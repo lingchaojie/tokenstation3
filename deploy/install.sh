@@ -2,7 +2,7 @@
 #
 # Sub2API Installation Script
 # Sub2API 安装脚本
-# Usage: curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/custom/release/deploy/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/install.sh | bash
 #
 
 set -e
