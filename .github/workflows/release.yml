@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - 'custom/release'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -26,22 +28,47 @@ permissions:
   packages: write
 
 jobs:
-  # Update VERSION file with tag version
+  # Update VERSION file with resolved release version
   update-version:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      branch_release: ${{ steps.version.outputs.branch_release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Update VERSION file
+      - name: Resolve release version
+        id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=${{ github.event.inputs.tag }}
-            VERSION=${VERSION#v}
+            TAG_NAME='${{ github.event.inputs.tag }}'
+            BRANCH_RELEASE=false
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            BRANCH_RELEASE=false
           else
-            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG_NAME="v0.1000.${{ github.run_number }}"
+            BRANCH_RELEASE=true
           fi
+
+          VERSION=${TAG_NAME#v}
+          if [ "$BRANCH_RELEASE" = "true" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+              echo "Release tag $TAG_NAME already exists"
+            else
+              git tag -a "$TAG_NAME" -m "Custom release from custom/release"
+              git push origin "$TAG_NAME"
+            fi
+          fi
+
           echo "$VERSION" > backend/cmd/server/VERSION
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch_release=$BRANCH_RELEASE" >> "$GITHUB_OUTPUT"
           echo "Updated VERSION file to: $VERSION"
 
       - name: Upload VERSION artifact
@@ -52,10 +79,13 @@ jobs:
           retention-days: 1
 
   build-frontend:
+    needs: [update-version]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.update-version.outputs.tag }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -92,7 +122,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.update-version.outputs.tag }}
 
       - name: Download VERSION artifact
         uses: actions/download-artifact@v8
@@ -145,18 +175,24 @@ jobs:
           # 确保获取完整的 annotated tag 信息
           git fetch --tags --force
 
-      - name: Get tag message
-        id: tag_message
+      - name: Prepare release tag
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
-          else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
+          TAG_NAME='${{ needs.update-version.outputs.tag }}'
+          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git tag "$TAG_NAME"
           fi
           echo "Processing tag: $TAG_NAME"
 
+      - name: Get tag message
+        id: tag_message
+        run: |
+          TAG_NAME='${{ needs.update-version.outputs.tag }}'
+
           # 获取完整的 tag message（跳过第一行标题）
           TAG_MESSAGE=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
+          if [ -z "$TAG_MESSAGE" ] && [ '${{ needs.update-version.outputs.branch_release }}' = 'true' ]; then
+            TAG_MESSAGE="Custom release from custom/release"
+          fi
 
           # 调试输出
           echo "Tag message length: ${#TAG_MESSAGE}"
@@ -213,12 +249,8 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
-          else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-          fi
-          VERSION=${TAG_NAME#v}
+          TAG_NAME='${{ needs.update-version.outputs.tag }}'
+          VERSION='${{ needs.update-version.outputs.version }}'
           REPO="${{ github.repository }}"
           GHCR_IMAGE="ghcr.io/${REPO,,}"  # ${,,} converts to lowercase
 
@@ -273,8 +305,8 @@ jobs:
               }')"
 
   sync-version-file:
-    needs: [release]
-    if: ${{ needs.release.result == 'success' }}
+    needs: [update-version, release]
+    if: ${{ needs.release.result == 'success' && needs.update-version.outputs.branch_release != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch

@@ -231,6 +231,32 @@ func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultUpdateGitHubRepo(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "Wei-Shaw/sub2api", cfg.Update.GitHubRepo)
+}
+
+func TestLoadUpdateGitHubRepoFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("UPDATE_GITHUB_REPO", "lingchaojie/tokenstation3")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "lingchaojie/tokenstation3", cfg.Update.GitHubRepo)
+}
+
+func TestLoadRejectsInvalidUpdateGitHubRepo(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("UPDATE_GITHUB_REPO", "https://github.com/lingchaojie/tokenstation3")
+
+	_, err := Load()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "update.github_repo")
+}
+
 func TestLoadDefaultIdempotencyConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

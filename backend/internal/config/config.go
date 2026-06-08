@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,8 @@ const (
 	RunModeStandard = "standard"
 	RunModeSimple   = "simple"
 )
+
+var githubRepoPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
 // 使用量记录队列溢出策略
 const (
@@ -150,6 +153,7 @@ type GeminiTierQuotaConfig struct {
 }
 
 type UpdateConfig struct {
+	GitHubRepo string `mapstructure:"github_repo"`
 	// ProxyURL 用于访问 GitHub 的代理地址
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
@@ -1460,6 +1464,10 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
+	cfg.Update.GitHubRepo = strings.TrimSpace(cfg.Update.GitHubRepo)
+	if cfg.Update.GitHubRepo == "" {
+		cfg.Update.GitHubRepo = "Wei-Shaw/sub2api"
+	}
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 		if err != nil {
@@ -1601,6 +1609,9 @@ func setDefaults() {
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
+
+	// Update
+	viper.SetDefault("update.github_repo", "Wei-Shaw/sub2api")
 
 	// Billing
 	viper.SetDefault("billing.circuit_breaker.enabled", true)
@@ -2026,6 +2037,10 @@ func (c *Config) Validate() error {
 		if c.Log.Sampling.Thereafter < 0 {
 			return fmt.Errorf("log.sampling.thereafter must be non-negative")
 		}
+	}
+
+	if !githubRepoPattern.MatchString(strings.TrimSpace(c.Update.GitHubRepo)) {
+		return fmt.Errorf("update.github_repo must be in owner/repo format")
 	}
 
 	if c.SubscriptionMaintenance.WorkerCount < 0 {

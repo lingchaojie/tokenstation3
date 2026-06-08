@@ -1106,6 +1106,11 @@ gemini:
 # Update Configuration (在线更新配置)
 # =============================================================================
 update:
+  # GitHub repository used for online update checks and release downloads
+  # 在线更新检查和 Release 下载使用的 GitHub 仓库
+  # Use your fork if you maintain custom builds, e.g. "lingchaojie/tokenstation3"
+  # 如果维护自定义构建，请改为你的 fork，例如 "lingchaojie/tokenstation3"
+  github_repo: "lingchaojie/tokenstation3"
   # Proxy URL for accessing GitHub (used for online updates and pricing data)
   # 用于访问 GitHub 的代理地址（用于在线更新和定价数据获取）
   # Supports: http, https, socks5, socks5h
