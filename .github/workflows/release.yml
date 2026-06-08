@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches:
-      - 'custom/release'
+      - 'release'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
             if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
               echo "Release tag $TAG_NAME already exists"
             else
-              git tag -a "$TAG_NAME" -m "Custom release from custom/release"
+              git tag -a "$TAG_NAME" -m "Custom release from release"
               git push origin "$TAG_NAME"
             fi
           fi
@@ -191,7 +191,7 @@ jobs:
           # 获取完整的 tag message（跳过第一行标题）
           TAG_MESSAGE=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
           if [ -z "$TAG_MESSAGE" ] && [ '${{ needs.update-version.outputs.branch_release }}' = 'true' ]; then
-            TAG_MESSAGE="Custom release from custom/release"
+            TAG_MESSAGE="Custom release from release"
           fi
 
           # 调试输出

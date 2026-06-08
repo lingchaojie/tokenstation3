@@ -35,10 +35,10 @@ Use the automated preparation script for the easiest setup:
 
 ```bash
 # Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/custom/release/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh | bash
 
 # Or download first, then run
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/custom/release/deploy/docker-deploy.sh -o docker-deploy.sh
+curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh -o docker-deploy.sh
 chmod +x docker-deploy.sh
 ./docker-deploy.sh
 ```
@@ -71,7 +71,7 @@ If you prefer manual control:
 
 ```bash
 # Clone repository
-git clone -b custom/main https://github.com/lingchaojie/tokenstation3.git
+git clone -b dev https://github.com/lingchaojie/tokenstation3.git
 cd sub2api/deploy
 
 # Configure environment
@@ -353,7 +353,7 @@ For production servers using systemd.
 ### One-Line Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/custom/release/deploy/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/install.sh | sudo bash
 ```
 
 ### Manual Installation
