@@ -12,7 +12,7 @@
 
 services:
   sub2api:
-    image: weishaw/sub2api:latest
+    image: ${SUB2API_IMAGE:-ghcr.io/lingchaojie/sub2api:latest}
     container_name: sub2api
     restart: unless-stopped
     ulimits:
@@ -94,6 +94,12 @@ services:
       - GEMINI_CLI_OAUTH_CLIENT_SECRET=${GEMINI_CLI_OAUTH_CLIENT_SECRET:-}
       - ANTIGRAVITY_OAUTH_CLIENT_SECRET=${ANTIGRAVITY_OAUTH_CLIENT_SECRET:-}
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_USER_AGENT_VERSION:-}
+
+      # =======================================================================
+      # Update Configuration (在线更新配置)
+      # =======================================================================
+      - UPDATE_GITHUB_REPO=${UPDATE_GITHUB_REPO:-lingchaojie/tokenstation3}
+      - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
 
       # =======================================================================
       # Image Generation Stream & Concurrency
