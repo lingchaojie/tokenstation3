@@ -12,7 +12,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock } = vi.hoist
       doc_url?: string
       home_content?: string
     },
-    siteName: 'Sub2API',
+    siteName: 'LINX2',
     siteLogo: '',
     siteSubtitle: 'AI API Gateway Platform',
     docUrl: '',
@@ -98,6 +98,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string) => messages[key] ?? key,
+      locale: { value: 'zh' },
     }),
   }
 })
@@ -120,7 +121,7 @@ function mountHome() {
 describe('HomeView landing page', () => {
   beforeEach(() => {
     appState.cachedPublicSettings = null
-    appState.siteName = 'Sub2API'
+    appState.siteName = 'LINX2'
     appState.siteLogo = ''
     appState.siteSubtitle = 'AI API Gateway Platform'
     appState.docUrl = ''
@@ -140,7 +141,7 @@ describe('HomeView landing page', () => {
     })
   })
 
-  it('renders the black-orange enterprise API landing shell by default', async () => {
+  it('renders the dark-orange LINX2 landing shell with USD model pricing by default', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',
       site_subtitle: 'Custom subtitle should not replace the approved hero copy',
@@ -152,18 +153,28 @@ describe('HomeView landing page', () => {
 
     const text = wrapper.text()
     expect(text).toContain('Fuse API')
-    expect(text).toContain('Claude Code & Codex API')
-    expect(text).toContain('企业级编程 API 服务')
-    expect(text).toContain('稳定、低延迟、可观测')
-    expect(text).toContain('统一 API 接入')
-    expect(text).toContain('智能账号池调度')
-    expect(text).toContain('用量与余额管理')
-    expect(text).toContain('Claude Code')
-    expect(text).toContain('Codex')
-    expect(text).toContain('OpenAI 兼容')
-    expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/landing-icon.jpg')
+    expect(text).toContain('统一 AI 编程 API · OpenAI 兼容路由')
+    expect(text).toContain('一个密钥，接入你需要的所有编程模型。')
+    // Gateway illustration + capabilities
+    expect(text).toContain('网关流程')
+    expect(text).toContain('MESSAGES')
+    expect(text).toContain('Gemini 路由族')
+    // Pricing section (USD per 1M tokens)
+    expect(text).toContain('官方原价透传')
+    expect(text).toContain('Opus 4.5')
+    expect(text).toContain('$5.00')
+    expect(text).toContain('$25.00')
+    expect(text).toContain('GPT-5')
+    expect(text).toContain('Gemini 2.5 Pro')
+    // Footer brand + no GitHub
+    expect(text).toContain('LINIX2.Ltd')
+    expect(text).not.toContain('GitHub')
+    expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/linx2-icon.png')
     expect(wrapper.get('a[href="/login"]').text()).toContain('立即开始')
-    expect(wrapper.get('a[href="https://docs.example.test"]').text()).toContain('查看文档')
+    const docsLinks = wrapper.findAll('a[href="https://docs.example.test"]')
+    expect(docsLinks.length).toBeGreaterThan(0)
+    expect(docsLinks[0].text()).toContain('文档')
+    expect(wrapper.find('header a[href="#pricing"]').exists()).toBe(false)
   })
 
   it('routes authenticated admin users to the dashboard CTA', async () => {
@@ -180,7 +191,7 @@ describe('HomeView landing page', () => {
     expect(wrapper.text()).toContain('控制台')
   })
 
-  it('keeps the header CTA compact and accessible on mobile screens', async () => {
+  it('shows an accessible labelled sign-in CTA in the header', async () => {
     const wrapper = mountHome()
     await flushPromises()
 
@@ -189,12 +200,7 @@ describe('HomeView landing page', () => {
 
     expect(headerCta.attributes('aria-label')).toBe('立即开始')
     expect(headerCta.classes()).toContain('h-10')
-    expect(headerCta.classes()).toContain('w-10')
-    expect(headerCta.classes()).toContain('px-0')
-    expect(headerCta.classes()).toContain('sm:w-auto')
-    expect(headerCta.classes()).toContain('sm:px-4')
-    expect(headerCtaLabel.classes()).toContain('hidden')
-    expect(headerCtaLabel.classes()).toContain('sm:inline')
+    expect(headerCtaLabel.text()).toBe('立即开始')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {
@@ -209,7 +215,7 @@ describe('HomeView landing page', () => {
     const iframe = wrapper.get('iframe')
     expect(iframe.attributes('src')).toBe('https://landing.example.test')
     expect(iframe.attributes('title')).toBe('Fuse API custom home content')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
   })
 
   it('renders Markdown custom home content before the default landing page', async () => {
@@ -222,7 +228,7 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.get('h1').text()).toBe('Custom Home')
     expect(wrapper.html()).toContain('<strong>custom</strong>')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
   })
 
   it('renders HTML custom home content before the default landing page', async () => {
@@ -235,6 +241,6 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
   })
 })

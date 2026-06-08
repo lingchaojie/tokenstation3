@@ -1,51 +1,40 @@
 <template>
-  <div class="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
-    <!-- Background -->
-    <div
-      class="absolute inset-0 bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-    ></div>
-
-    <!-- Decorative Elements -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <!-- Gradient Orbs -->
+  <!-- `dark` scope forces auth pages into the dark branded theme regardless of app theme -->
+  <div class="dark linx2-auth relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0a0b0e] p-4 text-zinc-100">
+    <!-- Background atmosphere -->
+    <div class="pointer-events-none absolute inset-0">
+      <div class="absolute inset-0 bg-[radial-gradient(circle_at_15%_-5%,rgba(249,115,22,0.20),transparent_38%),radial-gradient(circle_at_85%_110%,rgba(251,146,60,0.14),transparent_40%)]"></div>
+      <div class="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-orange-500/15 blur-3xl"></div>
+      <div class="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-orange-600/12 blur-3xl"></div>
       <div
-        class="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-primary-400/20 blur-3xl"
+        class="absolute inset-0 bg-[linear-gradient(rgba(249,115,22,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(249,115,22,0.04)_1px,transparent_1px)] bg-[size:64px_64px]"
       ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-
-      <!-- Grid Pattern -->
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
+      <div class="absolute left-1/2 top-0 h-px w-[70vw] -translate-x-1/2 bg-gradient-to-r from-transparent via-orange-400/40 to-transparent"></div>
     </div>
 
     <!-- Content Container -->
     <div class="relative z-10 w-full max-w-md">
-      <!-- Logo/Brand -->
+      <!-- Logo / Brand -->
       <div class="mb-8 text-center">
-        <!-- Custom Logo or Default Logo -->
         <template v-if="settingsLoaded">
           <div
-            class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
+            class="brand-tile mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white p-2 shadow-[0_12px_36px_rgba(249,115,22,0.28)] ring-1 ring-black/5"
           >
-            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+            <img :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
           </div>
-          <h1 class="text-gradient mb-2 text-3xl font-bold">
-            {{ siteName }}
+          <h1 class="font-display mb-2 text-3xl font-extrabold tracking-[0.06em]">
+            <span class="bg-gradient-to-r from-orange-300 via-orange-400 to-amber-200 bg-clip-text text-transparent">
+              {{ siteName }}
+            </span>
           </h1>
-          <p class="text-sm text-gray-500 dark:text-dark-400">
+          <p class="text-sm text-zinc-400">
             {{ siteSubtitle }}
           </p>
         </template>
       </div>
 
       <!-- Card Container -->
-      <div class="card-glass rounded-2xl p-8 shadow-glass">
+      <div class="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-8 shadow-2xl shadow-black/50 backdrop-blur-xl">
         <slot />
       </div>
 
@@ -55,8 +44,8 @@
       </div>
 
       <!-- Copyright -->
-      <div class="mt-8 text-center text-xs text-gray-400 dark:text-dark-500">
-        &copy; {{ currentYear }} {{ siteName }}. All rights reserved.
+      <div class="mt-8 text-center text-xs text-zinc-500">
+        &copy; {{ currentYear }} LINIX2.Ltd
       </div>
     </div>
   </div>
@@ -69,20 +58,36 @@ import { sanitizeUrl } from '@/utils/url'
 
 const appStore = useAppStore()
 
-const siteName = computed(() => appStore.siteName || 'Sub2API')
+const siteName = computed(() => appStore.siteName || 'LINX2')
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI 编程 API 平台 · linx2.ai')
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
 const currentYear = computed(() => new Date().getFullYear())
 
+// Load distinctive brand fonts for the auth experience (no-op if already injected by the landing page).
+function ensureBrandFonts() {
+  if (document.getElementById('linx2-brand-fonts')) return
+  const link = document.createElement('link')
+  link.id = 'linx2-brand-fonts'
+  link.rel = 'stylesheet'
+  link.href =
+    'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Manrope:wght@400..700&display=swap'
+  document.head.appendChild(link)
+}
+
 onMounted(() => {
+  ensureBrandFonts()
   appStore.fetchPublicSettings()
 })
 </script>
 
 <style scoped>
-.text-gradient {
-  @apply bg-gradient-to-r from-primary-600 to-primary-500 bg-clip-text text-transparent;
+.linx2-auth {
+  font-family: 'Manrope', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.font-display {
+  font-family: 'Bricolage Grotesque', 'Manrope', system-ui, 'PingFang SC', sans-serif;
 }
 </style>
