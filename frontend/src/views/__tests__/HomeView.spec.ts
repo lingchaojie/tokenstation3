@@ -174,7 +174,7 @@ describe('HomeView landing page', () => {
     const docsLinks = wrapper.findAll('a[href="https://docs.example.test"]')
     expect(docsLinks.length).toBeGreaterThan(0)
     expect(docsLinks[0].text()).toContain('文档')
-    expect(wrapper.find('header a[href="#pricing"]').exists()).toBe(false)
+    expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
   })
 
   it('routes authenticated admin users to the dashboard CTA', async () => {
@@ -242,5 +242,36 @@ describe('HomeView landing page', () => {
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
     expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
+  })
+
+  it('renders a Linear-style product console landing experience without decorative mesh glow', async () => {
+    appState.cachedPublicSettings = {
+      site_name: 'Fuse API',
+      doc_url: 'https://docs.example.test',
+    }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    expect(wrapper.find('.linear-landing').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="linear-product-console"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="linear-pricing-grid"]').exists()).toBe(true)
+    expect(wrapper.html()).not.toContain('bg-mesh-gradient')
+    expect(wrapper.html()).not.toContain('blur-3xl')
+    expect(wrapper.text()).toContain('API Gateway Console')
+    expect(wrapper.text()).toContain('Base URL')
+  })
+
+  it('keeps the default Linear landing in a local dark scope for light-mode users', async () => {
+    localStorage.setItem('theme', 'light')
+    document.documentElement.classList.remove('dark')
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const landing = wrapper.get('.linear-landing')
+    expect(landing.classes()).toContain('dark')
+    expect(landing.classes()).toContain('bg-linear-canvas')
+    expect(wrapper.find('[data-testid="linear-product-console"] .linx-panel-strong').exists()).toBe(true)
   })
 })

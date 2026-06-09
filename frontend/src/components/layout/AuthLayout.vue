@@ -1,52 +1,57 @@
 <template>
-  <!-- `dark` scope forces auth pages into the dark branded theme regardless of app theme -->
-  <div class="dark linx2-auth relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0a0b0e] p-4 text-zinc-100">
-    <!-- Background atmosphere -->
-    <div class="pointer-events-none absolute inset-0">
-      <div class="absolute inset-0 bg-[radial-gradient(circle_at_15%_-5%,rgba(249,115,22,0.20),transparent_38%),radial-gradient(circle_at_85%_110%,rgba(251,146,60,0.14),transparent_40%)]"></div>
-      <div class="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-orange-500/15 blur-3xl"></div>
-      <div class="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-orange-600/12 blur-3xl"></div>
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(249,115,22,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(249,115,22,0.04)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-      <div class="absolute left-1/2 top-0 h-px w-[70vw] -translate-x-1/2 bg-gradient-to-r from-transparent via-orange-400/40 to-transparent"></div>
-    </div>
-
-    <!-- Content Container -->
-    <div class="relative z-10 w-full max-w-md">
-      <!-- Logo / Brand -->
-      <div class="mb-8 text-center">
-        <template v-if="settingsLoaded">
-          <div
-            class="brand-tile mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white p-2 shadow-[0_12px_36px_rgba(249,115,22,0.28)] ring-1 ring-black/5"
-          >
-            <img :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
-          </div>
-          <h1 class="font-display mb-2 text-3xl font-extrabold tracking-[0.06em]">
-            <span class="bg-gradient-to-r from-orange-300 via-orange-400 to-amber-200 bg-clip-text text-transparent">
-              {{ siteName }}
+  <div class="dark linear-auth-shell relative min-h-screen overflow-hidden bg-linear-canvas text-linear-ink">
+    <div class="mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 gap-8 px-4 py-8 lg:grid-cols-[0.95fr_1.05fr] lg:items-center lg:px-8">
+      <section data-testid="auth-product-panel" class="hidden lg:block">
+        <div class="linx-panel-strong p-8">
+          <div class="mb-8 flex items-center gap-3">
+            <span class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-white p-1.5 ring-1 ring-white/10">
+              <img :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
             </span>
+            <div>
+              <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ siteName }}</p>
+              <p class="text-xs text-linear-ink-tertiary">{{ siteSubtitle }}</p>
+            </div>
+          </div>
+
+          <p class="linx-section-kicker">Unified AI Coding API</p>
+          <h1 class="mt-4 max-w-md text-5xl font-semibold leading-[1.02] tracking-[-0.06em] text-linear-ink">
+            One gateway for coding models, keys, and usage.
           </h1>
-          <p class="text-sm text-zinc-400">
-            {{ siteSubtitle }}
+          <p class="mt-5 max-w-md text-sm leading-6 text-linear-ink-subtle">
+            Sign in to manage API keys, subscriptions, billing, and channel access through a calm Linear-style console.
           </p>
-        </template>
-      </div>
 
-      <!-- Card Container -->
-      <div class="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-8 shadow-2xl shadow-black/50 backdrop-blur-xl">
-        <slot />
-      </div>
+          <div class="mt-8 rounded-xl border border-linear-hairline bg-linear-canvas p-4 font-mono text-xs text-linear-ink-muted">
+            <div class="linx-data-row"><span>Base URL</span><span class="text-primary-300">https://linx2.ai/api</span></div>
+            <div class="linx-data-row"><span>Routes</span><span>Claude · Codex · Gemini</span></div>
+            <div class="linx-data-row"><span>Billing</span><span>Usage ledger enabled</span></div>
+          </div>
+        </div>
+      </section>
 
-      <!-- Footer Links -->
-      <div class="mt-6 text-center text-sm">
-        <slot name="footer" />
-      </div>
+      <main class="flex min-h-[calc(100vh-4rem)] items-center justify-center lg:min-h-0">
+        <div class="w-full max-w-md">
+          <div class="mb-7 text-center lg:hidden">
+            <span class="mb-4 inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl bg-white p-2 ring-1 ring-white/10">
+              <img :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
+            </span>
+            <h1 class="text-2xl font-semibold tracking-[-0.04em] text-linear-ink">{{ siteName }}</h1>
+            <p class="mt-1 text-sm text-linear-ink-subtle">{{ siteSubtitle }}</p>
+          </div>
 
-      <!-- Copyright -->
-      <div class="mt-8 text-center text-xs text-zinc-500">
-        &copy; {{ currentYear }} LINIX2.Ltd
-      </div>
+          <div data-testid="auth-card" class="linx-panel-strong p-6 sm:p-8">
+            <slot />
+          </div>
+
+          <div class="mt-5 text-center text-sm text-linear-ink-subtle">
+            <slot name="footer" />
+          </div>
+
+          <div class="mt-8 text-center text-xs text-linear-ink-tertiary">
+            &copy; {{ currentYear }} LINIX2.Ltd
+          </div>
+        </div>
+      </main>
     </div>
   </div>
 </template>
@@ -61,33 +66,10 @@ const appStore = useAppStore()
 const siteName = computed(() => appStore.siteName || 'LINX2')
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI 编程 API 平台 · linx2.ai')
-const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
 const currentYear = computed(() => new Date().getFullYear())
 
-// Load distinctive brand fonts for the auth experience (no-op if already injected by the landing page).
-function ensureBrandFonts() {
-  if (document.getElementById('linx2-brand-fonts')) return
-  const link = document.createElement('link')
-  link.id = 'linx2-brand-fonts'
-  link.rel = 'stylesheet'
-  link.href =
-    'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Manrope:wght@400..700&display=swap'
-  document.head.appendChild(link)
-}
-
 onMounted(() => {
-  ensureBrandFonts()
   appStore.fetchPublicSettings()
 })
 </script>
-
-<style scoped>
-.linx2-auth {
-  font-family: 'Manrope', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-}
-
-.font-display {
-  font-family: 'Bricolage Grotesque', 'Manrope', system-ui, 'PingFang SC', sans-serif;
-}
-</style>

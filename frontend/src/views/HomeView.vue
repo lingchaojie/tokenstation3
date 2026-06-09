@@ -14,17 +14,17 @@
   <!-- Default Home Page -->
   <div
     v-else
-    class="linx2-landing min-h-screen bg-[#0a0b0e] text-zinc-100 selection:bg-orange-500/30 selection:text-orange-100"
+    class="dark linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-100"
   >
     <!-- Announcement bar -->
     <div
       v-if="showAnnouncement"
-      class="relative z-30 flex items-center justify-center gap-3 border-b border-orange-300/15 bg-orange-500/[0.08] px-4 py-2.5 text-center text-xs font-semibold text-orange-200 sm:text-sm"
+      class="relative z-30 flex items-center justify-center gap-3 border-b border-linear-hairline bg-linear-surface-1/70 px-4 py-2.5 text-center text-xs font-medium text-linear-ink-muted sm:text-sm"
     >
-      <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.9)]"></span>
+      <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-400"></span>
       <span>{{ copy.announcement }}</span>
       <button
-        class="absolute right-3 top-1/2 -translate-y-1/2 text-orange-300/60 transition-colors hover:text-orange-200"
+        class="absolute right-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary transition-colors hover:text-linear-ink"
         :aria-label="'close'"
         @click="showAnnouncement = false"
       >
@@ -33,26 +33,27 @@
     </div>
 
     <!-- Header -->
-    <header class="sticky top-0 z-20 border-b border-white/[0.06] bg-[#0a0b0e]/80 backdrop-blur-xl">
-      <nav class="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-4 sm:px-6 lg:px-8">
+    <header class="sticky top-0 z-20 border-b border-linear-hairline bg-linear-canvas/88 backdrop-blur-xl">
+      <nav class="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-3 sm:px-6 lg:px-8">
         <router-link to="/home" class="group flex items-center gap-3" :aria-label="siteName">
-          <span class="brand-tile flex h-10 w-10 items-center justify-center rounded-2xl bg-white p-1.5 shadow-[0_8px_24px_rgba(249,115,22,0.22)] ring-1 ring-black/5 transition-transform duration-300 group-hover:-rotate-6">
+          <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline transition-colors group-hover:ring-linear-hairline-strong">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
           <span class="leading-tight">
-            <span class="font-display block text-base font-extrabold tracking-[0.06em] text-zinc-50">{{ siteName }}</span>
-            <span class="block text-[10px] font-semibold uppercase tracking-[0.22em] text-zinc-500">AI Coding API</span>
+            <span class="block text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ siteName }}</span>
+            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">AI Coding API</span>
           </span>
         </router-link>
 
-        <div class="hidden items-center gap-8 text-sm font-semibold text-zinc-400 md:flex">
-          <a href="#capabilities" class="transition-colors hover:text-orange-300">{{ copy.nav.capabilities }}</a>
+        <div class="hidden items-center gap-7 text-sm font-medium text-linear-ink-subtle md:flex">
+          <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+          <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
           <a
             v-if="docUrl"
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="transition-colors hover:text-orange-300"
+            class="transition-colors hover:text-linear-ink"
           >
             {{ t('home.docs') }}
           </a>
@@ -62,7 +63,7 @@
           <LocaleSwitcher />
           <button
             @click="toggleTheme"
-            class="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-400 transition-colors hover:border-orange-300/40 hover:text-orange-200"
+            class="rounded-lg border border-linear-hairline bg-linear-surface-1 p-2 text-linear-ink-subtle transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
           >
             <Icon v-if="isDark" name="sun" size="md" />
@@ -71,11 +72,11 @@
           <router-link
             :to="isAuthenticated ? dashboardPath : '/login'"
             :aria-label="isAuthenticated ? t('home.goToDashboard') : t('home.getStarted')"
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-orange-500 px-4 py-2 text-sm font-bold text-black shadow-[0_0_28px_rgba(249,115,22,0.30)] transition-colors hover:bg-orange-400"
+            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
           >
             <span
               v-if="isAuthenticated && userInitial"
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-black/20 text-[10px]"
+              class="flex h-5 w-5 items-center justify-center rounded-md bg-white/15 text-[10px]"
             >
               {{ userInitial }}
             </span>
@@ -89,22 +90,22 @@
 
     <main>
       <!-- ===== Hero ===== -->
-      <section class="mx-auto max-w-7xl px-4 py-16 text-center sm:px-6 sm:py-20 lg:px-8 lg:py-24">
-        <div class="mx-auto max-w-4xl animate-rise">
-          <p class="inline-flex items-center gap-2 rounded-full border border-orange-300/20 bg-orange-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-orange-200">
-            <span class="h-1.5 w-1.5 rounded-full bg-orange-400 shadow-[0_0_14px_rgba(251,146,60,0.9)]"></span>
+      <section class="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
+        <div class="mx-auto max-w-4xl text-center">
+          <p class="linx-section-kicker inline-flex items-center gap-2">
+            <span class="h-1.5 w-1.5 rounded-full bg-primary-400"></span>
             {{ copy.heroKicker }}
           </p>
-          <h1 class="font-display mt-7 text-[clamp(2.75rem,7vw,5.5rem)] font-extrabold leading-[0.96] tracking-[-0.05em] text-zinc-50">
+          <h1 class="mt-7 text-[clamp(2.75rem,7vw,5.25rem)] font-semibold leading-[0.98] tracking-[-0.065em] text-linear-ink">
             {{ copy.heroTitle }}
           </h1>
-          <p class="mx-auto mt-6 max-w-2xl text-base leading-7 text-zinc-400 sm:text-lg sm:leading-8">
+          <p class="mx-auto mt-6 max-w-2xl text-base leading-7 tracking-[-0.01em] text-linear-ink-subtle sm:text-lg sm:leading-8">
             {{ copy.heroDescription }}
           </p>
           <div class="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
             <router-link
               :to="isAuthenticated ? dashboardPath : '/login'"
-              class="inline-flex items-center justify-center rounded-full bg-orange-500 px-6 py-3.5 text-sm font-extrabold text-black shadow-[0_0_42px_rgba(249,115,22,0.32)] transition-all hover:-translate-y-0.5 hover:bg-orange-400"
+              class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-400"
             >
               {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
               <Icon name="arrowRight" size="sm" class="ml-2" :stroke-width="2" />
@@ -113,59 +114,59 @@
               :href="docUrl || '#capabilities'"
               :target="docUrl ? '_blank' : undefined"
               :rel="docUrl ? 'noopener noreferrer' : undefined"
-              class="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.02] px-6 py-3.5 text-sm font-extrabold text-zinc-100 transition-all hover:-translate-y-0.5 hover:border-orange-300/50 hover:bg-orange-300/[0.06]"
+              class="inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-5 py-3 text-sm font-medium text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
             >
               {{ docUrl ? copy.docsCta : copy.learnCta }}
             </a>
           </div>
         </div>
 
-        <!-- Gateway illustration -->
-        <div id="models" class="mx-auto mt-14 w-full max-w-5xl animate-rise-delayed">
-          <div class="relative overflow-hidden rounded-[2rem] border border-white/[0.08] bg-white/[0.02] p-3 shadow-2xl shadow-black/50 sm:p-4">
-            <div class="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-orange-500/10 blur-3xl"></div>
-            <div class="relative rounded-[1.5rem] bg-[#101216]/80 p-4 sm:p-6">
-              <div class="mb-4 flex items-center justify-between gap-4 text-left">
+        <!-- Product console -->
+        <div id="models" class="mx-auto mt-14 w-full max-w-6xl" data-testid="linear-product-console">
+          <div class="linx-panel-strong overflow-hidden p-3 sm:p-4">
+            <div class="rounded-xl border border-linear-hairline bg-linear-canvas">
+              <div class="flex flex-col gap-4 border-b border-linear-hairline p-4 text-left sm:flex-row sm:items-center sm:justify-between sm:p-5">
                 <div>
-                  <h2 class="font-display text-sm font-extrabold text-zinc-50">{{ copy.gw.title }}</h2>
-                  <p class="mt-1 text-xs font-medium text-zinc-500">{{ copy.gw.description }}</p>
+                  <p class="text-xs font-medium uppercase tracking-[0.18em] text-primary-400">{{ copy.gw.badge }}</p>
+                  <h2 class="mt-2 text-xl font-semibold tracking-[-0.03em] text-linear-ink">{{ copy.gw.consoleTitle }}</h2>
+                  <p class="mt-1 text-sm text-linear-ink-subtle">{{ copy.gw.description }}</p>
                 </div>
-                <span class="flex items-center gap-1.5 rounded-full bg-orange-500/15 px-3 py-1.5 text-xs font-bold text-orange-300">
-                  <span class="h-1.5 w-1.5 rounded-full bg-orange-400"></span>
-                  {{ copy.gw.badge }}
+                <span class="inline-flex w-fit items-center gap-1.5 rounded-full border border-linear-hairline bg-linear-surface-1 px-3 py-1.5 text-xs font-medium text-linear-ink-muted">
+                  <span class="h-1.5 w-1.5 rounded-full bg-[#27a644]"></span>
+                  {{ copy.gw.title }}
                 </span>
               </div>
 
-              <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <div class="grid grid-cols-2 gap-px border-b border-linear-hairline bg-linear-hairline sm:grid-cols-3 lg:grid-cols-6">
                 <div
                   v-for="provider in providers"
                   :key="provider"
-                  class="rounded-2xl border border-white/[0.06] bg-white/[0.03] px-4 py-5 text-center text-sm font-extrabold text-zinc-200"
+                  class="bg-linear-surface-1 px-4 py-4 text-center text-sm font-medium text-linear-ink-muted"
                 >
                   {{ provider }}
                 </div>
               </div>
 
-              <div class="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
-                <div class="rounded-3xl border border-white/[0.06] bg-black/20 p-5 text-left">
-                  <p class="font-mono-brand text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">{{ copy.gw.flowTitle }}</p>
+              <div class="grid gap-px bg-linear-hairline lg:grid-cols-[1.05fr_0.95fr]">
+                <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
+                  <p class="linx-section-kicker">{{ copy.gw.flowTitle }}</p>
                   <div class="mt-5 grid gap-3 sm:grid-cols-3">
-                    <div v-for="(step, i) in copy.gw.flow" :key="step.title" class="rounded-2xl bg-white/[0.03] p-4">
-                      <span class="font-mono-brand text-[10px] font-bold text-orange-400">0{{ i + 1 }}</span>
-                      <p class="font-display mt-1 text-sm font-extrabold text-zinc-50">{{ step.title }}</p>
-                      <p class="mt-2 text-xs leading-5 text-zinc-500">{{ step.description }}</p>
+                    <div v-for="(step, i) in copy.gw.flow" :key="step.title" class="linx-panel bg-linear-surface-2 p-4">
+                      <span class="font-mono-brand text-[10px] font-medium text-linear-ink-tertiary">0{{ i + 1 }}</span>
+                      <p class="mt-2 text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ step.title }}</p>
+                      <p class="mt-2 text-xs leading-5 text-linear-ink-subtle">{{ step.description }}</p>
                     </div>
                   </div>
                 </div>
 
-                <div class="rounded-3xl border border-orange-300/15 bg-gradient-to-br from-orange-500/[0.12] to-black/30 p-5 text-left">
-                  <p class="font-mono-brand text-xs font-bold uppercase tracking-[0.18em] text-orange-300/80">{{ copy.gw.baseUrlTitle }}</p>
-                  <pre class="font-mono-brand mt-4 overflow-x-auto rounded-2xl bg-black/40 p-4 text-left text-xs leading-6 text-zinc-200"><code><span class="text-orange-300">ANTHROPIC_BASE_URL</span>=https://linx2.ai/api
-<span class="text-orange-300">ANTHROPIC_API_KEY</span>=lx2_<span class="text-zinc-500">••••••••</span></code></pre>
+                <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
+                  <p class="linx-section-kicker">{{ copy.gw.baseUrlTitle }}</p>
+                  <pre class="font-mono-brand mt-4 overflow-x-auto rounded-xl border border-linear-hairline bg-linear-canvas p-4 text-left text-xs leading-6 text-linear-ink-muted"><code><span class="text-primary-300">ANTHROPIC_BASE_URL</span>=https://linx2.ai/api
+<span class="text-primary-300">ANTHROPIC_API_KEY</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span></code></pre>
                   <div class="mt-4 grid grid-cols-3 gap-2">
-                    <div v-for="metric in metrics" :key="metric.label" class="rounded-2xl bg-white/[0.04] p-3 text-center">
-                      <p class="font-display text-lg font-extrabold text-orange-300">{{ metric.value }}</p>
-                      <p class="mt-0.5 text-[10px] leading-tight text-zinc-500">{{ metric.label }}</p>
+                    <div v-for="metric in metrics" :key="metric.label" class="linx-panel p-3 text-center">
+                      <p class="text-lg font-semibold tracking-[-0.03em] text-linear-ink">{{ metric.value }}</p>
+                      <p class="mt-0.5 text-[10px] leading-tight text-linear-ink-tertiary">{{ metric.label }}</p>
                     </div>
                   </div>
                 </div>
@@ -176,15 +177,15 @@
       </section>
 
       <!-- ===== Features ===== -->
-      <section id="features" class="border-y border-white/[0.06] bg-white/[0.015]">
+      <section id="features" class="border-y border-linear-hairline bg-linear-surface-1/35">
         <div class="mx-auto grid max-w-7xl gap-4 px-4 py-6 sm:px-6 md:grid-cols-3 lg:px-8">
           <article
             v-for="feature in copy.features"
             :key="feature.title"
-            class="rounded-3xl border border-white/[0.07] bg-white/[0.02] p-7 text-left transition-colors hover:border-orange-300/25 hover:bg-orange-500/[0.04]"
+            class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
           >
-            <p class="font-display text-sm font-extrabold text-zinc-50">{{ feature.title }}</p>
-            <p class="mt-3 text-sm leading-6 text-zinc-400">{{ feature.description }}</p>
+            <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ feature.title }}</p>
+            <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ feature.description }}</p>
           </article>
         </div>
       </section>
@@ -193,83 +194,82 @@
       <section id="capabilities" class="mx-auto max-w-7xl scroll-mt-24 px-4 py-16 sm:px-6 lg:px-8">
         <div class="grid gap-8 xl:grid-cols-[0.8fr_1.2fr] xl:items-end">
           <div class="text-left">
-            <p class="font-mono-brand text-sm font-bold uppercase tracking-[0.18em] text-orange-400">{{ copy.capabilityKicker }}</p>
-            <h2 class="font-display mt-4 max-w-3xl text-[clamp(2rem,4vw,2.9rem)] font-extrabold leading-tight tracking-[-0.04em] text-zinc-50">
+            <p class="linx-section-kicker">{{ copy.capabilityKicker }}</p>
+            <h2 class="mt-4 max-w-3xl text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">
               {{ copy.capabilityTitle }}
             </h2>
           </div>
-          <p class="text-left text-base leading-7 text-zinc-400">{{ copy.capabilityDescription }}</p>
+          <p class="text-left text-base leading-7 text-linear-ink-subtle">{{ copy.capabilityDescription }}</p>
         </div>
 
         <div class="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article
             v-for="capability in copy.capabilities"
             :key="capability.title"
-            class="group rounded-3xl border border-white/[0.07] bg-white/[0.02] p-6 text-left transition-colors hover:border-orange-300/25"
+            class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
           >
-            <p class="font-mono-brand text-xs font-bold uppercase tracking-[0.18em] text-orange-400/80">{{ capability.code }}</p>
-            <h3 class="font-display mt-4 text-xl font-extrabold tracking-[-0.02em] text-zinc-50">{{ capability.title }}</h3>
-            <p class="mt-3 text-sm leading-6 text-zinc-400">{{ capability.description }}</p>
+            <p class="font-mono-brand text-xs font-medium uppercase tracking-[0.18em] text-primary-400/90">{{ capability.code }}</p>
+            <h3 class="mt-4 text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ capability.title }}</h3>
+            <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ capability.description }}</p>
           </article>
         </div>
       </section>
 
       <!-- ===== Pricing ===== -->
-      <section id="pricing" class="scroll-mt-24 border-t border-white/[0.06] bg-gradient-to-b from-white/[0.02] to-transparent">
+      <section id="pricing" class="scroll-mt-24 border-t border-linear-hairline bg-linear-surface-1/25">
         <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
           <div class="mb-10 max-w-2xl">
-            <p class="font-mono-brand text-sm font-bold uppercase tracking-[0.18em] text-orange-400">{{ copy.pricingKicker }}</p>
-            <h2 class="font-display mt-4 text-[clamp(2rem,4vw,2.9rem)] font-extrabold leading-tight tracking-[-0.04em] text-zinc-50">{{ copy.pricingTitle }}</h2>
-            <p class="mt-4 text-base leading-7 text-zinc-400">
+            <p class="linx-section-kicker">{{ copy.pricingKicker }}</p>
+            <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.pricingTitle }}</h2>
+            <p class="mt-4 text-base leading-7 text-linear-ink-subtle">
               {{ copy.pricingDescription }}
             </p>
           </div>
 
-          <div class="grid gap-5 md:grid-cols-3">
+          <div class="grid gap-5 md:grid-cols-3" data-testid="linear-pricing-grid">
             <article
               v-for="group in pricingGroups"
               :key="group.provider"
-              class="group relative overflow-hidden rounded-[1.75rem] border border-white/[0.08] bg-white/[0.02] p-6 transition-colors hover:border-orange-300/25 hover:bg-orange-500/[0.04]"
+              class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
             >
-              <div class="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-orange-500/10 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100"></div>
               <div class="mb-5 flex items-center justify-between">
-                <h3 class="font-display text-xl font-bold text-zinc-50">{{ group.provider }}</h3>
-                <span class="font-mono-brand rounded-full border border-white/10 px-2.5 py-1 text-[10px] uppercase tracking-wider text-zinc-500">{{ group.tag }}</span>
+                <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ group.provider }}</h3>
+                <span class="font-mono-brand rounded-full border border-linear-hairline bg-linear-canvas px-2.5 py-1 text-[10px] uppercase tracking-wider text-linear-ink-tertiary">{{ group.tag }}</span>
               </div>
 
-              <div class="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 border-b border-white/[0.06] pb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+              <div class="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 border-b border-linear-hairline pb-2 text-[11px] font-medium uppercase tracking-wide text-linear-ink-tertiary">
                 <span>{{ copy.pricingCols.model }}</span>
                 <span class="text-right">{{ copy.pricingCols.input }}</span>
                 <span class="text-right">{{ copy.pricingCols.output }}</span>
               </div>
-              <ul class="divide-y divide-white/[0.05]">
+              <ul class="divide-y divide-linear-hairline">
                 <li
                   v-for="model in group.models"
                   :key="model.name"
                   class="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 py-3"
                 >
-                  <span class="text-sm font-medium text-zinc-200">{{ model.name }}</span>
-                  <span class="font-mono-brand text-right text-sm text-zinc-300">{{ model.in }}</span>
-                  <span class="font-mono-brand text-right text-sm font-semibold text-orange-300">{{ model.out }}</span>
+                  <span class="text-sm font-medium text-linear-ink-muted">{{ model.name }}</span>
+                  <span class="font-mono-brand text-right text-sm text-linear-ink-subtle">{{ model.in }}</span>
+                  <span class="font-mono-brand text-right text-sm font-medium text-linear-ink">{{ model.out }}</span>
                 </li>
               </ul>
             </article>
           </div>
 
-          <p class="mt-6 text-xs text-zinc-600">{{ copy.pricingFootnote }}</p>
+          <p class="mt-6 text-xs text-linear-ink-tertiary">{{ copy.pricingFootnote }}</p>
         </div>
       </section>
 
       <!-- ===== CTA ===== -->
       <section class="px-4 py-16 sm:px-6 lg:px-8">
-        <div class="mx-auto max-w-5xl overflow-hidden rounded-[2.25rem] border border-orange-300/15 bg-gradient-to-br from-orange-500/[0.16] to-[#0a0b0e] p-8 text-center shadow-[0_0_80px_rgba(249,115,22,0.12)] sm:p-12">
-          <p class="font-mono-brand text-sm font-bold uppercase tracking-[0.2em] text-orange-300">{{ copy.ctaKicker }}</p>
-          <h2 class="font-display mt-4 text-3xl font-extrabold tracking-tight text-zinc-50 sm:text-5xl">{{ copy.ctaTitle }}</h2>
-          <p class="mx-auto mt-5 max-w-2xl text-base leading-8 text-zinc-300">{{ copy.ctaDescription }}</p>
+        <div class="linx-panel-strong mx-auto max-w-5xl p-8 text-center sm:p-12">
+          <p class="linx-section-kicker">{{ copy.ctaKicker }}</p>
+          <h2 class="mt-4 text-3xl font-semibold tracking-[-0.055em] text-linear-ink sm:text-5xl">{{ copy.ctaTitle }}</h2>
+          <p class="mx-auto mt-5 max-w-2xl text-base leading-8 text-linear-ink-muted">{{ copy.ctaDescription }}</p>
           <div class="mt-8 flex flex-col justify-center gap-4 sm:flex-row">
             <router-link
               :to="isAuthenticated ? dashboardPath : '/login'"
-              class="inline-flex items-center justify-center rounded-full bg-orange-500 px-7 py-3 text-base font-bold text-black transition-colors hover:bg-orange-400"
+              class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-400"
             >
               {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
             </router-link>
@@ -278,7 +278,7 @@
               :href="docUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="inline-flex items-center justify-center rounded-full border border-orange-300/30 px-7 py-3 text-base font-semibold text-orange-100 transition-colors hover:bg-orange-300/10"
+              class="inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-canvas px-6 py-3 text-sm font-medium text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-1"
             >
               {{ t('home.docs') }}
             </a>
@@ -288,10 +288,10 @@
     </main>
 
     <!-- ===== Footer ===== -->
-    <footer class="border-t border-white/[0.06] px-4 py-8 sm:px-6 lg:px-8">
-      <div class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-center text-sm text-zinc-500 sm:flex-row sm:text-left">
+    <footer class="border-t border-linear-hairline px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-center text-sm text-linear-ink-tertiary sm:flex-row sm:text-left">
         <div class="flex items-center gap-2.5">
-          <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white p-1 ring-1 ring-black/5">
+          <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white p-1 ring-1 ring-linear-hairline">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
           <span>&copy; {{ currentYear }} LINIX2.Ltd</span>
@@ -301,7 +301,7 @@
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="transition-colors hover:text-orange-300"
+            class="transition-colors hover:text-linear-ink"
           >
             {{ t('home.docs') }}
           </a>
@@ -396,10 +396,11 @@ const copies = {
     learnCta: '了解能力',
     gw: {
       title: '供应商与能力墙',
+      consoleTitle: 'API Gateway Console',
       description: '一个平台密钥路由到兼容的模型 API。',
       badge: '可用路由',
       flowTitle: '网关流程',
-      baseUrlTitle: '可复制 Base URL',
+      baseUrlTitle: 'Base URL',
       flow: [
         { title: '应用请求', description: '使用供应商兼容客户端和一个 LINX2 密钥。' },
         { title: '余额保护', description: '转发模型流量前检查账户访问和余额。' },
@@ -441,10 +442,11 @@ const copies = {
     learnCta: 'Explore',
     gw: {
       title: 'Provider and capability wall',
+      consoleTitle: 'API Gateway Console',
       description: 'One platform key routes to compatible model APIs.',
       badge: 'Live routes',
       flowTitle: 'Gateway flow',
-      baseUrlTitle: 'Copy-ready base URL',
+      baseUrlTitle: 'Base URL',
       flow: [
         { title: 'App request', description: 'Use provider-compatible clients and one LINX2 key.' },
         { title: 'Balance guard', description: 'Check account access and balance before forwarding traffic.' },
@@ -531,7 +533,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.linx2-landing {
+.linear-landing {
   font-family: 'Manrope', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 

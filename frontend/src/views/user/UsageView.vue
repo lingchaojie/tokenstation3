@@ -1,10 +1,11 @@
 <template>
   <AppLayout>
+    <div class="linear-usage-page">
     <TablePageLayout>
       <template #actions>
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <!-- Total Requests -->
-          <div class="card p-4">
+          <div class="linx-panel p-4">
           <div class="flex items-center gap-3">
             <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
               <Icon name="document" size="md" class="text-blue-600 dark:text-blue-400" />
@@ -24,7 +25,7 @@
         </div>
 
         <!-- Total Tokens -->
-        <div class="card p-4">
+        <div class="linx-panel p-4">
           <div class="flex items-center gap-3">
             <div class="rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
               <Icon name="cube" size="md" class="text-amber-600 dark:text-amber-400" />
@@ -60,7 +61,7 @@
         </div>
 
         <!-- Total Cost -->
-        <div class="card p-4">
+        <div class="linx-panel p-4">
           <div class="flex items-center gap-3">
             <div class="rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
               <Icon name="dollar" size="md" class="text-green-600 dark:text-green-400" />
@@ -82,7 +83,7 @@
         </div>
 
         <!-- Average Duration -->
-        <div class="card p-4">
+        <div class="linx-panel p-4">
           <div class="flex items-center gap-3">
             <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
               <Icon name="clock" size="md" class="text-purple-600 dark:text-purple-400" />
@@ -102,8 +103,8 @@
       </template>
 
       <template #filters>
-        <div class="card">
-          <div class="px-6 py-4">
+        <div class="linx-panel p-4">
+          <div>
           <div class="flex flex-wrap items-end gap-4">
             <!-- API Key Filter -->
             <div class="min-w-[180px]">
@@ -165,7 +166,7 @@
 
       <template #table>
         <!-- Tab 切换栏 -->
-        <div v-if="errorViewEnabled" class="mb-0 flex gap-2 border-b border-gray-200 px-4 pt-3 dark:border-dark-700">
+        <div v-if="errorViewEnabled" class="linx-panel mb-0 flex gap-2 border-b border-gray-200 px-4 pt-3 dark:border-linear-hairline">
           <button class="tab" :class="{ 'tab-active': activeTab === 'usage' }" @click="activeTab = 'usage'">
             {{ t('usage.tabs.usage') }}
           </button>
@@ -398,6 +399,7 @@
         />
       </template>
     </TablePageLayout>
+    </div>
   </AppLayout>
 
   <!-- Token Tooltip Portal -->

@@ -68,7 +68,7 @@ onBeforeUnmount(() => {
     <div
       v-for="(item, index) in allEndpoints"
       :key="index"
-      class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs transition-colors hover:border-primary-200 dark:border-dark-600 dark:bg-dark-800 dark:hover:border-primary-700"
+      class="linx-panel flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs transition-colors hover:border-primary-200 dark:border-linear-hairline dark:bg-linear-surface-1 dark:hover:border-linear-hairline-strong"
     >
       <span class="font-medium text-gray-600 dark:text-gray-300">{{ item.name }}</span>
       <span

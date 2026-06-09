@@ -1,6 +1,7 @@
 <template>
   <AppLayout>
-    <MonitorHero
+    <div class="linear-channel-status-page space-y-5">
+      <MonitorHero
       :overall-status="overallStatus"
       :interval-seconds="DEFAULT_INTERVAL_SECONDS"
       :window="currentWindow"
@@ -19,12 +20,13 @@
       @card-click="openDetail"
     />
 
-    <MonitorDetailDialog
-      :show="showDetail"
-      :monitor-id="detailTarget?.id ?? null"
-      :title="detailTitle"
-      @close="closeDetail"
-    />
+      <MonitorDetailDialog
+        :show="showDetail"
+        :monitor-id="detailTarget?.id ?? null"
+        :title="detailTitle"
+        @close="closeDetail"
+      />
+    </div>
   </AppLayout>
 </template>
 

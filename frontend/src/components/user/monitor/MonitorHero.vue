@@ -1,5 +1,5 @@
 <template>
-  <section class="py-3 md:py-4">
+  <section class="linx-panel-strong p-6">
     <div class="flex items-center justify-end gap-3 flex-wrap">
       <div
         role="tablist"

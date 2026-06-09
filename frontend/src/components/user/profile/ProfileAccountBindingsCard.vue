@@ -1,14 +1,17 @@
 <template>
-  <ProfileIdentityBindingsSection
-    :user="user"
-    :linuxdo-enabled="linuxdoEnabled"
-    :dingtalk-enabled="dingtalkEnabled"
-    :oidc-enabled="oidcEnabled"
-    :oidc-provider-name="oidcProviderName"
-    :wechat-enabled="wechatEnabled"
-    :wechat-open-enabled="wechatOpenEnabled"
-    :wechat-mp-enabled="wechatMpEnabled"
-  />
+  <div class="linx-panel p-5">
+    <ProfileIdentityBindingsSection
+      :user="user"
+      :linuxdo-enabled="linuxdoEnabled"
+      :dingtalk-enabled="dingtalkEnabled"
+      :oidc-enabled="oidcEnabled"
+      :oidc-provider-name="oidcProviderName"
+      :wechat-enabled="wechatEnabled"
+      :wechat-open-enabled="wechatOpenEnabled"
+      :wechat-mp-enabled="wechatMpEnabled"
+      embedded
+    />
+  </div>
 </template>
 
 <script setup lang="ts">

@@ -46,6 +46,23 @@ export default {
           800: '#1e293b',
           900: '#0f172a',
           950: '#020617'
+        },
+        linear: {
+          canvas: '#010102',
+          surface: {
+            1: '#0f1011',
+            2: '#141516',
+            3: '#18191a',
+            4: '#191a1b'
+          },
+          hairline: '#23252a',
+          'hairline-strong': '#34343a',
+          ink: {
+            DEFAULT: '#f7f8f8',
+            muted: '#d0d6e0',
+            subtle: '#8a8f98',
+            tertiary: '#62666d'
+          }
         }
       },
       fontFamily: {
@@ -65,13 +82,13 @@ export default {
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
       },
       boxShadow: {
-        glass: '0 8px 32px rgba(0, 0, 0, 0.08)',
-        'glass-sm': '0 4px 16px rgba(0, 0, 0, 0.06)',
-        glow: '0 0 20px rgba(249, 115, 22, 0.25)',
-        'glow-lg': '0 0 40px rgba(249, 115, 22, 0.35)',
-        card: '0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)',
-        'card-hover': '0 10px 40px rgba(0, 0, 0, 0.08)',
-        'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+        glass: '0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 20px 80px rgba(0, 0, 0, 0.28)',
+        'glass-sm': '0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 12px 40px rgba(0, 0, 0, 0.22)',
+        glow: '0 0 0 1px rgba(249, 115, 22, 0.28)',
+        'glow-lg': '0 0 0 1px rgba(249, 115, 22, 0.34)',
+        card: '0 1px 0 rgba(255, 255, 255, 0.04) inset',
+        'card-hover': '0 1px 0 rgba(255, 255, 255, 0.06) inset',
+        'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.08)'
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',

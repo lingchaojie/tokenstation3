@@ -13,11 +13,11 @@
     </div>
 
     <div :class="props.embedded ? 'space-y-4' : 'divide-y divide-gray-100 dark:divide-dark-700'">
-      <div v-if="props.embedded">
-        <p class="text-sm font-semibold text-gray-900 dark:text-white">
+      <div v-if="props.embedded" class="space-y-1">
+        <p class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
           {{ t('profile.authBindings.title') }}
         </p>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
           {{ t('profile.authBindings.description') }}
         </p>
       </div>

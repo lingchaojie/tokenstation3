@@ -1,13 +1,30 @@
 <template>
   <AppLayout>
-    <div class="space-y-6">
-      <div v-if="loading" class="flex items-center justify-center py-12"><LoadingSpinner /></div>
+    <div class="linear-dashboard-page space-y-5">
+      <div v-if="loading" class="linx-panel flex items-center justify-center py-12"><LoadingSpinner /></div>
       <template v-else-if="stats">
-        <UserDashboardStats :stats="stats" :balance="user?.balance || 0" :is-simple="authStore.isSimpleMode" :platform-quotas="platformQuotas" />
-        <UserDashboardCharts v-model:startDate="startDate" v-model:endDate="endDate" v-model:granularity="granularity" :loading="loadingCharts" :trend="trendData" :models="modelStats" @dateRangeChange="loadCharts" @granularityChange="loadCharts" @refresh="refreshAll" />
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div class="lg:col-span-2"><UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" /></div>
-          <div class="lg:col-span-1"><UserDashboardQuickActions /></div>
+        <UserDashboardStats
+          :stats="stats"
+          :balance="user?.balance || 0"
+          :is-simple="authStore.isSimpleMode"
+          :platform-quotas="platformQuotas"
+        />
+        <div class="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <div class="min-w-0 space-y-5">
+            <UserDashboardCharts
+              v-model:startDate="startDate"
+              v-model:endDate="endDate"
+              v-model:granularity="granularity"
+              :loading="loadingCharts"
+              :trend="trendData"
+              :models="modelStats"
+              @dateRangeChange="loadCharts"
+              @granularityChange="loadCharts"
+              @refresh="refreshAll"
+            />
+            <UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" />
+          </div>
+          <UserDashboardQuickActions />
         </div>
       </template>
     </div>
