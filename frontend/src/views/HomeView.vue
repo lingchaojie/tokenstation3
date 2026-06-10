@@ -45,21 +45,20 @@
           </span>
         </router-link>
 
-        <div class="hidden items-center gap-7 text-sm font-medium text-linear-ink-subtle md:flex">
-          <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
-          <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="transition-colors hover:text-linear-ink"
-          >
-            {{ t('home.docs') }}
-          </a>
-        </div>
-
-        <div class="flex items-center gap-2 sm:gap-3">
+        <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
+          <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
+            <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+            <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
+            <a
+              v-if="docUrl"
+              :href="docUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="transition-colors hover:text-linear-ink"
+            >
+              {{ t('home.docs') }}
+            </a>
+          </div>
           <LocaleSwitcher />
           <button
             @click="toggleTheme"
@@ -147,22 +146,40 @@
                 </div>
               </div>
 
-              <div class="grid gap-px bg-linear-hairline lg:grid-cols-[1.05fr_0.95fr]">
+              <div class="grid gap-px bg-linear-hairline lg:grid-cols-[1.15fr_0.85fr]">
                 <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
-                  <p class="linx-section-kicker">{{ copy.gw.flowTitle }}</p>
-                  <div class="mt-5 grid gap-3 sm:grid-cols-3">
-                    <div v-for="(step, i) in copy.gw.flow" :key="step.title" class="linx-panel bg-linear-surface-2 p-4">
-                      <span class="font-mono-brand text-[10px] font-medium text-linear-ink-tertiary">0{{ i + 1 }}</span>
-                      <p class="mt-2 text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ step.title }}</p>
-                      <p class="mt-2 text-xs leading-5 text-linear-ink-subtle">{{ step.description }}</p>
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p class="linx-section-kicker">{{ copy.gw.flowTitle }}</p>
+                      <h3 class="mt-3 text-lg font-semibold tracking-[-0.035em] text-linear-ink">{{ copy.gw.routeTitle }}</h3>
                     </div>
+                    <p class="text-xs leading-5 text-linear-ink-tertiary">{{ copy.gw.routeSummary }}</p>
+                  </div>
+                  <div data-testid="homepage-route-grid" class="mt-5 grid gap-3 sm:grid-cols-2">
+                    <article
+                      v-for="route in routeCards"
+                      :key="route.label"
+                      class="rounded-xl border border-linear-hairline bg-linear-surface-2 p-4 transition-colors hover:border-linear-hairline-strong"
+                    >
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ route.label }}</p>
+                          <p class="mt-1 text-xs leading-5 text-linear-ink-subtle">{{ route.description }}</p>
+                        </div>
+                        <span class="font-mono-brand rounded-full border border-linear-hairline bg-linear-canvas px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary-300">
+                          {{ route.badge }}
+                        </span>
+                      </div>
+                    </article>
                   </div>
                 </div>
 
                 <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
                   <p class="linx-section-kicker">{{ copy.gw.baseUrlTitle }}</p>
                   <pre class="font-mono-brand mt-4 overflow-x-auto rounded-xl border border-linear-hairline bg-linear-canvas p-4 text-left text-xs leading-6 text-linear-ink-muted"><code><span class="text-primary-300">ANTHROPIC_BASE_URL</span>=https://linx2.ai/api
-<span class="text-primary-300">ANTHROPIC_API_KEY</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span></code></pre>
+<span class="text-primary-300">ANTHROPIC_AUTH_TOKEN</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span>
+<span class="text-primary-300">OPENAI_BASE_URL</span>=https://linx2.ai/api
+<span class="text-primary-300">OPENAI_API_KEY</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span></code></pre>
                   <div class="mt-4 grid grid-cols-3 gap-2">
                     <div v-for="metric in metrics" :key="metric.label" class="linx-panel p-3 text-center">
                       <p class="text-lg font-semibold tracking-[-0.03em] text-linear-ink">{{ metric.value }}</p>
@@ -226,33 +243,48 @@
             </p>
           </div>
 
-          <div class="grid gap-5 md:grid-cols-3" data-testid="linear-pricing-grid">
+          <div class="grid gap-5 lg:grid-cols-2" data-testid="linear-pricing-grid">
             <article
               v-for="group in pricingGroups"
               :key="group.provider"
-              class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+              class="linx-panel min-w-0 p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
             >
               <div class="mb-5 flex items-center justify-between">
                 <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ group.provider }}</h3>
                 <span class="font-mono-brand rounded-full border border-linear-hairline bg-linear-canvas px-2.5 py-1 text-[10px] uppercase tracking-wider text-linear-ink-tertiary">{{ group.tag }}</span>
               </div>
 
-              <div class="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 border-b border-linear-hairline pb-2 text-[11px] font-medium uppercase tracking-wide text-linear-ink-tertiary">
-                <span>{{ copy.pricingCols.model }}</span>
-                <span class="text-right">{{ copy.pricingCols.input }}</span>
-                <span class="text-right">{{ copy.pricingCols.output }}</span>
+              <div data-testid="pricing-table-scroll" class="overflow-x-auto">
+                <div class="min-w-[27rem]">
+                  <div class="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_4.75rem] items-center gap-x-3 border-b border-linear-hairline pb-2 text-[11px] font-medium uppercase tracking-wide text-linear-ink-tertiary">
+                    <span>{{ copy.pricingCols.model }}</span>
+                    <span class="text-right">{{ copy.pricingCols.input }}</span>
+                    <span class="text-right">{{ copy.pricingCols.output }}</span>
+                    <span class="text-right">{{ copy.pricingCols.label }}</span>
+                  </div>
+                  <ul class="divide-y divide-linear-hairline">
+                    <li
+                      v-for="model in group.models"
+                      :key="model.name"
+                      data-testid="pricing-model-row"
+                      class="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_4.75rem] items-center gap-x-3 py-3"
+                    >
+                      <span class="min-w-0 text-sm font-medium text-linear-ink-muted">{{ model.name }}</span>
+                      <span class="font-mono-brand text-right text-sm tabular-nums text-linear-ink-subtle">{{ model.in }}</span>
+                      <span class="font-mono-brand text-right text-sm font-medium tabular-nums text-linear-ink">{{ model.out }}</span>
+                      <span class="text-right">
+                        <span
+                          v-if="model.label"
+                          class="font-mono-brand rounded-full border border-primary-400/30 bg-primary-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary-300"
+                        >
+                          {{ model.label }}
+                        </span>
+                        <span v-else class="text-xs text-linear-ink-tertiary">—</span>
+                      </span>
+                    </li>
+                  </ul>
+                </div>
               </div>
-              <ul class="divide-y divide-linear-hairline">
-                <li
-                  v-for="model in group.models"
-                  :key="model.name"
-                  class="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 py-3"
-                >
-                  <span class="text-sm font-medium text-linear-ink-muted">{{ model.name }}</span>
-                  <span class="font-mono-brand text-right text-sm text-linear-ink-subtle">{{ model.in }}</span>
-                  <span class="font-mono-brand text-right text-sm font-medium text-linear-ink">{{ model.out }}</span>
-                </li>
-              </ul>
             </article>
           </div>
 
@@ -289,14 +321,14 @@
 
     <!-- ===== Footer ===== -->
     <footer class="border-t border-linear-hairline px-4 py-8 sm:px-6 lg:px-8">
-      <div class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-center text-sm text-linear-ink-tertiary sm:flex-row sm:text-left">
-        <div class="flex items-center gap-2.5">
-          <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white p-1 ring-1 ring-linear-hairline">
+      <div class="mx-auto flex max-w-7xl flex-col items-center justify-center gap-3 text-center text-sm text-linear-ink-tertiary">
+        <div data-testid="homepage-footer-brand" class="flex flex-col items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
           <span>&copy; {{ currentYear }} LINIX2.Ltd</span>
         </div>
-        <div v-if="docUrl" class="flex items-center gap-5">
+        <div v-if="docUrl" class="flex items-center justify-center gap-5">
           <a
             :href="docUrl"
             target="_blank"
@@ -343,7 +375,7 @@ const isHomeContentUrl = computed(() => {
 
 const showAnnouncement = ref(true)
 
-const providers = ['Claude', 'Codex', 'Gemini', 'Messages', 'Responses', 'Images']
+const providers = ['Claude Code', 'Codex', 'Messages', 'Responses', 'Chat', 'Images']
 
 const metrics = [
   { value: '99.9%', label: '可用性 Uptime' },
@@ -351,34 +383,33 @@ const metrics = [
   { value: '24/7', label: '监控 Monitor' },
 ]
 
+const routeCards = [
+  { label: 'Anthropic Messages', description: 'Claude Code / Messages API', badge: 'Claude' },
+  { label: 'OpenAI Responses', description: 'Responses API compatible path', badge: 'OpenAI' },
+  { label: 'OpenAI Chat Completions', description: 'Chat Completions compatible path', badge: 'OpenAI' },
+  { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
+]
+
 // Model pricing — USD per 1M tokens (官方原价透传, source: backend model-pricing).
-type PriceRow = { name: string; in: string; out: string }
+type PriceRow = { name: string; in: string; out: string; label?: string }
 type PriceGroup = { provider: string; tag: string; models: PriceRow[] }
 const pricingGroups: PriceGroup[] = [
   {
     provider: 'Claude',
     tag: 'Anthropic',
     models: [
-      { name: 'Opus 4.5', in: '$5.00', out: '$25.00' },
-      { name: 'Sonnet 4.5', in: '$3.00', out: '$15.00' },
-      { name: 'Haiku 4.5', in: '$1.00', out: '$5.00' },
+      { name: 'Claude Opus 4.5', in: '$5.00', out: '$25.00', label: 'Latest' },
+      { name: 'Claude Sonnet 4.5', in: '$3.00', out: '$15.00', label: 'Latest' },
+      { name: 'Claude Haiku 4.5', in: '$1.00', out: '$5.00', label: 'Latest' },
     ],
   },
   {
     provider: 'OpenAI',
     tag: 'GPT · Codex',
     models: [
-      { name: 'GPT-5', in: '$1.25', out: '$10.00' },
-      { name: 'GPT-5 mini', in: '$0.25', out: '$2.00' },
+      { name: 'GPT-5', in: '$1.25', out: '$10.00', label: 'Latest' },
+      { name: 'GPT-5 mini', in: '$0.25', out: '$2.00', label: 'Latest' },
       { name: 'o3', in: '$2.00', out: '$8.00' },
-    ],
-  },
-  {
-    provider: 'Gemini',
-    tag: 'Google',
-    models: [
-      { name: 'Gemini 2.5 Pro', in: '$1.25', out: '$10.00' },
-      { name: 'Gemini 2.5 Flash', in: '$0.30', out: '$2.50' },
     ],
   },
 ]
@@ -386,12 +417,12 @@ const pricingGroups: PriceGroup[] = [
 // Bilingual marketing copy (mirrors LocaleSwitcher in the header).
 const copies = {
   zh: {
-    announcement: '统一 Claude Code · Codex · Gemini 官方原生通道，国内稳定直连',
+    announcement: '统一 Claude Code · Codex 官方原生通道，国内稳定直连',
     nav: { capabilities: '能力', pricing: '价格' },
-    heroKicker: '统一 AI 编程 API · OpenAI 兼容路由',
-    heroTitle: '一个密钥，接入你需要的所有编程模型。',
+    heroKicker: '统一 AI 编程 API · Claude / OpenAI 兼容路由',
+    heroTitle: '一个密钥，接入 Claude 与 OpenAI 编程模型。',
     heroDescription:
-      '通过统一的计费、用量与访问控制层，转发 Claude Code、Codex 与 Gemini 兼容请求。无需繁琐配置、无需海外信用卡，开箱即用。',
+      '通过统一的计费、用量与访问控制层，转发 Claude Code、Codex 与 OpenAI 兼容请求。无需繁琐配置、无需海外信用卡，开箱即用。',
     docsCta: '查看文档',
     learnCta: '了解能力',
     gw: {
@@ -400,6 +431,8 @@ const copies = {
       description: '一个平台密钥路由到兼容的模型 API。',
       badge: '可用路由',
       flowTitle: '网关流程',
+      routeTitle: 'Claude / OpenAI 路由矩阵',
+      routeSummary: '当前聚焦 Claude 与 OpenAI 两类上游能力。',
       baseUrlTitle: 'Base URL',
       flow: [
         { title: '应用请求', description: '使用供应商兼容客户端和一个 LINX2 密钥。' },
@@ -418,26 +451,26 @@ const copies = {
       'LINX2 的表达保持简单：给开发者兼容模型路由，给运营者余额保护，并提供商业可见的用量记录。',
     capabilities: [
       { code: 'MESSAGES', title: 'Anthropic 风格调用', description: '在支持的流程中使用熟悉的 messages 路由、流式、工具和多模态请求。' },
-      { code: 'RESPONSES', title: 'OpenAI 兼容路径', description: '让应用客户端尽量保持标准 OpenAI 风格请求结构，迁移成本极低。' },
-      { code: 'GEMINI', title: 'Gemini 路由族', description: '与 Claude、OpenAI 模型访问模式并列提供 Gemini 兼容网关路由。' },
+      { code: 'RESPONSES', title: 'OpenAI Responses 路径', description: '让应用客户端保持标准 OpenAI Responses 请求结构，迁移成本极低。' },
+      { code: 'CODEX', title: 'Codex / Chat 兼容', description: '面向 Codex 与 OpenAI Chat Completions 工作负载提供统一转发入口。' },
       { code: 'LEDGER', title: '用量与计费层', description: '跟踪模型、Token、状态和费用记录，并提供账户级余额保护。' },
     ],
     pricingKicker: '模型价格',
     pricingTitle: '官方原价透传，无隐藏加价。',
     pricingDescription: '下列为各模型单价，单位为美元 / 每百万 tokens（USD / 1M tokens）。',
-    pricingCols: { model: '模型', input: '输入', output: '输出' },
+    pricingCols: { model: '模型', input: '输入', output: '输出', label: '标注' },
     pricingFootnote: '价格随上游官方调整，以控制台实际计费为准 · 缓存读写另按官方比例计价。',
     ctaKicker: 'Ready when you are',
     ctaTitle: '几分钟接入，立即开始编程',
-    ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 Gemini 纳入统一、稳定、透明计费的编程通道。',
+    ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 OpenAI 纳入统一、稳定、透明计费的编程通道。',
   },
   en: {
-    announcement: 'Unified official-native routes for Claude Code · Codex · Gemini — stable direct access',
+    announcement: 'Unified official-native routes for Claude Code · Codex — stable direct access',
     nav: { capabilities: 'Capabilities', pricing: 'Pricing' },
-    heroKicker: 'Unified AI Coding API · OpenAI-compatible routes',
-    heroTitle: 'One key for every model your code needs.',
+    heroKicker: 'Unified AI Coding API · Claude / OpenAI-compatible routes',
+    heroTitle: 'One key for Claude and OpenAI coding models.',
     heroDescription:
-      'Route Claude Code, Codex and Gemini-compatible requests through one billing, usage and access layer. No tedious setup, no overseas card — ready out of the box.',
+      'Route Claude Code, Codex and OpenAI-compatible requests through one billing, usage and access layer. No tedious setup, no overseas card — ready out of the box.',
     docsCta: 'Read docs',
     learnCta: 'Explore',
     gw: {
@@ -446,6 +479,8 @@ const copies = {
       description: 'One platform key routes to compatible model APIs.',
       badge: 'Live routes',
       flowTitle: 'Gateway flow',
+      routeTitle: 'Claude / OpenAI route matrix',
+      routeSummary: 'Currently focused on Claude and OpenAI upstream capabilities.',
       baseUrlTitle: 'Base URL',
       flow: [
         { title: 'App request', description: 'Use provider-compatible clients and one LINX2 key.' },
@@ -464,18 +499,18 @@ const copies = {
       'LINX2 keeps the story simple: compatible model routes for builders, balance protection for operators, and usage records for commercial visibility.',
     capabilities: [
       { code: 'MESSAGES', title: 'Anthropic-style calls', description: 'Use familiar message routes for text, streaming, tools and multimodal flows where supported.' },
-      { code: 'RESPONSES', title: 'OpenAI-compatible paths', description: 'Keep application clients close to standard OpenAI-style request shapes for compatible workloads.' },
-      { code: 'GEMINI', title: 'Gemini route family', description: 'Expose Gemini-compatible gateway routes alongside Claude and OpenAI model access patterns.' },
+      { code: 'RESPONSES', title: 'OpenAI Responses paths', description: 'Keep application clients close to standard OpenAI Responses request shapes for compatible workloads.' },
+      { code: 'CODEX', title: 'Codex / Chat compatible', description: 'Provide one forwarding entry for Codex and OpenAI Chat Completions workloads.' },
       { code: 'LEDGER', title: 'Usage and billing layer', description: 'Track model, token, status and cost records with account-level balance protection.' },
     ],
     pricingKicker: 'Model pricing',
     pricingTitle: 'Official pass-through pricing, no hidden markup.',
     pricingDescription: 'Per-model rates below, in US dollars per 1M tokens (USD / 1M tokens).',
-    pricingCols: { model: 'Model', input: 'Input', output: 'Output' },
+    pricingCols: { model: 'Model', input: 'Input', output: 'Output', label: 'Label' },
     pricingFootnote: 'Prices track upstream official changes; the console billing is authoritative · cache read/write billed at official ratios.',
     ctaKicker: 'Ready when you are',
     ctaTitle: 'Connect in minutes, start coding now',
-    ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and Gemini into one stable, transparent coding gateway.',
+    ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and OpenAI into one stable, transparent coding gateway.',
   },
 } as const
 
