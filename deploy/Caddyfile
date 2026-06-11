@@ -1,5 +1,11 @@
-# 修改为你的域名
-api.sub2api.com {
+# 修改为你的域名。
+# 推荐：裸域名跳转到 www，主域名反向代理到本机服务。
+# 示例：example.com -> https://www.example.com，www.example.com -> 127.0.0.1:8080
+example.com {
+	redir https://www.example.com{uri} permanent
+}
+
+www.example.com {
         # =========================================================================
 	# 静态资源长期缓存（高优先级，放在最前面）
 	# 带 hash 的文件可以永久缓存，浏览器和 CDN 都会缓存
@@ -30,7 +36,7 @@ api.sub2api.com {
 	# =========================================================================
 	# 反向代理配置
 	# =========================================================================
-	reverse_proxy localhost:8080 {
+	reverse_proxy 127.0.0.1:8080 {
 		# 健康检查
 		health_uri /health
 		health_interval 30s
@@ -70,18 +76,8 @@ api.sub2api.com {
 	# =========================================================================
 	# 压缩配置
 	# =========================================================================
-	encode {
-		zstd
-		gzip 6
+	encode zstd gzip {
 		minimum_length 256
-		match {
-			header Content-Type text/*
-			header Content-Type application/json*
-			header Content-Type application/javascript*
-			header Content-Type application/xml*
-			header Content-Type application/rss+xml*
-			header Content-Type image/svg+xml*
-		}
 	}
 
 	# =========================================================================

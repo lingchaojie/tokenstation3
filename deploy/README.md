@@ -17,6 +17,7 @@ This directory contains files for deploying Sub2API on Linux servers.
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `.env.example` | Docker environment variables template |
+| `Caddyfile` | Example Caddy reverse proxy for custom domains and HTTPS |
 | `DOCKER.md` | Docker Hub documentation |
 | `install.sh` | One-click binary installation script |
 | `install-datamanagementd.sh` | datamanagementd 一键安装脚本 |
@@ -35,13 +36,57 @@ Use the automated preparation script for the easiest setup:
 
 ```bash
 # Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh | bash
 
 # Or download first, then run
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh -o docker-deploy.sh
+curl -fsSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh -o docker-deploy.sh
 chmod +x docker-deploy.sh
 ./docker-deploy.sh
 ```
+
+#### Optional: One-Click Custom Domain Setup
+
+If your DNS already points to the server, the same script can also install/configure Caddy and enable HTTPS. Caddy setup writes to `/etc/caddy`, so run this flow with `sudo` on a fresh deployment directory and then use `sudo docker compose ...` for that deployment:
+
+```bash
+# Download first, then run a fresh deployment with HTTPS
+curl -fsSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh -o docker-deploy.sh
+chmod +x docker-deploy.sh
+
+# Main domain only
+DOMAIN=www.example.com sudo -E ./docker-deploy.sh
+
+# Recommended: apex redirects to www
+DOMAIN=www.example.com APEX_DOMAIN=example.com sudo -E ./docker-deploy.sh
+
+# Start services for this sudo-created deployment
+sudo docker compose up -d
+```
+
+If you want to manage Docker Compose as your normal user after the sudo run, fix ownership first:
+
+```bash
+sudo chown -R "$USER:$USER" .
+docker compose up -d
+```
+
+Do not rerun `docker-deploy.sh` with `DOMAIN` in an existing deployment unless you intend to answer the overwrite prompt and regenerate deployment files/secrets. To add a domain later without touching `.env` or data directories, configure Caddy manually using the snippet below.
+
+`DOMAIN` is the host users should open in the browser. `APEX_DOMAIN` is optional; when set, it redirects permanently to `DOMAIN`.
+
+The generated Caddy site configuration is stored at `/etc/caddy/sub2api/sub2api.caddy` and imported by `/etc/caddy/Caddyfile`:
+
+```caddyfile
+example.com {
+	redir https://www.example.com{uri} permanent
+}
+
+www.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+Caddy listens on ports `80` and `443`, obtains/renews HTTPS certificates automatically, and forwards traffic to the application on `127.0.0.1:8080`. In `DOMAIN` mode, the script also sets `BIND_HOST=127.0.0.1` by default so the application port is not exposed publicly outside Caddy. If you explicitly set another `BIND_HOST`, protect the direct app port with a firewall.
 
 **What the script does:**
 - Downloads `docker-compose.local.yml` and `.env.example`
@@ -51,15 +96,18 @@ chmod +x docker-deploy.sh
 - **Displays generated credentials** (POSTGRES_PASSWORD, JWT_SECRET, etc.)
 
 **After running the script:**
+
+The one-click script saves the local-directory Compose file as `docker-compose.yml` in the deployment directory.
+
 ```bash
 # Start services
-docker compose -f docker-compose.local.yml up -d
+docker compose up -d
 
 # View logs
-docker compose -f docker-compose.local.yml logs -f sub2api
+docker compose logs -f sub2api
 
 # If admin password was auto-generated, find it in logs:
-docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
+docker compose logs sub2api | grep "admin password"
 
 # Access Web UI
 # http://localhost:8080
@@ -72,7 +120,7 @@ If you prefer manual control:
 ```bash
 # Clone repository
 git clone -b dev https://github.com/lingchaojie/tokenstation3.git
-cd sub2api/deploy
+cd tokenstation3/deploy
 
 # Configure environment
 cp .env.example .env
@@ -101,10 +149,10 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 | Version | Data Storage | Migration | Best For |
 |---------|-------------|-----------|----------|
-| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
-| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/) | ⚠️ Requires docker commands | Simple setup, don't need migration |
+| **docker-compose.local.yml** (repo) / **docker-compose.yml** (script-created) | Local directories (./data, ./postgres_data, ./redis_data) | ✅ Easy (tar entire directory) | Production, need frequent backups/migration |
+| **docker-compose.yml** (repo) | Named volumes (/var/lib/docker/volumes/) | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
-**Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
+**Recommendation:** Use the local-directory Compose configuration for easier data management and migration. `docker-deploy.sh` downloads `docker-compose.local.yml` but saves it as `docker-compose.yml` in the deployment directory.
 
 ### How Auto-Setup Works
 
@@ -158,7 +206,31 @@ SELECT
 
 ### Commands
 
-For **local directory version** (docker-compose.local.yml):
+For **one-click script deployments** (`docker-deploy.sh` saves the local-directory Compose file as `docker-compose.yml`):
+
+```bash
+# Start services
+docker compose up -d
+
+# Stop services
+docker compose down
+
+# View logs
+docker compose logs -f sub2api
+
+# Restart Sub2API only
+docker compose restart sub2api
+
+# Update to latest version
+docker compose pull
+docker compose up -d
+
+# Remove all data (caution!)
+docker compose down
+rm -rf data/ postgres_data/ redis_data/
+```
+
+For **repo/manual local-directory deployments** (using `docker-compose.local.yml` directly):
 
 ```bash
 # Start services
@@ -182,7 +254,9 @@ docker compose -f docker-compose.local.yml down
 rm -rf data/ postgres_data/ redis_data/
 ```
 
-For **named volumes version** (docker-compose.yml):
+> **Custom domain note:** Docker updates do not overwrite `/etc/caddy/sub2api/sub2api.caddy` or its import in `/etc/caddy/Caddyfile`. If you configured `DOMAIN`/`APEX_DOMAIN`, keep using the same update commands for your deployment type; you do not need to reconfigure the domain unless you rebuild the server, change DNS/IPs, change `SERVER_PORT`, or manually replace the Caddy config.
+
+For **named volumes version** (repo `docker-compose.yml`):
 
 ```bash
 # Start services
@@ -213,6 +287,8 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
+| `DOMAIN` | No | - | Optional deployment-script input: configure Caddy for this public hostname |
+| `APEX_DOMAIN` | No | - | Optional deployment-script input: redirect this hostname to `DOMAIN` |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
@@ -227,12 +303,12 @@ See `.env.example` for all available options.
 
 ### Easy Migration (Local Directory Version)
 
-When using `docker-compose.local.yml`, all data is stored in local directories, making migration simple:
+When using the local-directory Compose configuration generated by `docker-deploy.sh`, all data is stored in local directories, making migration simple:
 
 ```bash
 # On source server: Stop services and create archive
 cd /path/to/deployment
-docker compose -f docker-compose.local.yml down
+docker compose down
 cd ..
 tar czf sub2api-complete.tar.gz deployment/
 
@@ -242,7 +318,7 @@ scp sub2api-complete.tar.gz user@new-server:/path/to/destination/
 # On new server: Extract and start
 tar xzf sub2api-complete.tar.gz
 cd deployment/
-docker compose -f docker-compose.local.yml up -d
+docker compose up -d
 ```
 
 Your entire deployment (configuration + data) is migrated!
