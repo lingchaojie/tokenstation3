@@ -149,6 +149,39 @@
     @apply rounded-xl p-2.5;
   }
 
+  .ui-accent-dot {
+    @apply bg-amber-400;
+  }
+
+  .ui-accent-badge {
+    @apply border-amber-400/30 bg-amber-500/10 text-amber-300;
+  }
+
+  .ui-theme-toggle {
+    @apply rounded-lg border border-linear-hairline bg-linear-surface-1/70 p-2 text-linear-ink-subtle transition-colors;
+    @apply hover:border-amber-400/30 hover:bg-amber-500/10 hover:text-amber-200;
+  }
+
+  .ui-theme-icon-accent {
+    @apply text-amber-400;
+  }
+
+  .ui-avatar-identity {
+    @apply bg-gradient-to-br from-orange-700 via-orange-600 to-rose-600 text-white shadow-lg shadow-orange-900/20;
+  }
+
+  .ui-avatar-identity-sm {
+    @apply ui-avatar-identity flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-semibold;
+  }
+
+  .ui-avatar-identity-md {
+    @apply ui-avatar-identity flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium;
+  }
+
+  .ui-avatar-identity-lg {
+    @apply ui-avatar-identity flex h-20 w-20 items-center justify-center rounded-[1.75rem] text-2xl font-bold;
+  }
+
   /* ============ 输入框样式 ============ */
   .input {
     @apply w-full rounded-lg px-3.5 py-2 text-sm;

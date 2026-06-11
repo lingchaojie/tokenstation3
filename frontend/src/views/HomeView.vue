@@ -21,7 +21,7 @@
       v-if="showAnnouncement"
       class="relative z-30 flex items-center justify-center gap-3 border-b border-linear-hairline bg-linear-surface-1/70 px-4 py-2.5 text-center text-xs font-medium text-linear-ink-muted sm:text-sm"
     >
-      <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-400"></span>
+      <span class="ui-accent-dot h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
       <span>{{ copy.announcement }}</span>
       <button
         class="absolute right-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary transition-colors hover:text-linear-ink"
@@ -61,12 +61,13 @@
           </div>
           <LocaleSwitcher />
           <button
+            data-testid="homepage-theme-toggle"
             @click="toggleTheme"
-            class="rounded-lg border border-linear-hairline bg-linear-surface-1 p-2 text-linear-ink-subtle transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+            class="ui-theme-toggle"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
           >
-            <Icon v-if="isDark" name="sun" size="md" />
-            <Icon v-else name="moon" size="md" />
+            <Icon v-if="isDark" name="sun" size="md" class="ui-theme-icon-accent" />
+            <Icon v-else name="moon" size="md" class="ui-theme-icon-accent" />
           </button>
           <router-link
             :to="isAuthenticated ? dashboardPath : '/login'"
@@ -75,7 +76,7 @@
           >
             <span
               v-if="isAuthenticated && userInitial"
-              class="flex h-5 w-5 items-center justify-center rounded-md bg-white/15 text-[10px]"
+              class="ui-avatar-identity-sm"
             >
               {{ userInitial }}
             </span>
@@ -92,7 +93,7 @@
       <section class="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
         <div class="mx-auto max-w-4xl text-center">
           <p class="linx-section-kicker inline-flex items-center gap-2">
-            <span class="h-1.5 w-1.5 rounded-full bg-primary-400"></span>
+            <span class="ui-accent-dot h-1.5 w-1.5 rounded-full"></span>
             {{ copy.heroKicker }}
           </p>
           <h1 class="mt-7 text-[clamp(2.75rem,7vw,5.25rem)] font-semibold leading-[0.98] tracking-[-0.065em] text-linear-ink">
@@ -166,7 +167,7 @@
                           <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ route.label }}</p>
                           <p class="mt-1 text-xs leading-5 text-linear-ink-subtle">{{ route.description }}</p>
                         </div>
-                        <span class="font-mono-brand rounded-full border border-linear-hairline bg-linear-canvas px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary-300">
+                        <span class="font-mono-brand ui-accent-badge rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider">
                           {{ route.badge }}
                         </span>
                       </div>
@@ -275,7 +276,7 @@
                       <span class="text-right">
                         <span
                           v-if="model.label"
-                          class="font-mono-brand rounded-full border border-primary-400/30 bg-primary-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary-300"
+                          class="font-mono-brand ui-accent-badge rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider"
                         >
                           {{ model.label }}
                         </span>

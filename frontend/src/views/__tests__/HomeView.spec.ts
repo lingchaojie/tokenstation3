@@ -203,7 +203,21 @@ describe('HomeView landing page', () => {
 
     expect(text).not.toContain('GitHub')
     expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/linx2-icon.png')
-    expect(wrapper.get('a[href="/login"]').text()).toContain('立即开始')
+    const headerCta = wrapper.get('a[href="/login"]')
+    expect(headerCta.text()).toContain('立即开始')
+    expect(headerCta.classes()).toContain('bg-primary-500')
+    expect(headerCta.classes()).not.toContain('ui-theme-toggle')
+
+    const themeToggle = wrapper.get('[data-testid="homepage-theme-toggle"]')
+    expect(themeToggle.classes()).toContain('ui-theme-toggle')
+    expect(themeToggle.classes()).not.toContain('bg-primary-500')
+
+    const accentBadges = wrapper.findAll('.ui-accent-badge')
+    expect(accentBadges.length).toBeGreaterThanOrEqual(6)
+
+    const accentDots = wrapper.findAll('.ui-accent-dot')
+    expect(accentDots.length).toBeGreaterThanOrEqual(2)
+
     const docsLinks = wrapper.findAll('a[href="https://docs.example.test"]')
     expect(docsLinks.length).toBeGreaterThan(0)
     expect(docsLinks[0].text()).toContain('文档')
@@ -219,6 +233,9 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const headerCta = wrapper.get('header a[href="/admin/dashboard"]')
+    const userInitial = headerCta.get('.ui-avatar-identity-sm')
+    expect(userInitial.text()).toBe('A')
+    expect(userInitial.classes()).not.toContain('bg-white/15')
     expect(headerCta.text()).toContain('进入控制台')
     expect(headerCta.attributes('aria-label')).toBe('进入控制台')
     expect(wrapper.text()).toContain('控制台')
@@ -248,7 +265,7 @@ describe('HomeView landing page', () => {
     const iframe = wrapper.get('iframe')
     expect(iframe.attributes('src')).toBe('https://landing.example.test')
     expect(iframe.attributes('title')).toBe('Fuse API custom home content')
-    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
   it('renders Markdown custom home content before the default landing page', async () => {
@@ -261,7 +278,7 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.get('h1').text()).toBe('Custom Home')
     expect(wrapper.html()).toContain('<strong>custom</strong>')
-    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
   it('renders HTML custom home content before the default landing page', async () => {
@@ -274,7 +291,7 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
-    expect(wrapper.text()).not.toContain('一个密钥，接入你需要的所有编程模型。')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
   it('renders a Linear-style product console landing experience without decorative mesh glow', async () => {
