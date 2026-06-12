@@ -74,6 +74,42 @@ func UserFromServiceAdmin(u *service.User) *AdminUser {
 	}
 }
 
+func UserAPIKeyRoutesFromServiceAdmin(routes *service.UserAPIKeyRoutes) *AdminUserAPIKeyRoutes {
+	if routes == nil {
+		return &AdminUserAPIKeyRoutes{}
+	}
+	return &AdminUserAPIKeyRoutes{
+		Anthropic: UserAPIKeyRouteFromServiceAdmin(routes.Anthropic),
+		OpenAI:    UserAPIKeyRouteFromServiceAdmin(routes.OpenAI),
+	}
+}
+
+func UserAPIKeyRouteFromServiceAdmin(route *service.UserAPIKeyRoute) *AdminUserAPIKeyRoute {
+	if route == nil {
+		return nil
+	}
+	return &AdminUserAPIKeyRoute{
+		ID:        route.ID,
+		UserID:    route.UserID,
+		KeyType:   route.KeyType,
+		GroupID:   route.GroupID,
+		Group:     UserAPIKeyRouteGroupFromServiceAdmin(route.Group),
+		CreatedAt: route.CreatedAt,
+		UpdatedAt: route.UpdatedAt,
+	}
+}
+
+func UserAPIKeyRouteGroupFromServiceAdmin(group *service.Group) *AdminUserAPIKeyRouteGroup {
+	if group == nil {
+		return nil
+	}
+	return &AdminUserAPIKeyRouteGroup{
+		ID:       group.ID,
+		Name:     group.Name,
+		Platform: group.Platform,
+	}
+}
+
 func apiKeyResponseType(k *service.APIKey) string {
 	if k == nil {
 		return service.APIKeyTypeUnknown

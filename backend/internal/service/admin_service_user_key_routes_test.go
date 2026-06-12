@@ -64,7 +64,10 @@ func (s *userAPIKeyRouteGroupRepoStub) UpdateSortOrders(context.Context, []Group
 }
 
 type userAPIKeyRouteRepoStub struct {
-	routes map[string]UserAPIKeyRoute
+	routes           map[string]UserAPIKeyRoute
+	getByUserIDCalls int
+	upsertCalls      int
+	deleteCalls      int
 }
 
 func routeKey(userID int64, keyType string) string {
@@ -72,6 +75,7 @@ func routeKey(userID int64, keyType string) string {
 }
 
 func (r *userAPIKeyRouteRepoStub) GetByUserID(_ context.Context, userID int64) ([]UserAPIKeyRoute, error) {
+	r.getByUserIDCalls++
 	out := []UserAPIKeyRoute{}
 	for _, route := range r.routes {
 		if route.UserID == userID {
@@ -90,6 +94,7 @@ func (r *userAPIKeyRouteRepoStub) GetByUserIDAndKeyType(_ context.Context, userI
 }
 
 func (r *userAPIKeyRouteRepoStub) Upsert(_ context.Context, route UserAPIKeyRoute) (*UserAPIKeyRoute, error) {
+	r.upsertCalls++
 	if r.routes == nil {
 		r.routes = map[string]UserAPIKeyRoute{}
 	}
@@ -99,6 +104,7 @@ func (r *userAPIKeyRouteRepoStub) Upsert(_ context.Context, route UserAPIKeyRout
 }
 
 func (r *userAPIKeyRouteRepoStub) DeleteByUserIDAndKeyType(_ context.Context, userID int64, keyType string) error {
+	r.deleteCalls++
 	delete(r.routes, routeKey(userID, keyType))
 	return nil
 }
@@ -111,7 +117,7 @@ func TestAdminService_UpdateUserAPIKeyRoutes_ValidatesPlatform(t *testing.T) {
 		openAIID:    {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
 	}}
 	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
-	svc := &adminServiceImpl{groupRepo: groupRepo, userAPIKeyRouteRepo: routeRepo}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, groupRepo: groupRepo, userAPIKeyRouteRepo: routeRepo}
 
 	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{
 		AnthropicGroupID: &anthropicID,
@@ -130,10 +136,89 @@ func TestAdminService_UpdateUserAPIKeyRoutes_RejectsPlatformMismatch(t *testing.
 	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
 		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
 	}}
-	svc := &adminServiceImpl{groupRepo: groupRepo, userAPIKeyRouteRepo: &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, groupRepo: groupRepo, userAPIKeyRouteRepo: &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}}
 
 	errRoutes, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{OpenAIGroupID: &anthropicID})
 
 	require.Nil(t, errRoutes)
 	require.Error(t, err)
+}
+
+func TestAdminService_GetUserAPIKeyRoutes_RejectsInvalidUserID(t *testing.T) {
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, userAPIKeyRouteRepo: routeRepo}
+
+	got, err := svc.GetUserAPIKeyRoutes(context.Background(), 0)
+
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.Equal(t, 0, routeRepo.getByUserIDCalls)
+}
+
+func TestAdminService_GetUserAPIKeyRoutes_RejectsMissingUser(t *testing.T) {
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{getErr: ErrUserNotFound}, userAPIKeyRouteRepo: routeRepo}
+
+	got, err := svc.GetUserAPIKeyRoutes(context.Background(), 42)
+
+	require.Nil(t, got)
+	require.ErrorIs(t, err, ErrUserNotFound)
+	require.Equal(t, 0, routeRepo.getByUserIDCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_RejectsInvalidUserID(t *testing.T) {
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, userAPIKeyRouteRepo: routeRepo}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 0, UserAPIKeyRouteUpdate{})
+
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.Equal(t, 0, routeRepo.upsertCalls)
+	require.Equal(t, 0, routeRepo.deleteCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_RejectsMissingUser(t *testing.T) {
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{getErr: ErrUserNotFound}, userAPIKeyRouteRepo: routeRepo}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{})
+
+	require.Nil(t, got)
+	require.ErrorIs(t, err, ErrUserNotFound)
+	require.Equal(t, 0, routeRepo.upsertCalls)
+	require.Equal(t, 0, routeRepo.deleteCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_InvalidOpenAIGroupDoesNotMutateAnthropicRoute(t *testing.T) {
+	anthropicID := int64(10)
+	invalidOpenAIID := int64(20)
+	originalAnthropicID := int64(11)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		anthropicID:     {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+		invalidOpenAIID: {ID: invalidOpenAIID, Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: originalAnthropicID},
+	}}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, groupRepo: groupRepo, userAPIKeyRouteRepo: routeRepo}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{
+		AnthropicGroupID: &anthropicID,
+		OpenAIGroupID:    &invalidOpenAIID,
+	})
+
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.Equal(t, originalAnthropicID, routeRepo.routes[routeKey(42, APIKeyTypeAnthropic)].GroupID)
+	require.Equal(t, 0, routeRepo.upsertCalls)
+	require.Equal(t, 0, routeRepo.deleteCalls)
 }

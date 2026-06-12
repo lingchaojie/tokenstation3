@@ -696,6 +696,9 @@ func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) 
 }
 
 func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error) {
+	if err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	if s.userAPIKeyRouteRepo == nil {
 		return &UserAPIKeyRoutes{}, nil
 	}
@@ -707,21 +710,51 @@ func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64
 }
 
 func (s *adminServiceImpl) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error) {
+	if err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	if s.userAPIKeyRouteRepo == nil {
 		return nil, infraerrors.InternalServer("USER_API_KEY_ROUTE_REPO_MISSING", "user API key route repository is not configured")
 	}
-	if err := s.upsertUserAPIKeyRoute(ctx, userID, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+	if err := s.validateUserAPIKeyRouteGroups(ctx, input); err != nil {
 		return nil, err
 	}
-	if err := s.upsertUserAPIKeyRoute(ctx, userID, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
+	if err := s.persistUserAPIKeyRoute(ctx, userID, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+		return nil, err
+	}
+	if err := s.persistUserAPIKeyRoute(ctx, userID, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
 		return nil, err
 	}
 	return s.GetUserAPIKeyRoutes(ctx, userID)
 }
 
-func (s *adminServiceImpl) upsertUserAPIKeyRoute(ctx context.Context, userID int64, keyType string, groupID *int64) error {
+func (s *adminServiceImpl) validateUserAPIKeyRouteUser(ctx context.Context, userID int64) error {
+	if userID <= 0 {
+		return infraerrors.BadRequest("INVALID_INPUT", "user_id must be greater than 0")
+	}
+	if s.userRepo == nil {
+		return infraerrors.InternalServer("USER_REPO_MISSING", "user repository is not configured")
+	}
+	_, err := s.userRepo.GetByID(ctx, userID)
+	return err
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroups(ctx context.Context, input UserAPIKeyRouteUpdate) error {
+	if err := s.validateUserAPIKeyRouteGroup(ctx, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+		return err
+	}
+	if err := s.validateUserAPIKeyRouteGroup(ctx, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) error {
 	if groupID == nil || *groupID <= 0 {
-		return s.userAPIKeyRouteRepo.DeleteByUserIDAndKeyType(ctx, userID, keyType)
+		return nil
+	}
+	if s.groupRepo == nil {
+		return infraerrors.InternalServer("GROUP_REPO_MISSING", "group repository is not configured")
 	}
 	group, err := s.groupRepo.GetByID(ctx, *groupID)
 	if err != nil {
@@ -730,7 +763,14 @@ func (s *adminServiceImpl) upsertUserAPIKeyRoute(ctx context.Context, userID int
 	if !group.IsActive() || APIKeyTypeFromGroupPlatform(group.Platform) != keyType {
 		return infraerrors.BadRequest("USER_API_KEY_ROUTE_INVALID_GROUP", "group platform or status does not match API key type")
 	}
-	_, err = s.userAPIKeyRouteRepo.Upsert(ctx, UserAPIKeyRoute{UserID: userID, KeyType: keyType, GroupID: *groupID})
+	return nil
+}
+
+func (s *adminServiceImpl) persistUserAPIKeyRoute(ctx context.Context, userID int64, keyType string, groupID *int64) error {
+	if groupID == nil || *groupID <= 0 {
+		return s.userAPIKeyRouteRepo.DeleteByUserIDAndKeyType(ctx, userID, keyType)
+	}
+	_, err := s.userAPIKeyRouteRepo.Upsert(ctx, UserAPIKeyRoute{UserID: userID, KeyType: keyType, GroupID: *groupID})
 	return err
 }
 

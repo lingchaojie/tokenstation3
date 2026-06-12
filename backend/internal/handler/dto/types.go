@@ -48,6 +48,27 @@ type AdminUser struct {
 	GroupRates map[int64]float64 `json:"group_rates,omitempty"`
 }
 
+type AdminUserAPIKeyRoutes struct {
+	Anthropic *AdminUserAPIKeyRoute `json:"anthropic"`
+	OpenAI    *AdminUserAPIKeyRoute `json:"openai"`
+}
+
+type AdminUserAPIKeyRoute struct {
+	ID        int64                      `json:"id"`
+	UserID    int64                      `json:"user_id"`
+	KeyType   string                     `json:"key_type"`
+	GroupID   int64                      `json:"group_id"`
+	Group     *AdminUserAPIKeyRouteGroup `json:"group,omitempty"`
+	CreatedAt time.Time                  `json:"created_at"`
+	UpdatedAt time.Time                  `json:"updated_at"`
+}
+
+type AdminUserAPIKeyRouteGroup struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+}
+
 type APIKey struct {
 	ID          int64      `json:"id"`
 	UserID      int64      `json:"user_id"`

@@ -575,7 +575,7 @@ func (h *UserHandler) GetUserAPIKeyRoutes(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, routes)
+	response.Success(c, dto.UserAPIKeyRoutesFromServiceAdmin(routes))
 }
 
 func (h *UserHandler) UpdateUserAPIKeyRoutes(c *gin.Context) {
@@ -597,7 +597,7 @@ func (h *UserHandler) UpdateUserAPIKeyRoutes(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, routes)
+	response.Success(c, dto.UserAPIKeyRoutesFromServiceAdmin(routes))
 }
 
 func (h *UserHandler) GetUserPlatformQuotas(c *gin.Context) {
