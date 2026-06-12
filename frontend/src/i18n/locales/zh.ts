@@ -701,6 +701,7 @@ export default {
     copyToClipboard: '复制到剪贴板',
     copied: '已复制！',
     importToCcSwitch: '导入到 CCS',
+    cannotImportUnconfiguredKey: '无法导入未配置的密钥',
     enable: '启用',
     disable: '禁用',
     nameLabel: '名称',

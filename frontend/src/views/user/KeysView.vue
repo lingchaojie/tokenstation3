@@ -865,7 +865,7 @@
       :api-key="selectedKey?.key || ''"
       :base-url="publicSettings?.api_base_url || ''"
       :platform="useKeyPlatform"
-      :allow-messages-dispatch="false"
+      :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch ?? false"
       @close="closeUseKeyModal"
     />
 
@@ -1442,7 +1442,11 @@ const importToCcswitch = (row: ApiKey) => {
 
 const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
-  const platform = row.key_type === 'openai' ? 'openai' : 'anthropic'
+  if (row.key_type !== 'anthropic' && row.key_type !== 'openai') {
+    appStore.showError(t('keys.cannotImportUnconfiguredKey'))
+    return
+  }
+  const platform = row.key_type
 
   const usageScript = `({
     request: {

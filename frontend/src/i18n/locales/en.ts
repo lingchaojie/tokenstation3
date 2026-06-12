@@ -702,6 +702,7 @@ export default {
     copyToClipboard: 'Copy to clipboard',
     copied: 'Copied!',
     importToCcSwitch: 'Import to CCS',
+    cannotImportUnconfiguredKey: 'Cannot import an unconfigured key',
     enable: 'Enable',
     disable: 'Disable',
     nameLabel: 'Name',
