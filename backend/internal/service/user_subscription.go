@@ -11,12 +11,12 @@ type UserSubscription struct {
 	PlanName         *string
 	SevenDayLimitUSD *float64
 
-	ScheduledPlanID            *int64
-	ScheduledPlanName          *string
-	ScheduledSevenDayLimitUSD  *float64
-	ScheduledPlanEffectiveAt   *time.Time
-	ScheduledExpiresAt         *time.Time
-	ScheduledOrderID           *int64
+	ScheduledPlanID           *int64
+	ScheduledPlanName         *string
+	ScheduledSevenDayLimitUSD *float64
+	ScheduledPlanEffectiveAt  *time.Time
+	ScheduledExpiresAt        *time.Time
+	ScheduledOrderID          *int64
 
 	StartsAt  time.Time
 	ExpiresAt time.Time

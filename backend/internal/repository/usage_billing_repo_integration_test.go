@@ -134,19 +134,24 @@ func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.
 		Key:     "sk-usage-billing-sub-" + uuid.NewString(),
 		Name:    "billing-sub",
 	})
+	limit := 10.0
 	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
-		UserID:  user.ID,
-		GroupID: group.ID,
+		UserID:           user.ID,
+		GroupID:          group.ID,
+		SevenDayLimitUSD: &limit,
 	})
+	_, err := integrationDB.ExecContext(ctx, "UPDATE user_subscriptions SET seven_day_limit_usd = $1 WHERE id = $2", limit, subscription.ID)
+	require.NoError(t, err)
 
 	requestID := uuid.NewString()
 	cmd := &service.UsageBillingCommand{
-		RequestID:        requestID,
-		APIKeyID:         apiKey.ID,
-		UserID:           user.ID,
-		AccountID:        0,
-		SubscriptionID:   &subscription.ID,
-		SubscriptionCost: 2.5,
+		RequestID:                    requestID,
+		APIKeyID:                     apiKey.ID,
+		UserID:                       user.ID,
+		AccountID:                    0,
+		SubscriptionID:               &subscription.ID,
+		SubscriptionCost:             2.5,
+		SubscriptionSevenDayLimitUSD: &limit,
 	}
 
 	result1, err := repo.Apply(ctx, cmd)

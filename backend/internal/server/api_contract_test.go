@@ -422,6 +422,12 @@ func TestAPIContracts(t *testing.T) {
 							"group_id": 10,
 							"plan_id": 42,
 							"plan_name": "Starter",
+							"scheduled_plan_id": null,
+							"scheduled_plan_name": null,
+							"scheduled_seven_day_limit_usd": null,
+							"scheduled_plan_effective_at": null,
+							"scheduled_expires_at": null,
+							"scheduled_order_id": null,
 							"starts_at": "2025-01-02T03:04:05Z",
 							"expires_at": "2099-01-02T03:04:05Z",
 							"status": "active",
@@ -444,6 +450,12 @@ func TestAPIContracts(t *testing.T) {
 							"group_id": 11,
 							"plan_id": null,
 							"plan_name": null,
+							"scheduled_plan_id": null,
+							"scheduled_plan_name": null,
+							"scheduled_seven_day_limit_usd": null,
+							"scheduled_plan_effective_at": null,
+							"scheduled_expires_at": null,
+							"scheduled_order_id": null,
 							"starts_at": "2025-01-02T03:04:05Z",
 							"expires_at": "2099-01-03T03:04:05Z",
 							"status": "active",
@@ -2057,6 +2069,15 @@ func (stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID 
 }
 func (stubUserSubscriptionRepo) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
 	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
+	return nil, false, errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
