@@ -237,6 +237,10 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 		response.BadRequest(c, "group_id is managed by administrator")
 		return
 	}
+	if _, hasKeyType := raw["key_type"]; hasKeyType {
+		response.BadRequest(c, "key_type cannot be changed after creation")
+		return
+	}
 
 	svcReq := service.UpdateAPIKeyRequest{
 		IPWhitelist:         req.IPWhitelist,

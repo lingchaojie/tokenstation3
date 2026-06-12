@@ -38,6 +38,7 @@ func TestAPIContracts(t *testing.T) {
 		headers    map[string]string
 		wantStatus int
 		wantJSON   string
+		verify     func(t *testing.T, deps *contractDeps)
 	}{
 		{
 			name:       "GET /api/v1/auth/me",
@@ -264,6 +265,41 @@ func TestAPIContracts(t *testing.T) {
 				"code": 400,
 				"message": "group_id is managed by administrator"
 			}`,
+		},
+		{
+			name: "PUT /api/v1/keys/:id rejects explicit key_type",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				deps.apiKeyRepo.MustSeed(&service.APIKey{
+					ID:        100,
+					UserID:    1,
+					Key:       "sk_custom_1234567890",
+					Name:      "Key One",
+					KeyType:   service.APIKeyTypeAnthropic,
+					GroupID:   ptr(int64(10)),
+					Status:    service.StatusActive,
+					CreatedAt: deps.now,
+					UpdatedAt: deps.now,
+				})
+			},
+			method: http.MethodPut,
+			path:   "/api/v1/keys/100",
+			body:   `{"key_type":"openai","name":"New Name"}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantJSON: `{
+				"code": 400,
+				"message": "key_type cannot be changed after creation"
+			}`,
+			verify: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				key, err := deps.apiKeyRepo.GetByID(context.Background(), 100)
+				require.NoError(t, err)
+				require.Equal(t, "Key One", key.Name)
+				require.Equal(t, service.APIKeyTypeAnthropic, key.KeyType)
+			},
 		},
 		{
 			name: "GET /api/v1/keys (paginated)",
@@ -1233,6 +1269,9 @@ func TestAPIContracts(t *testing.T) {
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
 			require.Equal(t, tt.wantStatus, status)
 			require.JSONEq(t, tt.wantJSON, body)
+			if tt.verify != nil {
+				tt.verify(t, deps)
+			}
 		})
 	}
 }
@@ -1340,6 +1379,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Keys.Use(jwtAuth)
 	v1Keys.GET("/keys", apiKeyHandler.List)
 	v1Keys.POST("/keys", apiKeyHandler.Create)
+	v1Keys.PUT("/keys/:id", apiKeyHandler.Update)
 	v1Keys.GET("/groups/available", apiKeyHandler.GetAvailableGroups)
 
 	v1Usage := v1.Group("")
