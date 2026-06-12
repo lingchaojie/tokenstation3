@@ -1611,6 +1611,12 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Contex
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
+	if err := s.validateDefaultAPIKeyGroup(ctx, settings.DefaultAnthropicGroupID, PlatformAnthropic); err != nil {
+		return nil, err
+	}
+	if err := s.validateDefaultAPIKeyGroup(ctx, settings.DefaultOpenAIGroupID, PlatformOpenAI); err != nil {
+		return nil, err
+	}
 	if err := s.validateDefaultSubscriptionGroups(ctx, settings.DefaultSubscriptions); err != nil {
 		return nil, err
 	}
@@ -1855,6 +1861,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyAffiliateRebatePerInviteeCap] = strconv.FormatFloat(settings.AffiliateRebatePerInviteeCap, 'f', 8, 64)
 	updates[SettingKeyDefaultUserRPMLimit] = strconv.Itoa(settings.DefaultUserRPMLimit)
+	updates[SettingKeyDefaultAnthropicGroupID] = formatOptionalSettingInt64(settings.DefaultAnthropicGroupID)
+	updates[SettingKeyDefaultOpenAIGroupID] = formatOptionalSettingInt64(settings.DefaultOpenAIGroupID)
 	defaultSubsJSON, err := json.Marshal(settings.DefaultSubscriptions)
 	if err != nil {
 		return nil, fmt.Errorf("marshal default subscriptions: %w", err)
@@ -2129,6 +2137,26 @@ func (s *SettingService) validateDefaultSubscriptionGroups(ctx context.Context, 
 		}
 	}
 
+	return nil
+}
+
+func (s *SettingService) validateDefaultAPIKeyGroup(ctx context.Context, groupID *int64, platform string) error {
+	if groupID == nil || *groupID <= 0 {
+		return nil
+	}
+	if s.defaultSubGroupReader == nil {
+		return nil
+	}
+	group, err := s.defaultSubGroupReader.GetByID(ctx, *groupID)
+	if err != nil {
+		if errors.Is(err, ErrGroupNotFound) {
+			return infraerrors.BadRequest("DEFAULT_API_KEY_GROUP_INVALID", "default API key group not found")
+		}
+		return fmt.Errorf("get default api key group %d: %w", *groupID, err)
+	}
+	if !group.IsActive() || group.Platform != platform {
+		return infraerrors.BadRequest("DEFAULT_API_KEY_GROUP_INVALID", "default API key group platform or status is invalid")
+	}
 	return nil
 }
 
@@ -2543,6 +2571,23 @@ func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultS
 	return parseDefaultSubscriptions(value)
 }
 
+func (s *SettingService) GetDefaultAPIKeyGroupID(ctx context.Context, keyType string) (*int64, error) {
+	var settingKey string
+	switch NormalizeAPIKeyType(keyType) {
+	case APIKeyTypeAnthropic:
+		settingKey = SettingKeyDefaultAnthropicGroupID
+	case APIKeyTypeOpenAI:
+		settingKey = SettingKeyDefaultOpenAIGroupID
+	default:
+		return nil, infraerrors.BadRequest("INVALID_API_KEY_TYPE", "invalid API key type")
+	}
+	value, err := s.settingRepo.GetValue(ctx, settingKey)
+	if err != nil {
+		return nil, err
+	}
+	return parseOptionalSettingInt64(value), nil
+}
+
 func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*AuthSourceDefaultSettings, error) {
 	keys := []string{
 		SettingKeyAuthSourceDefaultEmailBalance,
@@ -2752,6 +2797,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAffiliateRebatePerInviteeCap:              strconv.FormatFloat(AffiliateRebatePerInviteeCapDefault, 'f', 2, 64),
 		SettingKeyDefaultUserRPMLimit:                       "0",
 		SettingKeyDefaultSubscriptions:                      "[]",
+		SettingKeyDefaultAnthropicGroupID:                   "",
+		SettingKeyDefaultOpenAIGroupID:                      "",
 		SettingKeyAuthSourceDefaultEmailBalance:             "0",
 		SettingKeyAuthSourceDefaultEmailConcurrency:         "5",
 		SettingKeyAuthSourceDefaultEmailSubscriptions:       "[]",
@@ -2941,6 +2988,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.AffiliateRebatePerInviteeCap = perInviteeCap
 	}
 	result.DefaultSubscriptions = parseDefaultSubscriptions(settings[SettingKeyDefaultSubscriptions])
+	result.DefaultAnthropicGroupID = parseOptionalSettingInt64(settings[SettingKeyDefaultAnthropicGroupID])
+	result.DefaultOpenAIGroupID = parseOptionalSettingInt64(settings[SettingKeyDefaultOpenAIGroupID])
 
 	// 敏感信息直接返回，方便测试连接时使用
 	result.SMTPPassword = settings[SettingKeySMTPPassword]
@@ -3435,6 +3484,21 @@ func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (s
 		)
 	}
 	return normalized, nil
+}
+
+func formatOptionalSettingInt64(v *int64) string {
+	if v == nil || *v <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(*v, 10)
+}
+
+func parseOptionalSettingInt64(raw string) *int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 func parseDefaultSubscriptions(raw string) []DefaultSubscriptionSetting {

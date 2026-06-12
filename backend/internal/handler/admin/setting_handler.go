@@ -234,6 +234,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           settings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    settings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
+		DefaultAnthropicGroupID:                settings.DefaultAnthropicGroupID,
+		DefaultOpenAIGroupID:                   settings.DefaultOpenAIGroupID,
 		EnableModelFallback:                    settings.EnableModelFallback,
 		FallbackModelAnthropic:                 settings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    settings.FallbackModelOpenAI,
@@ -516,6 +518,8 @@ type UpdateSettingsRequest struct {
 	AffiliateRebatePerInviteeCap              *float64                          `json:"affiliate_rebate_per_invitee_cap"`
 	DefaultUserRPMLimit                       int                               `json:"default_user_rpm_limit"`
 	DefaultSubscriptions                      []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
+	DefaultAnthropicGroupID                   *int64                            `json:"default_anthropic_group_id"`
+	DefaultOpenAIGroupID                      *int64                            `json:"default_openai_group_id"`
 	AuthSourceDefaultEmailBalance             *float64                          `json:"auth_source_default_email_balance"`
 	AuthSourceDefaultEmailConcurrency         *int                              `json:"auth_source_default_email_concurrency"`
 	AuthSourceDefaultEmailSubscriptions       *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_email_subscriptions"`
@@ -1584,6 +1588,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           affiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    req.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
+		DefaultAnthropicGroupID:                req.DefaultAnthropicGroupID,
+		DefaultOpenAIGroupID:                   req.DefaultOpenAIGroupID,
 		EnableModelFallback:                    req.EnableModelFallback,
 		FallbackModelAnthropic:                 req.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    req.FallbackModelOpenAI,
@@ -2027,6 +2033,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           updatedSettings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    updatedSettings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   updatedDefaultSubscriptions,
+		DefaultAnthropicGroupID:                updatedSettings.DefaultAnthropicGroupID,
+		DefaultOpenAIGroupID:                   updatedSettings.DefaultOpenAIGroupID,
 		EnableModelFallback:                    updatedSettings.EnableModelFallback,
 		FallbackModelAnthropic:                 updatedSettings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    updatedSettings.FallbackModelOpenAI,
