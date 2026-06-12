@@ -642,6 +642,35 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("submits global provider default group settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      default_anthropic_group_id: 11,
+      default_openai_group_id: 21,
+    });
+    getGroups.mockResolvedValue([
+      { id: 11, name: "Anthropic Active", platform: "anthropic", status: "active", subscription_type: "standard" },
+      { id: 12, name: "Anthropic Inactive", platform: "anthropic", status: "inactive", subscription_type: "standard" },
+      { id: 21, name: "OpenAI Active", platform: "openai", status: "active", subscription_type: "standard" },
+      { id: 31, name: "Gemini Active", platform: "gemini", status: "active", subscription_type: "standard" },
+    ]);
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openUsersTab(wrapper);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        default_anthropic_group_id: 11,
+        default_openai_group_id: 21,
+      }),
+    );
+  });
+
   it("submits Antigravity user agent version gateway setting", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

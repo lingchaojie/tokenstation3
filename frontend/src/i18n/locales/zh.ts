@@ -2085,6 +2085,18 @@ export default {
         keyExists: '属性键已存在',
         dragToReorder: '拖拽排序'
       },
+      keyRoutes: {
+        action: '平台路由',
+        title: '平台路由',
+        description: '为该用户未来创建普通 API Key 选择默认分组。',
+        anthropicLabel: 'Anthropic 默认分组',
+        openaiLabel: 'OpenAI 默认分组',
+        useGlobalDefault: '使用全局默认',
+        hint: '仅显示匹配平台的活跃分组。已有 API Key 不会被修改。',
+        loadFailed: '加载平台路由失败',
+        updateSuccess: '平台路由已更新',
+        updateFailed: '更新平台路由失败'
+      },
       platformQuota: {
         menuItem: '平台限额',
         title: '平台限额',
@@ -5801,6 +5813,13 @@ export default {
         defaultSubscriptionsDuplicate: '默认订阅存在重复分组：{groupId}。每个分组只能出现一次。',
         subscriptionGroup: '订阅分组',
         subscriptionValidityDays: '有效期（天）',
+        providerRoutes: '默认 API Key 平台路由',
+        providerRoutesHint: '普通用户未来创建 Anthropic 或 OpenAI API Key 时使用；不会修改已有 Key。',
+        providerRouteUseNone: '不使用全局默认',
+        defaultAnthropicGroup: '默认 Anthropic 分组',
+        defaultAnthropicGroupPlaceholder: '不使用全局 Anthropic 默认分组',
+        defaultOpenAIGroup: '默认 OpenAI 分组',
+        defaultOpenAIGroupPlaceholder: '不使用全局 OpenAI 默认分组',
         defaultPlatformQuotas: '默认平台限额（注册时分配）',
         defaultPlatformQuotasHint: '新用户注册时自动写入平台限额记录；已有用户不受影响。留空 = 该平台该窗口不限制。',
         platformQuotaNotice: '月限额为 30 天滚动窗口，非自然月',

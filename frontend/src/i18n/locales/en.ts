@@ -2032,6 +2032,18 @@ export default {
         keyExists: 'Attribute key already exists',
         dragToReorder: 'Drag to reorder'
       },
+      keyRoutes: {
+        action: 'Provider Routes',
+        title: 'Provider Routes',
+        description: 'Choose per-user default groups for future normal-user API key creation.',
+        anthropicLabel: 'Anthropic Default Group',
+        openaiLabel: 'OpenAI Default Group',
+        useGlobalDefault: 'Use global default',
+        hint: 'Only active groups for the matching provider are shown. Existing API keys are not changed.',
+        loadFailed: 'Failed to load provider routes',
+        updateSuccess: 'Provider routes updated',
+        updateFailed: 'Failed to update provider routes'
+      },
       platformQuota: {
         menuItem: 'Platform Quotas',
         title: 'Platform Quotas',
@@ -5645,6 +5657,13 @@ export default {
           'Duplicate subscription group: {groupId}. Each group can only appear once.',
         subscriptionGroup: 'Subscription Group',
         subscriptionValidityDays: 'Validity (days)',
+        providerRoutes: 'Default API Key Provider Routes',
+        providerRoutesHint: 'Used when normal users create future Anthropic or OpenAI API keys. Existing keys are not changed.',
+        providerRouteUseNone: 'Use no global default',
+        defaultAnthropicGroup: 'Default Anthropic Group',
+        defaultAnthropicGroupPlaceholder: 'Use no global Anthropic default',
+        defaultOpenAIGroup: 'Default OpenAI Group',
+        defaultOpenAIGroupPlaceholder: 'Use no global OpenAI default',
         defaultPlatformQuotas: 'Default Platform Quotas (on signup)',
         defaultPlatformQuotasHint: 'Automatically assigned to new users on signup; existing users are not affected. Leave blank = unlimited.',
         platformQuotaNotice: 'Monthly quota uses a 30-day rolling window, not a calendar month.',

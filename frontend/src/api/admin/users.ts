@@ -302,6 +302,37 @@ export async function bindUserAuthIdentity(
   return data
 }
 
+export interface UserAPIKeyRouteItem {
+  id: number
+  user_id: number
+  key_type: 'anthropic' | 'openai'
+  group_id: number
+  group?: { id: number; name: string; platform: string } | null
+}
+
+export interface UserAPIKeyRoutesResponse {
+  anthropic?: UserAPIKeyRouteItem | null
+  openai?: UserAPIKeyRouteItem | null
+}
+
+export interface UpdateUserAPIKeyRoutesRequest {
+  anthropic_group_id?: number | null
+  openai_group_id?: number | null
+}
+
+export async function getAPIKeyRoutes(id: number): Promise<UserAPIKeyRoutesResponse> {
+  const { data } = await apiClient.get<UserAPIKeyRoutesResponse>(`/admin/users/${id}/api-key-routes`)
+  return data
+}
+
+export async function updateAPIKeyRoutes(
+  id: number,
+  updates: UpdateUserAPIKeyRoutesRequest
+): Promise<UserAPIKeyRoutesResponse> {
+  const { data } = await apiClient.put<UserAPIKeyRoutesResponse>(`/admin/users/${id}/api-key-routes`, updates)
+  return data
+}
+
 /**
  * Platform quota types
  */
@@ -388,6 +419,8 @@ export const usersAPI = {
   getUserBalanceHistory,
   replaceGroup,
   bindUserAuthIdentity,
+  getAPIKeyRoutes,
+  updateAPIKeyRoutes,
   getPlatformQuotas,
   updatePlatformQuotas,
   resetPlatformQuotaWindow,

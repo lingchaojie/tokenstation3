@@ -9,13 +9,17 @@ const {
   getAllGroups,
   getBatchUsersUsage,
   listEnabledDefinitions,
-  getBatchUserAttributes
+  getBatchUserAttributes,
+  getAPIKeyRoutes,
+  updateAPIKeyRoutes
 } = vi.hoisted(() => ({
   listUsers: vi.fn(),
   getAllGroups: vi.fn(),
   getBatchUsersUsage: vi.fn(),
   listEnabledDefinitions: vi.fn(),
-  getBatchUserAttributes: vi.fn()
+  getBatchUserAttributes: vi.fn(),
+  getAPIKeyRoutes: vi.fn(),
+  updateAPIKeyRoutes: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -23,7 +27,9 @@ vi.mock('@/api/admin', () => ({
     users: {
       list: listUsers,
       toggleStatus: vi.fn(),
-      delete: vi.fn()
+      delete: vi.fn(),
+      getAPIKeyRoutes,
+      updateAPIKeyRoutes
     },
     groups: {
       getAll: getAllGroups
@@ -84,6 +90,7 @@ const DataTableStub = {
       <button data-test="sort-last-used" @click="$emit('sort', 'last_used_at', 'desc')">sort</button>
       <div v-for="row in data" :key="row.id">
         <slot name="cell-last_used_at" :value="row.last_used_at" :row="row" />
+        <slot name="cell-actions" :row="row" />
       </div>
     </div>
   `
@@ -98,6 +105,8 @@ describe('admin UsersView', () => {
     getBatchUsersUsage.mockReset()
     listEnabledDefinitions.mockReset()
     getBatchUserAttributes.mockReset()
+    getAPIKeyRoutes.mockReset()
+    updateAPIKeyRoutes.mockReset()
 
     listUsers.mockResolvedValue({
       items: [createAdminUser()],
@@ -110,6 +119,55 @@ describe('admin UsersView', () => {
     getBatchUsersUsage.mockResolvedValue({ stats: {} })
     listEnabledDefinitions.mockResolvedValue([])
     getBatchUserAttributes.mockResolvedValue({ values: {} })
+    getAPIKeyRoutes.mockResolvedValue({ anthropic: null, openai: null })
+    updateAPIKeyRoutes.mockResolvedValue({ anthropic: null, openai: null })
+  })
+
+  it('opens the provider route configuration modal from the user action menu', async () => {
+    const wrapper = mount(UsersView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: {
+            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+          },
+          DataTable: DataTableStub,
+          Pagination: true,
+          ConfirmDialog: true,
+          EmptyState: true,
+          GroupBadge: true,
+          Select: true,
+          UserAttributesConfigModal: true,
+          UserConcurrencyCell: true,
+          UserCreateModal: true,
+          UserEditModal: true,
+          UserApiKeysModal: true,
+          UserAllowedGroupsModal: true,
+          UserBalanceModal: true,
+          UserBalanceHistoryModal: true,
+          UserPlatformQuotaModal: true,
+          GroupReplaceModal: true,
+          Icon: true,
+          Teleport: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    await wrapper.get('.action-menu-trigger').trigger('click')
+    await flushPromises()
+
+    const routeAction = wrapper.get('[data-test="user-key-routes-action"]')
+    expect(routeAction.text()).toContain('admin.users.keyRoutes.action')
+
+    await routeAction.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'UserKeyRoutesModal' }).props()).toMatchObject({
+      show: true,
+      user: expect.objectContaining({ id: 42 })
+    })
   })
 
   it('shows active, used, and created activity columns in order and requests last_used_at sort', async () => {
