@@ -2583,6 +2583,9 @@ func (s *SettingService) GetDefaultAPIKeyGroupID(ctx context.Context, keyType st
 	}
 	value, err := s.settingRepo.GetValue(ctx, settingKey)
 	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return parseOptionalSettingInt64(value), nil

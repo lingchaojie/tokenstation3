@@ -666,6 +666,34 @@ type UpdateSettingsRequest struct {
 	AuthSourceDingTalkPlatformQuotas map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_dingtalk_platform_quotas"`
 
 	AllowUserViewErrorRequests *bool `json:"allow_user_view_error_requests"`
+
+	defaultAnthropicGroupIDPresent bool
+	defaultOpenAIGroupIDPresent    bool
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type updateSettingsRequestAlias UpdateSettingsRequest
+	var decoded updateSettingsRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	*r = UpdateSettingsRequest(decoded)
+	_, r.defaultAnthropicGroupIDPresent = fields["default_anthropic_group_id"]
+	_, r.defaultOpenAIGroupIDPresent = fields["default_openai_group_id"]
+	return nil
+}
+
+func optionalInt64FromRequest(value *int64, present bool, previous *int64) *int64 {
+	if present {
+		return value
+	}
+	return previous
 }
 
 // UpdateSettings 更新系统设置
@@ -1588,8 +1616,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           affiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    req.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
-		DefaultAnthropicGroupID:                req.DefaultAnthropicGroupID,
-		DefaultOpenAIGroupID:                   req.DefaultOpenAIGroupID,
+		DefaultAnthropicGroupID:                optionalInt64FromRequest(req.DefaultAnthropicGroupID, req.defaultAnthropicGroupIDPresent, previousSettings.DefaultAnthropicGroupID),
+		DefaultOpenAIGroupID:                   optionalInt64FromRequest(req.DefaultOpenAIGroupID, req.defaultOpenAIGroupIDPresent, previousSettings.DefaultOpenAIGroupID),
 		EnableModelFallback:                    req.EnableModelFallback,
 		FallbackModelAnthropic:                 req.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    req.FallbackModelOpenAI,

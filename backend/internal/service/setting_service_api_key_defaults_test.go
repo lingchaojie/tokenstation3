@@ -130,3 +130,13 @@ func TestSettingService_GetDefaultAPIKeyGroupID(t *testing.T) {
 	require.NotNil(t, openAIID)
 	require.Equal(t, int64(20), *openAIID)
 }
+
+func TestSettingService_GetDefaultAPIKeyGroupID_MissingSettingReturnsNil(t *testing.T) {
+	repo := newMemorySettingRepo(map[string]string{})
+	svc := NewSettingService(repo, nil)
+
+	groupID, err := svc.GetDefaultAPIKeyGroupID(context.Background(), APIKeyTypeAnthropic)
+
+	require.NoError(t, err)
+	require.Nil(t, groupID)
+}
