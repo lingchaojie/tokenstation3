@@ -3,12 +3,13 @@ package schema
 import (
 	"fmt"
 
-	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
-	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"entgo.io/ent"
+	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
+	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 type UserAPIKeyRoute struct {
@@ -42,12 +43,14 @@ func (UserAPIKeyRoute) Edges() []ent.Edge {
 			Ref("api_key_routes").
 			Field("user_id").
 			Unique().
-			Required(),
+			Required().
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("group", Group.Type).
 			Ref("api_key_routes").
 			Field("group_id").
 			Unique().
-			Required(),
+			Required().
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 

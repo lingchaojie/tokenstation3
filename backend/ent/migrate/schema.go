@@ -1537,13 +1537,13 @@ var (
 				Symbol:     "user_api_key_routes_groups_api_key_routes",
 				Columns:    []*schema.Column{UserAPIKeyRoutesColumns[4]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.Cascade,
 			},
 			{
 				Symbol:     "user_api_key_routes_users_api_key_routes",
 				Columns:    []*schema.Column{UserAPIKeyRoutesColumns[5]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.Cascade,
 			},
 		},
 		Indexes: []*schema.Index{

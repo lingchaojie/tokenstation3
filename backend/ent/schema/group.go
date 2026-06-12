@@ -173,7 +173,8 @@ func (Group) Edges() []ent.Edge {
 		edge.To("redeem_codes", RedeemCode.Type),
 		edge.To("subscriptions", UserSubscription.Type),
 		edge.To("usage_logs", UsageLog.Type),
-		edge.To("api_key_routes", UserAPIKeyRoute.Type),
+		edge.To("api_key_routes", UserAPIKeyRoute.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("accounts", Account.Type).
 			Ref("groups").
 			Through("account_groups", AccountGroup.Type),
