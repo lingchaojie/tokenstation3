@@ -1658,7 +1658,10 @@ const closeApiKeysModal = () => {
   viewingUser.value = null
 }
 
-const handleKeyRoutes = (user: AdminUser) => {
+const handleKeyRoutes = async (user: AdminUser) => {
+  if (allGroups.value.length === 0) {
+    await loadAllGroups()
+  }
   keyRoutesUser.value = user
   showKeyRoutesModal.value = true
 }

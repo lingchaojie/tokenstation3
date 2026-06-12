@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-import type { AdminUser } from '@/types'
+import type { AdminGroup, AdminUser } from '@/types'
 import UsersView from '../UsersView.vue'
 
 const {
@@ -81,6 +81,39 @@ const createAdminUser = (): AdminUser => ({
   current_concurrency: 0
 })
 
+const createAdminGroup = (overrides: Partial<AdminGroup> = {}): AdminGroup => ({
+  id: 7,
+  name: 'Anthropic Route Group',
+  description: null,
+  platform: 'anthropic',
+  rate_multiplier: 1,
+  rpm_limit: 0,
+  is_exclusive: false,
+  status: 'active',
+  subscription_type: 'standard',
+  daily_limit_usd: null,
+  weekly_limit_usd: null,
+  monthly_limit_usd: null,
+  allow_image_generation: false,
+  image_rate_independent: false,
+  image_rate_multiplier: 1,
+  image_price_1k: null,
+  image_price_2k: null,
+  image_price_4k: null,
+  claude_code_only: false,
+  fallback_group_id: null,
+  fallback_group_id_on_invalid_request: null,
+  require_oauth_only: false,
+  require_privacy_set: false,
+  created_at: '2026-04-17T00:00:00Z',
+  updated_at: '2026-04-17T00:00:00Z',
+  model_routing: null,
+  model_routing_enabled: false,
+  mcp_xml_inject: false,
+  sort_order: 0,
+  ...overrides
+})
+
 const DataTableStub = {
   props: ['columns', 'data'],
   emits: ['sort'],
@@ -123,7 +156,13 @@ describe('admin UsersView', () => {
     updateAPIKeyRoutes.mockResolvedValue({ anthropic: null, openai: null })
   })
 
-  it('opens the provider route configuration modal from the user action menu', async () => {
+  it('loads groups before opening the provider route configuration modal from the user action menu', async () => {
+    const routeGroup = createAdminGroup()
+    let resolveGroups!: (groups: AdminGroup[]) => void
+    getAllGroups.mockReturnValueOnce(new Promise<AdminGroup[]>((resolve) => {
+      resolveGroups = resolve
+    }))
+
     const wrapper = mount(UsersView, {
       global: {
         stubs: {
@@ -154,6 +193,7 @@ describe('admin UsersView', () => {
     })
 
     await flushPromises()
+    expect(getAllGroups).not.toHaveBeenCalled()
 
     await wrapper.get('.action-menu-trigger').trigger('click')
     await flushPromises()
@@ -164,9 +204,20 @@ describe('admin UsersView', () => {
     await routeAction.trigger('click')
     await flushPromises()
 
+    expect(getAllGroups).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent({ name: 'UserKeyRoutesModal' }).props()).toMatchObject({
+      show: false,
+      user: null,
+      groups: []
+    })
+
+    resolveGroups([routeGroup])
+    await flushPromises()
+
     expect(wrapper.findComponent({ name: 'UserKeyRoutesModal' }).props()).toMatchObject({
       show: true,
-      user: expect.objectContaining({ id: 42 })
+      user: expect.objectContaining({ id: 42 }),
+      groups: [routeGroup]
     })
   })
 
