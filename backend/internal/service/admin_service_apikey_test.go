@@ -303,7 +303,7 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_NilGroupID_NoOp(t *testing.T) {
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_Unbind(t *testing.T) {
-	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: int64Ptr(5), Group: &Group{ID: 5, Name: "Old"}}
+	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: int64Ptr(5), Group: &Group{ID: 5, Name: "Old"}, KeyType: APIKeyTypeOpenAI}
 	repo := &apiKeyRepoStubForGroupUpdate{key: existing}
 	cache := &authCacheInvalidatorStub{}
 	svc := &adminServiceImpl{apiKeyRepo: repo, authCacheInvalidator: cache}
@@ -312,8 +312,11 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_Unbind(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got.APIKey.GroupID, "group_id should be nil after unbind")
 	require.Nil(t, got.APIKey.Group, "group object should be nil after unbind")
+	require.Equal(t, APIKeyTypeOpenAI, got.APIKey.KeyType, "unbind should not change key_type")
 	require.NotNil(t, repo.updated, "Update should have been called")
 	require.Nil(t, repo.updated.GroupID)
+	require.Equal(t, APIKeyTypeOpenAI, repo.updated.KeyType, "unbind should leave persisted key_type unchanged")
+	require.False(t, repo.updated.ClearKeyType, "unbind should not request key_type clearing")
 	require.Equal(t, []string{"sk-test"}, cache.keys, "cache should be invalidated")
 }
 
@@ -349,6 +352,23 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_UpdatesKeyTypeFromGroupPlatform(t
 	require.NotNil(t, got.APIKey)
 	require.Equal(t, APIKeyTypeOpenAI, got.APIKey.KeyType)
 	require.Equal(t, APIKeyTypeOpenAI, apiKeyRepo.updated.KeyType)
+	require.False(t, apiKeyRepo.updated.ClearKeyType, "mapped platforms should persist their key_type rather than clearing it")
+}
+
+func TestAdminService_AdminUpdateAPIKeyGroupID_ClearsKeyTypeForNonMappedGroupPlatform(t *testing.T) {
+	existing := &APIKey{ID: 1, UserID: 100, Key: "sk-test", GroupID: nil, KeyType: APIKeyTypeOpenAI}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 30, Name: "gemini", Platform: PlatformGemini, Status: StatusActive}}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo}
+
+	got, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(30))
+
+	require.NoError(t, err)
+	require.NotNil(t, got.APIKey)
+	require.Empty(t, got.APIKey.KeyType)
+	require.NotNil(t, apiKeyRepo.updated)
+	require.Empty(t, apiKeyRepo.updated.KeyType)
+	require.True(t, apiKeyRepo.updated.ClearKeyType, "non-Anthropic/OpenAI group binding should explicitly clear persisted key_type")
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_SameGroup_Idempotent(t *testing.T) {

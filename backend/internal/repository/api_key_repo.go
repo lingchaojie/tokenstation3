@@ -219,7 +219,6 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 	builder := client.APIKey.Update().
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
 		SetName(key.Name).
-		SetNillableKeyType(nonEmptyStringPtr(key.KeyType)).
 		SetStatus(key.Status).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -230,6 +229,12 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		SetUsage1d(key.Usage1d).
 		SetUsage7d(key.Usage7d).
 		SetUpdatedAt(now)
+	if key.ClearKeyType {
+		builder.ClearKeyType()
+	} else if key.KeyType != "" {
+		builder.SetKeyType(key.KeyType)
+	}
+
 	if key.GroupID != nil {
 		builder.SetGroupID(*key.GroupID)
 	} else {

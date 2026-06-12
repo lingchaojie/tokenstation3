@@ -171,6 +171,47 @@ func (s *APIKeyRepoSuite) TestUpdate_ClearGroupID() {
 	s.Require().Nil(got.GroupID, "expected GroupID to be cleared")
 }
 
+func (s *APIKeyRepoSuite) TestUpdate_EmptyKeyTypeLeavesExistingValueUnchanged() {
+	user := s.mustCreateUser("keytype-empty-unchanged@test.com")
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-keytype-empty-unchanged",
+		Name:    "Typed Key",
+		KeyType: service.APIKeyTypeOpenAI,
+		Status:  service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	key.KeyType = ""
+	err := s.repo.Update(s.ctx, key)
+	s.Require().NoError(err, "Update")
+
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.APIKeyTypeOpenAI, got.KeyType, "empty KeyType without explicit clear should leave the stored value unchanged")
+}
+
+func (s *APIKeyRepoSuite) TestUpdate_ClearKeyTypeWhenExplicitlyRequested() {
+	user := s.mustCreateUser("keytype-clear@test.com")
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-keytype-clear",
+		Name:    "Typed Key",
+		KeyType: service.APIKeyTypeAnthropic,
+		Status:  service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	key.KeyType = ""
+	key.ClearKeyType = true
+	err := s.repo.Update(s.ctx, key)
+	s.Require().NoError(err, "Update")
+
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Empty(got.KeyType, "explicit clear should remove the stored key_type")
+}
+
 // --- Delete ---
 
 func (s *APIKeyRepoSuite) TestDelete() {
