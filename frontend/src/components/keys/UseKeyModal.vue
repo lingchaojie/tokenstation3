@@ -982,6 +982,22 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
         }
       }
     },
+    'claude-mythos-5': {
+      name: 'Claude Mythos 5',
+      limit: {
+        context: 1048576,
+        output: 128000
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          type: 'adaptive'
+        }
+      }
+    },
     'claude-opus-4-6-thinking': {
       name: 'Claude 4.6 Opus (Thinking)',
       limit: {

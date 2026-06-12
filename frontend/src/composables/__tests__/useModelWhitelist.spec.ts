@@ -4,7 +4,12 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import {
+  buildModelMappingObject,
+  getModelsByPlatform,
+  getPresetMappingsByPlatform,
+  splitModelMappingObject,
+} from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -37,9 +42,32 @@ describe('useModelWhitelist', () => {
 
   it('Claude 模型列表包含新发布的 Claude 模型', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
+    expect(getModelsByPlatform('claude')).toContain('claude-mythos-5')
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
+    expect(getModelsByPlatform('antigravity')).toContain('claude-mythos-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
+  })
+
+  it('Claude 预设映射包含 Fable 和 Mythos 最新模型', () => {
+    expect(getPresetMappingsByPlatform('claude')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5' }),
+        expect.objectContaining({ label: 'Mythos 5', from: 'claude-mythos-5', to: 'claude-mythos-5' }),
+      ])
+    )
+    expect(getPresetMappingsByPlatform('antigravity')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5' }),
+        expect.objectContaining({ label: 'Mythos 5', from: 'claude-mythos-5', to: 'claude-mythos-5' }),
+      ])
+    )
+    expect(getPresetMappingsByPlatform('bedrock')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Fable 5', from: 'claude-fable-5', to: 'anthropic.claude-fable-5' }),
+        expect.objectContaining({ label: 'Mythos 5', from: 'claude-mythos-5', to: 'anthropic.claude-mythos-5' }),
+      ])
+    )
   })
 
   it('gemini 模型列表包含原生生图模型', () => {

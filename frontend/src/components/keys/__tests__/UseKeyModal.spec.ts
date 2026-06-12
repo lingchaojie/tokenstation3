@@ -157,11 +157,17 @@ describe('UseKeyModal', () => {
 
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
-    const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
+    const models = parsed.provider['antigravity-claude'].models
+    const fable = models['claude-fable-5']
+    const mythos = models['claude-mythos-5']
 
     expect(fable.name).toBe('Claude Fable 5')
     expect(fable.limit).toEqual({ context: 1048576, output: 128000 })
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })
     expect(fable.options.thinking).not.toHaveProperty('budgetTokens')
+    expect(mythos.name).toBe('Claude Mythos 5')
+    expect(mythos.limit).toEqual({ context: 1048576, output: 128000 })
+    expect(mythos.options.thinking).toEqual({ type: 'adaptive' })
+    expect(mythos.options.thinking).not.toHaveProperty('budgetTokens')
   })
 })

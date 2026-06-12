@@ -123,6 +123,12 @@ var DefaultModels = []Model{
 		CreatedAt:   "2026-06-09T00:00:00Z",
 	},
 	{
+		ID:          "claude-mythos-5",
+		Type:        "model",
+		DisplayName: "Claude Mythos 5",
+		CreatedAt:   "2026-06-09T00:00:00Z",
+	},
+	{
 		ID:          "claude-opus-4-5-20251101",
 		Type:        "model",
 		DisplayName: "Claude Opus 4.5",

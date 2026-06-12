@@ -221,6 +221,7 @@ const formatScopeName = (scope: string): string => {
   const aliases: Record<string, string> = {
     // Claude 系列
     'claude-fable-5': 'CFable5',
+    'claude-mythos-5': 'CMyth5',
     'claude-opus-4-6': 'COpus46',
     'claude-opus-4-6-thinking': 'COpus46T',
     'claude-opus-4-7': 'COpus47',

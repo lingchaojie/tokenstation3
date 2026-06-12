@@ -313,6 +313,65 @@
         </div>
       </section>
 
+      <!-- ===== Model Pricing ===== -->
+      <section id="model-pricing" class="scroll-mt-24 border-t border-linear-hairline bg-linear-canvas">
+        <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+          <div class="mb-8 grid gap-6 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
+            <div>
+              <p class="linx-section-kicker">{{ copy.modelPricingKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.modelPricingTitle }}</h2>
+            </div>
+            <div class="text-left lg:max-w-2xl">
+              <p class="text-base leading-7 text-linear-ink-subtle">{{ copy.modelPricingDescription }}</p>
+              <span class="font-mono-brand mt-4 inline-flex rounded-full border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-xs font-medium text-primary-300">
+                {{ copy.modelPricingUnit }}
+              </span>
+            </div>
+          </div>
+
+          <div data-testid="homepage-model-pricing-table" class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left">
+            <div class="grid gap-px bg-linear-hairline lg:grid-cols-2">
+              <section
+                v-for="group in modelPricingGroups"
+                :key="group.provider"
+                class="bg-linear-surface-1 p-5"
+              >
+                <div class="mb-4 flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full" :class="group.dotClass"></span>
+                    <h4 class="text-base font-semibold tracking-[-0.025em] text-linear-ink">{{ group.provider }}</h4>
+                  </div>
+                  <span class="text-xs font-medium text-linear-ink-tertiary">{{ copy.modelPricingProviderLabel }}</span>
+                </div>
+
+                <div class="overflow-hidden rounded-xl border border-linear-hairline bg-linear-canvas">
+                  <div class="hidden grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] border-b border-linear-hairline bg-linear-surface-2 px-4 py-3 text-[11px] font-medium uppercase tracking-[0.14em] text-linear-ink-tertiary sm:grid">
+                    <span>{{ copy.modelPricingModel }}</span>
+                    <span>{{ copy.modelPricingInput }}</span>
+                    <span>{{ copy.modelPricingOutput }}</span>
+                    <span>{{ copy.modelPricingCacheRead }}</span>
+                  </div>
+                  <div
+                    v-for="model in group.models"
+                    :key="model.name"
+                    data-testid="homepage-model-pricing-row"
+                    class="grid gap-3 border-b border-linear-hairline px-4 py-4 last:border-b-0 sm:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] sm:items-center"
+                  >
+                    <div>
+                      <p class="font-medium tracking-[-0.02em] text-linear-ink">{{ model.name }}</p>
+                      <p class="mt-1 text-xs text-linear-ink-tertiary">{{ model.note }}</p>
+                    </div>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingInput }} </span>{{ model.input }}</p>
+                    <p class="font-mono-brand text-sm font-semibold text-primary-300"><span class="font-sans sm:hidden">{{ copy.modelPricingOutput }} </span>{{ model.output }}</p>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingCacheRead }} </span>{{ model.cacheRead }}</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ===== CTA ===== -->
       <section class="px-4 py-16 sm:px-6 lg:px-8">
         <div class="linx-panel-strong mx-auto max-w-5xl p-8 text-center sm:p-12">
@@ -412,6 +471,29 @@ const routeCards = [
   { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
 ]
 
+const modelPricingGroups = [
+  {
+    provider: 'Anthropic',
+    dotClass: 'bg-[#d97745]',
+    models: [
+      { name: 'Claude Fable 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-fable-5' },
+      { name: 'Claude Mythos 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-mythos-5' },
+      { name: 'Claude Opus 4.7', input: '$5.00', output: '$25.00', cacheRead: '$0.50', note: 'claude-opus-4-7' },
+      { name: 'Claude Sonnet 4.6', input: '$3.00', output: '$15.00', cacheRead: '$0.30', note: 'claude-sonnet-4-6' },
+    ],
+  },
+  {
+    provider: 'OpenAI',
+    dotClass: 'bg-[#27a644]',
+    models: [
+      { name: 'GPT-5.5', input: '$5.00', output: '$30.00', cacheRead: '$0.50', note: 'gpt-5.5' },
+      { name: 'GPT-5.4', input: '$2.50', output: '$15.00', cacheRead: '$0.25', note: 'gpt-5.4' },
+      { name: 'GPT-5.4 Mini', input: '$0.75', output: '$4.50', cacheRead: '$0.075', note: 'gpt-5.4-mini' },
+      { name: 'GPT-5.3 Codex', input: '$1.75', output: '$14.00', cacheRead: '$0.175', note: 'gpt-5.3-codex' },
+    ],
+  },
+]
+
 // Bilingual marketing copy (mirrors LocaleSwitcher in the header).
 const copies = {
   zh: {
@@ -456,6 +538,15 @@ const copies = {
     pricingKicker: 'LINX2 订阅方案',
     pricingTitle: '按月订阅，每 7 天刷新可用额度。',
     pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容接口。',
+    modelPricingKicker: '价格透明',
+    modelPricingTitle: '价格透明，上游模型价格直传',
+    modelPricingDescription: 'Anthropic 与 OpenAI 上游模型价格直传，按每百万 Token 展示输入、输出与缓存读取单价；实际扣费以控制台账单和渠道配置为准。',
+    modelPricingUnit: '按每百万 Token 计价',
+    modelPricingProviderLabel: '官方原价透传',
+    modelPricingModel: '模型',
+    modelPricingInput: '输入',
+    modelPricingOutput: '输出',
+    modelPricingCacheRead: '缓存读取',
     pricingCta: '选择方案',
     planPeriod: '月',
     monthlyTotalLabel: '总共可获取',
@@ -511,6 +602,15 @@ const copies = {
     pricingKicker: 'LINX2 subscription plans',
     pricingTitle: 'Monthly plans with quota refreshed every seven days.',
     pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible APIs.',
+    modelPricingKicker: 'Transparent pricing',
+    modelPricingTitle: 'Transparent pricing with upstream model prices passed through',
+    modelPricingDescription: 'Anthropic and OpenAI upstream model prices are passed through and shown per million tokens for input, output, and cache reads. Console billing and channel configuration remain authoritative.',
+    modelPricingUnit: 'Per million tokens',
+    modelPricingProviderLabel: 'Official pass-through',
+    modelPricingModel: 'Model',
+    modelPricingInput: 'Input',
+    modelPricingOutput: 'Output',
+    modelPricingCacheRead: 'Cache read',
     pricingCta: 'Choose plan',
     planPeriod: 'month',
     monthlyTotalLabel: 'Total obtainable',
