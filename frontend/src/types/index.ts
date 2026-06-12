@@ -489,6 +489,8 @@ export interface PaginationConfig {
 
 export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 
+export type ApiKeyType = 'anthropic' | 'openai' | 'unknown'
+
 export type SubscriptionType = 'standard' | 'subscription'
 
 export interface OpenAIMessagesDispatchModelConfig {
@@ -568,6 +570,7 @@ export interface ApiKey {
   key: string
   name: string
   group_id: number | null
+  key_type: ApiKeyType
   status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
   ip_whitelist: string[]
   ip_blacklist: string[]
@@ -594,7 +597,7 @@ export interface ApiKey {
 
 export interface CreateApiKeyRequest {
   name: string
-  group_id?: number | null
+  key_type: Exclude<ApiKeyType, 'unknown'>
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]

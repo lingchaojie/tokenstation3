@@ -708,6 +708,14 @@ export default {
     namePlaceholder: 'My API Key',
     groupLabel: 'Group',
     selectGroup: 'Select a group',
+    keyTypeLabel: 'Key type',
+    selectKeyType: 'Select key type',
+    keyTypeHint: 'The administrator controls which account group this key uses.',
+    keyTypes: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      unknown: 'Unconfigured'
+    },
     statusLabel: 'Status',
     selectStatus: 'Select status',
     saving: 'Saving...',

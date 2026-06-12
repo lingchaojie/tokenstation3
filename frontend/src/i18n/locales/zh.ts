@@ -707,6 +707,14 @@ export default {
     namePlaceholder: '我的 API 密钥',
     groupLabel: '分组',
     selectGroup: '选择分组',
+    keyTypeLabel: '密钥类型',
+    selectKeyType: '选择密钥类型',
+    keyTypeHint: '管理员会控制该类型密钥实际路由到哪个账号分组。',
+    keyTypes: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      unknown: '未配置'
+    },
     statusLabel: '状态',
     selectStatus: '选择状态',
     saving: '保存中...',
