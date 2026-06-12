@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/Wei-Shaw/sub2api/ent/userapikeyroute"
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -533,6 +534,21 @@ func (_c *UserCreate) AddPlatformQuotas(v ...*UserPlatformQuota) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddPlatformQuotaIDs(ids...)
+}
+
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (_c *UserCreate) AddAPIKeyRouteIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddAPIKeyRouteIDs(ids...)
+	return _c
+}
+
+// AddAPIKeyRoutes adds the "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_c *UserCreate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddAPIKeyRouteIDs(ids...)
 }
 
 // Mutation returns the UserMutation object of the builder.
@@ -1048,6 +1064,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.APIKeyRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

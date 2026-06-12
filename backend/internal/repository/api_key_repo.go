@@ -43,6 +43,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
+		SetNillableKeyType(nonEmptyStringPtr(key.KeyType)).
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
@@ -131,6 +132,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldUserID,
 			apikey.FieldGroupID,
 			apikey.FieldName,
+			apikey.FieldKeyType,
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
 			apikey.FieldIPBlacklist,
@@ -217,6 +219,7 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 	builder := client.APIKey.Update().
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
 		SetName(key.Name).
+		SetNillableKeyType(nonEmptyStringPtr(key.KeyType)).
 		SetStatus(key.Status).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -702,6 +705,7 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		UserID:        m.UserID,
 		Key:           m.Key,
 		Name:          m.Name,
+		KeyType:       derefString(m.KeyType),
 		Status:        m.Status,
 		IPWhitelist:   m.IPWhitelist,
 		IPBlacklist:   m.IPBlacklist,
@@ -817,6 +821,13 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
+}
+
+func nonEmptyStringPtr(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 func derefString(s *string) string {

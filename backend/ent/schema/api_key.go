@@ -41,6 +41,10 @@ func (APIKey) Fields() []ent.Field {
 		field.String("name").
 			MaxLen(100).
 			NotEmpty(),
+		field.String("key_type").
+			MaxLen(20).
+			Optional().
+			Nillable(),
 		field.Int64("group_id").
 			Optional().
 			Nillable(),

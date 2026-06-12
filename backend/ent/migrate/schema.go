@@ -17,6 +17,7 @@ var (
 		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "key", Type: field.TypeString, Unique: true, Size: 128},
 		{Name: "name", Type: field.TypeString, Size: 100},
+		{Name: "key_type", Type: field.TypeString, Nullable: true, Size: 20},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "last_used_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ip_whitelist", Type: field.TypeJSON, Nullable: true},
@@ -44,13 +45,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "api_keys_groups_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[22]},
+				Columns:    []*schema.Column{APIKeysColumns[23]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "api_keys_users_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[23]},
+				Columns:    []*schema.Column{APIKeysColumns[24]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -59,17 +60,17 @@ var (
 			{
 				Name:    "apikey_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[23]},
+				Columns: []*schema.Column{APIKeysColumns[24]},
 			},
 			{
 				Name:    "apikey_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[22]},
+				Columns: []*schema.Column{APIKeysColumns[23]},
 			},
 			{
 				Name:    "apikey_status",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[6]},
+				Columns: []*schema.Column{APIKeysColumns[7]},
 			},
 			{
 				Name:    "apikey_deleted_at",
@@ -79,17 +80,17 @@ var (
 			{
 				Name:    "apikey_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[7]},
+				Columns: []*schema.Column{APIKeysColumns[8]},
 			},
 			{
 				Name:    "apikey_quota_quota_used",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[10], APIKeysColumns[11]},
+				Columns: []*schema.Column{APIKeysColumns[11], APIKeysColumns[12]},
 			},
 			{
 				Name:    "apikey_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[12]},
+				Columns: []*schema.Column{APIKeysColumns[13]},
 			},
 		},
 	}
@@ -1517,6 +1518,47 @@ var (
 			},
 		},
 	}
+	// UserAPIKeyRoutesColumns holds the columns for the "user_api_key_routes" table.
+	UserAPIKeyRoutesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "key_type", Type: field.TypeString, Size: 20},
+		{Name: "group_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// UserAPIKeyRoutesTable holds the schema information for the "user_api_key_routes" table.
+	UserAPIKeyRoutesTable = &schema.Table{
+		Name:       "user_api_key_routes",
+		Columns:    UserAPIKeyRoutesColumns,
+		PrimaryKey: []*schema.Column{UserAPIKeyRoutesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "user_api_key_routes_groups_api_key_routes",
+				Columns:    []*schema.Column{UserAPIKeyRoutesColumns[4]},
+				RefColumns: []*schema.Column{GroupsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "user_api_key_routes_users_api_key_routes",
+				Columns:    []*schema.Column{UserAPIKeyRoutesColumns[5]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "userapikeyroute_user_id_key_type",
+				Unique:  true,
+				Columns: []*schema.Column{UserAPIKeyRoutesColumns[5], UserAPIKeyRoutesColumns[3]},
+			},
+			{
+				Name:    "userapikeyroute_group_id",
+				Unique:  false,
+				Columns: []*schema.Column{UserAPIKeyRoutesColumns[4]},
+			},
+		},
+	}
 	// UserAllowedGroupsColumns holds the columns for the "user_allowed_groups" table.
 	UserAllowedGroupsColumns = []*schema.Column{
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
@@ -1804,6 +1846,7 @@ var (
 		UsageCleanupTasksTable,
 		UsageLogsTable,
 		UsersTable,
+		UserAPIKeyRoutesTable,
 		UserAllowedGroupsTable,
 		UserAttributeDefinitionsTable,
 		UserAttributeValuesTable,
@@ -1929,6 +1972,8 @@ func init() {
 	UsersTable.Annotation = &entsql.Annotation{
 		Table: "users",
 	}
+	UserAPIKeyRoutesTable.ForeignKeys[0].RefTable = GroupsTable
+	UserAPIKeyRoutesTable.ForeignKeys[1].RefTable = UsersTable
 	UserAllowedGroupsTable.ForeignKeys[0].RefTable = UsersTable
 	UserAllowedGroupsTable.ForeignKeys[1].RefTable = GroupsTable
 	UserAllowedGroupsTable.Annotation = &entsql.Annotation{

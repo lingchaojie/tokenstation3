@@ -96,6 +96,9 @@ type UsageLog func(*sql.Selector)
 // User is the predicate function for user builders.
 type User func(*sql.Selector)
 
+// UserAPIKeyRoute is the predicate function for userapikeyroute builders.
+type UserAPIKeyRoute func(*sql.Selector)
+
 // UserAllowedGroup is the predicate function for userallowedgroup builders.
 type UserAllowedGroup func(*sql.Selector)
 

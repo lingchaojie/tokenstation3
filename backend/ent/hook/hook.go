@@ -369,6 +369,18 @@ func (f UserFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error)
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UserMutation", m)
 }
 
+// The UserAPIKeyRouteFunc type is an adapter to allow the use of ordinary
+// function as UserAPIKeyRoute mutator.
+type UserAPIKeyRouteFunc func(context.Context, *ent.UserAPIKeyRouteMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f UserAPIKeyRouteFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.UserAPIKeyRouteMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UserAPIKeyRouteMutation", m)
+}
+
 // The UserAllowedGroupFunc type is an adapter to allow the use of ordinary
 // function as UserAllowedGroup mutator.
 type UserAllowedGroupFunc func(context.Context, *ent.UserAllowedGroupMutation) (ent.Value, error)
