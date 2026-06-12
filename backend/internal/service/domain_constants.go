@@ -63,6 +63,32 @@ func IsAllowedQuotaPlatform(s string) bool {
 	return false
 }
 
+const (
+	APIKeyTypeAnthropic = PlatformAnthropic
+	APIKeyTypeOpenAI    = PlatformOpenAI
+	APIKeyTypeUnknown   = "unknown"
+)
+
+func NormalizeAPIKeyType(raw string) string {
+	switch raw {
+	case APIKeyTypeAnthropic, APIKeyTypeOpenAI:
+		return raw
+	default:
+		return ""
+	}
+}
+
+func APIKeyTypeFromGroupPlatform(platform string) string {
+	switch platform {
+	case PlatformAnthropic:
+		return APIKeyTypeAnthropic
+	case PlatformOpenAI:
+		return APIKeyTypeOpenAI
+	default:
+		return ""
+	}
+}
+
 // Account type constants
 const (
 	AccountTypeOAuth          = domain.AccountTypeOAuth          // OAuth类型账号（full scope: profile + inference）

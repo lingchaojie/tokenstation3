@@ -74,6 +74,21 @@ func UserFromServiceAdmin(u *service.User) *AdminUser {
 	}
 }
 
+func apiKeyResponseType(k *service.APIKey) string {
+	if k == nil {
+		return service.APIKeyTypeUnknown
+	}
+	if normalized := service.NormalizeAPIKeyType(k.KeyType); normalized != "" {
+		return normalized
+	}
+	if k.Group != nil {
+		if fromGroup := service.APIKeyTypeFromGroupPlatform(k.Group.Platform); fromGroup != "" {
+			return fromGroup
+		}
+	}
+	return service.APIKeyTypeUnknown
+}
+
 func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k == nil {
 		return nil
@@ -83,6 +98,7 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		UserID:        k.UserID,
 		Key:           k.Key,
 		Name:          k.Name,
+		KeyType:       apiKeyResponseType(k),
 		GroupID:       k.GroupID,
 		Status:        k.Status,
 		IPWhitelist:   k.IPWhitelist,
