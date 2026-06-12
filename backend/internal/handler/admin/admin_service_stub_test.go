@@ -628,6 +628,14 @@ func (s *stubAdminService) ReplaceUserGroup(ctx context.Context, userID, oldGrou
 	return &service.ReplaceUserGroupResult{MigratedKeys: 0}, nil
 }
 
+func (s *stubAdminService) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*service.UserAPIKeyRoutes, error) {
+	return &service.UserAPIKeyRoutes{}, nil
+}
+
+func (s *stubAdminService) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input service.UserAPIKeyRouteUpdate) (*service.UserAPIKeyRoutes, error) {
+	return &service.UserAPIKeyRoutes{}, nil
+}
+
 func (s *stubAdminService) RevertAccountProxyFallback(ctx context.Context, id int64) error {
 	return nil
 }

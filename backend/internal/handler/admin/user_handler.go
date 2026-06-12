@@ -98,6 +98,11 @@ type BindUserAuthIdentityChannelRequest struct {
 	Metadata       map[string]any `json:"metadata"`
 }
 
+type UpdateUserAPIKeyRoutesRequest struct {
+	AnthropicGroupID *int64 `json:"anthropic_group_id"`
+	OpenAIGroupID    *int64 `json:"openai_group_id"`
+}
+
 // List handles listing all users with pagination
 // GET /api/v1/admin/users
 // Query params:
@@ -559,6 +564,42 @@ func (h *UserHandler) BatchUpdateConcurrency(c *gin.Context) {
 
 // GetUserPlatformQuotas GET /admin/users/:id/platform-quotas
 // admin 视角：D14 lazy 归零 + 暴露 *_window_start 调试字段
+func (h *UserHandler) GetUserAPIKeyRoutes(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	routes, err := h.adminService.GetUserAPIKeyRoutes(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, routes)
+}
+
+func (h *UserHandler) UpdateUserAPIKeyRoutes(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	var req UpdateUserAPIKeyRoutesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	routes, err := h.adminService.UpdateUserAPIKeyRoutes(c.Request.Context(), userID, service.UserAPIKeyRouteUpdate{
+		AnthropicGroupID: req.AnthropicGroupID,
+		OpenAIGroupID:    req.OpenAIGroupID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, routes)
+}
+
 func (h *UserHandler) GetUserPlatformQuotas(c *gin.Context) {
 	idStr := c.Param("id")
 	userID, err := strconv.ParseInt(idStr, 10, 64)

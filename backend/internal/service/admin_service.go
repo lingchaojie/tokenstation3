@@ -40,6 +40,8 @@ type AdminService interface {
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
 	BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
+	GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error)
+	UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error)
 	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
 	// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
@@ -543,6 +545,7 @@ type adminServiceImpl struct {
 	apiKeyRepo           APIKeyRepository
 	redeemCodeRepo       RedeemCodeRepository
 	userGroupRateRepo    UserGroupRateRepository
+	userAPIKeyRouteRepo  UserAPIKeyRouteRepository
 	userRPMCache         UserRPMCache
 	billingCacheService  *BillingCacheService
 	proxyProber          ProxyExitInfoProber
@@ -569,6 +572,7 @@ func NewAdminService(
 	apiKeyRepo APIKeyRepository,
 	redeemCodeRepo RedeemCodeRepository,
 	userGroupRateRepo UserGroupRateRepository,
+	userAPIKeyRouteRepo UserAPIKeyRouteRepository,
 	userRPMCache UserRPMCache,
 	billingCacheService *BillingCacheService,
 	proxyProber ProxyExitInfoProber,
@@ -589,6 +593,7 @@ func NewAdminService(
 		apiKeyRepo:           apiKeyRepo,
 		redeemCodeRepo:       redeemCodeRepo,
 		userGroupRateRepo:    userGroupRateRepo,
+		userAPIKeyRouteRepo:  userAPIKeyRouteRepo,
 		userRPMCache:         userRPMCache,
 		billingCacheService:  billingCacheService,
 		proxyProber:          proxyProber,
@@ -688,6 +693,59 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 
 func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) (*User, error) {
 	return s.userRepo.GetByIDIncludeDeleted(ctx, id)
+}
+
+func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error) {
+	if s.userAPIKeyRouteRepo == nil {
+		return &UserAPIKeyRoutes{}, nil
+	}
+	routes, err := s.userAPIKeyRouteRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return packUserAPIKeyRoutes(routes), nil
+}
+
+func (s *adminServiceImpl) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error) {
+	if s.userAPIKeyRouteRepo == nil {
+		return nil, infraerrors.InternalServer("USER_API_KEY_ROUTE_REPO_MISSING", "user API key route repository is not configured")
+	}
+	if err := s.upsertUserAPIKeyRoute(ctx, userID, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+		return nil, err
+	}
+	if err := s.upsertUserAPIKeyRoute(ctx, userID, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
+		return nil, err
+	}
+	return s.GetUserAPIKeyRoutes(ctx, userID)
+}
+
+func (s *adminServiceImpl) upsertUserAPIKeyRoute(ctx context.Context, userID int64, keyType string, groupID *int64) error {
+	if groupID == nil || *groupID <= 0 {
+		return s.userAPIKeyRouteRepo.DeleteByUserIDAndKeyType(ctx, userID, keyType)
+	}
+	group, err := s.groupRepo.GetByID(ctx, *groupID)
+	if err != nil {
+		return err
+	}
+	if !group.IsActive() || APIKeyTypeFromGroupPlatform(group.Platform) != keyType {
+		return infraerrors.BadRequest("USER_API_KEY_ROUTE_INVALID_GROUP", "group platform or status does not match API key type")
+	}
+	_, err = s.userAPIKeyRouteRepo.Upsert(ctx, UserAPIKeyRoute{UserID: userID, KeyType: keyType, GroupID: *groupID})
+	return err
+}
+
+func packUserAPIKeyRoutes(routes []UserAPIKeyRoute) *UserAPIKeyRoutes {
+	out := &UserAPIKeyRoutes{}
+	for i := range routes {
+		route := routes[i]
+		switch route.KeyType {
+		case APIKeyTypeAnthropic:
+			out.Anthropic = &route
+		case APIKeyTypeOpenAI:
+			out.OpenAI = &route
+		}
+	}
+	return out
 }
 
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
