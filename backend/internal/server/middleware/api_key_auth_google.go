@@ -92,22 +92,37 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 
 			needsMaintenance, err := subscriptionService.ValidateAndCheckLimits(subscription, apiKey.Group)
 			if err != nil {
-				status := 403
-				if errors.Is(err, service.ErrDailyLimitExceeded) ||
+				limitExceeded := errors.Is(err, service.ErrDailyLimitExceeded) ||
 					errors.Is(err, service.ErrWeeklyLimitExceeded) ||
-					errors.Is(err, service.ErrMonthlyLimitExceeded) {
-					status = 429
+					errors.Is(err, service.ErrMonthlyLimitExceeded)
+				weeklyFallbackEligible := errors.Is(err, service.ErrWeeklyLimitExceeded) && apiKey.User.Balance > 0
+				if !weeklyFallbackEligible {
+					status := 403
+					if limitExceeded {
+						status = 429
+					}
+					abortWithGoogleError(c, status, err.Error())
+					return
 				}
-				abortWithGoogleError(c, status, err.Error())
+			}
+
+			if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil && apiKey.User.Balance <= 0 {
+				abortWithGoogleError(c, 403, "Insufficient account balance")
 				return
 			}
 
-			c.Set(string(ContextKeySubscription), subscription)
-
 			if needsMaintenance {
-				maintenanceCopy := *subscription
-				subscriptionService.DoWindowMaintenance(&maintenanceCopy)
+				if err := subscriptionService.CheckAndResetWindows(c.Request.Context(), subscription); err != nil {
+					abortWithGoogleError(c, 500, "Failed to reset subscription usage windows")
+					return
+				}
+				if !subscription.IsWindowActivated() {
+					maintenanceCopy := *subscription
+					subscriptionService.DoWindowMaintenance(&maintenanceCopy)
+				}
 			}
+
+			c.Set(string(ContextKeySubscription), subscription)
 		} else {
 			if apiKey.User.Balance <= 0 {
 				abortWithGoogleError(c, 403, "Insufficient account balance")

@@ -24,10 +24,14 @@ type UserSubscriptionRepository interface {
 	ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error
 	UpdateStatus(ctx context.Context, subscriptionID int64, status string) error
 	UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error
+	UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error
+	SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error
+	ClearScheduledPlanChange(ctx context.Context, id int64) error
+	ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*UserSubscription, bool, error)
 
 	ActivateWindows(ctx context.Context, id int64, start time.Time) error
 	ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
-	ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
+	ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error
 	ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
 	IncrementUsage(ctx context.Context, id int64, costUSD float64) error
 

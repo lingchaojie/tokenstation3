@@ -8541,9 +8541,44 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
 	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
-		cmd.SubscriptionCost = p.Cost.ActualCost
+		cmd.SubscriptionSevenDayLimitUSD = p.Subscription.EffectiveSevenDayLimit(p.APIKey.Group)
+		if cmd.SubscriptionSevenDayLimitUSD == nil {
+			p.IsSubscriptionBill = false
+			cmd.BalanceCost = p.Cost.ActualCost
+			cmd.BillingType = BillingTypeBalance
+			if usageLog != nil {
+				usageLog.BillingType = BillingTypeBalance
+			}
+		} else if p.Cost.ActualCost <= 0 || p.Subscription.CanUseSevenDayQuota(p.APIKey.Group, p.Cost.ActualCost) {
+			p.IsSubscriptionBill = true
+			cmd.SubscriptionCost = p.Cost.ActualCost
+			cmd.AllowBalanceFallback = p.Cost.ActualCost > 0
+			cmd.BalanceFallbackCost = p.Cost.ActualCost
+			cmd.BillingType = BillingTypeSubscription
+			if usageLog != nil {
+				usageLog.BillingType = BillingTypeSubscription
+			}
+		} else if p.User != nil && p.User.Balance >= p.Cost.ActualCost {
+			p.IsSubscriptionBill = false
+			cmd.BalanceCost = p.Cost.ActualCost
+			cmd.BillingType = BillingTypeBalance
+			if usageLog != nil {
+				usageLog.BillingType = BillingTypeBalance
+			}
+		} else {
+			p.IsSubscriptionBill = false
+			cmd.BalanceCost = p.Cost.ActualCost
+			cmd.BillingType = BillingTypeBalance
+			if usageLog != nil {
+				usageLog.BillingType = BillingTypeBalance
+			}
+		}
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
+		cmd.BillingType = BillingTypeBalance
+		if usageLog != nil {
+			usageLog.BillingType = BillingTypeBalance
+		}
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
@@ -8584,6 +8619,10 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 		return false, nil
 	}
 
+	if usageLog != nil {
+		usageLog.BillingType = result.BillingType
+	}
+
 	if result.APIKeyQuotaExhausted {
 		if invalidator, ok := p.APIKeyService.(apiKeyAuthCacheInvalidator); ok && p.APIKey != nil && p.APIKey.Key != "" {
 			invalidator.InvalidateAuthCacheByKey(billingCtx, p.APIKey.Key)
@@ -8599,7 +8638,8 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		return
 	}
 
-	if p.IsSubscriptionBill {
+	actualSubscriptionBill := result != nil && result.BillingType == BillingTypeSubscription
+	if actualSubscriptionBill {
 		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
 			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
 		}
@@ -8620,7 +8660,7 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 	//     限制在并发 in-flight 请求数量内（旧实现的异步入队会让超支无限累积直到 worker 处理）
 	//   - DB 异步(flusher_enabled=false):在独立 goroutine 中走 detached context,失败用 ALERT log 触发 oncall 对账
 	//   - flusher_enabled=true:不直写 DB,由 flusher 异步批量刷（markDirty 已在 IncrementUserPlatformQuotaUsage 内部完成）
-	if !p.IsSubscriptionBill && p.Platform != "" && p.Cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
+	if !actualSubscriptionBill && p.Platform != "" && p.Cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
 		if deps.billingCacheService.HasUserPlatformQuotaLimit(ctx, p.User.ID, p.Platform) {
 			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, p.Cost.ActualCost)
 			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
@@ -8662,12 +8702,19 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 			slog.Error("panic in notifyBalanceLow", "recover", r)
 		}
 	}()
-	if p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
+	if result == nil || result.NewBalance == nil || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
 		slog.Debug("notifyBalanceLow: skipped",
 			"is_subscription", p.IsSubscriptionBill,
+			"actual_billing_type", func() int8 {
+				if result == nil {
+					return -1
+				}
+				return result.BillingType
+			}(),
 			"actual_cost", p.Cost.ActualCost,
 			"user_nil", p.User == nil,
 			"service_nil", deps.balanceNotifyService == nil,
+			"has_new_balance", result != nil && result.NewBalance != nil,
 		)
 		return
 	}

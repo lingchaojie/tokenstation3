@@ -141,7 +141,7 @@ describe('HomeView landing page', () => {
     })
   })
 
-  it('renders the dark-orange LINX2 landing shell with USD model pricing by default', async () => {
+  it('renders the dark-orange LINX2 landing shell with LINX2 subscription plans by default', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',
       site_subtitle: 'Custom subtitle should not replace the approved hero copy',
@@ -167,16 +167,30 @@ describe('HomeView landing page', () => {
     expect(text).not.toMatch(/(^|\s)API_KEY=lx2_/)
     expect(text).not.toContain('Gemini')
 
-    expect(text).toContain('官方原价透传')
-    expect(text).toContain('Claude Opus 4.5')
-    expect(text).toContain('Claude Sonnet 4.5')
-    expect(text).toContain('Claude Haiku 4.5')
-    expect(text).toContain('GPT-5')
-    expect(text).toContain('GPT-5 mini')
-    expect(text).toContain('o3')
-    expect(text).toContain('$5.00')
-    expect(text).toContain('$25.00')
-    expect(text).toContain('Latest')
+    expect(text).toContain('LINX2 订阅方案')
+    expect(text).toContain('Basic 月卡')
+    expect(text).toContain('Plus 月卡')
+    expect(text).toContain('Pro 月卡')
+    expect(text).toContain('Max 月卡')
+    expect(text).toContain('¥179')
+    expect(text).toContain('¥399')
+    expect(text).toContain('¥799')
+    expect(text).toContain('¥1599')
+    expect(text).toContain('$50 / 7 天')
+    expect(text).toContain('$110 / 7 天')
+    expect(text).toContain('$260 / 7 天')
+    expect(text).toContain('$550 / 7 天')
+    expect(text).toContain('总共可获取 $200')
+    expect(text).toContain('总共可获取 $440')
+    expect(text).toContain('总共可获取 $1,040')
+    expect(text).toContain('总共可获取 $2,200')
+    expect(text).toContain('每周发放充值额度')
+    expect(text).toContain('所有档位都支持 Claude Code 与 OpenAI 兼容接口')
+    expect(text).toContain('轻量 Claude Code 会话')
+    expect(text).toContain('OpenAI 兼容接口调试')
+    expect(text).toContain('高频 Claude Code / OpenAI 生产流量')
+    expect(text).not.toContain('Claude Opus 4.5')
+    expect(text).not.toContain('GPT-5 mini')
 
     const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
     expect(headerNav.text()).toContain('能力')
@@ -189,17 +203,36 @@ describe('HomeView landing page', () => {
     expect(routeGrid.text()).toContain('OpenAI Images')
 
     const pricingGrid = wrapper.get('[data-testid="linear-pricing-grid"]')
-    expect(pricingGrid.findAll('[data-testid="pricing-model-row"]').length).toBe(6)
-    const pricingCards = pricingGrid.findAll('article')
-    expect(pricingCards.length).toBe(2)
-    expect(pricingCards.every((card) => card.classes().includes('min-w-0'))).toBe(true)
-    const pricingTables = pricingGrid.findAll('[data-testid="pricing-table-scroll"]')
-    expect(pricingTables.length).toBe(2)
-    expect(pricingTables.every((table) => table.classes().includes('overflow-x-auto'))).toBe(true)
+    expect(pricingGrid.findAll('[data-testid="pricing-plan-card"]').length).toBe(4)
+    expect(pricingGrid.find('[data-testid="pricing-model-row"]').exists()).toBe(false)
+    const pricingCards = pricingGrid.findAll('[data-testid="pricing-plan-card"]')
+    const expectedPlans = [
+      { name: 'Basic 月卡', price: '¥179', quota: '$50 / 7 天', monthlyTotal: '$200' },
+      { name: 'Plus 月卡', price: '¥399', quota: '$110 / 7 天', monthlyTotal: '$440' },
+      { name: 'Pro 月卡', price: '¥799', quota: '$260 / 7 天', monthlyTotal: '$1,040' },
+      { name: 'Max 月卡', price: '¥1599', quota: '$550 / 7 天', monthlyTotal: '$2,200' },
+    ]
+    expectedPlans.forEach((plan, index) => {
+      const cardText = pricingCards[index].text()
+      expect(cardText).toContain(plan.name)
+      expect(cardText).toContain(plan.price)
+      expect(cardText).toContain('/ 月')
+      expect(cardText).toContain(plan.quota)
+      expect(cardText).toContain(`总共可获取 ${plan.monthlyTotal}`)
+      const planCta = pricingCards[index].get('a[href="/purchase?tab=subscription"]')
+      expect(planCta.text()).toContain('选择方案')
+      expect(planCta.attributes('aria-label')).toContain(plan.name)
+    })
+    const pricingCtaLabels = pricingCards.map((card) => card.get('a[href="/purchase?tab=subscription"]').attributes('aria-label'))
+    expect(new Set(pricingCtaLabels).size).toBe(expectedPlans.length)
+
+    const header = wrapper.get('header')
+    expect(header.classes()).toContain('bg-linear-canvas/90')
+    expect(header.classes()).not.toContain('bg-linear-canvas/88')
 
     const footerBrand = wrapper.get('[data-testid="homepage-footer-brand"]')
     expect(footerBrand.classes()).toContain('items-center')
-    expect(footerBrand.text()).toContain('LINIX2.Ltd')
+    expect(footerBrand.text()).toContain('LINX2.Ltd')
 
     expect(text).not.toContain('GitHub')
     expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/linx2-icon.png')

@@ -499,7 +499,10 @@ func TestIncrementUserPlatformQuotaUsage_GuardsAgainstEmpty(t *testing.T) {
 // fakeZeroQuotaCache 模拟 cache 命中且 daily limit=0（quota 耗尽）。
 type fakeZeroQuotaCache struct {
 	BillingCache
-	called bool
+	called                  bool
+	balanceCalled           bool
+	subscriptionWeeklyUsage float64
+	userBalance             float64
 }
 
 func (f *fakeZeroQuotaCache) GetUserPlatformQuotaCache(_ context.Context, _ int64, _ string) (*UserPlatformQuotaCacheEntry, bool, error) {
@@ -518,6 +521,10 @@ func (f *fakeZeroQuotaCache) DeleteUserPlatformQuotaCache(_ context.Context, _ i
 	return nil
 }
 
+func (f *fakeZeroQuotaCache) InvalidateSubscriptionCache(_ context.Context, _ int64, _ int64) error {
+	return nil
+}
+
 // SetUserPlatformQuotaCache 在 weekly/monthly window_start 为 nil 时,checkUserPlatform...
 // 会触发"窗口过期 → SetCache 刷新"分支。fake 用 noop 避免 panic。
 func (f *fakeZeroQuotaCache) SetUserPlatformQuotaCache(_ context.Context, _ int64, _ string, _ *UserPlatformQuotaCacheEntry, _ time.Duration) error {
@@ -531,13 +538,18 @@ func (f *fakeZeroQuotaCache) GetSubscriptionCache(_ context.Context, _ int64, _ 
 		Status:       SubscriptionStatusActive,
 		ExpiresAt:    time.Now().Add(30 * 24 * time.Hour),
 		DailyUsage:   0,
-		WeeklyUsage:  0,
+		WeeklyUsage:  f.subscriptionWeeklyUsage,
 		MonthlyUsage: 0,
 	}, nil
 }
 
+func (f *fakeZeroQuotaCache) GetUserBalance(_ context.Context, _ int64) (float64, error) {
+	f.balanceCalled = true
+	return f.userBalance, nil
+}
+
 func (f *fakeZeroQuotaCache) GetUserBalanceCache(_ context.Context, _ int64) (float64, bool, error) {
-	return 100.0, true, nil
+	return f.userBalance, true, nil
 }
 
 // TestCheckUserPlatformQuotaEligibility_StandardMode_BlocksWhenLimitZero 验证：
@@ -562,8 +574,225 @@ func TestCheckUserPlatformQuotaEligibility_StandardMode_BlocksWhenLimitZero(t *t
 
 // TestCheckBillingEligibility_SubscriptionMode_BypassesPlatformQuota 验证（C-NEW-2）：
 // 订阅模式用户不受 user×platform quota 拦截，GetUserPlatformQuotaCache 不应被调用。
+func TestCheckSubscriptionEligibilityUsesPlanSnapshotSevenDayLimit(t *testing.T) {
+	snapshotLimit := 50.0
+	groupLimit := 100.0
+	s := &BillingCacheService{cache: &fakeZeroQuotaCache{subscriptionWeeklyUsage: 75}}
+
+	err := s.checkSubscriptionEligibility(context.Background(), 42, &Group{
+		ID:             10,
+		WeeklyLimitUSD: &groupLimit,
+	}, &UserSubscription{SevenDayLimitUSD: &snapshotLimit})
+
+	if !errors.Is(err, ErrWeeklyLimitExceeded) {
+		t.Errorf("snapshot seven-day limit should override legacy group weekly limit, got: %v", err)
+	}
+}
+
+func TestCheckSubscriptionEligibilityFallsBackToGroupWeeklyLimit(t *testing.T) {
+	groupLimit := 100.0
+	s := &BillingCacheService{cache: &fakeZeroQuotaCache{subscriptionWeeklyUsage: 75}}
+
+	err := s.checkSubscriptionEligibility(context.Background(), 42, &Group{
+		ID:             10,
+		WeeklyLimitUSD: &groupLimit,
+	}, &UserSubscription{})
+
+	if err != nil {
+		t.Errorf("legacy subscription should fall back to group weekly limit, got: %v", err)
+	}
+}
+
+func TestCheckBillingEligibility_ExpiredSevenDayWindowIgnoresStaleWeeklyUsage(t *testing.T) {
+	weeklyLimit := 100.0
+	expiredStart := time.Now().Add(-7 * 24 * time.Hour)
+	fake := &fakeZeroQuotaCache{
+		subscriptionWeeklyUsage: 100,
+		userBalance:             0,
+	}
+	s := &BillingCacheService{
+		cache: fake,
+		cfg:   &config.Config{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+	sub := &UserSubscription{
+		Status:            "active",
+		WeeklyWindowStart: &expiredStart,
+	}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if err != nil {
+		t.Fatalf("expired seven-day window should not fall back to stale weekly usage or balance, got: %v", err)
+	}
+	if fake.balanceCalled {
+		t.Fatal("expired seven-day window should remain subscription-eligible and not check balance fallback")
+	}
+}
+
+func TestCheckBillingEligibility_WeeklyLimitExceededFallsBackToPositiveBalance(t *testing.T) {
+	weeklyLimit := 100.0
+	s := &BillingCacheService{
+		cache: &fakeZeroQuotaCache{
+			subscriptionWeeklyUsage: 100,
+			userBalance:             25,
+		},
+		cfg: &config.Config{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+	sub := &UserSubscription{Status: "active"}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if err != nil {
+		t.Fatalf("weekly exhaustion with positive balance should allow balance fallback, got: %v", err)
+	}
+}
+
+func TestCheckBillingEligibility_WeeklyLimitExceededBalanceFallbackChecksPlatformQuota(t *testing.T) {
+	weeklyLimit := 100.0
+	fake := &fakeZeroQuotaCache{
+		subscriptionWeeklyUsage: 100,
+		userBalance:             25,
+	}
+	s := &BillingCacheService{
+		cache:                 fake,
+		cfg:                   &config.Config{},
+		userPlatformQuotaRepo: &fakeQuotaRepo{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+	sub := &UserSubscription{Status: "active"}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if !errors.Is(err, ErrUserPlatformDailyQuotaExhausted) {
+		t.Fatalf("weekly exhaustion balance fallback should check and block on platform quota, got: %v", err)
+	}
+	if !fake.called {
+		t.Fatal("platform quota cache should be checked for weekly exhaustion balance fallback")
+	}
+}
+
+func TestCheckBillingEligibility_WeeklyLimitExceededWithZeroBalanceRejects(t *testing.T) {
+	weeklyLimit := 100.0
+	s := &BillingCacheService{
+		cache: &fakeZeroQuotaCache{
+			subscriptionWeeklyUsage: 100,
+			userBalance:             0,
+		},
+		cfg: &config.Config{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+	sub := &UserSubscription{Status: "active"}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatalf("weekly exhaustion with zero balance should reject as insufficient balance, got: %v", err)
+	}
+}
+
+func TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitRequiresBalanceFallback(t *testing.T) {
+	tests := []struct {
+		name        string
+		balance     float64
+		wantErr     error
+		wantAllowed bool
+	}{
+		{
+			name:        "positive balance allows fallback",
+			balance:     25,
+			wantAllowed: true,
+		},
+		{
+			name:    "zero balance rejects",
+			balance: 0,
+			wantErr: ErrInsufficientBalance,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeZeroQuotaCache{userBalance: tt.balance}
+			s := &BillingCacheService{
+				cache: fake,
+				cfg:   &config.Config{},
+			}
+
+			subGroup := &Group{
+				ID:               10,
+				SubscriptionType: "subscription",
+				Status:           "active",
+			}
+			sub := &UserSubscription{Status: "active"}
+			user := &User{ID: 42}
+
+			err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+			if tt.wantAllowed && err != nil {
+				t.Fatalf("absent effective quota with positive balance should allow balance fallback, got: %v", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("absent effective quota with zero balance should reject as %v, got: %v", tt.wantErr, err)
+			}
+			if !fake.balanceCalled {
+				t.Fatal("balance fallback eligibility should be checked when effective seven-day quota is absent")
+			}
+		})
+	}
+}
+
+func TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitBalanceFallbackChecksPlatformQuota(t *testing.T) {
+	fake := &fakeZeroQuotaCache{userBalance: 25}
+	s := &BillingCacheService{
+		cache:                 fake,
+		cfg:                   &config.Config{},
+		userPlatformQuotaRepo: &fakeQuotaRepo{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+	}
+	sub := &UserSubscription{Status: "active"}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if !errors.Is(err, ErrUserPlatformDailyQuotaExhausted) {
+		t.Fatalf("nil effective seven-day limit balance fallback should check and block on platform quota, got: %v", err)
+	}
+	if !fake.called {
+		t.Fatal("platform quota cache should be checked for nil effective seven-day limit balance fallback")
+	}
+}
+
 func TestCheckBillingEligibility_SubscriptionMode_BypassesPlatformQuota(t *testing.T) {
-	fake := &fakeZeroQuotaCache{} // GetUserPlatformQuotaCache 返回 limit=0，若被调用则拦截
+	sevenDayLimit := 100.0
+	fake := &fakeZeroQuotaCache{userBalance: 100} // GetUserPlatformQuotaCache 返回 limit=0，若被调用则拦截
 	cfg := &config.Config{}
 	cfg.Billing.UserPlatformQuotaCacheTTLSeconds = 60
 	s := &BillingCacheService{
@@ -578,7 +807,7 @@ func TestCheckBillingEligibility_SubscriptionMode_BypassesPlatformQuota(t *testi
 		Status:           "active",
 		// 无 DailyLimitUSD → checkSubscriptionEligibility 不会因超限失败
 	}
-	sub := &UserSubscription{Status: "active"}
+	sub := &UserSubscription{Status: "active", SevenDayLimitUSD: &sevenDayLimit}
 	user := &User{ID: 42}
 
 	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
@@ -769,9 +998,9 @@ func TestHasUserPlatformQuotaLimit(t *testing.T) {
 	daily := 5.0
 
 	tests := []struct {
-		name    string
-		setup   func() *BillingCacheService
-		want    bool
+		name  string
+		setup func() *BillingCacheService
+		want  bool
 	}{
 		{
 			name: "has_limit",

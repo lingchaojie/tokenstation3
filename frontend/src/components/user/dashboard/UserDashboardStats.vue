@@ -1,22 +1,75 @@
 <template>
-  <!-- Row 1: Core Stats -->
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-    <!-- Balance -->
-    <div v-if="!isSimple" class="linx-panel p-4">
-      <div class="flex items-center gap-3">
-        <div class="rounded-lg bg-emerald-100 p-2 dark:bg-emerald-900/30">
-          <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <!-- Balance Cards -->
+  <div v-if="!isSimple" class="space-y-4">
+    <div class="linx-panel p-6">
+      <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-orange-500 dark:text-orange-300">{{ t('dashboard.currentSubscription') }}</p>
+          <p v-if="subscriptionPlanLabel" class="mt-2 text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">
+            {{ subscriptionPlanLabel }}
+          </p>
+          <p v-else class="mt-2 text-lg font-semibold tracking-[-0.03em] text-gray-400 dark:text-gray-500">
+            {{ t('dashboard.noCurrentSubscription') }}
+          </p>
+        </div>
+        <div v-if="subscriptionBalance" class="min-w-0 lg:w-80">
+          <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
+            {{ t('dashboard.subscriptionRemaining', {
+              remaining: `$${formatBalance(subscriptionBalance.remaining)}`,
+              total: `$${formatBalance(subscriptionBalance.total)}`,
+            }) }}
+          </p>
+          <div
+            class="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700"
+            role="progressbar"
+            :aria-valuenow="subscriptionRemainingPercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div
+              class="h-full rounded-full bg-green-500 transition-all dark:bg-green-400"
+              :style="{ width: `${subscriptionRemainingPercent}%` }"
+            />
+          </div>
+          <p v-if="subscriptionBalance.resetAt" class="mt-2 text-xs text-gray-500 dark:text-linear-ink-subtle">
+            {{ t('dashboard.subscriptionResetAt', { time: formatResetTime(subscriptionBalance.resetAt) }) }}
+          </p>
+        </div>
+      </div>
+
+      <div v-if="dashboardPlans.length > 0" class="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="dashboard-subscription-plans">
+        <SubscriptionPlanCard
+          v-for="plan in dashboardPlans"
+          :key="plan.id"
+          :plan="plan"
+          :active-subscriptions="activeSubscriptions"
+          :pending-notice="pendingNoticeForPlan(plan)"
+          @select="handlePlanSelect"
+        />
+      </div>
+      <p v-else class="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-800/60 dark:text-linear-ink-subtle">
+        {{ t('payment.noPlans') }}
+      </p>
+    </div>
+
+    <div class="linx-panel p-6">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-500 dark:text-emerald-300">{{ t('dashboard.rechargeBalance') }}</p>
+          <p class="mt-3 text-3xl font-bold tracking-[-0.05em] text-gray-950 dark:text-linear-ink">${{ formatBalance(balance) }}</p>
+          <p class="mt-3 text-sm text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.balanceOrderHint') }}</p>
+        </div>
+        <div class="rounded-2xl bg-emerald-100 p-3 dark:bg-emerald-900/30">
+          <svg class="h-7 w-7 text-emerald-600 dark:text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
           </svg>
         </div>
-        <div>
-          <p class="text-xs font-medium linx-muted">{{ t('dashboard.balance') }}</p>
-          <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatBalance(balance) }}</p>
-          <p class="text-xs linx-muted">{{ t('common.available') }}</p>
-        </div>
       </div>
     </div>
+  </div>
 
+  <!-- Row 1: Core Stats -->
+  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
     <!-- API Keys -->
     <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
@@ -225,9 +278,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import Icon from '@/components/icons/Icon.vue'
+import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
-import type { PlatformQuotaItem } from '@/types'
+import type { PlatformQuotaItem, SubscriptionBalanceSummary, UserSubscription } from '@/types'
+import type { SubscriptionPlan } from '@/types/payment'
+import {
+  displayMonthlyPlanName,
+  getMonthlyPlanCards,
+  monthlyPlanKeyFromName,
+  type MonthlyPlanKey,
+  type SubscriptionPlanSelectIntent,
+} from '@/utils/monthlyPlans'
 
 interface FusedPlatformCard {
   platform: string
@@ -244,8 +307,12 @@ const props = defineProps<{
   balance: number
   isSimple: boolean
   platformQuotas?: PlatformQuotaItem[] | null
+  subscriptionBalance?: SubscriptionBalanceSummary | null
+  subscriptionPlans?: SubscriptionPlan[]
+  activeSubscriptions?: UserSubscription[]
 }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const router = useRouter()
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -255,6 +322,92 @@ const PLATFORM_LABELS: Record<string, string> = {
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
+
+const subscriptionPlanLabel = computed(() => {
+  if (!props.subscriptionBalance) return null
+  if (props.subscriptionBalance.displayMode === 'multiple') {
+    return t('dashboard.subscriptionPlanCount', {
+      count: props.subscriptionBalance.activePlanCount ?? props.subscriptionBalance.planNames?.length ?? 0,
+    })
+  }
+  return displayMonthlyPlanName(props.subscriptionBalance.planName, String(locale.value))
+})
+
+const subscriptionRemainingPercent = computed(() => {
+  if (!props.subscriptionBalance?.total) return 0
+  return calcPercent(props.subscriptionBalance.remaining, props.subscriptionBalance.total)
+})
+
+const monthlyPlanGroupId = computed(() => {
+  return props.subscriptionPlans?.find(plan => monthlyPlanKeyFromName(plan.name))?.group_id
+    ?? props.activeSubscriptions?.find(sub => monthlyPlanKeyFromName(sub.plan_name))?.group_id
+    ?? 0
+})
+
+const planByKey = computed(() => {
+  const map = new Map<MonthlyPlanKey, SubscriptionPlan>()
+  for (const plan of props.subscriptionPlans ?? []) {
+    const key = monthlyPlanKeyFromName(plan.name)
+    if (key) map.set(key, plan)
+  }
+  return map
+})
+
+const dashboardPlans = computed<SubscriptionPlan[]>(() => {
+  const groupId = monthlyPlanGroupId.value
+  return getMonthlyPlanCards(String(locale.value)).map((display, index) => {
+    const existing = planByKey.value.get(display.key)
+    if (existing) return existing
+    return {
+      id: -(index + 1),
+      group_id: groupId,
+      group_platform: 'anthropic',
+      group_name: 'LINX2 Subscription',
+      rate_multiplier: 1,
+      daily_limit_usd: null,
+      weekly_limit_usd: null,
+      monthly_limit_usd: null,
+      supported_model_scopes: [],
+      name: display.name,
+      description: display.description,
+      price: display.priceCny,
+      original_price: 0,
+      seven_day_quota_usd: display.sevenDayQuotaUsd,
+      validity_days: 30,
+      validity_unit: 'day',
+      features: display.benefits,
+      for_sale: true,
+      sort_order: display.rank,
+    }
+  })
+})
+
+function handlePlanSelect(plan: SubscriptionPlan, intent: SubscriptionPlanSelectIntent) {
+  router.push({
+    path: '/purchase',
+    query: {
+      tab: 'subscription',
+      plan: String(plan.id),
+      intent,
+    },
+  })
+}
+
+function pendingNoticeForPlan(plan: SubscriptionPlan): string {
+  const active = props.activeSubscriptions?.find(sub => {
+    if (sub.status !== 'active') return false
+    if (sub.plan_id != null && sub.plan_id === plan.id) return true
+    const activeKey = monthlyPlanKeyFromName(sub.plan_name)
+    const planKey = monthlyPlanKeyFromName(plan.name)
+    return !!activeKey && !!planKey && activeKey === planKey
+  })
+  if (!active?.scheduled_plan_name || !active.scheduled_plan_effective_at) return ''
+  const nextPlanName = displayMonthlyPlanName(active.scheduled_plan_name, String(locale.value)) || active.scheduled_plan_name
+  return t('dashboard.pendingSubscriptionChange', {
+    plan: nextPlanName,
+    time: formatResetTime(active.scheduled_plan_effective_at),
+  })
+}
 
 const sortedPlatforms = computed(() => {
   const list = props.stats?.by_platform ?? []
@@ -365,13 +518,12 @@ function formatResetTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hour}:${minute}`
 }
 
 const formatBalance = (b: number) =>

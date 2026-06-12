@@ -190,22 +190,36 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			if subscription != nil {
 				needsMaintenance, validateErr := subscriptionService.ValidateAndCheckLimits(subscription, apiKey.Group)
 				if validateErr != nil {
-					code := "SUBSCRIPTION_INVALID"
-					status := 403
-					if errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
+					limitExceeded := errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrWeeklyLimitExceeded) ||
-						errors.Is(validateErr, service.ErrMonthlyLimitExceeded) {
-						code = "USAGE_LIMIT_EXCEEDED"
-						status = 429
+						errors.Is(validateErr, service.ErrMonthlyLimitExceeded)
+					weeklyFallbackEligible := errors.Is(validateErr, service.ErrWeeklyLimitExceeded) && apiKey.User.Balance > 0
+					if !weeklyFallbackEligible {
+						code := "SUBSCRIPTION_INVALID"
+						status := 403
+						if limitExceeded {
+							code = "USAGE_LIMIT_EXCEEDED"
+							status = 429
+						}
+						AbortWithError(c, status, code, validateErr.Error())
+						return
 					}
-					AbortWithError(c, status, code, validateErr.Error())
+				}
+				if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil && apiKey.User.Balance <= 0 {
+					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 					return
 				}
 
-				// 窗口维护异步化（不阻塞请求）
+				// Expired quota windows must be reset before downstream billing reads usage.
 				if needsMaintenance {
-					maintenanceCopy := *subscription
-					subscriptionService.DoWindowMaintenance(&maintenanceCopy)
+					if err := subscriptionService.CheckAndResetWindows(c.Request.Context(), subscription); err != nil {
+						AbortWithError(c, 500, "INTERNAL_ERROR", "Failed to reset subscription usage windows")
+						return
+					}
+					if !subscription.IsWindowActivated() {
+						maintenanceCopy := *subscription
+						subscriptionService.DoWindowMaintenance(&maintenanceCopy)
+					}
 				}
 			} else {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查

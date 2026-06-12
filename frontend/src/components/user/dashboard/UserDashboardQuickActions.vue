@@ -4,9 +4,9 @@
       <h2 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">{{ t('dashboard.quickActions') }}</h2>
     </div>
     <div class="space-y-3">
-      <button @click="router.push('/keys')" class="btn btn-primary group flex w-full items-center gap-4 p-4 text-left">
-        <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-primary-100 transition-transform group-hover:scale-105 dark:bg-primary-900/30">
-          <Icon name="key" size="lg" class="text-primary-600 dark:text-primary-400" />
+      <button @click="router.push('/keys')" class="btn btn-secondary group flex w-full items-center gap-4 p-4 text-left">
+        <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-gray-100 transition-transform group-hover:scale-105 dark:bg-dark-700">
+          <Icon name="key" size="lg" class="text-gray-600 dark:text-gray-300" />
         </div>
         <div class="min-w-0 flex-1">
           <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('dashboard.createApiKey') }}</p>

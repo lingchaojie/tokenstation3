@@ -29,6 +29,24 @@ type UserSubscription struct {
 	UserID int64 `json:"user_id,omitempty"`
 	// GroupID holds the value of the "group_id" field.
 	GroupID int64 `json:"group_id,omitempty"`
+	// PlanID holds the value of the "plan_id" field.
+	PlanID *int64 `json:"plan_id,omitempty"`
+	// PlanName holds the value of the "plan_name" field.
+	PlanName *string `json:"plan_name,omitempty"`
+	// SevenDayLimitUsd holds the value of the "seven_day_limit_usd" field.
+	SevenDayLimitUsd *float64 `json:"seven_day_limit_usd,omitempty"`
+	// ScheduledPlanID holds the value of the "scheduled_plan_id" field.
+	ScheduledPlanID *int64 `json:"scheduled_plan_id,omitempty"`
+	// ScheduledPlanName holds the value of the "scheduled_plan_name" field.
+	ScheduledPlanName *string `json:"scheduled_plan_name,omitempty"`
+	// ScheduledSevenDayLimitUsd holds the value of the "scheduled_seven_day_limit_usd" field.
+	ScheduledSevenDayLimitUsd *float64 `json:"scheduled_seven_day_limit_usd,omitempty"`
+	// ScheduledPlanEffectiveAt holds the value of the "scheduled_plan_effective_at" field.
+	ScheduledPlanEffectiveAt *time.Time `json:"scheduled_plan_effective_at,omitempty"`
+	// ScheduledExpiresAt holds the value of the "scheduled_expires_at" field.
+	ScheduledExpiresAt *time.Time `json:"scheduled_expires_at,omitempty"`
+	// ScheduledOrderID holds the value of the "scheduled_order_id" field.
+	ScheduledOrderID *int64 `json:"scheduled_order_id,omitempty"`
 	// StartsAt holds the value of the "starts_at" field.
 	StartsAt time.Time `json:"starts_at,omitempty"`
 	// ExpiresAt holds the value of the "expires_at" field.
@@ -121,13 +139,13 @@ func (*UserSubscription) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
+		case usersubscription.FieldSevenDayLimitUsd, usersubscription.FieldScheduledSevenDayLimitUsd, usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
 			values[i] = new(sql.NullFloat64)
-		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldAssignedBy:
+		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldPlanID, usersubscription.FieldScheduledPlanID, usersubscription.FieldScheduledOrderID, usersubscription.FieldAssignedBy:
 			values[i] = new(sql.NullInt64)
-		case usersubscription.FieldStatus, usersubscription.FieldNotes:
+		case usersubscription.FieldPlanName, usersubscription.FieldScheduledPlanName, usersubscription.FieldStatus, usersubscription.FieldNotes:
 			values[i] = new(sql.NullString)
-		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldAssignedAt:
+		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldScheduledPlanEffectiveAt, usersubscription.FieldScheduledExpiresAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldAssignedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -180,6 +198,69 @@ func (_m *UserSubscription) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field group_id", values[i])
 			} else if value.Valid {
 				_m.GroupID = value.Int64
+			}
+		case usersubscription.FieldPlanID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field plan_id", values[i])
+			} else if value.Valid {
+				_m.PlanID = new(int64)
+				*_m.PlanID = value.Int64
+			}
+		case usersubscription.FieldPlanName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field plan_name", values[i])
+			} else if value.Valid {
+				_m.PlanName = new(string)
+				*_m.PlanName = value.String
+			}
+		case usersubscription.FieldSevenDayLimitUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field seven_day_limit_usd", values[i])
+			} else if value.Valid {
+				_m.SevenDayLimitUsd = new(float64)
+				*_m.SevenDayLimitUsd = value.Float64
+			}
+		case usersubscription.FieldScheduledPlanID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_plan_id", values[i])
+			} else if value.Valid {
+				_m.ScheduledPlanID = new(int64)
+				*_m.ScheduledPlanID = value.Int64
+			}
+		case usersubscription.FieldScheduledPlanName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_plan_name", values[i])
+			} else if value.Valid {
+				_m.ScheduledPlanName = new(string)
+				*_m.ScheduledPlanName = value.String
+			}
+		case usersubscription.FieldScheduledSevenDayLimitUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_seven_day_limit_usd", values[i])
+			} else if value.Valid {
+				_m.ScheduledSevenDayLimitUsd = new(float64)
+				*_m.ScheduledSevenDayLimitUsd = value.Float64
+			}
+		case usersubscription.FieldScheduledPlanEffectiveAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_plan_effective_at", values[i])
+			} else if value.Valid {
+				_m.ScheduledPlanEffectiveAt = new(time.Time)
+				*_m.ScheduledPlanEffectiveAt = value.Time
+			}
+		case usersubscription.FieldScheduledExpiresAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_expires_at", values[i])
+			} else if value.Valid {
+				_m.ScheduledExpiresAt = new(time.Time)
+				*_m.ScheduledExpiresAt = value.Time
+			}
+		case usersubscription.FieldScheduledOrderID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field scheduled_order_id", values[i])
+			} else if value.Valid {
+				_m.ScheduledOrderID = new(int64)
+				*_m.ScheduledOrderID = value.Int64
 			}
 		case usersubscription.FieldStartsAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -330,6 +411,51 @@ func (_m *UserSubscription) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("group_id=")
 	builder.WriteString(fmt.Sprintf("%v", _m.GroupID))
+	builder.WriteString(", ")
+	if v := _m.PlanID; v != nil {
+		builder.WriteString("plan_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PlanName; v != nil {
+		builder.WriteString("plan_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.SevenDayLimitUsd; v != nil {
+		builder.WriteString("seven_day_limit_usd=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledPlanID; v != nil {
+		builder.WriteString("scheduled_plan_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledPlanName; v != nil {
+		builder.WriteString("scheduled_plan_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledSevenDayLimitUsd; v != nil {
+		builder.WriteString("scheduled_seven_day_limit_usd=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledPlanEffectiveAt; v != nil {
+		builder.WriteString("scheduled_plan_effective_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledExpiresAt; v != nil {
+		builder.WriteString("scheduled_expires_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.ScheduledOrderID; v != nil {
+		builder.WriteString("scheduled_order_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("starts_at=")
 	builder.WriteString(_m.StartsAt.Format(time.ANSIC))

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"time"
+
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -11,17 +13,23 @@ import (
 
 // SubscriptionSummaryItem represents a subscription item in summary
 type SubscriptionSummaryItem struct {
-	ID              int64   `json:"id"`
-	GroupID         int64   `json:"group_id"`
-	GroupName       string  `json:"group_name"`
-	Status          string  `json:"status"`
-	DailyUsedUSD    float64 `json:"daily_used_usd,omitempty"`
-	DailyLimitUSD   float64 `json:"daily_limit_usd,omitempty"`
-	WeeklyUsedUSD   float64 `json:"weekly_used_usd,omitempty"`
-	WeeklyLimitUSD  float64 `json:"weekly_limit_usd,omitempty"`
-	MonthlyUsedUSD  float64 `json:"monthly_used_usd,omitempty"`
-	MonthlyLimitUSD float64 `json:"monthly_limit_usd,omitempty"`
-	ExpiresAt       *string `json:"expires_at,omitempty"`
+	ID                   int64      `json:"id"`
+	GroupID              int64      `json:"group_id"`
+	GroupName            string     `json:"group_name"`
+	Status               string     `json:"status"`
+	PlanID               *int64     `json:"plan_id"`
+	PlanName             *string    `json:"plan_name"`
+	DailyUsedUSD         float64    `json:"daily_used_usd,omitempty"`
+	DailyLimitUSD        float64    `json:"daily_limit_usd,omitempty"`
+	WeeklyUsedUSD        float64    `json:"weekly_used_usd,omitempty"`
+	WeeklyLimitUSD       float64    `json:"weekly_limit_usd,omitempty"`
+	MonthlyUsedUSD       float64    `json:"monthly_used_usd,omitempty"`
+	MonthlyLimitUSD      float64    `json:"monthly_limit_usd,omitempty"`
+	SevenDayLimitUSD     *float64   `json:"seven_day_limit_usd"`
+	SevenDayUsageUSD     float64    `json:"seven_day_usage_usd"`
+	SevenDayRemainingUSD *float64   `json:"seven_day_remaining_usd"`
+	SevenDayResetAt      *time.Time `json:"seven_day_reset_at"`
+	ExpiresAt            *string    `json:"expires_at,omitempty"`
 }
 
 // SubscriptionProgressInfo represents subscription with progress info
@@ -140,12 +148,18 @@ func (h *SubscriptionHandler) GetSummary(c *gin.Context) {
 
 	for _, sub := range subscriptions {
 		item := SubscriptionSummaryItem{
-			ID:             sub.ID,
-			GroupID:        sub.GroupID,
-			Status:         sub.Status,
-			DailyUsedUSD:   sub.DailyUsageUSD,
-			WeeklyUsedUSD:  sub.WeeklyUsageUSD,
-			MonthlyUsedUSD: sub.MonthlyUsageUSD,
+			ID:                   sub.ID,
+			GroupID:              sub.GroupID,
+			Status:               sub.Status,
+			PlanID:               sub.PlanID,
+			PlanName:             sub.PlanName,
+			DailyUsedUSD:         sub.DailyUsageUSD,
+			WeeklyUsedUSD:        sub.WeeklyUsageUSD,
+			MonthlyUsedUSD:       sub.MonthlyUsageUSD,
+			SevenDayLimitUSD:     sub.EffectiveSevenDayLimit(sub.Group),
+			SevenDayUsageUSD:     sub.WeeklyUsageUSD,
+			SevenDayRemainingUSD: sub.SevenDayRemaining(sub.Group),
+			SevenDayResetAt:      sub.WeeklyResetTime(),
 		}
 
 		// Add group info if preloaded

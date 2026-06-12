@@ -23,6 +23,8 @@ const (
 	FieldPrice = "price"
 	// FieldOriginalPrice holds the string denoting the original_price field in the database.
 	FieldOriginalPrice = "original_price"
+	// FieldSevenDayQuotaUsd holds the string denoting the seven_day_quota_usd field in the database.
+	FieldSevenDayQuotaUsd = "seven_day_quota_usd"
 	// FieldValidityDays holds the string denoting the validity_days field in the database.
 	FieldValidityDays = "validity_days"
 	// FieldValidityUnit holds the string denoting the validity_unit field in the database.
@@ -51,6 +53,7 @@ var Columns = []string{
 	FieldDescription,
 	FieldPrice,
 	FieldOriginalPrice,
+	FieldSevenDayQuotaUsd,
 	FieldValidityDays,
 	FieldValidityUnit,
 	FieldFeatures,
@@ -131,6 +134,11 @@ func ByPrice(opts ...sql.OrderTermOption) OrderOption {
 // ByOriginalPrice orders the results by the original_price field.
 func ByOriginalPrice(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOriginalPrice, opts...).ToFunc()
+}
+
+// BySevenDayQuotaUsd orders the results by the seven_day_quota_usd field.
+func BySevenDayQuotaUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSevenDayQuotaUsd, opts...).ToFunc()
 }
 
 // ByValidityDays orders the results by the validity_days field.

@@ -19,22 +19,25 @@ type UsageBillingCommand struct {
 	RequestFingerprint string
 	RequestPayloadHash string
 
-	UserID              int64
-	AccountID           int64
-	SubscriptionID      *int64
-	AccountType         string
-	Model               string
-	ServiceTier         string
-	ReasoningEffort     string
-	BillingType         int8
-	InputTokens         int
-	OutputTokens        int
-	CacheCreationTokens int
-	CacheReadTokens     int
-	ImageCount          int
-	MediaType           string
+	UserID                       int64
+	AccountID                    int64
+	SubscriptionID               *int64
+	AccountType                  string
+	Model                        string
+	ServiceTier                  string
+	ReasoningEffort              string
+	BillingType                  int8
+	AllowBalanceFallback         bool
+	SubscriptionSevenDayLimitUSD *float64
+	InputTokens                  int
+	OutputTokens                 int
+	CacheCreationTokens          int
+	CacheReadTokens              int
+	ImageCount                   int
+	MediaType                    string
 
 	BalanceCost         float64
+	BalanceFallbackCost float64
 	SubscriptionCost    float64
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
@@ -56,7 +59,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%s|%s|%s|%s|%d|%t|%0.10f|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
@@ -65,6 +68,8 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		strings.TrimSpace(c.ServiceTier),
 		strings.TrimSpace(c.ReasoningEffort),
 		c.BillingType,
+		c.AllowBalanceFallback,
+		floatValueOrZero(c.SubscriptionSevenDayLimitUSD),
 		c.InputTokens,
 		c.OutputTokens,
 		c.CacheCreationTokens,
@@ -73,6 +78,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		strings.TrimSpace(c.MediaType),
 		valueOrZero(c.SubscriptionID),
 		c.BalanceCost,
+		c.BalanceFallbackCost,
 		c.SubscriptionCost,
 		c.APIKeyQuotaCost,
 		c.APIKeyRateLimitCost,
@@ -100,6 +106,13 @@ func valueOrZero(v *int64) int64 {
 	return *v
 }
 
+func floatValueOrZero(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
 // AccountQuotaState holds the post-increment quota state returned by the DB transaction.
 // All values are post-update (i.e., already include the increment).
 type AccountQuotaState struct {
@@ -114,6 +127,7 @@ type AccountQuotaState struct {
 type UsageBillingApplyResult struct {
 	Applied              bool
 	APIKeyQuotaExhausted bool
+	BillingType          int8
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
 }

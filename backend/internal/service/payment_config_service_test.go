@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -434,4 +435,143 @@ func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 
 func paymentConfigStrPtr(value string) *string {
 	return &value
+}
+
+func TestPaymentConfigServicePlanSevenDayQuota(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	group, err := client.Group.Create().
+		SetName("Quota Test Group").
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	quota := 110.0
+
+	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		GroupID:          group.ID,
+		Name:             "Plus monthly",
+		Description:      "Everyday development",
+		Price:            399,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Seven-day quota\nRecharge fallback",
+		ProductName:      "LINX2 Plus monthly",
+		ForSale:          true,
+		SortOrder:        20,
+		SevenDayQuotaUSD: &quota,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan returned error: %v", err)
+	}
+	if created.SevenDayQuotaUsd == nil || math.Abs(*created.SevenDayQuotaUsd-110.0) > 0.000001 {
+		t.Fatalf("created.SevenDayQuotaUsd = %v, want 110", created.SevenDayQuotaUsd)
+	}
+
+	updatedQuota := 260.0
+	updated, err := svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		SevenDayQuotaUSD: &updatedQuota,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan returned error: %v", err)
+	}
+	if updated.SevenDayQuotaUsd == nil || math.Abs(*updated.SevenDayQuotaUsd-260.0) > 0.000001 {
+		t.Fatalf("updated.SevenDayQuotaUsd = %v, want 260", updated.SevenDayQuotaUsd)
+	}
+
+	listed, err := svc.ListPlansForSale(ctx)
+	if err != nil {
+		t.Fatalf("ListPlansForSale returned error: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListPlansForSale len = %d, want 1", len(listed))
+	}
+	if listed[0].SevenDayQuotaUsd == nil || math.Abs(*listed[0].SevenDayQuotaUsd-260.0) > 0.000001 {
+		t.Fatalf("listed[0].SevenDayQuotaUsd = %v, want 260", listed[0].SevenDayQuotaUsd)
+	}
+
+	cleared, err := svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		ClearSevenDayQuotaUSD: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan clear quota returned error: %v", err)
+	}
+	if cleared.SevenDayQuotaUsd != nil {
+		t.Fatalf("cleared.SevenDayQuotaUsd = %v, want nil", cleared.SevenDayQuotaUsd)
+	}
+}
+
+func TestPaymentConfigServicePlanSevenDayQuotaRejectsInvalidValues(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	group, err := client.Group.Create().
+		SetName("Quota Validation Group").
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	negativeQuota := -1.0
+	_, err = svc.CreatePlan(ctx, CreatePlanRequest{
+		GroupID:          group.ID,
+		Name:             "Invalid quota plan",
+		Description:      "Negative quotas are not allowed",
+		Price:            100,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature",
+		ProductName:      "Invalid quota plan",
+		ForSale:          true,
+		SortOrder:        30,
+		SevenDayQuotaUSD: &negativeQuota,
+	})
+	if err == nil {
+		t.Fatal("CreatePlan with negative SevenDayQuotaUSD returned nil error")
+	}
+
+	quota := 25.0
+	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		GroupID:          group.ID,
+		Name:             "Valid quota plan",
+		Description:      "Valid quota",
+		Price:            100,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature",
+		ProductName:      "Valid quota plan",
+		ForSale:          true,
+		SortOrder:        31,
+		SevenDayQuotaUSD: &quota,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan returned error: %v", err)
+	}
+
+	_, err = svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		SevenDayQuotaUSD: &negativeQuota,
+	})
+	if err == nil {
+		t.Fatal("UpdatePlan with negative SevenDayQuotaUSD returned nil error")
+	}
+
+	replacementQuota := 50.0
+	_, err = svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		SevenDayQuotaUSD:      &replacementQuota,
+		ClearSevenDayQuotaUSD: true,
+	})
+	if err == nil {
+		t.Fatal("UpdatePlan with both SevenDayQuotaUSD and ClearSevenDayQuotaUSD returned nil error")
+	}
+
+	reloaded, err := svc.GetPlan(ctx, int64(created.ID))
+	if err != nil {
+		t.Fatalf("GetPlan returned error: %v", err)
+	}
+	if reloaded.SevenDayQuotaUsd == nil || math.Abs(*reloaded.SevenDayQuotaUsd-25.0) > 0.000001 {
+		t.Fatalf("reloaded.SevenDayQuotaUsd = %v, want 25", reloaded.SevenDayQuotaUsd)
+	}
 }

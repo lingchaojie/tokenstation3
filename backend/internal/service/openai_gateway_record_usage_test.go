@@ -58,6 +58,15 @@ func TestOpenAIGatewayServiceRecordUsage_RejectsNilInput(t *testing.T) {
 	require.Error(t, svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{}))
 }
 
+func TestOpenAIGatewayServiceBillingDepsIncludesConfig(t *testing.T) {
+	cfg := &config.Config{}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	deps := svc.billingDeps()
+
+	require.Same(t, cfg, deps.cfg)
+}
+
 type openAIRecordUsageUserRepoStub struct {
 	UserRepository
 
@@ -1275,7 +1284,8 @@ func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingSetsSubscriptionFiel
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
-	subscription := &UserSubscription{ID: 99}
+	sevenDayLimit := 10.0
+	subscription := &UserSubscription{ID: 99, SevenDayLimitUSD: &sevenDayLimit}
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{

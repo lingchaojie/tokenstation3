@@ -33,7 +33,7 @@
     </div>
 
     <!-- Header -->
-    <header class="sticky top-0 z-20 border-b border-linear-hairline bg-linear-canvas/88 backdrop-blur-xl">
+    <header class="sticky top-0 z-20 border-b border-linear-hairline bg-linear-canvas/90 backdrop-blur-xl">
       <nav class="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-3 sm:px-6 lg:px-8">
         <router-link to="/home" class="group flex items-center gap-3" :aria-label="siteName">
           <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline transition-colors group-hover:ring-linear-hairline-strong">
@@ -244,48 +244,68 @@
             </p>
           </div>
 
-          <div class="grid gap-5 lg:grid-cols-2" data-testid="linear-pricing-grid">
+          <div class="mb-6 grid gap-3 rounded-2xl border border-linear-hairline bg-linear-surface-1 p-4 text-sm leading-6 text-linear-ink-muted md:grid-cols-3">
+            <div v-for="item in copy.monthlyCardInfo" :key="item.title" class="flex gap-3">
+              <span class="ui-accent-dot mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+              <div>
+                <p class="font-semibold text-linear-ink">{{ item.title }}</p>
+                <p class="mt-1 text-linear-ink-subtle">{{ item.description }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="linear-pricing-grid">
             <article
-              v-for="group in pricingGroups"
-              :key="group.provider"
-              class="linx-panel min-w-0 p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+              v-for="plan in subscriptionPlans"
+              :key="plan.name"
+              data-testid="pricing-plan-card"
+              class="linx-panel group flex min-w-0 flex-col p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
+              :class="plan.featured ? 'border-primary-500/45 bg-primary-500/[0.045]' : ''"
             >
-              <div class="mb-5 flex items-center justify-between">
-                <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ group.provider }}</h3>
-                <span class="font-mono-brand rounded-full border border-linear-hairline bg-linear-canvas px-2.5 py-1 text-[10px] uppercase tracking-wider text-linear-ink-tertiary">{{ group.tag }}</span>
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ plan.name }}</h3>
+                <span class="font-mono-brand ui-accent-badge rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wider">
+                  {{ plan.badge }}
+                </span>
               </div>
 
-              <div data-testid="pricing-table-scroll" class="overflow-x-auto">
-                <div class="min-w-[27rem]">
-                  <div class="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_4.75rem] items-center gap-x-3 border-b border-linear-hairline pb-2 text-[11px] font-medium uppercase tracking-wide text-linear-ink-tertiary">
-                    <span>{{ copy.pricingCols.model }}</span>
-                    <span class="text-right">{{ copy.pricingCols.input }}</span>
-                    <span class="text-right">{{ copy.pricingCols.output }}</span>
-                    <span class="text-right">{{ copy.pricingCols.label }}</span>
-                  </div>
-                  <ul class="divide-y divide-linear-hairline">
-                    <li
-                      v-for="model in group.models"
-                      :key="model.name"
-                      data-testid="pricing-model-row"
-                      class="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_4.75rem] items-center gap-x-3 py-3"
-                    >
-                      <span class="min-w-0 text-sm font-medium text-linear-ink-muted">{{ model.name }}</span>
-                      <span class="font-mono-brand text-right text-sm tabular-nums text-linear-ink-subtle">{{ model.in }}</span>
-                      <span class="font-mono-brand text-right text-sm font-medium tabular-nums text-linear-ink">{{ model.out }}</span>
-                      <span class="text-right">
-                        <span
-                          v-if="model.label"
-                          class="font-mono-brand ui-accent-badge rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider"
-                        >
-                          {{ model.label }}
-                        </span>
-                        <span v-else class="text-xs text-linear-ink-tertiary">—</span>
-                      </span>
-                    </li>
-                  </ul>
+              <div class="mt-6">
+                <p class="flex items-baseline gap-2">
+                  <span class="text-4xl font-semibold tracking-[-0.06em] text-linear-ink">{{ plan.price }}</span>
+                  <span class="text-sm font-medium text-linear-ink-tertiary">/ {{ copy.planPeriod }}</span>
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <p class="font-mono-brand inline-flex rounded-lg border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-sm font-medium text-primary-300">
+                    {{ plan.quota }}
+                  </p>
+                  <p class="inline-flex rounded-lg border border-linear-hairline bg-linear-surface-2 px-3 py-1.5 text-sm font-medium text-linear-ink-muted">
+                    {{ copy.monthlyTotalLabel }} {{ plan.monthlyTotal }}
+                  </p>
                 </div>
               </div>
+
+              <p class="mt-5 text-sm leading-6 text-linear-ink-subtle">{{ plan.description }}</p>
+
+              <ul class="mt-6 space-y-3 border-t border-linear-hairline pt-5">
+                <li
+                  v-for="benefit in plan.benefits"
+                  :key="benefit"
+                  class="flex gap-3 text-sm leading-6 text-linear-ink-muted"
+                >
+                  <span class="ui-accent-dot mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+                  <span>{{ benefit }}</span>
+                </li>
+              </ul>
+
+              <router-link
+                to="/purchase?tab=subscription"
+                :aria-label="`${copy.pricingCta} - ${plan.name}`"
+                class="mt-7 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
+                :class="plan.featured ? 'bg-primary-500 text-white hover:bg-primary-400' : 'border border-linear-hairline bg-linear-canvas text-linear-ink hover:border-linear-hairline-strong hover:bg-linear-surface-1'"
+              >
+                {{ copy.pricingCta }}
+                <Icon name="arrowRight" size="sm" class="ml-2" :stroke-width="2" />
+              </router-link>
             </article>
           </div>
 
@@ -327,7 +347,7 @@
           <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
-          <span>&copy; {{ currentYear }} LINIX2.Ltd</span>
+          <span>&copy; {{ currentYear }} LINX2.Ltd</span>
         </div>
         <div v-if="docUrl" class="flex items-center justify-center gap-5">
           <a
@@ -352,6 +372,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { getMonthlyPlanCards } from '@/utils/monthlyPlans'
 
 const { t, locale } = useI18n()
 
@@ -389,30 +410,6 @@ const routeCards = [
   { label: 'OpenAI Responses', description: 'Responses API compatible path', badge: 'OpenAI' },
   { label: 'OpenAI Chat Completions', description: 'Chat Completions compatible path', badge: 'OpenAI' },
   { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
-]
-
-// Model pricing — USD per 1M tokens (官方原价透传, source: backend model-pricing).
-type PriceRow = { name: string; in: string; out: string; label?: string }
-type PriceGroup = { provider: string; tag: string; models: PriceRow[] }
-const pricingGroups: PriceGroup[] = [
-  {
-    provider: 'Claude',
-    tag: 'Anthropic',
-    models: [
-      { name: 'Claude Opus 4.5', in: '$5.00', out: '$25.00', label: 'Latest' },
-      { name: 'Claude Sonnet 4.5', in: '$3.00', out: '$15.00', label: 'Latest' },
-      { name: 'Claude Haiku 4.5', in: '$1.00', out: '$5.00', label: 'Latest' },
-    ],
-  },
-  {
-    provider: 'OpenAI',
-    tag: 'GPT · Codex',
-    models: [
-      { name: 'GPT-5', in: '$1.25', out: '$10.00', label: 'Latest' },
-      { name: 'GPT-5 mini', in: '$0.25', out: '$2.00', label: 'Latest' },
-      { name: 'o3', in: '$2.00', out: '$8.00' },
-    ],
-  },
 ]
 
 // Bilingual marketing copy (mirrors LocaleSwitcher in the header).
@@ -456,11 +453,18 @@ const copies = {
       { code: 'CODEX', title: 'Codex / Chat 兼容', description: '面向 Codex 与 OpenAI Chat Completions 工作负载提供统一转发入口。' },
       { code: 'LEDGER', title: '用量与计费层', description: '跟踪模型、Token、状态和费用记录，并提供账户级余额保护。' },
     ],
-    pricingKicker: '模型价格',
-    pricingTitle: '官方原价透传，无隐藏加价。',
-    pricingDescription: '下列为各模型单价，单位为美元 / 每百万 tokens（USD / 1M tokens）。',
-    pricingCols: { model: '模型', input: '输入', output: '输出', label: '标注' },
-    pricingFootnote: '价格随上游官方调整，以控制台实际计费为准 · 缓存读写另按官方比例计价。',
+    pricingKicker: 'LINX2 订阅方案',
+    pricingTitle: '按月订阅，每 7 天刷新可用额度。',
+    pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容接口。',
+    pricingCta: '选择方案',
+    planPeriod: '月',
+    monthlyTotalLabel: '总共可获取',
+    pricingFootnote: '订阅额度优先使用；额度不足时继续使用充值余额兜底，实际状态以购买页和控制台为准。',
+    monthlyCardInfo: [
+      { title: '每周发放充值额度', description: '月卡按 7 天为一个周期刷新额度，不直接增加账户充值余额。' },
+      { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容接口，不按供应商拆分。' },
+      { title: '充值余额兜底', description: '订阅额度优先扣除，超出后自动使用充值余额继续请求。' },
+    ],
     ctaKicker: 'Ready when you are',
     ctaTitle: '几分钟接入，立即开始编程',
     ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 OpenAI 纳入统一、稳定、透明计费的编程通道。',
@@ -504,19 +508,36 @@ const copies = {
       { code: 'CODEX', title: 'Codex / Chat compatible', description: 'Provide one forwarding entry for Codex and OpenAI Chat Completions workloads.' },
       { code: 'LEDGER', title: 'Usage and billing layer', description: 'Track model, token, status and cost records with account-level balance protection.' },
     ],
-    pricingKicker: 'Model pricing',
-    pricingTitle: 'Official pass-through pricing, no hidden markup.',
-    pricingDescription: 'Per-model rates below, in US dollars per 1M tokens (USD / 1M tokens).',
-    pricingCols: { model: 'Model', input: 'Input', output: 'Output', label: 'Label' },
-    pricingFootnote: 'Prices track upstream official changes; the console billing is authoritative · cache read/write billed at official ratios.',
+    pricingKicker: 'LINX2 subscription plans',
+    pricingTitle: 'Monthly plans with quota refreshed every seven days.',
+    pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible APIs.',
+    pricingCta: 'Choose plan',
+    planPeriod: 'month',
+    monthlyTotalLabel: 'Total obtainable',
+    pricingFootnote: 'Subscription quota is used first; recharge balance keeps overflow requests running. Purchase page and console state are authoritative.',
+    monthlyCardInfo: [
+      { title: 'Weekly recharge quota', description: 'Monthly cards refresh usable quota every seven days without adding to your recharge wallet.' },
+      { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible APIs without provider-specific splitting.' },
+      { title: 'Recharge fallback', description: 'Subscription quota is consumed first, then recharge balance automatically covers overflow.' },
+    ],
     ctaKicker: 'Ready when you are',
     ctaTitle: 'Connect in minutes, start coding now',
     ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and OpenAI into one stable, transparent coding gateway.',
   },
 } as const
 
-const localeCode = computed(() => (locale.value === 'zh' ? 'zh' : 'en'))
+const localeCode = computed(() => (String(locale.value).startsWith('zh') ? 'zh' : 'en'))
 const copy = computed(() => copies[localeCode.value])
+const subscriptionPlans = computed(() => getMonthlyPlanCards(localeCode.value).map(plan => ({
+  name: plan.name,
+  badge: plan.badge,
+  price: plan.priceLabel,
+  quota: plan.quotaLabel,
+  monthlyTotal: plan.monthlyTotalLabel,
+  description: plan.description,
+  benefits: plan.benefits,
+  featured: plan.featured,
+})))
 
 // Theme
 const isDark = ref(document.documentElement.classList.contains('dark'))

@@ -376,20 +376,36 @@ func TestAPIContracts(t *testing.T) {
 				// 普通用户订阅接口不应包含 assigned_* / notes 等管理员字段。
 				deps.userSubRepo.SetByUserID(1, []service.UserSubscription{
 					{
-						ID:              501,
-						UserID:          1,
-						GroupID:         10,
-						StartsAt:        deps.now,
-						ExpiresAt:       time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC), // 使用未来日期避免 normalizeSubscriptionStatus 标记为过期
-						Status:          service.SubscriptionStatusActive,
-						DailyUsageUSD:   1.23,
-						WeeklyUsageUSD:  2.34,
-						MonthlyUsageUSD: 3.45,
-						AssignedBy:      ptr(int64(999)),
-						AssignedAt:      deps.now,
-						Notes:           "admin-note",
-						CreatedAt:       deps.now,
-						UpdatedAt:       deps.now,
+						ID:                501,
+						UserID:            1,
+						GroupID:           10,
+						PlanID:            ptr(int64(42)),
+						PlanName:          ptr("Starter"),
+						SevenDayLimitUSD:  ptr(10.0),
+						StartsAt:          deps.now,
+						ExpiresAt:         time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC), // 使用未来日期避免 normalizeSubscriptionStatus 标记为过期
+						Status:            service.SubscriptionStatusActive,
+						WeeklyWindowStart: ptr(time.Date(2099, 1, 1, 3, 4, 5, 0, time.UTC)),
+						DailyUsageUSD:     1.23,
+						WeeklyUsageUSD:    2.34,
+						MonthlyUsageUSD:   3.45,
+						AssignedBy:        ptr(int64(999)),
+						AssignedAt:        deps.now,
+						Notes:             "admin-note",
+						CreatedAt:         deps.now,
+						UpdatedAt:         deps.now,
+					},
+					{
+						ID:             502,
+						UserID:         1,
+						GroupID:        11,
+						StartsAt:       deps.now,
+						ExpiresAt:      time.Date(2099, 1, 3, 3, 4, 5, 0, time.UTC),
+						Status:         service.SubscriptionStatusActive,
+						WeeklyUsageUSD: 4.56,
+						AssignedAt:     deps.now,
+						CreatedAt:      deps.now,
+						UpdatedAt:      deps.now,
 					},
 				})
 			},
@@ -397,27 +413,55 @@ func TestAPIContracts(t *testing.T) {
 			path:       "/api/v1/subscriptions",
 			wantStatus: http.StatusOK,
 			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": [
-					{
-						"id": 501,
-						"user_id": 1,
-						"group_id": 10,
-						"starts_at": "2025-01-02T03:04:05Z",
-						"expires_at": "2099-01-02T03:04:05Z",
-						"status": "active",
-						"daily_window_start": null,
-						"weekly_window_start": null,
-						"monthly_window_start": null,
-						"daily_usage_usd": 1.23,
-						"weekly_usage_usd": 2.34,
-						"monthly_usage_usd": 3.45,
-						"created_at": "2025-01-02T03:04:05Z",
-						"updated_at": "2025-01-02T03:04:05Z"
-					}
-				]
-			}`,
+					"code": 0,
+					"message": "success",
+					"data": [
+						{
+							"id": 501,
+							"user_id": 1,
+							"group_id": 10,
+							"plan_id": 42,
+							"plan_name": "Starter",
+							"starts_at": "2025-01-02T03:04:05Z",
+							"expires_at": "2099-01-02T03:04:05Z",
+							"status": "active",
+							"daily_window_start": null,
+							"weekly_window_start": "2099-01-01T03:04:05Z",
+							"monthly_window_start": null,
+							"daily_usage_usd": 1.23,
+							"weekly_usage_usd": 2.34,
+							"monthly_usage_usd": 3.45,
+							"seven_day_limit_usd": 10,
+							"seven_day_usage_usd": 2.34,
+							"seven_day_remaining_usd": 7.66,
+							"seven_day_reset_at": "2099-01-08T03:04:05Z",
+							"created_at": "2025-01-02T03:04:05Z",
+							"updated_at": "2025-01-02T03:04:05Z"
+						},
+						{
+							"id": 502,
+							"user_id": 1,
+							"group_id": 11,
+							"plan_id": null,
+							"plan_name": null,
+							"starts_at": "2025-01-02T03:04:05Z",
+							"expires_at": "2099-01-03T03:04:05Z",
+							"status": "active",
+							"daily_window_start": null,
+							"weekly_window_start": null,
+							"monthly_window_start": null,
+							"daily_usage_usd": 0,
+							"weekly_usage_usd": 4.56,
+							"monthly_usage_usd": 0,
+							"seven_day_limit_usd": null,
+							"seven_day_usage_usd": 4.56,
+							"seven_day_remaining_usd": null,
+							"seven_day_reset_at": null,
+							"created_at": "2025-01-02T03:04:05Z",
+							"updated_at": "2025-01-02T03:04:05Z"
+						}
+					]
+				}`,
 		},
 		{
 			name: "GET /api/v1/redeem/history",
@@ -2011,13 +2055,16 @@ func (stubUserSubscriptionRepo) UpdateStatus(ctx context.Context, subscriptionID
 func (stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
 }
+func (stubUserSubscriptionRepo) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	return errors.New("not implemented")
+}
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {

@@ -13,6 +13,9 @@ const routerPush = vi.hoisted(() => vi.fn())
 const routerResolve = vi.hoisted(() => vi.fn(() => ({ href: '/payment/stripe?mock=1' })))
 const createOrder = vi.hoisted(() => vi.fn())
 const refreshUser = vi.hoisted(() => vi.fn())
+const activeSubscriptionsState = vi.hoisted(() => ({
+  value: [] as Array<Record<string, unknown>>,
+}))
 const fetchActiveSubscriptions = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const showError = vi.hoisted(() => vi.fn())
 const showInfo = vi.hoisted(() => vi.fn())
@@ -61,7 +64,9 @@ vi.mock('@/stores/payment', () => ({
 
 vi.mock('@/stores/subscriptions', () => ({
   useSubscriptionStore: () => ({
-    activeSubscriptions: [],
+    get activeSubscriptions() {
+      return activeSubscriptionsState.value
+    },
     fetchActiveSubscriptions,
   }),
 }))
@@ -111,30 +116,46 @@ function checkoutInfoFixture() {
   }
 }
 
+function monthlyPlanFixture(id: number, name: string, price: number, sevenDayQuota: number) {
+  return {
+    id,
+    group_id: 3,
+    name,
+    description: '',
+    price,
+    original_price: 0,
+    validity_days: 30,
+    validity_unit: 'day',
+    rate_multiplier: 1,
+    seven_day_quota_usd: sevenDayQuota,
+    daily_limit_usd: null,
+    weekly_limit_usd: 999,
+    monthly_limit_usd: null,
+    features: [],
+    group_platform: 'openai',
+    sort_order: id,
+    for_sale: true,
+    group_name: 'OpenAI',
+  }
+}
+
 function checkoutInfoWithPlansFixture() {
   return {
     data: {
       ...checkoutInfoFixture().data,
+      plans: [monthlyPlanFixture(7, 'Plus monthly', 399, 110)],
+    },
+  }
+}
+
+function checkoutInfoWithMonthlyPlansFixture() {
+  return {
+    data: {
+      ...checkoutInfoFixture().data,
       plans: [
-        {
-          id: 7,
-          group_id: 3,
-          name: 'Starter',
-          description: '',
-          price: 128,
-          original_price: 0,
-          validity_days: 30,
-          validity_unit: 'day',
-          rate_multiplier: 1,
-          daily_limit_usd: null,
-          weekly_limit_usd: null,
-          monthly_limit_usd: null,
-          features: [],
-          group_platform: 'openai',
-          sort_order: 1,
-          for_sale: true,
-          group_name: 'OpenAI',
-        },
+        monthlyPlanFixture(5, 'Basic monthly', 179, 50),
+        monthlyPlanFixture(7, 'Pro monthly', 799, 260),
+        monthlyPlanFixture(8, 'Max monthly', 1599, 550),
       ],
     },
   }
@@ -180,6 +201,22 @@ function oauthOrderFixture() {
   }
 }
 
+const paymentViewStubs = {
+  AppLayout: { template: '<div><slot /></div>' },
+  Teleport: true,
+  Transition: false,
+  SubscriptionPlanCard: {
+    props: ['plan'],
+    emits: ['select'],
+    template: '<button class="plan-card-stub" type="button" @click="$emit(\'select\', plan)">{{ plan.name }}</button>',
+  },
+  ConfirmDialog: {
+    props: ['show', 'title', 'message'],
+    emits: ['confirm', 'cancel'],
+    template: '<section v-if="show" class="confirm-dialog-stub"><h2>{{ title }}</h2><p>{{ message }}</p><button class="confirm-dialog-confirm" @click="$emit(\'confirm\')">confirm</button><button class="confirm-dialog-cancel" @click="$emit(\'cancel\')">cancel</button></section>',
+  },
+}
+
 describe('PaymentView WeChat JSAPI flow', () => {
   beforeEach(() => {
     routeState.path = '/purchase'
@@ -197,6 +234,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     showInfo.mockReset()
     showWarning.mockReset()
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
+    activeSubscriptionsState.value = []
     bridgeInvoke.mockReset()
     window.localStorage.clear()
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = {
@@ -212,10 +250,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
     await flushPromises()
@@ -241,10 +276,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
     await flushPromises()
@@ -262,10 +294,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     const wrapper = shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
 
@@ -306,10 +335,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
     await flushPromises()
@@ -319,6 +345,68 @@ describe('PaymentView WeChat JSAPI flow', () => {
       wechat_resume_token: 'resume-token-123',
     }))
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+  })
+
+  it('shows selected subscription plan seven-day quota and quota-first hint', async () => {
+    routeState.query = {
+      tab: 'subscription',
+      group: '3',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.planCard.sevenDayQuota')
+    expect(text).toContain('$110')
+    expect(text).toContain('payment.planCard.totalMonthlyQuota')
+    expect(text).toContain('$440')
+    expect(text).toContain('payment.subscription.quotaFirstHint')
+    expect(text).not.toContain('payment.planCard.rate')
+    expect(text).not.toContain('×1')
+    expect(text).not.toContain('$999')
+  })
+
+  it('shows active subscription seven-day quota instead of unlimited', async () => {
+    routeState.query = {
+      tab: 'subscription',
+    }
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        status: 'active',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        seven_day_limit_usd: 110,
+        group: {
+          id: 3,
+          name: 'OpenAI Subscription',
+          platform: 'openai',
+          rate_multiplier: 1,
+          daily_limit_usd: null,
+          weekly_limit_usd: null,
+          monthly_limit_usd: null,
+        },
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.planCard.sevenDayQuota: $110')
+    expect(text).not.toContain('payment.planCard.quota: payment.planCard.unlimited')
   })
 
   it('keeps subscription resume context for token-only WeChat callbacks', async () => {
@@ -344,10 +432,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
     await flushPromises()
@@ -371,6 +456,159 @@ describe('PaymentView WeChat JSAPI flow', () => {
     })
   })
 
+  it('opens upgrade confirmation before selecting a higher plan', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.findAll('.plan-card-stub').find(button => button.text().includes('Max monthly'))!.trigger('click')
+
+    expect(wrapper.text()).toContain('payment.switchConfirm.upgradeTitle')
+    expect(wrapper.text()).toContain('payment.switchConfirm.upgradeMessage')
+    expect(wrapper.text()).not.toContain('Confirm Payment ¥1,599')
+  })
+
+  it('opens downgrade confirmation with next-period copy before selecting a lower plan', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.findAll('.plan-card-stub').find(button => button.text().includes('Basic monthly'))!.trigger('click')
+
+    expect(wrapper.text()).toContain('payment.switchConfirm.downgradeTitle')
+    expect(wrapper.text()).toContain('payment.switchConfirm.downgradeMessage')
+    expect(wrapper.text()).not.toContain('Confirm Payment ¥179')
+  })
+
+  it('continues to selected-plan checkout after confirming switch modal', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.findAll('.plan-card-stub').find(button => button.text().includes('Max monthly'))!.trigger('click')
+    await wrapper.get('.confirm-dialog-confirm').trigger('click')
+
+    expect(wrapper.text()).toContain('Max monthly')
+    expect(wrapper.text()).toContain('payment.subscription.quotaFirstHint')
+    expect(wrapper.find('.confirm-dialog-stub').exists()).toBe(false)
+  })
+
+  it('canceling switch modal leaves the plan list unchanged', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.findAll('.plan-card-stub').find(button => button.text().includes('Basic monthly'))!.trigger('click')
+    await wrapper.get('.confirm-dialog-cancel').trigger('click')
+
+    expect(wrapper.find('.confirm-dialog-stub').exists()).toBe(false)
+    expect(wrapper.findAll('.plan-card-stub').length).toBe(3)
+    expect(wrapper.text()).not.toContain('payment.subscription.quotaFirstHint')
+  })
+
+  it('same-plan renew does not show switch confirmation modal', async () => {
+    routeState.query = { tab: 'subscription' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.findAll('.plan-card-stub').find(button => button.text().includes('Pro monthly'))!.trigger('click')
+
+    expect(wrapper.find('.confirm-dialog-stub').exists()).toBe(false)
+    expect(wrapper.text()).toContain('payment.subscription.quotaFirstHint')
+  })
+
+  it('plan query opens switch confirmation after subscriptions load', async () => {
+    routeState.query = { tab: 'subscription', plan: '8', intent: 'switch' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.switchConfirm.upgradeTitle')
+  })
+
   it('falls back to QR flow when mobile WeChat payment is unavailable', async () => {
     routeState.query = {
       wechat_resume: '1',
@@ -392,10 +630,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     shallowMount(PaymentView, {
       global: {
-        stubs: {
-          Teleport: true,
-          Transition: false,
-        },
+        stubs: paymentViewStubs,
       },
     })
     await flushPromises()

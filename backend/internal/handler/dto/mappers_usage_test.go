@@ -207,6 +207,36 @@ func TestUsageLogFromService_PreservesHistoricalMissingImageSize(t *testing.T) {
 	require.NotContains(t, string(body), `"image_size":"2K"`)
 }
 
+func TestUsageLogFromService_NestedLegacySubscriptionUsesLogGroupFallback(t *testing.T) {
+	t.Parallel()
+
+	legacyLimit := 95.0
+	log := &service.UsageLog{
+		RequestID: "req_legacy_sub_group",
+		Model:     "claude-sonnet-4",
+		Group: &service.Group{
+			WeeklyLimitUSD: &legacyLimit,
+		},
+		Subscription: &service.UserSubscription{
+			ID:             1004,
+			UserID:         2005,
+			GroupID:        3006,
+			WeeklyUsageUSD: 35.0,
+		},
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	for _, got := range []*UserSubscription{userDTO.Subscription, adminDTO.Subscription} {
+		require.NotNil(t, got)
+		require.NotNil(t, got.SevenDayLimitUSD)
+		require.InDelta(t, 95.0, *got.SevenDayLimitUSD, 1e-9)
+		require.NotNil(t, got.SevenDayRemainingUSD)
+		require.InDelta(t, 60.0, *got.SevenDayRemainingUSD, 1e-9)
+	}
+}
+
 func f64Ptr(value float64) *float64 {
 	return &value
 }

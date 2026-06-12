@@ -157,6 +157,56 @@ describe('useSubscriptionStore', () => {
       expect(store.hasActiveSubscriptions).toBe(true)
     })
 
+    it('aggregates seven-day subscription balance summary from active subscriptions', async () => {
+      mockGetActiveSubscriptions.mockResolvedValue([
+        {
+          ...fakeSubscriptions[0],
+          plan_id: 1,
+          plan_name: 'Basic monthly',
+          starts_at: '2024-01-01',
+          seven_day_limit_usd: 50,
+          seven_day_usage_usd: 10,
+          seven_day_remaining_usd: 40,
+          seven_day_reset_at: '2030-01-08T00:00:00Z',
+        },
+        {
+          ...fakeSubscriptions[1],
+          plan_id: 2,
+          plan_name: 'Plus monthly',
+          starts_at: '2024-02-01',
+          seven_day_limit_usd: 110,
+          seven_day_usage_usd: 25,
+          seven_day_remaining_usd: 85,
+          seven_day_reset_at: '2030-01-07T00:00:00Z',
+        },
+        {
+          ...fakeSubscriptions[1],
+          id: 3,
+          plan_id: null,
+          plan_name: null,
+          starts_at: '2024-03-01',
+          seven_day_limit_usd: null,
+          seven_day_usage_usd: 0,
+          seven_day_remaining_usd: null,
+          seven_day_reset_at: null,
+        },
+      ])
+      const store = useSubscriptionStore()
+
+      await store.fetchActiveSubscriptions()
+
+      expect(store.subscriptionBalanceSummary).toEqual({
+        remaining: 125,
+        total: 160,
+        used: 35,
+        resetAt: '2030-01-07T00:00:00Z',
+        planName: null,
+        planNames: ['Basic monthly', 'Plus monthly'],
+        activePlanCount: 2,
+        displayMode: 'multiple',
+      })
+    })
+
     it('无订阅时返回 false', () => {
       const store = useSubscriptionStore()
       expect(store.hasActiveSubscriptions).toBe(false)

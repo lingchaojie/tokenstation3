@@ -13,19 +13,18 @@
       <div class="mb-3 flex items-start justify-between gap-2">
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
-            <h3 class="truncate text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">{{ plan.name }}</h3>
-            <span :class="['shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', badgeLightClass]">
-              {{ pLabel }}
+            <h3 class="truncate text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">{{ displayName }}</h3>
+            <span v-if="monthlyDisplay?.badge" class="rounded-full border border-primary-500/25 bg-primary-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-600 dark:text-primary-300">
+              {{ monthlyDisplay.badge }}
             </span>
           </div>
-          <p v-if="plan.description" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
-            {{ plan.description }}
+          <p v-if="displayDescription" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
+            {{ displayDescription }}
           </p>
         </div>
         <div class="shrink-0 text-right">
           <div class="flex items-baseline gap-1">
-            <span class="text-xs text-gray-400 dark:text-dark-500">$</span>
-            <span :class="['text-3xl font-semibold tracking-[-0.05em] text-gray-950 dark:text-linear-ink', textClass]">{{ plan.price }}</span>
+            <span :class="['text-3xl font-semibold tracking-[-0.05em] text-gray-950 dark:text-linear-ink', textClass]">{{ priceLabel }}</span>
           </div>
           <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
           <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
@@ -35,42 +34,21 @@
         </div>
       </div>
 
-      <!-- Group quota info (compact) -->
-      <div class="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs dark:border-linear-hairline dark:bg-linear-surface-2">
-        <div class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.rate') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">{{ rateDisplay }}</span>
-        </div>
-        <div v-if="plan.daily_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.dailyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.daily_limit_usd }}</span>
-        </div>
-        <div v-if="plan.weekly_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.weeklyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.weekly_limit_usd }}</span>
-        </div>
-        <div v-if="plan.monthly_limit_usd != null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.monthlyLimit') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.monthly_limit_usd }}</span>
-        </div>
-        <div v-if="plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.quota') }}</span>
-          <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.planCard.unlimited') }}</span>
-        </div>
-        <div v-if="modelScopeLabels.length > 0" class="col-span-2 flex items-center justify-between">
-          <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.models') }}</span>
-          <div class="flex flex-wrap justify-end gap-1">
-            <span v-for="scope in modelScopeLabels" :key="scope"
-              class="rounded bg-gray-200/80 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-600 dark:text-gray-300">
-              {{ scope }}
-            </span>
-          </div>
-        </div>
+      <div class="mb-4 flex flex-wrap gap-2">
+        <p v-if="sevenDayQuotaLabel" class="inline-flex rounded-lg border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-sm font-medium text-primary-600 dark:text-primary-300">
+          {{ sevenDayQuotaLabel }}
+        </p>
+        <p v-if="monthlyTotalLabel" class="inline-flex rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-600 dark:border-linear-hairline dark:bg-linear-surface-2 dark:text-linear-ink-muted">
+          {{ t('payment.planCard.totalMonthlyQuota') }} {{ monthlyTotalLabel }}
+        </p>
+        <p v-if="!sevenDayQuotaLabel && plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="inline-flex rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-600 dark:border-linear-hairline dark:bg-linear-surface-2 dark:text-linear-ink-muted">
+          {{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}
+        </p>
       </div>
 
       <!-- Features list (compact) -->
-      <div v-if="plan.features.length > 0" class="mb-3 space-y-1">
-        <div v-for="feature in plan.features" :key="feature" class="flex items-start gap-1.5">
+      <div v-if="displayFeatures.length > 0" class="mb-3 space-y-1">
+        <div v-for="feature in displayFeatures" :key="feature" class="flex items-start gap-1.5">
           <svg :class="['mt-0.5 h-3.5 w-3.5 flex-shrink-0', iconClass]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
           </svg>
@@ -78,16 +56,29 @@
         </div>
       </div>
 
+      <p v-if="pendingNotice" class="mb-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-200">
+        {{ pendingNotice }}
+      </p>
+
       <div class="flex-1" />
 
-      <!-- Subscribe Button -->
-      <button
-        type="button"
-        :class="['w-full rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
-        @click="emit('select', plan)"
-      >
-        {{ isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
-      </button>
+      <div class="space-y-2">
+        <button
+          v-if="isCurrentPlan"
+          type="button"
+          disabled
+          class="w-full cursor-default rounded-xl border border-green-500/30 bg-green-500/10 py-2.5 text-sm font-semibold text-green-700 dark:text-green-300"
+        >
+          {{ t('payment.currentSubscription') }}
+        </button>
+        <button
+          type="button"
+          :class="['w-full rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
+          @click="emit('select', plan, actionIntent)"
+        >
+          {{ actionLabel }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -99,56 +90,86 @@ import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import {
   platformAccentBarClass,
-  platformBadgeLightClass,
   platformBorderClass,
   platformTextClass,
   platformIconClass,
   platformButtonClass,
   platformDiscountClass,
-  platformLabel,
 } from '@/utils/platformColors'
+import {
+  getMonthlyPlanDisplayFromPlan,
+  monthlyPlanKeyFromName,
+  formatMonthlyPlanCny,
+  formatMonthlyPlanUsd,
+  type SubscriptionPlanSelectIntent,
+} from '@/utils/monthlyPlans'
 
-const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
-const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
-const { t } = useI18n()
+const props = defineProps<{
+  plan: SubscriptionPlan
+  activeSubscriptions?: UserSubscription[]
+  displayName?: string
+  displayDescription?: string
+  displayFeatures?: string[]
+  pendingNotice?: string
+}>()
+const emit = defineEmits<{ select: [plan: SubscriptionPlan, intent: SubscriptionPlanSelectIntent] }>()
+const i18n = useI18n()
+const { t } = i18n
 
+const localeValue = computed(() => {
+  const raw = i18n.locale as unknown
+  if (typeof raw === 'string') return raw
+  if (raw && typeof raw === 'object' && 'value' in raw) return String((raw as { value?: string }).value || '')
+  return ''
+})
 const platform = computed(() => props.plan.group_platform || '')
-const isRenewal = computed(() =>
-  props.activeSubscriptions?.some(s => s.group_id === props.plan.group_id && s.status === 'active') ?? false
+const monthlyDisplay = computed(() => getMonthlyPlanDisplayFromPlan(props.plan, localeValue.value))
+const displayName = computed(() => props.displayName || monthlyDisplay.value?.name || props.plan.name)
+const displayDescription = computed(() => props.displayDescription || monthlyDisplay.value?.description || props.plan.description || '')
+const displayFeatures = computed(() => props.displayFeatures ?? monthlyDisplay.value?.benefits ?? props.plan.features)
+const planKey = computed(() => monthlyPlanKeyFromName(props.plan.name))
+const activeSameGroupSubscription = computed(() =>
+  props.activeSubscriptions?.find(s => s.group_id === props.plan.group_id && s.status === 'active') ?? null
 )
+const isCurrentPlan = computed(() => {
+  const active = activeSameGroupSubscription.value
+  if (!active) return false
+  if (active.plan_id != null && active.plan_id === props.plan.id) return true
+  const activeKey = monthlyPlanKeyFromName(active.plan_name)
+  return !!activeKey && !!planKey.value && activeKey === planKey.value
+})
+const hasActiveSameGroupSubscription = computed(() => activeSameGroupSubscription.value !== null)
+const actionIntent = computed<SubscriptionPlanSelectIntent>(() => {
+  if (isCurrentPlan.value) return 'renew'
+  if (hasActiveSameGroupSubscription.value) return 'switch'
+  return 'subscribe'
+})
+const actionLabel = computed(() => {
+  if (actionIntent.value === 'renew') return t('payment.renewNow')
+  if (actionIntent.value === 'switch') return t('payment.switchSubscription')
+  return t('payment.subscribeNow')
+})
+const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? formatMonthlyPlanCny(props.plan.price))
+const sevenDayQuotaLabel = computed(() => {
+  if (monthlyDisplay.value) return monthlyDisplay.value.quotaLabel
+  return props.plan.seven_day_quota_usd != null ? `${formatMonthlyPlanUsd(props.plan.seven_day_quota_usd)} / 7 ${t('payment.days')}` : ''
+})
+const monthlyTotalLabel = computed(() => {
+  if (monthlyDisplay.value) return monthlyDisplay.value.monthlyTotalLabel
+  return props.plan.seven_day_quota_usd != null ? formatMonthlyPlanUsd(props.plan.seven_day_quota_usd * 4) : ''
+})
 
 // Derived color classes from central config
 const accentClass = computed(() => platformAccentBarClass(platform.value))
 const borderClass = computed(() => platformBorderClass(platform.value))
-const badgeLightClass = computed(() => platformBadgeLightClass(platform.value))
 const textClass = computed(() => platformTextClass(platform.value))
 const iconClass = computed(() => platformIconClass(platform.value))
 const btnClass = computed(() => platformButtonClass(platform.value))
 const discountClass = computed(() => platformDiscountClass(platform.value))
-const pLabel = computed(() => platformLabel(platform.value))
-
 const discountText = computed(() => {
   if (!props.plan.original_price || props.plan.original_price <= 0) return ''
   const pct = Math.round((1 - props.plan.price / props.plan.original_price) * 100)
   return pct > 0 ? `-${pct}%` : ''
-})
-
-const rateDisplay = computed(() => {
-  const rate = props.plan.rate_multiplier ?? 1
-  return `×${Number(rate.toPrecision(10))}`
-})
-
-const MODEL_SCOPE_LABELS: Record<string, string> = {
-  claude: 'Claude',
-  gemini_text: 'Gemini',
-  gemini_image: 'Imagen',
-}
-
-const modelScopeLabels = computed(() => {
-  if (platform.value !== 'antigravity') return []
-  const scopes = props.plan.supported_model_scopes
-  if (!scopes || scopes.length === 0) return []
-  return scopes.map(s => MODEL_SCOPE_LABELS[s] || s)
 })
 
 const validitySuffix = computed(() => {

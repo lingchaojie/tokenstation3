@@ -85,6 +85,221 @@ func (_u *UserSubscriptionUpdate) SetNillableGroupID(v *int64) *UserSubscription
 	return _u
 }
 
+// SetPlanID sets the "plan_id" field.
+func (_u *UserSubscriptionUpdate) SetPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPlanID()
+	_u.mutation.SetPlanID(v)
+	return _u
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlanID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlanID(*v)
+	}
+	return _u
+}
+
+// AddPlanID adds value to the "plan_id" field.
+func (_u *UserSubscriptionUpdate) AddPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddPlanID(v)
+	return _u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (_u *UserSubscriptionUpdate) ClearPlanID() *UserSubscriptionUpdate {
+	_u.mutation.ClearPlanID()
+	return _u
+}
+
+// SetPlanName sets the "plan_name" field.
+func (_u *UserSubscriptionUpdate) SetPlanName(v string) *UserSubscriptionUpdate {
+	_u.mutation.SetPlanName(v)
+	return _u
+}
+
+// SetNillablePlanName sets the "plan_name" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePlanName(v *string) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPlanName(*v)
+	}
+	return _u
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (_u *UserSubscriptionUpdate) ClearPlanName() *UserSubscriptionUpdate {
+	_u.mutation.ClearPlanName()
+	return _u
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) SetSevenDayLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetSevenDayLimitUsd()
+	_u.mutation.SetSevenDayLimitUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayLimitUsd sets the "seven_day_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableSevenDayLimitUsd(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetSevenDayLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayLimitUsd adds value to the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) AddSevenDayLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddSevenDayLimitUsd(v)
+	return _u
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) ClearSevenDayLimitUsd() *UserSubscriptionUpdate {
+	_u.mutation.ClearSevenDayLimitUsd()
+	return _u
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdate) SetScheduledPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetScheduledPlanID()
+	_u.mutation.SetScheduledPlanID(v)
+	return _u
+}
+
+// SetNillableScheduledPlanID sets the "scheduled_plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledPlanID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledPlanID(*v)
+	}
+	return _u
+}
+
+// AddScheduledPlanID adds value to the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdate) AddScheduledPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddScheduledPlanID(v)
+	return _u
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledPlanID() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledPlanID()
+	return _u
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (_u *UserSubscriptionUpdate) SetScheduledPlanName(v string) *UserSubscriptionUpdate {
+	_u.mutation.SetScheduledPlanName(v)
+	return _u
+}
+
+// SetNillableScheduledPlanName sets the "scheduled_plan_name" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledPlanName(v *string) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledPlanName(*v)
+	}
+	return _u
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledPlanName() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledPlanName()
+	return _u
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetScheduledSevenDayLimitUsd()
+	_u.mutation.SetScheduledSevenDayLimitUsd(v)
+	return _u
+}
+
+// SetNillableScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledSevenDayLimitUsd(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledSevenDayLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddScheduledSevenDayLimitUsd adds value to the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) AddScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddScheduledSevenDayLimitUsd(v)
+	return _u
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledSevenDayLimitUsd() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledSevenDayLimitUsd()
+	return _u
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (_u *UserSubscriptionUpdate) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionUpdate {
+	_u.mutation.SetScheduledPlanEffectiveAt(v)
+	return _u
+}
+
+// SetNillableScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledPlanEffectiveAt(v *time.Time) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledPlanEffectiveAt(*v)
+	}
+	return _u
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledPlanEffectiveAt() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledPlanEffectiveAt()
+	return _u
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (_u *UserSubscriptionUpdate) SetScheduledExpiresAt(v time.Time) *UserSubscriptionUpdate {
+	_u.mutation.SetScheduledExpiresAt(v)
+	return _u
+}
+
+// SetNillableScheduledExpiresAt sets the "scheduled_expires_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledExpiresAt(v *time.Time) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledExpiresAt(*v)
+	}
+	return _u
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledExpiresAt() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledExpiresAt()
+	return _u
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdate) SetScheduledOrderID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetScheduledOrderID()
+	_u.mutation.SetScheduledOrderID(v)
+	return _u
+}
+
+// SetNillableScheduledOrderID sets the "scheduled_order_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableScheduledOrderID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetScheduledOrderID(*v)
+	}
+	return _u
+}
+
+// AddScheduledOrderID adds value to the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdate) AddScheduledOrderID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddScheduledOrderID(v)
+	return _u
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdate) ClearScheduledOrderID() *UserSubscriptionUpdate {
+	_u.mutation.ClearScheduledOrderID()
+	return _u
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_u *UserSubscriptionUpdate) SetStartsAt(v time.Time) *UserSubscriptionUpdate {
 	_u.mutation.SetStartsAt(v)
@@ -436,6 +651,16 @@ func (_u *UserSubscriptionUpdate) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UserSubscriptionUpdate) check() error {
+	if v, ok := _u.mutation.PlanName(); ok {
+		if err := usersubscription.PlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.plan_name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ScheduledPlanName(); ok {
+		if err := usersubscription.ScheduledPlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "scheduled_plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.scheduled_plan_name": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := usersubscription.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
@@ -470,6 +695,75 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(usersubscription.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PlanName(); ok {
+		_spec.SetField(usersubscription.FieldPlanName, field.TypeString, value)
+	}
+	if _u.mutation.PlanNameCleared() {
+		_spec.ClearField(usersubscription.FieldPlanName, field.TypeString)
+	}
+	if value, ok := _u.mutation.SevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledPlanID(); ok {
+		_spec.AddField(usersubscription.FieldScheduledPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.ScheduledPlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanName(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanName, field.TypeString, value)
+	}
+	if _u.mutation.ScheduledPlanNameCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ScheduledSevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledSevenDayLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.ScheduledSevenDayLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanEffectiveAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanEffectiveAt, field.TypeTime, value)
+	}
+	if _u.mutation.ScheduledPlanEffectiveAtCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanEffectiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ScheduledExpiresAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledExpiresAt, field.TypeTime, value)
+	}
+	if _u.mutation.ScheduledExpiresAtCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ScheduledOrderID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledOrderID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledOrderID(); ok {
+		_spec.AddField(usersubscription.FieldScheduledOrderID, field.TypeInt64, value)
+	}
+	if _u.mutation.ScheduledOrderIDCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledOrderID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
@@ -728,6 +1022,221 @@ func (_u *UserSubscriptionUpdateOne) SetNillableGroupID(v *int64) *UserSubscript
 	if v != nil {
 		_u.SetGroupID(*v)
 	}
+	return _u
+}
+
+// SetPlanID sets the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) SetPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPlanID()
+	_u.mutation.SetPlanID(v)
+	return _u
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlanID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlanID(*v)
+	}
+	return _u
+}
+
+// AddPlanID adds value to the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) AddPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPlanID(v)
+	return _u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearPlanID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPlanID()
+	return _u
+}
+
+// SetPlanName sets the "plan_name" field.
+func (_u *UserSubscriptionUpdateOne) SetPlanName(v string) *UserSubscriptionUpdateOne {
+	_u.mutation.SetPlanName(v)
+	return _u
+}
+
+// SetNillablePlanName sets the "plan_name" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePlanName(v *string) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPlanName(*v)
+	}
+	return _u
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (_u *UserSubscriptionUpdateOne) ClearPlanName() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPlanName()
+	return _u
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) SetSevenDayLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetSevenDayLimitUsd()
+	_u.mutation.SetSevenDayLimitUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayLimitUsd sets the "seven_day_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableSevenDayLimitUsd(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetSevenDayLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayLimitUsd adds value to the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) AddSevenDayLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddSevenDayLimitUsd(v)
+	return _u
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) ClearSevenDayLimitUsd() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearSevenDayLimitUsd()
+	return _u
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetScheduledPlanID()
+	_u.mutation.SetScheduledPlanID(v)
+	return _u
+}
+
+// SetNillableScheduledPlanID sets the "scheduled_plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledPlanID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledPlanID(*v)
+	}
+	return _u
+}
+
+// AddScheduledPlanID adds value to the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) AddScheduledPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddScheduledPlanID(v)
+	return _u
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledPlanID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledPlanID()
+	return _u
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledPlanName(v string) *UserSubscriptionUpdateOne {
+	_u.mutation.SetScheduledPlanName(v)
+	return _u
+}
+
+// SetNillableScheduledPlanName sets the "scheduled_plan_name" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledPlanName(v *string) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledPlanName(*v)
+	}
+	return _u
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledPlanName() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledPlanName()
+	return _u
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetScheduledSevenDayLimitUsd()
+	_u.mutation.SetScheduledSevenDayLimitUsd(v)
+	return _u
+}
+
+// SetNillableScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledSevenDayLimitUsd(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledSevenDayLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddScheduledSevenDayLimitUsd adds value to the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) AddScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddScheduledSevenDayLimitUsd(v)
+	return _u
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledSevenDayLimitUsd() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledSevenDayLimitUsd()
+	return _u
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionUpdateOne {
+	_u.mutation.SetScheduledPlanEffectiveAt(v)
+	return _u
+}
+
+// SetNillableScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledPlanEffectiveAt(v *time.Time) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledPlanEffectiveAt(*v)
+	}
+	return _u
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledPlanEffectiveAt() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledPlanEffectiveAt()
+	return _u
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledExpiresAt(v time.Time) *UserSubscriptionUpdateOne {
+	_u.mutation.SetScheduledExpiresAt(v)
+	return _u
+}
+
+// SetNillableScheduledExpiresAt sets the "scheduled_expires_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledExpiresAt(v *time.Time) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledExpiresAt(*v)
+	}
+	return _u
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledExpiresAt() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledExpiresAt()
+	return _u
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdateOne) SetScheduledOrderID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetScheduledOrderID()
+	_u.mutation.SetScheduledOrderID(v)
+	return _u
+}
+
+// SetNillableScheduledOrderID sets the "scheduled_order_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableScheduledOrderID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetScheduledOrderID(*v)
+	}
+	return _u
+}
+
+// AddScheduledOrderID adds value to the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdateOne) AddScheduledOrderID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddScheduledOrderID(v)
+	return _u
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearScheduledOrderID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearScheduledOrderID()
 	return _u
 }
 
@@ -1095,6 +1604,16 @@ func (_u *UserSubscriptionUpdateOne) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UserSubscriptionUpdateOne) check() error {
+	if v, ok := _u.mutation.PlanName(); ok {
+		if err := usersubscription.PlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.plan_name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ScheduledPlanName(); ok {
+		if err := usersubscription.ScheduledPlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "scheduled_plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.scheduled_plan_name": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := usersubscription.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
@@ -1146,6 +1665,75 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(usersubscription.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PlanName(); ok {
+		_spec.SetField(usersubscription.FieldPlanName, field.TypeString, value)
+	}
+	if _u.mutation.PlanNameCleared() {
+		_spec.ClearField(usersubscription.FieldPlanName, field.TypeString)
+	}
+	if value, ok := _u.mutation.SevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledPlanID(); ok {
+		_spec.AddField(usersubscription.FieldScheduledPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.ScheduledPlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanName(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanName, field.TypeString, value)
+	}
+	if _u.mutation.ScheduledPlanNameCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ScheduledSevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledSevenDayLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.ScheduledSevenDayLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ScheduledPlanEffectiveAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanEffectiveAt, field.TypeTime, value)
+	}
+	if _u.mutation.ScheduledPlanEffectiveAtCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledPlanEffectiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ScheduledExpiresAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledExpiresAt, field.TypeTime, value)
+	}
+	if _u.mutation.ScheduledExpiresAtCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ScheduledOrderID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledOrderID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedScheduledOrderID(); ok {
+		_spec.AddField(usersubscription.FieldScheduledOrderID, field.TypeInt64, value)
+	}
+	if _u.mutation.ScheduledOrderIDCleared() {
+		_spec.ClearField(usersubscription.FieldScheduledOrderID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)

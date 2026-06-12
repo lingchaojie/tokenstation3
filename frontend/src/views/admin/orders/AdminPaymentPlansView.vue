@@ -29,9 +29,13 @@
         </template>
         <template #cell-price="{ value, row }">
           <div class="text-sm">
-            <span class="font-medium text-gray-900 dark:text-white">${{ (value ?? 0).toFixed(2) }}</span>
-            <span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">${{ row.original_price.toFixed(2) }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">${{ formatMoney(value) }}</span>
+            <span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">${{ formatMoney(row.original_price) }}</span>
           </div>
+        </template>
+        <template #cell-seven_day_quota_usd="{ value }">
+          <span v-if="value != null" class="text-sm font-medium text-gray-900 dark:text-white">${{ formatMoney(value) }}</span>
+          <span v-else class="text-sm text-gray-400">-</span>
         </template>
         <template #cell-validity_days="{ value, row }">
           <span class="text-sm">{{ value }} {{ t('payment.admin.' + (row.validity_unit || 'days')) }}</span>
@@ -132,6 +136,7 @@ const planColumns = computed((): Column[] => [
   { key: 'name', label: t('payment.admin.planName') },
   { key: 'group_id', label: t('payment.admin.group') },
   { key: 'price', label: t('payment.admin.price') },
+  { key: 'seven_day_quota_usd', label: t('payment.admin.sevenDayQuota') },
   { key: 'validity_days', label: t('payment.admin.validityDays') },
   { key: 'for_sale', label: t('payment.admin.forSale') },
   { key: 'sort_order', label: t('payment.admin.sortOrder') },
@@ -159,6 +164,9 @@ function openPlanEdit(plan: SubscriptionPlan | null) {
   showPlanDialog.value = true
 }
 
+function formatMoney(value: number | null | undefined): string {
+  return (value ?? 0).toFixed(2)
+}
 
 /** Quick toggle for_sale from the list */
 async function toggleForSale(plan: SubscriptionPlan) {

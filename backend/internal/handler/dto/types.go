@@ -569,6 +569,16 @@ type UserSubscription struct {
 	UserID  int64 `json:"user_id"`
 	GroupID int64 `json:"group_id"`
 
+	PlanID   *int64  `json:"plan_id"`
+	PlanName *string `json:"plan_name"`
+
+	ScheduledPlanID           *int64     `json:"scheduled_plan_id"`
+	ScheduledPlanName         *string    `json:"scheduled_plan_name"`
+	ScheduledSevenDayLimitUSD *float64   `json:"scheduled_seven_day_limit_usd"`
+	ScheduledPlanEffectiveAt  *time.Time `json:"scheduled_plan_effective_at"`
+	ScheduledExpiresAt        *time.Time `json:"scheduled_expires_at"`
+	ScheduledOrderID          *int64     `json:"scheduled_order_id"`
+
 	StartsAt  time.Time `json:"starts_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Status    string    `json:"status"`
@@ -577,9 +587,13 @@ type UserSubscription struct {
 	WeeklyWindowStart  *time.Time `json:"weekly_window_start"`
 	MonthlyWindowStart *time.Time `json:"monthly_window_start"`
 
-	DailyUsageUSD   float64 `json:"daily_usage_usd"`
-	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
-	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
+	DailyUsageUSD        float64    `json:"daily_usage_usd"`
+	WeeklyUsageUSD       float64    `json:"weekly_usage_usd"`
+	MonthlyUsageUSD      float64    `json:"monthly_usage_usd"`
+	SevenDayLimitUSD     *float64   `json:"seven_day_limit_usd"`
+	SevenDayUsageUSD     float64    `json:"seven_day_usage_usd"`
+	SevenDayRemainingUSD *float64   `json:"seven_day_remaining_usd"`
+	SevenDayResetAt      *time.Time `json:"seven_day_reset_at"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

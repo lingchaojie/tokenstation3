@@ -96,10 +96,7 @@
               <div class="linx-panel p-5">
                 <!-- Header: platform badge + plan name -->
                 <div class="mb-3 flex flex-wrap items-center gap-2">
-                  <span :class="['rounded-md border px-2 py-0.5 text-xs font-medium', planBadgeClass]">
-                    {{ platformLabel(selectedPlan.group_platform || '') }}
-                  </span>
-                  <h3 class="text-lg font-bold text-gray-900 dark:text-white">{{ selectedPlan.name }}</h3>
+                  <h3 class="text-lg font-bold text-gray-900 dark:text-white">{{ displayPlanName(selectedPlan) }}</h3>
                 </div>
                 <!-- Price -->
                 <div class="flex items-baseline gap-2">
@@ -110,34 +107,39 @@
                   <span class="text-sm text-gray-500 dark:text-gray-400">/ {{ planValiditySuffix }}</span>
                 </div>
                 <!-- Description -->
-                <p v-if="selectedPlan.description" class="mt-2 text-sm leading-relaxed text-gray-500 dark:text-gray-400">
-                  {{ selectedPlan.description }}
+                <p v-if="displayPlanDescription(selectedPlan)" class="mt-2 text-sm leading-relaxed text-gray-500 dark:text-gray-400">
+                  {{ displayPlanDescription(selectedPlan) }}
                 </p>
-                <!-- Rate + Limits grid -->
+                <!-- Limits grid -->
                 <div class="mt-3 grid grid-cols-2 gap-3">
-                  <div>
-                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.rate') }}</span>
-                    <div class="flex items-baseline">
-                      <span :class="['text-lg font-bold', planTextClass]">×{{ selectedPlan.rate_multiplier ?? 1 }}</span>
-                    </div>
-                  </div>
                   <div v-if="selectedPlan.daily_limit_usd != null">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.dailyLimit') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.daily_limit_usd }}</div>
                   </div>
-                  <div v-if="selectedPlan.weekly_limit_usd != null">
+                  <div v-if="selectedPlan.seven_day_quota_usd != null" class="rounded-lg bg-amber-500/10 p-3">
+                    <span class="text-xs text-gray-600 dark:text-amber-200">{{ t('payment.planCard.sevenDayQuota') }}</span>
+                    <div class="text-lg font-semibold text-amber-600 dark:text-amber-300">${{ formatUSD(selectedPlan.seven_day_quota_usd) }}</div>
+                  </div>
+                  <div v-if="selectedPlan.seven_day_quota_usd != null" class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800/60">
+                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.totalMonthlyQuota') }}</span>
+                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ formatUSD(selectedPlan.seven_day_quota_usd * 4) }}</div>
+                  </div>
+                  <div v-else-if="selectedPlan.weekly_limit_usd != null">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.weeklyLimit') }}</span>
-                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.weekly_limit_usd }}</div>
+                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ formatUSD(selectedPlan.weekly_limit_usd) }}</div>
                   </div>
                   <div v-if="selectedPlan.monthly_limit_usd != null">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.monthlyLimit') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.monthly_limit_usd }}</div>
                   </div>
-                  <div v-if="selectedPlan.daily_limit_usd == null && selectedPlan.weekly_limit_usd == null && selectedPlan.monthly_limit_usd == null">
+                  <div v-if="selectedPlan.seven_day_quota_usd == null && selectedPlan.daily_limit_usd == null && selectedPlan.weekly_limit_usd == null && selectedPlan.monthly_limit_usd == null">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.quota') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">{{ t('payment.planCard.unlimited') }}</div>
                   </div>
                 </div>
+                <p class="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-gray-600 dark:text-amber-100">
+                  {{ t('payment.subscription.quotaFirstHint') }}
+                </p>
               </div>
               <div v-if="enabledMethods.length >= 1" class="linx-panel p-6">
                 <PaymentMethodSelector
@@ -178,7 +180,16 @@
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
               </div>
               <div v-else :class="planGridClass">
-                <SubscriptionPlanCard v-for="plan in checkout.plans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlan" />
+                <SubscriptionPlanCard
+                  v-for="plan in checkout.plans"
+                  :key="plan.id"
+                  :plan="plan"
+                  :active-subscriptions="activeSubscriptions"
+                  :display-name="displayPlanName(plan)"
+                  :display-description="displayPlanDescription(plan)"
+                  :display-features="displayPlanFeatures(plan)"
+                  @select="selectPlan"
+                />
               </div>
               <!-- Active subscriptions (compact, below plan list) -->
               <div v-if="activeSubscriptions.length > 0">
@@ -189,12 +200,12 @@
                     <div :class="['h-6 w-1 shrink-0 rounded-full', platformAccentBarClass(sub.group?.platform || '')]" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.group?.name || t('payment.groupFallback', { id: sub.group_id }) }}</span>
-                        <span :class="['shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium', platformBadgeLightClass(sub.group?.platform || '')]">{{ platformLabel(sub.group?.platform || '') }}</span>
+                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.plan_name ? displaySubscriptionName(sub.plan_name) : (sub.group?.name || t('payment.groupFallback', { id: sub.group_id })) }}</span>
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
-                        <span>{{ t('payment.planCard.rate') }}: ×{{ sub.group?.rate_multiplier ?? 1 }}</span>
-                        <span v-if="sub.group?.daily_limit_usd == null && sub.group?.weekly_limit_usd == null && sub.group?.monthly_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
+                        <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.sevenDayQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd) }}</span>
+                        <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.totalMonthlyQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd * 4) }}</span>
+                        <span v-if="sub.group?.daily_limit_usd == null && sub.seven_day_limit_usd == null && sub.group?.weekly_limit_usd == null && sub.group?.monthly_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
                         <span v-if="sub.expires_at">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expires_at) }) }}</span>
                         <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
                       </div>
@@ -216,6 +227,15 @@
         </div>
       </template>
     </div>
+    <ConfirmDialog
+      :show="switchConfirm.show"
+      :title="switchConfirmTitle"
+      :message="switchConfirmMessage"
+      :confirm-text="t('payment.switchConfirm.confirm')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmSwitchSelection"
+      @cancel="cancelSwitchSelection"
+    />
     <!-- Renewal Plan Selection Modal -->
     <Teleport to="body">
       <Transition name="modal">
@@ -227,7 +247,16 @@
             </button>
             <h3 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.selectPlan') }}</h3>
             <div class="space-y-4">
-              <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlanFromModal" />
+              <SubscriptionPlanCard
+                v-for="plan in renewalPlans"
+                :key="plan.id"
+                :plan="plan"
+                :active-subscriptions="activeSubscriptions"
+                :display-name="displayPlanName(plan)"
+                :display-description="displayPlanDescription(plan)"
+                :display-features="displayPlanFeatures(plan)"
+                @select="selectPlanFromModal"
+              />
             </div>
           </div>
         </div>
@@ -271,9 +300,18 @@ import {
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
-import { platformAccentBarClass, platformBadgeLightClass, platformBadgeClass, platformTextClass, platformLabel } from '@/utils/platformColors'
+import { platformAccentBarClass, platformTextClass } from '@/utils/platformColors'
+import {
+  displayMonthlyPlanName,
+  getMonthlyPlanDisplayFromPlan,
+  monthlyPlanKeyFromName,
+  monthlyPlanRank,
+  type MonthlyPlanKey,
+  type SubscriptionPlanSelectIntent,
+} from '@/utils/monthlyPlans'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
@@ -292,6 +330,32 @@ const appStore = useAppStore()
 const user = computed(() => authStore.user)
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
 
+const activeLocale = computed<'en' | 'zh'>(() => {
+  const raw = i18n.locale as unknown
+  const value = typeof raw === 'string'
+    ? raw
+    : raw && typeof raw === 'object' && 'value' in raw
+      ? String((raw as { value?: string }).value || '')
+      : ''
+  return value.startsWith('zh') ? 'zh' : 'en'
+})
+
+function displayPlanName(plan: SubscriptionPlan): string {
+  return getMonthlyPlanDisplayFromPlan(plan, activeLocale.value)?.name || plan.name
+}
+
+function displayPlanDescription(plan: SubscriptionPlan): string {
+  return getMonthlyPlanDisplayFromPlan(plan, activeLocale.value)?.description || plan.description || ''
+}
+
+function displayPlanFeatures(plan: SubscriptionPlan): string[] {
+  return getMonthlyPlanDisplayFromPlan(plan, activeLocale.value)?.features || plan.features
+}
+
+function displaySubscriptionName(planName: string): string {
+  return displayMonthlyPlanName(planName, activeLocale.value) || planName
+}
+
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
@@ -306,6 +370,14 @@ const amount = ref<number | null>(null)
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
+
+type SwitchConfirmKind = 'upgrade' | 'downgrade'
+
+const switchConfirm = ref<{
+  show: boolean
+  plan: SubscriptionPlan | null
+  kind: SwitchConfirmKind | null
+}>({ show: false, plan: null, kind: null })
 
 const paymentPhase = ref<'select' | 'paying'>('select')
 
@@ -544,6 +616,10 @@ function formatSelectedPaymentAmount(value: number): string {
   return formatPaymentAmount(value, selectedCurrency.value, localeCode.value)
 }
 
+function formatUSD(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
     const ml = visibleMethods.value[type]
@@ -638,7 +714,6 @@ const paymentButtonClass = computed(() => {
 })
 
 // Subscription confirm: platform accent colors (clean card, no gradient)
-const planBadgeClass = computed(() => platformBadgeClass(selectedPlan.value?.group_platform || ''))
 const planTextClass = computed(() => platformTextClass(selectedPlan.value?.group_platform || ''))
 
 // Renewal modal state
@@ -657,16 +732,73 @@ const planValiditySuffix = computed(() => {
   return `${selectedPlan.value.validity_days}${t('payment.days')}`
 })
 
-function selectPlan(plan: SubscriptionPlan) {
+function activeSubscriptionForPlan(plan: SubscriptionPlan) {
+  return activeSubscriptions.value.find(sub => sub.group_id === plan.group_id && sub.status === 'active') ?? null
+}
+
+function planKey(plan: SubscriptionPlan): MonthlyPlanKey | null {
+  return monthlyPlanKeyFromName(plan.name)
+}
+
+function activePlanKeyForPlan(plan: SubscriptionPlan): MonthlyPlanKey | null {
+  return monthlyPlanKeyFromName(activeSubscriptionForPlan(plan)?.plan_name)
+}
+
+function classifyPlanSelection(plan: SubscriptionPlan): SwitchConfirmKind | 'renew' | 'subscribe' {
+  const active = activeSubscriptionForPlan(plan)
+  if (!active) return 'subscribe'
+  if (active.plan_id != null && active.plan_id === plan.id) return 'renew'
+  const currentKey = activePlanKeyForPlan(plan)
+  const nextKey = planKey(plan)
+  if (currentKey && nextKey) {
+    if (currentKey === nextKey) return 'renew'
+    return monthlyPlanRank[nextKey] > monthlyPlanRank[currentKey] ? 'upgrade' : 'downgrade'
+  }
+  if (active.seven_day_limit_usd != null && plan.seven_day_quota_usd != null) {
+    if (Math.abs(active.seven_day_limit_usd - plan.seven_day_quota_usd) < 0.000001) return 'renew'
+    return plan.seven_day_quota_usd > active.seven_day_limit_usd ? 'upgrade' : 'downgrade'
+  }
+  return 'upgrade'
+}
+
+function proceedToSelectedPlan(plan: SubscriptionPlan) {
   selectedPlan.value = plan
   errorMessage.value = ''
 }
 
-function selectPlanFromModal(plan: SubscriptionPlan) {
+function selectPlan(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectIntent) {
+  const selection = intent === 'renew' ? 'renew' : intent === 'subscribe' ? 'subscribe' : classifyPlanSelection(plan)
+  if (selection === 'upgrade' || selection === 'downgrade') {
+    switchConfirm.value = { show: true, plan, kind: selection }
+    return
+  }
+  proceedToSelectedPlan(plan)
+}
+
+function selectPlanFromModal(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectIntent) {
   showRenewalModal.value = false
   renewGroupId.value = null
-  selectedPlan.value = plan
-  errorMessage.value = ''
+  selectPlan(plan, intent)
+}
+
+const switchConfirmTitle = computed(() => {
+  if (switchConfirm.value.kind === 'downgrade') return t('payment.switchConfirm.downgradeTitle')
+  return t('payment.switchConfirm.upgradeTitle')
+})
+
+const switchConfirmMessage = computed(() => {
+  if (switchConfirm.value.kind === 'downgrade') return t('payment.switchConfirm.downgradeMessage')
+  return t('payment.switchConfirm.upgradeMessage')
+})
+
+function confirmSwitchSelection() {
+  const plan = switchConfirm.value.plan
+  switchConfirm.value = { show: false, plan: null, kind: null }
+  if (plan) proceedToSelectedPlan(plan)
+}
+
+function cancelSwitchSelection() {
+  switchConfirm.value = { show: false, plan: null, kind: null }
 }
 
 function closeRenewalModal() {
@@ -980,6 +1112,25 @@ function applyScenarioError(err: unknown, paymentMethod: string): boolean {
   return true
 }
 
+function queryStringValue(value: unknown): string {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+function intentFromQuery(value: unknown): SubscriptionPlanSelectIntent | undefined {
+  const raw = queryStringValue(value)
+  return raw === 'renew' || raw === 'switch' || raw === 'subscribe' ? raw : undefined
+}
+
+function selectPlanFromQuery() {
+  const rawPlanID = queryStringValue(route.query.plan)
+  if (!rawPlanID) return
+  const planID = Number(rawPlanID)
+  if (!Number.isFinite(planID)) return
+  const plan = checkout.value.plans.find(item => item.id === planID)
+  if (!plan) return
+  selectPlan(plan, intentFromQuery(route.query.intent))
+}
+
 async function resumeWechatPaymentFromQuery() {
   const resume = parseWechatResumeRoute(route.query, checkout.value.plans, validAmount.value)
   if (!resume) {
@@ -1051,18 +1202,20 @@ onMounted(async () => {
         removeRecoverySnapshot()
       }
     }
+    await subscriptionStore.fetchActiveSubscriptions()
     await resumeWechatPaymentFromQuery()
     if (checkout.value.balance_disabled) {
       activeTab.value = 'subscription'
     }
-    // Handle renewal navigation: ?tab=subscription&group=123
     if (route.query.tab === 'subscription') {
       activeTab.value = 'subscription'
-      if (route.query.group) {
+      if (route.query.plan) {
+        selectPlanFromQuery()
+      } else if (route.query.group) {
         const groupId = Number(route.query.group)
         const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
         if (groupPlans.length === 1) {
-          selectedPlan.value = groupPlans[0]
+          selectPlan(groupPlans[0], 'renew')
         } else if (groupPlans.length > 1) {
           renewGroupId.value = groupId
           showRenewalModal.value = true
@@ -1071,7 +1224,5 @@ onMounted(async () => {
     }
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { loading.value = false }
-  // Fetch active subscriptions (uses cache, non-blocking)
-  subscriptionStore.fetchActiveSubscriptions().catch(() => {})
 })
 </script>

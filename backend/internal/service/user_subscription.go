@@ -7,6 +7,17 @@ type UserSubscription struct {
 	UserID  int64
 	GroupID int64
 
+	PlanID           *int64
+	PlanName         *string
+	SevenDayLimitUSD *float64
+
+	ScheduledPlanID            *int64
+	ScheduledPlanName          *string
+	ScheduledSevenDayLimitUSD  *float64
+	ScheduledPlanEffectiveAt   *time.Time
+	ScheduledExpiresAt         *time.Time
+	ScheduledOrderID           *int64
+
 	StartsAt  time.Time
 	ExpiresAt time.Time
 	Status    string
@@ -72,10 +83,14 @@ func (s *UserSubscription) NeedsDailyResetAt(now time.Time) bool {
 }
 
 func (s *UserSubscription) NeedsWeeklyReset() bool {
+	return s.NeedsWeeklyResetAt(time.Now())
+}
+
+func (s *UserSubscription) NeedsWeeklyResetAt(now time.Time) bool {
 	if s.WeeklyWindowStart == nil {
 		return false
 	}
-	return time.Since(*s.WeeklyWindowStart) >= 7*24*time.Hour
+	return !now.Before(s.WeeklyWindowStart.Add(7 * 24 * time.Hour))
 }
 
 func (s *UserSubscription) NeedsMonthlyReset() bool {
@@ -120,11 +135,45 @@ func (s *UserSubscription) CheckDailyLimit(group *Group, additionalCost float64)
 	return s.DailyUsageUSD+additionalCost <= *group.DailyLimitUSD
 }
 
-func (s *UserSubscription) CheckWeeklyLimit(group *Group, additionalCost float64) bool {
-	if !group.HasWeeklyLimit() {
+func (s *UserSubscription) EffectiveSevenDayLimit(group *Group) *float64 {
+	if s == nil {
+		return nil
+	}
+	if s.SevenDayLimitUSD != nil {
+		return s.SevenDayLimitUSD
+	}
+	if s.PlanID == nil && s.PlanName == nil && group != nil && group.WeeklyLimitUSD != nil {
+		return group.WeeklyLimitUSD
+	}
+	return nil
+}
+
+func (s *UserSubscription) SevenDayRemaining(group *Group) *float64 {
+	limit := s.EffectiveSevenDayLimit(group)
+	if limit == nil {
+		return nil
+	}
+	remaining := *limit - s.WeeklyUsageUSD
+	if remaining < 0 {
+		remaining = 0
+	}
+	return &remaining
+}
+
+func (s *UserSubscription) CanUseSevenDayQuota(group *Group, cost float64) bool {
+	if cost <= 0 {
 		return true
 	}
-	return s.WeeklyUsageUSD+additionalCost <= *group.WeeklyLimitUSD
+	remaining := s.SevenDayRemaining(group)
+	return remaining != nil && *remaining+1e-9 >= cost
+}
+
+func (s *UserSubscription) CheckWeeklyLimit(group *Group, additionalCost float64) bool {
+	limit := s.EffectiveSevenDayLimit(group)
+	if limit == nil {
+		return true
+	}
+	return s.WeeklyUsageUSD+additionalCost <= *limit
 }
 
 func (s *UserSubscription) CheckMonthlyLimit(group *Group, additionalCost float64) bool {
