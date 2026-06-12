@@ -193,7 +193,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					limitExceeded := errors.Is(validateErr, service.ErrDailyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrWeeklyLimitExceeded) ||
 						errors.Is(validateErr, service.ErrMonthlyLimitExceeded)
-					weeklyFallbackEligible := errors.Is(validateErr, service.ErrWeeklyLimitExceeded) && apiKey.User.Balance > 0
+					weeklyFallbackEligible := errors.Is(validateErr, service.ErrWeeklyLimitExceeded) &&
+						apiKey.User.SubscriptionBalanceFallbackEnabled &&
+						apiKey.User.Balance > 0
 					if !weeklyFallbackEligible {
 						code := "SUBSCRIPTION_INVALID"
 						status := 403
@@ -205,9 +207,15 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 						return
 					}
 				}
-				if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil && apiKey.User.Balance <= 0 {
-					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
-					return
+				if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil {
+					if !apiKey.User.SubscriptionBalanceFallbackEnabled {
+						AbortWithError(c, 429, "USAGE_LIMIT_EXCEEDED", service.ErrWeeklyLimitExceeded.Error())
+						return
+					}
+					if apiKey.User.Balance <= 0 {
+						AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+						return
+					}
 				}
 
 				// Expired quota windows must be reset before downstream billing reads usage.

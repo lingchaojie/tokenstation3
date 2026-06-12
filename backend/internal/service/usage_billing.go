@@ -19,22 +19,23 @@ type UsageBillingCommand struct {
 	RequestFingerprint string
 	RequestPayloadHash string
 
-	UserID                       int64
-	AccountID                    int64
-	SubscriptionID               *int64
-	AccountType                  string
-	Model                        string
-	ServiceTier                  string
-	ReasoningEffort              string
-	BillingType                  int8
-	AllowBalanceFallback         bool
-	SubscriptionSevenDayLimitUSD *float64
-	InputTokens                  int
-	OutputTokens                 int
-	CacheCreationTokens          int
-	CacheReadTokens              int
-	ImageCount                   int
-	MediaType                    string
+	UserID                        int64
+	AccountID                     int64
+	SubscriptionID                *int64
+	AccountType                   string
+	Model                         string
+	ServiceTier                   string
+	ReasoningEffort               string
+	BillingType                   int8
+	AllowBalanceFallback          bool
+	AllowSubscriptionQuotaOverrun bool
+	SubscriptionSevenDayLimitUSD  *float64
+	InputTokens                   int
+	OutputTokens                  int
+	CacheCreationTokens           int
+	CacheReadTokens               int
+	ImageCount                    int
+	MediaType                     string
 
 	BalanceCost         float64
 	BalanceFallbackCost float64
@@ -59,7 +60,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%t|%0.10f|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%s|%s|%s|%s|%d|%t|%t|%0.10f|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
@@ -69,6 +70,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		strings.TrimSpace(c.ReasoningEffort),
 		c.BillingType,
 		c.AllowBalanceFallback,
+		c.AllowSubscriptionQuotaOverrun,
 		floatValueOrZero(c.SubscriptionSevenDayLimitUSD),
 		c.InputTokens,
 		c.OutputTokens,

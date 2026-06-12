@@ -11,6 +11,7 @@
           :subscription-balance="subscriptionStore.subscriptionBalanceSummary"
           :subscription-plans="subscriptionPlans"
           :active-subscriptions="subscriptionStore.activeSubscriptions"
+          :subscription-balance-fallback-enabled="user?.subscription_balance_fallback_enabled ?? false"
         />
         <div class="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
           <div class="min-w-0 space-y-5">

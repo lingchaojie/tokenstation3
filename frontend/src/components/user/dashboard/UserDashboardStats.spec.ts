@@ -1,7 +1,11 @@
-import { config, mount } from '@vue/test-utils'
+import { config, flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 const routerPush = vi.hoisted(() => vi.fn())
+const mockUpdateProfile = vi.hoisted(() => vi.fn())
+const authState = vi.hoisted(() => ({
+  user: null as Record<string, unknown> | null,
+}))
 
 import UserDashboardStats from './UserDashboardStats.vue'
 
@@ -13,6 +17,9 @@ const messages = vi.hoisted(() => ({
   'dashboard.apiKeys': 'API Keys',
   'dashboard.averageTime': 'Average time',
   'dashboard.avgResponse': 'Avg Response',
+  'dashboard.balanceFallbackToggle.disabledHint': 'Default off. Requests stop after the monthly card 7-day quota is used up, even if the account still has balance.',
+  'dashboard.balanceFallbackToggle.enabledHint': 'When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.',
+  'dashboard.balanceFallbackToggle.title': 'Use balance after monthly card quota',
   'dashboard.balanceOrderHint': 'Subscription quota is used before recharge balance.',
   'dashboard.input': 'Input',
   'dashboard.output': 'Output',
@@ -74,6 +81,16 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: routerPush }),
 }))
 
+vi.mock('@/api/user', () => ({
+  userAPI: {
+    updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
+  },
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authState,
+}))
+
 vi.mock('@/components/icons/Icon.vue', () => ({
   default: { template: '<span class="icon-stub" />' },
 }))
@@ -114,6 +131,48 @@ const stats = {
 }
 
 describe('UserDashboardStats', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    authState.user = null
+  })
+
+  it('saves the balance fallback preference and updates the auth user when toggled on', async () => {
+    const updatedUser = {
+      id: 1,
+      balance: 25,
+      subscription_balance_fallback_enabled: true,
+    }
+    let resolveUpdate: (user: typeof updatedUser) => void = () => {}
+    mockUpdateProfile.mockReturnValue(new Promise(resolve => { resolveUpdate = resolve }))
+    authState.user = {
+      id: 1,
+      balance: 25,
+      subscription_balance_fallback_enabled: false,
+    }
+
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+        subscriptionBalanceFallbackEnabled: false,
+      },
+    })
+
+    const toggle = wrapper.get('[data-testid="subscription-balance-fallback-toggle"]')
+    expect(wrapper.text()).toContain('Default off. Requests stop after the monthly card 7-day quota is used up, even if the account still has balance.')
+
+    await toggle.trigger('click')
+    expect(toggle.attributes('disabled')).toBeDefined()
+
+    resolveUpdate(updatedUser)
+    await flushPromises()
+
+    expect(mockUpdateProfile).toHaveBeenCalledWith({ subscription_balance_fallback_enabled: true })
+    expect(authState.user).toEqual(updatedUser)
+    expect(wrapper.text()).toContain('When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.')
+  })
+
   it('shows subscription and recharge balances separately for non-simple users', () => {
     const wrapper = mount(UserDashboardStats, {
       props: {

@@ -53,6 +53,8 @@ type User struct {
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
 	// BalanceNotifyEnabled holds the value of the "balance_notify_enabled" field.
 	BalanceNotifyEnabled bool `json:"balance_notify_enabled,omitempty"`
+	// SubscriptionBalanceFallbackEnabled holds the value of the "subscription_balance_fallback_enabled" field.
+	SubscriptionBalanceFallbackEnabled bool `json:"subscription_balance_fallback_enabled,omitempty"`
 	// BalanceNotifyThresholdType holds the value of the "balance_notify_threshold_type" field.
 	BalanceNotifyThresholdType string `json:"balance_notify_threshold_type,omitempty"`
 	// BalanceNotifyThreshold holds the value of the "balance_notify_threshold" field.
@@ -235,7 +237,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled:
+		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
@@ -378,6 +380,12 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field balance_notify_enabled", values[i])
 			} else if value.Valid {
 				_m.BalanceNotifyEnabled = value.Bool
+			}
+		case user.FieldSubscriptionBalanceFallbackEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_balance_fallback_enabled", values[i])
+			} else if value.Valid {
+				_m.SubscriptionBalanceFallbackEnabled = value.Bool
 			}
 		case user.FieldBalanceNotifyThresholdType:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -579,6 +587,9 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("balance_notify_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BalanceNotifyEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("subscription_balance_fallback_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SubscriptionBalanceFallbackEnabled))
 	builder.WriteString(", ")
 	builder.WriteString("balance_notify_threshold_type=")
 	builder.WriteString(_m.BalanceNotifyThresholdType)

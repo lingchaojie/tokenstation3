@@ -119,7 +119,13 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 			}
 			return service.ErrWeeklyLimitExceeded
 		}
-		appliedSubscription, err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, cmd.SubscriptionSevenDayLimitUSD)
+		var appliedSubscription bool
+		var err error
+		if cmd.AllowSubscriptionQuotaOverrun {
+			appliedSubscription, err = incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, nil)
+		} else {
+			appliedSubscription, err = incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, cmd.SubscriptionSevenDayLimitUSD)
+		}
 		if err != nil {
 			return err
 		}

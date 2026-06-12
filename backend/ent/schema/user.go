@@ -96,6 +96,8 @@ func (User) Fields() []ent.Field {
 		// 余额不足通知
 		field.Bool("balance_notify_enabled").
 			Default(true),
+		field.Bool("subscription_balance_fallback_enabled").
+			Default(false),
 		field.String("balance_notify_threshold_type").
 			Default("fixed"), // "fixed" | "percentage"
 		field.Float("balance_notify_threshold").

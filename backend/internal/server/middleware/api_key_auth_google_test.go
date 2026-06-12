@@ -697,14 +697,15 @@ func TestApiKeyAuthWithSubscriptionGoogle_WeeklyLimitExceededUsesBalanceFallback
 		WeeklyLimitUSD:   &weeklyLimit,
 	}
 
-	newRouter := func(t *testing.T, balance float64) (*gin.Engine, string) {
+	newRouter := func(t *testing.T, balance float64, optIn bool) (*gin.Engine, string) {
 		t.Helper()
 		user := &service.User{
-			ID:          int64(1000 + int(balance*10)),
-			Role:        service.RoleUser,
-			Status:      service.StatusActive,
-			Balance:     balance,
-			Concurrency: 3,
+			ID:                                 int64(1000 + int(balance*10)),
+			Role:                               service.RoleUser,
+			Status:                             service.StatusActive,
+			Balance:                            balance,
+			Concurrency:                        3,
+			SubscriptionBalanceFallbackEnabled: optIn,
 		}
 		group := *baseGroup
 		apiKey := &service.APIKey{
@@ -756,8 +757,8 @@ func TestApiKeyAuthWithSubscriptionGoogle_WeeklyLimitExceededUsesBalanceFallback
 		return r, apiKey.Key
 	}
 
-	t.Run("positive balance allows fallback", func(t *testing.T) {
-		r, key := newRouter(t, 10)
+	t.Run("positive balance with opt-in allows fallback", func(t *testing.T) {
+		r, key := newRouter(t, 10, true)
 		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
 		req.Header.Set("x-goog-api-key", key)
 		rec := httptest.NewRecorder()
@@ -766,8 +767,23 @@ func TestApiKeyAuthWithSubscriptionGoogle_WeeklyLimitExceededUsesBalanceFallback
 		require.Equal(t, http.StatusOK, rec.Code)
 	})
 
+	t.Run("positive balance without opt-in rejects with Google quota error", func(t *testing.T) {
+		r, key := newRouter(t, 10, false)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
+		require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
+		require.Contains(t, resp.Error.Message, "weekly usage limit exceeded")
+	})
+
 	t.Run("zero balance rejects with Google error", func(t *testing.T) {
-		r, key := newRouter(t, 0)
+		r, key := newRouter(t, 0, true)
 		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
 		req.Header.Set("x-goog-api-key", key)
 		rec := httptest.NewRecorder()
@@ -794,14 +810,15 @@ func TestApiKeyAuthWithSubscriptionGoogle_AbsentEffectiveSevenDayLimitRequiresBa
 		SubscriptionType: service.SubscriptionTypeSubscription,
 	}
 
-	newRouter := func(t *testing.T, balance float64) (*gin.Engine, string) {
+	newRouter := func(t *testing.T, balance float64, optIn bool) (*gin.Engine, string) {
 		t.Helper()
 		user := &service.User{
-			ID:          int64(1100 + int(balance*10)),
-			Role:        service.RoleUser,
-			Status:      service.StatusActive,
-			Balance:     balance,
-			Concurrency: 3,
+			ID:                                 int64(1100 + int(balance*10)),
+			Role:                               service.RoleUser,
+			Status:                             service.StatusActive,
+			Balance:                            balance,
+			Concurrency:                        3,
+			SubscriptionBalanceFallbackEnabled: optIn,
 		}
 		group := *baseGroup
 		apiKey := &service.APIKey{
@@ -851,8 +868,8 @@ func TestApiKeyAuthWithSubscriptionGoogle_AbsentEffectiveSevenDayLimitRequiresBa
 		return r, apiKey.Key
 	}
 
-	t.Run("positive balance allows fallback", func(t *testing.T) {
-		r, key := newRouter(t, 10)
+	t.Run("positive balance with opt-in allows fallback", func(t *testing.T) {
+		r, key := newRouter(t, 10, true)
 		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
 		req.Header.Set("x-goog-api-key", key)
 		rec := httptest.NewRecorder()
@@ -861,8 +878,23 @@ func TestApiKeyAuthWithSubscriptionGoogle_AbsentEffectiveSevenDayLimitRequiresBa
 		require.Equal(t, http.StatusOK, rec.Code)
 	})
 
+	t.Run("positive balance without opt-in rejects with Google quota error", func(t *testing.T) {
+		r, key := newRouter(t, 10, false)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
+		require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
+		require.Contains(t, resp.Error.Message, "weekly usage limit exceeded")
+	})
+
 	t.Run("zero balance rejects with Google error", func(t *testing.T) {
-		r, key := newRouter(t, 0)
+		r, key := newRouter(t, 0, true)
 		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
 		req.Header.Set("x-goog-api-key", key)
 		rec := httptest.NewRecorder()

@@ -61,6 +61,7 @@ func TestAPIContracts(t *testing.T) {
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z",
 					"balance_notify_enabled": false,
+					"subscription_balance_fallback_enabled": false,
 					"balance_notify_threshold_type": "",
 					"balance_notify_threshold": null,
 					"balance_notify_extra_emails": null,

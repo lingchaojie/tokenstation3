@@ -232,6 +232,109 @@ func TestUsageBillingRepositoryApply_ResetBoundaryBillsSubscriptionBeforeBalance
 	require.InDelta(t, 100, balance, 0.000001)
 }
 
+func TestUsageBillingRepositoryApply_RejectsGuardedSubscriptionQuotaInsufficientWithoutFallback(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("usage-billing-no-fallback-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      100,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:             "usage-billing-no-fallback-group-" + uuid.NewString(),
+		Platform:         service.PlatformAnthropic,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-usage-billing-no-fallback-" + uuid.NewString(),
+		Name:    "billing-no-fallback",
+	})
+	limit := 5.0
+	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+		UserID:           user.ID,
+		GroupID:          group.ID,
+		SevenDayLimitUSD: &limit,
+		WeeklyUsageUSD:   4,
+	})
+	_, err := integrationDB.ExecContext(ctx, "UPDATE user_subscriptions SET seven_day_limit_usd = $1 WHERE id = $2", limit, subscription.ID)
+	require.NoError(t, err)
+
+	_, err = repo.Apply(ctx, &service.UsageBillingCommand{
+		RequestID:                    uuid.NewString(),
+		APIKeyID:                     apiKey.ID,
+		UserID:                       user.ID,
+		SubscriptionID:               &subscription.ID,
+		SubscriptionCost:             2,
+		SubscriptionSevenDayLimitUSD: &limit,
+	})
+	require.ErrorIs(t, err, service.ErrWeeklyLimitExceeded)
+
+	var weeklyUsage float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT weekly_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&weeklyUsage))
+	require.InDelta(t, 4, weeklyUsage, 0.000001)
+
+	var balance float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+	require.InDelta(t, 100, balance, 0.000001)
+}
+
+func TestUsageBillingRepositoryApply_RecordsNoFallbackPostUsageQuotaCrossing(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("usage-billing-post-usage-cross-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      100,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:             "usage-billing-post-usage-cross-group-" + uuid.NewString(),
+		Platform:         service.PlatformAnthropic,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-usage-billing-post-usage-cross-" + uuid.NewString(),
+		Name:    "billing-post-usage-cross",
+	})
+	limit := 5.0
+	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+		UserID:           user.ID,
+		GroupID:          group.ID,
+		SevenDayLimitUSD: &limit,
+		WeeklyUsageUSD:   4,
+	})
+	_, err := integrationDB.ExecContext(ctx, "UPDATE user_subscriptions SET seven_day_limit_usd = $1 WHERE id = $2", limit, subscription.ID)
+	require.NoError(t, err)
+
+	result, err := repo.Apply(ctx, &service.UsageBillingCommand{
+		RequestID:                     uuid.NewString(),
+		APIKeyID:                      apiKey.ID,
+		UserID:                        user.ID,
+		SubscriptionID:                &subscription.ID,
+		SubscriptionCost:              2,
+		SubscriptionSevenDayLimitUSD:  &limit,
+		AllowSubscriptionQuotaOverrun: true,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.Equal(t, service.BillingTypeSubscription, result.BillingType)
+
+	var weeklyUsage float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT weekly_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&weeklyUsage))
+	require.InDelta(t, 6, weeklyUsage, 0.000001)
+
+	var balance float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+	require.InDelta(t, 100, balance, 0.000001)
+}
+
 func TestUsageBillingRepositoryApply_FallsBackToBalanceWhenGuardedSubscriptionQuotaInsufficient(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

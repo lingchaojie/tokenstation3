@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 12 // v12: include exclusive group authorization fields
+const apiKeyAuthSnapshotVersion = 13 // v13: include subscription balance fallback preference
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -221,20 +221,21 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		RateLimit1d: apiKey.RateLimit1d,
 		RateLimit7d: apiKey.RateLimit7d,
 		User: APIKeyAuthUserSnapshot{
-			ID:                         apiKey.User.ID,
-			Status:                     apiKey.User.Status,
-			Role:                       apiKey.User.Role,
-			Balance:                    apiKey.User.Balance,
-			Concurrency:                apiKey.User.Concurrency,
-			AllowedGroups:              apiKey.User.AllowedGroups,
-			Email:                      apiKey.User.Email,
-			Username:                   apiKey.User.Username,
-			BalanceNotifyEnabled:       apiKey.User.BalanceNotifyEnabled,
-			BalanceNotifyThresholdType: apiKey.User.BalanceNotifyThresholdType,
-			BalanceNotifyThreshold:     apiKey.User.BalanceNotifyThreshold,
-			BalanceNotifyExtraEmails:   apiKey.User.BalanceNotifyExtraEmails,
-			TotalRecharged:             apiKey.User.TotalRecharged,
-			RPMLimit:                   apiKey.User.RPMLimit,
+			ID:                                 apiKey.User.ID,
+			Status:                             apiKey.User.Status,
+			Role:                               apiKey.User.Role,
+			Balance:                            apiKey.User.Balance,
+			Concurrency:                        apiKey.User.Concurrency,
+			AllowedGroups:                      apiKey.User.AllowedGroups,
+			Email:                              apiKey.User.Email,
+			Username:                           apiKey.User.Username,
+			BalanceNotifyEnabled:               apiKey.User.BalanceNotifyEnabled,
+			SubscriptionBalanceFallbackEnabled: apiKey.User.SubscriptionBalanceFallbackEnabled,
+			BalanceNotifyThresholdType:         apiKey.User.BalanceNotifyThresholdType,
+			BalanceNotifyThreshold:             apiKey.User.BalanceNotifyThreshold,
+			BalanceNotifyExtraEmails:           apiKey.User.BalanceNotifyExtraEmails,
+			TotalRecharged:                     apiKey.User.TotalRecharged,
+			RPMLimit:                           apiKey.User.RPMLimit,
 		},
 	}
 
@@ -301,21 +302,22 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		RateLimit1d: snapshot.RateLimit1d,
 		RateLimit7d: snapshot.RateLimit7d,
 		User: &User{
-			ID:                         snapshot.User.ID,
-			Status:                     snapshot.User.Status,
-			Role:                       snapshot.User.Role,
-			Balance:                    snapshot.User.Balance,
-			Concurrency:                snapshot.User.Concurrency,
-			AllowedGroups:              snapshot.User.AllowedGroups,
-			Email:                      snapshot.User.Email,
-			Username:                   snapshot.User.Username,
-			BalanceNotifyEnabled:       snapshot.User.BalanceNotifyEnabled,
-			BalanceNotifyThresholdType: snapshot.User.BalanceNotifyThresholdType,
-			BalanceNotifyThreshold:     snapshot.User.BalanceNotifyThreshold,
-			BalanceNotifyExtraEmails:   snapshot.User.BalanceNotifyExtraEmails,
-			TotalRecharged:             snapshot.User.TotalRecharged,
-			RPMLimit:                   snapshot.User.RPMLimit,
-			UserGroupRPMOverride:       snapshot.User.UserGroupRPMOverride,
+			ID:                                 snapshot.User.ID,
+			Status:                             snapshot.User.Status,
+			Role:                               snapshot.User.Role,
+			Balance:                            snapshot.User.Balance,
+			Concurrency:                        snapshot.User.Concurrency,
+			AllowedGroups:                      snapshot.User.AllowedGroups,
+			Email:                              snapshot.User.Email,
+			Username:                           snapshot.User.Username,
+			BalanceNotifyEnabled:               snapshot.User.BalanceNotifyEnabled,
+			SubscriptionBalanceFallbackEnabled: snapshot.User.SubscriptionBalanceFallbackEnabled,
+			BalanceNotifyThresholdType:         snapshot.User.BalanceNotifyThresholdType,
+			BalanceNotifyThreshold:             snapshot.User.BalanceNotifyThreshold,
+			BalanceNotifyExtraEmails:           snapshot.User.BalanceNotifyExtraEmails,
+			TotalRecharged:                     snapshot.User.TotalRecharged,
+			RPMLimit:                           snapshot.User.RPMLimit,
+			UserGroupRPMOverride:               snapshot.User.UserGroupRPMOverride,
 		},
 	}
 	if snapshot.Group != nil {

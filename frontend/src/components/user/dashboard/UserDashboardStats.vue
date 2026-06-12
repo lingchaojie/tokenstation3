@@ -65,6 +65,35 @@
           </svg>
         </div>
       </div>
+
+      <div class="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p id="subscription-balance-fallback-toggle-label" class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
+              {{ t('dashboard.balanceFallbackToggle.title') }}
+            </p>
+            <p class="mt-1 text-xs leading-relaxed text-gray-500 dark:text-linear-ink-subtle">
+              {{ t(balanceFallbackEnabled ? 'dashboard.balanceFallbackToggle.enabledHint' : 'dashboard.balanceFallbackToggle.disabledHint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            :class="balanceFallbackEnabled ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-gray-300 dark:bg-dark-600'"
+            role="switch"
+            :aria-checked="balanceFallbackEnabled"
+            aria-labelledby="subscription-balance-fallback-toggle-label"
+            :disabled="savingBalanceFallback"
+            data-testid="subscription-balance-fallback-toggle"
+            @click="toggleBalanceFallback"
+          >
+            <span
+              class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
+              :class="balanceFallbackEnabled ? 'translate-x-5' : 'translate-x-0'"
+            />
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -276,10 +305,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { userAPI } from '@/api/user'
 import Icon from '@/components/icons/Icon.vue'
+import { useAuthStore } from '@/stores/auth'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem, SubscriptionBalanceSummary, UserSubscription } from '@/types'
@@ -310,9 +341,20 @@ const props = defineProps<{
   subscriptionBalance?: SubscriptionBalanceSummary | null
   subscriptionPlans?: SubscriptionPlan[]
   activeSubscriptions?: UserSubscription[]
+  subscriptionBalanceFallbackEnabled?: boolean
 }>()
 const { t, locale } = useI18n()
 const router = useRouter()
+const authStore = useAuthStore()
+
+const balanceFallbackEnabled = ref(props.subscriptionBalanceFallbackEnabled ?? false)
+const savingBalanceFallback = ref(false)
+
+watch(() => props.subscriptionBalanceFallbackEnabled, (value) => {
+  if (!savingBalanceFallback.value) {
+    balanceFallbackEnabled.value = value ?? false
+  }
+})
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -391,6 +433,26 @@ function handlePlanSelect(plan: SubscriptionPlan, intent: SubscriptionPlanSelect
       intent,
     },
   })
+}
+
+async function toggleBalanceFallback() {
+  if (savingBalanceFallback.value) return
+
+  const previous = balanceFallbackEnabled.value
+  const next = !previous
+  balanceFallbackEnabled.value = next
+  savingBalanceFallback.value = true
+
+  try {
+    const updated = await userAPI.updateProfile({ subscription_balance_fallback_enabled: next })
+    authStore.user = updated
+    balanceFallbackEnabled.value = updated.subscription_balance_fallback_enabled ?? next
+  } catch (error) {
+    console.error('Failed to update subscription balance fallback preference:', error)
+    balanceFallbackEnabled.value = previous
+  } finally {
+    savingBalanceFallback.value = false
+  }
 }
 
 function pendingNoticeForPlan(plan: SubscriptionPlan): string {

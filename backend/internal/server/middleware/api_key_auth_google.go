@@ -95,7 +95,9 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 				limitExceeded := errors.Is(err, service.ErrDailyLimitExceeded) ||
 					errors.Is(err, service.ErrWeeklyLimitExceeded) ||
 					errors.Is(err, service.ErrMonthlyLimitExceeded)
-				weeklyFallbackEligible := errors.Is(err, service.ErrWeeklyLimitExceeded) && apiKey.User.Balance > 0
+				weeklyFallbackEligible := errors.Is(err, service.ErrWeeklyLimitExceeded) &&
+					apiKey.User.SubscriptionBalanceFallbackEnabled &&
+					apiKey.User.Balance > 0
 				if !weeklyFallbackEligible {
 					status := 403
 					if limitExceeded {
@@ -106,9 +108,15 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 				}
 			}
 
-			if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil && apiKey.User.Balance <= 0 {
-				abortWithGoogleError(c, 403, "Insufficient account balance")
-				return
+			if subscription.EffectiveSevenDayLimit(apiKey.Group) == nil {
+				if !apiKey.User.SubscriptionBalanceFallbackEnabled {
+					abortWithGoogleError(c, 429, service.ErrWeeklyLimitExceeded.Error())
+					return
+				}
+				if apiKey.User.Balance <= 0 {
+					abortWithGoogleError(c, 403, "Insufficient account balance")
+					return
+				}
 			}
 
 			if needsMaintenance {

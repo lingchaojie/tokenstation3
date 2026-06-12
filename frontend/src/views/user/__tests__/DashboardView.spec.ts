@@ -64,7 +64,19 @@ vi.mock('@/components/common/LoadingSpinner.vue', () => ({
 }))
 
 vi.mock('@/components/user/dashboard/UserDashboardStats.vue', () => ({
-  default: { props: ['stats', 'balance', 'isSimple', 'platformQuotas', 'subscriptionBalance', 'subscriptionPlans', 'activeSubscriptions'], template: '<section class="stats-stub" />' },
+  default: {
+    props: [
+      'stats',
+      'balance',
+      'isSimple',
+      'platformQuotas',
+      'subscriptionBalance',
+      'subscriptionPlans',
+      'activeSubscriptions',
+      'subscriptionBalanceFallbackEnabled',
+    ],
+    template: '<section class="stats-stub" data-testid="stats-stub">{{ String(subscriptionBalanceFallbackEnabled) }}</section>',
+  },
 }))
 
 vi.mock('@/components/user/dashboard/UserDashboardCharts.vue', () => ({
@@ -131,6 +143,15 @@ describe('DashboardView', () => {
       granularity: 'day',
     })
     expect(mockGetByDateRange).toHaveBeenCalledWith('2024-01-01', '2024-01-07')
+  })
+
+  it('passes false for balance fallback when the user preference is missing', async () => {
+    authState.user = { id: 1, balance: 25 }
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="stats-stub"]').text()).toBe('false')
   })
 
   it('fetches checkout plans and active subscriptions in standard mode', async () => {

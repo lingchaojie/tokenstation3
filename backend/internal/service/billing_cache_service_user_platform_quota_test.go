@@ -653,11 +653,40 @@ func TestCheckBillingEligibility_WeeklyLimitExceededFallsBackToPositiveBalance(t
 		WeeklyLimitUSD:   &weeklyLimit,
 	}
 	sub := &UserSubscription{Status: "active"}
-	user := &User{ID: 42}
+	user := &User{ID: 42, SubscriptionBalanceFallbackEnabled: true}
 
 	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
 	if err != nil {
-		t.Fatalf("weekly exhaustion with positive balance should allow balance fallback, got: %v", err)
+		t.Fatalf("weekly exhaustion with positive balance should allow opted-in balance fallback, got: %v", err)
+	}
+}
+
+func TestCheckBillingEligibility_WeeklyLimitExceededWithoutBalanceFallbackOptInRejects(t *testing.T) {
+	weeklyLimit := 100.0
+	fake := &fakeZeroQuotaCache{
+		subscriptionWeeklyUsage: 100,
+		userBalance:             25,
+	}
+	s := &BillingCacheService{
+		cache: fake,
+		cfg:   &config.Config{},
+	}
+
+	subGroup := &Group{
+		ID:               10,
+		SubscriptionType: "subscription",
+		Status:           "active",
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+	sub := &UserSubscription{Status: "active"}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
+	if !errors.Is(err, ErrWeeklyLimitExceeded) {
+		t.Fatalf("weekly exhaustion without fallback opt-in should reject as weekly quota exceeded, got: %v", err)
+	}
+	if fake.balanceCalled {
+		t.Fatal("balance should not be checked when subscription fallback opt-in is disabled")
 	}
 }
 
@@ -680,7 +709,7 @@ func TestCheckBillingEligibility_WeeklyLimitExceededBalanceFallbackChecksPlatfor
 		WeeklyLimitUSD:   &weeklyLimit,
 	}
 	sub := &UserSubscription{Status: "active"}
-	user := &User{ID: 42}
+	user := &User{ID: 42, SubscriptionBalanceFallbackEnabled: true}
 
 	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
 	if !errors.Is(err, ErrUserPlatformDailyQuotaExhausted) {
@@ -708,7 +737,7 @@ func TestCheckBillingEligibility_WeeklyLimitExceededWithZeroBalanceRejects(t *te
 		WeeklyLimitUSD:   &weeklyLimit,
 	}
 	sub := &UserSubscription{Status: "active"}
-	user := &User{ID: 42}
+	user := &User{ID: 42, SubscriptionBalanceFallbackEnabled: true}
 
 	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
 	if !errors.Is(err, ErrInsufficientBalance) {
@@ -720,18 +749,29 @@ func TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitRequiresBalanceFall
 	tests := []struct {
 		name        string
 		balance     float64
+		optIn       bool
 		wantErr     error
 		wantAllowed bool
+		wantBalance bool
 	}{
 		{
-			name:        "positive balance allows fallback",
+			name:        "positive balance with opt-in allows fallback",
 			balance:     25,
+			optIn:       true,
 			wantAllowed: true,
+			wantBalance: true,
 		},
 		{
-			name:    "zero balance rejects",
-			balance: 0,
-			wantErr: ErrInsufficientBalance,
+			name:    "positive balance without opt-in rejects as quota exhausted",
+			balance: 25,
+			wantErr: ErrWeeklyLimitExceeded,
+		},
+		{
+			name:        "zero balance with opt-in rejects insufficient balance",
+			balance:     0,
+			optIn:       true,
+			wantErr:     ErrInsufficientBalance,
+			wantBalance: true,
 		},
 	}
 
@@ -749,17 +789,17 @@ func TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitRequiresBalanceFall
 				Status:           "active",
 			}
 			sub := &UserSubscription{Status: "active"}
-			user := &User{ID: 42}
+			user := &User{ID: 42, SubscriptionBalanceFallbackEnabled: tt.optIn}
 
 			err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
 			if tt.wantAllowed && err != nil {
-				t.Fatalf("absent effective quota with positive balance should allow balance fallback, got: %v", err)
+				t.Fatalf("absent effective quota with opted-in positive balance should allow balance fallback, got: %v", err)
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Fatalf("absent effective quota with zero balance should reject as %v, got: %v", tt.wantErr, err)
+				t.Fatalf("absent effective quota should reject as %v, got: %v", tt.wantErr, err)
 			}
-			if !fake.balanceCalled {
-				t.Fatal("balance fallback eligibility should be checked when effective seven-day quota is absent")
+			if fake.balanceCalled != tt.wantBalance {
+				t.Fatalf("balanceCalled = %v, want %v", fake.balanceCalled, tt.wantBalance)
 			}
 		})
 	}
@@ -779,7 +819,7 @@ func TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitBalanceFallbackChec
 		Status:           "active",
 	}
 	sub := &UserSubscription{Status: "active"}
-	user := &User{ID: 42}
+	user := &User{ID: 42, SubscriptionBalanceFallbackEnabled: true}
 
 	err := s.CheckBillingEligibility(context.Background(), user, nil, subGroup, sub, "anthropic")
 	if !errors.Is(err, ErrUserPlatformDailyQuotaExhausted) {

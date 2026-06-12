@@ -8542,23 +8542,41 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionSevenDayLimitUSD = p.Subscription.EffectiveSevenDayLimit(p.APIKey.Group)
+		balanceFallbackEnabled := p.User != nil && p.User.SubscriptionBalanceFallbackEnabled
 		if cmd.SubscriptionSevenDayLimitUSD == nil {
+			if balanceFallbackEnabled {
+				p.IsSubscriptionBill = false
+				cmd.BalanceCost = p.Cost.ActualCost
+				cmd.BillingType = BillingTypeBalance
+				if usageLog != nil {
+					usageLog.BillingType = BillingTypeBalance
+				}
+			} else {
+				cmd.SubscriptionCost = p.Cost.ActualCost
+				cmd.BillingType = BillingTypeSubscription
+				if usageLog != nil {
+					usageLog.BillingType = BillingTypeSubscription
+				}
+			}
+		} else if p.Cost.ActualCost <= 0 || p.Subscription.CanUseSevenDayQuota(p.APIKey.Group, p.Cost.ActualCost) {
+			p.IsSubscriptionBill = true
+			cmd.SubscriptionCost = p.Cost.ActualCost
+			cmd.AllowBalanceFallback = balanceFallbackEnabled && p.Cost.ActualCost > 0
+			if cmd.AllowBalanceFallback {
+				cmd.BalanceFallbackCost = p.Cost.ActualCost
+			}
+			cmd.BillingType = BillingTypeSubscription
+			if usageLog != nil {
+				usageLog.BillingType = BillingTypeSubscription
+			}
+		} else if balanceFallbackEnabled && p.User.Balance >= p.Cost.ActualCost {
 			p.IsSubscriptionBill = false
 			cmd.BalanceCost = p.Cost.ActualCost
 			cmd.BillingType = BillingTypeBalance
 			if usageLog != nil {
 				usageLog.BillingType = BillingTypeBalance
 			}
-		} else if p.Cost.ActualCost <= 0 || p.Subscription.CanUseSevenDayQuota(p.APIKey.Group, p.Cost.ActualCost) {
-			p.IsSubscriptionBill = true
-			cmd.SubscriptionCost = p.Cost.ActualCost
-			cmd.AllowBalanceFallback = p.Cost.ActualCost > 0
-			cmd.BalanceFallbackCost = p.Cost.ActualCost
-			cmd.BillingType = BillingTypeSubscription
-			if usageLog != nil {
-				usageLog.BillingType = BillingTypeSubscription
-			}
-		} else if p.User != nil && p.User.Balance >= p.Cost.ActualCost {
+		} else if balanceFallbackEnabled {
 			p.IsSubscriptionBill = false
 			cmd.BalanceCost = p.Cost.ActualCost
 			cmd.BillingType = BillingTypeBalance
@@ -8566,11 +8584,11 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 				usageLog.BillingType = BillingTypeBalance
 			}
 		} else {
-			p.IsSubscriptionBill = false
-			cmd.BalanceCost = p.Cost.ActualCost
-			cmd.BillingType = BillingTypeBalance
+			cmd.SubscriptionCost = p.Cost.ActualCost
+			cmd.AllowSubscriptionQuotaOverrun = true
+			cmd.BillingType = BillingTypeSubscription
 			if usageLog != nil {
-				usageLog.BillingType = BillingTypeBalance
+				usageLog.BillingType = BillingTypeSubscription
 			}
 		}
 	} else if p.Cost.ActualCost > 0 {

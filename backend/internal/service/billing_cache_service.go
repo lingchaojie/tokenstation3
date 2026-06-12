@@ -737,11 +737,17 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 			if !errors.Is(err, ErrWeeklyLimitExceeded) {
 				return err
 			}
+			if !user.SubscriptionBalanceFallbackEnabled {
+				return err
+			}
 			balanceFallback = true
 			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
 				return balanceErr
 			}
 		} else if subscription.EffectiveSevenDayLimit(group) == nil {
+			if !user.SubscriptionBalanceFallbackEnabled {
+				return ErrWeeklyLimitExceeded
+			}
 			balanceFallback = true
 			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
 				return balanceErr
