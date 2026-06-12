@@ -2,7 +2,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -28,9 +31,29 @@ func NewAPIKeyHandler(apiKeyService *service.APIKeyService) *APIKeyHandler {
 	}
 }
 
+func bindJSONWithFieldPresence(c *gin.Context, out any) (map[string]json.RawMessage, error) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return nil, err
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	var raw map[string]json.RawMessage
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	if err := c.ShouldBindJSON(out); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
 	Name          string   `json:"name" binding:"required"`
+	KeyType       string   `json:"key_type" binding:"required,oneof=anthropic openai"`
 	GroupID       *int64   `json:"group_id"`        // nullable
 	CustomKey     *string  `json:"custom_key"`      // 可选的自定义key
 	IPWhitelist   []string `json:"ip_whitelist"`    // IP 白名单
@@ -148,13 +171,19 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	}
 
 	var req CreateAPIKeyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONWithFieldPresence(c, &req)
+	if err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if _, hasGroupID := raw["group_id"]; hasGroupID {
+		response.BadRequest(c, "group_id is managed by administrator")
 		return
 	}
 
 	svcReq := service.CreateAPIKeyRequest{
 		Name:          req.Name,
+		KeyType:       req.KeyType,
 		GroupID:       req.GroupID,
 		CustomKey:     req.CustomKey,
 		IPWhitelist:   req.IPWhitelist,
@@ -199,8 +228,13 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	}
 
 	var req UpdateAPIKeyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONWithFieldPresence(c, &req)
+	if err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if _, hasGroupID := raw["group_id"]; hasGroupID {
+		response.BadRequest(c, "group_id is managed by administrator")
 		return
 	}
 
@@ -217,7 +251,6 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	if req.Name != "" {
 		svcReq.Name = &req.Name
 	}
-	svcReq.GroupID = req.GroupID
 	if req.Status != "" {
 		svcReq.Status = &req.Status
 	}

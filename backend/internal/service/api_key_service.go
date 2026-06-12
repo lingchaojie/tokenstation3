@@ -21,13 +21,18 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound     = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed    = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists       = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort     = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited  = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrInvalidIPPattern   = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound              = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed             = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists                = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort              = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars          = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited           = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrInvalidIPPattern            = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyTypeRequired          = infraerrors.BadRequest("API_KEY_TYPE_REQUIRED", "api key type is required")
+	ErrInvalidAPIKeyType           = infraerrors.BadRequest("INVALID_API_KEY_TYPE", "invalid API key type")
+	ErrAPIKeyGroupSelectionBlocked = infraerrors.BadRequest("API_KEY_GROUP_SELECTION_BLOCKED", "group selection is managed by administrator")
+	ErrDefaultAPIKeyGroupMissing   = infraerrors.BadRequest("DEFAULT_API_KEY_GROUP_MISSING", "administrator has not configured a default group for this API key type")
+	ErrDefaultAPIKeyGroupInvalid   = infraerrors.BadRequest("DEFAULT_API_KEY_GROUP_INVALID", "default API key group is invalid")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -150,9 +155,14 @@ type APIKeyAuthCacheInvalidator interface {
 	InvalidateAuthCacheByGroupID(ctx context.Context, groupID int64)
 }
 
+type DefaultAPIKeyGroupSettings interface {
+	GetDefaultAPIKeyGroupID(ctx context.Context, keyType string) (*int64, error)
+}
+
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
 	Name        string   `json:"name"`
+	KeyType     string   `json:"key_type"`
 	GroupID     *int64   `json:"group_id"`
 	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
@@ -201,6 +211,8 @@ type APIKeyService struct {
 	groupRepo             GroupRepository
 	userSubRepo           UserSubscriptionRepository
 	userGroupRateRepo     UserGroupRateRepository
+	userAPIKeyRouteRepo   UserAPIKeyRouteRepository
+	defaultAPIKeyGroups   DefaultAPIKeyGroupSettings
 	cache                 APIKeyCache
 	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
 	cfg                   *config.Config
@@ -238,6 +250,11 @@ func NewAPIKeyService(
 // Called after construction (e.g. in wire) to avoid circular dependencies.
 func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidator) {
 	s.rateLimitCacheInvalid = inv
+}
+
+func (s *APIKeyService) SetProviderRouting(routeRepo UserAPIKeyRouteRepository, defaults DefaultAPIKeyGroupSettings) {
+	s.userAPIKeyRouteRepo = routeRepo
+	s.defaultAPIKeyGroups = defaults
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -328,6 +345,45 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 	return user.CanBindGroup(group.ID, group.IsExclusive)
 }
 
+func (s *APIKeyService) resolveProviderGroupForCreate(ctx context.Context, user *User, keyType string) (*int64, *Group, error) {
+	keyType = NormalizeAPIKeyType(keyType)
+	if keyType == "" {
+		return nil, nil, ErrInvalidAPIKeyType
+	}
+	var groupID *int64
+	if s.userAPIKeyRouteRepo != nil {
+		route, err := s.userAPIKeyRouteRepo.GetByUserIDAndKeyType(ctx, user.ID, keyType)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get user api key route: %w", err)
+		}
+		if route != nil && route.GroupID > 0 {
+			id := route.GroupID
+			groupID = &id
+		}
+	}
+	if groupID == nil && s.defaultAPIKeyGroups != nil {
+		id, err := s.defaultAPIKeyGroups.GetDefaultAPIKeyGroupID(ctx, keyType)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get default api key group: %w", err)
+		}
+		groupID = id
+	}
+	if groupID == nil || *groupID <= 0 {
+		return nil, nil, ErrDefaultAPIKeyGroupMissing
+	}
+	group, err := s.groupRepo.GetByID(ctx, *groupID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get group: %w", err)
+	}
+	if !group.IsActive() || APIKeyTypeFromGroupPlatform(group.Platform) != keyType {
+		return nil, nil, ErrDefaultAPIKeyGroupInvalid
+	}
+	if !s.canUserBindGroup(ctx, user, group) {
+		return nil, nil, ErrGroupNotAllowed
+	}
+	return groupID, group, nil
+}
+
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	// 验证用户存在
@@ -348,6 +404,21 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		if invalid := ip.ValidateIPPatterns(req.IPBlacklist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
+	}
+
+	keyType := NormalizeAPIKeyType(req.KeyType)
+	if strings.TrimSpace(req.KeyType) != "" && keyType == "" {
+		return nil, ErrInvalidAPIKeyType
+	}
+	if keyType != "" {
+		if req.GroupID != nil {
+			return nil, ErrAPIKeyGroupSelectionBlocked
+		}
+		resolvedGroupID, _, err := s.resolveProviderGroupForCreate(ctx, user, keyType)
+		if err != nil {
+			return nil, err
+		}
+		req.GroupID = resolvedGroupID
 	}
 
 	// 验证分组权限（如果指定了分组）
@@ -403,6 +474,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		UserID:      userID,
 		Key:         key,
 		Name:        html.EscapeString(req.Name),
+		KeyType:     keyType,
 		GroupID:     req.GroupID,
 		Status:      StatusActive,
 		IPWhitelist: req.IPWhitelist,

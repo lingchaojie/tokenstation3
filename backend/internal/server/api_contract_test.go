@@ -215,7 +215,7 @@ func TestAPIContracts(t *testing.T) {
 			name:   "POST /api/v1/keys",
 			method: http.MethodPost,
 			path:   "/api/v1/keys",
-			body:   `{"name":"Key One","custom_key":"sk_custom_1234567890"}`,
+			body:   `{"name":"Key One","key_type":"anthropic","custom_key":"sk_custom_1234567890"}`,
 			headers: map[string]string{
 				"Content-Type": "application/json",
 			},
@@ -228,7 +228,8 @@ func TestAPIContracts(t *testing.T) {
 					"user_id": 1,
 					"key": "sk_custom_1234567890",
 					"name": "Key One",
-					"group_id": null,
+					"key_type": "anthropic",
+					"group_id": 10,
 					"status": "active",
 					"ip_whitelist": null,
 					"ip_blacklist": null,
@@ -248,6 +249,20 @@ func TestAPIContracts(t *testing.T) {
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z"
 				}
+			}`,
+		},
+		{
+			name:   "POST /api/v1/keys rejects explicit group_id",
+			method: http.MethodPost,
+			path:   "/api/v1/keys",
+			body:   `{"name":"Key One","key_type":"anthropic","group_id":10}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantJSON: `{
+				"code": 400,
+				"message": "group_id is managed by administrator"
 			}`,
 		},
 		{
@@ -277,6 +292,7 @@ func TestAPIContracts(t *testing.T) {
 							"user_id": 1,
 							"key": "sk_custom_1234567890",
 							"name": "Key One",
+							"key_type": "unknown",
 							"group_id": null,
 							"status": "active",
 							"ip_whitelist": null,
@@ -802,6 +818,8 @@ func TestAPIContracts(t *testing.T) {
 					"force_email_on_third_party_signup": false,
 					"default_concurrency": 5,
 					"default_balance": 1.25,
+					"default_anthropic_group_id": null,
+					"default_openai_group_id": null,
 					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
@@ -1051,6 +1069,8 @@ func TestAPIContracts(t *testing.T) {
 					"custom_endpoints": [],
 					"default_concurrency": 0,
 					"default_balance": 0,
+					"default_anthropic_group_id": null,
+					"default_openai_group_id": null,
 					"affiliate_rebate_rate": 20,
 					"affiliate_rebate_freeze_hours": 0,
 					"affiliate_rebate_duration_days": 0,
@@ -1255,6 +1275,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	apiKeyRepo := newStubApiKeyRepo(now)
 	apiKeyCache := stubApiKeyCache{}
 	groupRepo := &stubGroupRepo{}
+	groupRepo.SetActive([]service.Group{{ID: 10, Name: "Default Anthropic", Platform: service.PlatformAnthropic, Status: service.StatusActive}})
 	userSubRepo := &stubUserSubscriptionRepo{}
 	accountRepo := stubAccountRepo{}
 	proxyRepo := stubProxyRepo{}
@@ -1281,6 +1302,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
+	apiKeyService.SetProviderRouting(nil, stubDefaultAPIKeyGroupSettings{keyType: service.APIKeyTypeAnthropic, groupID: 10})
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
@@ -1556,12 +1578,18 @@ func (stubGroupRepo) Create(ctx context.Context, group *service.Group) error {
 	return errors.New("not implemented")
 }
 
-func (stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+func (r *stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+	for i := range r.active {
+		if r.active[i].ID == id {
+			clone := r.active[i]
+			return &clone, nil
+		}
+	}
 	return nil, service.ErrGroupNotFound
 }
 
-func (stubGroupRepo) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
-	return nil, service.ErrGroupNotFound
+func (r *stubGroupRepo) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
+	return r.GetByID(ctx, id)
 }
 
 func (stubGroupRepo) Update(ctx context.Context, group *service.Group) error {
@@ -2521,6 +2549,19 @@ func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usag
 }
 func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
 	return nil, errors.New("not implemented")
+}
+
+type stubDefaultAPIKeyGroupSettings struct {
+	keyType string
+	groupID int64
+}
+
+func (s stubDefaultAPIKeyGroupSettings) GetDefaultAPIKeyGroupID(ctx context.Context, keyType string) (*int64, error) {
+	if keyType != s.keyType {
+		return nil, nil
+	}
+	id := s.groupID
+	return &id, nil
 }
 
 type stubSettingRepo struct {
