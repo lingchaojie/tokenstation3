@@ -337,6 +337,20 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_BindActiveGroup(t *testing.T) {
 	require.Equal(t, "Pro", got.APIKey.Group.Name)
 }
 
+func TestAdminService_AdminUpdateAPIKeyGroupID_UpdatesKeyTypeFromGroupPlatform(t *testing.T) {
+	existing := &APIKey{ID: 1, UserID: 100, Key: "sk-test", GroupID: nil, KeyType: APIKeyTypeAnthropic}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 20, Name: "openai", Platform: PlatformOpenAI, Status: StatusActive}}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo}
+
+	got, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(20))
+
+	require.NoError(t, err)
+	require.NotNil(t, got.APIKey)
+	require.Equal(t, APIKeyTypeOpenAI, got.APIKey.KeyType)
+	require.Equal(t, APIKeyTypeOpenAI, apiKeyRepo.updated.KeyType)
+}
+
 func TestAdminService_AdminUpdateAPIKeyGroupID_SameGroup_Idempotent(t *testing.T) {
 	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: int64Ptr(10), Group: &Group{ID: 10, Name: "Pro"}}
 	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}

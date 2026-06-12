@@ -2484,6 +2484,11 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		gid := *groupID
 		apiKey.GroupID = &gid
 		apiKey.Group = group
+		if inferred := APIKeyTypeFromGroupPlatform(group.Platform); inferred != "" {
+			apiKey.KeyType = inferred
+		} else {
+			apiKey.KeyType = ""
+		}
 
 		// 专属标准分组：使用事务保证「添加分组权限」与「更新 API Key」的原子性
 		if group.IsExclusive && !group.IsSubscriptionType() {
