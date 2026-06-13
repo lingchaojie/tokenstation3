@@ -575,6 +575,38 @@ func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Con
 	return int64(n), err
 }
 
+func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx context.Context, userID int64, keyType string, groupID int64) (int64, error) {
+	if keyType == "" || userID <= 0 || groupID <= 0 {
+		return 0, nil
+	}
+	client := clientFromContext(ctx, r.client)
+	res, err := client.ExecContext(ctx, `
+		UPDATE api_keys AS ak
+		SET group_id = $3,
+		    key_type = $2,
+		    updated_at = NOW()
+		FROM groups AS g
+		WHERE ak.deleted_at IS NULL
+		  AND ak.user_id = $1
+		  AND (
+		    ak.key_type = $2
+		    OR (
+		      (ak.key_type IS NULL OR ak.key_type = '')
+		      AND ak.group_id = g.id
+		      AND g.deleted_at IS NULL
+		      AND g.platform = $2
+		    )
+		  )`, userID, keyType, groupID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
+}
+
 // CountByGroupID 获取分组的 API Key 数量
 func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	count, err := r.activeQuery().Where(apikey.GroupIDEQ(groupID)).Count(ctx)

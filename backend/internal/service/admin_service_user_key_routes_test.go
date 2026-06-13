@@ -146,7 +146,8 @@ func TestAdminService_UpdateUserAPIKeyRoutes_ValidatesPlatform(t *testing.T) {
 		openAIID:    {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
 	}}
 	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
-	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, groupRepo: groupRepo, userAPIKeyRouteRepo: routeRepo}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{}
+	svc := &adminServiceImpl{userRepo: &userRepoStub{user: &User{ID: 42}}, groupRepo: groupRepo, userAPIKeyRouteRepo: routeRepo, apiKeyRepo: apiKeyRepo}
 
 	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{
 		AnthropicGroupID: &anthropicID,
@@ -158,6 +159,256 @@ func TestAdminService_UpdateUserAPIKeyRoutes_ValidatesPlatform(t *testing.T) {
 	require.Equal(t, anthropicID, got.Anthropic.GroupID)
 	require.NotNil(t, got.OpenAI)
 	require.Equal(t, openAIID, got.OpenAI.GroupID)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_RebindsExistingKeysForSavedRoute(t *testing.T) {
+	anthropicID := int64(10)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 2}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		userRepo:             &userRepoStub{user: &User{ID: 42}},
+		groupRepo:            groupRepo,
+		userAPIKeyRouteRepo:  routeRepo,
+		apiKeyRepo:           apiKeyRepo,
+		authCacheInvalidator: invalidator,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{AnthropicGroupID: &anthropicID})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.Anthropic)
+	require.Equal(t, anthropicID, got.Anthropic.GroupID)
+	require.Len(t, apiKeyRepo.effectiveBulkCalls, 1)
+	require.Equal(t, effectiveKeyTypeBulkCall{UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: anthropicID}, apiKeyRepo.effectiveBulkCalls[0])
+	require.Equal(t, []int64{42}, invalidator.userIDs)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_SavesOpenAIMessageDispatchGroup(t *testing.T) {
+	openAIID := int64(20)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		openAIID: {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive, AllowMessagesDispatch: true},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	svc := &adminServiceImpl{
+		userRepo:            &userRepoStub{user: &User{ID: 42}},
+		groupRepo:           groupRepo,
+		userAPIKeyRouteRepo: routeRepo,
+		apiKeyRepo:          apiKeyRepo,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{OpenAIGroupID: &openAIID})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.OpenAI)
+	require.Equal(t, openAIID, got.OpenAI.GroupID)
+	require.Len(t, apiKeyRepo.effectiveBulkCalls, 1)
+	require.Equal(t, effectiveKeyTypeBulkCall{UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: openAIID}, apiKeyRepo.effectiveBulkCalls[0])
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_ClearRouteRebindsToGlobalDefault(t *testing.T) {
+	oldAnthropicID := int64(10)
+	defaultAnthropicID := int64(11)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		oldAnthropicID:     {ID: oldAnthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+		defaultAnthropicID: {ID: defaultAnthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: oldAnthropicID},
+	}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	invalidator := &authCacheInvalidatorStub{}
+	settingSvc := NewSettingService(newMemorySettingRepo(map[string]string{
+		SettingKeyDefaultAnthropicGroupID: "11",
+	}), nil)
+	svc := &adminServiceImpl{
+		userRepo:             &userRepoStub{user: &User{ID: 42}},
+		groupRepo:            groupRepo,
+		userAPIKeyRouteRepo:  routeRepo,
+		apiKeyRepo:           apiKeyRepo,
+		authCacheInvalidator: invalidator,
+		settingService:       settingSvc,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{})
+
+	require.NoError(t, err)
+	require.Nil(t, got.Anthropic)
+	require.Len(t, apiKeyRepo.effectiveBulkCalls, 1)
+	require.Equal(t, effectiveKeyTypeBulkCall{UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: defaultAnthropicID}, apiKeyRepo.effectiveBulkCalls[0])
+	require.Equal(t, []int64{42}, invalidator.userIDs)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_ClearRouteWithoutGlobalDefaultDoesNotRebind(t *testing.T) {
+	oldAnthropicID := int64(10)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		oldAnthropicID: {ID: oldAnthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: oldAnthropicID},
+	}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{}
+	invalidator := &authCacheInvalidatorStub{}
+	settingSvc := NewSettingService(newMemorySettingRepo(map[string]string{}), nil)
+	svc := &adminServiceImpl{
+		userRepo:             &userRepoStub{user: &User{ID: 42}},
+		groupRepo:            groupRepo,
+		userAPIKeyRouteRepo:  routeRepo,
+		apiKeyRepo:           apiKeyRepo,
+		authCacheInvalidator: invalidator,
+		settingService:       settingSvc,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{})
+
+	require.NoError(t, err)
+	require.Nil(t, got.Anthropic)
+	require.Empty(t, apiKeyRepo.effectiveBulkCalls)
+	require.Empty(t, invalidator.userIDs)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_SameExistingRouteStillRebinds(t *testing.T) {
+	anthropicID := int64(10)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: anthropicID},
+	}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		userRepo:             &userRepoStub{user: &User{ID: 42}},
+		groupRepo:            groupRepo,
+		userAPIKeyRouteRepo:  routeRepo,
+		apiKeyRepo:           apiKeyRepo,
+		authCacheInvalidator: invalidator,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{AnthropicGroupID: &anthropicID})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.Anthropic)
+	require.Equal(t, anthropicID, got.Anthropic.GroupID)
+	require.Len(t, apiKeyRepo.effectiveBulkCalls, 1)
+	require.Equal(t, effectiveKeyTypeBulkCall{UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: anthropicID}, apiKeyRepo.effectiveBulkCalls[0])
+	require.Equal(t, []int64{42}, invalidator.userIDs)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_FullStateRebindsAllSavedRoutes(t *testing.T) {
+	oldAnthropicID := int64(10)
+	newAnthropicID := int64(11)
+	openAIID := int64(20)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		newAnthropicID: {ID: newAnthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+		openAIID:       {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: oldAnthropicID},
+		routeKey(42, APIKeyTypeOpenAI):    {UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	svc := &adminServiceImpl{
+		userRepo:            &userRepoStub{user: &User{ID: 42}},
+		groupRepo:           groupRepo,
+		userAPIKeyRouteRepo: routeRepo,
+		apiKeyRepo:          apiKeyRepo,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{
+		AnthropicGroupID: &newAnthropicID,
+		OpenAIGroupID:    &openAIID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.Anthropic)
+	require.Equal(t, newAnthropicID, got.Anthropic.GroupID)
+	require.NotNil(t, got.OpenAI)
+	require.Equal(t, openAIID, got.OpenAI.GroupID)
+	require.Equal(t, []effectiveKeyTypeBulkCall{
+		{UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: newAnthropicID},
+		{UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}, apiKeyRepo.effectiveBulkCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_RejectsExclusiveGroupWithoutAllowedGroup(t *testing.T) {
+	anthropicID := int64(10)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeStandard},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	svc := &adminServiceImpl{
+		userRepo:            &userRepoStub{user: &User{ID: 42, AllowedGroups: []int64{}}},
+		groupRepo:           groupRepo,
+		userAPIKeyRouteRepo: routeRepo,
+		apiKeyRepo:          apiKeyRepo,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{AnthropicGroupID: &anthropicID})
+
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.Equal(t, 0, routeRepo.upsertCalls)
+	require.Empty(t, apiKeyRepo.effectiveBulkCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_RejectsSubscriptionGroupWithoutActiveSubscription(t *testing.T) {
+	anthropicID := int64(10)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	userSubRepo := &userSubRepoStubForGroupUpdate{}
+	svc := &adminServiceImpl{
+		userRepo:            &userRepoStub{user: &User{ID: 42}},
+		groupRepo:           groupRepo,
+		userAPIKeyRouteRepo: routeRepo,
+		apiKeyRepo:          apiKeyRepo,
+		userSubRepo:         userSubRepo,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{AnthropicGroupID: &anthropicID})
+
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.True(t, userSubRepo.called)
+	require.Equal(t, int64(42), userSubRepo.calledUserID)
+	require.Equal(t, anthropicID, userSubRepo.calledGroupID)
+	require.Equal(t, 0, routeRepo.upsertCalls)
+	require.Empty(t, apiKeyRepo.effectiveBulkCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_AllowsSubscriptionGroupWithActiveSubscription(t *testing.T) {
+	openAIID := int64(20)
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		openAIID: {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription, AllowMessagesDispatch: true},
+	}}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+	userSubRepo := &userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: 42, GroupID: openAIID}}
+	svc := &adminServiceImpl{
+		userRepo:            &userRepoStub{user: &User{ID: 42}},
+		groupRepo:           groupRepo,
+		userAPIKeyRouteRepo: routeRepo,
+		apiKeyRepo:          apiKeyRepo,
+		userSubRepo:         userSubRepo,
+	}
+
+	got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{OpenAIGroupID: &openAIID})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.OpenAI)
+	require.Equal(t, openAIID, got.OpenAI.GroupID)
+	require.True(t, userSubRepo.called)
+	require.Equal(t, int64(42), userSubRepo.calledUserID)
+	require.Equal(t, openAIID, userSubRepo.calledGroupID)
+	require.Equal(t, []effectiveKeyTypeBulkCall{{UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: openAIID}}, apiKeyRepo.effectiveBulkCalls)
 }
 
 func TestAdminService_UpdateUserAPIKeyRoutes_RejectsPlatformMismatch(t *testing.T) {

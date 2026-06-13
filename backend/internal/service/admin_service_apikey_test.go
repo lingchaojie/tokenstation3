@@ -127,6 +127,12 @@ func (s *userRepoStubForGroupUpdate) RemoveGroupFromUserAllowedGroups(_ context.
 }
 
 // apiKeyRepoStubForGroupUpdate implements APIKeyRepository for AdminUpdateAPIKeyGroupID tests.
+type effectiveKeyTypeBulkCall struct {
+	UserID  int64
+	KeyType string
+	GroupID int64
+}
+
 type apiKeyRepoStubForGroupUpdate struct {
 	key                            *APIKey
 	getErr                         error
@@ -142,6 +148,9 @@ type apiKeyRepoStubForGroupUpdate struct {
 	legacyBulkCalled               bool
 	listKeysByUserIDResult         []string
 	listKeysByUserIDUnexpectedCall bool
+	effectiveBulkCalls             []effectiveKeyTypeBulkCall
+	effectiveBulkAffected          int64
+	effectiveBulkErr               error
 }
 
 func (s *apiKeyRepoStubForGroupUpdate) GetByID(_ context.Context, _ int64) (*APIKey, error) {
@@ -239,6 +248,11 @@ func (s *apiKeyRepoStubForGroupUpdate) UpdateGroupIDAndKeyTypeByUserAndGroup(_ c
 	copyUpdate := keyTypeUpdate
 	s.bulkKeyTypeUpdate = &copyUpdate
 	return s.bulkMigrated, s.bulkErr
+}
+
+func (s *apiKeyRepoStubForGroupUpdate) UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(_ context.Context, userID int64, keyType string, groupID int64) (int64, error) {
+	s.effectiveBulkCalls = append(s.effectiveBulkCalls, effectiveKeyTypeBulkCall{UserID: userID, KeyType: keyType, GroupID: groupID})
+	return s.effectiveBulkAffected, s.effectiveBulkErr
 }
 
 // groupRepoStubForGroupUpdate implements GroupRepository for AdminUpdateAPIKeyGroupID tests.

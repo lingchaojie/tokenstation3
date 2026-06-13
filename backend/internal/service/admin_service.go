@@ -33,6 +33,10 @@ type apiKeyGroupKeyTypeBulkUpdater interface {
 	UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate APIKeyGroupKeyTypeUpdate) (int64, error)
 }
 
+type apiKeyEffectiveKeyTypeBulkUpdater interface {
+	UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx context.Context, userID int64, keyType string, groupID int64) (int64, error)
+}
+
 type AdminService interface {
 	// User management
 	ListUsers(ctx context.Context, page, pageSize int, filters UserListFilters, sortBy, sortOrder string) ([]User, int64, error)
@@ -703,7 +707,7 @@ func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) 
 }
 
 func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error) {
-	if err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
+	if _, err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
 		return nil, err
 	}
 	if s.userAPIKeyRouteRepo == nil {
@@ -717,58 +721,124 @@ func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64
 }
 
 func (s *adminServiceImpl) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error) {
-	if err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
+	user, err := s.validateUserAPIKeyRouteUser(ctx, userID)
+	if err != nil {
 		return nil, err
 	}
 	if s.userAPIKeyRouteRepo == nil {
 		return nil, infraerrors.InternalServer("USER_API_KEY_ROUTE_REPO_MISSING", "user API key route repository is not configured")
 	}
-	if err := s.validateUserAPIKeyRouteGroups(ctx, input); err != nil {
+	if err := s.validateUserAPIKeyRouteGroups(ctx, user, input); err != nil {
 		return nil, err
 	}
-	if err := s.persistUserAPIKeyRoute(ctx, userID, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
-		return nil, err
+
+	shouldInvalidate := false
+	run := func(opCtx context.Context) error {
+		changed, err := s.persistAndRebindUserAPIKeyRoute(opCtx, user, APIKeyTypeAnthropic, input.AnthropicGroupID)
+		if err != nil {
+			return err
+		}
+		shouldInvalidate = shouldInvalidate || changed
+		changed, err = s.persistAndRebindUserAPIKeyRoute(opCtx, user, APIKeyTypeOpenAI, input.OpenAIGroupID)
+		if err != nil {
+			return err
+		}
+		shouldInvalidate = shouldInvalidate || changed
+		return nil
 	}
-	if err := s.persistUserAPIKeyRoute(ctx, userID, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
-		return nil, err
+
+	if s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := run(dbent.NewTxContext(ctx, tx)); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
+	} else {
+		if err := run(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	if shouldInvalidate && s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
 	return s.GetUserAPIKeyRoutes(ctx, userID)
 }
 
-func (s *adminServiceImpl) validateUserAPIKeyRouteUser(ctx context.Context, userID int64) error {
+func (s *adminServiceImpl) validateUserAPIKeyRouteUser(ctx context.Context, userID int64) (*User, error) {
 	if userID <= 0 {
-		return infraerrors.BadRequest("INVALID_INPUT", "user_id must be greater than 0")
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "user_id must be greater than 0")
 	}
 	if s.userRepo == nil {
-		return infraerrors.InternalServer("USER_REPO_MISSING", "user repository is not configured")
+		return nil, infraerrors.InternalServer("USER_REPO_MISSING", "user repository is not configured")
 	}
-	_, err := s.userRepo.GetByID(ctx, userID)
-	return err
+	return s.userRepo.GetByID(ctx, userID)
 }
 
-func (s *adminServiceImpl) validateUserAPIKeyRouteGroups(ctx context.Context, input UserAPIKeyRouteUpdate) error {
-	if err := s.validateUserAPIKeyRouteGroup(ctx, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroups(ctx context.Context, user *User, input UserAPIKeyRouteUpdate) error {
+	if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
 		return err
 	}
-	if err := s.validateUserAPIKeyRouteGroup(ctx, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
+	if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *adminServiceImpl) validateUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) error {
-	if groupID == nil || *groupID <= 0 {
-		return nil
-	}
-	if s.groupRepo == nil {
-		return infraerrors.InternalServer("GROUP_REPO_MISSING", "group repository is not configured")
-	}
-	group, err := s.groupRepo.GetByID(ctx, *groupID)
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroupForUser(ctx context.Context, user *User, keyType string, groupID *int64) error {
+	group, err := s.getValidUserAPIKeyRouteGroup(ctx, keyType, groupID)
 	if err != nil {
 		return err
 	}
+	return s.validateUserCanUseRouteGroup(ctx, user, group)
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) error {
+	_, err := s.getValidUserAPIKeyRouteGroup(ctx, keyType, groupID)
+	return err
+}
+
+func (s *adminServiceImpl) getValidUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) (*Group, error) {
+	if groupID == nil || *groupID <= 0 {
+		return nil, nil
+	}
+	if s.groupRepo == nil {
+		return nil, infraerrors.InternalServer("GROUP_REPO_MISSING", "group repository is not configured")
+	}
+	group, err := s.groupRepo.GetByID(ctx, *groupID)
+	if err != nil {
+		return nil, err
+	}
 	if !group.IsActive() || APIKeyTypeFromGroupPlatform(group.Platform) != keyType {
-		return infraerrors.BadRequest("USER_API_KEY_ROUTE_INVALID_GROUP", "group platform or status does not match API key type")
+		return nil, infraerrors.BadRequest("USER_API_KEY_ROUTE_INVALID_GROUP", "group platform or status does not match API key type")
+	}
+	return group, nil
+}
+
+func (s *adminServiceImpl) validateUserCanUseRouteGroup(ctx context.Context, user *User, group *Group) error {
+	if group == nil {
+		return nil
+	}
+	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return infraerrors.InternalServer("SUBSCRIPTION_REPOSITORY_UNAVAILABLE", "subscription repository is not configured")
+		}
+		if _, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID); err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				return infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "user does not have an active subscription for this group")
+			}
+			return err
+		}
+		return nil
+	}
+	if !user.CanBindGroup(group.ID, group.IsExclusive) {
+		return infraerrors.BadRequest("GROUP_ACCESS_DENIED", "user is not allowed to bind this group")
 	}
 	return nil
 }
@@ -779,6 +849,68 @@ func (s *adminServiceImpl) persistUserAPIKeyRoute(ctx context.Context, userID in
 	}
 	_, err := s.userAPIKeyRouteRepo.Upsert(ctx, UserAPIKeyRoute{UserID: userID, KeyType: keyType, GroupID: *groupID})
 	return err
+}
+
+func (s *adminServiceImpl) persistAndRebindUserAPIKeyRoute(ctx context.Context, user *User, keyType string, groupID *int64) (bool, error) {
+	userID := user.ID
+	existing, err := s.userAPIKeyRouteRepo.GetByUserIDAndKeyType(ctx, userID, keyType)
+	if err != nil {
+		return false, fmt.Errorf("get existing user api key route: %w", err)
+	}
+
+	shouldRebind := false
+	if groupID != nil && *groupID > 0 {
+		shouldRebind = true
+	} else {
+		shouldRebind = existing != nil
+	}
+
+	var targetGroupID *int64
+	if shouldRebind {
+		targetGroupID, err = s.resolveRouteRebindTargetGroupID(ctx, keyType, groupID)
+		if err != nil {
+			return false, err
+		}
+		if targetGroupID != nil && *targetGroupID > 0 {
+			if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, keyType, targetGroupID); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	if err := s.persistUserAPIKeyRoute(ctx, userID, keyType, groupID); err != nil {
+		return false, err
+	}
+	if !shouldRebind || targetGroupID == nil || *targetGroupID <= 0 {
+		return false, nil
+	}
+	if s.apiKeyRepo == nil {
+		return false, infraerrors.InternalServer("API_KEY_REPO_MISSING", "api key repository is not configured")
+	}
+	bulkUpdater, ok := s.apiKeyRepo.(apiKeyEffectiveKeyTypeBulkUpdater)
+	if !ok {
+		return false, infraerrors.InternalServer("API_KEY_REPO_UNSUPPORTED", "api key repository does not support effective key type rebinding")
+	}
+	affected, err := bulkUpdater.UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx, userID, keyType, *targetGroupID)
+	if err != nil {
+		return false, fmt.Errorf("rebind api keys for user route: %w", err)
+	}
+	return affected > 0, nil
+}
+
+func (s *adminServiceImpl) resolveRouteRebindTargetGroupID(ctx context.Context, keyType string, routeGroupID *int64) (*int64, error) {
+	if routeGroupID != nil && *routeGroupID > 0 {
+		id := *routeGroupID
+		return &id, nil
+	}
+	if s.settingService == nil {
+		return nil, nil
+	}
+	id, err := s.settingService.GetDefaultAPIKeyGroupID(ctx, keyType)
+	if err != nil {
+		return nil, fmt.Errorf("get default api key group: %w", err)
+	}
+	return id, nil
 }
 
 func packUserAPIKeyRoutes(routes []UserAPIKeyRoute) *UserAPIKeyRoutes {
