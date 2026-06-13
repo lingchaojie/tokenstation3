@@ -2,6 +2,25 @@ package antigravity
 
 import "testing"
 
+func TestModelInfoMap_ContainsLatestClaudeModels(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"claude-fable-5":  "Claude Fable 5",
+		"claude-mythos-5": "Claude Mythos 5",
+	}
+
+	for model, displayName := range cases {
+		info, ok := getModelInfo(model)
+		if !ok {
+			t.Fatalf("expected model info for %q to exist", model)
+		}
+		if info.DisplayName != displayName {
+			t.Fatalf("unexpected display name for %q: got %q want %q", model, info.DisplayName, displayName)
+		}
+	}
+}
+
 func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 	t.Parallel()
 
@@ -12,6 +31,8 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 	}
 
 	requiredIDs := []string{
+		"claude-fable-5",
+		"claude-mythos-5",
 		"claude-opus-4-8",
 		"claude-opus-4-6-thinking",
 		"gemini-2.5-flash-image",

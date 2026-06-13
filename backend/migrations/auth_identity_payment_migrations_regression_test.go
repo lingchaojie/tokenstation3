@@ -128,6 +128,28 @@ func TestMigration124BackfillsLegacyOIDCSecurityFlagsSafely(t *testing.T) {
 	require.Contains(t, sql, "'false'")
 }
 
+func TestMigration153BackfillsSubscriptionPlanQuotaSnapshotsFromOrderNotes(t *testing.T) {
+	content, err := FS.ReadFile("153_backfill_subscription_plan_quota_snapshots.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "WITH candidates AS")
+	require.Contains(t, sql, "SELECT DISTINCT ON (us.id)")
+	require.Contains(t, sql, "JOIN payment_orders po")
+	require.Contains(t, sql, "JOIN subscription_plans sp")
+	require.Contains(t, sql, "ON sp.id = po.plan_id")
+	require.Contains(t, sql, "seven_day_limit_usd = COALESCE(us.seven_day_limit_usd, candidates.seven_day_quota_usd)")
+	require.Contains(t, sql, "POSITION")
+	require.Contains(t, sql, "payment order")
+	require.Contains(t, sql, "po.subscription_group_id = us.group_id")
+	require.Contains(t, sql, "po.user_id = us.user_id")
+	require.Contains(t, sql, "(us.plan_id IS NULL OR us.plan_id = po.plan_id)")
+	require.Contains(t, sql, "ORDER BY us.id,")
+	require.Contains(t, sql, "po.completed_at DESC NULLS LAST")
+	require.Contains(t, sql, "po.paid_at DESC NULLS LAST")
+	require.Contains(t, sql, "po.id DESC")
+}
+
 func TestMigration134AddsAffiliateLedgerAuditFieldsWithoutJSONCast(t *testing.T) {
 	content, err := FS.ReadFile("134_affiliate_ledger_audit_snapshots.sql")
 	require.NoError(t, err)

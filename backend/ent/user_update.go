@@ -315,6 +315,34 @@ func (_u *UserUpdate) SetNillableBalanceNotifyEnabled(v *bool) *UserUpdate {
 	return _u
 }
 
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_u *UserUpdate) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdate {
+	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdate {
+	if v != nil {
+		_u.SetSubscriptionBalanceFallbackEnabled(*v)
+	}
+	return _u
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_u *UserUpdateOne) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdateOne {
+	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdateOne {
+	if v != nil {
+		_u.SetSubscriptionBalanceFallbackEnabled(*v)
+	}
+	return _u
+}
+
 // SetBalanceNotifyThresholdType sets the "balance_notify_threshold_type" field.
 func (_u *UserUpdate) SetBalanceNotifyThresholdType(v string) *UserUpdate {
 	_u.mutation.SetBalanceNotifyThresholdType(v)
@@ -1081,6 +1109,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SubscriptionBalanceFallbackEnabled(); ok {
+		_spec.SetField(user.FieldSubscriptionBalanceFallbackEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyThresholdType(); ok {
 		_spec.SetField(user.FieldBalanceNotifyThresholdType, field.TypeString, value)
@@ -2841,6 +2872,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SubscriptionBalanceFallbackEnabled(); ok {
+		_spec.SetField(user.FieldSubscriptionBalanceFallbackEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyThresholdType(); ok {
 		_spec.SetField(user.FieldBalanceNotifyThresholdType, field.TypeString, value)

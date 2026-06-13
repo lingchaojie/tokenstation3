@@ -51,6 +51,8 @@ const (
 	FieldLastActiveAt = "last_active_at"
 	// FieldBalanceNotifyEnabled holds the string denoting the balance_notify_enabled field in the database.
 	FieldBalanceNotifyEnabled = "balance_notify_enabled"
+	// FieldSubscriptionBalanceFallbackEnabled holds the string denoting the subscription_balance_fallback_enabled field in the database.
+	FieldSubscriptionBalanceFallbackEnabled = "subscription_balance_fallback_enabled"
 	// FieldBalanceNotifyThresholdType holds the string denoting the balance_notify_threshold_type field in the database.
 	FieldBalanceNotifyThresholdType = "balance_notify_threshold_type"
 	// FieldBalanceNotifyThreshold holds the string denoting the balance_notify_threshold field in the database.
@@ -219,6 +221,7 @@ var Columns = []string{
 	FieldLastLoginAt,
 	FieldLastActiveAt,
 	FieldBalanceNotifyEnabled,
+	FieldSubscriptionBalanceFallbackEnabled,
 	FieldBalanceNotifyThresholdType,
 	FieldBalanceNotifyThreshold,
 	FieldBalanceNotifyExtraEmails,
@@ -286,6 +289,8 @@ var (
 	SignupSourceValidator func(string) error
 	// DefaultBalanceNotifyEnabled holds the default value on creation for the "balance_notify_enabled" field.
 	DefaultBalanceNotifyEnabled bool
+	// DefaultSubscriptionBalanceFallbackEnabled holds the default value on creation for the "subscription_balance_fallback_enabled" field.
+	DefaultSubscriptionBalanceFallbackEnabled bool
 	// DefaultBalanceNotifyThresholdType holds the default value on creation for the "balance_notify_threshold_type" field.
 	DefaultBalanceNotifyThresholdType string
 	// DefaultBalanceNotifyExtraEmails holds the default value on creation for the "balance_notify_extra_emails" field.
@@ -392,6 +397,11 @@ func ByLastActiveAt(opts ...sql.OrderTermOption) OrderOption {
 // ByBalanceNotifyEnabled orders the results by the balance_notify_enabled field.
 func ByBalanceNotifyEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBalanceNotifyEnabled, opts...).ToFunc()
+}
+
+// BySubscriptionBalanceFallbackEnabled orders the results by the subscription_balance_fallback_enabled field.
+func BySubscriptionBalanceFallbackEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSubscriptionBalanceFallbackEnabled, opts...).ToFunc()
 }
 
 // ByBalanceNotifyThresholdType orders the results by the balance_notify_threshold_type field.

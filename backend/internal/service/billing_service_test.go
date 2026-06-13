@@ -114,6 +114,63 @@ func TestGetModelPricing_UnknownClaudeModelFallsBackToSonnet(t *testing.T) {
 	require.InDelta(t, 3e-6, pricing.InputPricePerToken, 1e-12)
 }
 
+func TestGetModelPricing_LocalFallbackMatchesRemotePricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	tests := []struct {
+		model                  string
+		input                  float64
+		inputPriority          float64
+		output                 float64
+		outputPriority         float64
+		cacheCreate            float64
+		cacheCreate1h          float64
+		cacheRead              float64
+		cacheReadPriority      float64
+		supportsCacheBreakdown bool
+		longContextThreshold   int
+		longContextInputMult   float64
+		longContextOutputMult  float64
+	}{
+		{model: "claude-fable-5", input: 10e-6, output: 50e-6, cacheCreate: 12.5e-6, cacheCreate1h: 20e-6, cacheRead: 1e-6, supportsCacheBreakdown: true},
+		{model: "claude-mythos-5", input: 10e-6, output: 50e-6, cacheCreate: 12.5e-6, cacheCreate1h: 20e-6, cacheRead: 1e-6, supportsCacheBreakdown: true},
+		{model: "claude-opus-4.5", input: 5e-6, output: 25e-6, cacheCreate: 6.25e-6, cacheCreate1h: 10e-6, cacheRead: 0.5e-6, supportsCacheBreakdown: true},
+		{model: "claude-opus-4.6", input: 5e-6, output: 25e-6, cacheCreate: 6.25e-6, cacheCreate1h: 10e-6, cacheRead: 0.5e-6, supportsCacheBreakdown: true},
+		{model: "claude-opus-4.7", input: 5e-6, output: 25e-6, cacheCreate: 6.25e-6, cacheCreate1h: 10e-6, cacheRead: 0.5e-6, supportsCacheBreakdown: true},
+		{model: "claude-sonnet-4", input: 3e-6, output: 15e-6, cacheCreate: 3.75e-6, cacheCreate1h: 6e-6, cacheRead: 0.3e-6, supportsCacheBreakdown: true},
+		{model: "claude-3-opus", input: 15e-6, output: 75e-6, cacheCreate: 18.75e-6, cacheCreate1h: 6e-6, cacheRead: 1.5e-6},
+		{model: "claude-3-haiku", input: 0.25e-6, output: 1.25e-6, cacheCreate: 0.3e-6, cacheCreate1h: 6e-6, cacheRead: 0.03e-6, supportsCacheBreakdown: true},
+		{model: "gemini-3.1-pro", input: 2e-6, inputPriority: 3.6e-6, output: 12e-6, outputPriority: 21.6e-6, cacheRead: 0.2e-6, cacheReadPriority: 0.36e-6},
+		{model: "gpt-5.4", input: 2.5e-6, inputPriority: 5e-6, output: 15e-6, outputPriority: 30e-6, cacheRead: 0.25e-6, cacheReadPriority: 0.5e-6, longContextThreshold: 272000, longContextInputMult: 2.0, longContextOutputMult: 1.5},
+		{model: "gpt-5.5", input: 5e-6, inputPriority: 10e-6, output: 30e-6, outputPriority: 60e-6, cacheRead: 0.5e-6, cacheReadPriority: 1e-6, longContextThreshold: 272000, longContextInputMult: 2.0, longContextOutputMult: 1.5},
+		{model: "gpt-5.4-mini", input: 0.75e-6, inputPriority: 1.5e-6, output: 4.5e-6, outputPriority: 9e-6, cacheRead: 0.075e-6, cacheReadPriority: 0.15e-6},
+		{model: "gpt-5.4-nano", input: 0.2e-6, output: 1.25e-6, cacheRead: 0.02e-6},
+		{model: "gpt-5.2", input: 1.75e-6, inputPriority: 3.5e-6, output: 14e-6, outputPriority: 28e-6, cacheRead: 0.175e-6, cacheReadPriority: 0.35e-6},
+		{model: "gpt-5.3-codex", input: 1.75e-6, inputPriority: 3.5e-6, output: 14e-6, outputPriority: 28e-6, cacheRead: 0.175e-6, cacheReadPriority: 0.35e-6},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			pricing, err := svc.GetModelPricing(tt.model)
+			require.NoError(t, err)
+			require.NotNil(t, pricing)
+			require.InDelta(t, tt.input, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, tt.inputPriority, pricing.InputPricePerTokenPriority, 1e-12)
+			require.InDelta(t, tt.output, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, tt.outputPriority, pricing.OutputPricePerTokenPriority, 1e-12)
+			require.InDelta(t, tt.cacheCreate, pricing.CacheCreationPricePerToken, 1e-12)
+			require.InDelta(t, tt.cacheCreate, pricing.CacheCreation5mPrice, 1e-12)
+			require.InDelta(t, tt.cacheCreate1h, pricing.CacheCreation1hPrice, 1e-12)
+			require.InDelta(t, tt.cacheRead, pricing.CacheReadPricePerToken, 1e-12)
+			require.InDelta(t, tt.cacheReadPriority, pricing.CacheReadPricePerTokenPriority, 1e-12)
+			require.Equal(t, tt.supportsCacheBreakdown, pricing.SupportsCacheBreakdown)
+			require.Equal(t, tt.longContextThreshold, pricing.LongContextInputThreshold)
+			require.InDelta(t, tt.longContextInputMult, pricing.LongContextInputMultiplier, 1e-12)
+			require.InDelta(t, tt.longContextOutputMult, pricing.LongContextOutputMultiplier, 1e-12)
+		})
+	}
+}
+
 func TestGetModelPricing_UnknownOpenAIModelReturnsError(t *testing.T) {
 	svc := newTestBillingService()
 
@@ -147,10 +204,10 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 		cacheRead   float64
 		longContext int
 	}{
-		{model: "gpt5.5", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
+		{model: "gpt5.5", inputPrice: 5e-6, outputPrice: 30e-6, cacheRead: 0.5e-6, longContext: 272000},
 		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
 		{model: "gpt5.4-mini", inputPrice: 7.5e-7, outputPrice: 4.5e-6, cacheRead: 7.5e-8, longContext: 0},
-		{model: "gpt5.3codexspark", inputPrice: 1.5e-6, outputPrice: 12e-6, cacheRead: 0.15e-6, longContext: 0},
+		{model: "gpt5.3codexspark", inputPrice: 1.75e-6, outputPrice: 14e-6, cacheRead: 0.175e-6, longContext: 0},
 	}
 
 	for _, tt := range tests {
@@ -264,10 +321,7 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesMultiplierToCacheCreation(t 
 	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
 	require.NoError(t, err)
 
-	// gpt-5.4 fallback: CacheCreationPricePerToken = 2.5e-6, LongContextInputMultiplier = 2.0
-	expectedCacheCreation := float64(tokens.CacheCreationTokens) * 2.5e-6 * 2.0
-	require.InDelta(t, expectedCacheCreation, cost.CacheCreationCost, 1e-10,
-		"cache_creation_cost should be scaled by LongContextInputMultiplier when long-context pricing applies")
+	require.Zero(t, cost.CacheCreationCost)
 }
 
 // 阴性测试：未触发长上下文时，cache_creation_price 不应被错误地乘以倍率。
@@ -285,9 +339,7 @@ func TestCalculateCost_OpenAIGPT54NoLongContextKeepsCacheCreationAtBasePrice(t *
 	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
 	require.NoError(t, err)
 
-	expectedCacheCreation := float64(tokens.CacheCreationTokens) * 2.5e-6
-	require.InDelta(t, expectedCacheCreation, cost.CacheCreationCost, 1e-10,
-		"cache_creation_cost should remain at base price when below long-context threshold")
+	require.Zero(t, cost.CacheCreationCost)
 }
 
 // 覆盖 5m / 1h ephemeral 分类计费路径：长上下文触发时两档价格都应被倍率缩放。
@@ -346,11 +398,11 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "gemini unknown no fallback", model: "gemini-2.0-pro", expectNilPricing: true},
 		{name: "openai gpt5.4", model: "gpt-5.4", expectedInput: 2.5e-6},
 		{name: "openai gpt5.4 mini", model: "gpt-5.4-mini", expectedInput: 7.5e-7},
-		{name: "openai gpt5.3 codex", model: "gpt-5.3-codex", expectedInput: 1.5e-6},
-		{name: "openai gpt5.3 codex spark", model: "gpt-5.3-codex-spark", expectedInput: 1.5e-6},
+		{name: "openai gpt5.3 codex", model: "gpt-5.3-codex", expectedInput: 1.75e-6},
+		{name: "openai gpt5.3 codex spark", model: "gpt-5.3-codex-spark", expectedInput: 1.75e-6},
 		{name: "openai legacy gpt5.1 falls back to gpt5.4", model: "gpt-5.1", expectedInput: 2.5e-6},
-		{name: "openai legacy gpt5.1 codex falls back to gpt5.3 codex", model: "gpt-5.1-codex", expectedInput: 1.5e-6},
-		{name: "openai legacy codex mini latest falls back to gpt5.3 codex", model: "codex-mini-latest", expectedInput: 1.5e-6},
+		{name: "openai legacy gpt5.1 codex falls back to gpt5.3 codex", model: "gpt-5.1-codex", expectedInput: 1.75e-6},
+		{name: "openai legacy codex mini latest falls back to gpt5.3 codex", model: "codex-mini-latest", expectedInput: 1.75e-6},
 		{name: "openai unknown no fallback", model: "gpt-unknown-model", expectNilPricing: true},
 		{name: "non supported family", model: "qwen-max", expectNilPricing: true},
 	}

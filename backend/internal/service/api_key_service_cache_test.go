@@ -363,11 +363,12 @@ func TestAPIKeyService_GetByKey_IgnoresLegacyAuthCacheSnapshotWithoutMessagesDis
 				GroupID:  &groupID,
 				Status:   StatusActive,
 				User: APIKeyAuthUserSnapshot{
-					ID:          2,
-					Status:      StatusActive,
-					Role:        RoleUser,
-					Balance:     10,
-					Concurrency: 3,
+					ID:                                 2,
+					Status:                             StatusActive,
+					Role:                               RoleUser,
+					Balance:                            10,
+					Concurrency:                        3,
+					SubscriptionBalanceFallbackEnabled: true,
 				},
 				Group: &APIKeyAuthGroupSnapshot{
 					ID:                    groupID,

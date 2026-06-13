@@ -30,3 +30,26 @@ describe('AppSidebar header styles', () => {
     expect(sidebarBrandBlockMatch?.[0]).not.toContain('overflow: hidden;')
   })
 })
+
+describe('Orange semantic color utilities', () => {
+  it('defines separate accent and identity avatar classes', () => {
+    expect(styleSource).toContain('.ui-accent-dot')
+    expect(styleSource).toContain('@apply bg-amber-400')
+    expect(styleSource).toContain('.ui-accent-badge')
+    expect(styleSource).toContain('@apply border-amber-400/30 bg-amber-500/10 text-amber-300')
+    expect(styleSource).toContain('.ui-theme-toggle')
+    expect(styleSource).toContain('.ui-theme-icon-accent')
+    expect(styleSource).toContain('.ui-avatar-identity')
+    expect(styleSource).toContain('@apply bg-gradient-to-br from-orange-700 via-orange-600 to-rose-600')
+    expect(styleSource).toContain('.ui-avatar-identity-sm')
+    expect(styleSource).toContain('.ui-avatar-identity-md')
+    expect(styleSource).toContain('.ui-avatar-identity-lg')
+  })
+})
+
+describe('AppSidebar theme toggle color hierarchy', () => {
+  it('uses the semantic accent class for the sun icon', () => {
+    expect(componentSource).toContain('class="h-5 w-5 flex-shrink-0 ui-theme-icon-accent"')
+    expect(componentSource).not.toContain('text-amber-500')
+  })
+})

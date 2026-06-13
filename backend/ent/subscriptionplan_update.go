@@ -125,6 +125,33 @@ func (_u *SubscriptionPlanUpdate) ClearOriginalPrice() *SubscriptionPlanUpdate {
 	return _u
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdate {
+	_u.mutation.ResetSevenDayQuotaUsd()
+	_u.mutation.SetSevenDayQuotaUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdate) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanUpdate {
+	if v != nil {
+		_u.SetSevenDayQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayQuotaUsd adds value to the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdate {
+	_u.mutation.AddSevenDayQuotaUsd(v)
+	return _u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) ClearSevenDayQuotaUsd() *SubscriptionPlanUpdate {
+	_u.mutation.ClearSevenDayQuotaUsd()
+	return _u
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_u *SubscriptionPlanUpdate) SetValidityDays(v int) *SubscriptionPlanUpdate {
 	_u.mutation.ResetValidityDays()
@@ -329,6 +356,15 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if _u.mutation.OriginalPriceCleared() {
 		_spec.ClearField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayQuotaUsd(); ok {
+		_spec.AddField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayQuotaUsdCleared() {
+		_spec.ClearField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
 	}
@@ -470,6 +506,33 @@ func (_u *SubscriptionPlanUpdateOne) AddOriginalPrice(v float64) *SubscriptionPl
 // ClearOriginalPrice clears the value of the "original_price" field.
 func (_u *SubscriptionPlanUpdateOne) ClearOriginalPrice() *SubscriptionPlanUpdateOne {
 	_u.mutation.ClearOriginalPrice()
+	return _u
+}
+
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdateOne {
+	_u.mutation.ResetSevenDayQuotaUsd()
+	_u.mutation.SetSevenDayQuotaUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdateOne) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanUpdateOne {
+	if v != nil {
+		_u.SetSevenDayQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayQuotaUsd adds value to the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdateOne {
+	_u.mutation.AddSevenDayQuotaUsd(v)
+	return _u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) ClearSevenDayQuotaUsd() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearSevenDayQuotaUsd()
 	return _u
 }
 
@@ -706,6 +769,15 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	}
 	if _u.mutation.OriginalPriceCleared() {
 		_spec.ClearField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayQuotaUsd(); ok {
+		_spec.AddField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayQuotaUsdCleared() {
+		_spec.ClearField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)

@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="space-y-6">
+    <div class="linear-subscriptions-page space-y-5">
       <!-- Loading State -->
       <div v-if="loading" class="flex justify-center py-12">
         <div
@@ -9,7 +9,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="subscriptions.length === 0" class="card p-12 text-center">
+      <div v-else-if="subscriptions.length === 0" class="linx-panel p-12 text-center">
         <div
           class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 dark:bg-dark-700"
         >
@@ -28,7 +28,7 @@
         <div
           v-for="subscription in subscriptions"
           :key="subscription.id"
-          class="overflow-hidden rounded-2xl border bg-white dark:bg-dark-800"
+          class="linx-panel overflow-hidden"
           :class="platformBorderClass(subscription.group?.platform || '')"
         >
           <!-- Header -->
@@ -42,12 +42,9 @@
                   <h3 class="font-semibold text-gray-900 dark:text-white">
                     {{ subscription.group?.name || `Group #${subscription.group_id}` }}
                   </h3>
-                  <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', platformBadgeClass(subscription.group?.platform || '')]">
-                    {{ platformLabel(subscription.group?.platform || '') }}
-                  </span>
                 </div>
-                <p v-if="subscription.group?.description" class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
-                  {{ subscription.group.description }}
+                <p v-if="displaySubscriptionDescription(subscription)" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
+                  {{ displaySubscriptionDescription(subscription) }}
                 </p>
               </div>
             </div>
@@ -76,6 +73,48 @@
 
           <!-- Usage Progress -->
           <div class="space-y-4 p-4">
+            <div class="rounded-xl border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-500/20 dark:bg-orange-500/10">
+              <p class="text-xs font-medium text-orange-700 dark:text-orange-300">
+                {{ t('userSubscriptions.balanceOrderHint') }}
+              </p>
+            </div>
+
+            <!-- Active Plan -->
+            <div class="flex items-center justify-between text-sm">
+              <span class="text-gray-500 dark:text-dark-400">{{ t('userSubscriptions.plan') }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">
+                {{ displaySubscriptionPlanName(subscription) }}
+              </span>
+            </div>
+
+            <!-- Seven-day Quota -->
+            <div v-if="subscription.seven_day_limit_usd != null" class="space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('userSubscriptions.sevenDayQuota') }}
+                </span>
+                <span class="text-sm text-gray-500 dark:text-dark-400">
+                  ${{ formatUsd(subscription.seven_day_usage_usd || 0) }} /
+                  ${{ formatUsd(subscription.seven_day_limit_usd) }}
+                </span>
+              </div>
+              <div class="relative h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
+                <div
+                  class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
+                  :class="getProgressBarClass(subscription.seven_day_usage_usd, subscription.seven_day_limit_usd)"
+                  :style="{ width: getProgressWidth(subscription.seven_day_usage_usd, subscription.seven_day_limit_usd) }"
+                ></div>
+              </div>
+              <div class="grid gap-2 text-xs text-gray-500 dark:text-dark-400 sm:grid-cols-3">
+                <span>{{ t('userSubscriptions.usageOf', { used: `$${formatUsd(subscription.seven_day_usage_usd || 0)}`, limit: `$${formatUsd(subscription.seven_day_limit_usd)}` }) }}</span>
+                <span>{{ t('userSubscriptions.remaining', { amount: `$${formatUsd(subscription.seven_day_remaining_usd ?? Math.max(subscription.seven_day_limit_usd - (subscription.seven_day_usage_usd || 0), 0))}` }) }}</span>
+                <span>{{ t('payment.planCard.totalMonthlyQuota') }}: ${{ formatUsd(subscription.seven_day_limit_usd * 4) }}</span>
+                <span v-if="subscription.seven_day_reset_at">
+                  {{ t('userSubscriptions.nextReset') }}: {{ formatAbsoluteDateTime(subscription.seven_day_reset_at) }}
+                </span>
+              </div>
+            </div>
+
             <!-- Expiration Info -->
             <div v-if="subscription.expires_at" class="flex items-center justify-between text-sm">
               <span class="text-gray-500 dark:text-dark-400">{{
@@ -216,6 +255,7 @@
             <!-- No limits configured - Unlimited badge -->
             <div
               v-if="
+                subscription.seven_day_limit_usd == null &&
                 !subscription.group?.daily_limit_usd &&
                 !subscription.group?.weekly_limit_usd &&
                 !subscription.group?.monthly_limit_usd
@@ -242,7 +282,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -251,7 +291,7 @@ import type { UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatDateOnly } from '@/utils/format'
-import { platformBorderClass, platformBadgeClass, platformButtonClass, platformLabel } from '@/utils/platformColors'
+import { platformBorderClass, platformButtonClass } from '@/utils/platformColors'
 import { getRemainingDurationParts, isOneTimeDailyQuota, type RemainingDurationParts } from '@/utils/subscriptionQuota'
 
 function platformAccentDotClass(p: string): string {
@@ -264,12 +304,55 @@ function platformAccentDotClass(p: string): string {
   }
 }
 
-const { t } = useI18n()
+const i18n = useI18n()
+const { t } = i18n
 const router = useRouter()
 const appStore = useAppStore()
 
 const subscriptions = ref<UserSubscription[]>([])
 const loading = ref(true)
+
+const activeLocale = computed<'en' | 'zh'>(() => String(i18n.locale.value).startsWith('zh') ? 'zh' : 'en')
+
+const monthlyPlanCopy: Record<string, { en: { name: string; description: string }; zh: { name: string; description: string } }> = {
+  basic: {
+    en: { name: 'Basic monthly', description: 'Start with LINX2 essentials for focused personal usage and predictable weekly capacity.' },
+    zh: { name: 'Basic 月卡', description: '适合轻量试用和低频个人开发，每 7 天发放一次基础额度。' },
+  },
+  plus: {
+    en: { name: 'Plus monthly', description: 'For everyday development when LINX2 is your steady personal coding gateway.' },
+    zh: { name: 'Plus 月卡', description: '适合日常开发和稳定个人使用，把 LINX2 作为默认编程网关。' },
+  },
+  pro: {
+    en: { name: 'Pro monthly', description: 'For primary development workflows, heavier agent loops, and higher-frequency usage.' },
+    zh: { name: 'Pro 月卡', description: '适合主力开发流程、更高频的 Agent 循环和项目工作负载。' },
+  },
+  max: {
+    en: { name: 'Max monthly', description: 'For heavy usage, parallel projects, longer sessions, and higher concurrency needs.' },
+    zh: { name: 'Max 月卡', description: '适合高强度使用、并行项目、长会话和更高并发需求。' },
+  },
+}
+
+function defaultMonthlyPlanKey(name?: string | null): string | null {
+  const normalized = (name || '').toLowerCase().trim()
+  if (normalized.startsWith('basic')) return 'basic'
+  if (normalized.startsWith('plus')) return 'plus'
+  if (normalized.startsWith('pro')) return 'pro'
+  if (normalized.startsWith('max')) return 'max'
+  return null
+}
+
+function displaySubscriptionPlanName(subscription: UserSubscription): string {
+  const key = defaultMonthlyPlanKey(subscription.plan_name)
+  if (key) return monthlyPlanCopy[key][activeLocale.value].name
+  return subscription.plan_name || subscription.group?.name || `Group #${subscription.group_id}`
+}
+
+function displaySubscriptionDescription(subscription: UserSubscription): string {
+  const key = defaultMonthlyPlanKey(subscription.plan_name)
+  if (key) return monthlyPlanCopy[key][activeLocale.value].description
+  return subscription.group?.description || ''
+}
 
 async function loadSubscriptions() {
   try {
@@ -295,6 +378,29 @@ function getProgressBarClass(used: number | undefined, limit: number | null | un
   if (percentage >= 90) return 'bg-red-500'
   if (percentage >= 70) return 'bg-orange-500'
   return 'bg-green-500'
+}
+
+const usdFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+function formatUsd(amount: number): string {
+  if (!Number.isFinite(amount)) return '0.00'
+  return usdFormatter.format(amount)
+}
+
+function formatAbsoluteDateTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }
 
 function formatExpirationDate(expiresAt: string): string {

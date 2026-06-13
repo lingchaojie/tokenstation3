@@ -75,6 +75,140 @@ func TestApplyWeChatPaymentResumeClaimsRejectsPaymentTypeMismatch(t *testing.T) 
 	}
 }
 
+func TestGetPlansIncludesSevenDayQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := sql.Open("sqlite", "file:payment_handler_plans_quota?mode=memory&cache=shared")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	quota := 110.0
+	group, err := client.Group.Create().SetName("LINX2 Subscription").SetPlatform("anthropic").Save(context.Background())
+	require.NoError(t, err)
+	_, err = client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("Plus monthly").
+		SetDescription("Everyday development").
+		SetPrice(399).
+		SetValidityDays(30).
+		SetValidityUnit("day").
+		SetFeatures("Seven-day quota").
+		SetProductName("LINX2 Plus monthly").
+		SetForSale(true).
+		SetSortOrder(20).
+		SetSevenDayQuotaUsd(quota).
+		Save(context.Background())
+	require.NoError(t, err)
+
+	configSvc := service.NewPaymentConfigService(client, nil, nil)
+	h := NewPaymentHandler(nil, configSvc, nil)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/payment/plans", nil)
+
+	h.GetPlans(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var resp struct {
+		Code int              `json:"code"`
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Len(t, resp.Data, 1)
+	require.Equal(t, 110.0, resp.Data[0]["seven_day_quota_usd"])
+}
+
+func TestGetCheckoutInfoIncludesSevenDayQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := sql.Open("sqlite", "file:payment_handler_checkout_quota?mode=memory&cache=shared")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	quota := 260.0
+	group, err := client.Group.Create().
+		SetName("LINX2 Subscription").
+		SetPlatform("anthropic").
+		SetRateMultiplier(1.25).
+		Save(context.Background())
+	require.NoError(t, err)
+	_, err = client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("Pro monthly").
+		SetDescription("Primary development").
+		SetPrice(799).
+		SetValidityDays(30).
+		SetValidityUnit("day").
+		SetFeatures("High seven-day quota\nRecharge fallback").
+		SetProductName("LINX2 Pro monthly").
+		SetForSale(true).
+		SetSortOrder(30).
+		SetSevenDayQuotaUsd(quota).
+		Save(context.Background())
+	require.NoError(t, err)
+
+	configSvc := service.NewPaymentConfigService(client, paymentHandlerSettingRepoStub{}, nil)
+	h := NewPaymentHandler(nil, configSvc, nil)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/payment/checkout-info", nil)
+
+	h.GetCheckoutInfo(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Plans []map[string]any `json:"plans"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Len(t, resp.Data.Plans, 1)
+	require.Equal(t, 260.0, resp.Data.Plans[0]["seven_day_quota_usd"])
+}
+
+type paymentHandlerSettingRepoStub struct{}
+
+func (paymentHandlerSettingRepoStub) Get(context.Context, string) (*service.Setting, error) {
+	return nil, nil
+}
+func (paymentHandlerSettingRepoStub) GetValue(context.Context, string) (string, error) {
+	return "", nil
+}
+func (paymentHandlerSettingRepoStub) Set(context.Context, string, string) error { return nil }
+func (paymentHandlerSettingRepoStub) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		values[key] = ""
+	}
+	return values, nil
+}
+func (paymentHandlerSettingRepoStub) SetMultiple(context.Context, map[string]string) error {
+	return nil
+}
+func (paymentHandlerSettingRepoStub) GetAll(context.Context) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+func (paymentHandlerSettingRepoStub) Delete(context.Context, string) error { return nil }
+
 func TestVerifyOrderPublicReturnsLegacyOrderState(t *testing.T) {
 	t.Parallel()
 

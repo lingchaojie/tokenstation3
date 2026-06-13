@@ -1,5 +1,6 @@
 <template>
-  <DataTable :columns="columns" :data="orders" :loading="loading">
+  <div class="linx-panel overflow-hidden p-0">
+    <DataTable :columns="columns" :data="orders" :loading="loading">
     <template #cell-id="{ value }">
       <span class="font-mono text-sm">#{{ value }}</span>
     </template>
@@ -35,7 +36,8 @@
     <template #cell-actions="{ row }">
       <slot name="actions" :row="row" />
     </template>
-  </DataTable>
+    </DataTable>
+  </div>
 </template>
 
 <script setup lang="ts">

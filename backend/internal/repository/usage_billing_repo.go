@@ -50,7 +50,7 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		return &service.UsageBillingApplyResult{Applied: false}, nil
 	}
 
-	result := &service.UsageBillingApplyResult{Applied: true}
+	result := &service.UsageBillingApplyResult{Applied: true, BillingType: cmd.BillingType}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
 		return nil, err
 	}
@@ -107,8 +107,39 @@ func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *s
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
 	if cmd.SubscriptionCost > 0 && cmd.SubscriptionID != nil {
-		if err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost); err != nil {
+		if cmd.SubscriptionSevenDayLimitUSD == nil {
+			if cmd.AllowBalanceFallback && cmd.BalanceFallbackCost > 0 {
+				newBalance, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceFallbackCost)
+				if err != nil {
+					return err
+				}
+				result.NewBalance = &newBalance
+				result.BillingType = service.BillingTypeBalance
+				return nil
+			}
+			return service.ErrWeeklyLimitExceeded
+		}
+		var appliedSubscription bool
+		var err error
+		if cmd.AllowSubscriptionQuotaOverrun {
+			appliedSubscription, err = incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, nil)
+		} else {
+			appliedSubscription, err = incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, cmd.SubscriptionSevenDayLimitUSD)
+		}
+		if err != nil {
 			return err
+		}
+		if appliedSubscription {
+			result.BillingType = service.BillingTypeSubscription
+		} else if cmd.AllowBalanceFallback && cmd.BalanceFallbackCost > 0 {
+			newBalance, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceFallbackCost)
+			if err != nil {
+				return err
+			}
+			result.NewBalance = &newBalance
+			result.BillingType = service.BillingTypeBalance
+		} else {
+			return service.ErrWeeklyLimitExceeded
 		}
 	}
 
@@ -118,6 +149,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 			return err
 		}
 		result.NewBalance = &newBalance
+		result.BillingType = service.BillingTypeBalance
 	}
 
 	if cmd.APIKeyQuotaCost > 0 {
@@ -145,7 +177,56 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	return nil
 }
 
-func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64) error {
+func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64, sevenDayLimitUSD *float64) (bool, error) {
+	if sevenDayLimitUSD != nil {
+		const guardedUpdateSQL = `
+			UPDATE user_subscriptions us
+			SET
+				daily_usage_usd = us.daily_usage_usd + $1,
+				weekly_usage_usd = CASE
+					WHEN us.weekly_window_start IS NOT NULL
+						AND us.weekly_window_start + INTERVAL '7 days' <= NOW()
+					THEN $1
+					ELSE us.weekly_usage_usd + $1
+				END,
+				weekly_window_start = CASE
+					WHEN us.weekly_window_start IS NOT NULL
+						AND us.weekly_window_start + INTERVAL '7 days' <= NOW()
+					THEN NOW()
+					ELSE us.weekly_window_start
+				END,
+				monthly_usage_usd = us.monthly_usage_usd + $1,
+				updated_at = NOW()
+			WHERE us.id = $2
+				AND us.deleted_at IS NULL
+				AND (CASE
+					WHEN us.weekly_window_start IS NOT NULL
+						AND us.weekly_window_start + INTERVAL '7 days' <= NOW()
+					THEN 0
+					ELSE us.weekly_usage_usd
+				END) + $1 <= $3 + 1e-9
+		`
+		res, err := tx.ExecContext(ctx, guardedUpdateSQL, costUSD, subscriptionID, *sevenDayLimitUSD)
+		if err != nil {
+			return false, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if affected > 0 {
+			return true, nil
+		}
+		exists, err := usageBillingSubscriptionExists(ctx, tx, subscriptionID)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, service.ErrSubscriptionNotFound
+		}
+		return false, nil
+	}
+
 	const updateSQL = `
 		UPDATE user_subscriptions us
 		SET
@@ -161,16 +242,28 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 	`
 	res, err := tx.ExecContext(ctx, updateSQL, costUSD, subscriptionID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if affected > 0 {
-		return nil
+		return true, nil
 	}
-	return service.ErrSubscriptionNotFound
+	return false, service.ErrSubscriptionNotFound
+}
+
+func usageBillingSubscriptionExists(ctx context.Context, tx *sql.Tx, subscriptionID int64) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM user_subscriptions
+			WHERE id = $1 AND deleted_at IS NULL
+		)
+	`, subscriptionID).Scan(&exists)
+	return exists, err
 }
 
 func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, error) {

@@ -107,13 +107,25 @@ func (userSubRepoNoop) UpdateStatus(context.Context, int64, string) error {
 func (userSubRepoNoop) UpdateNotes(context.Context, int64, string) error {
 	panic("unexpected UpdateNotes call")
 }
+func (userSubRepoNoop) UpdatePlanSnapshot(context.Context, int64, *int64, *string, *float64, time.Time, time.Time, *string) error {
+	panic("unexpected UpdatePlanSnapshot call")
+}
+func (userSubRepoNoop) SchedulePlanChange(context.Context, int64, *int64, *string, *float64, time.Time, time.Time, *int64, *string) error {
+	panic("unexpected SchedulePlanChange call")
+}
+func (userSubRepoNoop) ClearScheduledPlanChange(context.Context, int64) error {
+	panic("unexpected ClearScheduledPlanChange call")
+}
+func (userSubRepoNoop) ApplyScheduledPlanChange(context.Context, int64, time.Time) (*UserSubscription, bool, error) {
+	panic("unexpected ApplyScheduledPlanChange call")
+}
 func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
 func (userSubRepoNoop) ResetDailyUsage(context.Context, int64, time.Time) error {
 	panic("unexpected ResetDailyUsage call")
 }
-func (userSubRepoNoop) ResetWeeklyUsage(context.Context, int64, time.Time) error {
+func (userSubRepoNoop) ResetWeeklyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetWeeklyUsage call")
 }
 func (userSubRepoNoop) ResetMonthlyUsage(context.Context, int64, time.Time) error {
@@ -129,10 +141,12 @@ func (userSubRepoNoop) BatchUpdateExpiredStatus(context.Context) (int64, error) 
 type subscriptionUserSubRepoStub struct {
 	userSubRepoNoop
 
-	nextID      int64
-	byID        map[int64]*UserSubscription
-	byUserGroup map[string]*UserSubscription
-	createCalls int
+	nextID            int64
+	byID              map[int64]*UserSubscription
+	byUserGroup       map[string]*UserSubscription
+	createCalls       int
+	createErr         error
+	existsAlwaysFalse bool
 }
 
 func newSubscriptionUserSubRepoStub() *subscriptionUserSubRepoStub {
@@ -161,6 +175,9 @@ func (s *subscriptionUserSubRepoStub) seed(sub *UserSubscription) {
 }
 
 func (s *subscriptionUserSubRepoStub) ExistsByUserIDAndGroupID(_ context.Context, userID, groupID int64) (bool, error) {
+	if s.existsAlwaysFalse {
+		return false, nil
+	}
 	_, ok := s.byUserGroup[s.key(userID, groupID)]
 	return ok, nil
 }
@@ -179,6 +196,9 @@ func (s *subscriptionUserSubRepoStub) Create(_ context.Context, sub *UserSubscri
 		return nil
 	}
 	s.createCalls++
+	if s.createErr != nil {
+		return s.createErr
+	}
 	cp := *sub
 	if cp.ID == 0 {
 		cp.ID = s.nextID
@@ -214,6 +234,116 @@ func (s *subscriptionUserSubRepoStub) Update(_ context.Context, sub *UserSubscri
 		delete(s.byUserGroup, oldKey)
 	}
 	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdatePlanSnapshot(_ context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	existing := s.byID[id]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	cp := *existing
+	cp.PlanID = planID
+	cp.PlanName = planName
+	cp.SevenDayLimitUSD = sevenDayLimitUSD
+	cp.ExpiresAt = expiresAt
+	cp.Status = SubscriptionStatusActive
+	cp.ScheduledPlanID = nil
+	cp.ScheduledPlanName = nil
+	cp.ScheduledSevenDayLimitUSD = nil
+	cp.ScheduledPlanEffectiveAt = nil
+	cp.ScheduledExpiresAt = nil
+	cp.ScheduledOrderID = nil
+	cp.WeeklyWindowStart = &windowStart
+	cp.WeeklyUsageUSD = 0
+	if notes != nil {
+		cp.Notes = *notes
+	}
+	s.byID[cp.ID] = &cp
+	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) SchedulePlanChange(_ context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	existing := s.byID[id]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	cp := *existing
+	cp.ScheduledPlanID = planID
+	cp.ScheduledPlanName = planName
+	cp.ScheduledSevenDayLimitUSD = sevenDayLimitUSD
+	cp.ScheduledPlanEffectiveAt = &effectiveAt
+	cp.ScheduledExpiresAt = &expiresAt
+	cp.ScheduledOrderID = orderID
+	if notes != nil {
+		cp.Notes = *notes
+	}
+	s.byID[cp.ID] = &cp
+	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ClearScheduledPlanChange(_ context.Context, id int64) error {
+	existing := s.byID[id]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	cp := *existing
+	cp.ScheduledPlanID = nil
+	cp.ScheduledPlanName = nil
+	cp.ScheduledSevenDayLimitUSD = nil
+	cp.ScheduledPlanEffectiveAt = nil
+	cp.ScheduledExpiresAt = nil
+	cp.ScheduledOrderID = nil
+	s.byID[cp.ID] = &cp
+	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ApplyScheduledPlanChange(_ context.Context, id int64, now time.Time) (*UserSubscription, bool, error) {
+	existing := s.byID[id]
+	if existing == nil {
+		return nil, false, ErrSubscriptionNotFound
+	}
+	if existing.ScheduledPlanEffectiveAt == nil || existing.ScheduledPlanEffectiveAt.After(now) {
+		return nil, false, nil
+	}
+	cp := *existing
+	cp.PlanID = existing.ScheduledPlanID
+	cp.PlanName = existing.ScheduledPlanName
+	cp.SevenDayLimitUSD = existing.ScheduledSevenDayLimitUSD
+	cp.StartsAt = *existing.ScheduledPlanEffectiveAt
+	if existing.ScheduledExpiresAt != nil {
+		cp.ExpiresAt = *existing.ScheduledExpiresAt
+	}
+	cp.Status = SubscriptionStatusActive
+	cp.DailyWindowStart = existing.ScheduledPlanEffectiveAt
+	cp.WeeklyWindowStart = existing.ScheduledPlanEffectiveAt
+	cp.MonthlyWindowStart = existing.ScheduledPlanEffectiveAt
+	cp.DailyUsageUSD = 0
+	cp.WeeklyUsageUSD = 0
+	cp.MonthlyUsageUSD = 0
+	cp.ScheduledPlanID = nil
+	cp.ScheduledPlanName = nil
+	cp.ScheduledSevenDayLimitUSD = nil
+	cp.ScheduledPlanEffectiveAt = nil
+	cp.ScheduledExpiresAt = nil
+	cp.ScheduledOrderID = nil
+	s.byID[cp.ID] = &cp
+	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	out := cp
+	return &out, true, nil
+}
+
+func (s *subscriptionUserSubRepoStub) IncrementUsage(_ context.Context, id int64, costUSD float64) error {
+	existing := s.byID[id]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	existing.DailyUsageUSD += costUSD
+	existing.WeeklyUsageUSD += costUSD
+	existing.MonthlyUsageUSD += costUSD
 	return nil
 }
 
@@ -337,6 +467,66 @@ func TestAssignSubscriptionKeepsWorkingWhenIdempotencyStoreUnavailable(t *testin
 	require.Equal(t, 1, subRepo.createCalls, "semantic idempotent endpoint should not depend on idempotency store availability")
 }
 
+func TestAssignSubscriptionReusesExistingAfterCreateConflictWhenSemanticsMatch(t *testing.T) {
+	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        42,
+		UserID:    4201,
+		GroupID:   1,
+		StartsAt:  start,
+		ExpiresAt: start.AddDate(0, 0, 30),
+		Notes:     "race-safe",
+	})
+	subRepo.createErr = ErrSubscriptionAlreadyExists
+	subRepo.existsAlwaysFalse = true
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	sub, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       4201,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "race-safe",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(42), sub.ID)
+	require.Equal(t, 1, subRepo.createCalls, "create conflict path should re-read and reuse matching subscription")
+}
+
+func TestAssignSubscriptionReturnsConflictAfterCreateConflictWhenSemanticsMismatch(t *testing.T) {
+	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        43,
+		UserID:    4301,
+		GroupID:   1,
+		StartsAt:  start,
+		ExpiresAt: start.AddDate(0, 0, 60),
+		Notes:     "race-safe",
+	})
+	subRepo.createErr = ErrSubscriptionAlreadyExists
+	subRepo.existsAlwaysFalse = true
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	_, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       4301,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "race-safe",
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SUBSCRIPTION_ASSIGN_CONFLICT", infraerrorsReason(err))
+	require.Equal(t, 1, subRepo.createCalls, "create conflict path should preserve semantic conflict behavior")
+}
+
 func TestNormalizeAssignValidityDays(t *testing.T) {
 	require.Equal(t, 30, normalizeAssignValidityDays(0))
 	require.Equal(t, 30, normalizeAssignValidityDays(-5))
@@ -346,19 +536,31 @@ func TestNormalizeAssignValidityDays(t *testing.T) {
 
 func TestDetectAssignSemanticConflictCases(t *testing.T) {
 	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	basePlanID := int64(10)
+	basePlanName := "Plus"
+	baseSevenDayLimit := 110.0
 	base := &UserSubscription{
-		UserID:    1,
-		GroupID:   1,
-		StartsAt:  start,
-		ExpiresAt: start.AddDate(0, 0, 30),
-		Notes:     "same",
+		UserID:           1,
+		GroupID:          1,
+		PlanID:           &basePlanID,
+		PlanName:         &basePlanName,
+		SevenDayLimitUSD: &baseSevenDayLimit,
+		StartsAt:         start,
+		ExpiresAt:        start.AddDate(0, 0, 30),
+		Notes:            "same",
 	}
 
+	samePlanID := int64(10)
+	samePlanName := "Plus"
+	sameSevenDayLimit := 110.0 + 1e-10
 	reason, conflict := detectAssignSemanticConflict(base, &AssignSubscriptionInput{
-		UserID:       1,
-		GroupID:      1,
-		ValidityDays: 30,
-		Notes:        "same",
+		UserID:           1,
+		GroupID:          1,
+		ValidityDays:     30,
+		Notes:            "same",
+		PlanID:           &samePlanID,
+		PlanName:         &samePlanName,
+		SevenDayLimitUSD: &sameSevenDayLimit,
 	})
 	require.False(t, conflict)
 	require.Equal(t, "", reason)
@@ -380,6 +582,71 @@ func TestDetectAssignSemanticConflictCases(t *testing.T) {
 	})
 	require.True(t, conflict)
 	require.Equal(t, "notes_mismatch", reason)
+}
+
+func TestDetectAssignSemanticConflictDetectsPlanSnapshotMismatch(t *testing.T) {
+	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	planID := int64(10)
+	planName := "Plus"
+	sevenDayLimit := 110.0
+	base := &UserSubscription{
+		UserID:           1,
+		GroupID:          1,
+		PlanID:           &planID,
+		PlanName:         &planName,
+		SevenDayLimitUSD: &sevenDayLimit,
+		StartsAt:         start,
+		ExpiresAt:        start.AddDate(0, 0, 30),
+		Notes:            "same",
+	}
+
+	otherPlanID := int64(11)
+	reason, conflict := detectAssignSemanticConflict(base, &AssignSubscriptionInput{
+		UserID:       1,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "same",
+		PlanID:       &otherPlanID,
+		PlanName:     &planName,
+	})
+	require.True(t, conflict)
+	require.Equal(t, "plan_id_mismatch", reason)
+
+	otherPlanName := "Pro"
+	reason, conflict = detectAssignSemanticConflict(base, &AssignSubscriptionInput{
+		UserID:       1,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "same",
+		PlanID:       &planID,
+		PlanName:     &otherPlanName,
+	})
+	require.True(t, conflict)
+	require.Equal(t, "plan_name_mismatch", reason)
+
+	otherSevenDayLimit := 260.0
+	reason, conflict = detectAssignSemanticConflict(base, &AssignSubscriptionInput{
+		UserID:           1,
+		GroupID:          1,
+		ValidityDays:     30,
+		Notes:            "same",
+		PlanID:           &planID,
+		PlanName:         &planName,
+		SevenDayLimitUSD: &otherSevenDayLimit,
+	})
+	require.True(t, conflict)
+	require.Equal(t, "seven_day_limit_mismatch", reason)
+
+	reason, conflict = detectAssignSemanticConflict(base, &AssignSubscriptionInput{
+		UserID:       1,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "same",
+		PlanID:       &planID,
+		PlanName:     &planName,
+	})
+	require.True(t, conflict)
+	require.Equal(t, "seven_day_limit_mismatch", reason)
 }
 
 func TestAssignSubscriptionGroupTypeValidation(t *testing.T) {

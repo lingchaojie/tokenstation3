@@ -1,7 +1,6 @@
 <template>
   <!-- Custom Home Content: Full Page Mode -->
   <div v-if="trimmedHomeContent" class="min-h-screen">
-    <!-- iframe mode -->
     <iframe
       v-if="isHomeContentUrl"
       :src="trimmedHomeContent"
@@ -9,151 +8,185 @@
       class="h-screen w-full border-0"
       allowfullscreen
     ></iframe>
-    <!-- Markdown/HTML mode -->
     <div v-else v-html="renderedHomeContent"></div>
   </div>
 
   <!-- Default Home Page -->
   <div
     v-else
-    class="relative min-h-screen overflow-hidden bg-[#070503] text-stone-100 selection:bg-orange-500/30 selection:text-orange-100"
+    class="dark linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-100"
   >
-    <div class="pointer-events-none absolute inset-0">
-      <div class="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(251,146,60,0.18),transparent_32%),radial-gradient(circle_at_80%_18%,rgba(249,115,22,0.12),transparent_28%),linear-gradient(180deg,rgba(7,5,3,0)_0%,#070503_72%)]"></div>
-      <div class="absolute inset-0 opacity-[0.16] landing-grid"></div>
-      <div class="absolute left-1/2 top-0 h-px w-[80vw] -translate-x-1/2 bg-gradient-to-r from-transparent via-orange-300/50 to-transparent"></div>
+    <!-- Announcement bar -->
+    <div
+      v-if="showAnnouncement"
+      class="relative z-30 flex items-center justify-center gap-3 border-b border-linear-hairline bg-linear-surface-1/70 px-4 py-2.5 text-center text-xs font-medium text-linear-ink-muted sm:text-sm"
+    >
+      <span class="ui-accent-dot h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+      <span>{{ copy.announcement }}</span>
+      <button
+        class="absolute right-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary transition-colors hover:text-linear-ink"
+        :aria-label="'close'"
+        @click="showAnnouncement = false"
+      >
+        <Icon name="x" size="sm" />
+      </button>
     </div>
 
-    <header class="relative z-20 border-b border-orange-300/10 px-6 py-4 backdrop-blur-xl">
-      <nav class="mx-auto flex max-w-7xl items-center justify-between gap-6">
-        <router-link to="/home" class="flex items-center gap-3" :aria-label="siteName">
-          <span class="flex h-11 w-11 items-center justify-center rounded-2xl border border-orange-300/25 bg-orange-400/10 p-1.5 shadow-[0_0_32px_rgba(249,115,22,0.18)]">
-            <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full rounded-xl object-contain" />
+    <!-- Header -->
+    <header class="sticky top-0 z-20 border-b border-linear-hairline bg-linear-canvas/90 backdrop-blur-xl">
+      <nav class="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-3 sm:px-6 lg:px-8">
+        <router-link to="/home" class="group flex items-center gap-3" :aria-label="siteName">
+          <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline transition-colors group-hover:ring-linear-hairline-strong">
+            <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
-          <span class="text-base font-semibold tracking-[0.24em] text-orange-50">{{ siteName }}</span>
+          <span class="leading-tight">
+            <span class="block text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ siteName }}</span>
+            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">AI Coding API</span>
+          </span>
         </router-link>
 
-        <div class="hidden items-center gap-8 text-sm font-medium text-stone-300 md:flex">
-          <a
-            v-for="item in navItems"
-            :key="item.href"
-            :href="item.href"
-            class="transition-colors hover:text-orange-300"
-          >
-            {{ item.label }}
-          </a>
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="transition-colors hover:text-orange-300"
-          >
-            文档<span class="sr-only"> {{ t('home.viewDocs') }}</span>
-          </a>
-        </div>
-
-        <div class="flex items-center gap-2 sm:gap-3">
+        <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
+          <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
+            <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+            <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
+            <a
+              v-if="docUrl"
+              :href="docUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="transition-colors hover:text-linear-ink"
+            >
+              {{ t('home.docs') }}
+            </a>
+          </div>
           <LocaleSwitcher />
           <button
+            data-testid="homepage-theme-toggle"
             @click="toggleTheme"
-            class="rounded-full border border-orange-300/15 bg-stone-950/60 p-2 text-stone-400 transition-colors hover:border-orange-300/40 hover:text-orange-200"
+            class="ui-theme-toggle"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
           >
-            <Icon v-if="isDark" name="sun" size="md" />
-            <Icon v-else name="moon" size="md" />
+            <Icon v-if="isDark" name="sun" size="md" class="ui-theme-icon-accent" />
+            <Icon v-else name="moon" size="md" class="ui-theme-icon-accent" />
           </button>
           <router-link
             :to="isAuthenticated ? dashboardPath : '/login'"
             :aria-label="isAuthenticated ? t('home.goToDashboard') : t('home.getStarted')"
-            class="inline-flex h-10 w-10 items-center justify-center gap-2 rounded-full bg-orange-500 px-0 py-2 text-sm font-semibold text-black shadow-[0_0_28px_rgba(249,115,22,0.28)] transition-colors hover:bg-orange-300 sm:w-auto sm:px-4"
+            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
           >
             <span
               v-if="isAuthenticated && userInitial"
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-black/20 text-[10px]"
+              class="ui-avatar-identity-sm"
             >
               {{ userInitial }}
             </span>
-            <span data-testid="header-cta-label" class="hidden sm:inline">
+            <span data-testid="header-cta-label">
               {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
             </span>
-            <Icon v-if="!isAuthenticated" name="arrowRight" size="sm" class="sm:hidden" :stroke-width="2" />
           </router-link>
         </div>
       </nav>
     </header>
 
-    <main class="relative z-10">
-      <section class="px-6 pb-20 pt-16 sm:pt-24">
-        <div class="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
-          <div>
-            <div class="mb-6 inline-flex items-center gap-2 rounded-full border border-orange-300/20 bg-orange-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-orange-200">
-              <span class="h-1.5 w-1.5 rounded-full bg-orange-400 shadow-[0_0_16px_rgba(251,146,60,0.9)]"></span>
-              Claude Code & Codex API
-            </div>
-            <h1 class="max-w-4xl text-5xl font-black leading-[0.95] tracking-[-0.06em] text-orange-50 sm:text-6xl xl:text-7xl">
-              企业级编程 API 服务
-            </h1>
-            <p class="mt-6 max-w-2xl text-lg leading-8 text-stone-300 sm:text-xl">
-              为 Claude Code、Codex 与兼容模型构建统一接入层，提供稳定、低延迟、可观测的企业级 API 调度体验。
-            </p>
-
-            <div class="mt-8 flex flex-wrap gap-3">
-              <span
-                v-for="tag in heroTags"
-                :key="tag"
-                class="rounded-full border border-stone-700/80 bg-stone-950/70 px-4 py-2 text-sm text-stone-300"
-              >
-                {{ tag }}
-              </span>
-            </div>
-
-            <div class="mt-10 flex flex-col gap-4 sm:flex-row">
-              <router-link
-                :to="isAuthenticated ? dashboardPath : '/login'"
-                class="inline-flex items-center justify-center rounded-full bg-orange-500 px-7 py-3 text-base font-bold text-black shadow-[0_0_42px_rgba(249,115,22,0.32)] transition-colors hover:bg-orange-300"
-              >
-                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
-              </router-link>
-              <a
-                v-if="docUrl"
-                :href="docUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex items-center justify-center rounded-full border border-orange-300/25 px-7 py-3 text-base font-semibold text-orange-100 transition-colors hover:border-orange-300/60 hover:bg-orange-300/10"
-              >
-                {{ t('home.viewDocs') }}
-                <Icon name="externalLink" size="sm" class="ml-2" />
-              </a>
-            </div>
+    <main>
+      <!-- ===== Hero ===== -->
+      <section class="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
+        <div class="mx-auto max-w-4xl text-center">
+          <p class="linx-section-kicker inline-flex items-center gap-2">
+            <span class="ui-accent-dot h-1.5 w-1.5 rounded-full"></span>
+            {{ copy.heroKicker }}
+          </p>
+          <h1 class="mt-7 text-[clamp(2.75rem,7vw,5.25rem)] font-semibold leading-[0.98] tracking-[-0.065em] text-linear-ink">
+            {{ copy.heroTitle }}
+          </h1>
+          <p class="mx-auto mt-6 max-w-2xl text-base leading-7 tracking-[-0.01em] text-linear-ink-subtle sm:text-lg sm:leading-8">
+            {{ copy.heroDescription }}
+          </p>
+          <div class="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+            <router-link
+              :to="isAuthenticated ? dashboardPath : '/login'"
+              class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+            >
+              {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
+              <Icon name="arrowRight" size="sm" class="ml-2" :stroke-width="2" />
+            </router-link>
+            <a
+              :href="docUrl || '#capabilities'"
+              :target="docUrl ? '_blank' : undefined"
+              :rel="docUrl ? 'noopener noreferrer' : undefined"
+              class="inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-5 py-3 text-sm font-medium text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+            >
+              {{ docUrl ? copy.docsCta : copy.learnCta }}
+            </a>
           </div>
+        </div>
 
-          <div class="relative">
-            <div class="absolute -inset-6 rounded-[2rem] bg-orange-500/10 blur-3xl"></div>
-            <div class="relative overflow-hidden rounded-[2rem] border border-orange-200/15 bg-[#100b07]/90 p-5 shadow-2xl shadow-black/60">
-              <div class="mb-4 flex items-center justify-between border-b border-orange-200/10 pb-4">
-                <div class="flex items-center gap-2">
-                  <span class="h-3 w-3 rounded-full bg-[#ff5f57]"></span>
-                  <span class="h-3 w-3 rounded-full bg-[#ffbd2e]"></span>
-                  <span class="h-3 w-3 rounded-full bg-[#28c840]"></span>
+        <!-- Product console -->
+        <div id="models" class="mx-auto mt-14 w-full max-w-6xl" data-testid="linear-product-console">
+          <div class="linx-panel-strong overflow-hidden p-3 sm:p-4">
+            <div class="rounded-xl border border-linear-hairline bg-linear-canvas">
+              <div class="flex flex-col gap-4 border-b border-linear-hairline p-4 text-left sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div>
+                  <p class="text-xs font-medium uppercase tracking-[0.18em] text-primary-400">{{ copy.gw.badge }}</p>
+                  <h2 class="mt-2 text-xl font-semibold tracking-[-0.03em] text-linear-ink">{{ copy.gw.consoleTitle }}</h2>
+                  <p class="mt-1 text-sm text-linear-ink-subtle">{{ copy.gw.description }}</p>
                 </div>
-                <span class="font-mono text-xs text-stone-500">tokenstation.gateway</span>
+                <span class="inline-flex w-fit items-center gap-1.5 rounded-full border border-linear-hairline bg-linear-surface-1 px-3 py-1.5 text-xs font-medium text-linear-ink-muted">
+                  <span class="h-1.5 w-1.5 rounded-full bg-[#27a644]"></span>
+                  {{ copy.gw.title }}
+                </span>
               </div>
-              <div class="space-y-4 font-mono text-sm leading-7 text-stone-300">
-                <p><span class="text-orange-400">$</span> curl -X POST /v1/messages</p>
-                <p class="text-stone-500"># route: claude-code → healthy account pool</p>
-                <p><span class="rounded bg-orange-500/15 px-2 py-1 text-orange-300">200 OK</span> <span class="text-stone-400">latency=628ms</span></p>
-                <p class="text-orange-100">{ "content": "enterprise coding API ready" }</p>
-              </div>
-              <div class="mt-6 grid gap-3 sm:grid-cols-3">
+
+              <div class="grid grid-cols-2 gap-px border-b border-linear-hairline bg-linear-hairline sm:grid-cols-3 lg:grid-cols-6">
                 <div
-                  v-for="metric in metrics"
-                  :key="metric.label"
-                  class="rounded-2xl border border-orange-200/10 bg-black/30 p-4"
+                  v-for="provider in providers"
+                  :key="provider"
+                  class="bg-linear-surface-1 px-4 py-4 text-center text-sm font-medium text-linear-ink-muted"
                 >
-                  <p class="text-2xl font-black text-orange-300">{{ metric.value }}</p>
-                  <p class="mt-1 text-xs text-stone-500">{{ metric.label }}</p>
+                  {{ provider }}
+                </div>
+              </div>
+
+              <div class="grid gap-px bg-linear-hairline lg:grid-cols-[1.15fr_0.85fr]">
+                <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p class="linx-section-kicker">{{ copy.gw.flowTitle }}</p>
+                      <h3 class="mt-3 text-lg font-semibold tracking-[-0.035em] text-linear-ink">{{ copy.gw.routeTitle }}</h3>
+                    </div>
+                    <p class="text-xs leading-5 text-linear-ink-tertiary">{{ copy.gw.routeSummary }}</p>
+                  </div>
+                  <div data-testid="homepage-route-grid" class="mt-5 grid gap-3 sm:grid-cols-2">
+                    <article
+                      v-for="route in routeCards"
+                      :key="route.label"
+                      class="rounded-xl border border-linear-hairline bg-linear-surface-2 p-4 transition-colors hover:border-linear-hairline-strong"
+                    >
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ route.label }}</p>
+                          <p class="mt-1 text-xs leading-5 text-linear-ink-subtle">{{ route.description }}</p>
+                        </div>
+                        <span class="font-mono-brand ui-accent-badge rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider">
+                          {{ route.badge }}
+                        </span>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+
+                <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
+                  <p class="linx-section-kicker">{{ copy.gw.baseUrlTitle }}</p>
+                  <pre class="font-mono-brand mt-4 overflow-x-auto rounded-xl border border-linear-hairline bg-linear-canvas p-4 text-left text-xs leading-6 text-linear-ink-muted"><code><span class="text-primary-300">ANTHROPIC_BASE_URL</span>=https://linx2.ai/api
+<span class="text-primary-300">ANTHROPIC_AUTH_TOKEN</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span>
+<span class="text-primary-300">OPENAI_BASE_URL</span>=https://linx2.ai/api
+<span class="text-primary-300">OPENAI_API_KEY</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span></code></pre>
+                  <div class="mt-4 grid grid-cols-3 gap-2">
+                    <div v-for="metric in metrics" :key="metric.label" class="linx-panel p-3 text-center">
+                      <p class="text-lg font-semibold tracking-[-0.03em] text-linear-ink">{{ metric.value }}</p>
+                      <p class="mt-0.5 text-[10px] leading-tight text-linear-ink-tertiary">{{ metric.label }}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -161,68 +194,194 @@
         </div>
       </section>
 
-      <section id="services" class="px-6 py-16">
-        <div class="mx-auto max-w-7xl">
-          <div class="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
-            <div>
-              <p class="text-sm font-semibold uppercase tracking-[0.3em] text-orange-400">Services</p>
-              <h2 class="mt-3 text-3xl font-black tracking-tight text-orange-50 sm:text-4xl">为编程 Agent 打造的服务层</h2>
-            </div>
-            <p class="max-w-xl text-sm leading-7 text-stone-400">
-              从接入、调度到账单监控，把多模型 API 运营能力收敛到一个可控入口。
+      <!-- ===== Features ===== -->
+      <section id="features" class="border-y border-linear-hairline bg-linear-surface-1/35">
+        <div class="mx-auto grid max-w-7xl gap-4 px-4 py-6 sm:px-6 md:grid-cols-3 lg:px-8">
+          <article
+            v-for="feature in copy.features"
+            :key="feature.title"
+            class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+          >
+            <p class="text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ feature.title }}</p>
+            <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ feature.description }}</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ===== Capabilities ===== -->
+      <section id="capabilities" class="mx-auto max-w-7xl scroll-mt-24 px-4 py-16 sm:px-6 lg:px-8">
+        <div class="grid gap-8 xl:grid-cols-[0.8fr_1.2fr] xl:items-end">
+          <div class="text-left">
+            <p class="linx-section-kicker">{{ copy.capabilityKicker }}</p>
+            <h2 class="mt-4 max-w-3xl text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">
+              {{ copy.capabilityTitle }}
+            </h2>
+          </div>
+          <p class="text-left text-base leading-7 text-linear-ink-subtle">{{ copy.capabilityDescription }}</p>
+        </div>
+
+        <div class="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <article
+            v-for="capability in copy.capabilities"
+            :key="capability.title"
+            class="linx-panel p-6 text-left transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+          >
+            <p class="font-mono-brand text-xs font-medium uppercase tracking-[0.18em] text-primary-400/90">{{ capability.code }}</p>
+            <h3 class="mt-4 text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ capability.title }}</h3>
+            <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ capability.description }}</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ===== Pricing ===== -->
+      <section id="pricing" class="scroll-mt-24 border-t border-linear-hairline bg-linear-surface-1/25">
+        <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+          <div class="mb-10 max-w-2xl">
+            <p class="linx-section-kicker">{{ copy.pricingKicker }}</p>
+            <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.pricingTitle }}</h2>
+            <p class="mt-4 text-base leading-7 text-linear-ink-subtle">
+              {{ copy.pricingDescription }}
             </p>
           </div>
 
-          <div class="grid gap-5 md:grid-cols-3">
-            <article
-              v-for="feature in features"
-              :key="feature.title"
-              class="group rounded-[1.75rem] border border-orange-200/10 bg-stone-950/60 p-6 transition-colors hover:border-orange-300/35 hover:bg-orange-500/[0.06]"
-            >
-              <div class="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500/15 text-orange-300 ring-1 ring-orange-300/20">
-                <Icon :name="feature.icon" size="lg" />
+          <div class="mb-6 grid gap-3 rounded-2xl border border-linear-hairline bg-linear-surface-1 p-4 text-sm leading-6 text-linear-ink-muted md:grid-cols-3">
+            <div v-for="item in copy.monthlyCardInfo" :key="item.title" class="flex gap-3">
+              <span class="ui-accent-dot mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+              <div>
+                <p class="font-semibold text-linear-ink">{{ item.title }}</p>
+                <p class="mt-1 text-linear-ink-subtle">{{ item.description }}</p>
               </div>
-              <h3 class="text-xl font-bold text-orange-50">{{ feature.title }}</h3>
-              <p class="mt-3 text-sm leading-7 text-stone-400">{{ feature.description }}</p>
+            </div>
+          </div>
+
+          <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="linear-pricing-grid">
+            <article
+              v-for="plan in subscriptionPlans"
+              :key="plan.name"
+              data-testid="pricing-plan-card"
+              class="linx-panel group flex min-w-0 flex-col p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
+              :class="plan.featured ? 'border-primary-500/45 bg-primary-500/[0.045]' : ''"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ plan.name }}</h3>
+                <span class="font-mono-brand ui-accent-badge rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wider">
+                  {{ plan.badge }}
+                </span>
+              </div>
+
+              <div class="mt-6">
+                <p class="flex items-baseline gap-2">
+                  <span class="text-4xl font-semibold tracking-[-0.06em] text-linear-ink">{{ plan.price }}</span>
+                  <span class="text-sm font-medium text-linear-ink-tertiary">/ {{ copy.planPeriod }}</span>
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <p class="font-mono-brand inline-flex rounded-lg border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-sm font-medium text-primary-300">
+                    {{ plan.quota }}
+                  </p>
+                  <p class="inline-flex rounded-lg border border-linear-hairline bg-linear-surface-2 px-3 py-1.5 text-sm font-medium text-linear-ink-muted">
+                    {{ copy.monthlyTotalLabel }} {{ plan.monthlyTotal }}
+                  </p>
+                </div>
+              </div>
+
+              <p class="mt-5 text-sm leading-6 text-linear-ink-subtle">{{ plan.description }}</p>
+
+              <ul class="mt-6 space-y-3 border-t border-linear-hairline pt-5">
+                <li
+                  v-for="benefit in plan.benefits"
+                  :key="benefit"
+                  class="flex gap-3 text-sm leading-6 text-linear-ink-muted"
+                >
+                  <span class="ui-accent-dot mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+                  <span>{{ benefit }}</span>
+                </li>
+              </ul>
+
+              <router-link
+                to="/purchase?tab=subscription"
+                :aria-label="`${copy.pricingCta} - ${plan.name}`"
+                class="mt-7 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
+                :class="plan.featured ? 'bg-primary-500 text-white hover:bg-primary-400' : 'border border-linear-hairline bg-linear-canvas text-linear-ink hover:border-linear-hairline-strong hover:bg-linear-surface-1'"
+              >
+                {{ copy.pricingCta }}
+                <Icon name="arrowRight" size="sm" class="ml-2" :stroke-width="2" />
+              </router-link>
             </article>
           </div>
+
+          <p class="mt-6 text-xs text-linear-ink-tertiary">{{ copy.pricingFootnote }}</p>
         </div>
       </section>
 
-      <section id="advantages" class="px-6 py-16">
-        <div class="mx-auto max-w-7xl rounded-[2rem] border border-orange-200/10 bg-[#0d0905]/80 p-6 sm:p-8">
-          <div class="mb-8 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <!-- ===== Model Pricing ===== -->
+      <section id="model-pricing" class="scroll-mt-24 border-t border-linear-hairline bg-linear-canvas">
+        <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+          <div class="mb-8 grid gap-6 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
             <div>
-              <p class="text-sm font-semibold uppercase tracking-[0.3em] text-orange-400">Advantages</p>
-              <h2 class="mt-3 text-3xl font-black tracking-tight text-orange-50">支持多提供商统一编排</h2>
+              <p class="linx-section-kicker">{{ copy.modelPricingKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.modelPricingTitle }}</h2>
             </div>
-            <p class="max-w-lg text-sm leading-7 text-stone-400">
-              以 OpenAI 兼容体验接入主流编程模型，后续服务商可持续扩展。
-            </p>
+            <div class="text-left lg:max-w-2xl">
+              <p class="text-base leading-7 text-linear-ink-subtle">{{ copy.modelPricingDescription }}</p>
+              <span class="font-mono-brand mt-4 inline-flex rounded-full border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-xs font-medium text-primary-300">
+                {{ copy.modelPricingUnit }}
+              </span>
+            </div>
           </div>
-          <div class="flex flex-wrap gap-3">
-            <span
-              v-for="provider in providers"
-              :key="provider"
-              class="rounded-full border border-orange-200/[0.12] bg-black/25 px-5 py-3 text-sm font-semibold text-stone-200"
-            >
-              {{ provider }}
-            </span>
+
+          <div data-testid="homepage-model-pricing-table" class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left">
+            <div class="grid gap-px bg-linear-hairline lg:grid-cols-2">
+              <section
+                v-for="group in modelPricingGroups"
+                :key="group.provider"
+                class="bg-linear-surface-1 p-5"
+              >
+                <div class="mb-4 flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full" :class="group.dotClass"></span>
+                    <h4 class="text-base font-semibold tracking-[-0.025em] text-linear-ink">{{ group.provider }}</h4>
+                  </div>
+                  <span class="text-xs font-medium text-linear-ink-tertiary">{{ copy.modelPricingProviderLabel }}</span>
+                </div>
+
+                <div class="overflow-hidden rounded-xl border border-linear-hairline bg-linear-canvas">
+                  <div class="hidden grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] border-b border-linear-hairline bg-linear-surface-2 px-4 py-3 text-[11px] font-medium uppercase tracking-[0.14em] text-linear-ink-tertiary sm:grid">
+                    <span>{{ copy.modelPricingModel }}</span>
+                    <span>{{ copy.modelPricingInput }}</span>
+                    <span>{{ copy.modelPricingOutput }}</span>
+                    <span>{{ copy.modelPricingCacheRead }}</span>
+                  </div>
+                  <div
+                    v-for="model in group.models"
+                    :key="model.name"
+                    data-testid="homepage-model-pricing-row"
+                    class="grid gap-3 border-b border-linear-hairline px-4 py-4 last:border-b-0 sm:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] sm:items-center"
+                  >
+                    <div>
+                      <p class="font-medium tracking-[-0.02em] text-linear-ink">{{ model.name }}</p>
+                      <p class="mt-1 text-xs text-linear-ink-tertiary">{{ model.note }}</p>
+                    </div>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingInput }} </span>{{ model.input }}</p>
+                    <p class="font-mono-brand text-sm font-semibold text-primary-300"><span class="font-sans sm:hidden">{{ copy.modelPricingOutput }} </span>{{ model.output }}</p>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingCacheRead }} </span>{{ model.cacheRead }}</p>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="px-6 py-20">
-        <div class="mx-auto max-w-5xl rounded-[2.25rem] border border-orange-300/15 bg-gradient-to-br from-orange-500/[0.16] to-stone-950 p-8 text-center shadow-[0_0_80px_rgba(249,115,22,0.12)] sm:p-12">
-          <p class="text-sm font-semibold uppercase tracking-[0.3em] text-orange-300">Ready for production</p>
-          <h2 class="mt-4 text-3xl font-black tracking-tight text-orange-50 sm:text-5xl">把编程 API 纳入企业级运营</h2>
-          <p class="mx-auto mt-5 max-w-2xl text-base leading-8 text-stone-300">
-            从第一条请求开始获得统一鉴权、账号池调度、用量透明和可观测链路。
-          </p>
+      <!-- ===== CTA ===== -->
+      <section class="px-4 py-16 sm:px-6 lg:px-8">
+        <div class="linx-panel-strong mx-auto max-w-5xl p-8 text-center sm:p-12">
+          <p class="linx-section-kicker">{{ copy.ctaKicker }}</p>
+          <h2 class="mt-4 text-3xl font-semibold tracking-[-0.055em] text-linear-ink sm:text-5xl">{{ copy.ctaTitle }}</h2>
+          <p class="mx-auto mt-5 max-w-2xl text-base leading-8 text-linear-ink-muted">{{ copy.ctaDescription }}</p>
           <div class="mt-8 flex flex-col justify-center gap-4 sm:flex-row">
             <router-link
               :to="isAuthenticated ? dashboardPath : '/login'"
-              class="inline-flex items-center justify-center rounded-full bg-orange-500 px-7 py-3 text-base font-bold text-black transition-colors hover:bg-orange-300"
+              class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-400"
             >
               {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
             </router-link>
@@ -231,7 +390,7 @@
               :href="docUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="inline-flex items-center justify-center rounded-full border border-orange-300/30 px-7 py-3 text-base font-semibold text-orange-100 transition-colors hover:bg-orange-300/10"
+              class="inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-canvas px-6 py-3 text-sm font-medium text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-1"
             >
               {{ t('home.docs') }}
             </a>
@@ -240,26 +399,23 @@
       </section>
     </main>
 
-    <footer class="relative z-10 border-t border-orange-200/10 px-6 py-8">
-      <div class="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-center text-sm text-stone-500 sm:flex-row sm:text-left">
-        <p>&copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}</p>
-        <div class="flex items-center gap-5">
+    <!-- ===== Footer ===== -->
+    <footer class="border-t border-linear-hairline px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto flex max-w-7xl flex-col items-center justify-center gap-3 text-center text-sm text-linear-ink-tertiary">
+        <div data-testid="homepage-footer-brand" class="flex flex-col items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline">
+            <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
+          </span>
+          <span>&copy; {{ currentYear }} LINX2.Ltd</span>
+        </div>
+        <div v-if="docUrl" class="flex items-center justify-center gap-5">
           <a
-            v-if="docUrl"
             :href="docUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="transition-colors hover:text-orange-300"
+            class="transition-colors hover:text-linear-ink"
           >
             {{ t('home.docs') }}
-          </a>
-          <a
-            :href="githubUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="transition-colors hover:text-orange-300"
-          >
-            GitHub
           </a>
         </div>
       </div>
@@ -275,109 +431,258 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { getMonthlyPlanCards } from '@/utils/monthlyPlans'
 
-type IconName = InstanceType<typeof Icon>['$props']['name']
-
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const authStore = useAuthStore()
 const appStore = useAppStore()
 
-const landingIconUrl = '/landing-icon.jpg'
+const brandIconUrl = '/linx2-icon.png'
 
-// Site settings - directly from appStore (already initialized from injected config)
-const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
+// Site settings
+const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'LINX2')
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
-const brandLogo = computed(() => siteLogo.value || landingIconUrl)
+const brandLogo = computed(() => siteLogo.value || brandIconUrl)
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const trimmedHomeContent = computed(() => homeContent.value.trim())
 const renderedHomeContent = computed(() => DOMPurify.sanitize(marked.parse(homeContent.value) as string))
 
-// Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
   const content = trimmedHomeContent.value
   return content.startsWith('http://') || content.startsWith('https://')
 })
 
-const navItems = [
-  { label: '服务', href: '#services' },
-  { label: '优势', href: '#advantages' },
-]
+const showAnnouncement = ref(true)
 
-const heroTags = ['统一 API', '智能调度', '透明计费']
+const providers = ['Claude Code', 'Codex', 'Messages', 'Responses', 'Chat', 'Images']
 
 const metrics = [
-  { value: '99.9%', label: '可用性' },
-  { value: '628ms', label: '示例延迟' },
-  { value: '24/7', label: '监控' },
+  { value: '99.9%', label: '可用性 Uptime' },
+  { value: '<1s', label: '首字延迟 TTFB' },
+  { value: '24/7', label: '监控 Monitor' },
 ]
 
-const features: Array<{ title: string; description: string; icon: IconName }> = [
+const routeCards = [
+  { label: 'Anthropic Messages', description: 'Claude Code / Messages API', badge: 'Claude' },
+  { label: 'OpenAI Responses', description: 'Responses API compatible path', badge: 'OpenAI' },
+  { label: 'OpenAI Chat Completions', description: 'Chat Completions compatible path', badge: 'OpenAI' },
+  { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
+]
+
+const modelPricingGroups = [
   {
-    title: '统一 API 接入',
-    description: '以统一协议聚合 Claude Code、Codex 与兼容服务，减少团队接入和迁移成本。',
-    icon: 'terminal',
+    provider: 'Anthropic',
+    dotClass: 'bg-[#d97745]',
+    models: [
+      { name: 'Claude Fable 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-fable-5' },
+      { name: 'Claude Mythos 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-mythos-5' },
+      { name: 'Claude Opus 4.7', input: '$5.00', output: '$25.00', cacheRead: '$0.50', note: 'claude-opus-4-7' },
+      { name: 'Claude Sonnet 4.6', input: '$3.00', output: '$15.00', cacheRead: '$0.30', note: 'claude-sonnet-4-6' },
+    ],
   },
   {
-    title: '智能账号池调度',
-    description: '按健康度、额度和延迟动态路由请求，让高峰期调用保持稳定可控。',
-    icon: 'swap',
-  },
-  {
-    title: '用量与余额管理',
-    description: '集中观察消耗、余额和调用趋势，让成本、配额和异常都清晰可见。',
-    icon: 'chart',
+    provider: 'OpenAI',
+    dotClass: 'bg-[#27a644]',
+    models: [
+      { name: 'GPT-5.5', input: '$5.00', output: '$30.00', cacheRead: '$0.50', note: 'gpt-5.5' },
+      { name: 'GPT-5.4', input: '$2.50', output: '$15.00', cacheRead: '$0.25', note: 'gpt-5.4' },
+      { name: 'GPT-5.4 Mini', input: '$0.75', output: '$4.50', cacheRead: '$0.075', note: 'gpt-5.4-mini' },
+      { name: 'GPT-5.3 Codex', input: '$1.75', output: '$14.00', cacheRead: '$0.175', note: 'gpt-5.3-codex' },
+    ],
   },
 ]
 
-const providers = ['Claude Code', 'Codex', 'Gemini', 'OpenAI 兼容', '更多即将支持']
+// Bilingual marketing copy (mirrors LocaleSwitcher in the header).
+const copies = {
+  zh: {
+    announcement: '统一 Claude Code · Codex 官方原生通道，国内稳定直连',
+    nav: { capabilities: '能力', pricing: '价格' },
+    heroKicker: '统一 AI 编程 API · Claude / OpenAI 兼容路由',
+    heroTitle: '一个密钥，接入 Claude 与 OpenAI 编程模型。',
+    heroDescription:
+      '通过统一的计费、用量与访问控制层，转发 Claude Code、Codex 与 OpenAI 兼容请求。无需繁琐配置、无需海外信用卡，开箱即用。',
+    docsCta: '查看文档',
+    learnCta: '了解能力',
+    gw: {
+      title: '供应商与能力墙',
+      consoleTitle: 'API Gateway Console',
+      description: '一个平台密钥路由到兼容的模型 API。',
+      badge: '可用路由',
+      flowTitle: '网关流程',
+      routeTitle: 'Claude / OpenAI 路由矩阵',
+      routeSummary: '当前聚焦 Claude 与 OpenAI 两类上游能力。',
+      baseUrlTitle: 'Base URL',
+      flow: [
+        { title: '应用请求', description: '使用供应商兼容客户端和一个 LINX2 密钥。' },
+        { title: '余额保护', description: '转发模型流量前检查账户访问和余额。' },
+        { title: '用量账本', description: '记录模型、Token、状态和费用轨迹。' },
+      ],
+    },
+    features: [
+      { title: '一个密钥接入所有模型', description: '为应用、Agent 和实验发放平台密钥，上游官方凭证安全保留在网关背后。' },
+      { title: '余额感知准入', description: '请求前进行余额保护，供应商响应后记录实际用量和费用，账单清晰可控。' },
+      { title: '官方原生 · 稳定直连', description: '官方原价透传、原生模型通道，专线优化国内直连，减少等待与网络折损。' },
+    ],
+    capabilityKicker: '能力概览',
+    capabilityTitle: '覆盖主流编程模型，同时保留运营控制。',
+    capabilityDescription:
+      'LINX2 的表达保持简单：给开发者兼容模型路由，给运营者余额保护，并提供商业可见的用量记录。',
+    capabilities: [
+      { code: 'MESSAGES', title: 'Anthropic 风格调用', description: '在支持的流程中使用熟悉的 messages 路由、流式、工具和多模态请求。' },
+      { code: 'RESPONSES', title: 'OpenAI Responses 路径', description: '让应用客户端保持标准 OpenAI Responses 请求结构，迁移成本极低。' },
+      { code: 'CODEX', title: 'Codex / Chat 兼容', description: '面向 Codex 与 OpenAI Chat Completions 工作负载提供统一转发入口。' },
+      { code: 'LEDGER', title: '用量与计费层', description: '跟踪模型、Token、状态和费用记录，并提供账户级余额保护。' },
+    ],
+    pricingKicker: 'LINX2 订阅方案',
+    pricingTitle: '按月订阅，每 7 天刷新可用额度。',
+    pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容接口。',
+    modelPricingKicker: '价格透明',
+    modelPricingTitle: '价格透明，上游模型价格直传',
+    modelPricingDescription: 'Anthropic 与 OpenAI 上游模型价格直传，按每百万 Token 展示输入、输出与缓存读取单价；实际扣费以控制台账单和渠道配置为准。',
+    modelPricingUnit: '按每百万 Token 计价',
+    modelPricingProviderLabel: '官方原价透传',
+    modelPricingModel: '模型',
+    modelPricingInput: '输入',
+    modelPricingOutput: '输出',
+    modelPricingCacheRead: '缓存读取',
+    pricingCta: '选择方案',
+    planPeriod: '月',
+    monthlyTotalLabel: '总共可获取',
+    pricingFootnote: '订阅额度优先使用；额度不足时继续使用充值余额兜底，实际状态以购买页和控制台为准。',
+    monthlyCardInfo: [
+      { title: '每周发放充值额度', description: '月卡按 7 天为一个周期刷新额度，不直接增加账户充值余额。' },
+      { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容接口，不按供应商拆分。' },
+      { title: '充值余额兜底', description: '订阅额度优先扣除，超出后自动使用充值余额继续请求。' },
+    ],
+    ctaKicker: 'Ready when you are',
+    ctaTitle: '几分钟接入，立即开始编程',
+    ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 OpenAI 纳入统一、稳定、透明计费的编程通道。',
+  },
+  en: {
+    announcement: 'Unified official-native routes for Claude Code · Codex — stable direct access',
+    nav: { capabilities: 'Capabilities', pricing: 'Pricing' },
+    heroKicker: 'Unified AI Coding API · Claude / OpenAI-compatible routes',
+    heroTitle: 'One key for Claude and OpenAI coding models.',
+    heroDescription:
+      'Route Claude Code, Codex and OpenAI-compatible requests through one billing, usage and access layer. No tedious setup, no overseas card — ready out of the box.',
+    docsCta: 'Read docs',
+    learnCta: 'Explore',
+    gw: {
+      title: 'Provider and capability wall',
+      consoleTitle: 'API Gateway Console',
+      description: 'One platform key routes to compatible model APIs.',
+      badge: 'Live routes',
+      flowTitle: 'Gateway flow',
+      routeTitle: 'Claude / OpenAI route matrix',
+      routeSummary: 'Currently focused on Claude and OpenAI upstream capabilities.',
+      baseUrlTitle: 'Base URL',
+      flow: [
+        { title: 'App request', description: 'Use provider-compatible clients and one LINX2 key.' },
+        { title: 'Balance guard', description: 'Check account access and balance before forwarding traffic.' },
+        { title: 'Usage ledger', description: 'Record model, token, status, and cost traces.' },
+      ],
+    },
+    features: [
+      { title: 'One key for every model', description: 'Issue platform keys for apps, agents and experiments while official upstream credentials stay behind the gateway.' },
+      { title: 'Balance-aware admission', description: 'Predictable billing guards before requests exceed balance, then record real usage after provider responses.' },
+      { title: 'Official-native, stable', description: 'Official pass-through pricing and native model routes, with optimized lines for stable low-latency access.' },
+    ],
+    capabilityKicker: 'Capability overview',
+    capabilityTitle: 'Provider breadth without hiding operational controls.',
+    capabilityDescription:
+      'LINX2 keeps the story simple: compatible model routes for builders, balance protection for operators, and usage records for commercial visibility.',
+    capabilities: [
+      { code: 'MESSAGES', title: 'Anthropic-style calls', description: 'Use familiar message routes for text, streaming, tools and multimodal flows where supported.' },
+      { code: 'RESPONSES', title: 'OpenAI Responses paths', description: 'Keep application clients close to standard OpenAI Responses request shapes for compatible workloads.' },
+      { code: 'CODEX', title: 'Codex / Chat compatible', description: 'Provide one forwarding entry for Codex and OpenAI Chat Completions workloads.' },
+      { code: 'LEDGER', title: 'Usage and billing layer', description: 'Track model, token, status and cost records with account-level balance protection.' },
+    ],
+    pricingKicker: 'LINX2 subscription plans',
+    pricingTitle: 'Monthly plans with quota refreshed every seven days.',
+    pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible APIs.',
+    modelPricingKicker: 'Transparent pricing',
+    modelPricingTitle: 'Transparent pricing with upstream model prices passed through',
+    modelPricingDescription: 'Anthropic and OpenAI upstream model prices are passed through and shown per million tokens for input, output, and cache reads. Console billing and channel configuration remain authoritative.',
+    modelPricingUnit: 'Per million tokens',
+    modelPricingProviderLabel: 'Official pass-through',
+    modelPricingModel: 'Model',
+    modelPricingInput: 'Input',
+    modelPricingOutput: 'Output',
+    modelPricingCacheRead: 'Cache read',
+    pricingCta: 'Choose plan',
+    planPeriod: 'month',
+    monthlyTotalLabel: 'Total obtainable',
+    pricingFootnote: 'Subscription quota is used first; recharge balance keeps overflow requests running. Purchase page and console state are authoritative.',
+    monthlyCardInfo: [
+      { title: 'Weekly recharge quota', description: 'Monthly cards refresh usable quota every seven days without adding to your recharge wallet.' },
+      { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible APIs without provider-specific splitting.' },
+      { title: 'Recharge fallback', description: 'Subscription quota is consumed first, then recharge balance automatically covers overflow.' },
+    ],
+    ctaKicker: 'Ready when you are',
+    ctaTitle: 'Connect in minutes, start coding now',
+    ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and OpenAI into one stable, transparent coding gateway.',
+  },
+} as const
+
+const localeCode = computed(() => (String(locale.value).startsWith('zh') ? 'zh' : 'en'))
+const copy = computed(() => copies[localeCode.value])
+const subscriptionPlans = computed(() => getMonthlyPlanCards(localeCode.value).map(plan => ({
+  name: plan.name,
+  badge: plan.badge,
+  price: plan.priceLabel,
+  quota: plan.quotaLabel,
+  monthlyTotal: plan.monthlyTotalLabel,
+  description: plan.description,
+  benefits: plan.benefits,
+  featured: plan.featured,
+})))
 
 // Theme
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
-// GitHub URL
-const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
-
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const isAdmin = computed(() => authStore.isAdmin)
-const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
+const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
 const userInitial = computed(() => {
   const user = authStore.user
   if (!user || !user.email) return ''
   return user.email.charAt(0).toUpperCase()
 })
 
-// Current year for footer
 const currentYear = computed(() => new Date().getFullYear())
 
-// Toggle theme
 function toggleTheme() {
   isDark.value = !isDark.value
   document.documentElement.classList.toggle('dark', isDark.value)
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
 }
 
-// Initialize theme
 function initTheme() {
   const savedTheme = localStorage.getItem('theme')
-  if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  ) {
+  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
     isDark.value = true
     document.documentElement.classList.add('dark')
   }
 }
 
+// Load distinctive brand fonts only for the landing page (keeps dashboard lean).
+function ensureBrandFonts() {
+  if (document.getElementById('linx2-brand-fonts')) return
+  const link = document.createElement('link')
+  link.id = 'linx2-brand-fonts'
+  link.rel = 'stylesheet'
+  link.href =
+    'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Manrope:wght@400..700&family=JetBrains+Mono:wght@400..600&display=swap'
+  document.head.appendChild(link)
+}
+
 onMounted(() => {
   initTheme()
-
-  // Check auth state
+  ensureBrandFonts()
   authStore.checkAuth()
-
-  // Ensure public settings are loaded (will use cache if already loaded from injected config)
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
@@ -385,11 +690,41 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.landing-grid {
-  background-image:
-    linear-gradient(rgba(251, 146, 60, 0.45) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(251, 146, 60, 0.45) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(circle at 50% 18%, black, transparent 68%);
+.linear-landing {
+  font-family: 'Manrope', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.font-display {
+  font-family: 'Bricolage Grotesque', 'Manrope', system-ui, 'PingFang SC', sans-serif;
+}
+
+.font-mono-brand {
+  font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-rise-delayed {
+  animation: rise 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-rise-delayed {
+    animation: none;
+  }
 }
 </style>

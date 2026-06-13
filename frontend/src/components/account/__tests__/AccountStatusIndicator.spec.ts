@@ -52,7 +52,7 @@ describe('AccountStatusIndicator', () => {
           extra: {
             allow_overages: true,
             model_rate_limits: {
-              'claude-sonnet-4-5': {
+              'claude-mythos-5': {
                 rate_limited_at: '2026-03-15T00:00:00Z',
                 rate_limit_reset_at: '2099-03-15T00:00:00Z'
               }
@@ -68,7 +68,7 @@ describe('AccountStatusIndicator', () => {
     })
 
     expect(wrapper.text()).toContain('⚡')
-    expect(wrapper.text()).toContain('CSon45')
+    expect(wrapper.text()).toContain('CMyth5')
   })
 
   it('模型限流 + overages 未启用 → 普通限流样式（无 ⚡）', () => {

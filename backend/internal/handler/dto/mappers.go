@@ -13,24 +13,25 @@ func UserFromServiceShallow(u *service.User) *User {
 		return nil
 	}
 	return &User{
-		ID:                         u.ID,
-		Email:                      u.Email,
-		Username:                   u.Username,
-		Role:                       u.Role,
-		Balance:                    u.Balance,
-		Concurrency:                u.Concurrency,
-		Status:                     u.Status,
-		AllowedGroups:              u.AllowedGroups,
-		LastActiveAt:               u.LastActiveAt,
-		CreatedAt:                  u.CreatedAt,
-		UpdatedAt:                  u.UpdatedAt,
-		BalanceNotifyEnabled:       u.BalanceNotifyEnabled,
-		BalanceNotifyThresholdType: u.BalanceNotifyThresholdType,
-		BalanceNotifyThreshold:     u.BalanceNotifyThreshold,
-		BalanceNotifyExtraEmails:   NotifyEmailEntriesFromService(u.BalanceNotifyExtraEmails),
-		TotalRecharged:             u.TotalRecharged,
-		RPMLimit:                   u.RPMLimit,
-		DeletedAt:                  u.DeletedAt,
+		ID:                                 u.ID,
+		Email:                              u.Email,
+		Username:                           u.Username,
+		Role:                               u.Role,
+		Balance:                            u.Balance,
+		Concurrency:                        u.Concurrency,
+		Status:                             u.Status,
+		AllowedGroups:                      u.AllowedGroups,
+		LastActiveAt:                       u.LastActiveAt,
+		CreatedAt:                          u.CreatedAt,
+		UpdatedAt:                          u.UpdatedAt,
+		BalanceNotifyEnabled:               u.BalanceNotifyEnabled,
+		SubscriptionBalanceFallbackEnabled: u.SubscriptionBalanceFallbackEnabled,
+		BalanceNotifyThresholdType:         u.BalanceNotifyThresholdType,
+		BalanceNotifyThreshold:             u.BalanceNotifyThreshold,
+		BalanceNotifyExtraEmails:           NotifyEmailEntriesFromService(u.BalanceNotifyExtraEmails),
+		TotalRecharged:                     u.TotalRecharged,
+		RPMLimit:                           u.RPMLimit,
+		DeletedAt:                          u.DeletedAt,
 	}
 }
 
@@ -680,7 +681,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		User:                  UserFromServiceShallow(l.User),
 		APIKey:                APIKeyFromService(l.APIKey),
 		Group:                 GroupFromServiceShallow(l.Group),
-		Subscription:          UserSubscriptionFromService(l.Subscription),
+		Subscription:          UserSubscriptionFromServiceWithGroup(l.Subscription, l.Group),
 	}
 }
 
@@ -768,7 +769,15 @@ func UserSubscriptionFromService(sub *service.UserSubscription) *UserSubscriptio
 	if sub == nil {
 		return nil
 	}
-	out := userSubscriptionFromServiceBase(sub)
+	out := userSubscriptionFromServiceBase(sub, sub.Group)
+	return &out
+}
+
+func UserSubscriptionFromServiceWithGroup(sub *service.UserSubscription, group *service.Group) *UserSubscription {
+	if sub == nil {
+		return nil
+	}
+	out := userSubscriptionFromServiceBase(sub, group)
 	return &out
 }
 
@@ -779,7 +788,7 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 		return nil
 	}
 	return &AdminUserSubscription{
-		UserSubscription: userSubscriptionFromServiceBase(sub),
+		UserSubscription: userSubscriptionFromServiceBase(sub, sub.Group),
 		AssignedBy:       sub.AssignedBy,
 		AssignedAt:       sub.AssignedAt,
 		Notes:            sub.Notes,
@@ -787,24 +796,36 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 	}
 }
 
-func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscription {
+func userSubscriptionFromServiceBase(sub *service.UserSubscription, group *service.Group) UserSubscription {
 	return UserSubscription{
-		ID:                 sub.ID,
-		UserID:             sub.UserID,
-		GroupID:            sub.GroupID,
-		StartsAt:           sub.StartsAt,
-		ExpiresAt:          sub.ExpiresAt,
-		Status:             sub.Status,
-		DailyWindowStart:   sub.DailyWindowStart,
-		WeeklyWindowStart:  sub.WeeklyWindowStart,
-		MonthlyWindowStart: sub.MonthlyWindowStart,
-		DailyUsageUSD:      sub.DailyUsageUSD,
-		WeeklyUsageUSD:     sub.WeeklyUsageUSD,
-		MonthlyUsageUSD:    sub.MonthlyUsageUSD,
-		CreatedAt:          sub.CreatedAt,
-		UpdatedAt:          sub.UpdatedAt,
-		User:               UserFromServiceShallow(sub.User),
-		Group:              GroupFromServiceShallow(sub.Group),
+		ID:                        sub.ID,
+		UserID:                    sub.UserID,
+		GroupID:                   sub.GroupID,
+		PlanID:                    sub.PlanID,
+		PlanName:                  sub.PlanName,
+		ScheduledPlanID:           sub.ScheduledPlanID,
+		ScheduledPlanName:         sub.ScheduledPlanName,
+		ScheduledSevenDayLimitUSD: sub.ScheduledSevenDayLimitUSD,
+		ScheduledPlanEffectiveAt:  sub.ScheduledPlanEffectiveAt,
+		ScheduledExpiresAt:        sub.ScheduledExpiresAt,
+		ScheduledOrderID:          sub.ScheduledOrderID,
+		StartsAt:                  sub.StartsAt,
+		ExpiresAt:                 sub.ExpiresAt,
+		Status:                    sub.Status,
+		DailyWindowStart:          sub.DailyWindowStart,
+		WeeklyWindowStart:         sub.WeeklyWindowStart,
+		MonthlyWindowStart:        sub.MonthlyWindowStart,
+		DailyUsageUSD:             sub.DailyUsageUSD,
+		WeeklyUsageUSD:            sub.WeeklyUsageUSD,
+		MonthlyUsageUSD:           sub.MonthlyUsageUSD,
+		SevenDayLimitUSD:          sub.EffectiveSevenDayLimit(group),
+		SevenDayUsageUSD:          sub.WeeklyUsageUSD,
+		SevenDayRemainingUSD:      sub.SevenDayRemaining(group),
+		SevenDayResetAt:           sub.WeeklyResetTime(),
+		CreatedAt:                 sub.CreatedAt,
+		UpdatedAt:                 sub.UpdatedAt,
+		User:                      UserFromServiceShallow(sub.User),
+		Group:                     GroupFromServiceShallow(sub.Group),
 	}
 }
 

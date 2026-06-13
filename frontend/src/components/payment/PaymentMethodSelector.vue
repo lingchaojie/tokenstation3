@@ -10,12 +10,12 @@
         type="button"
         :disabled="!method.available"
         :class="[
-          'relative flex h-[60px] flex-col items-center justify-center rounded-lg border px-3 transition-all sm:flex-1',
+          'linear-method-option relative flex min-h-[72px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-linear-hairline dark:bg-linear-surface-1 dark:hover:border-linear-hairline-strong dark:hover:bg-linear-surface-2 sm:flex-1',
           !method.available
-            ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-dark-700 dark:bg-dark-800/50'
+            ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-linear-hairline dark:bg-linear-surface-1/50'
             : selected === method.type
               ? methodSelectedClass(method.type)
-              : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:border-dark-500',
+              : 'text-gray-700 dark:text-gray-200',
         ]"
         @click="method.available && emit('select', method.type)"
       >
@@ -86,10 +86,10 @@ function methodIcon(type: string): string {
 }
 
 function methodSelectedClass(type: string): string {
-  if (type.includes('alipay')) return 'border-[#02A9F1] bg-blue-50 text-gray-900 shadow-sm dark:bg-blue-950 dark:text-gray-100'
-  if (type.includes('wxpay')) return 'border-[#09BB07] bg-green-50 text-gray-900 shadow-sm dark:bg-green-950 dark:text-gray-100'
-  if (type === 'stripe') return 'border-[#676BE5] bg-indigo-50 text-gray-900 shadow-sm dark:bg-indigo-950 dark:text-gray-100'
-  if (type === 'airwallex') return 'border-[#FF6B3D] bg-orange-50 text-gray-900 shadow-sm dark:border-[#FF8E3C] dark:bg-orange-950 dark:text-gray-100'
-  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-sm dark:bg-primary-950 dark:text-gray-100'
+  if (type.includes('alipay')) return 'border-primary-500 bg-primary-50 dark:border-primary-500/60 dark:bg-primary-500/10 border-[#02A9F1] bg-blue-50 text-gray-900 shadow-sm dark:bg-blue-950 dark:text-gray-100'
+  if (type.includes('wxpay')) return 'border-primary-500 bg-primary-50 dark:border-primary-500/60 dark:bg-primary-500/10 border-[#09BB07] bg-green-50 text-gray-900 shadow-sm dark:bg-green-950 dark:text-gray-100'
+  if (type === 'stripe') return 'border-primary-500 bg-primary-50 dark:border-primary-500/60 dark:bg-primary-500/10 border-[#676BE5] bg-indigo-50 text-gray-900 shadow-sm dark:bg-indigo-950 dark:text-gray-100'
+  if (type === 'airwallex') return 'border-primary-500 bg-primary-50 dark:border-primary-500/60 dark:bg-primary-500/10 border-[#FF6B3D] bg-orange-50 text-gray-900 shadow-sm dark:border-[#FF8E3C] dark:bg-orange-950 dark:text-gray-100'
+  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-sm dark:border-primary-500/60 dark:bg-primary-500/10 dark:text-gray-100'
 }
 </script>

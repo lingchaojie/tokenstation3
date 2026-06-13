@@ -1,5 +1,6 @@
 <template>
   <AppLayout>
+    <div class="linear-keys-page">
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-col gap-3">
@@ -54,7 +55,7 @@
         >
           <template #cell-key="{ value, row }">
             <div class="flex items-center gap-2">
-              <code class="code text-xs">
+              <code class="code text-xs tracking-[-0.01em]">
                 {{ maskApiKey(value) }}
               </code>
               <button
@@ -916,6 +917,7 @@
       </template>
     </BaseDialog>
 
+    </div>
   </AppLayout>
 </template>
 

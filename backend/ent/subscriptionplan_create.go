@@ -68,6 +68,20 @@ func (_c *SubscriptionPlanCreate) SetNillableOriginalPrice(v *float64) *Subscrip
 	return _c
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_c *SubscriptionPlanCreate) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanCreate {
+	_c.mutation.SetSevenDayQuotaUsd(v)
+	return _c
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetSevenDayQuotaUsd(*v)
+	}
+	return _c
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_c *SubscriptionPlanCreate) SetValidityDays(v int) *SubscriptionPlanCreate {
 	_c.mutation.SetValidityDays(v)
@@ -353,6 +367,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 		_spec.SetField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64, value)
 		_node.OriginalPrice = &value
 	}
+	if value, ok := _c.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+		_node.SevenDayQuotaUsd = &value
+	}
 	if value, ok := _c.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
 		_node.ValidityDays = value
@@ -518,6 +536,30 @@ func (u *SubscriptionPlanUpsert) AddOriginalPrice(v float64) *SubscriptionPlanUp
 // ClearOriginalPrice clears the value of the "original_price" field.
 func (u *SubscriptionPlanUpsert) ClearOriginalPrice() *SubscriptionPlanUpsert {
 	u.SetNull(subscriptionplan.FieldOriginalPrice)
+	return u
+}
+
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldSevenDayQuotaUsd, v)
+	return u
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldSevenDayQuotaUsd)
+	return u
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldSevenDayQuotaUsd, v)
+	return u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldSevenDayQuotaUsd)
 	return u
 }
 
@@ -757,6 +799,34 @@ func (u *SubscriptionPlanUpsertOne) UpdateOriginalPrice() *SubscriptionPlanUpser
 func (u *SubscriptionPlanUpsertOne) ClearOriginalPrice() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearOriginalPrice()
+	})
+}
+
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSevenDayQuotaUsd(v)
+	})
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSevenDayQuotaUsd(v)
+	})
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSevenDayQuotaUsd()
+	})
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSevenDayQuotaUsd()
 	})
 }
 
@@ -1178,6 +1248,34 @@ func (u *SubscriptionPlanUpsertBulk) UpdateOriginalPrice() *SubscriptionPlanUpse
 func (u *SubscriptionPlanUpsertBulk) ClearOriginalPrice() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearOriginalPrice()
+	})
+}
+
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSevenDayQuotaUsd(v)
+	})
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSevenDayQuotaUsd(v)
+	})
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSevenDayQuotaUsd()
+	})
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSevenDayQuotaUsd()
 	})
 }
 

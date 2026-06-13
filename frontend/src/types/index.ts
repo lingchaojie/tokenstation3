@@ -93,6 +93,7 @@ export interface User {
   balance_notify_enabled: boolean
   balance_notify_threshold: number | null
   balance_notify_extra_emails: NotifyEmailEntry[]
+  subscription_balance_fallback_enabled: boolean
   subscriptions?: UserSubscription[] // User's active subscriptions
   last_active_at?: string | null
   created_at: string
@@ -1558,43 +1559,69 @@ export interface UserSubscription {
   id: number
   user_id: number
   group_id: number
+  plan_id: number | null
+  plan_name: string | null
+  scheduled_plan_id?: number | null
+  scheduled_plan_name?: string | null
+  scheduled_seven_day_limit_usd?: number | null
+  scheduled_plan_effective_at?: string | null
+  scheduled_expires_at?: string | null
+  scheduled_order_id?: number | null
   status: 'active' | 'expired' | 'revoked'
   starts_at: string
+  expires_at: string
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  seven_day_limit_usd: number | null
+  seven_day_usage_usd: number
+  seven_day_remaining_usd: number | null
+  seven_day_reset_at: string | null
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
   created_at: string
   updated_at: string
-  expires_at: string | null
   user?: User
   group?: Group
 }
 
+export interface SubscriptionBalanceSummary {
+  remaining: number
+  total: number
+  used: number
+  resetAt: string | null
+  planName: string | null
+  planNames?: string[]
+  activePlanCount?: number
+  displayMode?: 'none' | 'single' | 'multiple'
+  planKey?: 'basic' | 'plus' | 'pro' | 'max' | null
+  priceCny?: number | null
+}
+
+export interface SubscriptionProgressEntry {
+  limit_usd: number
+  used_usd: number
+  remaining_usd: number
+  percentage: number
+  window_start: string
+  resets_at: string
+  resets_in_seconds: number
+}
+
 export interface SubscriptionProgress {
-  subscription_id: number
-  daily: {
-    used: number
-    limit: number | null
-    percentage: number
-    reset_in_seconds: number | null
-  } | null
-  weekly: {
-    used: number
-    limit: number | null
-    percentage: number
-    reset_in_seconds: number | null
-  } | null
-  monthly: {
-    used: number
-    limit: number | null
-    percentage: number
-    reset_in_seconds: number | null
-  } | null
-  expires_at: string | null
-  days_remaining: number | null
+  id: number
+  group_name: string
+  expires_at: string
+  expires_in_days: number
+  daily?: SubscriptionProgressEntry
+  weekly?: SubscriptionProgressEntry
+  monthly?: SubscriptionProgressEntry
+}
+
+export interface SubscriptionProgressResponse {
+  subscription: UserSubscription
+  progress: SubscriptionProgress
 }
 
 export interface AssignSubscriptionRequest {

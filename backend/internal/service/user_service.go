@@ -65,11 +65,15 @@ var (
 
 // UserListFilters contains all filter options for listing users
 type UserListFilters struct {
-	Status     string           // User status filter
-	Role       string           // User role filter
-	Search     string           // Search in email, username
-	GroupName  string           // Filter by allowed group name (fuzzy match)
-	Attributes map[int64]string // Custom attribute filters: attributeID -> value
+	Status    string // User status filter
+	Role      string // User role filter
+	Search    string // Search in email, username
+	GroupName string // Filter by allowed group name (fuzzy match)
+	// APIKeyGroupID filters users who own at least one non-soft-deleted API key
+	// bound to this group (api_keys.group_id). 0 = no filter. Covers all three
+	// group types since it matches the key's group directly, not allowed_groups.
+	APIKeyGroupID int64
+	Attributes    map[int64]string // Custom attribute filters: attributeID -> value
 	// IncludeSubscriptions controls whether ListWithFilters should load active subscriptions.
 	// For large datasets this can be expensive; admin list pages should enable it on demand.
 	// nil means not specified (default: load subscriptions for backward compatibility).
@@ -173,12 +177,13 @@ const (
 
 // UpdateProfileRequest 更新用户资料请求
 type UpdateProfileRequest struct {
-	Email                  *string  `json:"email"`
-	Username               *string  `json:"username"`
-	AvatarURL              *string  `json:"avatar_url"`
-	Concurrency            *int     `json:"concurrency"`
-	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
-	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
+	Email                              *string  `json:"email"`
+	Username                           *string  `json:"username"`
+	AvatarURL                          *string  `json:"avatar_url"`
+	Concurrency                        *int     `json:"concurrency"`
+	BalanceNotifyEnabled               *bool    `json:"balance_notify_enabled"`
+	SubscriptionBalanceFallbackEnabled *bool    `json:"subscription_balance_fallback_enabled"`
+	BalanceNotifyThreshold             *float64 `json:"balance_notify_threshold"`
 }
 
 type UserAvatar struct {
@@ -389,48 +394,54 @@ func (s *UserService) UnbindUserAuthProviderWithResult(ctx context.Context, user
 func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req UpdateProfileRequest) (*User, error) {
 	if txRunner, ok := s.userRepo.(userProfileIdentityTxRunner); ok {
 		var (
-			updated        *User
-			oldConcurrency int
+			updated                               *User
+			oldConcurrency                        int
+			oldSubscriptionBalanceFallbackEnabled bool
 		)
 		if err := txRunner.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {
 			var err error
-			updated, oldConcurrency, err = s.updateProfile(txCtx, userID, req)
+			updated, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, err = s.updateProfile(txCtx, userID, req)
 			return err
 		}); err != nil {
 			return nil, err
 		}
-		if s.authCacheInvalidator != nil && updated != nil && updated.Concurrency != oldConcurrency {
+		if s.authCacheInvalidator != nil && shouldInvalidateAuthCache(updated, oldConcurrency, oldSubscriptionBalanceFallbackEnabled) {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 		}
 		return updated, nil
 	}
 
-	updated, oldConcurrency, err := s.updateProfile(ctx, userID, req)
+	updated, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, err := s.updateProfile(ctx, userID, req)
 	if err != nil {
 		return nil, err
 	}
-	if s.authCacheInvalidator != nil && updated.Concurrency != oldConcurrency {
+	if s.authCacheInvalidator != nil && shouldInvalidateAuthCache(updated, oldConcurrency, oldSubscriptionBalanceFallbackEnabled) {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
 	return updated, nil
 }
 
-func (s *UserService) updateProfile(ctx context.Context, userID int64, req UpdateProfileRequest) (*User, int, error) {
+func shouldInvalidateAuthCache(user *User, oldConcurrency int, oldSubscriptionBalanceFallbackEnabled bool) bool {
+	return user != nil && (user.Concurrency != oldConcurrency || user.SubscriptionBalanceFallbackEnabled != oldSubscriptionBalanceFallbackEnabled)
+}
+
+func (s *UserService) updateProfile(ctx context.Context, userID int64, req UpdateProfileRequest) (*User, int, bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("get user: %w", err)
+		return nil, 0, false, fmt.Errorf("get user: %w", err)
 	}
 	oldConcurrency := user.Concurrency
+	oldSubscriptionBalanceFallbackEnabled := user.SubscriptionBalanceFallbackEnabled
 
 	// 更新字段
 	if req.Email != nil {
 		// 检查新邮箱是否已被使用
 		exists, err := s.userRepo.ExistsByEmail(ctx, *req.Email)
 		if err != nil {
-			return nil, oldConcurrency, fmt.Errorf("check email exists: %w", err)
+			return nil, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, fmt.Errorf("check email exists: %w", err)
 		}
 		if exists && *req.Email != user.Email {
-			return nil, oldConcurrency, ErrEmailExists
+			return nil, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, ErrEmailExists
 		}
 		user.Email = *req.Email
 	}
@@ -442,7 +453,7 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 	if req.AvatarURL != nil {
 		avatar, err := s.SetAvatar(ctx, userID, *req.AvatarURL)
 		if err != nil {
-			return nil, oldConcurrency, err
+			return nil, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, err
 		}
 		applyUserAvatar(user, avatar)
 	}
@@ -454,6 +465,9 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 	if req.BalanceNotifyEnabled != nil {
 		user.BalanceNotifyEnabled = *req.BalanceNotifyEnabled
 	}
+	if req.SubscriptionBalanceFallbackEnabled != nil {
+		user.SubscriptionBalanceFallbackEnabled = *req.SubscriptionBalanceFallbackEnabled
+	}
 	if req.BalanceNotifyThreshold != nil {
 		if *req.BalanceNotifyThreshold <= 0 {
 			user.BalanceNotifyThreshold = nil // clear to system default
@@ -463,10 +477,10 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
-		return nil, oldConcurrency, fmt.Errorf("update user: %w", err)
+		return nil, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, fmt.Errorf("update user: %w", err)
 	}
 
-	return user, oldConcurrency, nil
+	return user, oldConcurrency, oldSubscriptionBalanceFallbackEnabled, nil
 }
 
 func (s *UserService) SetAvatar(ctx context.Context, userID int64, raw string) (*UserAvatar, error) {

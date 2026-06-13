@@ -1,6 +1,6 @@
 <template>
-  <div class="card p-4">
-    <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
+  <div class="linx-panel p-5">
+    <h3 class="mb-4 text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
       {{ t('admin.dashboard.tokenUsageTrend') }}
     </h3>
     <div v-if="loading" class="flex h-48 items-center justify-center">
@@ -11,7 +11,7 @@
     </div>
     <div
       v-else
-      class="flex h-48 items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+      class="flex h-48 items-center justify-center text-xs text-gray-500 dark:text-linear-ink-subtle"
     >
       {{ t('admin.dashboard.noDataAvailable') }}
     </div>

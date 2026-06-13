@@ -1,14 +1,14 @@
 <template>
-  <div class="card">
-    <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-      <h2 class="text-lg font-medium text-gray-900 dark:text-white">
+  <div class="linx-panel p-5">
+    <div class="border-b border-gray-100 pb-4 dark:border-dark-700">
+      <h2 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
         {{ t('profile.totp.title') }}
       </h2>
-      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+      <p class="mt-1 text-sm text-gray-500 dark:text-linear-ink-subtle">
         {{ t('profile.totp.description') }}
       </p>
     </div>
-    <div class="px-6 py-6">
+    <div class="pt-5">
       <!-- Loading state -->
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
@@ -25,7 +25,7 @@
           <p class="font-medium text-gray-700 dark:text-gray-300">
             {{ t('profile.totp.featureDisabled') }}
           </p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">
+          <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
             {{ t('profile.totp.featureDisabledHint') }}
           </p>
         </div>
@@ -43,7 +43,7 @@
             <p class="font-medium text-gray-900 dark:text-white">
               {{ t('profile.totp.enabled') }}
             </p>
-            <p v-if="status.enabled_at" class="text-sm text-gray-500 dark:text-gray-400">
+            <p v-if="status.enabled_at" class="text-sm text-gray-500 dark:text-linear-ink-subtle">
               {{ t('profile.totp.enabledAt') }}: {{ formatDate(status.enabled_at) }}
             </p>
           </div>
@@ -69,7 +69,7 @@
             <p class="font-medium text-gray-700 dark:text-gray-300">
               {{ t('profile.totp.notEnabled') }}
             </p>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
+            <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
               {{ t('profile.totp.notEnabledHint') }}
             </p>
           </div>

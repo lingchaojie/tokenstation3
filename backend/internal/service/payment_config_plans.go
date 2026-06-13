@@ -36,6 +36,9 @@ func validatePlanRequired(name string, groupID int64, price float64, validityDay
 
 // validatePlanPatch validates only the non-nil fields in a patch update.
 func validatePlanPatch(req UpdatePlanRequest) error {
+	if req.SevenDayQuotaUSD != nil && req.ClearSevenDayQuotaUSD {
+		return infraerrors.BadRequest("PLAN_SEVEN_DAY_QUOTA_CONFLICT", "seven day quota cannot be set and cleared in the same request")
+	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
 		return infraerrors.BadRequest("PLAN_NAME_REQUIRED", "plan name is required")
 	}
@@ -53,6 +56,9 @@ func validatePlanPatch(req UpdatePlanRequest) error {
 	}
 	if req.OriginalPrice != nil && *req.OriginalPrice < 0 {
 		return infraerrors.BadRequest("PLAN_ORIGINAL_PRICE_INVALID", "original price must be >= 0")
+	}
+	if req.SevenDayQuotaUSD != nil && *req.SevenDayQuotaUSD < 0 {
+		return infraerrors.BadRequest("PLAN_SEVEN_DAY_QUOTA_INVALID", "seven day quota must be >= 0")
 	}
 	return nil
 }
@@ -124,6 +130,9 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	if err := validatePlanRequired(req.Name, req.GroupID, req.Price, req.ValidityDays, req.ValidityUnit, req.OriginalPrice); err != nil {
 		return nil, err
 	}
+	if req.SevenDayQuotaUSD != nil && *req.SevenDayQuotaUSD < 0 {
+		return nil, infraerrors.BadRequest("PLAN_SEVEN_DAY_QUOTA_INVALID", "seven day quota must be >= 0")
+	}
 	b := s.entClient.SubscriptionPlan.Create().
 		SetGroupID(req.GroupID).SetName(req.Name).SetDescription(req.Description).
 		SetPrice(req.Price).SetValidityDays(req.ValidityDays).SetValidityUnit(req.ValidityUnit).
@@ -131,6 +140,9 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 		SetForSale(req.ForSale).SetSortOrder(req.SortOrder)
 	if req.OriginalPrice != nil {
 		b.SetOriginalPrice(*req.OriginalPrice)
+	}
+	if req.SevenDayQuotaUSD != nil {
+		b.SetSevenDayQuotaUsd(*req.SevenDayQuotaUSD)
 	}
 	return b.Save(ctx)
 }
@@ -157,6 +169,11 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	}
 	if req.OriginalPrice != nil {
 		u.SetOriginalPrice(*req.OriginalPrice)
+	}
+	if req.SevenDayQuotaUSD != nil {
+		u.SetSevenDayQuotaUsd(*req.SevenDayQuotaUSD)
+	} else if req.ClearSevenDayQuotaUSD {
+		u.ClearSevenDayQuotaUsd()
 	}
 	if req.ValidityDays != nil {
 		u.SetValidityDays(*req.ValidityDays)

@@ -1,22 +1,26 @@
 <template>
-  <div :class="props.embedded ? 'space-y-4' : 'card'">
+  <div :class="props.embedded ? 'space-y-4' : 'linx-panel p-5'">
     <div
       v-if="!props.embedded"
-      class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+      class="border-b border-gray-100 pb-4 dark:border-dark-700"
     >
-      <h2 class="text-lg font-medium text-gray-900 dark:text-white">
+      <h2 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
         {{ t('profile.avatar.title') }}
       </h2>
-      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+      <p class="mt-1 text-sm text-gray-500 dark:text-linear-ink-subtle">
         {{ t('profile.avatar.description') }}
       </p>
     </div>
 
-    <div :class="props.embedded ? 'space-y-3' : 'flex flex-col gap-5 px-6 py-6 sm:flex-row sm:items-start'">
+    <div :class="props.embedded ? 'space-y-3' : 'flex flex-col gap-5 pt-5 sm:flex-row sm:items-start'">
       <div
-        :class="props.embedded
-          ? 'flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 text-xl font-bold text-white shadow-lg shadow-primary-500/20'
-          : 'flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 text-3xl font-bold text-white shadow-lg shadow-primary-500/20'"
+        data-testid="profile-avatar-shell"
+        :class="[
+          'ui-avatar-identity shrink-0 overflow-hidden rounded-2xl',
+          props.embedded
+            ? 'flex h-16 w-16 items-center justify-center text-xl font-bold'
+            : 'flex h-24 w-24 items-center justify-center text-3xl font-bold'
+        ]"
       >
         <img
           v-if="avatarPreviewUrl"
@@ -36,7 +40,7 @@
           <p v-else class="text-sm font-medium text-gray-900 dark:text-white">
             {{ displayName }}
           </p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">
+          <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
             {{ t('profile.avatar.uploadHint') }}
           </p>
         </div>

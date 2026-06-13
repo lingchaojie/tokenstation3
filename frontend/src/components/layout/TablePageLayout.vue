@@ -1,25 +1,29 @@
 <template>
-  <div class="table-page-layout" :class="{ 'mobile-mode': isMobile }">
-    <!-- 固定区域：操作按钮 -->
-    <div v-if="$slots.actions" class="layout-section-fixed">
-      <slot name="actions" />
-    </div>
-
-    <!-- 固定区域：搜索和过滤器 -->
-    <div v-if="$slots.filters" class="layout-section-fixed">
-      <slot name="filters" />
-    </div>
-
-    <!-- 滚动区域：表格 -->
-    <div class="layout-section-scrollable">
-      <div class="card table-scroll-container">
-        <slot name="table" />
+  <div class="linx-page table-page-layout min-h-0" :class="{ 'mobile-mode': isMobile }">
+    <div class="space-y-4">
+      <!-- 固定区域：搜索和过滤器 -->
+      <div v-if="$slots.filters" class="linx-panel layout-section-fixed p-4">
+        <slot name="filters" />
       </div>
-    </div>
 
-    <!-- 固定区域：分页器 -->
-    <div v-if="$slots.pagination" class="layout-section-fixed">
-      <slot name="pagination" />
+      <!-- 固定区域：操作按钮 -->
+      <div v-if="$slots.actions" class="layout-section-fixed flex w-full items-center justify-end gap-3">
+        <slot name="actions" />
+      </div>
+
+      <!-- 滚动区域：表格 -->
+      <div class="layout-section-scrollable">
+        <div class="linx-panel table-scroll-container overflow-hidden">
+          <slot name="table" />
+        </div>
+      </div>
+
+      <!-- 固定区域：分页器 -->
+      <div v-if="$slots.pagination" class="layout-section-fixed">
+        <slot name="pagination" />
+      </div>
+
+      <slot />
     </div>
   </div>
 </template>
@@ -46,8 +50,12 @@ onUnmounted(() => {
 <style scoped>
 /* 桌面端：Flexbox 布局 */
 .table-page-layout {
-  @apply flex flex-col gap-6;
-  height: calc(100vh - 64px - 4rem); /* 减去 header + lg:p-8 的上下padding */
+  @apply flex flex-col;
+  height: calc(100vh - 56px - 3rem); /* 减去 header + lg:p-6 的上下padding */
+}
+
+.table-page-layout > .space-y-4 {
+  @apply flex min-h-0 flex-1 flex-col;
 }
 
 .layout-section-fixed {

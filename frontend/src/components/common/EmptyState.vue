@@ -1,5 +1,5 @@
 <template>
-  <div class="empty-state">
+  <div class="empty-state linx-panel flex flex-col items-center justify-center px-4 py-12 text-center">
     <!-- Icon -->
     <div
       class="mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-gray-100 dark:bg-dark-800"

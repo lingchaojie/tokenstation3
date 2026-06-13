@@ -271,6 +271,20 @@ func (_c *UserCreate) SetNillableBalanceNotifyEnabled(v *bool) *UserCreate {
 	return _c
 }
 
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_c *UserCreate) SetSubscriptionBalanceFallbackEnabled(v bool) *UserCreate {
+	_c.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _c
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_c *UserCreate) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserCreate {
+	if v != nil {
+		_c.SetSubscriptionBalanceFallbackEnabled(*v)
+	}
+	return _c
+}
+
 // SetBalanceNotifyThresholdType sets the "balance_notify_threshold_type" field.
 func (_c *UserCreate) SetBalanceNotifyThresholdType(v string) *UserCreate {
 	_c.mutation.SetBalanceNotifyThresholdType(v)
@@ -638,6 +652,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultBalanceNotifyEnabled
 		_c.mutation.SetBalanceNotifyEnabled(v)
 	}
+	if _, ok := _c.mutation.SubscriptionBalanceFallbackEnabled(); !ok {
+		v := user.DefaultSubscriptionBalanceFallbackEnabled
+		_c.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	}
 	if _, ok := _c.mutation.BalanceNotifyThresholdType(); !ok {
 		v := user.DefaultBalanceNotifyThresholdType
 		_c.mutation.SetBalanceNotifyThresholdType(v)
@@ -727,6 +745,9 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.BalanceNotifyEnabled(); !ok {
 		return &ValidationError{Name: "balance_notify_enabled", err: errors.New(`ent: missing required field "User.balance_notify_enabled"`)}
+	}
+	if _, ok := _c.mutation.SubscriptionBalanceFallbackEnabled(); !ok {
+		return &ValidationError{Name: "subscription_balance_fallback_enabled", err: errors.New(`ent: missing required field "User.subscription_balance_fallback_enabled"`)}
 	}
 	if _, ok := _c.mutation.BalanceNotifyThresholdType(); !ok {
 		return &ValidationError{Name: "balance_notify_threshold_type", err: errors.New(`ent: missing required field "User.balance_notify_threshold_type"`)}
@@ -838,6 +859,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
 		_node.BalanceNotifyEnabled = value
+	}
+	if value, ok := _c.mutation.SubscriptionBalanceFallbackEnabled(); ok {
+		_spec.SetField(user.FieldSubscriptionBalanceFallbackEnabled, field.TypeBool, value)
+		_node.SubscriptionBalanceFallbackEnabled = value
 	}
 	if value, ok := _c.mutation.BalanceNotifyThresholdType(); ok {
 		_spec.SetField(user.FieldBalanceNotifyThresholdType, field.TypeString, value)
@@ -1379,6 +1404,18 @@ func (u *UserUpsert) SetBalanceNotifyEnabled(v bool) *UserUpsert {
 	return u
 }
 
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (u *UserUpsert) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpsert {
+	u.Set(user.FieldSubscriptionBalanceFallbackEnabled, v)
+	return u
+}
+
+// UpdateSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field to the value that was provided on create.
+func (u *UserUpsert) UpdateSubscriptionBalanceFallbackEnabled() *UserUpsert {
+	u.SetExcluded(user.FieldSubscriptionBalanceFallbackEnabled)
+	return u
+}
+
 // UpdateBalanceNotifyEnabled sets the "balance_notify_enabled" field to the value that was provided on create.
 func (u *UserUpsert) UpdateBalanceNotifyEnabled() *UserUpsert {
 	u.SetExcluded(user.FieldBalanceNotifyEnabled)
@@ -1798,6 +1835,20 @@ func (u *UserUpsertOne) SetBalanceNotifyEnabled(v bool) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateBalanceNotifyEnabled() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateBalanceNotifyEnabled()
+	})
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (u *UserUpsertOne) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetSubscriptionBalanceFallbackEnabled(v)
+	})
+}
+
+// UpdateSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateSubscriptionBalanceFallbackEnabled() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateSubscriptionBalanceFallbackEnabled()
 	})
 }
 
@@ -2394,6 +2445,20 @@ func (u *UserUpsertBulk) SetBalanceNotifyEnabled(v bool) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateBalanceNotifyEnabled() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateBalanceNotifyEnabled()
+	})
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (u *UserUpsertBulk) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetSubscriptionBalanceFallbackEnabled(v)
+	})
+}
+
+// UpdateSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateSubscriptionBalanceFallbackEnabled() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateSubscriptionBalanceFallbackEnabled()
 	})
 }
 
