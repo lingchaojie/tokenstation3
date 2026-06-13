@@ -51,6 +51,11 @@ const (
 	apiKeyLastUsedFailBackoff = 5 * time.Second
 )
 
+type APIKeyGroupKeyTypeUpdate struct {
+	KeyType      string
+	ClearKeyType bool
+}
+
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *APIKey) error
 	GetByID(ctx context.Context, id int64) (*APIKey, error)

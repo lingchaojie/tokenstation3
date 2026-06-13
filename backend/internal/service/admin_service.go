@@ -29,6 +29,10 @@ import (
 )
 
 // AdminService interface defines admin management operations
+type apiKeyGroupKeyTypeBulkUpdater interface {
+	UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate APIKeyGroupKeyTypeUpdate) (int64, error)
+}
+
 type AdminService interface {
 	// User management
 	ListUsers(ctx context.Context, page, pageSize int, filters UserListFilters, sortBy, sortOrder string) ([]User, int64, error)
@@ -2609,8 +2613,16 @@ func (s *adminServiceImpl) ReplaceUserGroup(ctx context.Context, userID, oldGrou
 		return nil, fmt.Errorf("add new group to allowed groups: %w", err)
 	}
 
-	// 2. 迁移绑定旧分组的 Key 到新分组
-	migrated, err := s.apiKeyRepo.UpdateGroupIDByUserAndGroup(opCtx, userID, oldGroupID, newGroupID)
+	// 2. 迁移绑定旧分组的 Key 到新分组，并同步 stored key_type 与目标分组平台。
+	keyTypeUpdate := APIKeyGroupKeyTypeUpdate{KeyType: APIKeyTypeFromGroupPlatform(newGroup.Platform)}
+	if keyTypeUpdate.KeyType == "" {
+		keyTypeUpdate.ClearKeyType = true
+	}
+	bulkUpdater, ok := s.apiKeyRepo.(apiKeyGroupKeyTypeBulkUpdater)
+	if !ok {
+		return nil, fmt.Errorf("api key repository does not support key_type-aware group replacement")
+	}
+	migrated, err := bulkUpdater.UpdateGroupIDAndKeyTypeByUserAndGroup(opCtx, userID, oldGroupID, newGroupID, keyTypeUpdate)
 	if err != nil {
 		return nil, fmt.Errorf("migrate api keys: %w", err)
 	}

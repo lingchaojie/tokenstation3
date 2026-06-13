@@ -472,6 +472,7 @@ func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, par
 
 	keysQuery := q.
 		WithUser().
+		WithGroup().
 		Offset(params.Offset()).
 		Limit(params.Limit())
 	for _, order := range apiKeyListOrder(params) {
@@ -556,6 +557,20 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
 		SetGroupID(newGroupID).
 		Save(ctx)
+	return int64(n), err
+}
+
+func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate service.APIKeyGroupKeyTypeUpdate) (int64, error) {
+	client := clientFromContext(ctx, r.client)
+	update := client.APIKey.Update().
+		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
+		SetGroupID(newGroupID)
+	if keyTypeUpdate.ClearKeyType {
+		update.ClearKeyType()
+	} else {
+		update.SetNillableKeyType(nonEmptyStringPtr(keyTypeUpdate.KeyType))
+	}
+	n, err := update.Save(ctx)
 	return int64(n), err
 }
 

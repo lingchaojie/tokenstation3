@@ -306,8 +306,11 @@ func (s *APIKeyRepoSuite) TestListByGroupID() {
 	s.Require().NoError(err, "ListByGroupID")
 	s.Require().Len(keys, 2)
 	s.Require().Equal(int64(2), page.Total)
-	// User preloaded
+	// User and Group are preloaded for admin DTO mapping, including legacy key_type derivation.
 	s.Require().NotNil(keys[0].User)
+	s.Require().NotNil(keys[0].Group)
+	s.Require().Equal(group.ID, keys[0].Group.ID)
+	s.Require().Equal(service.PlatformAnthropic, keys[0].Group.Platform)
 }
 
 func (s *APIKeyRepoSuite) TestCountByGroupID() {
@@ -318,6 +321,75 @@ func (s *APIKeyRepoSuite) TestCountByGroupID() {
 	count, err := s.repo.CountByGroupID(s.ctx, group.ID)
 	s.Require().NoError(err, "CountByGroupID")
 	s.Require().Equal(int64(1), count)
+}
+
+func (s *APIKeyRepoSuite) TestUpdateGroupIDByUserAndGroup_UpdatesKeyTypeFromMappedTargetPlatform() {
+	user := s.mustCreateUser("bulk-keytype-openai@test.com")
+	oldGroup := s.mustCreateGroup("g-bulk-keytype-anthropic")
+	newGroup, err := s.client.Group.Create().
+		SetName("g-bulk-keytype-openai").
+		SetPlatform(service.PlatformOpenAI).
+		SetStatus(service.StatusActive).
+		Save(s.ctx)
+	s.Require().NoError(err)
+
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-bulk-keytype-openai",
+		Name:    "Bulk OpenAI",
+		KeyType: service.APIKeyTypeAnthropic,
+		GroupID: &oldGroup.ID,
+		Status:  service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	affected, err := s.repo.UpdateGroupIDAndKeyTypeByUserAndGroup(s.ctx, user.ID, oldGroup.ID, newGroup.ID, service.APIKeyGroupKeyTypeUpdate{KeyType: service.APIKeyTypeFromGroupPlatform(newGroup.Platform), ClearKeyType: service.APIKeyTypeFromGroupPlatform(newGroup.Platform) == ""})
+
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), affected)
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(got.GroupID)
+	s.Require().Equal(newGroup.ID, *got.GroupID)
+	s.Require().Equal(service.APIKeyTypeOpenAI, got.KeyType)
+	stored, err := s.client.APIKey.Get(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(stored.KeyType)
+	s.Require().Equal(service.APIKeyTypeOpenAI, *stored.KeyType)
+}
+
+func (s *APIKeyRepoSuite) TestUpdateGroupIDByUserAndGroup_ClearsKeyTypeForUnmappedTargetPlatform() {
+	user := s.mustCreateUser("bulk-keytype-gemini@test.com")
+	oldGroup := s.mustCreateGroup("g-bulk-keytype-old-openai")
+	newGroup, err := s.client.Group.Create().
+		SetName("g-bulk-keytype-gemini").
+		SetPlatform(service.PlatformGemini).
+		SetStatus(service.StatusActive).
+		Save(s.ctx)
+	s.Require().NoError(err)
+
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-bulk-keytype-gemini",
+		Name:    "Bulk Gemini",
+		KeyType: service.APIKeyTypeOpenAI,
+		GroupID: &oldGroup.ID,
+		Status:  service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	affected, err := s.repo.UpdateGroupIDAndKeyTypeByUserAndGroup(s.ctx, user.ID, oldGroup.ID, newGroup.ID, service.APIKeyGroupKeyTypeUpdate{KeyType: service.APIKeyTypeFromGroupPlatform(newGroup.Platform), ClearKeyType: service.APIKeyTypeFromGroupPlatform(newGroup.Platform) == ""})
+
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), affected)
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(got.GroupID)
+	s.Require().Equal(newGroup.ID, *got.GroupID)
+	s.Require().Empty(got.KeyType)
+	stored, err := s.client.APIKey.Get(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Nil(stored.KeyType)
 }
 
 // --- ExistsByKey ---

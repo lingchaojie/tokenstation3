@@ -4,13 +4,22 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "modernc.org/sqlite"
 )
 
 // ---------------------------------------------------------------------------
@@ -19,10 +28,14 @@ import (
 
 // userRepoStubForGroupUpdate implements UserRepository for AdminUpdateAPIKeyGroupID tests.
 type userRepoStubForGroupUpdate struct {
-	addGroupErr    error
-	addGroupCalled bool
-	addedUserID    int64
-	addedGroupID   int64
+	addGroupErr       error
+	addGroupCalled    bool
+	addedUserID       int64
+	addedGroupID      int64
+	removeGroupErr    error
+	removeGroupCalled bool
+	removedUserID     int64
+	removedGroupID    int64
 }
 
 func (s *userRepoStubForGroupUpdate) AddGroupToAllowedGroups(_ context.Context, userID int64, groupID int64) error {
@@ -106,16 +119,29 @@ func (s *userRepoStubForGroupUpdate) GetLatestUsedAtByUserID(context.Context, in
 func (s *userRepoStubForGroupUpdate) UpdateUserLastActiveAt(context.Context, int64, time.Time) error {
 	panic("unexpected")
 }
-func (s *userRepoStubForGroupUpdate) RemoveGroupFromUserAllowedGroups(context.Context, int64, int64) error {
-	panic("unexpected")
+func (s *userRepoStubForGroupUpdate) RemoveGroupFromUserAllowedGroups(_ context.Context, userID int64, groupID int64) error {
+	s.removeGroupCalled = true
+	s.removedUserID = userID
+	s.removedGroupID = groupID
+	return s.removeGroupErr
 }
 
 // apiKeyRepoStubForGroupUpdate implements APIKeyRepository for AdminUpdateAPIKeyGroupID tests.
 type apiKeyRepoStubForGroupUpdate struct {
-	key       *APIKey
-	getErr    error
-	updateErr error
-	updated   *APIKey // captures what was passed to Update
+	key                            *APIKey
+	getErr                         error
+	updateErr                      error
+	updated                        *APIKey // captures what was passed to Update
+	bulkMigrated                   int64
+	bulkErr                        error
+	bulkCalled                     bool
+	bulkUserID                     int64
+	bulkOldGroupID                 int64
+	bulkNewGroupID                 int64
+	bulkKeyTypeUpdate              *APIKeyGroupKeyTypeUpdate
+	legacyBulkCalled               bool
+	listKeysByUserIDResult         []string
+	listKeysByUserIDUnexpectedCall bool
 }
 
 func (s *apiKeyRepoStubForGroupUpdate) GetByID(_ context.Context, _ int64) (*APIKey, error) {
@@ -174,7 +200,10 @@ func (s *apiKeyRepoStubForGroupUpdate) CountByGroupID(context.Context, int64) (i
 	panic("unexpected")
 }
 func (s *apiKeyRepoStubForGroupUpdate) ListKeysByUserID(context.Context, int64) ([]string, error) {
-	panic("unexpected")
+	if s.listKeysByUserIDUnexpectedCall {
+		panic("unexpected")
+	}
+	return append([]string(nil), s.listKeysByUserIDResult...), nil
 }
 func (s *apiKeyRepoStubForGroupUpdate) ListKeysByGroupID(context.Context, int64) ([]string, error) {
 	panic("unexpected")
@@ -194,8 +223,22 @@ func (s *apiKeyRepoStubForGroupUpdate) ResetRateLimitWindows(context.Context, in
 func (s *apiKeyRepoStubForGroupUpdate) GetRateLimitData(context.Context, int64) (*APIKeyRateLimitData, error) {
 	panic("unexpected")
 }
-func (s *apiKeyRepoStubForGroupUpdate) UpdateGroupIDByUserAndGroup(context.Context, int64, int64, int64) (int64, error) {
-	panic("unexpected")
+func (s *apiKeyRepoStubForGroupUpdate) UpdateGroupIDByUserAndGroup(_ context.Context, userID, oldGroupID, newGroupID int64) (int64, error) {
+	s.legacyBulkCalled = true
+	s.bulkUserID = userID
+	s.bulkOldGroupID = oldGroupID
+	s.bulkNewGroupID = newGroupID
+	return s.bulkMigrated, s.bulkErr
+}
+
+func (s *apiKeyRepoStubForGroupUpdate) UpdateGroupIDAndKeyTypeByUserAndGroup(_ context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate APIKeyGroupKeyTypeUpdate) (int64, error) {
+	s.bulkCalled = true
+	s.bulkUserID = userID
+	s.bulkOldGroupID = oldGroupID
+	s.bulkNewGroupID = newGroupID
+	copyUpdate := keyTypeUpdate
+	s.bulkKeyTypeUpdate = &copyUpdate
+	return s.bulkMigrated, s.bulkErr
 }
 
 // groupRepoStubForGroupUpdate implements GroupRepository for AdminUpdateAPIKeyGroupID tests.
@@ -281,6 +324,26 @@ func (s *userSubRepoStubForGroupUpdate) GetActiveByUserIDAndGroupID(_ context.Co
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+func newAdminAPIKeyServiceTestEntClient(t *testing.T) *dbent.Client {
+	t.Helper()
+
+	dbName := fmt.Sprintf(
+		"file:%s?mode=memory&cache=shared",
+		strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()),
+	)
+	db, err := sql.Open("sqlite", dbName)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_KeyNotFound(t *testing.T) {
 	repo := &apiKeyRepoStubForGroupUpdate{getErr: ErrAPIKeyNotFound}
@@ -456,6 +519,48 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_NilCacheInvalidator(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, got.APIKey.GroupID)
 	require.Equal(t, int64(7), *got.APIKey.GroupID)
+}
+
+func TestAdminService_ReplaceUserGroup_PassesMappedTargetKeyTypeToBulkMigration(t *testing.T) {
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{bulkMigrated: 2}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 20, Name: "openai", Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeStandard}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	cache := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, authCacheInvalidator: cache, entClient: newAdminAPIKeyServiceTestEntClient(t)}
+
+	result, err := svc.ReplaceUserGroup(context.Background(), 42, 10, 20)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), result.MigratedKeys)
+	require.True(t, userRepo.addGroupCalled)
+	require.Equal(t, int64(42), userRepo.addedUserID)
+	require.Equal(t, int64(20), userRepo.addedGroupID)
+	require.True(t, apiKeyRepo.bulkCalled)
+	require.Equal(t, int64(42), apiKeyRepo.bulkUserID)
+	require.Equal(t, int64(10), apiKeyRepo.bulkOldGroupID)
+	require.Equal(t, int64(20), apiKeyRepo.bulkNewGroupID)
+	require.NotNil(t, apiKeyRepo.bulkKeyTypeUpdate)
+	require.Equal(t, APIKeyTypeOpenAI, apiKeyRepo.bulkKeyTypeUpdate.KeyType)
+	require.False(t, apiKeyRepo.bulkKeyTypeUpdate.ClearKeyType)
+	require.True(t, userRepo.removeGroupCalled)
+	require.Equal(t, int64(42), userRepo.removedUserID)
+	require.Equal(t, int64(10), userRepo.removedGroupID)
+}
+
+func TestAdminService_ReplaceUserGroup_PassesClearKeyTypeForUnmappedTargetPlatform(t *testing.T) {
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{bulkMigrated: 1}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 30, Name: "gemini", Platform: PlatformGemini, Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeStandard}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, entClient: newAdminAPIKeyServiceTestEntClient(t)}
+
+	result, err := svc.ReplaceUserGroup(context.Background(), 42, 10, 30)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.MigratedKeys)
+	require.True(t, apiKeyRepo.bulkCalled)
+	require.NotNil(t, apiKeyRepo.bulkKeyTypeUpdate)
+	require.Empty(t, apiKeyRepo.bulkKeyTypeUpdate.KeyType)
+	require.True(t, apiKeyRepo.bulkKeyTypeUpdate.ClearKeyType)
 }
 
 // ---------------------------------------------------------------------------
