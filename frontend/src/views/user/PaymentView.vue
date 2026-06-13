@@ -691,6 +691,7 @@ const subTotalAmount = computed(() => {
 
 const canSubmitSubscription = computed(() =>
   selectedPlan.value !== null
+    && !isPlanFullForNewOpening(selectedPlan.value)
     && amountFitsMethod(selectedPlan.value.price, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -761,12 +762,27 @@ function classifyPlanSelection(plan: SubscriptionPlan): SwitchConfirmKind | 'ren
   return 'upgrade'
 }
 
+function isSamePlanRenewal(plan: SubscriptionPlan): boolean {
+  return activeSubscriptions.value.some(s => s.status === 'active' && s.plan_id === plan.id)
+}
+
+function isPlanFullForNewOpening(plan: SubscriptionPlan): boolean {
+  return plan.seat_limit !== null && plan.seat_limit !== undefined && plan.seat_full === true && !isSamePlanRenewal(plan)
+}
+
+function warnIfPlanFullForNewOpening(plan: SubscriptionPlan): boolean {
+  if (!isPlanFullForNewOpening(plan)) return false
+  appStore.showWarning('该套餐名额已满，暂不支持新用户开通。')
+  return true
+}
+
 function proceedToSelectedPlan(plan: SubscriptionPlan) {
   selectedPlan.value = plan
   errorMessage.value = ''
 }
 
 function selectPlan(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectIntent) {
+  if (warnIfPlanFullForNewOpening(plan)) return
   const selection = intent === 'renew' ? 'renew' : intent === 'subscribe' ? 'subscribe' : classifyPlanSelection(plan)
   if (selection === 'upgrade' || selection === 'downgrade') {
     switchConfirm.value = { show: true, plan, kind: selection }
@@ -776,6 +792,7 @@ function selectPlan(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectInten
 }
 
 function selectPlanFromModal(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectIntent) {
+  if (warnIfPlanFullForNewOpening(plan)) return
   showRenewalModal.value = false
   renewGroupId.value = null
   selectPlan(plan, intent)
@@ -813,6 +830,7 @@ async function handleSubmitRecharge() {
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
+  if (warnIfPlanFullForNewOpening(selectedPlan.value)) return
   await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id)
 }
 

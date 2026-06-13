@@ -114,6 +114,11 @@ func SortOrder(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSortOrder, v))
 }
 
+// SeatLimit applies equality check predicate on the "seat_limit" field. It's identical to SeatLimitEQ.
+func SeatLimit(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSeatLimit, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldCreatedAt, v))
@@ -717,6 +722,56 @@ func SortOrderLT(v int) predicate.SubscriptionPlan {
 // SortOrderLTE applies the LTE predicate on the "sort_order" field.
 func SortOrderLTE(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldLTE(FieldSortOrder, v))
+}
+
+// SeatLimitEQ applies the EQ predicate on the "seat_limit" field.
+func SeatLimitEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSeatLimit, v))
+}
+
+// SeatLimitNEQ applies the NEQ predicate on the "seat_limit" field.
+func SeatLimitNEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNEQ(FieldSeatLimit, v))
+}
+
+// SeatLimitIn applies the In predicate on the "seat_limit" field.
+func SeatLimitIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIn(FieldSeatLimit, vs...))
+}
+
+// SeatLimitNotIn applies the NotIn predicate on the "seat_limit" field.
+func SeatLimitNotIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotIn(FieldSeatLimit, vs...))
+}
+
+// SeatLimitGT applies the GT predicate on the "seat_limit" field.
+func SeatLimitGT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGT(FieldSeatLimit, v))
+}
+
+// SeatLimitGTE applies the GTE predicate on the "seat_limit" field.
+func SeatLimitGTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGTE(FieldSeatLimit, v))
+}
+
+// SeatLimitLT applies the LT predicate on the "seat_limit" field.
+func SeatLimitLT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLT(FieldSeatLimit, v))
+}
+
+// SeatLimitLTE applies the LTE predicate on the "seat_limit" field.
+func SeatLimitLTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLTE(FieldSeatLimit, v))
+}
+
+// SeatLimitIsNil applies the IsNil predicate on the "seat_limit" field.
+func SeatLimitIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldSeatLimit))
+}
+
+// SeatLimitNotNil applies the NotNil predicate on the "seat_limit" field.
+func SeatLimitNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldSeatLimit))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

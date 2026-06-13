@@ -46,6 +46,12 @@
                 <p v-if="displaySubscriptionDescription(subscription)" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
                   {{ displaySubscriptionDescription(subscription) }}
                 </p>
+                <span
+                  v-if="hasPlanSeatLimit(subscription)"
+                  class="mt-2 inline-flex items-center rounded-full border border-orange-200/70 bg-orange-50 px-2.5 py-1 text-[11px] font-medium text-orange-700 dark:border-orange-400/20 dark:bg-orange-400/10 dark:text-orange-200"
+                >
+                  当前已开通 {{ subscription.seat_used }}/{{ subscription.seat_limit }}
+                </span>
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -352,6 +358,15 @@ function displaySubscriptionDescription(subscription: UserSubscription): string 
   const key = defaultMonthlyPlanKey(subscription.plan_name)
   if (key) return monthlyPlanCopy[key][activeLocale.value].description
   return subscription.group?.description || ''
+}
+
+function hasPlanSeatLimit(subscription: UserSubscription): boolean {
+  return (
+    subscription.seat_limit !== null &&
+    subscription.seat_limit !== undefined &&
+    subscription.seat_used !== null &&
+    subscription.seat_used !== undefined
+  )
 }
 
 async function loadSubscriptions() {

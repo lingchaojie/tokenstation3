@@ -429,6 +429,9 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 	if err != nil || g.Status != payment.EntityStatusActive {
 		return fmt.Errorf("group %d no longer exists or inactive", gid)
 	}
+	if !g.IsSubscriptionType() {
+		return ErrGroupNotSubscriptionType
+	}
 	// Idempotency: check durable completion marker first.
 	if s.hasAuditLog(ctx, o.ID, "SUBSCRIPTION_SUCCESS") {
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", gid)
@@ -439,42 +442,72 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 		slog.Info("subscription already contains payment order note, skipping", "orderID", o.ID, "groupID", gid)
 		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 	}
-	var planID *int64
-	var planName *string
-	var sevenDayLimitUSD *float64
 	if o.PlanID != nil {
-		if s.configService == nil {
-			return fmt.Errorf("payment config service not configured")
-		}
-		plan, err := s.configService.GetPlan(ctx, *o.PlanID)
-		if err != nil {
-			return fmt.Errorf("load subscription plan: %w", err)
-		}
-		if plan.GroupID != gid {
-			return fmt.Errorf("plan %d no longer belongs to group %d", *o.PlanID, gid)
-		}
-		id := int64(plan.ID)
-		name := plan.Name
-		planID = &id
-		planName = &name
-		sevenDayLimitUSD = plan.SevenDayQuotaUsd
+		return s.doSubWithPlanSeat(ctx, o, gid, days, orderNote)
 	}
-
 	orderID := o.ID
 	_, _, err = s.subscriptionSvc.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{
-		UserID:           o.UserID,
-		GroupID:          gid,
-		ValidityDays:     days,
-		AssignedBy:       0,
-		OrderID:          &orderID,
-		Notes:            orderNote,
-		PlanID:           planID,
-		PlanName:         planName,
-		SevenDayLimitUSD: sevenDayLimitUSD,
+		UserID:       o.UserID,
+		GroupID:      gid,
+		ValidityDays: days,
+		AssignedBy:   0,
+		OrderID:      &orderID,
+		Notes:        orderNote,
 	})
 	if err != nil {
 		return fmt.Errorf("assign subscription: %w", err)
 	}
+	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
+}
+
+func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.PaymentOrder, groupID int64, days int, orderNote string) error {
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin plan seat transaction: %w", err)
+	}
+	txCtx := dbent.NewTxContext(ctx, tx)
+	txClosed := false
+	defer func() {
+		if !txClosed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	plan, err := s.configService.LockPlanForUpdate(txCtx, *o.PlanID)
+	if err != nil {
+		return err
+	}
+	if err := s.configService.ValidatePlanSeatAvailable(txCtx, plan, o.UserID); err != nil {
+		_ = tx.Rollback()
+		txClosed = true
+		s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_SEAT_LIMIT_REACHED", "system", map[string]any{
+			"plan_id": *o.PlanID,
+			"user_id": o.UserID,
+		})
+		return err
+	}
+
+	planID := int64(plan.ID)
+	planName := plan.Name
+	orderID := o.ID
+	_, _, err = s.subscriptionSvc.assignOrExtendSubscriptionTerm(txCtx, &AssignSubscriptionInput{
+		UserID:           o.UserID,
+		GroupID:          groupID,
+		PlanID:           &planID,
+		PlanName:         &planName,
+		SevenDayLimitUSD: plan.SevenDayQuotaUsd,
+		ValidityDays:     days,
+		AssignedBy:       0,
+		OrderID:          &orderID,
+		Notes:            orderNote,
+	})
+	if err != nil {
+		return fmt.Errorf("assign subscription: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit plan seat transaction: %w", err)
+	}
+	txClosed = true
 	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 }
 

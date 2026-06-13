@@ -166,6 +166,20 @@ func (_c *SubscriptionPlanCreate) SetNillableSortOrder(v *int) *SubscriptionPlan
 	return _c
 }
 
+// SetSeatLimit sets the "seat_limit" field.
+func (_c *SubscriptionPlanCreate) SetSeatLimit(v int) *SubscriptionPlanCreate {
+	_c.mutation.SetSeatLimit(v)
+	return _c
+}
+
+// SetNillableSeatLimit sets the "seat_limit" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableSeatLimit(v *int) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetSeatLimit(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *SubscriptionPlanCreate) SetCreatedAt(v time.Time) *SubscriptionPlanCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -314,6 +328,11 @@ func (_c *SubscriptionPlanCreate) check() error {
 	if _, ok := _c.mutation.SortOrder(); !ok {
 		return &ValidationError{Name: "sort_order", err: errors.New(`ent: missing required field "SubscriptionPlan.sort_order"`)}
 	}
+	if v, ok := _c.mutation.SeatLimit(); ok {
+		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
+			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "SubscriptionPlan.created_at"`)}
 	}
@@ -394,6 +413,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 	if value, ok := _c.mutation.SortOrder(); ok {
 		_spec.SetField(subscriptionplan.FieldSortOrder, field.TypeInt, value)
 		_node.SortOrder = value
+	}
+	if value, ok := _c.mutation.SeatLimit(); ok {
+		_spec.SetField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+		_node.SeatLimit = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldCreatedAt, field.TypeTime, value)
@@ -644,6 +667,30 @@ func (u *SubscriptionPlanUpsert) UpdateSortOrder() *SubscriptionPlanUpsert {
 // AddSortOrder adds v to the "sort_order" field.
 func (u *SubscriptionPlanUpsert) AddSortOrder(v int) *SubscriptionPlanUpsert {
 	u.Add(subscriptionplan.FieldSortOrder, v)
+	return u
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) SetSeatLimit(v int) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldSeatLimit, v)
+	return u
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateSeatLimit() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldSeatLimit)
+	return u
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) AddSeatLimit(v int) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldSeatLimit, v)
+	return u
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) ClearSeatLimit() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldSeatLimit)
 	return u
 }
 
@@ -925,6 +972,34 @@ func (u *SubscriptionPlanUpsertOne) AddSortOrder(v int) *SubscriptionPlanUpsertO
 func (u *SubscriptionPlanUpsertOne) UpdateSortOrder() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateSortOrder()
+	})
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) SetSeatLimit(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSeatLimit(v)
+	})
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) AddSeatLimit(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSeatLimit(v)
+	})
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateSeatLimit() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSeatLimit()
+	})
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) ClearSeatLimit() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSeatLimit()
 	})
 }
 
@@ -1374,6 +1449,34 @@ func (u *SubscriptionPlanUpsertBulk) AddSortOrder(v int) *SubscriptionPlanUpsert
 func (u *SubscriptionPlanUpsertBulk) UpdateSortOrder() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateSortOrder()
+	})
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) SetSeatLimit(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSeatLimit(v)
+	})
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) AddSeatLimit(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSeatLimit(v)
+	})
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateSeatLimit() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSeatLimit()
+	})
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) ClearSeatLimit() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSeatLimit()
 	})
 }
 

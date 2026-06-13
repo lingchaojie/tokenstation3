@@ -1246,6 +1246,7 @@ var (
 		{Name: "product_name", Type: field.TypeString, Size: 100, Default: ""},
 		{Name: "for_sale", Type: field.TypeBool, Default: true},
 		{Name: "sort_order", Type: field.TypeInt, Default: 0},
+		{Name: "seat_limit", Type: field.TypeInt, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 	}
@@ -1797,6 +1798,16 @@ var (
 				Name:    "usersubscription_plan_id",
 				Unique:  false,
 				Columns: []*schema.Column{UserSubscriptionsColumns[4]},
+			},
+			{
+				Name:    "usersubscription_plan_id_status_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{UserSubscriptionsColumns[4], UserSubscriptionsColumns[15], UserSubscriptionsColumns[14]},
+			},
+			{
+				Name:    "usersubscription_plan_id_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{UserSubscriptionsColumns[4], UserSubscriptionsColumns[25]},
 			},
 			{
 				Name:    "usersubscription_status",

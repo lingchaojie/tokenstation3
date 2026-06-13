@@ -144,6 +144,9 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	if !group.IsSubscriptionType() {
 		return nil, infraerrors.BadRequest("GROUP_TYPE_MISMATCH", "group is not a subscription type")
 	}
+	if err := s.configService.ValidatePlanSeatAvailable(ctx, plan, req.UserID); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 

@@ -182,6 +182,10 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 		return nil, false, ErrGroupNotSubscriptionType
 	}
 
+	return s.assignOrExtendSubscriptionTerm(ctx, input)
+}
+
+func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
 	// 查询是否已有订阅
 	existingSub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
 	if err != nil {
@@ -222,7 +226,7 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 			newExpiresAt = MaxExpiresAt
 		}
 
-		if hasPlanSnapshotInput(input) {
+		if hasPlanSnapshotInput(input) && hasPlanQuotaSnapshotInput(input) {
 			notes := appendSubscriptionNotes(existingSub.Notes, input.Notes)
 			if isExpired {
 				renewed := renewedSubscriptionTerm(existingSub, input.Notes, now, newExpiresAt)
@@ -235,9 +239,8 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 			} else {
 				switch classifyActivePlanChange(existingSub, input) {
 				case activePlanChangeSame:
-					renewed := renewedActiveSubscriptionTerm(existingSub, notes, newExpiresAt)
-					if err := s.userSubRepo.Update(ctx, renewed); err != nil {
-						return nil, false, fmt.Errorf("renew active subscription with same plan: %w", err)
+					if err := s.renewActiveSamePlanSubscriptionTerm(ctx, existingSub, input.Notes, newExpiresAt, input.PlanID); err != nil {
+						return nil, false, err
 					}
 				case activePlanChangeDowngrade:
 					scheduledExpiresAt := existingSub.ExpiresAt.AddDate(0, 0, validityDays)
@@ -253,7 +256,7 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 					}
 				}
 			}
-		} else if err := s.updateExistingSubscriptionTerm(ctx, existingSub, input.Notes, now, newExpiresAt, isExpired); err != nil {
+		} else if err := s.updateExistingSubscriptionTerm(ctx, existingSub, input.Notes, now, newExpiresAt, isExpired, input.PlanID); err != nil {
 			return nil, false, err
 		}
 
@@ -300,32 +303,39 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 	startsAt time.Time,
 	newExpiresAt time.Time,
 	isExpired bool,
+	planID *int64,
 ) error {
 	return s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
 		if isExpired {
 			renewed := renewedSubscriptionTerm(existingSub, notes, startsAt, newExpiresAt)
+			if planID != nil {
+				renewed.PlanID = planID
+			}
 			if err := s.userSubRepo.Update(txCtx, renewed); err != nil {
 				return fmt.Errorf("renew expired subscription: %w", err)
 			}
 			return nil
 		}
 
-		// 更新过期时间
 		if err := s.userSubRepo.ExtendExpiry(txCtx, existingSub.ID, newExpiresAt); err != nil {
 			return fmt.Errorf("extend subscription: %w", err)
 		}
 
-		// 如果订阅被暂停，恢复为 active 状态
 		if existingSub.Status != SubscriptionStatusActive {
 			if err := s.userSubRepo.UpdateStatus(txCtx, existingSub.ID, SubscriptionStatusActive); err != nil {
 				return fmt.Errorf("update subscription status: %w", err)
 			}
 		}
 
-		// 追加备注
 		if notes != "" {
 			if err := s.userSubRepo.UpdateNotes(txCtx, existingSub.ID, appendSubscriptionNotes(existingSub.Notes, notes)); err != nil {
 				return fmt.Errorf("update subscription notes: %w", err)
+			}
+		}
+
+		if planID != nil {
+			if err := s.userSubRepo.UpdatePlanID(txCtx, existingSub.ID, *planID); err != nil {
+				return fmt.Errorf("update subscription plan: %w", err)
 			}
 		}
 
@@ -333,8 +343,40 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 	})
 }
 
+func (s *SubscriptionService) renewActiveSamePlanSubscriptionTerm(ctx context.Context, existingSub *UserSubscription, notes string, newExpiresAt time.Time, planID *int64) error {
+	return s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+		if err := s.userSubRepo.ExtendExpiry(txCtx, existingSub.ID, newExpiresAt); err != nil {
+			return fmt.Errorf("extend subscription: %w", err)
+		}
+
+		if existingSub.Status != SubscriptionStatusActive {
+			if err := s.userSubRepo.UpdateStatus(txCtx, existingSub.ID, SubscriptionStatusActive); err != nil {
+				return fmt.Errorf("update subscription status: %w", err)
+			}
+		}
+
+		if notes != "" {
+			if err := s.userSubRepo.UpdateNotes(txCtx, existingSub.ID, appendSubscriptionNotes(existingSub.Notes, notes)); err != nil {
+				return fmt.Errorf("update subscription notes: %w", err)
+			}
+		}
+
+		if planID != nil {
+			if err := s.userSubRepo.UpdatePlanID(txCtx, existingSub.ID, *planID); err != nil {
+				return fmt.Errorf("update subscription plan: %w", err)
+			}
+		}
+
+		if err := s.userSubRepo.ClearScheduledPlanChange(txCtx, existingSub.ID); err != nil {
+			return fmt.Errorf("clear scheduled plan change: %w", err)
+		}
+
+		return nil
+	})
+}
+
 func (s *SubscriptionService) withSubscriptionUpdateTx(ctx context.Context, fn func(context.Context) error) error {
-	if s.entClient == nil {
+	if dbent.TxFromContext(ctx) != nil || s.entClient == nil {
 		return fn(ctx)
 	}
 
@@ -498,6 +540,10 @@ func appendSubscriptionNotes(existingNotes, newNotes string) string {
 
 func hasPlanSnapshotInput(input *AssignSubscriptionInput) bool {
 	return input != nil && (input.PlanID != nil || input.PlanName != nil || input.SevenDayLimitUSD != nil)
+}
+
+func hasPlanQuotaSnapshotInput(input *AssignSubscriptionInput) bool {
+	return input != nil && (input.PlanName != nil || input.SevenDayLimitUSD != nil)
 }
 
 func applyPlanSnapshot(sub *UserSubscription, input *AssignSubscriptionInput) {

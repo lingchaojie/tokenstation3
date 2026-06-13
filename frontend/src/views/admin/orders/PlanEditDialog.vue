@@ -49,6 +49,12 @@
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.sevenDayQuotaHint') }}</p>
         </div>
         <div><label class="input-label">{{ t('payment.admin.sortOrder') }}</label><input v-model.number="planForm.sort_order" type="number" min="0" class="input" /></div>
+        <div>
+          <label class="input-label">{{ t('payment.admin.seatLimit') }}</label>
+          <input :value="planForm.seat_limit" type="number" min="0" step="1" class="input" :placeholder="t('payment.admin.seatLimitPlaceholder')" @input="setSeatLimitInput" />
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.seatLimitHint') }}</p>
+          <p v-if="seatLimitLowerThanUsed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ t('payment.admin.seatLimitLowerThanUsed') }}</p>
+        </div>
       </div>
       <div>
         <label class="input-label">{{ t('payment.admin.features') }}</label>
@@ -120,6 +126,7 @@ const planForm = reactive({
   validity_days: 30,
   validity_unit: 'days',
   sort_order: 0,
+  seat_limit: '',
   for_sale: true,
 })
 const planFeaturesText = ref('')
@@ -145,6 +152,19 @@ const selectedGroupInfo = computed(() => {
   return props.groups.find(g => g.id === planForm.group_id) || null
 })
 
+const seatLimitLowerThanUsed = computed(() => {
+  if (!props.plan) return false
+  const trimmed = planForm.seat_limit.trim()
+  if (!trimmed) return false
+  const value = Number(trimmed)
+  if (!Number.isInteger(value) || value < 0) return false
+  return value < (props.plan.seat_used || 0)
+})
+
+function setSeatLimitInput(event: Event) {
+  planForm.seat_limit = (event.target as HTMLInputElement).value
+}
+
 // Reset form when dialog opens
 watch(() => props.show, (visible) => {
   if (!visible) return
@@ -159,6 +179,7 @@ watch(() => props.show, (visible) => {
       validity_days: props.plan.validity_days,
       validity_unit: props.plan.validity_unit || 'days',
       sort_order: props.plan.sort_order || 0,
+      seat_limit: props.plan.seat_limit == null ? '' : String(props.plan.seat_limit),
       for_sale: props.plan.for_sale,
     })
     planFeaturesText.value = (props.plan.features || []).join('\n')
@@ -173,11 +194,20 @@ watch(() => props.show, (visible) => {
       validity_days: 30,
       validity_unit: 'days',
       sort_order: 0,
+      seat_limit: '',
       for_sale: true,
     })
     planFeaturesText.value = ''
   }
-})
+}, { immediate: true })
+
+function parseSeatLimit(): number | null {
+  const trimmed = planForm.seat_limit.trim()
+  if (!trimmed) return null
+  const value = Number(trimmed)
+  if (!Number.isInteger(value) || value < 0) throw new Error(t('payment.admin.seatLimitHint'))
+  return value
+}
 
 function parseNullableNumber(value: number | string | null): number | null {
   if (value === null || value === '') return null
@@ -198,6 +228,7 @@ function buildPlanPayload() {
     validity_days: planForm.validity_days,
     validity_unit: planForm.validity_unit,
     sort_order: planForm.sort_order,
+    seat_limit: parseSeatLimit(),
     for_sale: planForm.for_sale,
     features,
     seven_day_quota_usd: sevenDayQuota,
@@ -223,9 +254,15 @@ async function handleSavePlan() {
     appStore.showError(t('payment.admin.validityDaysRequired'))
     return
   }
+  let data: ReturnType<typeof buildPlanPayload>
+  try {
+    data = buildPlanPayload()
+  } catch (err: unknown) {
+    appStore.showError(err instanceof Error ? err.message : t('common.error'))
+    return
+  }
   saving.value = true
   try {
-    const data = buildPlanPayload()
     if (props.plan) { await adminPaymentAPI.updatePlan(props.plan.id, data) }
     else { await adminPaymentAPI.createPlan(data) }
     appStore.showSuccess(t('common.saved'))

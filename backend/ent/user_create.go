@@ -1404,6 +1404,12 @@ func (u *UserUpsert) SetBalanceNotifyEnabled(v bool) *UserUpsert {
 	return u
 }
 
+// UpdateBalanceNotifyEnabled sets the "balance_notify_enabled" field to the value that was provided on create.
+func (u *UserUpsert) UpdateBalanceNotifyEnabled() *UserUpsert {
+	u.SetExcluded(user.FieldBalanceNotifyEnabled)
+	return u
+}
+
 // SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
 func (u *UserUpsert) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpsert {
 	u.Set(user.FieldSubscriptionBalanceFallbackEnabled, v)
@@ -1413,12 +1419,6 @@ func (u *UserUpsert) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpsert {
 // UpdateSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field to the value that was provided on create.
 func (u *UserUpsert) UpdateSubscriptionBalanceFallbackEnabled() *UserUpsert {
 	u.SetExcluded(user.FieldSubscriptionBalanceFallbackEnabled)
-	return u
-}
-
-// UpdateBalanceNotifyEnabled sets the "balance_notify_enabled" field to the value that was provided on create.
-func (u *UserUpsert) UpdateBalanceNotifyEnabled() *UserUpsert {
-	u.SetExcluded(user.FieldBalanceNotifyEnabled)
 	return u
 }
 

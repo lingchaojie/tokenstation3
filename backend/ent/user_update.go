@@ -329,20 +329,6 @@ func (_u *UserUpdate) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *Us
 	return _u
 }
 
-// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
-func (_u *UserUpdateOne) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdateOne {
-	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
-	return _u
-}
-
-// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
-func (_u *UserUpdateOne) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdateOne {
-	if v != nil {
-		_u.SetSubscriptionBalanceFallbackEnabled(*v)
-	}
-	return _u
-}
-
 // SetBalanceNotifyThresholdType sets the "balance_notify_threshold_type" field.
 func (_u *UserUpdate) SetBalanceNotifyThresholdType(v string) *UserUpdate {
 	_u.mutation.SetBalanceNotifyThresholdType(v)
@@ -2072,6 +2058,20 @@ func (_u *UserUpdateOne) SetBalanceNotifyEnabled(v bool) *UserUpdateOne {
 func (_u *UserUpdateOne) SetNillableBalanceNotifyEnabled(v *bool) *UserUpdateOne {
 	if v != nil {
 		_u.SetBalanceNotifyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_u *UserUpdateOne) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdateOne {
+	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdateOne {
+	if v != nil {
+		_u.SetSubscriptionBalanceFallbackEnabled(*v)
 	}
 	return _u
 }

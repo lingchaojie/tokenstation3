@@ -1567,6 +1567,10 @@ export interface UserSubscription {
   scheduled_plan_effective_at?: string | null
   scheduled_expires_at?: string | null
   scheduled_order_id?: number | null
+  seat_limit?: number | null
+  seat_used?: number | null
+  seat_full?: boolean
+  seat_over_limit?: boolean
   status: 'active' | 'expired' | 'revoked'
   starts_at: string
   expires_at: string

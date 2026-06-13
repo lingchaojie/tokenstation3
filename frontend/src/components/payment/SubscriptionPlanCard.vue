@@ -21,6 +21,12 @@
           <p v-if="displayDescription" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
             {{ displayDescription }}
           </p>
+          <span
+            v-if="hasSeatLimit"
+            class="mt-2 inline-flex items-center rounded-full border border-orange-200/60 bg-orange-50 px-2.5 py-1 text-[11px] font-medium text-orange-700 shadow-sm dark:border-orange-400/20 dark:bg-orange-400/10 dark:text-orange-200"
+          >
+            当前已开通 {{ seatUsed }}/{{ plan.seat_limit }}
+          </span>
         </div>
         <div class="shrink-0 text-right">
           <div class="flex items-baseline gap-1">
@@ -62,7 +68,7 @@
 
       <div class="flex-1" />
 
-      <div class="space-y-2">
+<div class="space-y-2">
         <button
           v-if="isCurrentPlan"
           type="button"
@@ -73,10 +79,14 @@
         </button>
         <button
           type="button"
-          :class="['w-full rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
-          @click="emit('select', plan, actionIntent)"
+          :disabled="isDisabled"
+          :class="[
+            'w-full rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-[0.98]',
+            isDisabled ? 'cursor-not-allowed bg-gray-200 text-gray-500 shadow-none dark:bg-dark-700 dark:text-dark-400' : btnClass,
+          ]"
+          @click="handleSelect"
         >
-          {{ actionLabel }}
+          {{ buttonText }}
         </button>
       </div>
     </div>
@@ -149,6 +159,18 @@ const actionLabel = computed(() => {
   if (actionIntent.value === 'switch') return t('payment.switchSubscription')
   return t('payment.subscribeNow')
 })
+const hasSeatLimit = computed(() => props.plan.seat_limit !== null && props.plan.seat_limit !== undefined)
+const seatUsed = computed(() => props.plan.seat_used || 0)
+const isFullForNewOpening = computed(() => hasSeatLimit.value && props.plan.seat_full === true && !isCurrentPlan.value)
+const isDisabled = computed(() => isFullForNewOpening.value)
+const buttonText = computed(() => {
+  if (isFullForNewOpening.value) return '名额已满'
+  return actionLabel.value
+})
+function handleSelect() {
+  if (isDisabled.value) return
+  emit('select', props.plan, actionIntent.value)
+}
 const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? formatMonthlyPlanCny(props.plan.price))
 const sevenDayQuotaLabel = computed(() => {
   if (monthlyDisplay.value) return monthlyDisplay.value.quotaLabel
@@ -158,6 +180,7 @@ const monthlyTotalLabel = computed(() => {
   if (monthlyDisplay.value) return monthlyDisplay.value.monthlyTotalLabel
   return props.plan.seven_day_quota_usd != null ? formatMonthlyPlanUsd(props.plan.seven_day_quota_usd * 4) : ''
 })
+
 
 // Derived color classes from central config
 const accentClass = computed(() => platformAccentBarClass(platform.value))

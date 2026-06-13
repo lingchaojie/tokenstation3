@@ -140,6 +140,8 @@ func (UserSubscription) Indexes() []ent.Index {
 		index.Fields("user_id"),
 		index.Fields("group_id"),
 		index.Fields("plan_id"),
+		index.Fields("plan_id", "status", "expires_at"),
+		index.Fields("plan_id", "user_id"),
 		index.Fields("status"),
 		index.Fields("expires_at"),
 		// 活跃订阅查询复合索引（线上由 SQL 迁移创建部分索引，schema 仅用于模型可读性对齐）

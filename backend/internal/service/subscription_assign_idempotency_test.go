@@ -119,6 +119,9 @@ func (userSubRepoNoop) ClearScheduledPlanChange(context.Context, int64) error {
 func (userSubRepoNoop) ApplyScheduledPlanChange(context.Context, int64, time.Time) (*UserSubscription, bool, error) {
 	panic("unexpected ApplyScheduledPlanChange call")
 }
+func (userSubRepoNoop) UpdatePlanID(context.Context, int64, int64) error {
+	panic("unexpected UpdatePlanID call")
+}
 func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
@@ -147,6 +150,11 @@ type subscriptionUserSubRepoStub struct {
 	createCalls       int
 	createErr         error
 	existsAlwaysFalse bool
+
+	incrementUsageAfterGetByUserGroup bool
+	concurrentDailyUsageDelta         float64
+	concurrentWeeklyUsageDelta        float64
+	concurrentMonthlyUsageDelta       float64
 }
 
 func newSubscriptionUserSubRepoStub() *subscriptionUserSubRepoStub {
@@ -188,6 +196,12 @@ func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, u
 		return nil, ErrSubscriptionNotFound
 	}
 	cp := *sub
+	if s.incrementUsageAfterGetByUserGroup {
+		s.incrementUsageAfterGetByUserGroup = false
+		sub.DailyUsageUSD += s.concurrentDailyUsageDelta
+		sub.WeeklyUsageUSD += s.concurrentWeeklyUsageDelta
+		sub.MonthlyUsageUSD += s.concurrentMonthlyUsageDelta
+	}
 	return &cp, nil
 }
 
@@ -345,6 +359,83 @@ func (s *subscriptionUserSubRepoStub) IncrementUsage(_ context.Context, id int64
 	existing.WeeklyUsageUSD += costUSD
 	existing.MonthlyUsageUSD += costUSD
 	return nil
+}
+func (s *subscriptionUserSubRepoStub) ExtendExpiry(_ context.Context, subscriptionID int64, newExpiresAt time.Time) error {
+	existing := s.byID[subscriptionID]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	existing.ExpiresAt = newExpiresAt
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateStatus(_ context.Context, subscriptionID int64, status string) error {
+	existing := s.byID[subscriptionID]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	existing.Status = status
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateNotes(_ context.Context, subscriptionID int64, notes string) error {
+	existing := s.byID[subscriptionID]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	existing.Notes = notes
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdatePlanID(_ context.Context, subscriptionID int64, planID int64) error {
+	existing := s.byID[subscriptionID]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	existing.PlanID = &planID
+	return nil
+}
+
+func TestAssignOrExtendSubscription_NonExpiredRenewalWithPlanIDPreservesConcurrentUsage(t *testing.T) {
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	now := time.Now()
+	subRepo.seed(&UserSubscription{
+		ID:              30,
+		UserID:          3001,
+		GroupID:         1,
+		StartsAt:        now.AddDate(0, 0, -1),
+		ExpiresAt:       now.AddDate(0, 0, 29),
+		Status:          SubscriptionStatusActive,
+		DailyUsageUSD:   12.50,
+		WeeklyUsageUSD:  34.25,
+		MonthlyUsageUSD: 56.75,
+		Notes:           "old",
+	})
+	subRepo.incrementUsageAfterGetByUserGroup = true
+	subRepo.concurrentDailyUsageDelta = 0.25
+	subRepo.concurrentWeeklyUsageDelta = 0.50
+	subRepo.concurrentMonthlyUsageDelta = 0.75
+	planID := int64(99)
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+
+	renewed, reused, err := svc.AssignOrExtendSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       3001,
+		GroupID:      1,
+		PlanID:       &planID,
+		ValidityDays: 30,
+		Notes:        "renew",
+	})
+
+	require.NoError(t, err)
+	require.True(t, reused)
+	require.NotNil(t, renewed.PlanID)
+	require.Equal(t, planID, *renewed.PlanID)
+	require.Equal(t, 12.75, renewed.DailyUsageUSD)
+	require.Equal(t, 34.75, renewed.WeeklyUsageUSD)
+	require.Equal(t, 57.50, renewed.MonthlyUsageUSD)
 }
 
 func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {

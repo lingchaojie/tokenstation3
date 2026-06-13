@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -90,6 +91,63 @@ func TestHandlePaymentNotification_NonSuccessStatus_Skips(t *testing.T) {
 	err := svc.HandlePaymentNotification(ctx, notification, payment.TypeStripe)
 	require.NoError(t, err,
 		"non-success notifications must short-circuit before the DB lookup")
+}
+
+func TestExecuteSubscriptionFulfillment_PassesOrderPlanIDToAssignment(t *testing.T) {
+	ctx := context.Background()
+	client := newOrderNotFoundTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("fulfillment-plan@example.com").
+		SetPasswordHash("hash").
+		SetUsername("fulfillment-plan-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	plan, _ := createPaymentOrderSeatPlanFixture(t, ctx, client, nil)
+	planID := plan.ID
+	groupID := plan.GroupID
+	subscriptionDays := 30
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(99).
+		SetPayAmount(99).
+		SetFeeRate(0).
+		SetRechargeCode("SUB-FULFILLMENT-PLAN").
+		SetOutTradeNo("sub2_fulfillment_plan").
+		SetPaymentType(payment.TypeStripe).
+		SetPaymentTradeNo("trade-fulfillment-plan").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(time.Now()).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetPlanID(planID).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(subscriptionDays).
+		Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: groupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	createdSub, err := subRepo.GetByUserIDAndGroupID(ctx, user.ID, groupID)
+	require.NoError(t, err)
+	require.NotNil(t, createdSub.PlanID)
+	require.Equal(t, planID, *createdSub.PlanID)
 }
 
 // TestErrOrderNotFound_DistinctFromOtherErrors guards against an accidental

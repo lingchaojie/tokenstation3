@@ -10,7 +10,9 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 
@@ -35,6 +37,18 @@ type paymentOrderLifecycleRedeemRepo struct {
 		id     int64
 		userID int64
 	}
+}
+
+type paymentOrderLifecycleLoadBalancer struct {
+	selection *payment.InstanceSelection
+}
+
+func (lb *paymentOrderLifecycleLoadBalancer) GetInstanceConfig(context.Context, int64) (map[string]string, error) {
+	return lb.selection.Config, nil
+}
+
+func (lb *paymentOrderLifecycleLoadBalancer) SelectInstance(context.Context, string, payment.PaymentType, payment.Strategy, float64) (*payment.InstanceSelection, error) {
+	return lb.selection, nil
 }
 
 func (p *paymentOrderLifecycleQueryProvider) Name() string {
@@ -160,6 +174,54 @@ func (r *paymentOrderLifecycleRedeemRepo) ListByUserPaginated(context.Context, i
 
 func (r *paymentOrderLifecycleRedeemRepo) SumPositiveBalanceByUser(context.Context, int64) (float64, error) {
 	panic("unexpected call")
+}
+
+func TestCreateOrderRejectsNewUserWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, existingUserID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	newUserID := createPaymentOrderSeatUser(t, ctx, client, "seat-order-new@example.com")
+	createSeatSubscription(t, ctx, client, existingUserID, plan.GroupID, plan.ID, SubscriptionStatusActive, time.Now().Add(time.Hour))
+	svc := newPaymentOrderSeatCreateOrderService(t, client, plan.GroupID, newUserID)
+
+	_, createErr := svc.CreateOrder(ctx, CreateOrderRequest{
+		UserID:      newUserID,
+		PaymentType: payment.TypeAlipay,
+		OrderType:   payment.OrderTypeSubscription,
+		PlanID:      plan.ID,
+		ClientIP:    "127.0.0.1",
+		SrcHost:     "app.example.com",
+	})
+
+	require.Error(t, createErr)
+	require.Equal(t, "PLAN_SEAT_LIMIT_REACHED", infraerrors.Reason(createErr))
+}
+
+func TestCreateOrderAllowsSameUserRenewalWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, userID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	createSeatSubscription(t, ctx, client, userID, plan.GroupID, plan.ID, SubscriptionStatusActive, time.Now().Add(time.Hour))
+	svc := newPaymentOrderSeatCreateOrderService(t, client, plan.GroupID, userID)
+
+	resp, err := svc.CreateOrder(ctx, CreateOrderRequest{
+		UserID:      userID,
+		PaymentType: payment.TypeAlipay,
+		OrderType:   payment.OrderTypeSubscription,
+		PlanID:      plan.ID,
+		ClientIP:    "127.0.0.1",
+		SrcHost:     "app.example.com",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotZero(t, resp.OrderID)
+	reloaded, err := client.PaymentOrder.Get(ctx, resp.OrderID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.PlanID)
+	require.Equal(t, plan.ID, *reloaded.PlanID)
 }
 
 func TestVerifyOrderByOutTradeNoBackfillsTradeNoFromPaidQuery(t *testing.T) {
@@ -794,6 +856,79 @@ func TestPaymentOrderQueryReferenceUsesOutTradeNoForOfficialProviders(t *testing
 	require.Equal(t, "sub2_out_trade_no", paymentOrderQueryReference(order, paymentFulfillmentTestProvider{
 		key: payment.TypeWxpay,
 	}))
+}
+
+func newPaymentOrderSeatCreateOrderService(t *testing.T, client *dbent.Client, groupID, userID int64) *PaymentService {
+	t.Helper()
+	configService := NewPaymentConfigService(client, &paymentConfigSettingRepoStub{values: map[string]string{
+		SettingPaymentEnabled: "true",
+	}}, nil)
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: groupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	return &PaymentService{
+		entClient:     client,
+		configService: configService,
+		groupRepo:     groupRepo,
+		userRepo: &mockUserRepo{getByIDUser: &User{
+			ID:       userID,
+			Email:    "seat-order@example.com",
+			Username: "seat-order-user",
+			Status:   payment.EntityStatusActive,
+		}},
+		loadBalancer: &paymentOrderLifecycleLoadBalancer{selection: &payment.InstanceSelection{
+			InstanceID:     "seat-test-easypay",
+			ProviderKey:    payment.TypeEasyPay,
+			SupportedTypes: payment.TypeAlipay,
+			PaymentMode:    "popup",
+			Config: map[string]string{
+				"pid":         "1001",
+				"pkey":        "secret",
+				"apiBase":     "https://pay.example.com",
+				"notifyUrl":   "https://api.example.com/notify",
+				"returnUrl":   "https://app.example.com/payment/result",
+				"paymentMode": "popup",
+			},
+		}},
+	}
+}
+
+func createPaymentOrderSeatUser(t *testing.T, ctx context.Context, client *dbent.Client, email string) int64 {
+	t.Helper()
+	return client.User.Create().
+		SetEmail(email).
+		SetPasswordHash("hash").
+		SetUsername(email).
+		SetRole(domain.RoleUser).
+		SetStatus(payment.EntityStatusActive).
+		SaveX(ctx).
+		ID
+}
+
+func createPaymentOrderSeatPlanFixture(t *testing.T, ctx context.Context, client *dbent.Client, limit *int) (*dbent.SubscriptionPlan, int64) {
+	t.Helper()
+	userID := createPaymentOrderSeatUser(t, ctx, client, "seat-order-existing@example.com")
+	group := client.Group.Create().
+		SetName("Seat Order Group").
+		SetPlatform(domain.PlatformAnthropic).
+		SetStatus(payment.EntityStatusActive).
+		SetSubscriptionType(domain.SubscriptionTypeSubscription).
+		SaveX(ctx)
+	planCreate := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("Seat Order Plan").
+		SetDescription("").
+		SetPrice(9.99).
+		SetValidityDays(30).
+		SetValidityUnit("days").
+		SetFeatures("").
+		SetProductName("").
+		SetForSale(true).
+		SetSortOrder(0)
+	if limit != nil {
+		planCreate.SetSeatLimit(*limit)
+	}
+	return planCreate.SaveX(ctx), userID
 }
 
 func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {

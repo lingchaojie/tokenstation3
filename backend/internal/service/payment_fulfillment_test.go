@@ -19,7 +19,9 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -441,6 +443,198 @@ func (p paymentFulfillmentTestProvider) VerifyNotification(ctx context.Context, 
 }
 func (p paymentFulfillmentTestProvider) Refund(ctx context.Context, req payment.RefundRequest) (*payment.RefundResponse, error) {
 	panic("unexpected call")
+}
+
+func TestSubscriptionFulfillmentRejectsActiveNonSubscriptionGroupForPlanBackedOrder(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, _ := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	payerID := createPaymentOrderSeatUser(t, ctx, client, "seat-fulfillment-standard-group@example.com")
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, payerID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeStandard},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	err := svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+
+	require.Error(t, err)
+	require.Equal(t, infraerrors.Reason(ErrGroupNotSubscriptionType), infraerrors.Reason(err))
+	require.Zero(t, subRepo.createCalls)
+	count, countErr := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(payerID), usersubscription.GroupIDEQ(plan.GroupID)).
+		Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
+func TestSubscriptionFulfillmentRejectsNewUserWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, existingUserID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	payerID := createPaymentOrderSeatUser(t, ctx, client, "seat-fulfillment-new@example.com")
+	createSeatSubscription(t, ctx, client, existingUserID, plan.GroupID, plan.ID, SubscriptionStatusActive, time.Now().Add(time.Hour))
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, payerID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, newSubscriptionUserSubRepoStub(), nil, nil, nil),
+	}
+
+	err := svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+
+	require.Error(t, err)
+	require.Equal(t, "PLAN_SEAT_LIMIT_REACHED", infraerrors.Reason(err))
+	count, countErr := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(payerID), usersubscription.GroupIDEQ(plan.GroupID)).
+		Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
+func TestSubscriptionFulfillmentAllowsSameUserRenewalWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, userID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	createSeatSubscription(t, ctx, client, userID, plan.GroupID, plan.ID, SubscriptionStatusActive, expiresAt)
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, userID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        99,
+		UserID:    userID,
+		GroupID:   plan.GroupID,
+		PlanID:    &plan.ID,
+		StartsAt:  time.Now().Add(-24 * time.Hour),
+		ExpiresAt: expiresAt,
+		Status:    SubscriptionStatusActive,
+	})
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	renewed, err := subRepo.GetByUserIDAndGroupID(ctx, userID, plan.GroupID)
+	require.NoError(t, err)
+	require.True(t, renewed.ExpiresAt.After(expiresAt))
+	require.NotNil(t, renewed.PlanID)
+	require.Equal(t, plan.ID, *renewed.PlanID)
+}
+
+func TestSubscriptionFulfillmentPlanSeatAssignmentUsesTransactionContext(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, userID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	createSeatSubscription(t, ctx, client, userID, plan.GroupID, plan.ID, SubscriptionStatusActive, expiresAt)
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, userID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &paymentFulfillmentTxGuardGroupRepo{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := &paymentFulfillmentTxGuardUserSubRepo{subscriptionUserSubRepoStub: newSubscriptionUserSubRepoStub()}
+	subRepo.seed(&UserSubscription{
+		ID:        199,
+		UserID:    userID,
+		GroupID:   plan.GroupID,
+		PlanID:    &plan.ID,
+		StartsAt:  time.Now().Add(-24 * time.Hour),
+		ExpiresAt: expiresAt,
+		Status:    SubscriptionStatusActive,
+	})
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	require.Equal(t, 1, groupRepo.getByIDCalls, "plan-backed fulfillment should reuse the pre-transaction group validation")
+	require.True(t, subRepo.extendExpirySawTx, "subscription renewal write should use the plan-seat transaction context")
+	require.True(t, subRepo.updatePlanIDSawTx, "subscription plan update should use the plan-seat transaction context")
+}
+
+type paymentFulfillmentTxGuardGroupRepo struct {
+	groupRepoNoop
+	group        *Group
+	getByIDCalls int
+}
+
+func (r *paymentFulfillmentTxGuardGroupRepo) GetByID(ctx context.Context, id int64) (*Group, error) {
+	r.getByIDCalls++
+	if dbent.TxFromContext(ctx) != nil {
+		return nil, errors.New("group validation unexpectedly called inside transaction")
+	}
+	return r.group, nil
+}
+
+type paymentFulfillmentTxGuardUserSubRepo struct {
+	*subscriptionUserSubRepoStub
+	extendExpirySawTx bool
+	updatePlanIDSawTx bool
+}
+
+func (r *paymentFulfillmentTxGuardUserSubRepo) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {
+	if dbent.TxFromContext(ctx) != nil {
+		r.extendExpirySawTx = true
+	}
+	return r.subscriptionUserSubRepoStub.ExtendExpiry(ctx, subscriptionID, newExpiresAt)
+}
+
+func (r *paymentFulfillmentTxGuardUserSubRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	if dbent.TxFromContext(ctx) != nil {
+		r.updatePlanIDSawTx = true
+	}
+	return r.subscriptionUserSubRepoStub.UpdatePlanID(ctx, subscriptionID, planID)
+}
+
+func createPaidSeatSubscriptionOrder(t *testing.T, ctx context.Context, client *dbent.Client, userID, planID, groupID int64, days int) *dbent.PaymentOrder {
+	t.Helper()
+	return client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail("seat-fulfillment@example.com").
+		SetUserName("seat-fulfillment-user").
+		SetAmount(9.99).
+		SetPayAmount(9.99).
+		SetFeeRate(0).
+		SetRechargeCode("SUB-SEAT-FULFILLMENT").
+		SetOutTradeNo("sub2_seat_fulfillment").
+		SetPaymentType(payment.TypeStripe).
+		SetPaymentTradeNo("trade-seat-fulfillment").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(time.Now()).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetPlanID(planID).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(days).
+		SaveX(ctx)
 }
 
 // ---------------------------------------------------------------------------

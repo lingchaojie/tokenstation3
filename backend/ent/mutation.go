@@ -31442,6 +31442,8 @@ type SubscriptionPlanMutation struct {
 	for_sale               *bool
 	sort_order             *int
 	addsort_order          *int
+	seat_limit             *int
+	addseat_limit          *int
 	created_at             *time.Time
 	updated_at             *time.Time
 	clearedFields          map[string]struct{}
@@ -32128,6 +32130,76 @@ func (m *SubscriptionPlanMutation) ResetSortOrder() {
 	m.addsort_order = nil
 }
 
+// SetSeatLimit sets the "seat_limit" field.
+func (m *SubscriptionPlanMutation) SetSeatLimit(i int) {
+	m.seat_limit = &i
+	m.addseat_limit = nil
+}
+
+// SeatLimit returns the value of the "seat_limit" field in the mutation.
+func (m *SubscriptionPlanMutation) SeatLimit() (r int, exists bool) {
+	v := m.seat_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSeatLimit returns the old "seat_limit" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldSeatLimit(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSeatLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSeatLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSeatLimit: %w", err)
+	}
+	return oldValue.SeatLimit, nil
+}
+
+// AddSeatLimit adds i to the "seat_limit" field.
+func (m *SubscriptionPlanMutation) AddSeatLimit(i int) {
+	if m.addseat_limit != nil {
+		*m.addseat_limit += i
+	} else {
+		m.addseat_limit = &i
+	}
+}
+
+// AddedSeatLimit returns the value that was added to the "seat_limit" field in this mutation.
+func (m *SubscriptionPlanMutation) AddedSeatLimit() (r int, exists bool) {
+	v := m.addseat_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (m *SubscriptionPlanMutation) ClearSeatLimit() {
+	m.seat_limit = nil
+	m.addseat_limit = nil
+	m.clearedFields[subscriptionplan.FieldSeatLimit] = struct{}{}
+}
+
+// SeatLimitCleared returns if the "seat_limit" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) SeatLimitCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldSeatLimit]
+	return ok
+}
+
+// ResetSeatLimit resets all changes to the "seat_limit" field.
+func (m *SubscriptionPlanMutation) ResetSeatLimit() {
+	m.seat_limit = nil
+	m.addseat_limit = nil
+	delete(m.clearedFields, subscriptionplan.FieldSeatLimit)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *SubscriptionPlanMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -32234,7 +32306,7 @@ func (m *SubscriptionPlanMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SubscriptionPlanMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.group_id != nil {
 		fields = append(fields, subscriptionplan.FieldGroupID)
 	}
@@ -32270,6 +32342,9 @@ func (m *SubscriptionPlanMutation) Fields() []string {
 	}
 	if m.sort_order != nil {
 		fields = append(fields, subscriptionplan.FieldSortOrder)
+	}
+	if m.seat_limit != nil {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
 	if m.created_at != nil {
 		fields = append(fields, subscriptionplan.FieldCreatedAt)
@@ -32309,6 +32384,8 @@ func (m *SubscriptionPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.ForSale()
 	case subscriptionplan.FieldSortOrder:
 		return m.SortOrder()
+	case subscriptionplan.FieldSeatLimit:
+		return m.SeatLimit()
 	case subscriptionplan.FieldCreatedAt:
 		return m.CreatedAt()
 	case subscriptionplan.FieldUpdatedAt:
@@ -32346,6 +32423,8 @@ func (m *SubscriptionPlanMutation) OldField(ctx context.Context, name string) (e
 		return m.OldForSale(ctx)
 	case subscriptionplan.FieldSortOrder:
 		return m.OldSortOrder(ctx)
+	case subscriptionplan.FieldSeatLimit:
+		return m.OldSeatLimit(ctx)
 	case subscriptionplan.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case subscriptionplan.FieldUpdatedAt:
@@ -32443,6 +32522,13 @@ func (m *SubscriptionPlanMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetSortOrder(v)
 		return nil
+	case subscriptionplan.FieldSeatLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSeatLimit(v)
+		return nil
 	case subscriptionplan.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -32483,6 +32569,9 @@ func (m *SubscriptionPlanMutation) AddedFields() []string {
 	if m.addsort_order != nil {
 		fields = append(fields, subscriptionplan.FieldSortOrder)
 	}
+	if m.addseat_limit != nil {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
+	}
 	return fields
 }
 
@@ -32503,6 +32592,8 @@ func (m *SubscriptionPlanMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedValidityDays()
 	case subscriptionplan.FieldSortOrder:
 		return m.AddedSortOrder()
+	case subscriptionplan.FieldSeatLimit:
+		return m.AddedSeatLimit()
 	}
 	return nil, false
 }
@@ -32554,6 +32645,13 @@ func (m *SubscriptionPlanMutation) AddField(name string, value ent.Value) error 
 		}
 		m.AddSortOrder(v)
 		return nil
+	case subscriptionplan.FieldSeatLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSeatLimit(v)
+		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan numeric field %s", name)
 }
@@ -32567,6 +32665,9 @@ func (m *SubscriptionPlanMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(subscriptionplan.FieldSevenDayQuotaUsd) {
 		fields = append(fields, subscriptionplan.FieldSevenDayQuotaUsd)
+	}
+	if m.FieldCleared(subscriptionplan.FieldSeatLimit) {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
 	return fields
 }
@@ -32587,6 +32688,9 @@ func (m *SubscriptionPlanMutation) ClearField(name string) error {
 		return nil
 	case subscriptionplan.FieldSevenDayQuotaUsd:
 		m.ClearSevenDayQuotaUsd()
+		return nil
+	case subscriptionplan.FieldSeatLimit:
+		m.ClearSeatLimit()
 		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan nullable field %s", name)
@@ -32631,6 +32735,9 @@ func (m *SubscriptionPlanMutation) ResetField(name string) error {
 		return nil
 	case subscriptionplan.FieldSortOrder:
 		m.ResetSortOrder()
+		return nil
+	case subscriptionplan.FieldSeatLimit:
+		m.ResetSeatLimit()
 		return nil
 	case subscriptionplan.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -40864,7 +40971,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 24)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -41038,6 +41145,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldLastActiveAt(ctx)
 	case user.FieldBalanceNotifyEnabled:
 		return m.OldBalanceNotifyEnabled(ctx)
+	case user.FieldSubscriptionBalanceFallbackEnabled:
+		return m.OldSubscriptionBalanceFallbackEnabled(ctx)
 	case user.FieldBalanceNotifyThresholdType:
 		return m.OldBalanceNotifyThresholdType(ctx)
 	case user.FieldBalanceNotifyThreshold:

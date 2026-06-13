@@ -61,6 +61,9 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 	}
 	// Keep compatibility with historical behavior: always store notes as a string value.
 	builder.SetNotes(sub.Notes)
+	if sub.PlanID != nil {
+		builder.SetPlanID(*sub.PlanID)
+	}
 
 	created, err := builder.Save(ctx)
 	if err == nil {
@@ -508,6 +511,14 @@ func (r *userSubscriptionRepository) ApplyScheduledPlanChange(ctx context.Contex
 		return nil, false, service.ErrSubscriptionNotFound
 	}
 	return nil, false, nil
+}
+
+func (r *userSubscriptionRepository) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
+		SetPlanID(planID).
+		Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
 func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {

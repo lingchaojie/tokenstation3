@@ -86,6 +86,9 @@ func (r *subscriptionExpiryRepoStub) ClearScheduledPlanChange(context.Context, i
 func (r *subscriptionExpiryRepoStub) ApplyScheduledPlanChange(context.Context, int64, time.Time) (*UserSubscription, bool, error) {
 	return nil, false, nil
 }
+func (r *subscriptionExpiryRepoStub) UpdatePlanID(context.Context, int64, int64) error {
+	return nil
+}
 
 func (r *subscriptionExpiryRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
 	return nil

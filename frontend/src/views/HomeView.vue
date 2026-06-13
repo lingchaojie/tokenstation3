@@ -639,6 +639,7 @@ const subscriptionPlans = computed(() => getMonthlyPlanCards(localeCode.value).m
   featured: plan.featured,
 })))
 
+
 // Theme
 const isDark = ref(document.documentElement.classList.contains('dark'))
 

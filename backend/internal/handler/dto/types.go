@@ -588,11 +588,16 @@ type Setting struct {
 }
 
 type UserSubscription struct {
-	ID      int64 `json:"id"`
-	UserID  int64 `json:"user_id"`
-	GroupID int64 `json:"group_id"`
+	ID      int64  `json:"id"`
+	UserID  int64  `json:"user_id"`
+	GroupID int64  `json:"group_id"`
+	PlanID  *int64 `json:"plan_id,omitempty"`
 
-	PlanID   *int64  `json:"plan_id"`
+	SeatLimit     *int `json:"seat_limit,omitempty"`
+	SeatUsed      *int `json:"seat_used,omitempty"`
+	SeatFull      bool `json:"seat_full,omitempty"`
+	SeatOverLimit bool `json:"seat_over_limit,omitempty"`
+
 	PlanName *string `json:"plan_name"`
 
 	ScheduledPlanID           *int64     `json:"scheduled_plan_id"`

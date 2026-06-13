@@ -12,7 +12,7 @@ import (
 )
 
 // validatePlanRequired checks that all required fields for a plan are provided.
-func validatePlanRequired(name string, groupID int64, price float64, validityDays int, validityUnit string, originalPrice *float64) error {
+func validatePlanRequired(name string, groupID int64, price float64, validityDays int, validityUnit string, originalPrice *float64, seatLimit *int) error {
 	if strings.TrimSpace(name) == "" {
 		return infraerrors.BadRequest("PLAN_NAME_REQUIRED", "plan name is required")
 	}
@@ -30,6 +30,9 @@ func validatePlanRequired(name string, groupID int64, price float64, validityDay
 	}
 	if originalPrice != nil && *originalPrice < 0 {
 		return infraerrors.BadRequest("PLAN_ORIGINAL_PRICE_INVALID", "original price must be >= 0")
+	}
+	if seatLimit != nil && *seatLimit < 0 {
+		return infraerrors.BadRequest("PLAN_SEAT_LIMIT_INVALID", "seat limit must be >= 0")
 	}
 	return nil
 }
@@ -59,6 +62,9 @@ func validatePlanPatch(req UpdatePlanRequest) error {
 	}
 	if req.SevenDayQuotaUSD != nil && *req.SevenDayQuotaUSD < 0 {
 		return infraerrors.BadRequest("PLAN_SEVEN_DAY_QUOTA_INVALID", "seven day quota must be >= 0")
+	}
+	if req.SeatLimit.Set && req.SeatLimit.Value != nil && *req.SeatLimit.Value < 0 {
+		return infraerrors.BadRequest("PLAN_SEAT_LIMIT_INVALID", "seat limit must be >= 0")
 	}
 	return nil
 }
@@ -127,7 +133,7 @@ func (s *PaymentConfigService) ListPlansForSale(ctx context.Context) ([]*dbent.S
 }
 
 func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanRequest) (*dbent.SubscriptionPlan, error) {
-	if err := validatePlanRequired(req.Name, req.GroupID, req.Price, req.ValidityDays, req.ValidityUnit, req.OriginalPrice); err != nil {
+	if err := validatePlanRequired(req.Name, req.GroupID, req.Price, req.ValidityDays, req.ValidityUnit, req.OriginalPrice, req.SeatLimit); err != nil {
 		return nil, err
 	}
 	if req.SevenDayQuotaUSD != nil && *req.SevenDayQuotaUSD < 0 {
@@ -143,6 +149,9 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	}
 	if req.SevenDayQuotaUSD != nil {
 		b.SetSevenDayQuotaUsd(*req.SevenDayQuotaUSD)
+	}
+	if req.SeatLimit != nil {
+		b.SetSeatLimit(*req.SeatLimit)
 	}
 	return b.Save(ctx)
 }
@@ -192,6 +201,13 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	}
 	if req.SortOrder != nil {
 		u.SetSortOrder(*req.SortOrder)
+	}
+	if req.SeatLimit.Set {
+		if req.SeatLimit.Value == nil {
+			u.ClearSeatLimit()
+		} else {
+			u.SetSeatLimit(*req.SeatLimit.Value)
+		}
 	}
 	return u.Save(ctx)
 }

@@ -171,6 +171,9 @@ func (f fakeGoogleSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context
 func (f fakeGoogleSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
 	return nil, false, nil
 }
+func (f fakeGoogleSubscriptionRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	return errors.New("not implemented")
+}
 func (f fakeGoogleSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	if f.activateWindow != nil {
 		return f.activateWindow(ctx, id, start)

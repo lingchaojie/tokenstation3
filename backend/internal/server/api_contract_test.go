@@ -2148,6 +2148,9 @@ func (stubUserSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context, id
 func (stubUserSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
 	return nil, false, errors.New("not implemented")
 }
+func (stubUserSubscriptionRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	return errors.New("not implemented")
+}
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
 }

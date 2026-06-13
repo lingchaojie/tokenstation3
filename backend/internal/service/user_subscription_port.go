@@ -24,6 +24,7 @@ type UserSubscriptionRepository interface {
 	ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error
 	UpdateStatus(ctx context.Context, subscriptionID int64, status string) error
 	UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error
+	UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error
 	UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error
 	SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error
 	ClearScheduledPlanChange(ctx context.Context, id int64) error

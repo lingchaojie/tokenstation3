@@ -11,6 +11,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -30,6 +31,56 @@ func (s *UserSubscriptionRepoSuite) SetupTest() {
 
 func TestUserSubscriptionRepoSuite(t *testing.T) {
 	suite.Run(t, new(UserSubscriptionRepoSuite))
+}
+
+func TestUserSubscriptionRepository_CreateAndGet_PreservesPlanID(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := NewUserSubscriptionRepository(client)
+
+	user := client.User.Create().
+		SetEmail("sub-plan-id@test.com").
+		SetPasswordHash("test-password-hash").
+		SetStatus(service.StatusActive).
+		SetRole(service.RoleUser).
+		SaveX(ctx)
+	group := client.Group.Create().
+		SetName("g-plan-id").
+		SetStatus(service.StatusActive).
+		SaveX(ctx)
+
+	plan := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("Seat limited plan").
+		SetDescription("").
+		SetPrice(9.99).
+		SetValidityDays(30).
+		SetValidityUnit("days").
+		SetFeatures("").
+		SetProductName("").
+		SetForSale(true).
+		SetSortOrder(0).
+		SaveX(ctx)
+
+	planID := int64(plan.ID)
+	now := time.Now()
+	sub := &service.UserSubscription{
+		UserID:     user.ID,
+		GroupID:    group.ID,
+		PlanID:     &planID,
+		StartsAt:   now,
+		ExpiresAt:  now.Add(30 * 24 * time.Hour),
+		Status:     service.SubscriptionStatusActive,
+		AssignedAt: now,
+	}
+
+	require.NoError(t, repo.Create(ctx, sub))
+
+	got, err := repo.GetByID(ctx, sub.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.PlanID)
+	require.Equal(t, planID, *got.PlanID)
 }
 
 func (s *UserSubscriptionRepoSuite) mustCreateUser(email string, role string) *service.User {

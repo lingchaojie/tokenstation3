@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/triple-slash-reference */
+/// <reference path="../../../vite-env.d.ts" />
+
 import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import SubscriptionPlanCard from "../SubscriptionPlanCard.vue";
@@ -24,23 +27,56 @@ vi.mock("vue-i18n", () => ({
   }),
 }));
 
-const mountPlanCard = (groupPlatform: string) =>
+const basePlan = (overrides: Record<string, unknown> = {}) => ({
+  id: 1,
+  group_id: 10,
+  group_platform: "openai",
+  group_name: "OpenAI",
+  name: "Pro",
+  description: "",
+  price: 10,
+  original_price: 0,
+  features: [],
+  rate_multiplier: 1,
+  daily_limit_usd: null,
+  weekly_limit_usd: null,
+  monthly_limit_usd: null,
+  validity_days: 30,
+  validity_unit: "day",
+  supported_model_scopes: ["claude", "gemini_text", "gemini_image"],
+  for_sale: true,
+  sort_order: 1,
+  ...overrides,
+});
+
+const activeSubscription = (overrides: Record<string, unknown> = {}) => ({
+  id: 99,
+  user_id: 1,
+  group_id: 10,
+  plan_id: 1,
+  status: "active" as const,
+  starts_at: "2026-01-01T00:00:00Z",
+  expires_at: "2026-02-01T00:00:00Z",
+  daily_usage_usd: 0,
+  weekly_usage_usd: 0,
+  monthly_usage_usd: 0,
+  daily_window_start: null,
+  weekly_window_start: null,
+  monthly_window_start: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  ...overrides,
+});
+
+const mountPlanCard = (
+  groupPlatform: string,
+  planOverrides: Record<string, unknown> = {},
+  activeSubscriptions: Array<Record<string, unknown>> = [],
+) =>
   mount(SubscriptionPlanCard, {
     props: {
-      plan: {
-        id: 1,
-        group_id: 10,
-        group_platform: groupPlatform,
-        name: "Pro",
-        price: 10,
-        amount: 1000,
-        features: [],
-        rate_multiplier: 1,
-        validity_days: 30,
-        validity_unit: "day",
-        supported_model_scopes: ["claude", "gemini_text", "gemini_image"],
-        is_active: true,
-      },
+      plan: basePlan({ group_platform: groupPlatform, ...planOverrides }),
+      activeSubscriptions,
     },
   });
 
@@ -197,5 +233,67 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.text()).toContain("Subscribe now");
     wrapper.get("button").trigger("click");
     expect(wrapper.emitted("select")?.[0][1]).toBe("subscribe");
+  });
+
+  it("shows the current opened count tag for limited plans", () => {
+    const text = mountPlanCard("openai", { seat_limit: 100, seat_used: 12 }).text();
+
+    expect(text).toContain("当前已开通 12/100");
+  });
+
+  it("does not show plan-seat text for unlimited plans", () => {
+    const text = mountPlanCard("openai", { seat_limit: null, seat_used: 12 }).text();
+
+    expect(text).not.toContain("当前已开通");
+    expect(text).not.toContain("12/100");
+    expect(text).not.toContain("名额");
+  });
+
+  it("disables full limited plans for new openings and does not emit select", async () => {
+    const wrapper = mountPlanCard("openai", {
+      seat_limit: 100,
+      seat_used: 100,
+      seat_full: true,
+    });
+    const button = wrapper.get("button");
+
+    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.text()).toContain("名额已满");
+
+    await button.trigger("click");
+
+    expect(wrapper.emitted("select")).toBeUndefined();
+  });
+
+  it("does not treat a different plan in the same group as a renewal", async () => {
+    const wrapper = mountPlanCard(
+      "openai",
+      { id: 7, group_id: 10, seat_limit: 100, seat_used: 100, seat_full: true },
+      [activeSubscription({ plan_id: 8, group_id: 10 })],
+    );
+    const button = wrapper.get("button");
+
+    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.text()).toContain("名额已满");
+
+    await button.trigger("click");
+
+    expect(wrapper.emitted("select")).toBeUndefined();
+  });
+
+  it("allows same-plan renewal even when a limited plan is full", async () => {
+    const wrapper = mountPlanCard(
+      "openai",
+      { id: 7, seat_limit: 100, seat_used: 100, seat_full: true },
+      [activeSubscription({ plan_id: 7 })],
+    );
+    const buttons = wrapper.findAll("button");
+    const button = buttons[buttons.length - 1];
+
+    expect(button.attributes("disabled")).toBeUndefined();
+
+    await button.trigger("click");
+
+    expect(wrapper.emitted("select")?.[0]).toEqual([expect.objectContaining({ id: 7 }), "renew"]);
   });
 });

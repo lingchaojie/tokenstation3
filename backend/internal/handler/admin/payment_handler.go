@@ -2,6 +2,7 @@ package admin
 
 import (
 	"strconv"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -180,12 +181,72 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 // ListPlans returns all subscription plans.
 // GET /api/v1/admin/payment/plans
 func (h *PaymentHandler) ListPlans(c *gin.Context) {
-	plans, err := h.configService.ListPlans(c.Request.Context())
+	ctx := c.Request.Context()
+	plans, err := h.configService.ListPlans(ctx)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, plans)
+	seatSummaries, err := h.configService.SeatSummariesForPlans(ctx, plans)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	result := make([]adminPlanResponse, 0, len(plans))
+	for _, p := range plans {
+		plan := adminPlanResponse{
+			ID:            int64(p.ID),
+			GroupID:       p.GroupID,
+			Name:          p.Name,
+			Description:   p.Description,
+			Price:         p.Price,
+			OriginalPrice: p.OriginalPrice,
+			ValidityDays:  p.ValidityDays,
+			ValidityUnit:  p.ValidityUnit,
+			Features:      p.Features,
+			ProductName:   p.ProductName,
+			ForSale:       p.ForSale,
+			SortOrder:     p.SortOrder,
+			CreatedAt:     p.CreatedAt,
+			UpdatedAt:     p.UpdatedAt,
+		}
+		applySeatSummaryToAdminPlan(&plan, seatSummaries[p.ID])
+		result = append(result, plan)
+	}
+	response.Success(c, result)
+}
+
+type adminPlanResponse struct {
+	ID            int64     `json:"id"`
+	GroupID       int64     `json:"group_id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Price         float64   `json:"price"`
+	OriginalPrice *float64  `json:"original_price,omitempty"`
+	ValidityDays  int       `json:"validity_days"`
+	ValidityUnit  string    `json:"validity_unit"`
+	Features      string    `json:"features"`
+	ProductName   string    `json:"product_name"`
+	ForSale       bool      `json:"for_sale"`
+	SortOrder     int       `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	SeatLimit     *int      `json:"seat_limit"`
+	SeatUsed      int       `json:"seat_used"`
+	SeatAvailable *int      `json:"seat_available,omitempty"`
+	SeatFull      bool      `json:"seat_full"`
+	SeatOverLimit bool      `json:"seat_over_limit"`
+}
+
+func applySeatSummaryToAdminPlan(plan *adminPlanResponse, summary service.PlanSeatSummary) {
+	if plan == nil {
+		return
+	}
+	plan.SeatLimit = summary.SeatLimit
+	plan.SeatUsed = summary.SeatUsed
+	plan.SeatAvailable = summary.SeatAvailable
+	plan.SeatFull = summary.SeatFull
+	plan.SeatOverLimit = summary.SeatOverLimit
 }
 
 // CreatePlan creates a new subscription plan.
