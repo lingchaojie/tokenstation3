@@ -331,6 +331,24 @@ type LoginAgreementDocument struct {
 	ContentMD string `json:"content_md"`
 }
 
+type PublicModelPricingResponse struct {
+	Providers []PublicModelPricingProvider `json:"providers"`
+}
+
+type PublicModelPricingProvider struct {
+	Provider    string                    `json:"provider"`
+	AccentColor string                    `json:"accent_color"`
+	Models      []PublicModelPricingModel `json:"models"`
+}
+
+type PublicModelPricingModel struct {
+	Name                string  `json:"name"`
+	Model               string  `json:"model"`
+	InputPerMillion     float64 `json:"input_per_million"`
+	OutputPerMillion    float64 `json:"output_per_million"`
+	CacheReadPerMillion float64 `json:"cache_read_per_million"`
+}
+
 // OverloadCooldownSettings 529过载冷却配置 DTO
 type OverloadCooldownSettings struct {
 	Enabled         bool `json:"enabled"`

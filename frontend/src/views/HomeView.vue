@@ -40,8 +40,11 @@
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
           <span class="leading-tight">
-            <span class="block text-sm font-semibold tracking-[-0.02em] text-linear-ink">{{ siteName }}</span>
-            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">AI Coding API</span>
+            <span class="block text-sm font-semibold tracking-[-0.02em] text-linear-ink">
+              <LinxWordmark v-if="usesDefaultBrand" />
+              <span v-else>{{ siteName }}</span>
+            </span>
+            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">AI Gateway Platform</span>
           </span>
         </router-link>
 
@@ -178,9 +181,9 @@
                 <div class="bg-linear-surface-1 p-5 text-left sm:p-6">
                   <p class="linx-section-kicker">{{ copy.gw.baseUrlTitle }}</p>
                   <pre class="font-mono-brand mt-4 overflow-x-auto rounded-xl border border-linear-hairline bg-linear-canvas p-4 text-left text-xs leading-6 text-linear-ink-muted"><code><span class="text-primary-300">ANTHROPIC_BASE_URL</span>=https://linx2.ai/api
-<span class="text-primary-300">ANTHROPIC_AUTH_TOKEN</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span>
+<span class="text-primary-300">ANTHROPIC_API_KEY</span>={LINX2_AI_API}
 <span class="text-primary-300">OPENAI_BASE_URL</span>=https://linx2.ai/api
-<span class="text-primary-300">OPENAI_API_KEY</span>=lx2_<span class="text-linear-ink-tertiary">••••••••</span></code></pre>
+<span class="text-primary-300">OPENAI_API_KEY</span>={LINX2_AI_API}</code></pre>
                   <div class="mt-4 grid grid-cols-3 gap-2">
                     <div v-for="metric in metrics" :key="metric.label" class="linx-panel p-3 text-center">
                       <p class="text-lg font-semibold tracking-[-0.03em] text-linear-ink">{{ metric.value }}</p>
@@ -259,7 +262,7 @@
               v-for="plan in subscriptionPlans"
               :key="plan.name"
               data-testid="pricing-plan-card"
-              class="linx-panel group flex min-w-0 flex-col p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
+              class="linx-panel group flex h-full min-w-0 flex-col p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
               :class="plan.featured ? 'border-primary-500/45 bg-primary-500/[0.045]' : ''"
             >
               <div class="flex items-center justify-between gap-3">
@@ -300,7 +303,7 @@
               <router-link
                 to="/purchase?tab=subscription"
                 :aria-label="`${copy.pricingCta} - ${plan.name}`"
-                class="mt-7 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
+                class="mt-auto inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors"
                 :class="plan.featured ? 'bg-primary-500 text-white hover:bg-primary-400' : 'border border-linear-hairline bg-linear-canvas text-linear-ink hover:border-linear-hairline-strong hover:bg-linear-surface-1'"
               >
                 {{ copy.pricingCta }}
@@ -338,7 +341,7 @@
               >
                 <div class="mb-4 flex items-center justify-between gap-3">
                   <div class="flex items-center gap-2">
-                    <span class="h-2 w-2 rounded-full" :class="group.dotClass"></span>
+                    <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: group.accent_color }"></span>
                     <h4 class="text-base font-semibold tracking-[-0.025em] text-linear-ink">{{ group.provider }}</h4>
                   </div>
                   <span class="text-xs font-medium text-linear-ink-tertiary">{{ copy.modelPricingProviderLabel }}</span>
@@ -352,20 +355,29 @@
                     <span>{{ copy.modelPricingCacheRead }}</span>
                   </div>
                   <div
-                    v-for="model in group.models"
-                    :key="model.name"
+                    v-for="model in visibleModelsFor(group)"
+                    :key="model.model"
                     data-testid="homepage-model-pricing-row"
                     class="grid gap-3 border-b border-linear-hairline px-4 py-4 last:border-b-0 sm:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] sm:items-center"
                   >
                     <div>
                       <p class="font-medium tracking-[-0.02em] text-linear-ink">{{ model.name }}</p>
-                      <p class="mt-1 text-xs text-linear-ink-tertiary">{{ model.note }}</p>
+                      <p class="mt-1 text-xs text-linear-ink-tertiary">{{ model.model }}</p>
                     </div>
-                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingInput }} </span>{{ model.input }}</p>
-                    <p class="font-mono-brand text-sm font-semibold text-primary-300"><span class="font-sans sm:hidden">{{ copy.modelPricingOutput }} </span>{{ model.output }}</p>
-                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingCacheRead }} </span>{{ model.cacheRead }}</p>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingInput }} </span>{{ formatModelPrice(model.input_per_million) }}</p>
+                    <p class="font-mono-brand text-sm font-semibold text-primary-300"><span class="font-sans sm:hidden">{{ copy.modelPricingOutput }} </span>{{ formatModelPrice(model.output_per_million) }}</p>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingCacheRead }} </span>{{ formatModelPrice(model.cache_read_per_million) }}</p>
                   </div>
                 </div>
+                <button
+                  v-if="hasHiddenModels(group)"
+                  type="button"
+                  data-testid="homepage-model-pricing-toggle"
+                  class="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-linear-hairline bg-linear-canvas px-4 py-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+                  @click="toggleModelProvider(group.provider)"
+                >
+                  {{ expandedModelProviders[group.provider] ? copy.modelPricingShowLess : copy.modelPricingShowMore }}
+                </button>
               </section>
             </div>
           </div>
@@ -406,7 +418,7 @@
           <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
-          <span>&copy; {{ currentYear }} LINX2.Ltd</span>
+          <span>&copy; {{ currentYear }} LINX2.AI</span>
         </div>
         <div v-if="docUrl" class="flex items-center justify-center gap-5">
           <a
@@ -431,19 +443,23 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { getMonthlyPlanCards } from '@/utils/monthlyPlans'
+import { getPublicModelPricing, type PublicModelPricingProvider } from '@/api/settings'
 
 const { t, locale } = useI18n()
 
 const authStore = useAuthStore()
 const appStore = useAppStore()
 
+const DEFAULT_SITE_NAME = 'LINX2.AI'
 const brandIconUrl = '/linx2-icon.png'
 
 // Site settings
-const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'LINX2')
+const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
 const brandLogo = computed(() => siteLogo.value || brandIconUrl)
+const usesDefaultBrand = computed(() => siteName.value.trim().toUpperCase() === DEFAULT_SITE_NAME)
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const trimmedHomeContent = computed(() => homeContent.value.trim())
@@ -460,7 +476,7 @@ const providers = ['Claude Code', 'Codex', 'Messages', 'Responses', 'Chat', 'Ima
 
 const metrics = [
   { value: '99.9%', label: '可用性 Uptime' },
-  { value: '<1s', label: '首字延迟 TTFB' },
+  { value: '<5s', label: '首字延迟 TTFB' },
   { value: '24/7', label: '监控 Monitor' },
 ]
 
@@ -471,36 +487,53 @@ const routeCards = [
   { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
 ]
 
-const modelPricingGroups = [
-  {
-    provider: 'Anthropic',
-    dotClass: 'bg-[#d97745]',
-    models: [
-      { name: 'Claude Fable 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-fable-5' },
-      { name: 'Claude Mythos 5', input: '$10.00', output: '$50.00', cacheRead: '$1.00', note: 'claude-mythos-5' },
-      { name: 'Claude Opus 4.7', input: '$5.00', output: '$25.00', cacheRead: '$0.50', note: 'claude-opus-4-7' },
-      { name: 'Claude Sonnet 4.6', input: '$3.00', output: '$15.00', cacheRead: '$0.30', note: 'claude-sonnet-4-6' },
-    ],
-  },
-  {
-    provider: 'OpenAI',
-    dotClass: 'bg-[#27a644]',
-    models: [
-      { name: 'GPT-5.5', input: '$5.00', output: '$30.00', cacheRead: '$0.50', note: 'gpt-5.5' },
-      { name: 'GPT-5.4', input: '$2.50', output: '$15.00', cacheRead: '$0.25', note: 'gpt-5.4' },
-      { name: 'GPT-5.4 Mini', input: '$0.75', output: '$4.50', cacheRead: '$0.075', note: 'gpt-5.4-mini' },
-      { name: 'GPT-5.3 Codex', input: '$1.75', output: '$14.00', cacheRead: '$0.175', note: 'gpt-5.3-codex' },
-    ],
-  },
-]
+const visibleModelCount = 4
+const modelPricingGroups = ref<PublicModelPricingProvider[]>([])
+const expandedModelProviders = ref<Record<string, boolean>>({})
+
+function formatModelPrice(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '—'
+  const decimals = value < 1 ? 3 : 2
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`
+}
+
+function visibleModelsFor(group: PublicModelPricingProvider) {
+  return expandedModelProviders.value[group.provider]
+    ? group.models
+    : group.models.slice(0, visibleModelCount)
+}
+
+function hasHiddenModels(group: PublicModelPricingProvider): boolean {
+  return group.models.length > visibleModelCount
+}
+
+function toggleModelProvider(provider: string) {
+  expandedModelProviders.value = {
+    ...expandedModelProviders.value,
+    [provider]: !expandedModelProviders.value[provider],
+  }
+}
+
+async function loadModelPricing() {
+  try {
+    const data = await getPublicModelPricing()
+    modelPricingGroups.value = data.providers || []
+  } catch (error) {
+    console.error('Failed to load public model pricing:', error)
+    modelPricingGroups.value = []
+  }
+}
 
 // Bilingual marketing copy (mirrors LocaleSwitcher in the header).
 const copies = {
   zh: {
     announcement: '统一 Claude Code · Codex 官方原生通道，国内稳定直连',
     nav: { capabilities: '能力', pricing: '价格' },
-    heroKicker: '统一 AI 编程 API · Claude / OpenAI 兼容路由',
-    heroTitle: '一个密钥，接入 Claude 与 OpenAI 编程模型。',
+    heroKicker: 'AI 网关平台 · Claude / OpenAI 兼容路由',
+    heroTitle: '一个网关密钥，接入 Claude 与 OpenAI 模型。',
     heroDescription:
       '通过统一的计费、用量与访问控制层，转发 Claude Code、Codex 与 OpenAI 兼容请求。无需繁琐配置、无需海外信用卡，开箱即用。',
     docsCta: '查看文档',
@@ -515,7 +548,7 @@ const copies = {
       routeSummary: '当前聚焦 Claude 与 OpenAI 两类上游能力。',
       baseUrlTitle: 'Base URL',
       flow: [
-        { title: '应用请求', description: '使用供应商兼容客户端和一个 LINX2 密钥。' },
+        { title: '应用请求', description: '使用供应商兼容客户端和一个 LINX2.AI 密钥。' },
         { title: '余额保护', description: '转发模型流量前检查账户访问和余额。' },
         { title: '用量账本', description: '记录模型、Token、状态和费用轨迹。' },
       ],
@@ -526,18 +559,18 @@ const copies = {
       { title: '官方原生 · 稳定直连', description: '官方原价透传、原生模型通道，专线优化国内直连，减少等待与网络折损。' },
     ],
     capabilityKicker: '能力概览',
-    capabilityTitle: '覆盖主流编程模型，同时保留运营控制。',
+    capabilityTitle: '覆盖主流 AI 模型，同时保留运营控制。',
     capabilityDescription:
-      'LINX2 的表达保持简单：给开发者兼容模型路由，给运营者余额保护，并提供商业可见的用量记录。',
+      'LINX2.AI 的表达保持简单：给开发者兼容模型路由，给运营者余额保护，并提供商业可见的用量记录。',
     capabilities: [
       { code: 'MESSAGES', title: 'Anthropic 风格调用', description: '在支持的流程中使用熟悉的 messages 路由、流式、工具和多模态请求。' },
       { code: 'RESPONSES', title: 'OpenAI Responses 路径', description: '让应用客户端保持标准 OpenAI Responses 请求结构，迁移成本极低。' },
       { code: 'CODEX', title: 'Codex / Chat 兼容', description: '面向 Codex 与 OpenAI Chat Completions 工作负载提供统一转发入口。' },
       { code: 'LEDGER', title: '用量与计费层', description: '跟踪模型、Token、状态和费用记录，并提供账户级余额保护。' },
     ],
-    pricingKicker: 'LINX2 订阅方案',
+    pricingKicker: 'LINX2.AI 订阅方案',
     pricingTitle: '按月订阅，每 7 天刷新可用额度。',
-    pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容接口。',
+    pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容网关。',
     modelPricingKicker: '价格透明',
     modelPricingTitle: '价格透明，上游模型价格直传',
     modelPricingDescription: 'Anthropic 与 OpenAI 上游模型价格直传，按每百万 Token 展示输入、输出与缓存读取单价；实际扣费以控制台账单和渠道配置为准。',
@@ -547,24 +580,26 @@ const copies = {
     modelPricingInput: '输入',
     modelPricingOutput: '输出',
     modelPricingCacheRead: '缓存读取',
+    modelPricingShowMore: '展开更多模型',
+    modelPricingShowLess: '收起模型',
     pricingCta: '选择方案',
     planPeriod: '月',
     monthlyTotalLabel: '总共可获取',
     pricingFootnote: '订阅额度优先使用；额度不足时继续使用充值余额兜底，实际状态以购买页和控制台为准。',
     monthlyCardInfo: [
       { title: '每周发放充值额度', description: '月卡按 7 天为一个周期刷新额度，不直接增加账户充值余额。' },
-      { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容接口，不按供应商拆分。' },
+      { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容网关，不按供应商拆分。' },
       { title: '充值余额兜底', description: '订阅额度优先扣除，超出后自动使用充值余额继续请求。' },
     ],
     ctaKicker: 'Ready when you are',
-    ctaTitle: '几分钟接入，立即开始编程',
-    ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 OpenAI 纳入统一、稳定、透明计费的编程通道。',
+    ctaTitle: '几分钟接入，立即开始使用 AI 网关',
+    ctaDescription: '注册后获取专属 API Key，把 Claude Code、Codex 与 OpenAI 纳入统一、稳定、透明计费的 AI 网关。',
   },
   en: {
     announcement: 'Unified official-native routes for Claude Code · Codex — stable direct access',
     nav: { capabilities: 'Capabilities', pricing: 'Pricing' },
-    heroKicker: 'Unified AI Coding API · Claude / OpenAI-compatible routes',
-    heroTitle: 'One key for Claude and OpenAI coding models.',
+    heroKicker: 'AI Gateway Platform · Claude / OpenAI-compatible routes',
+    heroTitle: 'One gateway key for Claude and OpenAI models.',
     heroDescription:
       'Route Claude Code, Codex and OpenAI-compatible requests through one billing, usage and access layer. No tedious setup, no overseas card — ready out of the box.',
     docsCta: 'Read docs',
@@ -579,7 +614,7 @@ const copies = {
       routeSummary: 'Currently focused on Claude and OpenAI upstream capabilities.',
       baseUrlTitle: 'Base URL',
       flow: [
-        { title: 'App request', description: 'Use provider-compatible clients and one LINX2 key.' },
+        { title: 'App request', description: 'Use provider-compatible clients and one LINX2.AI key.' },
         { title: 'Balance guard', description: 'Check account access and balance before forwarding traffic.' },
         { title: 'Usage ledger', description: 'Record model, token, status, and cost traces.' },
       ],
@@ -592,16 +627,16 @@ const copies = {
     capabilityKicker: 'Capability overview',
     capabilityTitle: 'Provider breadth without hiding operational controls.',
     capabilityDescription:
-      'LINX2 keeps the story simple: compatible model routes for builders, balance protection for operators, and usage records for commercial visibility.',
+      'LINX2.AI keeps the story simple: compatible model routes for builders, balance protection for operators, and usage records for commercial visibility.',
     capabilities: [
       { code: 'MESSAGES', title: 'Anthropic-style calls', description: 'Use familiar message routes for text, streaming, tools and multimodal flows where supported.' },
       { code: 'RESPONSES', title: 'OpenAI Responses paths', description: 'Keep application clients close to standard OpenAI Responses request shapes for compatible workloads.' },
       { code: 'CODEX', title: 'Codex / Chat compatible', description: 'Provide one forwarding entry for Codex and OpenAI Chat Completions workloads.' },
       { code: 'LEDGER', title: 'Usage and billing layer', description: 'Track model, token, status and cost records with account-level balance protection.' },
     ],
-    pricingKicker: 'LINX2 subscription plans',
+    pricingKicker: 'LINX2.AI subscription plans',
     pricingTitle: 'Monthly plans with quota refreshed every seven days.',
-    pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible APIs.',
+    pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible gateway access.',
     modelPricingKicker: 'Transparent pricing',
     modelPricingTitle: 'Transparent pricing with upstream model prices passed through',
     modelPricingDescription: 'Anthropic and OpenAI upstream model prices are passed through and shown per million tokens for input, output, and cache reads. Console billing and channel configuration remain authoritative.',
@@ -611,18 +646,20 @@ const copies = {
     modelPricingInput: 'Input',
     modelPricingOutput: 'Output',
     modelPricingCacheRead: 'Cache read',
+    modelPricingShowMore: 'Show more models',
+    modelPricingShowLess: 'Show fewer models',
     pricingCta: 'Choose plan',
     planPeriod: 'month',
     monthlyTotalLabel: 'Total obtainable',
     pricingFootnote: 'Subscription quota is used first; recharge balance keeps overflow requests running. Purchase page and console state are authoritative.',
     monthlyCardInfo: [
       { title: 'Weekly recharge quota', description: 'Monthly cards refresh usable quota every seven days without adding to your recharge wallet.' },
-      { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible APIs without provider-specific splitting.' },
+      { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible gateway access without provider-specific splitting.' },
       { title: 'Recharge fallback', description: 'Subscription quota is consumed first, then recharge balance automatically covers overflow.' },
     ],
     ctaKicker: 'Ready when you are',
-    ctaTitle: 'Connect in minutes, start coding now',
-    ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and OpenAI into one stable, transparent coding gateway.',
+    ctaTitle: 'Connect in minutes, start using the AI gateway',
+    ctaDescription: 'Sign up to get your API key and bring Claude Code, Codex and OpenAI into one stable, transparent AI gateway.',
   },
 } as const
 
@@ -687,6 +724,7 @@ onMounted(() => {
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
+  loadModelPricing()
 })
 </script>
 

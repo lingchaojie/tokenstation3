@@ -71,7 +71,7 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
     en: {
       name: 'Basic monthly',
       badge: 'Start',
-      description: 'For focused LINX2 trials, small automations, and keeping a personal coding agent online.',
+      description: 'For focused LINX2.AI trials, small automations, and keeping a personal coding agent online.',
       benefits: ['Light Claude Code sessions', 'OpenAI-compatible API testing', 'Personal scripts and low-frequency projects'],
       features: ['Total obtainable: $200', 'Seven-day quota: $50', 'Recharge balance fallback'],
     },
@@ -80,14 +80,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
     zh: {
       name: 'Plus 月卡',
       badge: '日常',
-      description: '适合日常开发，把 LINX2 作为个人工作的默认统一网关。',
+      description: '适合日常开发，把 LINX2.AI 作为个人工作的默认统一网关。',
       benefits: ['日常 Claude Code 编程', 'OpenAI Responses / Chat 工作流', '个人开发者和原型项目'],
       features: ['总共可获取：$440', '7 日额度：$110', '优先扣月卡额度'],
     },
     en: {
       name: 'Plus monthly',
       badge: 'Daily',
-      description: 'For regular development days where LINX2 becomes the default gateway for individual work.',
+      description: 'For regular development days where LINX2.AI becomes the default gateway for individual work.',
       benefits: ['Daily Claude Code development', 'OpenAI Responses / Chat workflows', 'Solo builders and prototype projects'],
       features: ['Total obtainable: $440', 'Seven-day quota: $110', 'Quota used before recharge balance'],
     },
@@ -112,14 +112,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
     zh: {
       name: 'Max 月卡',
       badge: '高强度',
-      description: '适合并行项目、长会话和高强度 LINX2 流量。',
+      description: '适合并行项目、长会话和高强度 LINX2.AI 流量。',
       benefits: ['多项目并行和高并发使用', '重度 Agent 循环与批量任务', '高频 Claude Code / OpenAI 生产流量'],
       features: ['总共可获取：$2,200', '7 日额度：$550', '最高月卡额度'],
     },
     en: {
       name: 'Max monthly',
       badge: 'Scale',
-      description: 'For demanding users running parallel projects, longer sessions, and high-intensity LINX2 traffic.',
+      description: 'For demanding users running parallel projects, longer sessions, and high-intensity LINX2.AI traffic.',
       benefits: ['Parallel projects and high-concurrency usage', 'Heavy agent loops and batch tasks', 'High-frequency Claude Code / OpenAI production traffic'],
       features: ['Total obtainable: $2,200', 'Seven-day quota: $550', 'Highest monthly card capacity'],
     },

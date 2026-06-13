@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import HomeView from '../HomeView.vue'
 
-const { appState, authState, fetchPublicSettingsMock, checkAuthMock } = vi.hoisted(() => ({
+const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelPricingMock } = vi.hoisted(() => ({
   appState: {
     cachedPublicSettings: null as null | {
       site_name?: string
@@ -12,9 +12,9 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock } = vi.hoist
       doc_url?: string
       home_content?: string
     },
-    siteName: 'LINX2',
+    siteName: 'LINX2.AI',
     siteLogo: '',
-    siteSubtitle: 'AI API Gateway Platform',
+    siteSubtitle: 'AI Gateway Platform',
     docUrl: '',
     publicSettingsLoaded: true,
   },
@@ -25,6 +25,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock } = vi.hoist
   },
   fetchPublicSettingsMock: vi.fn(),
   checkAuthMock: vi.fn(),
+  getPublicModelPricingMock: vi.fn(),
 }))
 
 vi.mock('@/stores', () => ({
@@ -63,6 +64,10 @@ vi.mock('@/stores', () => ({
   }),
 }))
 
+vi.mock('@/api/settings', () => ({
+  getPublicModelPricing: getPublicModelPricingMock,
+}))
+
 const messages: Record<string, string> = {
   'home.docs': '文档',
   'home.footer.allRightsReserved': '保留所有权利。',
@@ -73,7 +78,7 @@ const messages: Record<string, string> = {
   'home.switchToLight': '切换到浅色模式',
   'home.switchToDark': '切换到深色模式',
   'home.viewDocs': '查看文档',
-  'home.tags.subscriptionToApi': '订阅转 API',
+  'home.tags.subscriptionToApi': 'AI 网关平台',
   'home.tags.stickySession': '会话保持',
   'home.tags.realtimeBilling': '实时计费',
   'home.features.unifiedGateway': '统一网关',
@@ -90,6 +95,33 @@ const messages: Record<string, string> = {
   'home.providers.more': '更多',
   'home.providers.supported': '已支持',
   'home.providers.soon': '即将支持',
+}
+
+const modelPricingFixture = {
+  providers: [
+    {
+      provider: 'Anthropic',
+      accent_color: '#d97745',
+      models: [
+        { name: 'Claude Opus 4.8', model: 'claude-opus-4-8', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Opus 4.7', model: 'claude-opus-4-7', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Opus 4.6', model: 'claude-opus-4-6', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Sonnet 4.6', model: 'claude-sonnet-4-6', input_per_million: 3, output_per_million: 15, cache_read_per_million: 0.3 },
+        { name: 'Claude Sonnet 4.5', model: 'claude-sonnet-4-5', input_per_million: 3, output_per_million: 15, cache_read_per_million: 0.3 },
+      ],
+    },
+    {
+      provider: 'OpenAI',
+      accent_color: '#27a644',
+      models: [
+        { name: 'GPT-5.5', model: 'gpt-5.5', input_per_million: 5, output_per_million: 30, cache_read_per_million: 0.5 },
+        { name: 'GPT-5.4', model: 'gpt-5.4', input_per_million: 2.5, output_per_million: 15, cache_read_per_million: 0.25 },
+        { name: 'GPT-5.4 Mini', model: 'gpt-5.4-mini', input_per_million: 0.75, output_per_million: 4.5, cache_read_per_million: 0.075 },
+        { name: 'GPT-5.3 Codex', model: 'gpt-5.3-codex', input_per_million: 1.25, output_per_million: 10, cache_read_per_million: 0.125 },
+        { name: 'GPT-4o', model: 'gpt-4o', input_per_million: 2.5, output_per_million: 10, cache_read_per_million: 1.25 },
+      ],
+    },
+  ],
 }
 
 vi.mock('vue-i18n', async () => {
@@ -121,9 +153,9 @@ function mountHome() {
 describe('HomeView landing page', () => {
   beforeEach(() => {
     appState.cachedPublicSettings = null
-    appState.siteName = 'LINX2'
+    appState.siteName = 'LINX2.AI'
     appState.siteLogo = ''
-    appState.siteSubtitle = 'AI API Gateway Platform'
+    appState.siteSubtitle = 'AI Gateway Platform'
     appState.docUrl = ''
     appState.publicSettingsLoaded = true
     authState.isAuthenticated = false
@@ -131,7 +163,9 @@ describe('HomeView landing page', () => {
     authState.user = null
     fetchPublicSettingsMock.mockReset()
     checkAuthMock.mockReset()
+    getPublicModelPricingMock.mockReset()
     fetchPublicSettingsMock.mockResolvedValue({})
+    getPublicModelPricingMock.mockResolvedValue(modelPricingFixture)
     document.documentElement.classList.remove('dark')
     localStorage.clear()
 
@@ -141,7 +175,7 @@ describe('HomeView landing page', () => {
     })
   })
 
-  it('renders the dark-orange LINX2 landing shell with LINX2 subscription plans by default', async () => {
+  it('renders the LINX2.AI gateway landing shell with subscription plans by default', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',
       site_subtitle: 'Custom subtitle should not replace the approved hero copy',
@@ -153,8 +187,8 @@ describe('HomeView landing page', () => {
 
     const text = wrapper.text()
     expect(text).toContain('Fuse API')
-    expect(text).toContain('统一 AI 编程 API · Claude / OpenAI 兼容路由')
-    expect(text).toContain('一个密钥，接入 Claude 与 OpenAI 编程模型。')
+    expect(text).toContain('AI 网关平台 · Claude / OpenAI 兼容路由')
+    expect(text).toContain('一个网关密钥，接入 Claude 与 OpenAI 模型。')
     expect(text).toContain('Claude Code')
     expect(text).toContain('Codex')
     expect(text).toContain('可用路由')
@@ -162,12 +196,18 @@ describe('HomeView landing page', () => {
     expect(text).toContain('OpenAI Responses')
     expect(text).toContain('OpenAI Chat Completions')
     expect(text).toContain('OpenAI Images')
-    expect(text).toContain('ANTHROPIC_AUTH_TOKEN')
+    expect(text).toContain('ANTHROPIC_API_KEY')
     expect(text).toContain('OPENAI_API_KEY')
+    expect(text).toContain('{LINX2_AI_API}')
+    expect(text).toContain('<5s')
+    expect(text).not.toContain('ANTHROPIC_AUTH_TOKEN')
     expect(text).not.toMatch(/(^|\s)API_KEY=lx2_/)
+    expect(text).not.toContain('订阅转 API')
+    expect(text).not.toContain('Subscription to API')
+    expect(text).not.toContain('AI Coding API')
     expect(text).not.toContain('Gemini')
 
-    expect(text).toContain('LINX2 订阅方案')
+    expect(text).toContain('LINX2.AI 订阅方案')
     expect(text).toContain('Basic 月卡')
     expect(text).toContain('Plus 月卡')
     expect(text).toContain('Pro 月卡')
@@ -185,7 +225,7 @@ describe('HomeView landing page', () => {
     expect(text).toContain('总共可获取 $1,040')
     expect(text).toContain('总共可获取 $2,200')
     expect(text).toContain('每周发放充值额度')
-    expect(text).toContain('所有档位都支持 Claude Code 与 OpenAI 兼容接口')
+    expect(text).toContain('所有档位都支持 Claude Code 与 OpenAI 兼容网关')
     expect(text).toContain('轻量 Claude Code 会话')
     expect(text).toContain('OpenAI 兼容接口调试')
     expect(text).toContain('高频 Claude Code / OpenAI 生产流量')
@@ -193,18 +233,21 @@ describe('HomeView landing page', () => {
     expect(text).toContain('按每百万 Token 计价')
     expect(text).toContain('Anthropic')
     expect(text).toContain('OpenAI')
-    expect(text).toContain('Claude Fable 5')
-    expect(text).toContain('Claude Mythos 5')
+    expect(text).toContain('Claude Opus 4.8')
+    expect(text).toContain('Claude Sonnet 4.6')
     expect(text).toContain('GPT-5.5')
     expect(text).toContain('GPT-5.4 Mini')
-    expect(text).toContain('$50.00')
-    expect(text).toContain('$30.00')
-    expect(text).toContain('$4.50')
+    expect(text).toContain('GPT-5.3 Codex')
+    expect(text).toContain('$75.00')
+    expect(text).toContain('$0.075')
+    expect(text).not.toContain('Claude Mythos 5')
+    expect(text).not.toContain('Claude Sonnet 4.5')
+    expect(text).not.toContain('GPT-4o')
 
     const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
     expect(headerNav.text()).toContain('能力')
     expect(headerNav.text()).toContain('价格')
-    expect(headerNav.get('a[href="#pricing"]').exists()).toBe(true)
+    expect(headerNav.find('a[href="#pricing"]').exists()).toBe(true)
 
     const routeGrid = wrapper.get('[data-testid="homepage-route-grid"]')
     expect(routeGrid.text()).toContain('Anthropic Messages')
@@ -223,13 +266,16 @@ describe('HomeView landing page', () => {
       { name: 'Max 月卡', price: '¥1599', quota: '$550 / 7 天', monthlyTotal: '$2,200' },
     ]
     expectedPlans.forEach((plan, index) => {
-      const cardText = pricingCards[index].text()
+      const card = pricingCards[index]
+      const cardText = card.text()
+      expect(card.classes()).toEqual(expect.arrayContaining(['flex', 'h-full', 'flex-col']))
       expect(cardText).toContain(plan.name)
       expect(cardText).toContain(plan.price)
       expect(cardText).toContain('/ 月')
       expect(cardText).toContain(plan.quota)
       expect(cardText).toContain(`总共可获取 ${plan.monthlyTotal}`)
-      const planCta = pricingCards[index].get('a[href="/purchase?tab=subscription"]')
+      const planCta = card.get('a[href="/purchase?tab=subscription"]')
+      expect(planCta.classes()).toContain('mt-auto')
       expect(planCta.text()).toContain('选择方案')
       expect(planCta.attributes('aria-label')).toContain(plan.name)
     })
@@ -238,11 +284,23 @@ describe('HomeView landing page', () => {
 
     const subscriptionSection = wrapper.get('section#pricing')
     const modelPricingSection = wrapper.get('section#model-pricing')
-    expect(subscriptionSection.text()).toContain('LINX2 订阅方案')
+    expect(subscriptionSection.text()).toContain('LINX2.AI 订阅方案')
     expect(subscriptionSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
     expect(modelPricingSection.text()).toContain('价格透明，上游模型价格直传')
-    expect(modelPricingSection.text()).toContain('Claude Mythos 5')
+    expect(modelPricingSection.text()).toContain('Claude Opus 4.8')
+    expect(modelPricingSection.text()).not.toContain('Claude Mythos 5')
     expect(subscriptionSection.element.compareDocumentPosition(modelPricingSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const modelRows = wrapper.findAll('[data-testid="homepage-model-pricing-row"]')
+    expect(modelRows).toHaveLength(8)
+    const toggles = wrapper.findAll('[data-testid="homepage-model-pricing-toggle"]')
+    expect(toggles).toHaveLength(2)
+    expect(toggles[0].text()).toContain('展开更多模型')
+    await toggles[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="homepage-model-pricing-row"]')).toHaveLength(9)
+    expect(wrapper.text()).toContain('Claude Sonnet 4.5')
+    expect(wrapper.text()).not.toContain('Claude Mythos 5')
 
     const header = wrapper.get('header')
     expect(header.classes()).toContain('bg-linear-canvas/90')
@@ -250,7 +308,7 @@ describe('HomeView landing page', () => {
 
     const footerBrand = wrapper.get('[data-testid="homepage-footer-brand"]')
     expect(footerBrand.classes()).toContain('items-center')
-    expect(footerBrand.text()).toContain('LINX2.Ltd')
+    expect(footerBrand.text()).toContain('LINX2.AI')
 
     expect(text).not.toContain('GitHub')
     expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/linx2-icon.png')
@@ -273,6 +331,16 @@ describe('HomeView landing page', () => {
     expect(docsLinks.length).toBeGreaterThan(0)
     expect(docsLinks[0].text()).toContain('文档')
     expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
+  })
+
+  it('renders the orange-X LINX2.AI wordmark for the default brand', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const wordmark = wrapper.get('.linx-wordmark')
+    expect(wordmark.attributes('aria-label')).toBe('LINX2.AI')
+    expect(wordmark.text()).toBe('LINX2.AI')
+    expect(wordmark.get('.text-primary-400').text()).toBe('X')
   })
 
   it('routes authenticated admin users to the dashboard CTA', async () => {

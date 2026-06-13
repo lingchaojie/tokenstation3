@@ -322,20 +322,20 @@ const activeLocale = computed<'en' | 'zh'>(() => String(i18n.locale.value).start
 
 const monthlyPlanCopy: Record<string, { en: { name: string; description: string }; zh: { name: string; description: string } }> = {
   basic: {
-    en: { name: 'Basic monthly', description: 'Start with LINX2 essentials for focused personal usage and predictable weekly capacity.' },
-    zh: { name: 'Basic 月卡', description: '适合轻量试用和低频个人开发，每 7 天发放一次基础额度。' },
+    en: { name: 'Basic monthly', description: 'For focused LINX2.AI trials, small automations, and keeping a personal coding agent online.' },
+    zh: { name: 'Basic 月卡', description: '适合轻量试用、小型自动化，以及保持个人编程 Agent 在线。' },
   },
   plus: {
-    en: { name: 'Plus monthly', description: 'For everyday development when LINX2 is your steady personal coding gateway.' },
-    zh: { name: 'Plus 月卡', description: '适合日常开发和稳定个人使用，把 LINX2 作为默认编程网关。' },
+    en: { name: 'Plus monthly', description: 'For regular development days where LINX2.AI becomes the default gateway for individual work.' },
+    zh: { name: 'Plus 月卡', description: '适合日常开发，把 LINX2.AI 作为个人工作的默认统一网关。' },
   },
   pro: {
-    en: { name: 'Pro monthly', description: 'For primary development workflows, heavier agent loops, and higher-frequency usage.' },
-    zh: { name: 'Pro 月卡', description: '适合主力开发流程、更高频的 Agent 循环和项目工作负载。' },
+    en: { name: 'Pro monthly', description: 'For primary projects, heavier agent loops, and teams that need more room before fallback billing.' },
+    zh: { name: 'Pro 月卡', description: '适合主力项目、更重的 Agent 循环，以及需要更大订阅额度的团队。' },
   },
   max: {
-    en: { name: 'Max monthly', description: 'For heavy usage, parallel projects, longer sessions, and higher concurrency needs.' },
-    zh: { name: 'Max 月卡', description: '适合高强度使用、并行项目、长会话和更高并发需求。' },
+    en: { name: 'Max monthly', description: 'For demanding users running parallel projects, longer sessions, and high-intensity LINX2.AI traffic.' },
+    zh: { name: 'Max 月卡', description: '适合并行项目、长会话和高强度 LINX2.AI 流量。' },
   },
 }
 

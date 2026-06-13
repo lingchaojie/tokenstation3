@@ -11,9 +11,9 @@ const showWarning = vi.hoisted(() => vi.fn())
 
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
-    siteName: 'LINX2',
+    siteName: 'LINX2.AI',
     siteLogo: '',
-    cachedPublicSettings: { site_subtitle: 'AI 编程 API 平台 · linx2.ai' },
+    cachedPublicSettings: { site_subtitle: 'AI 网关平台 · linx2.ai' },
     publicSettingsLoaded: true,
     fetchPublicSettings,
     showError,
@@ -82,7 +82,10 @@ describe('Auth Linear shell', () => {
     expect(wrapper.find('.linear-auth-shell').exists()).toBe(true)
     expect(wrapper.find('[data-testid="auth-product-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="auth-card"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('LINX2')
+    expect(wrapper.text()).toContain('LINX2.AI')
+    expect(wrapper.text()).toContain('One gateway for models, keys, and usage.')
+    expect(wrapper.text()).not.toContain('订阅转 API')
+    expect(wrapper.text()).not.toContain('Subscription to API')
     expect(wrapper.html()).not.toContain('blur-3xl')
   })
 

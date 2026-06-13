@@ -204,6 +204,8 @@ describe('useSubscriptionStore', () => {
         planNames: ['Basic monthly', 'Plus monthly'],
         activePlanCount: 2,
         displayMode: 'multiple',
+        planKey: null,
+        priceCny: null,
       })
     })
 
