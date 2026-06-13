@@ -799,11 +799,6 @@ func (s *adminServiceImpl) validateUserAPIKeyRouteGroupForUser(ctx context.Conte
 	return s.validateUserCanUseRouteGroup(ctx, user, group)
 }
 
-func (s *adminServiceImpl) validateUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) error {
-	_, err := s.getValidUserAPIKeyRouteGroup(ctx, keyType, groupID)
-	return err
-}
-
 func (s *adminServiceImpl) getValidUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) (*Group, error) {
 	if groupID == nil || *groupID <= 0 {
 		return nil, nil
