@@ -48,6 +48,20 @@ func TestBillingErrorDetails_BillingServiceUnavailableMapsTo503(t *testing.T) {
 	require.Equal(t, 0, retryAfter, "non-RPM errors should not set Retry-After")
 }
 
+func TestBillingErrorDetails_SubscriptionQuotaErrorsMapToTooManyRequests(t *testing.T) {
+	for _, err := range []error{
+		service.ErrDailyLimitExceeded,
+		service.ErrWeeklyLimitExceeded,
+		service.ErrMonthlyLimitExceeded,
+	} {
+		status, code, msg, retryAfter := billingErrorDetails(err)
+		require.Equal(t, http.StatusTooManyRequests, status, "status for %v", err)
+		require.Equal(t, "rate_limit_exceeded", code)
+		require.NotEmpty(t, msg)
+		require.Equal(t, 0, retryAfter)
+	}
+}
+
 func TestBillingErrorDetails_UnknownErrorFallsBackTo403(t *testing.T) {
 	status, code, msg, _ := billingErrorDetails(service.ErrInsufficientBalance)
 	require.Equal(t, http.StatusForbidden, status)

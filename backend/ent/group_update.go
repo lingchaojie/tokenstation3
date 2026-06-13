@@ -19,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/Wei-Shaw/sub2api/ent/userapikeyroute"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
@@ -711,6 +712,21 @@ func (_u *GroupUpdate) AddUsageLogs(v ...*UsageLog) *GroupUpdate {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (_u *GroupUpdate) AddAPIKeyRouteIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.AddAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyRoutes adds the "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *GroupUpdate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyRouteIDs(ids...)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *GroupUpdate) AddAccountIDs(ids ...int64) *GroupUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -828,6 +844,27 @@ func (_u *GroupUpdate) RemoveUsageLogs(v ...*UsageLog) *GroupUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearAPIKeyRoutes clears all "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *GroupUpdate) ClearAPIKeyRoutes() *GroupUpdate {
+	_u.mutation.ClearAPIKeyRoutes()
+	return _u
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to UserAPIKeyRoute entities by IDs.
+func (_u *GroupUpdate) RemoveAPIKeyRouteIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.RemoveAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyRoutes removes "api_key_routes" edges to UserAPIKeyRoute entities.
+func (_u *GroupUpdate) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyRouteIDs(ids...)
 }
 
 // ClearAccounts clears all "accounts" edges to the Account entity.
@@ -1308,6 +1345,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -2124,6 +2206,21 @@ func (_u *GroupUpdateOne) AddUsageLogs(v ...*UsageLog) *GroupUpdateOne {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (_u *GroupUpdateOne) AddAPIKeyRouteIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.AddAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyRoutes adds the "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *GroupUpdateOne) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyRouteIDs(ids...)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *GroupUpdateOne) AddAccountIDs(ids ...int64) *GroupUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -2241,6 +2338,27 @@ func (_u *GroupUpdateOne) RemoveUsageLogs(v ...*UsageLog) *GroupUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearAPIKeyRoutes clears all "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *GroupUpdateOne) ClearAPIKeyRoutes() *GroupUpdateOne {
+	_u.mutation.ClearAPIKeyRoutes()
+	return _u
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to UserAPIKeyRoute entities by IDs.
+func (_u *GroupUpdateOne) RemoveAPIKeyRouteIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.RemoveAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyRoutes removes "api_key_routes" edges to UserAPIKeyRoute entities.
+func (_u *GroupUpdateOne) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyRouteIDs(ids...)
 }
 
 // ClearAccounts clears all "accounts" edges to the Account entity.
@@ -2751,6 +2869,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyRoutesTable,
+			Columns: []string{group.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

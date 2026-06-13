@@ -379,6 +379,8 @@ export interface SystemSettings {
   default_concurrency: number;
   default_user_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
+  default_anthropic_group_id?: number | null;
+  default_openai_group_id?: number | null;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -638,6 +640,8 @@ export interface UpdateSettingsRequest {
   default_concurrency?: number;
   default_user_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
+  default_anthropic_group_id?: number | null;
+  default_openai_group_id?: number | null;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];

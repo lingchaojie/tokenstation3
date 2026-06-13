@@ -254,7 +254,7 @@ curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/de
 mkdir -p sub2api-deploy && cd sub2api-deploy
 
 # 下载并运行部署准备脚本
-curl -sSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh | bash
 
 # 启动服务
 docker compose up -d
@@ -270,6 +270,42 @@ docker compose logs -f sub2api
 - 创建数据目录（使用本地目录，便于备份和迁移）
 - 显示生成的凭证供你记录
 
+#### 可选：一键配置自定义域名
+
+如果域名 DNS 已经指向服务器，可以在运行部署脚本时同时配置 Caddy 和 HTTPS。配置 Caddy 需要写入 `/etc/caddy`，因此请在新的部署目录中使用 `sudo` 完成该流程，并对这个部署继续使用 `sudo docker compose ...`：
+
+```bash
+# 先下载脚本
+curl -fsSL https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy/docker-deploy.sh -o docker-deploy.sh
+chmod +x docker-deploy.sh
+
+# 只配置主域名
+DOMAIN=www.example.com sudo -E ./docker-deploy.sh
+
+# 推荐：裸域名跳转到 www
+DOMAIN=www.example.com APEX_DOMAIN=example.com sudo -E ./docker-deploy.sh
+
+# 启动服务
+sudo docker compose up -d
+```
+
+如果你希望后续用普通用户管理 Docker Compose，请先修正文件归属：
+
+```bash
+sudo chown -R "$USER:$USER" .
+docker compose up -d
+```
+
+不要在已有部署目录中为了添加域名而直接重跑带 `DOMAIN` 的 `docker-deploy.sh`，除非你确实要确认覆盖提示并重新生成部署文件/密钥。若需后续补充域名且不影响 `.env` 和数据目录，请手动配置 Caddy。
+
+说明：
+
+- `DOMAIN` 是用户最终访问的主域名，例如 `www.linx2.ai`
+- `APEX_DOMAIN` 是可选裸域名，例如 `linx2.ai`，配置后会永久跳转到 `DOMAIN`
+- Caddy 站点配置写入 `/etc/caddy/sub2api/sub2api.caddy`，并由 `/etc/caddy/Caddyfile` 导入
+- Caddy 监听 `80/443`，自动申请和续期 HTTPS 证书，并反向代理到本机 `127.0.0.1:8080`
+- 使用 `DOMAIN` 模式时，脚本默认写入 `BIND_HOST=127.0.0.1`，避免应用端口绕过 Caddy 直接暴露到公网；如果你显式设置其他 `BIND_HOST`，请用防火墙保护直连端口
+
 #### 手动部署
 
 如果你希望手动配置：
@@ -277,7 +313,7 @@ docker compose logs -f sub2api
 ```bash
 # 1. 克隆仓库
 git clone -b dev https://github.com/lingchaojie/tokenstation3.git
-cd sub2api/deploy
+cd tokenstation3/deploy
 
 # 2. 复制环境配置文件
 cp .env.example .env
@@ -340,10 +376,10 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 | 版本 | 数据存储 | 迁移便利性 | 适用场景 |
 |------|---------|-----------|---------|
-| **docker-compose.local.yml** | 本地目录 | ✅ 简单（打包整个目录） | 生产环境、频繁备份 |
-| **docker-compose.yml** | 命名卷 | ⚠️ 需要 docker 命令 | 简单设置 |
+| **docker-compose.local.yml**（仓库）/ **docker-compose.yml**（脚本生成） | 本地目录 | ✅ 简单（打包整个目录） | 生产环境、频繁备份 |
+| **docker-compose.yml**（仓库） | 命名卷 | ⚠️ 需要 docker 命令 | 简单设置 |
 
-**推荐：** 使用 `docker-compose.local.yml`（脚本部署）以便更轻松地管理数据。
+**推荐：** 使用本地目录版 Compose 配置以便更轻松地管理数据。`docker-deploy.sh` 会下载 `docker-compose.local.yml`，但在部署目录中保存为 `docker-compose.yml`。
 
 #### 启用“数据管理”功能（datamanagementd）
 
@@ -363,24 +399,35 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 如果管理员密码是自动生成的，在日志中查找：
 ```bash
-docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
+docker compose logs sub2api | grep "admin password"
 ```
 
 #### 升级
 
+一键脚本部署会把本地目录版 Compose 文件保存为 `docker-compose.yml`：
+
 ```bash
 # 拉取最新镜像并重建容器
+docker compose pull
+docker compose up -d
+```
+
+如果你是在仓库的 `deploy/` 目录中手动使用 `docker-compose.local.yml` 部署，则使用：
+
+```bash
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
 
+> **自定义域名说明：** 正常 Docker 升级不会覆盖 `/etc/caddy/sub2api/sub2api.caddy` 或 `/etc/caddy/Caddyfile` 中的导入配置。如果你已经通过 `DOMAIN` / `APEX_DOMAIN` 配置过域名，后续仍然使用对应部署方式的升级命令即可，不需要重新配置域名。只有重装服务器、修改 DNS/IP、修改 `SERVER_PORT` 或手动覆盖 Caddy 配置时，才需要重新处理域名配置。
+
 #### 轻松迁移（本地目录版）
 
-使用 `docker-compose.local.yml` 时，可以轻松迁移到新服务器：
+使用一键脚本生成的本地目录版 Compose 配置时，可以轻松迁移到新服务器：
 
 ```bash
 # 源服务器
-docker compose -f docker-compose.local.yml down
+docker compose down
 cd ..
 tar czf sub2api-complete.tar.gz sub2api-deploy/
 
@@ -390,10 +437,29 @@ scp sub2api-complete.tar.gz user@new-server:/path/
 # 新服务器
 tar xzf sub2api-complete.tar.gz
 cd sub2api-deploy/
-docker compose -f docker-compose.local.yml up -d
+docker compose up -d
 ```
 
 #### 常用命令
+
+一键脚本部署（当前目录中的 `docker-compose.yml`）：
+
+```bash
+# 停止所有服务
+docker compose down
+
+# 重启
+docker compose restart
+
+# 查看所有日志
+docker compose logs -f
+
+# 删除所有数据（谨慎！）
+docker compose down
+rm -rf data/ postgres_data/ redis_data/
+```
+
+仓库 `deploy/` 目录手动部署（直接使用 `docker-compose.local.yml`）：
 
 ```bash
 # 停止所有服务

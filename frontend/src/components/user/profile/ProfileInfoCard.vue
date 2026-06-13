@@ -2,12 +2,13 @@
   <div class="space-y-6">
     <section
       data-testid="profile-overview-hero"
-      class="card overflow-hidden border border-primary-100/80 bg-gradient-to-br from-primary-50 via-white to-amber-50/70 dark:border-primary-900/40 dark:from-primary-950/40 dark:via-dark-900 dark:to-dark-950"
+      class="linx-panel-strong overflow-hidden p-5"
     >
-      <div class="px-6 py-6 md:px-8">
+      <div>
         <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
           <div
-            class="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-[1.75rem] bg-gradient-to-br from-primary-500 to-primary-600 text-2xl font-bold text-white shadow-lg shadow-primary-500/20"
+            data-testid="profile-overview-avatar"
+            class="ui-avatar-identity-lg shrink-0 overflow-hidden"
           >
             <img
               v-if="avatarUrl"
@@ -102,14 +103,14 @@
       <div data-testid="profile-main-column" class="space-y-6">
         <section
           data-testid="profile-basics-panel"
-          class="card border border-gray-100 bg-white/90 p-6 dark:border-dark-700 dark:bg-dark-900/50"
+          class="linx-panel p-5"
         >
           <div class="mb-5 flex items-start justify-between gap-4">
             <div>
-              <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+              <h3 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
                 {{ t('profile.basicsTitle') }}
               </h3>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              <p class="mt-1 text-sm text-gray-500 dark:text-linear-ink-subtle">
                 {{ t('profile.basicsDescription') }}
               </p>
             </div>
@@ -134,7 +135,7 @@
 
         <section
           data-testid="profile-auth-bindings-panel"
-          class="card border border-gray-100 bg-white/90 p-6 dark:border-dark-700 dark:bg-dark-900/50"
+          class="linx-panel p-5"
         >
           <ProfileIdentityBindingsSection
             :user="user"
@@ -154,12 +155,12 @@
       <div data-testid="profile-side-column" class="space-y-6">
         <section
           v-if="sourceHints.length"
-          class="card border border-gray-100 bg-white/90 p-6 dark:border-dark-700 dark:bg-dark-900/50"
+          class="linx-panel p-5"
         >
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+          <h3 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
             {{ t('profile.linkedProfileSources') }}
           </h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mt-1 text-sm text-gray-500 dark:text-linear-ink-subtle">
             {{ t('profile.linkedProfileSourcesDescription') }}
           </p>
 

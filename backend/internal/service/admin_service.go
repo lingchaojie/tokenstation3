@@ -29,6 +29,14 @@ import (
 )
 
 // AdminService interface defines admin management operations
+type apiKeyGroupKeyTypeBulkUpdater interface {
+	UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate APIKeyGroupKeyTypeUpdate) (int64, error)
+}
+
+type apiKeyEffectiveKeyTypeBulkUpdater interface {
+	UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx context.Context, userID int64, keyType string, groupID int64) (int64, error)
+}
+
 type AdminService interface {
 	// User management
 	ListUsers(ctx context.Context, page, pageSize int, filters UserListFilters, sortBy, sortOrder string) ([]User, int64, error)
@@ -40,6 +48,8 @@ type AdminService interface {
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
 	BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
+	GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error)
+	UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error)
 	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
 	// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
@@ -52,6 +62,9 @@ type AdminService interface {
 	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
 	GetAllGroups(ctx context.Context) ([]Group, error)
 	GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error)
+	// GetAllGroupsIncludingInactive returns all groups regardless of status (active + disabled),
+	// ordered by sort_order then id. Used by the API Key group filter dropdown.
+	GetAllGroupsIncludingInactive(ctx context.Context) ([]Group, error)
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error)
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
@@ -543,6 +556,7 @@ type adminServiceImpl struct {
 	apiKeyRepo           APIKeyRepository
 	redeemCodeRepo       RedeemCodeRepository
 	userGroupRateRepo    UserGroupRateRepository
+	userAPIKeyRouteRepo  UserAPIKeyRouteRepository
 	userRPMCache         UserRPMCache
 	billingCacheService  *BillingCacheService
 	proxyProber          ProxyExitInfoProber
@@ -569,6 +583,7 @@ func NewAdminService(
 	apiKeyRepo APIKeyRepository,
 	redeemCodeRepo RedeemCodeRepository,
 	userGroupRateRepo UserGroupRateRepository,
+	userAPIKeyRouteRepo UserAPIKeyRouteRepository,
 	userRPMCache UserRPMCache,
 	billingCacheService *BillingCacheService,
 	proxyProber ProxyExitInfoProber,
@@ -589,6 +604,7 @@ func NewAdminService(
 		apiKeyRepo:           apiKeyRepo,
 		redeemCodeRepo:       redeemCodeRepo,
 		userGroupRateRepo:    userGroupRateRepo,
+		userAPIKeyRouteRepo:  userAPIKeyRouteRepo,
 		userRPMCache:         userRPMCache,
 		billingCacheService:  billingCacheService,
 		proxyProber:          proxyProber,
@@ -688,6 +704,222 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 
 func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) (*User, error) {
 	return s.userRepo.GetByIDIncludeDeleted(ctx, id)
+}
+
+func (s *adminServiceImpl) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*UserAPIKeyRoutes, error) {
+	if _, err := s.validateUserAPIKeyRouteUser(ctx, userID); err != nil {
+		return nil, err
+	}
+	if s.userAPIKeyRouteRepo == nil {
+		return &UserAPIKeyRoutes{}, nil
+	}
+	routes, err := s.userAPIKeyRouteRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return packUserAPIKeyRoutes(routes), nil
+}
+
+func (s *adminServiceImpl) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input UserAPIKeyRouteUpdate) (*UserAPIKeyRoutes, error) {
+	user, err := s.validateUserAPIKeyRouteUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.userAPIKeyRouteRepo == nil {
+		return nil, infraerrors.InternalServer("USER_API_KEY_ROUTE_REPO_MISSING", "user API key route repository is not configured")
+	}
+	if err := s.validateUserAPIKeyRouteGroups(ctx, user, input); err != nil {
+		return nil, err
+	}
+
+	shouldInvalidate := false
+	run := func(opCtx context.Context) error {
+		changed, err := s.persistAndRebindUserAPIKeyRoute(opCtx, user, APIKeyTypeAnthropic, input.AnthropicGroupID)
+		if err != nil {
+			return err
+		}
+		shouldInvalidate = shouldInvalidate || changed
+		changed, err = s.persistAndRebindUserAPIKeyRoute(opCtx, user, APIKeyTypeOpenAI, input.OpenAIGroupID)
+		if err != nil {
+			return err
+		}
+		shouldInvalidate = shouldInvalidate || changed
+		return nil
+	}
+
+	if s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := run(dbent.NewTxContext(ctx, tx)); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
+	} else {
+		if err := run(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	if shouldInvalidate && s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	return s.GetUserAPIKeyRoutes(ctx, userID)
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteUser(ctx context.Context, userID int64) (*User, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "user_id must be greater than 0")
+	}
+	if s.userRepo == nil {
+		return nil, infraerrors.InternalServer("USER_REPO_MISSING", "user repository is not configured")
+	}
+	return s.userRepo.GetByID(ctx, userID)
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroups(ctx context.Context, user *User, input UserAPIKeyRouteUpdate) error {
+	if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, APIKeyTypeAnthropic, input.AnthropicGroupID); err != nil {
+		return err
+	}
+	if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, APIKeyTypeOpenAI, input.OpenAIGroupID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) validateUserAPIKeyRouteGroupForUser(ctx context.Context, user *User, keyType string, groupID *int64) error {
+	group, err := s.getValidUserAPIKeyRouteGroup(ctx, keyType, groupID)
+	if err != nil {
+		return err
+	}
+	return s.validateUserCanUseRouteGroup(ctx, user, group)
+}
+
+func (s *adminServiceImpl) getValidUserAPIKeyRouteGroup(ctx context.Context, keyType string, groupID *int64) (*Group, error) {
+	if groupID == nil || *groupID <= 0 {
+		return nil, nil
+	}
+	if s.groupRepo == nil {
+		return nil, infraerrors.InternalServer("GROUP_REPO_MISSING", "group repository is not configured")
+	}
+	group, err := s.groupRepo.GetByID(ctx, *groupID)
+	if err != nil {
+		return nil, err
+	}
+	if !group.IsActive() || APIKeyTypeFromGroupPlatform(group.Platform) != keyType {
+		return nil, infraerrors.BadRequest("USER_API_KEY_ROUTE_INVALID_GROUP", "group platform or status does not match API key type")
+	}
+	return group, nil
+}
+
+func (s *adminServiceImpl) validateUserCanUseRouteGroup(ctx context.Context, user *User, group *Group) error {
+	if group == nil {
+		return nil
+	}
+	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return infraerrors.InternalServer("SUBSCRIPTION_REPOSITORY_UNAVAILABLE", "subscription repository is not configured")
+		}
+		if _, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID); err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				return infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "user does not have an active subscription for this group")
+			}
+			return err
+		}
+		return nil
+	}
+	if !user.CanBindGroup(group.ID, group.IsExclusive) {
+		return infraerrors.BadRequest("GROUP_ACCESS_DENIED", "user is not allowed to bind this group")
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) persistUserAPIKeyRoute(ctx context.Context, userID int64, keyType string, groupID *int64) error {
+	if groupID == nil || *groupID <= 0 {
+		return s.userAPIKeyRouteRepo.DeleteByUserIDAndKeyType(ctx, userID, keyType)
+	}
+	_, err := s.userAPIKeyRouteRepo.Upsert(ctx, UserAPIKeyRoute{UserID: userID, KeyType: keyType, GroupID: *groupID})
+	return err
+}
+
+func (s *adminServiceImpl) persistAndRebindUserAPIKeyRoute(ctx context.Context, user *User, keyType string, groupID *int64) (bool, error) {
+	userID := user.ID
+	existing, err := s.userAPIKeyRouteRepo.GetByUserIDAndKeyType(ctx, userID, keyType)
+	if err != nil {
+		return false, fmt.Errorf("get existing user api key route: %w", err)
+	}
+
+	shouldRebind := false
+	if groupID != nil && *groupID > 0 {
+		shouldRebind = true
+	} else {
+		shouldRebind = existing != nil
+	}
+
+	var targetGroupID *int64
+	if shouldRebind {
+		targetGroupID, err = s.resolveRouteRebindTargetGroupID(ctx, keyType, groupID)
+		if err != nil {
+			return false, err
+		}
+		if targetGroupID != nil && *targetGroupID > 0 {
+			if err := s.validateUserAPIKeyRouteGroupForUser(ctx, user, keyType, targetGroupID); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	if err := s.persistUserAPIKeyRoute(ctx, userID, keyType, groupID); err != nil {
+		return false, err
+	}
+	if !shouldRebind || targetGroupID == nil || *targetGroupID <= 0 {
+		return false, nil
+	}
+	if s.apiKeyRepo == nil {
+		return false, infraerrors.InternalServer("API_KEY_REPO_MISSING", "api key repository is not configured")
+	}
+	bulkUpdater, ok := s.apiKeyRepo.(apiKeyEffectiveKeyTypeBulkUpdater)
+	if !ok {
+		return false, infraerrors.InternalServer("API_KEY_REPO_UNSUPPORTED", "api key repository does not support effective key type rebinding")
+	}
+	affected, err := bulkUpdater.UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx, userID, keyType, *targetGroupID)
+	if err != nil {
+		return false, fmt.Errorf("rebind api keys for user route: %w", err)
+	}
+	return affected > 0, nil
+}
+
+func (s *adminServiceImpl) resolveRouteRebindTargetGroupID(ctx context.Context, keyType string, routeGroupID *int64) (*int64, error) {
+	if routeGroupID != nil && *routeGroupID > 0 {
+		id := *routeGroupID
+		return &id, nil
+	}
+	if s.settingService == nil {
+		return nil, nil
+	}
+	id, err := s.settingService.GetDefaultAPIKeyGroupID(ctx, keyType)
+	if err != nil {
+		return nil, fmt.Errorf("get default api key group: %w", err)
+	}
+	return id, nil
+}
+
+func packUserAPIKeyRoutes(routes []UserAPIKeyRoute) *UserAPIKeyRoutes {
+	out := &UserAPIKeyRoutes{}
+	for i := range routes {
+		route := routes[i]
+		switch route.KeyType {
+		case APIKeyTypeAnthropic:
+			out.Anthropic = &route
+		case APIKeyTypeOpenAI:
+			out.OpenAI = &route
+		}
+	}
+	return out
 }
 
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
@@ -1701,6 +1933,13 @@ func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform 
 	return s.groupRepo.ListActiveByPlatform(ctx, platform)
 }
 
+func (s *adminServiceImpl) GetAllGroupsIncludingInactive(ctx context.Context) ([]Group, error) {
+	// ListWithFilters with empty status = no status filter, so active + disabled groups are returned.
+	// PageSize 10000 is intentionally large; group count is O(dozens) in practice.
+	groups, _, err := s.groupRepo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 10000}, "", "", "", nil)
+	return groups, err
+}
+
 func (s *adminServiceImpl) GetGroup(ctx context.Context, id int64) (*Group, error) {
 	return s.groupRepo.GetByID(ctx, id)
 }
@@ -2386,6 +2625,13 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		gid := *groupID
 		apiKey.GroupID = &gid
 		apiKey.Group = group
+		if inferred := APIKeyTypeFromGroupPlatform(group.Platform); inferred != "" {
+			apiKey.KeyType = inferred
+			apiKey.ClearKeyType = false
+		} else {
+			apiKey.KeyType = ""
+			apiKey.ClearKeyType = true
+		}
 
 		// 专属标准分组：使用事务保证「添加分组权限」与「更新 API Key」的原子性
 		if group.IsExclusive && !group.IsSubscriptionType() {
@@ -2504,13 +2750,28 @@ func (s *adminServiceImpl) ReplaceUserGroup(ctx context.Context, userID, oldGrou
 		return nil, fmt.Errorf("add new group to allowed groups: %w", err)
 	}
 
-	// 2. 迁移绑定旧分组的 Key 到新分组
-	migrated, err := s.apiKeyRepo.UpdateGroupIDByUserAndGroup(opCtx, userID, oldGroupID, newGroupID)
+	// 2. 迁移绑定旧分组的 Key 到新分组，并同步 stored key_type 与目标分组平台。
+	keyTypeUpdate := APIKeyGroupKeyTypeUpdate{KeyType: APIKeyTypeFromGroupPlatform(newGroup.Platform)}
+	if keyTypeUpdate.KeyType == "" {
+		keyTypeUpdate.ClearKeyType = true
+	}
+	bulkUpdater, ok := s.apiKeyRepo.(apiKeyGroupKeyTypeBulkUpdater)
+	if !ok {
+		return nil, fmt.Errorf("api key repository does not support key_type-aware group replacement")
+	}
+	migrated, err := bulkUpdater.UpdateGroupIDAndKeyTypeByUserAndGroup(opCtx, userID, oldGroupID, newGroupID, keyTypeUpdate)
 	if err != nil {
 		return nil, fmt.Errorf("migrate api keys: %w", err)
 	}
 
-	// 3. 移除旧分组权限
+	// 3. 同步用户 API Key 类型路由，避免保留指向旧分组的 per-user 路由。
+	if s.userAPIKeyRouteRepo != nil {
+		if err := s.userAPIKeyRouteRepo.ReconcileGroupReplacement(opCtx, userID, oldGroupID, newGroupID, keyTypeUpdate.KeyType); err != nil {
+			return nil, fmt.Errorf("reconcile user api key routes: %w", err)
+		}
+	}
+
+	// 4. 移除旧分组权限
 	if err := s.userRepo.RemoveGroupFromUserAllowedGroups(opCtx, userID, oldGroupID); err != nil {
 		return nil, fmt.Errorf("remove old group from allowed groups: %w", err)
 	}

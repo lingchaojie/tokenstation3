@@ -3,7 +3,7 @@
     <div class="space-y-6">
       <!-- Title -->
       <div class="text-center">
-        <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+        <h2 class="linear-auth-title text-2xl font-semibold tracking-[-0.04em] text-gray-950 dark:text-linear-ink">
           {{ t('auth.createAccount') }}
         </h2>
         <p class="mt-2 text-sm text-gray-500 dark:text-dark-400">

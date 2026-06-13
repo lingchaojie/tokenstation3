@@ -187,8 +187,8 @@ export default {
 
   // Setup Wizard
   setup: {
-    title: 'Sub2API Setup',
-    description: 'Configure your Sub2API instance',
+    title: 'LINX2 Setup',
+    description: 'Configure your LINX2 instance',
     database: {
       title: 'Database Configuration',
       description: 'Connect to your PostgreSQL database',
@@ -342,6 +342,34 @@ export default {
         withSuffix: '{time} to lift'
       }
     }
+  },
+
+  adminCompliance: {
+    title: 'Deployment and Operation Compliance Acknowledgment',
+    blockingNotice: 'Deployment and operation compliance acknowledgment is required before continuing to use the console.',
+    riskNotice: 'This acknowledgment provides clear, conspicuous, and reproducible notice of compliance obligations and operation risks for self-hosted instances.',
+    version: 'Document Version',
+    openDocument: 'Open the GitHub document',
+    documentSource: 'The agreement text comes from Markdown files in this project repository. When the agreement content changes, the document version must be incremented; acknowledgments of older versions become invalid and console users must acknowledge again.',
+    inputLabel: 'Type the following confirmation phrase exactly',
+    inputPlaceholder: 'Type the confirmation phrase to continue',
+    inputMismatch: 'The confirmation phrase does not match. Type the displayed text exactly.',
+    legalNote: 'This acknowledgment defines the no-affiliation relationship and responsibility boundary between self-hosted instances and the open-source project, copyright holders, contributors, and maintainers. The party that deploys, operates, or controls the relevant instance remains independently responsible for its applicable obligations.',
+    logout: 'Log out',
+    accept: 'Acknowledge and Continue',
+    accepted: 'Compliance acknowledgment recorded',
+    acceptFailed: 'Failed to submit acknowledgment'
+  },
+
+  legal: {
+    loadFailed: 'Failed to load document',
+    retryLater: 'Refresh the page and try again later.',
+    notFound: 'Document not found',
+    notFoundDescription: 'This legal document does not exist or has been removed by an administrator.',
+    updatedAt: 'Updated: {date}',
+    empty: 'No content',
+    loginAgreement: 'Login Agreement',
+    adminCompliance: 'Deployment and Operation Compliance Commitment'
   },
 
   // Navigation
@@ -615,6 +643,25 @@ export default {
     title: 'Dashboard',
     welcomeMessage: "Welcome back! Here's an overview of your account.",
     balance: 'Balance',
+    subscriptionBalance: 'Subscription balance',
+    currentSubscription: 'Current subscription',
+    noCurrentSubscription: 'No active subscription',
+    subscriptionRemaining: '{remaining} remaining of {total}',
+    rechargeBalance: 'Recharge balance',
+    balanceOrderHint: 'Subscription quota is used before recharge balance.',
+    balanceFallbackToggle: {
+      title: 'Use balance after monthly card quota',
+      enabledHint: 'When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.',
+      disabledHint: 'Default off. Requests stop after the monthly card 7-day quota is used up, even if the account still has balance.',
+    },
+    subscriptionPlan: 'Plan: {plan}',
+    subscriptionPlanCount: '{count} active plans',
+    subscriptionResetAt: 'Resets {time}',
+    subscriptionPlanPeriod: 'month',
+    subscriptionWeeklyQuota: '{amount} / 7 days',
+    subscriptionAllRoutes: 'Claude Code + OpenAI',
+    renewSubscription: 'Renew subscription',
+    pendingSubscriptionChange: '{plan} starts on {time}',
     apiKeys: 'API Keys',
     todayRequests: 'Today Requests',
     todayCost: 'Today Cost',
@@ -702,12 +749,21 @@ export default {
     copyToClipboard: 'Copy to clipboard',
     copied: 'Copied!',
     importToCcSwitch: 'Import to CCS',
+    cannotImportUnconfiguredKey: 'Cannot import an unconfigured key',
     enable: 'Enable',
     disable: 'Disable',
     nameLabel: 'Name',
     namePlaceholder: 'My API Key',
     groupLabel: 'Group',
     selectGroup: 'Select a group',
+    keyTypeLabel: 'Key type',
+    selectKeyType: 'Select key type',
+    keyTypeHint: 'The administrator controls which account group this key uses.',
+    keyTypes: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      unknown: 'Unconfigured'
+    },
     statusLabel: 'Status',
     selectStatus: 'Select status',
     saving: 'Saving...',
@@ -1538,7 +1594,7 @@ export default {
         step1: {
           title: 'Create an R2 Bucket',
           line1: 'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
-          line2: 'Click "Create bucket", enter a name (e.g. sub2api-backups), choose a region',
+          line2: 'Click "Create bucket", enter a name (e.g. linx2-backups), choose a region',
           line3: 'Click create to finish'
         },
         step2: {
@@ -1796,6 +1852,16 @@ export default {
       allGroups: 'All Groups',
       searchGroups: 'Search groups...',
       fuzzySearch: 'Fuzzy search',
+      apiKeyGroupFilter: 'API Key Group',
+      apiKeyGroupExclusive: 'Exclusive Groups',
+      apiKeyGroupPublic: 'Public Groups',
+      apiKeyGroupSubscription: 'Subscription Groups',
+      apiKeyGroupDisabled: 'Disabled Groups',
+      authorizedGroupFilter: 'Authorized Group',
+      allAuthorizedGroups: 'All Authorized Groups',
+      searchAuthorizedGroups: 'Search authorized groups...',
+      allApiKeyGroups: 'All API Key Groups',
+      searchApiKeyGroups: 'Search API Key groups...',
       admin: 'Admin',
       user: 'User',
       disabled: 'Disabled',
@@ -2022,6 +2088,18 @@ export default {
         failedToReorder: 'Failed to update order',
         keyExists: 'Attribute key already exists',
         dragToReorder: 'Drag to reorder'
+      },
+      keyRoutes: {
+        action: 'Provider Routes',
+        title: 'Provider Routes',
+        description: 'Choose per-user default groups for future normal-user API key creation.',
+        anthropicLabel: 'Anthropic Default Group',
+        openaiLabel: 'OpenAI Default Group',
+        useGlobalDefault: 'Use global default',
+        hint: 'Only active groups for the matching provider are shown. Existing API keys are not changed.',
+        loadFailed: 'Failed to load provider routes',
+        updateSuccess: 'Provider routes updated',
+        updateFailed: 'Failed to update provider routes'
       },
       platformQuota: {
         menuItem: 'Platform Quotas',
@@ -2879,8 +2957,10 @@ export default {
       daily: 'Daily',
       weekly: 'Weekly',
       monthly: 'Monthly',
+      sevenDay: '7-day quota',
       noLimits: 'No limits configured',
       unlimited: 'Unlimited',
+      remaining: 'Remaining {amount}',
       resetNow: 'Resetting soon',
       windowNotActive: 'Window not active',
       resetInMinutes: 'Resets in {minutes}m',
@@ -3132,7 +3212,7 @@ export default {
         expiresAt: 'Expires At',
         actions: 'Actions'
       },
-      usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
+      usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by LINX2, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within LINX2.',
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',
       privacyTrainingOff: 'Training data sharing disabled',
@@ -3483,7 +3563,7 @@ export default {
       poolMode: 'Pool Mode',
       poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
       poolModeInfo:
-        'When enabled, upstream 429/403/401 errors will auto-retry without marking the account as rate-limited or errored. Suitable for upstream pointing to another sub2api instance.',
+        'When enabled, upstream 429/403/401 errors will auto-retry without marking the account as rate-limited or errored. Suitable for upstream pointing to another LINX2 instance.',
       poolModeRetryCount: 'Same-Account Retries',
       poolModeRetryCountHint:
         'Only applies in pool mode. Use 0 to disable in-place retry. Default {default}, maximum {max}.',
@@ -5506,7 +5586,7 @@ export default {
       },
       linuxdo: {
         title: 'LinuxDo Connect Login',
-        description: 'Configure LinuxDo Connect OAuth for Sub2API end-user login',
+        description: 'Configure LinuxDo Connect OAuth for LINX2 end-user login',
         enable: 'Enable LinuxDo Login',
         enableHint: 'Show LinuxDo login on the login/register pages',
         clientId: 'Client ID',
@@ -5526,7 +5606,7 @@ export default {
       },
       dingtalk: {
         title: 'DingTalk Login',
-        description: 'Configure DingTalk OAuth for Sub2API end-user login',
+        description: 'Configure DingTalk OAuth for LINX2 end-user login',
         enable: 'Enable DingTalk Login (Internal Corporate App)',
         enableHint: 'Show DingTalk login on the login/register pages',
         clientId: 'Client ID (AppKey)',
@@ -5636,6 +5716,13 @@ export default {
           'Duplicate subscription group: {groupId}. Each group can only appear once.',
         subscriptionGroup: 'Subscription Group',
         subscriptionValidityDays: 'Validity (days)',
+        providerRoutes: 'Default API Key Provider Routes',
+        providerRoutesHint: 'Used when normal users create future Anthropic or OpenAI API keys. Existing keys are not changed.',
+        providerRouteUseNone: 'Use no global default',
+        defaultAnthropicGroup: 'Default Anthropic Group',
+        defaultAnthropicGroupPlaceholder: 'Use no global Anthropic default',
+        defaultOpenAIGroup: 'Default OpenAI Group',
+        defaultOpenAIGroupPlaceholder: 'Use no global OpenAI default',
         defaultPlatformQuotas: 'Default Platform Quotas (on signup)',
         defaultPlatformQuotasHint: 'Automatically assigned to new users on signup; existing users are not affected. Leave blank = unlimited.',
         platformQuotaNotice: 'Monthly quota uses a 30-day rolling window, not a calendar month.',
@@ -5729,7 +5816,7 @@ export default {
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
         siteName: 'Site Name',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'LINX2',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
         siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',
@@ -6019,7 +6106,7 @@ export default {
         fromEmail: 'From Email',
         fromEmailPlaceholder: "noreply{'@'}example.com",
         fromName: 'From Name',
-        fromNamePlaceholder: 'Sub2API',
+        fromNamePlaceholder: 'LINX2',
         useTls: 'Use TLS',
         useTlsHint: 'Enable TLS encryption for SMTP connection'
       },
@@ -6545,6 +6632,7 @@ export default {
     daily: 'Daily',
     weekly: 'Weekly',
     monthly: 'Monthly',
+    sevenDay: '7-day',
     daysRemaining: '{days} days left',
     expired: 'Expired',
     expiresToday: 'Expires today',
@@ -6642,6 +6730,11 @@ export default {
     noExpiration: 'No expiration',
     unlimited: 'Unlimited',
     unlimitedDesc: 'No usage limits on this subscription',
+    plan: 'Active plan',
+    sevenDayQuota: '7-day quota',
+    nextReset: 'Next reset',
+    remaining: 'Remaining {amount}',
+    balanceOrderHint: 'Subscription quota is used before recharge balance.',
     daily: 'Daily',
     weekly: 'Weekly',
     monthly: 'Monthly',
@@ -6668,14 +6761,14 @@ export default {
     // Admin tour steps
     admin: {
       welcome: {
-        title: '👋 Welcome to Sub2API',
-        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Sub2API is a powerful AI service gateway platform that helps you easily manage and distribute AI services.</p><p style="margin-bottom: 12px;"><b>🎯 Core Features:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>Group Management</b> - Create service tiers (VIP, Free Trial, etc.)</li><li>🔗 <b>Account Pool</b> - Connect multiple upstream AI service accounts</li><li>🔑 <b>Key Distribution</b> - Generate independent API Keys for users</li><li>💰 <b>Billing Control</b> - Flexible rate and quota management</li></ul><p style="color: #10b981; font-weight: 600;">Let\'s complete the initial setup in 3 minutes →</p></div>',
+        title: '👋 Welcome to LINX2',
+        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">LINX2 is a powerful AI service gateway platform that helps you easily manage and distribute AI services.</p><p style="margin-bottom: 12px;"><b>🎯 Core Features:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>Group Management</b> - Create service tiers (VIP, Free Trial, etc.)</li><li>🔗 <b>Account Pool</b> - Connect multiple upstream AI service accounts</li><li>🔑 <b>Key Distribution</b> - Generate independent API Keys for users</li><li>💰 <b>Billing Control</b> - Flexible rate and quota management</li></ul><p style="color: #10b981; font-weight: 600;">Let\'s complete the initial setup in 3 minutes →</p></div>',
         nextBtn: 'Start Setup 🚀',
         prevBtn: 'Skip'
       },
       groupManage: {
         title: '📦 Step 1: Group Management',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>What is a Group?</b></p><p style="margin-bottom: 12px;">Groups are the core concept of Sub2API, like a "service package":</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 Each group can contain multiple upstream accounts</li><li>💰 Each group has independent billing multiplier</li><li>👥 Can be set as public or exclusive</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Example:</b> You can create "VIP Premium" (high rate) and "Free Trial" (low rate) groups</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Group Management" on the left sidebar</p></div>'
+        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>What is a Group?</b></p><p style="margin-bottom: 12px;">Groups are the core concept of LINX2, like a "service package":</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 Each group can contain multiple upstream accounts</li><li>💰 Each group has independent billing multiplier</li><li>👥 Can be set as public or exclusive</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Example:</b> You can create "VIP Premium" (high rate) and "Free Trial" (low rate) groups</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Group Management" on the left sidebar</p></div>'
       },
       createGroup: {
         title: '➕ Create New Group',
@@ -6768,8 +6861,8 @@ export default {
     // User tour steps
     user: {
       welcome: {
-        title: '👋 Welcome to Sub2API',
-        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Hello! Welcome to the Sub2API AI service platform.</p><p style="margin-bottom: 12px;"><b>🎯 Quick Start:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 Create API Key</li><li>📋 Copy key to your application</li><li>🚀 Start using AI services</li></ul><p style="color: #10b981; font-weight: 600;">Just 1 minute, let\'s get started →</p></div>',
+        title: '👋 Welcome to LINX2',
+        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Hello! Welcome to the LINX2 AI service platform.</p><p style="margin-bottom: 12px;"><b>🎯 Quick Start:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 Create API Key</li><li>📋 Copy key to your application</li><li>🚀 Start using AI services</li></ul><p style="color: #10b981; font-weight: 600;">Just 1 minute, let\'s get started →</p></div>',
         nextBtn: 'Start 🚀',
         prevBtn: 'Skip'
       },
@@ -6960,13 +7053,27 @@ export default {
     },
     subscribeNow: 'Subscribe Now',
     renewNow: 'Renew',
+    switchSubscription: 'Switch subscription',
+    currentSubscription: 'Current subscription',
     selectPlan: 'Select Plan',
     planFeatures: 'Features',
+    subscription: {
+      quotaFirstHint: 'Usage consumes subscription quota first, then recharge balance if needed.',
+    },
+    switchConfirm: {
+      upgradeTitle: 'Confirm subscription upgrade',
+      upgradeMessage: 'After payment, the new plan applies immediately, starts a new 7-day quota window, and extends your subscription expiry.',
+      downgradeTitle: 'Confirm subscription downgrade',
+      downgradeMessage: 'After payment, your current plan stays active until the current expiry; the lower tier starts in the next paid period.',
+      confirm: 'Continue',
+    },
     planCard: {
       rate: 'Rate',
       dailyLimit: 'Daily',
       weeklyLimit: 'Weekly',
       monthlyLimit: 'Monthly',
+      sevenDayQuota: '7-day quota',
+      totalMonthlyQuota: 'Total obtainable',
       quota: 'Quota',
       unlimited: 'Unlimited',
       models: 'Models',
@@ -7056,9 +7163,19 @@ export default {
       deletePlanConfirm: 'Are you sure you want to delete this plan?',
       originalPrice: 'Original Price',
       price: 'Price',
+      sevenDayQuota: '7-day quota (USD)',
+      sevenDayQuotaHint: 'Leave blank for no plan-level seven-day quota.',
       validityDays: 'Validity (days)',
       validityUnit: 'Validity Unit',
       sortOrder: 'Sort Order',
+      seatLimit: 'Seat limit',
+      seatLimitPlaceholder: 'Empty means unlimited',
+      seatUsage: 'Seats',
+      seatUnlimited: 'Unlimited',
+      seatFull: 'Full',
+      seatOverLimit: 'Over limit',
+      seatLimitHint: 'Leave empty for unlimited. 0 blocks new openings.',
+      seatLimitLowerThanUsed: 'Current usage is above the new limit. Existing users remain active; new users are blocked.',
       forSale: 'For Sale',
       onSale: 'On Sale',
       offSale: 'Off Sale',

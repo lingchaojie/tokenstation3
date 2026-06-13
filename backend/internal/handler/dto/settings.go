@@ -150,6 +150,8 @@ type SystemSettings struct {
 	AffiliateRebatePerInviteeCap float64                      `json:"affiliate_rebate_per_invitee_cap"`
 	DefaultUserRPMLimit          int                          `json:"default_user_rpm_limit"`
 	DefaultSubscriptions         []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	DefaultAnthropicGroupID      *int64                       `json:"default_anthropic_group_id"`
+	DefaultOpenAIGroupID         *int64                       `json:"default_openai_group_id"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`

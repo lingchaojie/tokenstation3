@@ -79,6 +79,132 @@ func (_c *UserSubscriptionCreate) SetGroupID(v int64) *UserSubscriptionCreate {
 	return _c
 }
 
+// SetPlanID sets the "plan_id" field.
+func (_c *UserSubscriptionCreate) SetPlanID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetPlanID(v)
+	return _c
+}
+
+// SetNillablePlanID sets the "plan_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlanID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlanID(*v)
+	}
+	return _c
+}
+
+// SetPlanName sets the "plan_name" field.
+func (_c *UserSubscriptionCreate) SetPlanName(v string) *UserSubscriptionCreate {
+	_c.mutation.SetPlanName(v)
+	return _c
+}
+
+// SetNillablePlanName sets the "plan_name" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePlanName(v *string) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPlanName(*v)
+	}
+	return _c
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (_c *UserSubscriptionCreate) SetSevenDayLimitUsd(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetSevenDayLimitUsd(v)
+	return _c
+}
+
+// SetNillableSevenDayLimitUsd sets the "seven_day_limit_usd" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableSevenDayLimitUsd(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetSevenDayLimitUsd(*v)
+	}
+	return _c
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (_c *UserSubscriptionCreate) SetScheduledPlanID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledPlanID(v)
+	return _c
+}
+
+// SetNillableScheduledPlanID sets the "scheduled_plan_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledPlanID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledPlanID(*v)
+	}
+	return _c
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (_c *UserSubscriptionCreate) SetScheduledPlanName(v string) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledPlanName(v)
+	return _c
+}
+
+// SetNillableScheduledPlanName sets the "scheduled_plan_name" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledPlanName(v *string) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledPlanName(*v)
+	}
+	return _c
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (_c *UserSubscriptionCreate) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledSevenDayLimitUsd(v)
+	return _c
+}
+
+// SetNillableScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledSevenDayLimitUsd(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledSevenDayLimitUsd(*v)
+	}
+	return _c
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (_c *UserSubscriptionCreate) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledPlanEffectiveAt(v)
+	return _c
+}
+
+// SetNillableScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledPlanEffectiveAt(v *time.Time) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledPlanEffectiveAt(*v)
+	}
+	return _c
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (_c *UserSubscriptionCreate) SetScheduledExpiresAt(v time.Time) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledExpiresAt(v)
+	return _c
+}
+
+// SetNillableScheduledExpiresAt sets the "scheduled_expires_at" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledExpiresAt(v *time.Time) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledExpiresAt(*v)
+	}
+	return _c
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (_c *UserSubscriptionCreate) SetScheduledOrderID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetScheduledOrderID(v)
+	return _c
+}
+
+// SetNillableScheduledOrderID sets the "scheduled_order_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableScheduledOrderID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetScheduledOrderID(*v)
+	}
+	return _c
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_c *UserSubscriptionCreate) SetStartsAt(v time.Time) *UserSubscriptionCreate {
 	_c.mutation.SetStartsAt(v)
@@ -366,6 +492,16 @@ func (_c *UserSubscriptionCreate) check() error {
 	if _, ok := _c.mutation.GroupID(); !ok {
 		return &ValidationError{Name: "group_id", err: errors.New(`ent: missing required field "UserSubscription.group_id"`)}
 	}
+	if v, ok := _c.mutation.PlanName(); ok {
+		if err := usersubscription.PlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.plan_name": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.ScheduledPlanName(); ok {
+		if err := usersubscription.ScheduledPlanNameValidator(v); err != nil {
+			return &ValidationError{Name: "scheduled_plan_name", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.scheduled_plan_name": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.StartsAt(); !ok {
 		return &ValidationError{Name: "starts_at", err: errors.New(`ent: missing required field "UserSubscription.starts_at"`)}
 	}
@@ -436,6 +572,42 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.DeletedAt(); ok {
 		_spec.SetField(usersubscription.FieldDeletedAt, field.TypeTime, value)
 		_node.DeletedAt = &value
+	}
+	if value, ok := _c.mutation.PlanID(); ok {
+		_spec.SetField(usersubscription.FieldPlanID, field.TypeInt64, value)
+		_node.PlanID = &value
+	}
+	if value, ok := _c.mutation.PlanName(); ok {
+		_spec.SetField(usersubscription.FieldPlanName, field.TypeString, value)
+		_node.PlanName = &value
+	}
+	if value, ok := _c.mutation.SevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldSevenDayLimitUsd, field.TypeFloat64, value)
+		_node.SevenDayLimitUsd = &value
+	}
+	if value, ok := _c.mutation.ScheduledPlanID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanID, field.TypeInt64, value)
+		_node.ScheduledPlanID = &value
+	}
+	if value, ok := _c.mutation.ScheduledPlanName(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanName, field.TypeString, value)
+		_node.ScheduledPlanName = &value
+	}
+	if value, ok := _c.mutation.ScheduledSevenDayLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldScheduledSevenDayLimitUsd, field.TypeFloat64, value)
+		_node.ScheduledSevenDayLimitUsd = &value
+	}
+	if value, ok := _c.mutation.ScheduledPlanEffectiveAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledPlanEffectiveAt, field.TypeTime, value)
+		_node.ScheduledPlanEffectiveAt = &value
+	}
+	if value, ok := _c.mutation.ScheduledExpiresAt(); ok {
+		_spec.SetField(usersubscription.FieldScheduledExpiresAt, field.TypeTime, value)
+		_node.ScheduledExpiresAt = &value
+	}
+	if value, ok := _c.mutation.ScheduledOrderID(); ok {
+		_spec.SetField(usersubscription.FieldScheduledOrderID, field.TypeInt64, value)
+		_node.ScheduledOrderID = &value
 	}
 	if value, ok := _c.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
@@ -651,6 +823,198 @@ func (u *UserSubscriptionUpsert) SetGroupID(v int64) *UserSubscriptionUpsert {
 // UpdateGroupID sets the "group_id" field to the value that was provided on create.
 func (u *UserSubscriptionUpsert) UpdateGroupID() *UserSubscriptionUpsert {
 	u.SetExcluded(usersubscription.FieldGroupID)
+	return u
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsert) SetPlanID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlanID, v)
+	return u
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlanID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlanID)
+	return u
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsert) AddPlanID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPlanID, v)
+	return u
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsert) ClearPlanID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPlanID)
+	return u
+}
+
+// SetPlanName sets the "plan_name" field.
+func (u *UserSubscriptionUpsert) SetPlanName(v string) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPlanName, v)
+	return u
+}
+
+// UpdatePlanName sets the "plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePlanName() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPlanName)
+	return u
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (u *UserSubscriptionUpsert) ClearPlanName() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPlanName)
+	return u
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) SetSevenDayLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldSevenDayLimitUsd, v)
+	return u
+}
+
+// UpdateSevenDayLimitUsd sets the "seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateSevenDayLimitUsd() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldSevenDayLimitUsd)
+	return u
+}
+
+// AddSevenDayLimitUsd adds v to the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) AddSevenDayLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldSevenDayLimitUsd, v)
+	return u
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) ClearSevenDayLimitUsd() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldSevenDayLimitUsd)
+	return u
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsert) SetScheduledPlanID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledPlanID, v)
+	return u
+}
+
+// UpdateScheduledPlanID sets the "scheduled_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledPlanID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledPlanID)
+	return u
+}
+
+// AddScheduledPlanID adds v to the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsert) AddScheduledPlanID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldScheduledPlanID, v)
+	return u
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsert) ClearScheduledPlanID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledPlanID)
+	return u
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsert) SetScheduledPlanName(v string) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledPlanName, v)
+	return u
+}
+
+// UpdateScheduledPlanName sets the "scheduled_plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledPlanName() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledPlanName)
+	return u
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsert) ClearScheduledPlanName() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledPlanName)
+	return u
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledSevenDayLimitUsd, v)
+	return u
+}
+
+// UpdateScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledSevenDayLimitUsd() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledSevenDayLimitUsd)
+	return u
+}
+
+// AddScheduledSevenDayLimitUsd adds v to the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) AddScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldScheduledSevenDayLimitUsd, v)
+	return u
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsert) ClearScheduledSevenDayLimitUsd() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledSevenDayLimitUsd)
+	return u
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsert) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledPlanEffectiveAt, v)
+	return u
+}
+
+// UpdateScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledPlanEffectiveAt() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledPlanEffectiveAt)
+	return u
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsert) ClearScheduledPlanEffectiveAt() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledPlanEffectiveAt)
+	return u
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsert) SetScheduledExpiresAt(v time.Time) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledExpiresAt, v)
+	return u
+}
+
+// UpdateScheduledExpiresAt sets the "scheduled_expires_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledExpiresAt() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledExpiresAt)
+	return u
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsert) ClearScheduledExpiresAt() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledExpiresAt)
+	return u
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsert) SetScheduledOrderID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldScheduledOrderID, v)
+	return u
+}
+
+// UpdateScheduledOrderID sets the "scheduled_order_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateScheduledOrderID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldScheduledOrderID)
+	return u
+}
+
+// AddScheduledOrderID adds v to the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsert) AddScheduledOrderID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldScheduledOrderID, v)
+	return u
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsert) ClearScheduledOrderID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldScheduledOrderID)
 	return u
 }
 
@@ -951,6 +1315,230 @@ func (u *UserSubscriptionUpsertOne) SetGroupID(v int64) *UserSubscriptionUpsertO
 func (u *UserSubscriptionUpsertOne) UpdateGroupID() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) SetPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanID(v)
+	})
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) AddPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanID(v)
+	})
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanID()
+	})
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsertOne) ClearPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanID()
+	})
+}
+
+// SetPlanName sets the "plan_name" field.
+func (u *UserSubscriptionUpsertOne) SetPlanName(v string) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanName(v)
+	})
+}
+
+// UpdatePlanName sets the "plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePlanName() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanName()
+	})
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (u *UserSubscriptionUpsertOne) ClearPlanName() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanName()
+	})
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) SetSevenDayLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSevenDayLimitUsd(v)
+	})
+}
+
+// AddSevenDayLimitUsd adds v to the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) AddSevenDayLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddSevenDayLimitUsd(v)
+	})
+}
+
+// UpdateSevenDayLimitUsd sets the "seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateSevenDayLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSevenDayLimitUsd()
+	})
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) ClearSevenDayLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearSevenDayLimitUsd()
+	})
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanID(v)
+	})
+}
+
+// AddScheduledPlanID adds v to the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertOne) AddScheduledPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledPlanID(v)
+	})
+}
+
+// UpdateScheduledPlanID sets the "scheduled_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanID()
+	})
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanID()
+	})
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledPlanName(v string) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanName(v)
+	})
+}
+
+// UpdateScheduledPlanName sets the "scheduled_plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledPlanName() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanName()
+	})
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledPlanName() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanName()
+	})
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledSevenDayLimitUsd(v)
+	})
+}
+
+// AddScheduledSevenDayLimitUsd adds v to the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) AddScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledSevenDayLimitUsd(v)
+	})
+}
+
+// UpdateScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledSevenDayLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledSevenDayLimitUsd()
+	})
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledSevenDayLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledSevenDayLimitUsd()
+	})
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanEffectiveAt(v)
+	})
+}
+
+// UpdateScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledPlanEffectiveAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanEffectiveAt()
+	})
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledPlanEffectiveAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanEffectiveAt()
+	})
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledExpiresAt(v time.Time) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledExpiresAt(v)
+	})
+}
+
+// UpdateScheduledExpiresAt sets the "scheduled_expires_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledExpiresAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledExpiresAt()
+	})
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledExpiresAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledExpiresAt()
+	})
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertOne) SetScheduledOrderID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledOrderID(v)
+	})
+}
+
+// AddScheduledOrderID adds v to the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertOne) AddScheduledOrderID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledOrderID(v)
+	})
+}
+
+// UpdateScheduledOrderID sets the "scheduled_order_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateScheduledOrderID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledOrderID()
+	})
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertOne) ClearScheduledOrderID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledOrderID()
 	})
 }
 
@@ -1449,6 +2037,230 @@ func (u *UserSubscriptionUpsertBulk) SetGroupID(v int64) *UserSubscriptionUpsert
 func (u *UserSubscriptionUpsertBulk) UpdateGroupID() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetPlanID sets the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) SetPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanID(v)
+	})
+}
+
+// AddPlanID adds v to the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) AddPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPlanID(v)
+	})
+}
+
+// UpdatePlanID sets the "plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanID()
+	})
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanID()
+	})
+}
+
+// SetPlanName sets the "plan_name" field.
+func (u *UserSubscriptionUpsertBulk) SetPlanName(v string) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPlanName(v)
+	})
+}
+
+// UpdatePlanName sets the "plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePlanName() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePlanName()
+	})
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (u *UserSubscriptionUpsertBulk) ClearPlanName() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPlanName()
+	})
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) SetSevenDayLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSevenDayLimitUsd(v)
+	})
+}
+
+// AddSevenDayLimitUsd adds v to the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) AddSevenDayLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddSevenDayLimitUsd(v)
+	})
+}
+
+// UpdateSevenDayLimitUsd sets the "seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateSevenDayLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSevenDayLimitUsd()
+	})
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) ClearSevenDayLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearSevenDayLimitUsd()
+	})
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanID(v)
+	})
+}
+
+// AddScheduledPlanID adds v to the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) AddScheduledPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledPlanID(v)
+	})
+}
+
+// UpdateScheduledPlanID sets the "scheduled_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanID()
+	})
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanID()
+	})
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledPlanName(v string) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanName(v)
+	})
+}
+
+// UpdateScheduledPlanName sets the "scheduled_plan_name" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledPlanName() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanName()
+	})
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledPlanName() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanName()
+	})
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledSevenDayLimitUsd(v)
+	})
+}
+
+// AddScheduledSevenDayLimitUsd adds v to the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) AddScheduledSevenDayLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledSevenDayLimitUsd(v)
+	})
+}
+
+// UpdateScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledSevenDayLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledSevenDayLimitUsd()
+	})
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledSevenDayLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledSevenDayLimitUsd()
+	})
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledPlanEffectiveAt(v time.Time) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledPlanEffectiveAt(v)
+	})
+}
+
+// UpdateScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledPlanEffectiveAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledPlanEffectiveAt()
+	})
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledPlanEffectiveAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledPlanEffectiveAt()
+	})
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledExpiresAt(v time.Time) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledExpiresAt(v)
+	})
+}
+
+// UpdateScheduledExpiresAt sets the "scheduled_expires_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledExpiresAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledExpiresAt()
+	})
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledExpiresAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledExpiresAt()
+	})
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertBulk) SetScheduledOrderID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetScheduledOrderID(v)
+	})
+}
+
+// AddScheduledOrderID adds v to the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertBulk) AddScheduledOrderID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddScheduledOrderID(v)
+	})
+}
+
+// UpdateScheduledOrderID sets the "scheduled_order_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateScheduledOrderID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateScheduledOrderID()
+	})
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearScheduledOrderID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearScheduledOrderID()
 	})
 }
 

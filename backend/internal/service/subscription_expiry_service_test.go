@@ -71,6 +71,25 @@ func (r *subscriptionExpiryRepoStub) UpdateNotes(context.Context, int64, string)
 	return nil
 }
 
+func (r *subscriptionExpiryRepoStub) UpdatePlanSnapshot(context.Context, int64, *int64, *string, *float64, time.Time, time.Time, *string) error {
+	return nil
+}
+
+func (r *subscriptionExpiryRepoStub) SchedulePlanChange(context.Context, int64, *int64, *string, *float64, time.Time, time.Time, *int64, *string) error {
+	return nil
+}
+
+func (r *subscriptionExpiryRepoStub) ClearScheduledPlanChange(context.Context, int64) error {
+	return nil
+}
+
+func (r *subscriptionExpiryRepoStub) ApplyScheduledPlanChange(context.Context, int64, time.Time) (*UserSubscription, bool, error) {
+	return nil, false, nil
+}
+func (r *subscriptionExpiryRepoStub) UpdatePlanID(context.Context, int64, int64) error {
+	return nil
+}
+
 func (r *subscriptionExpiryRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
 	return nil
 }
@@ -79,7 +98,7 @@ func (r *subscriptionExpiryRepoStub) ResetDailyUsage(context.Context, int64, tim
 	return nil
 }
 
-func (r *subscriptionExpiryRepoStub) ResetWeeklyUsage(context.Context, int64, time.Time) error {
+func (r *subscriptionExpiryRepoStub) ResetWeeklyUsage(context.Context, int64, *time.Time, time.Time) error {
 	return nil
 }
 

@@ -264,6 +264,10 @@ func (s *stubAdminService) GetAllGroupsByPlatform(ctx context.Context, platform 
 	return s.groups, nil
 }
 
+func (s *stubAdminService) GetAllGroupsIncludingInactive(ctx context.Context) ([]service.Group, error) {
+	return s.groups, nil
+}
+
 func (s *stubAdminService) GetGroup(ctx context.Context, id int64) (*service.Group, error) {
 	group := service.Group{ID: id, Name: "group", Status: service.StatusActive}
 	return &group, nil
@@ -626,6 +630,14 @@ func (s *stubAdminService) ForceAntigravityPrivacy(ctx context.Context, account 
 
 func (s *stubAdminService) ReplaceUserGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (*service.ReplaceUserGroupResult, error) {
 	return &service.ReplaceUserGroupResult{MigratedKeys: 0}, nil
+}
+
+func (s *stubAdminService) GetUserAPIKeyRoutes(ctx context.Context, userID int64) (*service.UserAPIKeyRoutes, error) {
+	return &service.UserAPIKeyRoutes{}, nil
+}
+
+func (s *stubAdminService) UpdateUserAPIKeyRoutes(ctx context.Context, userID int64, input service.UserAPIKeyRouteUpdate) (*service.UserAPIKeyRoutes, error) {
+	return &service.UserAPIKeyRoutes{}, nil
 }
 
 func (s *stubAdminService) RevertAccountProxyFallback(ctx context.Context, id int64) error {

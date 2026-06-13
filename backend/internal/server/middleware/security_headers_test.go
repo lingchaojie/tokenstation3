@@ -129,6 +129,7 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Contains(t, csp, "default-src 'self'")
 		assert.Contains(t, csp, "'nonce-")
 		assert.Contains(t, csp, CloudflareInsightsDomain)
+		assert.Contains(t, csp, FiftyOneLaSDKDomain)
 	})
 
 	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {
@@ -311,6 +312,20 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 
 		count := strings.Count(enhanced, CloudflareInsightsDomain)
 		assert.Equal(t, 1, count)
+	})
+
+	t.Run("adds_51la_domain_for_analytics_sdk", func(t *testing.T) {
+		policy := "default-src 'self'; script-src 'self' __CSP_NONCE__"
+		enhanced := enhanceCSPPolicy(policy)
+
+		assert.Equal(t, 1, countDirectiveValue(enhanced, "script-src", FiftyOneLaSDKDomain))
+	})
+
+	t.Run("does_not_duplicate_51la_domain", func(t *testing.T) {
+		policy := "default-src 'self'; script-src 'self' https://sdk.51.la"
+		enhanced := enhanceCSPPolicy(policy)
+
+		assert.Equal(t, 1, countDirectiveValue(enhanced, "script-src", FiftyOneLaSDKDomain))
 	})
 
 	t.Run("handles_policy_without_script_src", func(t *testing.T) {

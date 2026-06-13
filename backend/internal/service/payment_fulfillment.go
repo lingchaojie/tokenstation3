@@ -429,17 +429,85 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 	if err != nil || g.Status != payment.EntityStatusActive {
 		return fmt.Errorf("group %d no longer exists or inactive", gid)
 	}
-	// Idempotency: check audit log to see if subscription was already assigned.
-	// Prevents double-extension on retry after markCompleted fails.
+	if !g.IsSubscriptionType() {
+		return ErrGroupNotSubscriptionType
+	}
+	// Idempotency: check durable completion marker first.
 	if s.hasAuditLog(ctx, o.ID, "SUBSCRIPTION_SUCCESS") {
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", gid)
 		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 	}
 	orderNote := fmt.Sprintf("payment order %d", o.ID)
-	_, _, err = s.subscriptionSvc.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{UserID: o.UserID, GroupID: gid, ValidityDays: days, AssignedBy: 0, Notes: orderNote})
+	if s.subscriptionHasOrderNote(ctx, o.UserID, gid, orderNote) {
+		slog.Info("subscription already contains payment order note, skipping", "orderID", o.ID, "groupID", gid)
+		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
+	}
+	if o.PlanID != nil {
+		return s.doSubWithPlanSeat(ctx, o, gid, days, orderNote)
+	}
+	orderID := o.ID
+	_, _, err = s.subscriptionSvc.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{
+		UserID:       o.UserID,
+		GroupID:      gid,
+		ValidityDays: days,
+		AssignedBy:   0,
+		OrderID:      &orderID,
+		Notes:        orderNote,
+	})
 	if err != nil {
 		return fmt.Errorf("assign subscription: %w", err)
 	}
+	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
+}
+
+func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.PaymentOrder, groupID int64, days int, orderNote string) error {
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin plan seat transaction: %w", err)
+	}
+	txCtx := dbent.NewTxContext(ctx, tx)
+	txClosed := false
+	defer func() {
+		if !txClosed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	plan, err := s.configService.LockPlanForUpdate(txCtx, *o.PlanID)
+	if err != nil {
+		return err
+	}
+	if err := s.configService.ValidatePlanSeatAvailable(txCtx, plan, o.UserID); err != nil {
+		_ = tx.Rollback()
+		txClosed = true
+		s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_SEAT_LIMIT_REACHED", "system", map[string]any{
+			"plan_id": *o.PlanID,
+			"user_id": o.UserID,
+		})
+		return err
+	}
+
+	planID := int64(plan.ID)
+	planName := plan.Name
+	orderID := o.ID
+	_, _, err = s.subscriptionSvc.assignOrExtendSubscriptionTerm(txCtx, &AssignSubscriptionInput{
+		UserID:           o.UserID,
+		GroupID:          groupID,
+		PlanID:           &planID,
+		PlanName:         &planName,
+		SevenDayLimitUSD: plan.SevenDayQuotaUsd,
+		ValidityDays:     days,
+		AssignedBy:       0,
+		OrderID:          &orderID,
+		Notes:            orderNote,
+	})
+	if err != nil {
+		return fmt.Errorf("assign subscription: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit plan seat transaction: %w", err)
+	}
+	txClosed = true
 	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 }
 
@@ -449,6 +517,22 @@ func (s *PaymentService) hasAuditLog(ctx context.Context, orderID int64, action 
 		Where(paymentauditlog.OrderIDEQ(oid), paymentauditlog.ActionEQ(action)).
 		Limit(1).Count(ctx)
 	return c > 0
+}
+
+func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID, groupID int64, orderNote string) bool {
+	if s == nil || s.subscriptionSvc == nil || strings.TrimSpace(orderNote) == "" {
+		return false
+	}
+	sub, err := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	if err != nil || sub == nil {
+		return false
+	}
+	for _, line := range strings.Split(sub.Notes, "\n") {
+		if strings.TrimSpace(line) == orderNote {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *dbent.PaymentOrder) error {

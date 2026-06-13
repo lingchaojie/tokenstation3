@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -459,9 +460,22 @@ func (s *BillingCacheService) convertToPortsData(data *subscriptionCacheData) *S
 
 // getSubscriptionFromDB 从数据库获取订阅数据
 func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID, groupID int64) (*subscriptionCacheData, error) {
-	sub, err := s.subRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+	now := time.Now()
+	sub, err := s.subRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("get subscription: %w", err)
+	}
+	if sub.ScheduledPlanEffectiveAt != nil && !sub.ScheduledPlanEffectiveAt.After(now) {
+		applied, changed, err := s.subRepo.ApplyScheduledPlanChange(ctx, sub.ID, now)
+		if err != nil {
+			return nil, fmt.Errorf("apply scheduled subscription plan change: %w", err)
+		}
+		if changed && applied != nil {
+			sub = applied
+		}
+	}
+	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(now) {
+		return nil, fmt.Errorf("get subscription: %w", ErrSubscriptionNotFound)
 	}
 
 	return &subscriptionCacheData{
@@ -716,10 +730,28 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 
 	// 判断计费模式
 	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	balanceFallback := false
 
 	if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
-			return err
+			if !errors.Is(err, ErrWeeklyLimitExceeded) {
+				return err
+			}
+			if !user.SubscriptionBalanceFallbackEnabled {
+				return err
+			}
+			balanceFallback = true
+			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
+				return balanceErr
+			}
+		} else if subscription.EffectiveSevenDayLimit(group) == nil {
+			if !user.SubscriptionBalanceFallbackEnabled {
+				return ErrWeeklyLimitExceeded
+			}
+			balanceFallback = true
+			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
+				return balanceErr
+			}
 		}
 	} else {
 		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
@@ -727,8 +759,9 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		}
 	}
 
-	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
-	if !isSubscriptionMode {
+	// user × platform quota applies to balance-billed requests. Only actual subscription-billed
+	// requests with effective quota bypass it.
+	if !isSubscriptionMode || balanceFallback {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}
@@ -879,12 +912,35 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		return ErrSubscriptionInvalid
 	}
 
+	now := time.Now()
+	if subscription.NeedsWeeklyResetAt(now) {
+		expectedWeeklyWindowStart := subscription.WeeklyWindowStart
+		if s.subRepo != nil {
+			if err := s.subRepo.ResetWeeklyUsage(ctx, subscription.ID, expectedWeeklyWindowStart, now); err != nil {
+				if s.circuitBreaker != nil {
+					s.circuitBreaker.OnFailure(err)
+				}
+				logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription weekly reset failed for user %d group %d: %v", userID, group.ID, err)
+				return ErrBillingServiceUnavailable.WithCause(err)
+			}
+		}
+		subData.WeeklyUsage = 0
+		subscription.WeeklyUsageUSD = 0
+		subscription.WeeklyWindowStart = &now
+		if s.cache != nil {
+			if err := s.cache.InvalidateSubscriptionCache(ctx, userID, group.ID); err != nil {
+				logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache after weekly reset failed for user %d group %d: %v", userID, group.ID, err)
+				return ErrBillingServiceUnavailable.WithCause(err)
+			}
+		}
+	}
+
 	// 检查限额（使用传入的Group限额配置）
 	if group.HasDailyLimit() && subData.DailyUsage >= *group.DailyLimitUSD {
 		return ErrDailyLimitExceeded
 	}
 
-	if group.HasWeeklyLimit() && subData.WeeklyUsage >= *group.WeeklyLimitUSD {
+	if weeklyLimit := subscription.EffectiveSevenDayLimit(group); weeklyLimit != nil && subData.WeeklyUsage >= *weeklyLimit {
 		return ErrWeeklyLimitExceeded
 	}
 

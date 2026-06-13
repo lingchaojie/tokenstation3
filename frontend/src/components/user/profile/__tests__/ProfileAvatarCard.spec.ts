@@ -259,4 +259,24 @@ describe('ProfileAvatarCard', () => {
     expect(authStoreState.user?.avatar_url).toBeNull()
     expect(showSuccessMock).toHaveBeenCalledWith('Avatar removed')
   })
+
+  it('uses identity avatar colors for fallback initials in full and embedded modes', () => {
+    authStoreState.user = createUser()
+
+    const full = mount(ProfileAvatarCard, {
+      props: { user: authStoreState.user },
+      global: { stubs: { Icon: true } }
+    })
+    const fullAvatar = full.get('[data-testid="profile-avatar-shell"]')
+    expect(fullAvatar.classes()).toContain('ui-avatar-identity')
+    expect(fullAvatar.classes()).not.toContain('from-primary-500')
+
+    const embedded = mount(ProfileAvatarCard, {
+      props: { user: authStoreState.user, embedded: true },
+      global: { stubs: { Icon: true } }
+    })
+    const embeddedAvatar = embedded.get('[data-testid="profile-avatar-shell"]')
+    expect(embeddedAvatar.classes()).toContain('ui-avatar-identity')
+    expect(embeddedAvatar.classes()).not.toContain('from-primary-500')
+  })
 })

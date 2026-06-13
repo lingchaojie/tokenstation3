@@ -6,7 +6,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import subscriptionsAPI from '@/api/subscriptions'
-import type { UserSubscription } from '@/types'
+import type { SubscriptionBalanceSummary, UserSubscription } from '@/types'
+import { monthlyPlanKeyFromName, monthlyPlanPricesCny } from '@/utils/monthlyPlans'
 
 // Cache TTL: 60 seconds
 const CACHE_TTL_MS = 60_000
@@ -29,6 +30,62 @@ export const useSubscriptionStore = defineStore('subscriptions', () => {
 
   // Computed
   const hasActiveSubscriptions = computed(() => activeSubscriptions.value.length > 0)
+
+  const subscriptionBalanceSummary = computed<SubscriptionBalanceSummary | null>(() => {
+    const quotaSubscriptions = activeSubscriptions.value.filter(
+      (subscription) =>
+        subscription.status === 'active' &&
+        subscription.seven_day_limit_usd != null &&
+        subscription.seven_day_remaining_usd != null
+    )
+
+    if (quotaSubscriptions.length === 0) return null
+
+    const total = quotaSubscriptions.reduce(
+      (sum, subscription) => sum + (subscription.seven_day_limit_usd ?? 0),
+      0
+    )
+    const remaining = quotaSubscriptions.reduce(
+      (sum, subscription) => sum + (subscription.seven_day_remaining_usd ?? 0),
+      0
+    )
+    const used = quotaSubscriptions.reduce(
+      (sum, subscription) => sum + (subscription.seven_day_usage_usd ?? 0),
+      0
+    )
+    const resetAt = quotaSubscriptions
+      .map((subscription) => subscription.seven_day_reset_at)
+      .filter((value): value is string => Boolean(value))
+      .sort()[0] ?? null
+    const planNames = Array.from(
+      new Set(
+        quotaSubscriptions
+          .map((subscription) => subscription.plan_name)
+          .filter((value): value is string => Boolean(value))
+      )
+    )
+
+    const planName = planNames.length === 1 ? planNames[0] : null
+    const planKey = monthlyPlanKeyFromName(planName)
+
+    return {
+      remaining,
+      total,
+      used,
+      resetAt,
+      planName,
+      planNames,
+      activePlanCount: planNames.length,
+      displayMode:
+        planNames.length === 0
+          ? 'none'
+          : planNames.length === 1
+            ? 'single'
+            : 'multiple',
+      planKey,
+      priceCny: planKey ? monthlyPlanPricesCny[planKey] : null,
+    }
+  })
 
   /**
    * Fetch active subscriptions with caching and deduplication
@@ -129,6 +186,7 @@ export const useSubscriptionStore = defineStore('subscriptions', () => {
     activeSubscriptions,
     loading,
     hasActiveSubscriptions,
+    subscriptionBalanceSummary,
 
     // Actions
     fetchActiveSubscriptions,

@@ -145,6 +145,11 @@ func BalanceNotifyEnabled(v bool) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyEnabled, v))
 }
 
+// SubscriptionBalanceFallbackEnabled applies equality check predicate on the "subscription_balance_fallback_enabled" field. It's identical to SubscriptionBalanceFallbackEnabledEQ.
+func SubscriptionBalanceFallbackEnabled(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldSubscriptionBalanceFallbackEnabled, v))
+}
+
 // BalanceNotifyThresholdType applies equality check predicate on the "balance_notify_threshold_type" field. It's identical to BalanceNotifyThresholdTypeEQ.
 func BalanceNotifyThresholdType(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyThresholdType, v))
@@ -1080,6 +1085,16 @@ func BalanceNotifyEnabledNEQ(v bool) predicate.User {
 	return predicate.User(sql.FieldNEQ(FieldBalanceNotifyEnabled, v))
 }
 
+// SubscriptionBalanceFallbackEnabledEQ applies the EQ predicate on the "subscription_balance_fallback_enabled" field.
+func SubscriptionBalanceFallbackEnabledEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldSubscriptionBalanceFallbackEnabled, v))
+}
+
+// SubscriptionBalanceFallbackEnabledNEQ applies the NEQ predicate on the "subscription_balance_fallback_enabled" field.
+func SubscriptionBalanceFallbackEnabledNEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldSubscriptionBalanceFallbackEnabled, v))
+}
+
 // BalanceNotifyThresholdTypeEQ applies the EQ predicate on the "balance_notify_threshold_type" field.
 func BalanceNotifyThresholdTypeEQ(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyThresholdType, v))
@@ -1631,6 +1646,29 @@ func HasPlatformQuotas() predicate.User {
 func HasPlatformQuotasWith(preds ...predicate.UserPlatformQuota) predicate.User {
 	return predicate.User(func(s *sql.Selector) {
 		step := newPlatformQuotasStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasAPIKeyRoutes applies the HasEdge predicate on the "api_key_routes" edge.
+func HasAPIKeyRoutes() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, APIKeyRoutesTable, APIKeyRoutesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAPIKeyRoutesWith applies the HasEdge predicate on the "api_key_routes" edge with a given conditions (other predicates).
+func HasAPIKeyRoutesWith(preds ...predicate.UserAPIKeyRoute) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newAPIKeyRoutesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/Wei-Shaw/sub2api/ent/userapikeyroute"
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -310,6 +311,20 @@ func (_u *UserUpdate) SetBalanceNotifyEnabled(v bool) *UserUpdate {
 func (_u *UserUpdate) SetNillableBalanceNotifyEnabled(v *bool) *UserUpdate {
 	if v != nil {
 		_u.SetBalanceNotifyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_u *UserUpdate) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdate {
+	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdate {
+	if v != nil {
+		_u.SetSubscriptionBalanceFallbackEnabled(*v)
 	}
 	return _u
 }
@@ -606,6 +621,21 @@ func (_u *UserUpdate) AddPlatformQuotas(v ...*UserPlatformQuota) *UserUpdate {
 	return _u.AddPlatformQuotaIDs(ids...)
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (_u *UserUpdate) AddAPIKeyRouteIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyRoutes adds the "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *UserUpdate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyRouteIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdate) Mutation() *UserMutation {
 	return _u.mutation
@@ -884,6 +914,27 @@ func (_u *UserUpdate) RemovePlatformQuotas(v ...*UserPlatformQuota) *UserUpdate 
 	return _u.RemovePlatformQuotaIDs(ids...)
 }
 
+// ClearAPIKeyRoutes clears all "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *UserUpdate) ClearAPIKeyRoutes() *UserUpdate {
+	_u.mutation.ClearAPIKeyRoutes()
+	return _u
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to UserAPIKeyRoute entities by IDs.
+func (_u *UserUpdate) RemoveAPIKeyRouteIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyRoutes removes "api_key_routes" edges to UserAPIKeyRoute entities.
+func (_u *UserUpdate) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyRouteIDs(ids...)
+}
+
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *UserUpdate) Save(ctx context.Context) (int, error) {
 	if err := _u.defaults(); err != nil {
@@ -1044,6 +1095,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SubscriptionBalanceFallbackEnabled(); ok {
+		_spec.SetField(user.FieldSubscriptionBalanceFallbackEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyThresholdType(); ok {
 		_spec.SetField(user.FieldBalanceNotifyThresholdType, field.TypeString, value)
@@ -1662,6 +1716,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1963,6 +2062,20 @@ func (_u *UserUpdateOne) SetNillableBalanceNotifyEnabled(v *bool) *UserUpdateOne
 	return _u
 }
 
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (_u *UserUpdateOne) SetSubscriptionBalanceFallbackEnabled(v bool) *UserUpdateOne {
+	_u.mutation.SetSubscriptionBalanceFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableSubscriptionBalanceFallbackEnabled(v *bool) *UserUpdateOne {
+	if v != nil {
+		_u.SetSubscriptionBalanceFallbackEnabled(*v)
+	}
+	return _u
+}
+
 // SetBalanceNotifyThresholdType sets the "balance_notify_threshold_type" field.
 func (_u *UserUpdateOne) SetBalanceNotifyThresholdType(v string) *UserUpdateOne {
 	_u.mutation.SetBalanceNotifyThresholdType(v)
@@ -2255,6 +2368,21 @@ func (_u *UserUpdateOne) AddPlatformQuotas(v ...*UserPlatformQuota) *UserUpdateO
 	return _u.AddPlatformQuotaIDs(ids...)
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (_u *UserUpdateOne) AddAPIKeyRouteIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyRoutes adds the "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *UserUpdateOne) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyRouteIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdateOne) Mutation() *UserMutation {
 	return _u.mutation
@@ -2533,6 +2661,27 @@ func (_u *UserUpdateOne) RemovePlatformQuotas(v ...*UserPlatformQuota) *UserUpda
 	return _u.RemovePlatformQuotaIDs(ids...)
 }
 
+// ClearAPIKeyRoutes clears all "api_key_routes" edges to the UserAPIKeyRoute entity.
+func (_u *UserUpdateOne) ClearAPIKeyRoutes() *UserUpdateOne {
+	_u.mutation.ClearAPIKeyRoutes()
+	return _u
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to UserAPIKeyRoute entities by IDs.
+func (_u *UserUpdateOne) RemoveAPIKeyRouteIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveAPIKeyRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyRoutes removes "api_key_routes" edges to UserAPIKeyRoute entities.
+func (_u *UserUpdateOne) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyRouteIDs(ids...)
+}
+
 // Where appends a list predicates to the UserUpdate builder.
 func (_u *UserUpdateOne) Where(ps ...predicate.User) *UserUpdateOne {
 	_u.mutation.Where(ps...)
@@ -2723,6 +2872,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SubscriptionBalanceFallbackEnabled(); ok {
+		_spec.SetField(user.FieldSubscriptionBalanceFallbackEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyThresholdType(); ok {
 		_spec.SetField(user.FieldBalanceNotifyThresholdType, field.TypeString, value)
@@ -3341,6 +3493,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.APIKeyRoutesTable,
+			Columns: []string{user.APIKeyRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

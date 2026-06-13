@@ -43,6 +43,10 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
 			Optional().
 			Nillable(),
+		field.Float("seven_day_quota_usd").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Optional().
+			Nillable(),
 		field.Int("validity_days").
 			Default(30),
 		field.String("validity_unit").
@@ -58,6 +62,10 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			Default(true),
 		field.Int("sort_order").
 			Default(0),
+		field.Int("seat_limit").
+			Optional().
+			Nillable().
+			NonNegative(),
 		field.Time("created_at").
 			Immutable().
 			Default(time.Now).

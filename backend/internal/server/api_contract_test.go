@@ -38,6 +38,7 @@ func TestAPIContracts(t *testing.T) {
 		headers    map[string]string
 		wantStatus int
 		wantJSON   string
+		verify     func(t *testing.T, deps *contractDeps)
 	}{
 		{
 			name:       "GET /api/v1/auth/me",
@@ -61,6 +62,7 @@ func TestAPIContracts(t *testing.T) {
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z",
 					"balance_notify_enabled": false,
+					"subscription_balance_fallback_enabled": false,
 					"balance_notify_threshold_type": "",
 					"balance_notify_threshold": null,
 					"balance_notify_extra_emails": null,
@@ -215,7 +217,7 @@ func TestAPIContracts(t *testing.T) {
 			name:   "POST /api/v1/keys",
 			method: http.MethodPost,
 			path:   "/api/v1/keys",
-			body:   `{"name":"Key One","custom_key":"sk_custom_1234567890"}`,
+			body:   `{"name":"Key One","key_type":"anthropic","custom_key":"sk_custom_1234567890"}`,
 			headers: map[string]string{
 				"Content-Type": "application/json",
 			},
@@ -228,7 +230,8 @@ func TestAPIContracts(t *testing.T) {
 					"user_id": 1,
 					"key": "sk_custom_1234567890",
 					"name": "Key One",
-					"group_id": null,
+					"key_type": "anthropic",
+					"group_id": 10,
 					"status": "active",
 					"ip_whitelist": null,
 					"ip_blacklist": null,
@@ -249,6 +252,55 @@ func TestAPIContracts(t *testing.T) {
 					"updated_at": "2025-01-02T03:04:05Z"
 				}
 			}`,
+		},
+		{
+			name:   "POST /api/v1/keys rejects explicit group_id",
+			method: http.MethodPost,
+			path:   "/api/v1/keys",
+			body:   `{"name":"Key One","key_type":"anthropic","group_id":10}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantJSON: `{
+				"code": 400,
+				"message": "group_id is managed by administrator"
+			}`,
+		},
+		{
+			name: "PUT /api/v1/keys/:id rejects explicit key_type",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				deps.apiKeyRepo.MustSeed(&service.APIKey{
+					ID:        100,
+					UserID:    1,
+					Key:       "sk_custom_1234567890",
+					Name:      "Key One",
+					KeyType:   service.APIKeyTypeAnthropic,
+					GroupID:   ptr(int64(10)),
+					Status:    service.StatusActive,
+					CreatedAt: deps.now,
+					UpdatedAt: deps.now,
+				})
+			},
+			method: http.MethodPut,
+			path:   "/api/v1/keys/100",
+			body:   `{"key_type":"openai","name":"New Name"}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantJSON: `{
+				"code": 400,
+				"message": "key_type cannot be changed after creation"
+			}`,
+			verify: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				key, err := deps.apiKeyRepo.GetByID(context.Background(), 100)
+				require.NoError(t, err)
+				require.Equal(t, "Key One", key.Name)
+				require.Equal(t, service.APIKeyTypeAnthropic, key.KeyType)
+			},
 		},
 		{
 			name: "GET /api/v1/keys (paginated)",
@@ -277,6 +329,7 @@ func TestAPIContracts(t *testing.T) {
 							"user_id": 1,
 							"key": "sk_custom_1234567890",
 							"name": "Key One",
+							"key_type": "unknown",
 							"group_id": null,
 							"status": "active",
 							"ip_whitelist": null,
@@ -376,20 +429,36 @@ func TestAPIContracts(t *testing.T) {
 				// 普通用户订阅接口不应包含 assigned_* / notes 等管理员字段。
 				deps.userSubRepo.SetByUserID(1, []service.UserSubscription{
 					{
-						ID:              501,
-						UserID:          1,
-						GroupID:         10,
-						StartsAt:        deps.now,
-						ExpiresAt:       time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC), // 使用未来日期避免 normalizeSubscriptionStatus 标记为过期
-						Status:          service.SubscriptionStatusActive,
-						DailyUsageUSD:   1.23,
-						WeeklyUsageUSD:  2.34,
-						MonthlyUsageUSD: 3.45,
-						AssignedBy:      ptr(int64(999)),
-						AssignedAt:      deps.now,
-						Notes:           "admin-note",
-						CreatedAt:       deps.now,
-						UpdatedAt:       deps.now,
+						ID:                501,
+						UserID:            1,
+						GroupID:           10,
+						PlanID:            ptr(int64(42)),
+						PlanName:          ptr("Starter"),
+						SevenDayLimitUSD:  ptr(10.0),
+						StartsAt:          deps.now,
+						ExpiresAt:         time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC), // 使用未来日期避免 normalizeSubscriptionStatus 标记为过期
+						Status:            service.SubscriptionStatusActive,
+						WeeklyWindowStart: ptr(time.Date(2099, 1, 1, 3, 4, 5, 0, time.UTC)),
+						DailyUsageUSD:     1.23,
+						WeeklyUsageUSD:    2.34,
+						MonthlyUsageUSD:   3.45,
+						AssignedBy:        ptr(int64(999)),
+						AssignedAt:        deps.now,
+						Notes:             "admin-note",
+						CreatedAt:         deps.now,
+						UpdatedAt:         deps.now,
+					},
+					{
+						ID:             502,
+						UserID:         1,
+						GroupID:        11,
+						StartsAt:       deps.now,
+						ExpiresAt:      time.Date(2099, 1, 3, 3, 4, 5, 0, time.UTC),
+						Status:         service.SubscriptionStatusActive,
+						WeeklyUsageUSD: 4.56,
+						AssignedAt:     deps.now,
+						CreatedAt:      deps.now,
+						UpdatedAt:      deps.now,
 					},
 				})
 			},
@@ -397,27 +466,67 @@ func TestAPIContracts(t *testing.T) {
 			path:       "/api/v1/subscriptions",
 			wantStatus: http.StatusOK,
 			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": [
-					{
-						"id": 501,
-						"user_id": 1,
-						"group_id": 10,
-						"starts_at": "2025-01-02T03:04:05Z",
-						"expires_at": "2099-01-02T03:04:05Z",
-						"status": "active",
-						"daily_window_start": null,
-						"weekly_window_start": null,
-						"monthly_window_start": null,
-						"daily_usage_usd": 1.23,
-						"weekly_usage_usd": 2.34,
-						"monthly_usage_usd": 3.45,
-						"created_at": "2025-01-02T03:04:05Z",
-						"updated_at": "2025-01-02T03:04:05Z"
-					}
-				]
-			}`,
+					"code": 0,
+					"message": "success",
+					"data": [
+						{
+							"id": 501,
+							"user_id": 1,
+							"group_id": 10,
+							"plan_id": 42,
+							"plan_name": "Starter",
+							"scheduled_plan_id": null,
+							"scheduled_plan_name": null,
+							"scheduled_seven_day_limit_usd": null,
+							"scheduled_plan_effective_at": null,
+							"scheduled_expires_at": null,
+							"scheduled_order_id": null,
+							"starts_at": "2025-01-02T03:04:05Z",
+							"expires_at": "2099-01-02T03:04:05Z",
+							"status": "active",
+							"daily_window_start": null,
+							"weekly_window_start": "2099-01-01T03:04:05Z",
+							"monthly_window_start": null,
+							"daily_usage_usd": 1.23,
+							"weekly_usage_usd": 2.34,
+							"monthly_usage_usd": 3.45,
+							"seven_day_limit_usd": 10,
+							"seven_day_usage_usd": 2.34,
+							"seven_day_remaining_usd": 7.66,
+							"seven_day_reset_at": "2099-01-08T03:04:05Z",
+							"created_at": "2025-01-02T03:04:05Z",
+							"updated_at": "2025-01-02T03:04:05Z"
+						},
+						{
+							"id": 502,
+							"user_id": 1,
+							"group_id": 11,
+							"plan_id": null,
+							"plan_name": null,
+							"scheduled_plan_id": null,
+							"scheduled_plan_name": null,
+							"scheduled_seven_day_limit_usd": null,
+							"scheduled_plan_effective_at": null,
+							"scheduled_expires_at": null,
+							"scheduled_order_id": null,
+							"starts_at": "2025-01-02T03:04:05Z",
+							"expires_at": "2099-01-03T03:04:05Z",
+							"status": "active",
+							"daily_window_start": null,
+							"weekly_window_start": null,
+							"monthly_window_start": null,
+							"daily_usage_usd": 0,
+							"weekly_usage_usd": 4.56,
+							"monthly_usage_usd": 0,
+							"seven_day_limit_usd": null,
+							"seven_day_usage_usd": 4.56,
+							"seven_day_remaining_usd": null,
+							"seven_day_reset_at": null,
+							"created_at": "2025-01-02T03:04:05Z",
+							"updated_at": "2025-01-02T03:04:05Z"
+						}
+					]
+				}`,
 		},
 		{
 			name: "GET /api/v1/redeem/history",
@@ -802,6 +911,8 @@ func TestAPIContracts(t *testing.T) {
 					"force_email_on_third_party_signup": false,
 					"default_concurrency": 5,
 					"default_balance": 1.25,
+					"default_anthropic_group_id": null,
+					"default_openai_group_id": null,
 					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
@@ -1051,6 +1162,8 @@ func TestAPIContracts(t *testing.T) {
 					"custom_endpoints": [],
 					"default_concurrency": 0,
 					"default_balance": 0,
+					"default_anthropic_group_id": null,
+					"default_openai_group_id": null,
 					"affiliate_rebate_rate": 20,
 					"affiliate_rebate_freeze_hours": 0,
 					"affiliate_rebate_duration_days": 0,
@@ -1213,6 +1326,9 @@ func TestAPIContracts(t *testing.T) {
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
 			require.Equal(t, tt.wantStatus, status)
 			require.JSONEq(t, tt.wantJSON, body)
+			if tt.verify != nil {
+				tt.verify(t, deps)
+			}
 		})
 	}
 }
@@ -1255,6 +1371,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	apiKeyRepo := newStubApiKeyRepo(now)
 	apiKeyCache := stubApiKeyCache{}
 	groupRepo := &stubGroupRepo{}
+	groupRepo.SetActive([]service.Group{{ID: 10, Name: "Default Anthropic", Platform: service.PlatformAnthropic, Status: service.StatusActive}})
 	userSubRepo := &stubUserSubscriptionRepo{}
 	accountRepo := stubAccountRepo{}
 	proxyRepo := stubProxyRepo{}
@@ -1281,8 +1398,9 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
+	apiKeyService.SetProviderRouting(nil, stubDefaultAPIKeyGroupSettings{keyType: service.APIKeyTypeAnthropic, groupID: 10})
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
@@ -1318,6 +1436,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Keys.Use(jwtAuth)
 	v1Keys.GET("/keys", apiKeyHandler.List)
 	v1Keys.POST("/keys", apiKeyHandler.Create)
+	v1Keys.PUT("/keys/:id", apiKeyHandler.Update)
 	v1Keys.GET("/groups/available", apiKeyHandler.GetAvailableGroups)
 
 	v1Usage := v1.Group("")
@@ -1556,12 +1675,18 @@ func (stubGroupRepo) Create(ctx context.Context, group *service.Group) error {
 	return errors.New("not implemented")
 }
 
-func (stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+func (r *stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+	for i := range r.active {
+		if r.active[i].ID == id {
+			clone := r.active[i]
+			return &clone, nil
+		}
+	}
 	return nil, service.ErrGroupNotFound
 }
 
-func (stubGroupRepo) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
-	return nil, service.ErrGroupNotFound
+func (r *stubGroupRepo) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
+	return r.GetByID(ctx, id)
 }
 
 func (stubGroupRepo) Update(ctx context.Context, group *service.Group) error {
@@ -2011,13 +2136,28 @@ func (stubUserSubscriptionRepo) UpdateStatus(ctx context.Context, subscriptionID
 func (stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
 }
+func (stubUserSubscriptionRepo) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
+	return nil, false, errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	return errors.New("not implemented")
+}
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	return errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
@@ -2521,6 +2661,19 @@ func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usag
 }
 func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
 	return nil, errors.New("not implemented")
+}
+
+type stubDefaultAPIKeyGroupSettings struct {
+	keyType string
+	groupID int64
+}
+
+func (s stubDefaultAPIKeyGroupSettings) GetDefaultAPIKeyGroupID(ctx context.Context, keyType string) (*int64, error) {
+	if keyType != s.keyType {
+		return nil, nil
+	}
+	id := s.groupID
+	return &id, nil
 }
 
 type stubSettingRepo struct {

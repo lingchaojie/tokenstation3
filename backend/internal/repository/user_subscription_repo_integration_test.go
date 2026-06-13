@@ -11,6 +11,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -30,6 +31,56 @@ func (s *UserSubscriptionRepoSuite) SetupTest() {
 
 func TestUserSubscriptionRepoSuite(t *testing.T) {
 	suite.Run(t, new(UserSubscriptionRepoSuite))
+}
+
+func TestUserSubscriptionRepository_CreateAndGet_PreservesPlanID(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := NewUserSubscriptionRepository(client)
+
+	user := client.User.Create().
+		SetEmail("sub-plan-id@test.com").
+		SetPasswordHash("test-password-hash").
+		SetStatus(service.StatusActive).
+		SetRole(service.RoleUser).
+		SaveX(ctx)
+	group := client.Group.Create().
+		SetName("g-plan-id").
+		SetStatus(service.StatusActive).
+		SaveX(ctx)
+
+	plan := client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName("Seat limited plan").
+		SetDescription("").
+		SetPrice(9.99).
+		SetValidityDays(30).
+		SetValidityUnit("days").
+		SetFeatures("").
+		SetProductName("").
+		SetForSale(true).
+		SetSortOrder(0).
+		SaveX(ctx)
+
+	planID := int64(plan.ID)
+	now := time.Now()
+	sub := &service.UserSubscription{
+		UserID:     user.ID,
+		GroupID:    group.ID,
+		PlanID:     &planID,
+		StartsAt:   now,
+		ExpiresAt:  now.Add(30 * 24 * time.Hour),
+		Status:     service.SubscriptionStatusActive,
+		AssignedAt: now,
+	}
+
+	require.NoError(t, repo.Create(ctx, sub))
+
+	got, err := repo.GetByID(ctx, sub.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.PlanID)
+	require.Equal(t, planID, *got.PlanID)
 }
 
 func (s *UserSubscriptionRepoSuite) mustCreateUser(email string, role string) *service.User {
@@ -402,7 +453,7 @@ func (s *UserSubscriptionRepoSuite) TestResetWeeklyUsage() {
 	})
 
 	resetAt := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
-	err := s.repo.ResetWeeklyUsage(s.ctx, sub.ID, resetAt)
+	err := s.repo.ResetWeeklyUsage(s.ctx, sub.ID, sub.WeeklyWindowStart, resetAt)
 	s.Require().NoError(err, "ResetWeeklyUsage")
 
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
@@ -411,6 +462,33 @@ func (s *UserSubscriptionRepoSuite) TestResetWeeklyUsage() {
 	s.Require().InDelta(30.0, got.MonthlyUsageUSD, 1e-6)
 	s.Require().NotNil(got.WeeklyWindowStart)
 	s.Require().WithinDuration(resetAt, *got.WeeklyWindowStart, time.Microsecond)
+}
+
+func (s *UserSubscriptionRepoSuite) TestResetWeeklyUsage_StaleResetDoesNotWipeUsageAfterConcurrentReset() {
+	user := s.mustCreateUser("resetw-stale@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-resetw-stale")
+	oldWindowStart := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	sub := s.mustCreateSubscription(user.ID, group.ID, func(c *dbent.UserSubscriptionCreate) {
+		c.SetWeeklyWindowStart(oldWindowStart)
+		c.SetWeeklyUsageUsd(15.0)
+	})
+
+	firstResetAt := oldWindowStart.Add(7 * 24 * time.Hour)
+	err := s.repo.ResetWeeklyUsage(s.ctx, sub.ID, sub.WeeklyWindowStart, firstResetAt)
+	s.Require().NoError(err, "first ResetWeeklyUsage")
+
+	const billedUsage = 3.25
+	s.Require().NoError(s.repo.IncrementUsage(s.ctx, sub.ID, billedUsage), "IncrementUsage after first reset")
+
+	staleResetAt := firstResetAt.Add(1 * time.Second)
+	err = s.repo.ResetWeeklyUsage(s.ctx, sub.ID, sub.WeeklyWindowStart, staleResetAt)
+	s.Require().NoError(err, "stale ResetWeeklyUsage should be treated as success")
+
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().InDelta(billedUsage, got.WeeklyUsageUSD, 1e-6)
+	s.Require().NotNil(got.WeeklyWindowStart)
+	s.Require().WithinDuration(firstResetAt, *got.WeeklyWindowStart, time.Microsecond)
 }
 
 func (s *UserSubscriptionRepoSuite) TestResetMonthlyUsage() {

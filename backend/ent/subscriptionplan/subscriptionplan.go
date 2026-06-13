@@ -23,6 +23,8 @@ const (
 	FieldPrice = "price"
 	// FieldOriginalPrice holds the string denoting the original_price field in the database.
 	FieldOriginalPrice = "original_price"
+	// FieldSevenDayQuotaUsd holds the string denoting the seven_day_quota_usd field in the database.
+	FieldSevenDayQuotaUsd = "seven_day_quota_usd"
 	// FieldValidityDays holds the string denoting the validity_days field in the database.
 	FieldValidityDays = "validity_days"
 	// FieldValidityUnit holds the string denoting the validity_unit field in the database.
@@ -35,6 +37,8 @@ const (
 	FieldForSale = "for_sale"
 	// FieldSortOrder holds the string denoting the sort_order field in the database.
 	FieldSortOrder = "sort_order"
+	// FieldSeatLimit holds the string denoting the seat_limit field in the database.
+	FieldSeatLimit = "seat_limit"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -51,12 +55,14 @@ var Columns = []string{
 	FieldDescription,
 	FieldPrice,
 	FieldOriginalPrice,
+	FieldSevenDayQuotaUsd,
 	FieldValidityDays,
 	FieldValidityUnit,
 	FieldFeatures,
 	FieldProductName,
 	FieldForSale,
 	FieldSortOrder,
+	FieldSeatLimit,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -92,6 +98,8 @@ var (
 	DefaultForSale bool
 	// DefaultSortOrder holds the default value on creation for the "sort_order" field.
 	DefaultSortOrder int
+	// SeatLimitValidator is a validator for the "seat_limit" field. It is called by the builders before save.
+	SeatLimitValidator func(int) error
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -133,6 +141,11 @@ func ByOriginalPrice(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOriginalPrice, opts...).ToFunc()
 }
 
+// BySevenDayQuotaUsd orders the results by the seven_day_quota_usd field.
+func BySevenDayQuotaUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSevenDayQuotaUsd, opts...).ToFunc()
+}
+
 // ByValidityDays orders the results by the validity_days field.
 func ByValidityDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldValidityDays, opts...).ToFunc()
@@ -161,6 +174,11 @@ func ByForSale(opts ...sql.OrderTermOption) OrderOption {
 // BySortOrder orders the results by the sort_order field.
 func BySortOrder(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSortOrder, opts...).ToFunc()
+}
+
+// BySeatLimit orders the results by the seat_limit field.
+func BySeatLimit(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSeatLimit, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

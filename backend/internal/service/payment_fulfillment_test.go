@@ -4,14 +4,423 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"math"
+	"strconv"
 	"testing"
+	"time"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "modernc.org/sqlite"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type paymentFulfillmentPlanSnapshotHarness struct {
+	client           *dbent.Client
+	user             *dbent.User
+	paymentService   *PaymentService
+	subscriptionRepo *subscriptionUserSubRepoStub
+}
+
+func newPaymentFulfillmentPlanSnapshotHarness(t *testing.T) *paymentFulfillmentPlanSnapshotHarness {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:payment_fulfillment_plan_snapshot_%s?mode=memory&cache=shared&_fk=1", t.Name()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := context.Background()
+	user := client.User.Create().
+		SetEmail("snapshot@example.com").
+		SetPasswordHash("hash").
+		SetUsername("snapshot").
+		SaveX(ctx)
+
+	groupRepo := &paymentFulfillmentGroupRepoStub{}
+	subscriptionRepo := newSubscriptionUserSubRepoStub()
+	configService := NewPaymentConfigService(client, nil, nil)
+	subscriptionSvc := NewSubscriptionService(groupRepo, subscriptionRepo, nil, nil, nil)
+	paymentService := &PaymentService{
+		entClient:       client,
+		subscriptionSvc: subscriptionSvc,
+		configService:   configService,
+		groupRepo:       groupRepo,
+	}
+
+	return &paymentFulfillmentPlanSnapshotHarness{
+		client:           client,
+		user:             user,
+		paymentService:   paymentService,
+		subscriptionRepo: subscriptionRepo,
+	}
+}
+
+type paymentFulfillmentGroupRepoStub struct {
+	groupRepoNoop
+	groups map[int64]*Group
+}
+
+func (s *paymentFulfillmentGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	group := s.groups[id]
+	if group == nil {
+		return nil, ErrGroupNotSubscriptionType
+	}
+	cp := *group
+	return &cp, nil
+}
+
+func (h *paymentFulfillmentPlanSnapshotHarness) createSubscriptionGroup(t *testing.T, name string) *dbent.Group {
+	t.Helper()
+	entGroup := h.client.Group.Create().
+		SetName(name).
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetPlatform(PlatformAnthropic).
+		SetRateMultiplier(1).
+		SaveX(context.Background())
+
+	stub := h.paymentService.groupRepo.(*paymentFulfillmentGroupRepoStub)
+	if stub.groups == nil {
+		stub.groups = make(map[int64]*Group)
+	}
+	stub.groups[entGroup.ID] = &Group{
+		ID:               entGroup.ID,
+		Name:             entGroup.Name,
+		Status:           entGroup.Status,
+		SubscriptionType: entGroup.SubscriptionType,
+		Platform:         entGroup.Platform,
+		RateMultiplier:   entGroup.RateMultiplier,
+	}
+	return entGroup
+}
+
+func (h *paymentFulfillmentPlanSnapshotHarness) createSubscriptionPlan(t *testing.T, groupID int64, name string, price float64, days int, quota *float64) *dbent.SubscriptionPlan {
+	t.Helper()
+	builder := h.client.SubscriptionPlan.Create().
+		SetGroupID(groupID).
+		SetName(name).
+		SetDescription(name).
+		SetPrice(price).
+		SetValidityDays(days).
+		SetValidityUnit("day").
+		SetFeatures("Seven-day quota").
+		SetProductName(name).
+		SetForSale(true).
+		SetSortOrder(10)
+	if quota != nil {
+		builder.SetSevenDayQuotaUsd(*quota)
+	}
+	return builder.SaveX(context.Background())
+}
+
+func (h *paymentFulfillmentPlanSnapshotHarness) createPaidSubscriptionOrder(t *testing.T, userID, planID, groupID int64, days int) *dbent.PaymentOrder {
+	t.Helper()
+	now := time.Now()
+	return h.client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail(h.user.Email).
+		SetUserName(h.user.Username).
+		SetAmount(100).
+		SetPayAmount(100).
+		SetRechargeCode("").
+		SetOutTradeNo(fmt.Sprintf("sub2_%d_%d", planID, now.UnixNano())).
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetPlanID(planID).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(days).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(now.Add(time.Hour)).
+		SetPaidAt(now).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("example.test").
+		SaveX(context.Background())
+}
+
+func TestPaymentFulfillmentSnapshotsSubscriptionPlanQuota(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	quota := 110.0
+	plan := h.createSubscriptionPlan(t, group.ID, "Plus monthly", 399, 30, &quota)
+	order := h.createPaidSubscriptionOrder(t, h.user.ID, plan.ID, group.ID, 30)
+
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	sub, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.NotNil(t, sub.PlanID)
+	require.Equal(t, int64(plan.ID), *sub.PlanID)
+	require.NotNil(t, sub.PlanName)
+	require.Equal(t, "Plus monthly", *sub.PlanName)
+	require.NotNil(t, sub.SevenDayLimitUSD)
+	require.InDelta(t, 110.0, *sub.SevenDayLimitUSD, 0.000001)
+	require.NotNil(t, sub.WeeklyWindowStart)
+	require.WithinDuration(t, time.Now(), *sub.WeeklyWindowStart, 2*time.Second)
+	require.Zero(t, sub.WeeklyUsageUSD)
+}
+
+func TestPaymentFulfillmentAllowsHiddenPlanAfterCheckout(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	quota := 110.0
+	plan := h.createSubscriptionPlan(t, group.ID, "Hidden after checkout", 399, 30, &quota)
+	order := h.createPaidSubscriptionOrder(t, h.user.ID, plan.ID, group.ID, 30)
+	h.client.SubscriptionPlan.UpdateOneID(plan.ID).SetForSale(false).SaveX(ctx)
+
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	sub, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.NotNil(t, sub.PlanID)
+	require.Equal(t, int64(plan.ID), *sub.PlanID)
+	require.NotNil(t, sub.PlanName)
+	require.Equal(t, "Hidden after checkout", *sub.PlanName)
+	require.NotNil(t, sub.SevenDayLimitUSD)
+	require.InDelta(t, quota, *sub.SevenDayLimitUSD, 0.000001)
+}
+
+func TestPaymentFulfillmentRestartsExpiredPlanSnapshotFromPurchaseCompletion(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	oldQuota := 50.0
+	newQuota := 260.0
+	oldPlanID := int64(1000)
+	oldPlanName := "Old monthly"
+	pro := h.createSubscriptionPlan(t, group.ID, "Pro monthly", 799, 30, &newQuota)
+	oldStart := time.Now().AddDate(0, 0, -45)
+	oldDailyWindow := oldStart.Add(12 * time.Hour)
+	oldWeeklyWindow := oldStart.Add(24 * time.Hour)
+	oldMonthlyWindow := oldStart.Add(48 * time.Hour)
+	h.subscriptionRepo.seed(&UserSubscription{
+		ID:                 77,
+		UserID:             h.user.ID,
+		GroupID:            group.ID,
+		PlanID:             &oldPlanID,
+		PlanName:           &oldPlanName,
+		SevenDayLimitUSD:   &oldQuota,
+		StartsAt:           oldStart,
+		ExpiresAt:          oldStart.AddDate(0, 0, 30),
+		Status:             SubscriptionStatusExpired,
+		DailyWindowStart:   &oldDailyWindow,
+		WeeklyWindowStart:  &oldWeeklyWindow,
+		MonthlyWindowStart: &oldMonthlyWindow,
+		DailyUsageUSD:      11,
+		WeeklyUsageUSD:     22,
+		MonthlyUsageUSD:    33,
+		Notes:              "old",
+	})
+
+	order := h.createPaidSubscriptionOrder(t, h.user.ID, pro.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	after, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.Equal(t, SubscriptionStatusActive, after.Status)
+	require.True(t, after.StartsAt.After(oldStart), "expired snapshot renewal should reset StartsAt to purchase completion time")
+	require.WithinDuration(t, time.Now(), after.StartsAt, 2*time.Second)
+	require.WithinDuration(t, after.StartsAt.AddDate(0, 0, 30), after.ExpiresAt, 2*time.Second)
+	require.NotNil(t, after.DailyWindowStart)
+	require.NotNil(t, after.WeeklyWindowStart)
+	require.NotNil(t, after.MonthlyWindowStart)
+	require.WithinDuration(t, after.StartsAt, *after.DailyWindowStart, time.Second)
+	require.WithinDuration(t, after.StartsAt, *after.WeeklyWindowStart, time.Second)
+	require.WithinDuration(t, after.StartsAt, *after.MonthlyWindowStart, time.Second)
+	require.Zero(t, after.DailyUsageUSD)
+	require.Zero(t, after.WeeklyUsageUSD)
+	require.Zero(t, after.MonthlyUsageUSD)
+	require.NotNil(t, after.PlanID)
+	require.Equal(t, int64(pro.ID), *after.PlanID)
+	require.NotNil(t, after.PlanName)
+	require.Equal(t, "Pro monthly", *after.PlanName)
+	require.NotNil(t, after.SevenDayLimitUSD)
+	require.InDelta(t, newQuota, *after.SevenDayLimitUSD, 0.000001)
+	require.Equal(t, "old\npayment order "+strconv.FormatInt(order.ID, 10), after.Notes)
+}
+
+func TestPaymentFulfillmentSwitchesActiveSubscriptionPlanAndExtendsExpiry(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	basicQuota := 50.0
+	proQuota := 260.0
+	basic := h.createSubscriptionPlan(t, group.ID, "Basic monthly", 179, 30, &basicQuota)
+	pro := h.createSubscriptionPlan(t, group.ID, "Pro monthly", 799, 30, &proQuota)
+
+	firstOrder := h.createPaidSubscriptionOrder(t, h.user.ID, basic.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, firstOrder.ID))
+
+	before, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	originalExpiry := before.ExpiresAt
+	require.NoError(t, h.subscriptionRepo.IncrementUsage(ctx, before.ID, 20))
+
+	switchOrder := h.createPaidSubscriptionOrder(t, h.user.ID, pro.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, switchOrder.ID))
+
+	after, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.PlanID)
+	require.Equal(t, int64(pro.ID), *after.PlanID)
+	require.NotNil(t, after.PlanName)
+	require.Equal(t, "Pro monthly", *after.PlanName)
+	require.NotNil(t, after.SevenDayLimitUSD)
+	require.InDelta(t, 260.0, *after.SevenDayLimitUSD, 0.000001)
+	require.Zero(t, after.WeeklyUsageUSD)
+	require.NotNil(t, after.WeeklyWindowStart)
+	require.NotNil(t, before.WeeklyWindowStart)
+	require.True(t, after.WeeklyWindowStart.After(*before.WeeklyWindowStart) || after.WeeklyWindowStart.Equal(*before.WeeklyWindowStart))
+	require.WithinDuration(t, originalExpiry.Add(30*24*time.Hour), after.ExpiresAt, time.Second)
+}
+
+func TestPaymentFulfillmentRenewingSameActivePlanExtendsExpiryWithoutResettingWeeklyUsage(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	basicQuota := 50.0
+	proQuota := 260.0
+	basic := h.createSubscriptionPlan(t, group.ID, "Basic monthly", 179, 30, &basicQuota)
+	pro := h.createSubscriptionPlan(t, group.ID, "Pro monthly", 799, 30, &proQuota)
+
+	firstOrder := h.createPaidSubscriptionOrder(t, h.user.ID, pro.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, firstOrder.ID))
+
+	before, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	originalExpiry := before.ExpiresAt
+	originalWeeklyWindow := *before.WeeklyWindowStart
+	require.NoError(t, h.subscriptionRepo.IncrementUsage(ctx, before.ID, 20))
+
+	basicPlanID := int64(basic.ID)
+	basicPlanName := "Basic monthly"
+	scheduledEffectiveAt := originalExpiry
+	scheduledExpiresAt := originalExpiry.AddDate(0, 0, 30)
+	require.NoError(t, h.subscriptionRepo.SchedulePlanChange(ctx, before.ID, &basicPlanID, &basicPlanName, &basicQuota, scheduledEffectiveAt, scheduledExpiresAt, nil, nil))
+
+	renewOrder := h.createPaidSubscriptionOrder(t, h.user.ID, pro.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, renewOrder.ID))
+
+	after, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.PlanID)
+	require.Equal(t, int64(pro.ID), *after.PlanID)
+	require.NotNil(t, after.PlanName)
+	require.Equal(t, "Pro monthly", *after.PlanName)
+	require.NotNil(t, after.SevenDayLimitUSD)
+	require.InDelta(t, proQuota, *after.SevenDayLimitUSD, 0.000001)
+	require.InDelta(t, 20.0, after.WeeklyUsageUSD, 0.000001)
+	require.NotNil(t, after.WeeklyWindowStart)
+	require.Equal(t, originalWeeklyWindow, *after.WeeklyWindowStart)
+	require.WithinDuration(t, originalExpiry.Add(30*24*time.Hour), after.ExpiresAt, time.Second)
+	require.Nil(t, after.ScheduledPlanID)
+	require.Nil(t, after.ScheduledPlanName)
+	require.Nil(t, after.ScheduledSevenDayLimitUSD)
+	require.Nil(t, after.ScheduledPlanEffectiveAt)
+	require.Nil(t, after.ScheduledExpiresAt)
+	require.Nil(t, after.ScheduledOrderID)
+}
+
+func TestPaymentFulfillmentDowngradeSchedulesNextPeriodPlan(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	basicQuota := 50.0
+	proQuota := 260.0
+	basic := h.createSubscriptionPlan(t, group.ID, "Basic monthly", 179, 30, &basicQuota)
+	pro := h.createSubscriptionPlan(t, group.ID, "Pro monthly", 799, 30, &proQuota)
+
+	firstOrder := h.createPaidSubscriptionOrder(t, h.user.ID, pro.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, firstOrder.ID))
+
+	before, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	originalExpiry := before.ExpiresAt
+	originalWeeklyWindow := *before.WeeklyWindowStart
+	require.NoError(t, h.subscriptionRepo.IncrementUsage(ctx, before.ID, 20))
+
+	downgradeOrder := h.createPaidSubscriptionOrder(t, h.user.ID, basic.ID, group.ID, 30)
+	require.NoError(t, h.paymentService.ExecuteSubscriptionFulfillment(ctx, downgradeOrder.ID))
+
+	after, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.PlanID)
+	require.Equal(t, int64(pro.ID), *after.PlanID)
+	require.NotNil(t, after.PlanName)
+	require.Equal(t, "Pro monthly", *after.PlanName)
+	require.NotNil(t, after.SevenDayLimitUSD)
+	require.InDelta(t, proQuota, *after.SevenDayLimitUSD, 0.000001)
+	require.InDelta(t, 20.0, after.WeeklyUsageUSD, 0.000001)
+	require.NotNil(t, after.WeeklyWindowStart)
+	require.Equal(t, originalWeeklyWindow, *after.WeeklyWindowStart)
+	require.WithinDuration(t, originalExpiry, after.ExpiresAt, time.Second)
+	require.NotNil(t, after.ScheduledPlanID)
+	require.Equal(t, int64(basic.ID), *after.ScheduledPlanID)
+	require.NotNil(t, after.ScheduledPlanName)
+	require.Equal(t, "Basic monthly", *after.ScheduledPlanName)
+	require.NotNil(t, after.ScheduledSevenDayLimitUSD)
+	require.InDelta(t, basicQuota, *after.ScheduledSevenDayLimitUSD, 0.000001)
+	require.NotNil(t, after.ScheduledPlanEffectiveAt)
+	require.WithinDuration(t, originalExpiry, *after.ScheduledPlanEffectiveAt, time.Second)
+	require.NotNil(t, after.ScheduledExpiresAt)
+	require.WithinDuration(t, originalExpiry.Add(30*24*time.Hour), *after.ScheduledExpiresAt, time.Second)
+	require.NotNil(t, after.ScheduledOrderID)
+	require.Equal(t, downgradeOrder.ID, *after.ScheduledOrderID)
+}
+
+func TestPaymentFulfillmentRetryAfterCompletionMarkerFailureDoesNotExtendSubscriptionTwice(t *testing.T) {
+	ctx := context.Background()
+	h := newPaymentFulfillmentPlanSnapshotHarness(t)
+
+	group := h.createSubscriptionGroup(t, "LINX2 Subscription")
+	quota := 110.0
+	plan := h.createSubscriptionPlan(t, group.ID, "Plus monthly", 399, 30, &quota)
+	order := h.createPaidSubscriptionOrder(t, h.user.ID, plan.ID, group.ID, 30)
+
+	recharging := h.client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusRecharging).SaveX(ctx)
+	require.NoError(t, h.paymentService.doSub(ctx, recharging))
+
+	afterFirst, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	firstExpiry := afterFirst.ExpiresAt
+
+	h.client.PaymentAuditLog.Delete().Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("SUBSCRIPTION_SUCCESS")).ExecX(ctx)
+	h.client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusFailed).ClearCompletedAt().SaveX(ctx)
+	require.NoError(t, h.paymentService.RetryFulfillment(ctx, order.ID))
+
+	afterRetry, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
+	require.NoError(t, err)
+	require.Equal(t, firstExpiry, afterRetry.ExpiresAt, "retry after completion marker failure must not extend the same payment order twice")
+
+	reloadedOrder := h.client.PaymentOrder.GetX(ctx, order.ID)
+	require.Equal(t, OrderStatusCompleted, reloadedOrder.Status)
+}
 
 type paymentFulfillmentTestProvider struct {
 	key            string
@@ -34,6 +443,198 @@ func (p paymentFulfillmentTestProvider) VerifyNotification(ctx context.Context, 
 }
 func (p paymentFulfillmentTestProvider) Refund(ctx context.Context, req payment.RefundRequest) (*payment.RefundResponse, error) {
 	panic("unexpected call")
+}
+
+func TestSubscriptionFulfillmentRejectsActiveNonSubscriptionGroupForPlanBackedOrder(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, _ := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	payerID := createPaymentOrderSeatUser(t, ctx, client, "seat-fulfillment-standard-group@example.com")
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, payerID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeStandard},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	err := svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+
+	require.Error(t, err)
+	require.Equal(t, infraerrors.Reason(ErrGroupNotSubscriptionType), infraerrors.Reason(err))
+	require.Zero(t, subRepo.createCalls)
+	count, countErr := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(payerID), usersubscription.GroupIDEQ(plan.GroupID)).
+		Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
+func TestSubscriptionFulfillmentRejectsNewUserWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, existingUserID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	payerID := createPaymentOrderSeatUser(t, ctx, client, "seat-fulfillment-new@example.com")
+	createSeatSubscription(t, ctx, client, existingUserID, plan.GroupID, plan.ID, SubscriptionStatusActive, time.Now().Add(time.Hour))
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, payerID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, newSubscriptionUserSubRepoStub(), nil, nil, nil),
+	}
+
+	err := svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+
+	require.Error(t, err)
+	require.Equal(t, "PLAN_SEAT_LIMIT_REACHED", infraerrors.Reason(err))
+	count, countErr := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(payerID), usersubscription.GroupIDEQ(plan.GroupID)).
+		Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
+}
+
+func TestSubscriptionFulfillmentAllowsSameUserRenewalWhenPlanSeatLimitReached(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, userID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	createSeatSubscription(t, ctx, client, userID, plan.GroupID, plan.ID, SubscriptionStatusActive, expiresAt)
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, userID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        99,
+		UserID:    userID,
+		GroupID:   plan.GroupID,
+		PlanID:    &plan.ID,
+		StartsAt:  time.Now().Add(-24 * time.Hour),
+		ExpiresAt: expiresAt,
+		Status:    SubscriptionStatusActive,
+	})
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	renewed, err := subRepo.GetByUserIDAndGroupID(ctx, userID, plan.GroupID)
+	require.NoError(t, err)
+	require.True(t, renewed.ExpiresAt.After(expiresAt))
+	require.NotNil(t, renewed.PlanID)
+	require.Equal(t, plan.ID, *renewed.PlanID)
+}
+
+func TestSubscriptionFulfillmentPlanSeatAssignmentUsesTransactionContext(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	limit := 1
+	plan, userID := createPaymentOrderSeatPlanFixture(t, ctx, client, &limit)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	createSeatSubscription(t, ctx, client, userID, plan.GroupID, plan.ID, SubscriptionStatusActive, expiresAt)
+	order := createPaidSeatSubscriptionOrder(t, ctx, client, userID, plan.ID, plan.GroupID, 30)
+
+	groupRepo := &paymentFulfillmentTxGuardGroupRepo{
+		group: &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := &paymentFulfillmentTxGuardUserSubRepo{subscriptionUserSubRepoStub: newSubscriptionUserSubRepoStub()}
+	subRepo.seed(&UserSubscription{
+		ID:        199,
+		UserID:    userID,
+		GroupID:   plan.GroupID,
+		PlanID:    &plan.ID,
+		StartsAt:  time.Now().Add(-24 * time.Hour),
+		ExpiresAt: expiresAt,
+		Status:    SubscriptionStatusActive,
+	})
+	svc := &PaymentService{
+		entClient:       client,
+		configService:   NewPaymentConfigService(client, nil, nil),
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, subRepo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	require.Equal(t, 1, groupRepo.getByIDCalls, "plan-backed fulfillment should reuse the pre-transaction group validation")
+	require.True(t, subRepo.extendExpirySawTx, "subscription renewal write should use the plan-seat transaction context")
+	require.True(t, subRepo.updatePlanIDSawTx, "subscription plan update should use the plan-seat transaction context")
+}
+
+type paymentFulfillmentTxGuardGroupRepo struct {
+	groupRepoNoop
+	group        *Group
+	getByIDCalls int
+}
+
+func (r *paymentFulfillmentTxGuardGroupRepo) GetByID(ctx context.Context, id int64) (*Group, error) {
+	r.getByIDCalls++
+	if dbent.TxFromContext(ctx) != nil {
+		return nil, errors.New("group validation unexpectedly called inside transaction")
+	}
+	return r.group, nil
+}
+
+type paymentFulfillmentTxGuardUserSubRepo struct {
+	*subscriptionUserSubRepoStub
+	extendExpirySawTx bool
+	updatePlanIDSawTx bool
+}
+
+func (r *paymentFulfillmentTxGuardUserSubRepo) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {
+	if dbent.TxFromContext(ctx) != nil {
+		r.extendExpirySawTx = true
+	}
+	return r.subscriptionUserSubRepoStub.ExtendExpiry(ctx, subscriptionID, newExpiresAt)
+}
+
+func (r *paymentFulfillmentTxGuardUserSubRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	if dbent.TxFromContext(ctx) != nil {
+		r.updatePlanIDSawTx = true
+	}
+	return r.subscriptionUserSubRepoStub.UpdatePlanID(ctx, subscriptionID, planID)
+}
+
+func createPaidSeatSubscriptionOrder(t *testing.T, ctx context.Context, client *dbent.Client, userID, planID, groupID int64, days int) *dbent.PaymentOrder {
+	t.Helper()
+	return client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail("seat-fulfillment@example.com").
+		SetUserName("seat-fulfillment-user").
+		SetAmount(9.99).
+		SetPayAmount(9.99).
+		SetFeeRate(0).
+		SetRechargeCode("SUB-SEAT-FULFILLMENT").
+		SetOutTradeNo("sub2_seat_fulfillment").
+		SetPaymentType(payment.TypeStripe).
+		SetPaymentTradeNo("trade-seat-fulfillment").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(time.Now()).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetPlanID(planID).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(days).
+		SaveX(ctx)
 }
 
 // ---------------------------------------------------------------------------

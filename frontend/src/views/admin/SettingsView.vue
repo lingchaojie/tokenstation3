@@ -3126,6 +3126,39 @@
               </div>
 
               <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div class="mb-3">
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.defaults.providerRoutes") }}
+                  </label>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.defaults.providerRoutesHint") }}
+                  </p>
+                </div>
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.defaultAnthropicGroup") }}
+                    </label>
+                    <Select
+                      v-model="form.default_anthropic_group_id"
+                      :options="providerDefaultGroupOptions.anthropic"
+                      :placeholder="t('admin.settings.defaults.defaultAnthropicGroupPlaceholder')"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.defaultOpenAIGroup") }}
+                    </label>
+                    <Select
+                      v-model="form.default_openai_group_id"
+                      :options="providerDefaultGroupOptions.openai"
+                      :placeholder="t('admin.settings.defaults.defaultOpenAIGroupPlaceholder')"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                 <div class="mb-3 flex items-center justify-between">
                   <div>
                     <label class="font-medium text-gray-900 dark:text-white">
@@ -6865,6 +6898,7 @@ const adminApiKeyExists = ref(false);
 const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
+const allGroups = ref<AdminGroup[]>([]);
 const subscriptionGroups = ref<AdminGroup[]>([]);
 
 // Overload Cooldown (529) 状态
@@ -7032,6 +7066,8 @@ const form = reactive<SettingsForm>({
   affiliate_rebate_per_invitee_cap: 0,
   default_concurrency: 1,
   default_subscriptions: [],
+  default_anthropic_group_id: null,
+  default_openai_group_id: null,
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
   site_name: "Sub2API",
@@ -7463,6 +7499,21 @@ const defaultSubscriptionGroupOptions = computed<
     rate: group.rate_multiplier,
   })),
 );
+
+const providerDefaultGroupOptions = computed(() => ({
+  anthropic: [
+    { value: null, label: t("admin.settings.defaults.providerRouteUseNone") },
+    ...allGroups.value
+      .filter((group) => group.status === "active" && group.platform === "anthropic")
+      .map((group) => ({ value: group.id, label: group.name })),
+  ],
+  openai: [
+    { value: null, label: t("admin.settings.defaults.providerRouteUseNone") },
+    ...allGroups.value
+      .filter((group) => group.status === "active" && group.platform === "openai")
+      .map((group) => ({ value: group.id, label: group.name })),
+  ],
+}));
 
 const registrationEmailSuffixWhitelistSeparatorKeys = new Set([
   " ",
@@ -7948,11 +7999,13 @@ async function loadSettings() {
 async function loadSubscriptionGroups() {
   try {
     const groups = await adminAPI.groups.getAll();
+    allGroups.value = groups;
     subscriptionGroups.value = groups.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
     );
   } catch (_error: unknown) {
+    allGroups.value = [];
     subscriptionGroups.value = [];
   }
 }
@@ -8178,6 +8231,8 @@ async function saveSettings() {
       affiliate_rebate_per_invitee_cap: Math.max(0, Number(form.affiliate_rebate_per_invitee_cap) || 0),
       default_concurrency: form.default_concurrency,
       default_subscriptions: normalizedDefaultSubscriptions,
+      default_anthropic_group_id: form.default_anthropic_group_id ?? null,
+      default_openai_group_id: form.default_openai_group_id ?? null,
       force_email_on_third_party_signup: form.force_email_on_third_party_signup,
       default_user_rpm_limit: form.default_user_rpm_limit,
       site_name: form.site_name,
@@ -9738,7 +9793,7 @@ watch(
   height: 2px;
   border-radius: 9999px;
   content: "";
-  background: linear-gradient(90deg, #14b8a6, #0ea5e9);
+  background: linear-gradient(90deg, #f97316, #fb923c);
 }
 
 .settings-tab-icon {

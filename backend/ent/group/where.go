@@ -1532,6 +1532,29 @@ func HasUsageLogsWith(preds ...predicate.UsageLog) predicate.Group {
 	})
 }
 
+// HasAPIKeyRoutes applies the HasEdge predicate on the "api_key_routes" edge.
+func HasAPIKeyRoutes() predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, APIKeyRoutesTable, APIKeyRoutesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAPIKeyRoutesWith applies the HasEdge predicate on the "api_key_routes" edge with a given conditions (other predicates).
+func HasAPIKeyRoutesWith(preds ...predicate.UserAPIKeyRoute) predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := newAPIKeyRoutesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasAccounts applies the HasEdge predicate on the "accounts" edge.
 func HasAccounts() predicate.Group {
 	return predicate.Group(func(s *sql.Selector) {

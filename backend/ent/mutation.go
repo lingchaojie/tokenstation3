@@ -44,6 +44,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
+	"github.com/Wei-Shaw/sub2api/ent/userapikeyroute"
 	"github.com/Wei-Shaw/sub2api/ent/userattributedefinition"
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
@@ -90,6 +91,7 @@ const (
 	TypeUsageCleanupTask              = "UsageCleanupTask"
 	TypeUsageLog                      = "UsageLog"
 	TypeUser                          = "User"
+	TypeUserAPIKeyRoute               = "UserAPIKeyRoute"
 	TypeUserAllowedGroup              = "UserAllowedGroup"
 	TypeUserAttributeDefinition       = "UserAttributeDefinition"
 	TypeUserAttributeValue            = "UserAttributeValue"
@@ -108,6 +110,7 @@ type APIKeyMutation struct {
 	deleted_at         *time.Time
 	key                *string
 	name               *string
+	key_type           *string
 	status             *string
 	last_used_at       *time.Time
 	ip_whitelist       *[]string
@@ -472,6 +475,55 @@ func (m *APIKeyMutation) OldName(ctx context.Context) (v string, err error) {
 // ResetName resets all changes to the "name" field.
 func (m *APIKeyMutation) ResetName() {
 	m.name = nil
+}
+
+// SetKeyType sets the "key_type" field.
+func (m *APIKeyMutation) SetKeyType(s string) {
+	m.key_type = &s
+}
+
+// KeyType returns the value of the "key_type" field in the mutation.
+func (m *APIKeyMutation) KeyType() (r string, exists bool) {
+	v := m.key_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeyType returns the old "key_type" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldKeyType(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeyType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeyType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeyType: %w", err)
+	}
+	return oldValue.KeyType, nil
+}
+
+// ClearKeyType clears the value of the "key_type" field.
+func (m *APIKeyMutation) ClearKeyType() {
+	m.key_type = nil
+	m.clearedFields[apikey.FieldKeyType] = struct{}{}
+}
+
+// KeyTypeCleared returns if the "key_type" field was cleared in this mutation.
+func (m *APIKeyMutation) KeyTypeCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldKeyType]
+	return ok
+}
+
+// ResetKeyType resets all changes to the "key_type" field.
+func (m *APIKeyMutation) ResetKeyType() {
+	m.key_type = nil
+	delete(m.clearedFields, apikey.FieldKeyType)
 }
 
 // SetGroupID sets the "group_id" field.
@@ -1524,7 +1576,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 24)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1542,6 +1594,9 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.name != nil {
 		fields = append(fields, apikey.FieldName)
+	}
+	if m.key_type != nil {
+		fields = append(fields, apikey.FieldKeyType)
 	}
 	if m.group != nil {
 		fields = append(fields, apikey.FieldGroupID)
@@ -1614,6 +1669,8 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.Key()
 	case apikey.FieldName:
 		return m.Name()
+	case apikey.FieldKeyType:
+		return m.KeyType()
 	case apikey.FieldGroupID:
 		return m.GroupID()
 	case apikey.FieldStatus:
@@ -1669,6 +1726,8 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldKey(ctx)
 	case apikey.FieldName:
 		return m.OldName(ctx)
+	case apikey.FieldKeyType:
+		return m.OldKeyType(ctx)
 	case apikey.FieldGroupID:
 		return m.OldGroupID(ctx)
 	case apikey.FieldStatus:
@@ -1753,6 +1812,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetName(v)
+		return nil
+	case apikey.FieldKeyType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeyType(v)
 		return nil
 	case apikey.FieldGroupID:
 		v, ok := value.(int64)
@@ -2005,6 +2071,9 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	if m.FieldCleared(apikey.FieldDeletedAt) {
 		fields = append(fields, apikey.FieldDeletedAt)
 	}
+	if m.FieldCleared(apikey.FieldKeyType) {
+		fields = append(fields, apikey.FieldKeyType)
+	}
 	if m.FieldCleared(apikey.FieldGroupID) {
 		fields = append(fields, apikey.FieldGroupID)
 	}
@@ -2045,6 +2114,9 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	switch name {
 	case apikey.FieldDeletedAt:
 		m.ClearDeletedAt()
+		return nil
+	case apikey.FieldKeyType:
+		m.ClearKeyType()
 		return nil
 	case apikey.FieldGroupID:
 		m.ClearGroupID()
@@ -2095,6 +2167,9 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldName:
 		m.ResetName()
+		return nil
+	case apikey.FieldKeyType:
+		m.ResetKeyType()
 		return nil
 	case apikey.FieldGroupID:
 		m.ResetGroupID()
@@ -15024,6 +15099,9 @@ type GroupMutation struct {
 	usage_logs                              map[int64]struct{}
 	removedusage_logs                       map[int64]struct{}
 	clearedusage_logs                       bool
+	api_key_routes                          map[int64]struct{}
+	removedapi_key_routes                   map[int64]struct{}
+	clearedapi_key_routes                   bool
 	accounts                                map[int64]struct{}
 	removedaccounts                         map[int64]struct{}
 	clearedaccounts                         bool
@@ -17035,6 +17113,60 @@ func (m *GroupMutation) ResetUsageLogs() {
 	m.removedusage_logs = nil
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by ids.
+func (m *GroupMutation) AddAPIKeyRouteIDs(ids ...int64) {
+	if m.api_key_routes == nil {
+		m.api_key_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.api_key_routes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearAPIKeyRoutes clears the "api_key_routes" edge to the UserAPIKeyRoute entity.
+func (m *GroupMutation) ClearAPIKeyRoutes() {
+	m.clearedapi_key_routes = true
+}
+
+// APIKeyRoutesCleared reports if the "api_key_routes" edge to the UserAPIKeyRoute entity was cleared.
+func (m *GroupMutation) APIKeyRoutesCleared() bool {
+	return m.clearedapi_key_routes
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (m *GroupMutation) RemoveAPIKeyRouteIDs(ids ...int64) {
+	if m.removedapi_key_routes == nil {
+		m.removedapi_key_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.api_key_routes, ids[i])
+		m.removedapi_key_routes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedAPIKeyRoutes returns the removed IDs of the "api_key_routes" edge to the UserAPIKeyRoute entity.
+func (m *GroupMutation) RemovedAPIKeyRoutesIDs() (ids []int64) {
+	for id := range m.removedapi_key_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// APIKeyRoutesIDs returns the "api_key_routes" edge IDs in the mutation.
+func (m *GroupMutation) APIKeyRoutesIDs() (ids []int64) {
+	for id := range m.api_key_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetAPIKeyRoutes resets all changes to the "api_key_routes" edge.
+func (m *GroupMutation) ResetAPIKeyRoutes() {
+	m.api_key_routes = nil
+	m.clearedapi_key_routes = false
+	m.removedapi_key_routes = nil
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *GroupMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -18082,7 +18214,7 @@ func (m *GroupMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *GroupMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.api_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -18094,6 +18226,9 @@ func (m *GroupMutation) AddedEdges() []string {
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.api_key_routes != nil {
+		edges = append(edges, group.EdgeAPIKeyRoutes)
 	}
 	if m.accounts != nil {
 		edges = append(edges, group.EdgeAccounts)
@@ -18132,6 +18267,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case group.EdgeAPIKeyRoutes:
+		ids := make([]ent.Value, 0, len(m.api_key_routes))
+		for id := range m.api_key_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	case group.EdgeAccounts:
 		ids := make([]ent.Value, 0, len(m.accounts))
 		for id := range m.accounts {
@@ -18150,7 +18291,7 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *GroupMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.removedapi_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -18162,6 +18303,9 @@ func (m *GroupMutation) RemovedEdges() []string {
 	}
 	if m.removedusage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.removedapi_key_routes != nil {
+		edges = append(edges, group.EdgeAPIKeyRoutes)
 	}
 	if m.removedaccounts != nil {
 		edges = append(edges, group.EdgeAccounts)
@@ -18200,6 +18344,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case group.EdgeAPIKeyRoutes:
+		ids := make([]ent.Value, 0, len(m.removedapi_key_routes))
+		for id := range m.removedapi_key_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	case group.EdgeAccounts:
 		ids := make([]ent.Value, 0, len(m.removedaccounts))
 		for id := range m.removedaccounts {
@@ -18218,7 +18368,7 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *GroupMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.clearedapi_keys {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -18230,6 +18380,9 @@ func (m *GroupMutation) ClearedEdges() []string {
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.clearedapi_key_routes {
+		edges = append(edges, group.EdgeAPIKeyRoutes)
 	}
 	if m.clearedaccounts {
 		edges = append(edges, group.EdgeAccounts)
@@ -18252,6 +18405,8 @@ func (m *GroupMutation) EdgeCleared(name string) bool {
 		return m.clearedsubscriptions
 	case group.EdgeUsageLogs:
 		return m.clearedusage_logs
+	case group.EdgeAPIKeyRoutes:
+		return m.clearedapi_key_routes
 	case group.EdgeAccounts:
 		return m.clearedaccounts
 	case group.EdgeAllowedUsers:
@@ -18283,6 +18438,9 @@ func (m *GroupMutation) ResetEdge(name string) error {
 		return nil
 	case group.EdgeUsageLogs:
 		m.ResetUsageLogs()
+		return nil
+	case group.EdgeAPIKeyRoutes:
+		m.ResetAPIKeyRoutes()
 		return nil
 	case group.EdgeAccounts:
 		m.ResetAccounts()
@@ -31263,31 +31421,35 @@ func (m *SettingMutation) ResetEdge(name string) error {
 // SubscriptionPlanMutation represents an operation that mutates the SubscriptionPlan nodes in the graph.
 type SubscriptionPlanMutation struct {
 	config
-	op                Op
-	typ               string
-	id                *int64
-	group_id          *int64
-	addgroup_id       *int64
-	name              *string
-	description       *string
-	price             *float64
-	addprice          *float64
-	original_price    *float64
-	addoriginal_price *float64
-	validity_days     *int
-	addvalidity_days  *int
-	validity_unit     *string
-	features          *string
-	product_name      *string
-	for_sale          *bool
-	sort_order        *int
-	addsort_order     *int
-	created_at        *time.Time
-	updated_at        *time.Time
-	clearedFields     map[string]struct{}
-	done              bool
-	oldValue          func(context.Context) (*SubscriptionPlan, error)
-	predicates        []predicate.SubscriptionPlan
+	op                     Op
+	typ                    string
+	id                     *int64
+	group_id               *int64
+	addgroup_id            *int64
+	name                   *string
+	description            *string
+	price                  *float64
+	addprice               *float64
+	original_price         *float64
+	addoriginal_price      *float64
+	seven_day_quota_usd    *float64
+	addseven_day_quota_usd *float64
+	validity_days          *int
+	addvalidity_days       *int
+	validity_unit          *string
+	features               *string
+	product_name           *string
+	for_sale               *bool
+	sort_order             *int
+	addsort_order          *int
+	seat_limit             *int
+	addseat_limit          *int
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	done                   bool
+	oldValue               func(context.Context) (*SubscriptionPlan, error)
+	predicates             []predicate.SubscriptionPlan
 }
 
 var _ ent.Mutation = (*SubscriptionPlanMutation)(nil)
@@ -31642,6 +31804,76 @@ func (m *SubscriptionPlanMutation) ResetOriginalPrice() {
 	delete(m.clearedFields, subscriptionplan.FieldOriginalPrice)
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (m *SubscriptionPlanMutation) SetSevenDayQuotaUsd(f float64) {
+	m.seven_day_quota_usd = &f
+	m.addseven_day_quota_usd = nil
+}
+
+// SevenDayQuotaUsd returns the value of the "seven_day_quota_usd" field in the mutation.
+func (m *SubscriptionPlanMutation) SevenDayQuotaUsd() (r float64, exists bool) {
+	v := m.seven_day_quota_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSevenDayQuotaUsd returns the old "seven_day_quota_usd" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldSevenDayQuotaUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSevenDayQuotaUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSevenDayQuotaUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSevenDayQuotaUsd: %w", err)
+	}
+	return oldValue.SevenDayQuotaUsd, nil
+}
+
+// AddSevenDayQuotaUsd adds f to the "seven_day_quota_usd" field.
+func (m *SubscriptionPlanMutation) AddSevenDayQuotaUsd(f float64) {
+	if m.addseven_day_quota_usd != nil {
+		*m.addseven_day_quota_usd += f
+	} else {
+		m.addseven_day_quota_usd = &f
+	}
+}
+
+// AddedSevenDayQuotaUsd returns the value that was added to the "seven_day_quota_usd" field in this mutation.
+func (m *SubscriptionPlanMutation) AddedSevenDayQuotaUsd() (r float64, exists bool) {
+	v := m.addseven_day_quota_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (m *SubscriptionPlanMutation) ClearSevenDayQuotaUsd() {
+	m.seven_day_quota_usd = nil
+	m.addseven_day_quota_usd = nil
+	m.clearedFields[subscriptionplan.FieldSevenDayQuotaUsd] = struct{}{}
+}
+
+// SevenDayQuotaUsdCleared returns if the "seven_day_quota_usd" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) SevenDayQuotaUsdCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldSevenDayQuotaUsd]
+	return ok
+}
+
+// ResetSevenDayQuotaUsd resets all changes to the "seven_day_quota_usd" field.
+func (m *SubscriptionPlanMutation) ResetSevenDayQuotaUsd() {
+	m.seven_day_quota_usd = nil
+	m.addseven_day_quota_usd = nil
+	delete(m.clearedFields, subscriptionplan.FieldSevenDayQuotaUsd)
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (m *SubscriptionPlanMutation) SetValidityDays(i int) {
 	m.validity_days = &i
@@ -31898,6 +32130,76 @@ func (m *SubscriptionPlanMutation) ResetSortOrder() {
 	m.addsort_order = nil
 }
 
+// SetSeatLimit sets the "seat_limit" field.
+func (m *SubscriptionPlanMutation) SetSeatLimit(i int) {
+	m.seat_limit = &i
+	m.addseat_limit = nil
+}
+
+// SeatLimit returns the value of the "seat_limit" field in the mutation.
+func (m *SubscriptionPlanMutation) SeatLimit() (r int, exists bool) {
+	v := m.seat_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSeatLimit returns the old "seat_limit" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldSeatLimit(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSeatLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSeatLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSeatLimit: %w", err)
+	}
+	return oldValue.SeatLimit, nil
+}
+
+// AddSeatLimit adds i to the "seat_limit" field.
+func (m *SubscriptionPlanMutation) AddSeatLimit(i int) {
+	if m.addseat_limit != nil {
+		*m.addseat_limit += i
+	} else {
+		m.addseat_limit = &i
+	}
+}
+
+// AddedSeatLimit returns the value that was added to the "seat_limit" field in this mutation.
+func (m *SubscriptionPlanMutation) AddedSeatLimit() (r int, exists bool) {
+	v := m.addseat_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (m *SubscriptionPlanMutation) ClearSeatLimit() {
+	m.seat_limit = nil
+	m.addseat_limit = nil
+	m.clearedFields[subscriptionplan.FieldSeatLimit] = struct{}{}
+}
+
+// SeatLimitCleared returns if the "seat_limit" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) SeatLimitCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldSeatLimit]
+	return ok
+}
+
+// ResetSeatLimit resets all changes to the "seat_limit" field.
+func (m *SubscriptionPlanMutation) ResetSeatLimit() {
+	m.seat_limit = nil
+	m.addseat_limit = nil
+	delete(m.clearedFields, subscriptionplan.FieldSeatLimit)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *SubscriptionPlanMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -32004,7 +32306,7 @@ func (m *SubscriptionPlanMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SubscriptionPlanMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 15)
 	if m.group_id != nil {
 		fields = append(fields, subscriptionplan.FieldGroupID)
 	}
@@ -32019,6 +32321,9 @@ func (m *SubscriptionPlanMutation) Fields() []string {
 	}
 	if m.original_price != nil {
 		fields = append(fields, subscriptionplan.FieldOriginalPrice)
+	}
+	if m.seven_day_quota_usd != nil {
+		fields = append(fields, subscriptionplan.FieldSevenDayQuotaUsd)
 	}
 	if m.validity_days != nil {
 		fields = append(fields, subscriptionplan.FieldValidityDays)
@@ -32037,6 +32342,9 @@ func (m *SubscriptionPlanMutation) Fields() []string {
 	}
 	if m.sort_order != nil {
 		fields = append(fields, subscriptionplan.FieldSortOrder)
+	}
+	if m.seat_limit != nil {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
 	if m.created_at != nil {
 		fields = append(fields, subscriptionplan.FieldCreatedAt)
@@ -32062,6 +32370,8 @@ func (m *SubscriptionPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.Price()
 	case subscriptionplan.FieldOriginalPrice:
 		return m.OriginalPrice()
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		return m.SevenDayQuotaUsd()
 	case subscriptionplan.FieldValidityDays:
 		return m.ValidityDays()
 	case subscriptionplan.FieldValidityUnit:
@@ -32074,6 +32384,8 @@ func (m *SubscriptionPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.ForSale()
 	case subscriptionplan.FieldSortOrder:
 		return m.SortOrder()
+	case subscriptionplan.FieldSeatLimit:
+		return m.SeatLimit()
 	case subscriptionplan.FieldCreatedAt:
 		return m.CreatedAt()
 	case subscriptionplan.FieldUpdatedAt:
@@ -32097,6 +32409,8 @@ func (m *SubscriptionPlanMutation) OldField(ctx context.Context, name string) (e
 		return m.OldPrice(ctx)
 	case subscriptionplan.FieldOriginalPrice:
 		return m.OldOriginalPrice(ctx)
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		return m.OldSevenDayQuotaUsd(ctx)
 	case subscriptionplan.FieldValidityDays:
 		return m.OldValidityDays(ctx)
 	case subscriptionplan.FieldValidityUnit:
@@ -32109,6 +32423,8 @@ func (m *SubscriptionPlanMutation) OldField(ctx context.Context, name string) (e
 		return m.OldForSale(ctx)
 	case subscriptionplan.FieldSortOrder:
 		return m.OldSortOrder(ctx)
+	case subscriptionplan.FieldSeatLimit:
+		return m.OldSeatLimit(ctx)
 	case subscriptionplan.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case subscriptionplan.FieldUpdatedAt:
@@ -32157,6 +32473,13 @@ func (m *SubscriptionPlanMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetOriginalPrice(v)
 		return nil
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSevenDayQuotaUsd(v)
+		return nil
 	case subscriptionplan.FieldValidityDays:
 		v, ok := value.(int)
 		if !ok {
@@ -32199,6 +32522,13 @@ func (m *SubscriptionPlanMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetSortOrder(v)
 		return nil
+	case subscriptionplan.FieldSeatLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSeatLimit(v)
+		return nil
 	case subscriptionplan.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -32230,11 +32560,17 @@ func (m *SubscriptionPlanMutation) AddedFields() []string {
 	if m.addoriginal_price != nil {
 		fields = append(fields, subscriptionplan.FieldOriginalPrice)
 	}
+	if m.addseven_day_quota_usd != nil {
+		fields = append(fields, subscriptionplan.FieldSevenDayQuotaUsd)
+	}
 	if m.addvalidity_days != nil {
 		fields = append(fields, subscriptionplan.FieldValidityDays)
 	}
 	if m.addsort_order != nil {
 		fields = append(fields, subscriptionplan.FieldSortOrder)
+	}
+	if m.addseat_limit != nil {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
 	return fields
 }
@@ -32250,10 +32586,14 @@ func (m *SubscriptionPlanMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPrice()
 	case subscriptionplan.FieldOriginalPrice:
 		return m.AddedOriginalPrice()
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		return m.AddedSevenDayQuotaUsd()
 	case subscriptionplan.FieldValidityDays:
 		return m.AddedValidityDays()
 	case subscriptionplan.FieldSortOrder:
 		return m.AddedSortOrder()
+	case subscriptionplan.FieldSeatLimit:
+		return m.AddedSeatLimit()
 	}
 	return nil, false
 }
@@ -32284,6 +32624,13 @@ func (m *SubscriptionPlanMutation) AddField(name string, value ent.Value) error 
 		}
 		m.AddOriginalPrice(v)
 		return nil
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSevenDayQuotaUsd(v)
+		return nil
 	case subscriptionplan.FieldValidityDays:
 		v, ok := value.(int)
 		if !ok {
@@ -32298,6 +32645,13 @@ func (m *SubscriptionPlanMutation) AddField(name string, value ent.Value) error 
 		}
 		m.AddSortOrder(v)
 		return nil
+	case subscriptionplan.FieldSeatLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSeatLimit(v)
+		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan numeric field %s", name)
 }
@@ -32308,6 +32662,12 @@ func (m *SubscriptionPlanMutation) ClearedFields() []string {
 	var fields []string
 	if m.FieldCleared(subscriptionplan.FieldOriginalPrice) {
 		fields = append(fields, subscriptionplan.FieldOriginalPrice)
+	}
+	if m.FieldCleared(subscriptionplan.FieldSevenDayQuotaUsd) {
+		fields = append(fields, subscriptionplan.FieldSevenDayQuotaUsd)
+	}
+	if m.FieldCleared(subscriptionplan.FieldSeatLimit) {
+		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
 	return fields
 }
@@ -32325,6 +32685,12 @@ func (m *SubscriptionPlanMutation) ClearField(name string) error {
 	switch name {
 	case subscriptionplan.FieldOriginalPrice:
 		m.ClearOriginalPrice()
+		return nil
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		m.ClearSevenDayQuotaUsd()
+		return nil
+	case subscriptionplan.FieldSeatLimit:
+		m.ClearSeatLimit()
 		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan nullable field %s", name)
@@ -32349,6 +32715,9 @@ func (m *SubscriptionPlanMutation) ResetField(name string) error {
 	case subscriptionplan.FieldOriginalPrice:
 		m.ResetOriginalPrice()
 		return nil
+	case subscriptionplan.FieldSevenDayQuotaUsd:
+		m.ResetSevenDayQuotaUsd()
+		return nil
 	case subscriptionplan.FieldValidityDays:
 		m.ResetValidityDays()
 		return nil
@@ -32366,6 +32735,9 @@ func (m *SubscriptionPlanMutation) ResetField(name string) error {
 		return nil
 	case subscriptionplan.FieldSortOrder:
 		m.ResetSortOrder()
+		return nil
+	case subscriptionplan.FieldSeatLimit:
+		m.ResetSeatLimit()
 		return nil
 	case subscriptionplan.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -38588,80 +38960,84 @@ func (m *UsageLogMutation) ResetEdge(name string) error {
 // UserMutation represents an operation that mutates the User nodes in the graph.
 type UserMutation struct {
 	config
-	op                            Op
-	typ                           string
-	id                            *int64
-	created_at                    *time.Time
-	updated_at                    *time.Time
-	deleted_at                    *time.Time
-	email                         *string
-	password_hash                 *string
-	role                          *string
-	balance                       *float64
-	addbalance                    *float64
-	concurrency                   *int
-	addconcurrency                *int
-	status                        *string
-	username                      *string
-	notes                         *string
-	totp_secret_encrypted         *string
-	totp_enabled                  *bool
-	totp_enabled_at               *time.Time
-	signup_source                 *string
-	last_login_at                 *time.Time
-	last_active_at                *time.Time
-	balance_notify_enabled        *bool
-	balance_notify_threshold_type *string
-	balance_notify_threshold      *float64
-	addbalance_notify_threshold   *float64
-	balance_notify_extra_emails   *string
-	total_recharged               *float64
-	addtotal_recharged            *float64
-	rpm_limit                     *int
-	addrpm_limit                  *int
-	clearedFields                 map[string]struct{}
-	api_keys                      map[int64]struct{}
-	removedapi_keys               map[int64]struct{}
-	clearedapi_keys               bool
-	redeem_codes                  map[int64]struct{}
-	removedredeem_codes           map[int64]struct{}
-	clearedredeem_codes           bool
-	subscriptions                 map[int64]struct{}
-	removedsubscriptions          map[int64]struct{}
-	clearedsubscriptions          bool
-	assigned_subscriptions        map[int64]struct{}
-	removedassigned_subscriptions map[int64]struct{}
-	clearedassigned_subscriptions bool
-	announcement_reads            map[int64]struct{}
-	removedannouncement_reads     map[int64]struct{}
-	clearedannouncement_reads     bool
-	allowed_groups                map[int64]struct{}
-	removedallowed_groups         map[int64]struct{}
-	clearedallowed_groups         bool
-	usage_logs                    map[int64]struct{}
-	removedusage_logs             map[int64]struct{}
-	clearedusage_logs             bool
-	attribute_values              map[int64]struct{}
-	removedattribute_values       map[int64]struct{}
-	clearedattribute_values       bool
-	promo_code_usages             map[int64]struct{}
-	removedpromo_code_usages      map[int64]struct{}
-	clearedpromo_code_usages      bool
-	payment_orders                map[int64]struct{}
-	removedpayment_orders         map[int64]struct{}
-	clearedpayment_orders         bool
-	auth_identities               map[int64]struct{}
-	removedauth_identities        map[int64]struct{}
-	clearedauth_identities        bool
-	pending_auth_sessions         map[int64]struct{}
-	removedpending_auth_sessions  map[int64]struct{}
-	clearedpending_auth_sessions  bool
-	platform_quotas               map[int64]struct{}
-	removedplatform_quotas        map[int64]struct{}
-	clearedplatform_quotas        bool
-	done                          bool
-	oldValue                      func(context.Context) (*User, error)
-	predicates                    []predicate.User
+	op                                    Op
+	typ                                   string
+	id                                    *int64
+	created_at                            *time.Time
+	updated_at                            *time.Time
+	deleted_at                            *time.Time
+	email                                 *string
+	password_hash                         *string
+	role                                  *string
+	balance                               *float64
+	addbalance                            *float64
+	concurrency                           *int
+	addconcurrency                        *int
+	status                                *string
+	username                              *string
+	notes                                 *string
+	totp_secret_encrypted                 *string
+	totp_enabled                          *bool
+	totp_enabled_at                       *time.Time
+	signup_source                         *string
+	last_login_at                         *time.Time
+	last_active_at                        *time.Time
+	balance_notify_enabled                *bool
+	subscription_balance_fallback_enabled *bool
+	balance_notify_threshold_type         *string
+	balance_notify_threshold              *float64
+	addbalance_notify_threshold           *float64
+	balance_notify_extra_emails           *string
+	total_recharged                       *float64
+	addtotal_recharged                    *float64
+	rpm_limit                             *int
+	addrpm_limit                          *int
+	clearedFields                         map[string]struct{}
+	api_keys                              map[int64]struct{}
+	removedapi_keys                       map[int64]struct{}
+	clearedapi_keys                       bool
+	redeem_codes                          map[int64]struct{}
+	removedredeem_codes                   map[int64]struct{}
+	clearedredeem_codes                   bool
+	subscriptions                         map[int64]struct{}
+	removedsubscriptions                  map[int64]struct{}
+	clearedsubscriptions                  bool
+	assigned_subscriptions                map[int64]struct{}
+	removedassigned_subscriptions         map[int64]struct{}
+	clearedassigned_subscriptions         bool
+	announcement_reads                    map[int64]struct{}
+	removedannouncement_reads             map[int64]struct{}
+	clearedannouncement_reads             bool
+	allowed_groups                        map[int64]struct{}
+	removedallowed_groups                 map[int64]struct{}
+	clearedallowed_groups                 bool
+	usage_logs                            map[int64]struct{}
+	removedusage_logs                     map[int64]struct{}
+	clearedusage_logs                     bool
+	attribute_values                      map[int64]struct{}
+	removedattribute_values               map[int64]struct{}
+	clearedattribute_values               bool
+	promo_code_usages                     map[int64]struct{}
+	removedpromo_code_usages              map[int64]struct{}
+	clearedpromo_code_usages              bool
+	payment_orders                        map[int64]struct{}
+	removedpayment_orders                 map[int64]struct{}
+	clearedpayment_orders                 bool
+	auth_identities                       map[int64]struct{}
+	removedauth_identities                map[int64]struct{}
+	clearedauth_identities                bool
+	pending_auth_sessions                 map[int64]struct{}
+	removedpending_auth_sessions          map[int64]struct{}
+	clearedpending_auth_sessions          bool
+	platform_quotas                       map[int64]struct{}
+	removedplatform_quotas                map[int64]struct{}
+	clearedplatform_quotas                bool
+	api_key_routes                        map[int64]struct{}
+	removedapi_key_routes                 map[int64]struct{}
+	clearedapi_key_routes                 bool
+	done                                  bool
+	oldValue                              func(context.Context) (*User, error)
+	predicates                            []predicate.User
 }
 
 var _ ent.Mutation = (*UserMutation)(nil)
@@ -39513,6 +39889,42 @@ func (m *UserMutation) OldBalanceNotifyEnabled(ctx context.Context) (v bool, err
 // ResetBalanceNotifyEnabled resets all changes to the "balance_notify_enabled" field.
 func (m *UserMutation) ResetBalanceNotifyEnabled() {
 	m.balance_notify_enabled = nil
+}
+
+// SetSubscriptionBalanceFallbackEnabled sets the "subscription_balance_fallback_enabled" field.
+func (m *UserMutation) SetSubscriptionBalanceFallbackEnabled(b bool) {
+	m.subscription_balance_fallback_enabled = &b
+}
+
+// SubscriptionBalanceFallbackEnabled returns the value of the "subscription_balance_fallback_enabled" field in the mutation.
+func (m *UserMutation) SubscriptionBalanceFallbackEnabled() (r bool, exists bool) {
+	v := m.subscription_balance_fallback_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubscriptionBalanceFallbackEnabled returns the old "subscription_balance_fallback_enabled" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldSubscriptionBalanceFallbackEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubscriptionBalanceFallbackEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubscriptionBalanceFallbackEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubscriptionBalanceFallbackEnabled: %w", err)
+	}
+	return oldValue.SubscriptionBalanceFallbackEnabled, nil
+}
+
+// ResetSubscriptionBalanceFallbackEnabled resets all changes to the "subscription_balance_fallback_enabled" field.
+func (m *UserMutation) ResetSubscriptionBalanceFallbackEnabled() {
+	m.subscription_balance_fallback_enabled = nil
 }
 
 // SetBalanceNotifyThresholdType sets the "balance_notify_threshold_type" field.
@@ -40471,6 +40883,60 @@ func (m *UserMutation) ResetPlatformQuotas() {
 	m.removedplatform_quotas = nil
 }
 
+// AddAPIKeyRouteIDs adds the "api_key_routes" edge to the UserAPIKeyRoute entity by ids.
+func (m *UserMutation) AddAPIKeyRouteIDs(ids ...int64) {
+	if m.api_key_routes == nil {
+		m.api_key_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.api_key_routes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearAPIKeyRoutes clears the "api_key_routes" edge to the UserAPIKeyRoute entity.
+func (m *UserMutation) ClearAPIKeyRoutes() {
+	m.clearedapi_key_routes = true
+}
+
+// APIKeyRoutesCleared reports if the "api_key_routes" edge to the UserAPIKeyRoute entity was cleared.
+func (m *UserMutation) APIKeyRoutesCleared() bool {
+	return m.clearedapi_key_routes
+}
+
+// RemoveAPIKeyRouteIDs removes the "api_key_routes" edge to the UserAPIKeyRoute entity by IDs.
+func (m *UserMutation) RemoveAPIKeyRouteIDs(ids ...int64) {
+	if m.removedapi_key_routes == nil {
+		m.removedapi_key_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.api_key_routes, ids[i])
+		m.removedapi_key_routes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedAPIKeyRoutes returns the removed IDs of the "api_key_routes" edge to the UserAPIKeyRoute entity.
+func (m *UserMutation) RemovedAPIKeyRoutesIDs() (ids []int64) {
+	for id := range m.removedapi_key_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// APIKeyRoutesIDs returns the "api_key_routes" edge IDs in the mutation.
+func (m *UserMutation) APIKeyRoutesIDs() (ids []int64) {
+	for id := range m.api_key_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetAPIKeyRoutes resets all changes to the "api_key_routes" edge.
+func (m *UserMutation) ResetAPIKeyRoutes() {
+	m.api_key_routes = nil
+	m.clearedapi_key_routes = false
+	m.removedapi_key_routes = nil
+}
+
 // Where appends a list predicates to the UserMutation builder.
 func (m *UserMutation) Where(ps ...predicate.User) {
 	m.predicates = append(m.predicates, ps...)
@@ -40505,7 +40971,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 24)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -40559,6 +41025,9 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.balance_notify_enabled != nil {
 		fields = append(fields, user.FieldBalanceNotifyEnabled)
+	}
+	if m.subscription_balance_fallback_enabled != nil {
+		fields = append(fields, user.FieldSubscriptionBalanceFallbackEnabled)
 	}
 	if m.balance_notify_threshold_type != nil {
 		fields = append(fields, user.FieldBalanceNotifyThresholdType)
@@ -40619,6 +41088,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.LastActiveAt()
 	case user.FieldBalanceNotifyEnabled:
 		return m.BalanceNotifyEnabled()
+	case user.FieldSubscriptionBalanceFallbackEnabled:
+		return m.SubscriptionBalanceFallbackEnabled()
 	case user.FieldBalanceNotifyThresholdType:
 		return m.BalanceNotifyThresholdType()
 	case user.FieldBalanceNotifyThreshold:
@@ -40674,6 +41145,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldLastActiveAt(ctx)
 	case user.FieldBalanceNotifyEnabled:
 		return m.OldBalanceNotifyEnabled(ctx)
+	case user.FieldSubscriptionBalanceFallbackEnabled:
+		return m.OldSubscriptionBalanceFallbackEnabled(ctx)
 	case user.FieldBalanceNotifyThresholdType:
 		return m.OldBalanceNotifyThresholdType(ctx)
 	case user.FieldBalanceNotifyThreshold:
@@ -40818,6 +41291,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBalanceNotifyEnabled(v)
+		return nil
+	case user.FieldSubscriptionBalanceFallbackEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubscriptionBalanceFallbackEnabled(v)
 		return nil
 	case user.FieldBalanceNotifyThresholdType:
 		v, ok := value.(string)
@@ -41059,6 +41539,9 @@ func (m *UserMutation) ResetField(name string) error {
 	case user.FieldBalanceNotifyEnabled:
 		m.ResetBalanceNotifyEnabled()
 		return nil
+	case user.FieldSubscriptionBalanceFallbackEnabled:
+		m.ResetSubscriptionBalanceFallbackEnabled()
+		return nil
 	case user.FieldBalanceNotifyThresholdType:
 		m.ResetBalanceNotifyThresholdType()
 		return nil
@@ -41080,7 +41563,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -41119,6 +41602,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.platform_quotas != nil {
 		edges = append(edges, user.EdgePlatformQuotas)
+	}
+	if m.api_key_routes != nil {
+		edges = append(edges, user.EdgeAPIKeyRoutes)
 	}
 	return edges
 }
@@ -41205,13 +41691,19 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeAPIKeyRoutes:
+		ids := make([]ent.Value, 0, len(m.api_key_routes))
+		for id := range m.api_key_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -41250,6 +41742,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedplatform_quotas != nil {
 		edges = append(edges, user.EdgePlatformQuotas)
+	}
+	if m.removedapi_key_routes != nil {
+		edges = append(edges, user.EdgeAPIKeyRoutes)
 	}
 	return edges
 }
@@ -41336,13 +41831,19 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeAPIKeyRoutes:
+		ids := make([]ent.Value, 0, len(m.removedapi_key_routes))
+		for id := range m.removedapi_key_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -41382,6 +41883,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	if m.clearedplatform_quotas {
 		edges = append(edges, user.EdgePlatformQuotas)
 	}
+	if m.clearedapi_key_routes {
+		edges = append(edges, user.EdgeAPIKeyRoutes)
+	}
 	return edges
 }
 
@@ -41415,6 +41919,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedpending_auth_sessions
 	case user.EdgePlatformQuotas:
 		return m.clearedplatform_quotas
+	case user.EdgeAPIKeyRoutes:
+		return m.clearedapi_key_routes
 	}
 	return false
 }
@@ -41470,8 +41976,656 @@ func (m *UserMutation) ResetEdge(name string) error {
 	case user.EdgePlatformQuotas:
 		m.ResetPlatformQuotas()
 		return nil
+	case user.EdgeAPIKeyRoutes:
+		m.ResetAPIKeyRoutes()
+		return nil
 	}
 	return fmt.Errorf("unknown User edge %s", name)
+}
+
+// UserAPIKeyRouteMutation represents an operation that mutates the UserAPIKeyRoute nodes in the graph.
+type UserAPIKeyRouteMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *int64
+	created_at    *time.Time
+	updated_at    *time.Time
+	key_type      *string
+	clearedFields map[string]struct{}
+	user          *int64
+	cleareduser   bool
+	group         *int64
+	clearedgroup  bool
+	done          bool
+	oldValue      func(context.Context) (*UserAPIKeyRoute, error)
+	predicates    []predicate.UserAPIKeyRoute
+}
+
+var _ ent.Mutation = (*UserAPIKeyRouteMutation)(nil)
+
+// userapikeyrouteOption allows management of the mutation configuration using functional options.
+type userapikeyrouteOption func(*UserAPIKeyRouteMutation)
+
+// newUserAPIKeyRouteMutation creates new mutation for the UserAPIKeyRoute entity.
+func newUserAPIKeyRouteMutation(c config, op Op, opts ...userapikeyrouteOption) *UserAPIKeyRouteMutation {
+	m := &UserAPIKeyRouteMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeUserAPIKeyRoute,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withUserAPIKeyRouteID sets the ID field of the mutation.
+func withUserAPIKeyRouteID(id int64) userapikeyrouteOption {
+	return func(m *UserAPIKeyRouteMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *UserAPIKeyRoute
+		)
+		m.oldValue = func(ctx context.Context) (*UserAPIKeyRoute, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().UserAPIKeyRoute.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withUserAPIKeyRoute sets the old UserAPIKeyRoute of the mutation.
+func withUserAPIKeyRoute(node *UserAPIKeyRoute) userapikeyrouteOption {
+	return func(m *UserAPIKeyRouteMutation) {
+		m.oldValue = func(context.Context) (*UserAPIKeyRoute, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m UserAPIKeyRouteMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m UserAPIKeyRouteMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *UserAPIKeyRouteMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *UserAPIKeyRouteMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().UserAPIKeyRoute.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *UserAPIKeyRouteMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *UserAPIKeyRouteMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the UserAPIKeyRoute entity.
+// If the UserAPIKeyRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserAPIKeyRouteMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *UserAPIKeyRouteMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *UserAPIKeyRouteMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *UserAPIKeyRouteMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the UserAPIKeyRoute entity.
+// If the UserAPIKeyRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserAPIKeyRouteMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *UserAPIKeyRouteMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *UserAPIKeyRouteMutation) SetUserID(i int64) {
+	m.user = &i
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *UserAPIKeyRouteMutation) UserID() (r int64, exists bool) {
+	v := m.user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the UserAPIKeyRoute entity.
+// If the UserAPIKeyRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserAPIKeyRouteMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *UserAPIKeyRouteMutation) ResetUserID() {
+	m.user = nil
+}
+
+// SetKeyType sets the "key_type" field.
+func (m *UserAPIKeyRouteMutation) SetKeyType(s string) {
+	m.key_type = &s
+}
+
+// KeyType returns the value of the "key_type" field in the mutation.
+func (m *UserAPIKeyRouteMutation) KeyType() (r string, exists bool) {
+	v := m.key_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeyType returns the old "key_type" field's value of the UserAPIKeyRoute entity.
+// If the UserAPIKeyRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserAPIKeyRouteMutation) OldKeyType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeyType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeyType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeyType: %w", err)
+	}
+	return oldValue.KeyType, nil
+}
+
+// ResetKeyType resets all changes to the "key_type" field.
+func (m *UserAPIKeyRouteMutation) ResetKeyType() {
+	m.key_type = nil
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *UserAPIKeyRouteMutation) SetGroupID(i int64) {
+	m.group = &i
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *UserAPIKeyRouteMutation) GroupID() (r int64, exists bool) {
+	v := m.group
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the UserAPIKeyRoute entity.
+// If the UserAPIKeyRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserAPIKeyRouteMutation) OldGroupID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *UserAPIKeyRouteMutation) ResetGroupID() {
+	m.group = nil
+}
+
+// ClearUser clears the "user" edge to the User entity.
+func (m *UserAPIKeyRouteMutation) ClearUser() {
+	m.cleareduser = true
+	m.clearedFields[userapikeyroute.FieldUserID] = struct{}{}
+}
+
+// UserCleared reports if the "user" edge to the User entity was cleared.
+func (m *UserAPIKeyRouteMutation) UserCleared() bool {
+	return m.cleareduser
+}
+
+// UserIDs returns the "user" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// UserID instead. It exists only for internal usage by the builders.
+func (m *UserAPIKeyRouteMutation) UserIDs() (ids []int64) {
+	if id := m.user; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetUser resets all changes to the "user" edge.
+func (m *UserAPIKeyRouteMutation) ResetUser() {
+	m.user = nil
+	m.cleareduser = false
+}
+
+// ClearGroup clears the "group" edge to the Group entity.
+func (m *UserAPIKeyRouteMutation) ClearGroup() {
+	m.clearedgroup = true
+	m.clearedFields[userapikeyroute.FieldGroupID] = struct{}{}
+}
+
+// GroupCleared reports if the "group" edge to the Group entity was cleared.
+func (m *UserAPIKeyRouteMutation) GroupCleared() bool {
+	return m.clearedgroup
+}
+
+// GroupIDs returns the "group" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// GroupID instead. It exists only for internal usage by the builders.
+func (m *UserAPIKeyRouteMutation) GroupIDs() (ids []int64) {
+	if id := m.group; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetGroup resets all changes to the "group" edge.
+func (m *UserAPIKeyRouteMutation) ResetGroup() {
+	m.group = nil
+	m.clearedgroup = false
+}
+
+// Where appends a list predicates to the UserAPIKeyRouteMutation builder.
+func (m *UserAPIKeyRouteMutation) Where(ps ...predicate.UserAPIKeyRoute) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the UserAPIKeyRouteMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *UserAPIKeyRouteMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.UserAPIKeyRoute, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *UserAPIKeyRouteMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *UserAPIKeyRouteMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (UserAPIKeyRoute).
+func (m *UserAPIKeyRouteMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *UserAPIKeyRouteMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.created_at != nil {
+		fields = append(fields, userapikeyroute.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, userapikeyroute.FieldUpdatedAt)
+	}
+	if m.user != nil {
+		fields = append(fields, userapikeyroute.FieldUserID)
+	}
+	if m.key_type != nil {
+		fields = append(fields, userapikeyroute.FieldKeyType)
+	}
+	if m.group != nil {
+		fields = append(fields, userapikeyroute.FieldGroupID)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *UserAPIKeyRouteMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case userapikeyroute.FieldCreatedAt:
+		return m.CreatedAt()
+	case userapikeyroute.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case userapikeyroute.FieldUserID:
+		return m.UserID()
+	case userapikeyroute.FieldKeyType:
+		return m.KeyType()
+	case userapikeyroute.FieldGroupID:
+		return m.GroupID()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *UserAPIKeyRouteMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case userapikeyroute.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case userapikeyroute.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case userapikeyroute.FieldUserID:
+		return m.OldUserID(ctx)
+	case userapikeyroute.FieldKeyType:
+		return m.OldKeyType(ctx)
+	case userapikeyroute.FieldGroupID:
+		return m.OldGroupID(ctx)
+	}
+	return nil, fmt.Errorf("unknown UserAPIKeyRoute field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *UserAPIKeyRouteMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case userapikeyroute.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case userapikeyroute.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case userapikeyroute.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case userapikeyroute.FieldKeyType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeyType(v)
+		return nil
+	case userapikeyroute.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	}
+	return fmt.Errorf("unknown UserAPIKeyRoute field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *UserAPIKeyRouteMutation) AddedFields() []string {
+	var fields []string
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *UserAPIKeyRouteMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *UserAPIKeyRouteMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown UserAPIKeyRoute numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *UserAPIKeyRouteMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *UserAPIKeyRouteMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *UserAPIKeyRouteMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown UserAPIKeyRoute nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *UserAPIKeyRouteMutation) ResetField(name string) error {
+	switch name {
+	case userapikeyroute.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case userapikeyroute.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case userapikeyroute.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case userapikeyroute.FieldKeyType:
+		m.ResetKeyType()
+		return nil
+	case userapikeyroute.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	}
+	return fmt.Errorf("unknown UserAPIKeyRoute field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *UserAPIKeyRouteMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.user != nil {
+		edges = append(edges, userapikeyroute.EdgeUser)
+	}
+	if m.group != nil {
+		edges = append(edges, userapikeyroute.EdgeGroup)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *UserAPIKeyRouteMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case userapikeyroute.EdgeUser:
+		if id := m.user; id != nil {
+			return []ent.Value{*id}
+		}
+	case userapikeyroute.EdgeGroup:
+		if id := m.group; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *UserAPIKeyRouteMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *UserAPIKeyRouteMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *UserAPIKeyRouteMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.cleareduser {
+		edges = append(edges, userapikeyroute.EdgeUser)
+	}
+	if m.clearedgroup {
+		edges = append(edges, userapikeyroute.EdgeGroup)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *UserAPIKeyRouteMutation) EdgeCleared(name string) bool {
+	switch name {
+	case userapikeyroute.EdgeUser:
+		return m.cleareduser
+	case userapikeyroute.EdgeGroup:
+		return m.clearedgroup
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *UserAPIKeyRouteMutation) ClearEdge(name string) error {
+	switch name {
+	case userapikeyroute.EdgeUser:
+		m.ClearUser()
+		return nil
+	case userapikeyroute.EdgeGroup:
+		m.ClearGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown UserAPIKeyRoute unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *UserAPIKeyRouteMutation) ResetEdge(name string) error {
+	switch name {
+	case userapikeyroute.EdgeUser:
+		m.ResetUser()
+		return nil
+	case userapikeyroute.EdgeGroup:
+		m.ResetGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown UserAPIKeyRoute edge %s", name)
 }
 
 // UserAllowedGroupMutation represents an operation that mutates the UserAllowedGroup nodes in the graph.
@@ -45115,39 +46269,53 @@ func (m *UserPlatformQuotaMutation) ResetEdge(name string) error {
 // UserSubscriptionMutation represents an operation that mutates the UserSubscription nodes in the graph.
 type UserSubscriptionMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *int64
-	created_at              *time.Time
-	updated_at              *time.Time
-	deleted_at              *time.Time
-	starts_at               *time.Time
-	expires_at              *time.Time
-	status                  *string
-	daily_window_start      *time.Time
-	weekly_window_start     *time.Time
-	monthly_window_start    *time.Time
-	daily_usage_usd         *float64
-	adddaily_usage_usd      *float64
-	weekly_usage_usd        *float64
-	addweekly_usage_usd     *float64
-	monthly_usage_usd       *float64
-	addmonthly_usage_usd    *float64
-	assigned_at             *time.Time
-	notes                   *string
-	clearedFields           map[string]struct{}
-	user                    *int64
-	cleareduser             bool
-	group                   *int64
-	clearedgroup            bool
-	assigned_by_user        *int64
-	clearedassigned_by_user bool
-	usage_logs              map[int64]struct{}
-	removedusage_logs       map[int64]struct{}
-	clearedusage_logs       bool
-	done                    bool
-	oldValue                func(context.Context) (*UserSubscription, error)
-	predicates              []predicate.UserSubscription
+	op                               Op
+	typ                              string
+	id                               *int64
+	created_at                       *time.Time
+	updated_at                       *time.Time
+	deleted_at                       *time.Time
+	plan_id                          *int64
+	addplan_id                       *int64
+	plan_name                        *string
+	seven_day_limit_usd              *float64
+	addseven_day_limit_usd           *float64
+	scheduled_plan_id                *int64
+	addscheduled_plan_id             *int64
+	scheduled_plan_name              *string
+	scheduled_seven_day_limit_usd    *float64
+	addscheduled_seven_day_limit_usd *float64
+	scheduled_plan_effective_at      *time.Time
+	scheduled_expires_at             *time.Time
+	scheduled_order_id               *int64
+	addscheduled_order_id            *int64
+	starts_at                        *time.Time
+	expires_at                       *time.Time
+	status                           *string
+	daily_window_start               *time.Time
+	weekly_window_start              *time.Time
+	monthly_window_start             *time.Time
+	daily_usage_usd                  *float64
+	adddaily_usage_usd               *float64
+	weekly_usage_usd                 *float64
+	addweekly_usage_usd              *float64
+	monthly_usage_usd                *float64
+	addmonthly_usage_usd             *float64
+	assigned_at                      *time.Time
+	notes                            *string
+	clearedFields                    map[string]struct{}
+	user                             *int64
+	cleareduser                      bool
+	group                            *int64
+	clearedgroup                     bool
+	assigned_by_user                 *int64
+	clearedassigned_by_user          bool
+	usage_logs                       map[int64]struct{}
+	removedusage_logs                map[int64]struct{}
+	clearedusage_logs                bool
+	done                             bool
+	oldValue                         func(context.Context) (*UserSubscription, error)
+	predicates                       []predicate.UserSubscription
 }
 
 var _ ent.Mutation = (*UserSubscriptionMutation)(nil)
@@ -45439,6 +46607,552 @@ func (m *UserSubscriptionMutation) OldGroupID(ctx context.Context) (v int64, err
 // ResetGroupID resets all changes to the "group_id" field.
 func (m *UserSubscriptionMutation) ResetGroupID() {
 	m.group = nil
+}
+
+// SetPlanID sets the "plan_id" field.
+func (m *UserSubscriptionMutation) SetPlanID(i int64) {
+	m.plan_id = &i
+	m.addplan_id = nil
+}
+
+// PlanID returns the value of the "plan_id" field in the mutation.
+func (m *UserSubscriptionMutation) PlanID() (r int64, exists bool) {
+	v := m.plan_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanID returns the old "plan_id" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldPlanID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanID: %w", err)
+	}
+	return oldValue.PlanID, nil
+}
+
+// AddPlanID adds i to the "plan_id" field.
+func (m *UserSubscriptionMutation) AddPlanID(i int64) {
+	if m.addplan_id != nil {
+		*m.addplan_id += i
+	} else {
+		m.addplan_id = &i
+	}
+}
+
+// AddedPlanID returns the value that was added to the "plan_id" field in this mutation.
+func (m *UserSubscriptionMutation) AddedPlanID() (r int64, exists bool) {
+	v := m.addplan_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearPlanID clears the value of the "plan_id" field.
+func (m *UserSubscriptionMutation) ClearPlanID() {
+	m.plan_id = nil
+	m.addplan_id = nil
+	m.clearedFields[usersubscription.FieldPlanID] = struct{}{}
+}
+
+// PlanIDCleared returns if the "plan_id" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) PlanIDCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldPlanID]
+	return ok
+}
+
+// ResetPlanID resets all changes to the "plan_id" field.
+func (m *UserSubscriptionMutation) ResetPlanID() {
+	m.plan_id = nil
+	m.addplan_id = nil
+	delete(m.clearedFields, usersubscription.FieldPlanID)
+}
+
+// SetPlanName sets the "plan_name" field.
+func (m *UserSubscriptionMutation) SetPlanName(s string) {
+	m.plan_name = &s
+}
+
+// PlanName returns the value of the "plan_name" field in the mutation.
+func (m *UserSubscriptionMutation) PlanName() (r string, exists bool) {
+	v := m.plan_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanName returns the old "plan_name" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldPlanName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanName: %w", err)
+	}
+	return oldValue.PlanName, nil
+}
+
+// ClearPlanName clears the value of the "plan_name" field.
+func (m *UserSubscriptionMutation) ClearPlanName() {
+	m.plan_name = nil
+	m.clearedFields[usersubscription.FieldPlanName] = struct{}{}
+}
+
+// PlanNameCleared returns if the "plan_name" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) PlanNameCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldPlanName]
+	return ok
+}
+
+// ResetPlanName resets all changes to the "plan_name" field.
+func (m *UserSubscriptionMutation) ResetPlanName() {
+	m.plan_name = nil
+	delete(m.clearedFields, usersubscription.FieldPlanName)
+}
+
+// SetSevenDayLimitUsd sets the "seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) SetSevenDayLimitUsd(f float64) {
+	m.seven_day_limit_usd = &f
+	m.addseven_day_limit_usd = nil
+}
+
+// SevenDayLimitUsd returns the value of the "seven_day_limit_usd" field in the mutation.
+func (m *UserSubscriptionMutation) SevenDayLimitUsd() (r float64, exists bool) {
+	v := m.seven_day_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSevenDayLimitUsd returns the old "seven_day_limit_usd" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldSevenDayLimitUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSevenDayLimitUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSevenDayLimitUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSevenDayLimitUsd: %w", err)
+	}
+	return oldValue.SevenDayLimitUsd, nil
+}
+
+// AddSevenDayLimitUsd adds f to the "seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) AddSevenDayLimitUsd(f float64) {
+	if m.addseven_day_limit_usd != nil {
+		*m.addseven_day_limit_usd += f
+	} else {
+		m.addseven_day_limit_usd = &f
+	}
+}
+
+// AddedSevenDayLimitUsd returns the value that was added to the "seven_day_limit_usd" field in this mutation.
+func (m *UserSubscriptionMutation) AddedSevenDayLimitUsd() (r float64, exists bool) {
+	v := m.addseven_day_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSevenDayLimitUsd clears the value of the "seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) ClearSevenDayLimitUsd() {
+	m.seven_day_limit_usd = nil
+	m.addseven_day_limit_usd = nil
+	m.clearedFields[usersubscription.FieldSevenDayLimitUsd] = struct{}{}
+}
+
+// SevenDayLimitUsdCleared returns if the "seven_day_limit_usd" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) SevenDayLimitUsdCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldSevenDayLimitUsd]
+	return ok
+}
+
+// ResetSevenDayLimitUsd resets all changes to the "seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) ResetSevenDayLimitUsd() {
+	m.seven_day_limit_usd = nil
+	m.addseven_day_limit_usd = nil
+	delete(m.clearedFields, usersubscription.FieldSevenDayLimitUsd)
+}
+
+// SetScheduledPlanID sets the "scheduled_plan_id" field.
+func (m *UserSubscriptionMutation) SetScheduledPlanID(i int64) {
+	m.scheduled_plan_id = &i
+	m.addscheduled_plan_id = nil
+}
+
+// ScheduledPlanID returns the value of the "scheduled_plan_id" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanID() (r int64, exists bool) {
+	v := m.scheduled_plan_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledPlanID returns the old "scheduled_plan_id" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledPlanID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledPlanID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledPlanID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledPlanID: %w", err)
+	}
+	return oldValue.ScheduledPlanID, nil
+}
+
+// AddScheduledPlanID adds i to the "scheduled_plan_id" field.
+func (m *UserSubscriptionMutation) AddScheduledPlanID(i int64) {
+	if m.addscheduled_plan_id != nil {
+		*m.addscheduled_plan_id += i
+	} else {
+		m.addscheduled_plan_id = &i
+	}
+}
+
+// AddedScheduledPlanID returns the value that was added to the "scheduled_plan_id" field in this mutation.
+func (m *UserSubscriptionMutation) AddedScheduledPlanID() (r int64, exists bool) {
+	v := m.addscheduled_plan_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearScheduledPlanID clears the value of the "scheduled_plan_id" field.
+func (m *UserSubscriptionMutation) ClearScheduledPlanID() {
+	m.scheduled_plan_id = nil
+	m.addscheduled_plan_id = nil
+	m.clearedFields[usersubscription.FieldScheduledPlanID] = struct{}{}
+}
+
+// ScheduledPlanIDCleared returns if the "scheduled_plan_id" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanIDCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledPlanID]
+	return ok
+}
+
+// ResetScheduledPlanID resets all changes to the "scheduled_plan_id" field.
+func (m *UserSubscriptionMutation) ResetScheduledPlanID() {
+	m.scheduled_plan_id = nil
+	m.addscheduled_plan_id = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledPlanID)
+}
+
+// SetScheduledPlanName sets the "scheduled_plan_name" field.
+func (m *UserSubscriptionMutation) SetScheduledPlanName(s string) {
+	m.scheduled_plan_name = &s
+}
+
+// ScheduledPlanName returns the value of the "scheduled_plan_name" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanName() (r string, exists bool) {
+	v := m.scheduled_plan_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledPlanName returns the old "scheduled_plan_name" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledPlanName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledPlanName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledPlanName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledPlanName: %w", err)
+	}
+	return oldValue.ScheduledPlanName, nil
+}
+
+// ClearScheduledPlanName clears the value of the "scheduled_plan_name" field.
+func (m *UserSubscriptionMutation) ClearScheduledPlanName() {
+	m.scheduled_plan_name = nil
+	m.clearedFields[usersubscription.FieldScheduledPlanName] = struct{}{}
+}
+
+// ScheduledPlanNameCleared returns if the "scheduled_plan_name" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanNameCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledPlanName]
+	return ok
+}
+
+// ResetScheduledPlanName resets all changes to the "scheduled_plan_name" field.
+func (m *UserSubscriptionMutation) ResetScheduledPlanName() {
+	m.scheduled_plan_name = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledPlanName)
+}
+
+// SetScheduledSevenDayLimitUsd sets the "scheduled_seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) SetScheduledSevenDayLimitUsd(f float64) {
+	m.scheduled_seven_day_limit_usd = &f
+	m.addscheduled_seven_day_limit_usd = nil
+}
+
+// ScheduledSevenDayLimitUsd returns the value of the "scheduled_seven_day_limit_usd" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledSevenDayLimitUsd() (r float64, exists bool) {
+	v := m.scheduled_seven_day_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledSevenDayLimitUsd returns the old "scheduled_seven_day_limit_usd" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledSevenDayLimitUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledSevenDayLimitUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledSevenDayLimitUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledSevenDayLimitUsd: %w", err)
+	}
+	return oldValue.ScheduledSevenDayLimitUsd, nil
+}
+
+// AddScheduledSevenDayLimitUsd adds f to the "scheduled_seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) AddScheduledSevenDayLimitUsd(f float64) {
+	if m.addscheduled_seven_day_limit_usd != nil {
+		*m.addscheduled_seven_day_limit_usd += f
+	} else {
+		m.addscheduled_seven_day_limit_usd = &f
+	}
+}
+
+// AddedScheduledSevenDayLimitUsd returns the value that was added to the "scheduled_seven_day_limit_usd" field in this mutation.
+func (m *UserSubscriptionMutation) AddedScheduledSevenDayLimitUsd() (r float64, exists bool) {
+	v := m.addscheduled_seven_day_limit_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearScheduledSevenDayLimitUsd clears the value of the "scheduled_seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) ClearScheduledSevenDayLimitUsd() {
+	m.scheduled_seven_day_limit_usd = nil
+	m.addscheduled_seven_day_limit_usd = nil
+	m.clearedFields[usersubscription.FieldScheduledSevenDayLimitUsd] = struct{}{}
+}
+
+// ScheduledSevenDayLimitUsdCleared returns if the "scheduled_seven_day_limit_usd" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledSevenDayLimitUsdCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledSevenDayLimitUsd]
+	return ok
+}
+
+// ResetScheduledSevenDayLimitUsd resets all changes to the "scheduled_seven_day_limit_usd" field.
+func (m *UserSubscriptionMutation) ResetScheduledSevenDayLimitUsd() {
+	m.scheduled_seven_day_limit_usd = nil
+	m.addscheduled_seven_day_limit_usd = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledSevenDayLimitUsd)
+}
+
+// SetScheduledPlanEffectiveAt sets the "scheduled_plan_effective_at" field.
+func (m *UserSubscriptionMutation) SetScheduledPlanEffectiveAt(t time.Time) {
+	m.scheduled_plan_effective_at = &t
+}
+
+// ScheduledPlanEffectiveAt returns the value of the "scheduled_plan_effective_at" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanEffectiveAt() (r time.Time, exists bool) {
+	v := m.scheduled_plan_effective_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledPlanEffectiveAt returns the old "scheduled_plan_effective_at" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledPlanEffectiveAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledPlanEffectiveAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledPlanEffectiveAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledPlanEffectiveAt: %w", err)
+	}
+	return oldValue.ScheduledPlanEffectiveAt, nil
+}
+
+// ClearScheduledPlanEffectiveAt clears the value of the "scheduled_plan_effective_at" field.
+func (m *UserSubscriptionMutation) ClearScheduledPlanEffectiveAt() {
+	m.scheduled_plan_effective_at = nil
+	m.clearedFields[usersubscription.FieldScheduledPlanEffectiveAt] = struct{}{}
+}
+
+// ScheduledPlanEffectiveAtCleared returns if the "scheduled_plan_effective_at" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledPlanEffectiveAtCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledPlanEffectiveAt]
+	return ok
+}
+
+// ResetScheduledPlanEffectiveAt resets all changes to the "scheduled_plan_effective_at" field.
+func (m *UserSubscriptionMutation) ResetScheduledPlanEffectiveAt() {
+	m.scheduled_plan_effective_at = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledPlanEffectiveAt)
+}
+
+// SetScheduledExpiresAt sets the "scheduled_expires_at" field.
+func (m *UserSubscriptionMutation) SetScheduledExpiresAt(t time.Time) {
+	m.scheduled_expires_at = &t
+}
+
+// ScheduledExpiresAt returns the value of the "scheduled_expires_at" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledExpiresAt() (r time.Time, exists bool) {
+	v := m.scheduled_expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledExpiresAt returns the old "scheduled_expires_at" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledExpiresAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledExpiresAt: %w", err)
+	}
+	return oldValue.ScheduledExpiresAt, nil
+}
+
+// ClearScheduledExpiresAt clears the value of the "scheduled_expires_at" field.
+func (m *UserSubscriptionMutation) ClearScheduledExpiresAt() {
+	m.scheduled_expires_at = nil
+	m.clearedFields[usersubscription.FieldScheduledExpiresAt] = struct{}{}
+}
+
+// ScheduledExpiresAtCleared returns if the "scheduled_expires_at" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledExpiresAtCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledExpiresAt]
+	return ok
+}
+
+// ResetScheduledExpiresAt resets all changes to the "scheduled_expires_at" field.
+func (m *UserSubscriptionMutation) ResetScheduledExpiresAt() {
+	m.scheduled_expires_at = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledExpiresAt)
+}
+
+// SetScheduledOrderID sets the "scheduled_order_id" field.
+func (m *UserSubscriptionMutation) SetScheduledOrderID(i int64) {
+	m.scheduled_order_id = &i
+	m.addscheduled_order_id = nil
+}
+
+// ScheduledOrderID returns the value of the "scheduled_order_id" field in the mutation.
+func (m *UserSubscriptionMutation) ScheduledOrderID() (r int64, exists bool) {
+	v := m.scheduled_order_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScheduledOrderID returns the old "scheduled_order_id" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldScheduledOrderID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScheduledOrderID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScheduledOrderID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScheduledOrderID: %w", err)
+	}
+	return oldValue.ScheduledOrderID, nil
+}
+
+// AddScheduledOrderID adds i to the "scheduled_order_id" field.
+func (m *UserSubscriptionMutation) AddScheduledOrderID(i int64) {
+	if m.addscheduled_order_id != nil {
+		*m.addscheduled_order_id += i
+	} else {
+		m.addscheduled_order_id = &i
+	}
+}
+
+// AddedScheduledOrderID returns the value that was added to the "scheduled_order_id" field in this mutation.
+func (m *UserSubscriptionMutation) AddedScheduledOrderID() (r int64, exists bool) {
+	v := m.addscheduled_order_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearScheduledOrderID clears the value of the "scheduled_order_id" field.
+func (m *UserSubscriptionMutation) ClearScheduledOrderID() {
+	m.scheduled_order_id = nil
+	m.addscheduled_order_id = nil
+	m.clearedFields[usersubscription.FieldScheduledOrderID] = struct{}{}
+}
+
+// ScheduledOrderIDCleared returns if the "scheduled_order_id" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) ScheduledOrderIDCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldScheduledOrderID]
+	return ok
+}
+
+// ResetScheduledOrderID resets all changes to the "scheduled_order_id" field.
+func (m *UserSubscriptionMutation) ResetScheduledOrderID() {
+	m.scheduled_order_id = nil
+	m.addscheduled_order_id = nil
+	delete(m.clearedFields, usersubscription.FieldScheduledOrderID)
 }
 
 // SetStartsAt sets the "starts_at" field.
@@ -46180,7 +47894,7 @@ func (m *UserSubscriptionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserSubscriptionMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 26)
 	if m.created_at != nil {
 		fields = append(fields, usersubscription.FieldCreatedAt)
 	}
@@ -46195,6 +47909,33 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	}
 	if m.group != nil {
 		fields = append(fields, usersubscription.FieldGroupID)
+	}
+	if m.plan_id != nil {
+		fields = append(fields, usersubscription.FieldPlanID)
+	}
+	if m.plan_name != nil {
+		fields = append(fields, usersubscription.FieldPlanName)
+	}
+	if m.seven_day_limit_usd != nil {
+		fields = append(fields, usersubscription.FieldSevenDayLimitUsd)
+	}
+	if m.scheduled_plan_id != nil {
+		fields = append(fields, usersubscription.FieldScheduledPlanID)
+	}
+	if m.scheduled_plan_name != nil {
+		fields = append(fields, usersubscription.FieldScheduledPlanName)
+	}
+	if m.scheduled_seven_day_limit_usd != nil {
+		fields = append(fields, usersubscription.FieldScheduledSevenDayLimitUsd)
+	}
+	if m.scheduled_plan_effective_at != nil {
+		fields = append(fields, usersubscription.FieldScheduledPlanEffectiveAt)
+	}
+	if m.scheduled_expires_at != nil {
+		fields = append(fields, usersubscription.FieldScheduledExpiresAt)
+	}
+	if m.scheduled_order_id != nil {
+		fields = append(fields, usersubscription.FieldScheduledOrderID)
 	}
 	if m.starts_at != nil {
 		fields = append(fields, usersubscription.FieldStartsAt)
@@ -46250,6 +47991,24 @@ func (m *UserSubscriptionMutation) Field(name string) (ent.Value, bool) {
 		return m.UserID()
 	case usersubscription.FieldGroupID:
 		return m.GroupID()
+	case usersubscription.FieldPlanID:
+		return m.PlanID()
+	case usersubscription.FieldPlanName:
+		return m.PlanName()
+	case usersubscription.FieldSevenDayLimitUsd:
+		return m.SevenDayLimitUsd()
+	case usersubscription.FieldScheduledPlanID:
+		return m.ScheduledPlanID()
+	case usersubscription.FieldScheduledPlanName:
+		return m.ScheduledPlanName()
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		return m.ScheduledSevenDayLimitUsd()
+	case usersubscription.FieldScheduledPlanEffectiveAt:
+		return m.ScheduledPlanEffectiveAt()
+	case usersubscription.FieldScheduledExpiresAt:
+		return m.ScheduledExpiresAt()
+	case usersubscription.FieldScheduledOrderID:
+		return m.ScheduledOrderID()
 	case usersubscription.FieldStartsAt:
 		return m.StartsAt()
 	case usersubscription.FieldExpiresAt:
@@ -46293,6 +48052,24 @@ func (m *UserSubscriptionMutation) OldField(ctx context.Context, name string) (e
 		return m.OldUserID(ctx)
 	case usersubscription.FieldGroupID:
 		return m.OldGroupID(ctx)
+	case usersubscription.FieldPlanID:
+		return m.OldPlanID(ctx)
+	case usersubscription.FieldPlanName:
+		return m.OldPlanName(ctx)
+	case usersubscription.FieldSevenDayLimitUsd:
+		return m.OldSevenDayLimitUsd(ctx)
+	case usersubscription.FieldScheduledPlanID:
+		return m.OldScheduledPlanID(ctx)
+	case usersubscription.FieldScheduledPlanName:
+		return m.OldScheduledPlanName(ctx)
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		return m.OldScheduledSevenDayLimitUsd(ctx)
+	case usersubscription.FieldScheduledPlanEffectiveAt:
+		return m.OldScheduledPlanEffectiveAt(ctx)
+	case usersubscription.FieldScheduledExpiresAt:
+		return m.OldScheduledExpiresAt(ctx)
+	case usersubscription.FieldScheduledOrderID:
+		return m.OldScheduledOrderID(ctx)
 	case usersubscription.FieldStartsAt:
 		return m.OldStartsAt(ctx)
 	case usersubscription.FieldExpiresAt:
@@ -46360,6 +48137,69 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetGroupID(v)
+		return nil
+	case usersubscription.FieldPlanID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanID(v)
+		return nil
+	case usersubscription.FieldPlanName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanName(v)
+		return nil
+	case usersubscription.FieldSevenDayLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSevenDayLimitUsd(v)
+		return nil
+	case usersubscription.FieldScheduledPlanID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledPlanID(v)
+		return nil
+	case usersubscription.FieldScheduledPlanName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledPlanName(v)
+		return nil
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledSevenDayLimitUsd(v)
+		return nil
+	case usersubscription.FieldScheduledPlanEffectiveAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledPlanEffectiveAt(v)
+		return nil
+	case usersubscription.FieldScheduledExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledExpiresAt(v)
+		return nil
+	case usersubscription.FieldScheduledOrderID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScheduledOrderID(v)
 		return nil
 	case usersubscription.FieldStartsAt:
 		v, ok := value.(time.Time)
@@ -46453,6 +48293,21 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 // this mutation.
 func (m *UserSubscriptionMutation) AddedFields() []string {
 	var fields []string
+	if m.addplan_id != nil {
+		fields = append(fields, usersubscription.FieldPlanID)
+	}
+	if m.addseven_day_limit_usd != nil {
+		fields = append(fields, usersubscription.FieldSevenDayLimitUsd)
+	}
+	if m.addscheduled_plan_id != nil {
+		fields = append(fields, usersubscription.FieldScheduledPlanID)
+	}
+	if m.addscheduled_seven_day_limit_usd != nil {
+		fields = append(fields, usersubscription.FieldScheduledSevenDayLimitUsd)
+	}
+	if m.addscheduled_order_id != nil {
+		fields = append(fields, usersubscription.FieldScheduledOrderID)
+	}
 	if m.adddaily_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldDailyUsageUsd)
 	}
@@ -46470,6 +48325,16 @@ func (m *UserSubscriptionMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case usersubscription.FieldPlanID:
+		return m.AddedPlanID()
+	case usersubscription.FieldSevenDayLimitUsd:
+		return m.AddedSevenDayLimitUsd()
+	case usersubscription.FieldScheduledPlanID:
+		return m.AddedScheduledPlanID()
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		return m.AddedScheduledSevenDayLimitUsd()
+	case usersubscription.FieldScheduledOrderID:
+		return m.AddedScheduledOrderID()
 	case usersubscription.FieldDailyUsageUsd:
 		return m.AddedDailyUsageUsd()
 	case usersubscription.FieldWeeklyUsageUsd:
@@ -46485,6 +48350,41 @@ func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *UserSubscriptionMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case usersubscription.FieldPlanID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPlanID(v)
+		return nil
+	case usersubscription.FieldSevenDayLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSevenDayLimitUsd(v)
+		return nil
+	case usersubscription.FieldScheduledPlanID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddScheduledPlanID(v)
+		return nil
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddScheduledSevenDayLimitUsd(v)
+		return nil
+	case usersubscription.FieldScheduledOrderID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddScheduledOrderID(v)
+		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		v, ok := value.(float64)
 		if !ok {
@@ -46517,6 +48417,33 @@ func (m *UserSubscriptionMutation) ClearedFields() []string {
 	if m.FieldCleared(usersubscription.FieldDeletedAt) {
 		fields = append(fields, usersubscription.FieldDeletedAt)
 	}
+	if m.FieldCleared(usersubscription.FieldPlanID) {
+		fields = append(fields, usersubscription.FieldPlanID)
+	}
+	if m.FieldCleared(usersubscription.FieldPlanName) {
+		fields = append(fields, usersubscription.FieldPlanName)
+	}
+	if m.FieldCleared(usersubscription.FieldSevenDayLimitUsd) {
+		fields = append(fields, usersubscription.FieldSevenDayLimitUsd)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledPlanID) {
+		fields = append(fields, usersubscription.FieldScheduledPlanID)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledPlanName) {
+		fields = append(fields, usersubscription.FieldScheduledPlanName)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledSevenDayLimitUsd) {
+		fields = append(fields, usersubscription.FieldScheduledSevenDayLimitUsd)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledPlanEffectiveAt) {
+		fields = append(fields, usersubscription.FieldScheduledPlanEffectiveAt)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledExpiresAt) {
+		fields = append(fields, usersubscription.FieldScheduledExpiresAt)
+	}
+	if m.FieldCleared(usersubscription.FieldScheduledOrderID) {
+		fields = append(fields, usersubscription.FieldScheduledOrderID)
+	}
 	if m.FieldCleared(usersubscription.FieldDailyWindowStart) {
 		fields = append(fields, usersubscription.FieldDailyWindowStart)
 	}
@@ -46548,6 +48475,33 @@ func (m *UserSubscriptionMutation) ClearField(name string) error {
 	switch name {
 	case usersubscription.FieldDeletedAt:
 		m.ClearDeletedAt()
+		return nil
+	case usersubscription.FieldPlanID:
+		m.ClearPlanID()
+		return nil
+	case usersubscription.FieldPlanName:
+		m.ClearPlanName()
+		return nil
+	case usersubscription.FieldSevenDayLimitUsd:
+		m.ClearSevenDayLimitUsd()
+		return nil
+	case usersubscription.FieldScheduledPlanID:
+		m.ClearScheduledPlanID()
+		return nil
+	case usersubscription.FieldScheduledPlanName:
+		m.ClearScheduledPlanName()
+		return nil
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		m.ClearScheduledSevenDayLimitUsd()
+		return nil
+	case usersubscription.FieldScheduledPlanEffectiveAt:
+		m.ClearScheduledPlanEffectiveAt()
+		return nil
+	case usersubscription.FieldScheduledExpiresAt:
+		m.ClearScheduledExpiresAt()
+		return nil
+	case usersubscription.FieldScheduledOrderID:
+		m.ClearScheduledOrderID()
 		return nil
 	case usersubscription.FieldDailyWindowStart:
 		m.ClearDailyWindowStart()
@@ -46586,6 +48540,33 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 		return nil
 	case usersubscription.FieldGroupID:
 		m.ResetGroupID()
+		return nil
+	case usersubscription.FieldPlanID:
+		m.ResetPlanID()
+		return nil
+	case usersubscription.FieldPlanName:
+		m.ResetPlanName()
+		return nil
+	case usersubscription.FieldSevenDayLimitUsd:
+		m.ResetSevenDayLimitUsd()
+		return nil
+	case usersubscription.FieldScheduledPlanID:
+		m.ResetScheduledPlanID()
+		return nil
+	case usersubscription.FieldScheduledPlanName:
+		m.ResetScheduledPlanName()
+		return nil
+	case usersubscription.FieldScheduledSevenDayLimitUsd:
+		m.ResetScheduledSevenDayLimitUsd()
+		return nil
+	case usersubscription.FieldScheduledPlanEffectiveAt:
+		m.ResetScheduledPlanEffectiveAt()
+		return nil
+	case usersubscription.FieldScheduledExpiresAt:
+		m.ResetScheduledExpiresAt()
+		return nil
+	case usersubscription.FieldScheduledOrderID:
+		m.ResetScheduledOrderID()
 		return nil
 	case usersubscription.FieldStartsAt:
 		m.ResetStartsAt()

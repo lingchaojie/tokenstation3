@@ -185,6 +185,9 @@ describe('ProfileInfoCard', () => {
     })
 
     expect(wrapper.get('[data-testid="profile-overview-hero"]').text()).toContain('alice@example.com')
+    const heroAvatar = wrapper.get('[data-testid="profile-overview-avatar"]')
+    expect(heroAvatar.classes()).toContain('ui-avatar-identity-lg')
+    expect(heroAvatar.classes()).not.toContain('from-primary-500')
     expect(wrapper.get('[data-testid="profile-overview-metric-balance"]').text()).toContain('Account Balance')
     expect(wrapper.get('[data-testid="profile-overview-metric-concurrency"]').text()).toContain('Concurrency Limit')
     expect(wrapper.get('[data-testid="profile-overview-metric-member-since"]').text()).toContain('Member Since')

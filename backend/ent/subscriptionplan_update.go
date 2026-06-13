@@ -125,6 +125,33 @@ func (_u *SubscriptionPlanUpdate) ClearOriginalPrice() *SubscriptionPlanUpdate {
 	return _u
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdate {
+	_u.mutation.ResetSevenDayQuotaUsd()
+	_u.mutation.SetSevenDayQuotaUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdate) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanUpdate {
+	if v != nil {
+		_u.SetSevenDayQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayQuotaUsd adds value to the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdate {
+	_u.mutation.AddSevenDayQuotaUsd(v)
+	return _u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdate) ClearSevenDayQuotaUsd() *SubscriptionPlanUpdate {
+	_u.mutation.ClearSevenDayQuotaUsd()
+	return _u
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_u *SubscriptionPlanUpdate) SetValidityDays(v int) *SubscriptionPlanUpdate {
 	_u.mutation.ResetValidityDays()
@@ -223,6 +250,33 @@ func (_u *SubscriptionPlanUpdate) AddSortOrder(v int) *SubscriptionPlanUpdate {
 	return _u
 }
 
+// SetSeatLimit sets the "seat_limit" field.
+func (_u *SubscriptionPlanUpdate) SetSeatLimit(v int) *SubscriptionPlanUpdate {
+	_u.mutation.ResetSeatLimit()
+	_u.mutation.SetSeatLimit(v)
+	return _u
+}
+
+// SetNillableSeatLimit sets the "seat_limit" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdate) SetNillableSeatLimit(v *int) *SubscriptionPlanUpdate {
+	if v != nil {
+		_u.SetSeatLimit(*v)
+	}
+	return _u
+}
+
+// AddSeatLimit adds value to the "seat_limit" field.
+func (_u *SubscriptionPlanUpdate) AddSeatLimit(v int) *SubscriptionPlanUpdate {
+	_u.mutation.AddSeatLimit(v)
+	return _u
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (_u *SubscriptionPlanUpdate) ClearSeatLimit() *SubscriptionPlanUpdate {
+	_u.mutation.ClearSeatLimit()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *SubscriptionPlanUpdate) SetUpdatedAt(v time.Time) *SubscriptionPlanUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -287,6 +341,11 @@ func (_u *SubscriptionPlanUpdate) check() error {
 			return &ValidationError{Name: "product_name", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.product_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SeatLimit(); ok {
+		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
+			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -329,6 +388,15 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if _u.mutation.OriginalPriceCleared() {
 		_spec.ClearField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayQuotaUsd(); ok {
+		_spec.AddField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayQuotaUsdCleared() {
+		_spec.ClearField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
 	}
@@ -352,6 +420,15 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if value, ok := _u.mutation.AddedSortOrder(); ok {
 		_spec.AddField(subscriptionplan.FieldSortOrder, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.SeatLimit(); ok {
+		_spec.SetField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedSeatLimit(); ok {
+		_spec.AddField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+	}
+	if _u.mutation.SeatLimitCleared() {
+		_spec.ClearField(subscriptionplan.FieldSeatLimit, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldUpdatedAt, field.TypeTime, value)
@@ -473,6 +550,33 @@ func (_u *SubscriptionPlanUpdateOne) ClearOriginalPrice() *SubscriptionPlanUpdat
 	return _u
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdateOne {
+	_u.mutation.ResetSevenDayQuotaUsd()
+	_u.mutation.SetSevenDayQuotaUsd(v)
+	return _u
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdateOne) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanUpdateOne {
+	if v != nil {
+		_u.SetSevenDayQuotaUsd(*v)
+	}
+	return _u
+}
+
+// AddSevenDayQuotaUsd adds value to the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpdateOne {
+	_u.mutation.AddSevenDayQuotaUsd(v)
+	return _u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (_u *SubscriptionPlanUpdateOne) ClearSevenDayQuotaUsd() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearSevenDayQuotaUsd()
+	return _u
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_u *SubscriptionPlanUpdateOne) SetValidityDays(v int) *SubscriptionPlanUpdateOne {
 	_u.mutation.ResetValidityDays()
@@ -571,6 +675,33 @@ func (_u *SubscriptionPlanUpdateOne) AddSortOrder(v int) *SubscriptionPlanUpdate
 	return _u
 }
 
+// SetSeatLimit sets the "seat_limit" field.
+func (_u *SubscriptionPlanUpdateOne) SetSeatLimit(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.ResetSeatLimit()
+	_u.mutation.SetSeatLimit(v)
+	return _u
+}
+
+// SetNillableSeatLimit sets the "seat_limit" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdateOne) SetNillableSeatLimit(v *int) *SubscriptionPlanUpdateOne {
+	if v != nil {
+		_u.SetSeatLimit(*v)
+	}
+	return _u
+}
+
+// AddSeatLimit adds value to the "seat_limit" field.
+func (_u *SubscriptionPlanUpdateOne) AddSeatLimit(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.AddSeatLimit(v)
+	return _u
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (_u *SubscriptionPlanUpdateOne) ClearSeatLimit() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearSeatLimit()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *SubscriptionPlanUpdateOne) SetUpdatedAt(v time.Time) *SubscriptionPlanUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -648,6 +779,11 @@ func (_u *SubscriptionPlanUpdateOne) check() error {
 			return &ValidationError{Name: "product_name", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.product_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SeatLimit(); ok {
+		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
+			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -707,6 +843,15 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	if _u.mutation.OriginalPriceCleared() {
 		_spec.ClearField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSevenDayQuotaUsd(); ok {
+		_spec.AddField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.SevenDayQuotaUsdCleared() {
+		_spec.ClearField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
 	}
@@ -730,6 +875,15 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	}
 	if value, ok := _u.mutation.AddedSortOrder(); ok {
 		_spec.AddField(subscriptionplan.FieldSortOrder, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.SeatLimit(); ok {
+		_spec.SetField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedSeatLimit(); ok {
+		_spec.AddField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+	}
+	if _u.mutation.SeatLimitCleared() {
+		_spec.ClearField(subscriptionplan.FieldSeatLimit, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldUpdatedAt, field.TypeTime, value)

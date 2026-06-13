@@ -187,8 +187,8 @@ export default {
 
   // Setup Wizard
   setup: {
-    title: 'Sub2API 安装向导',
-    description: '配置您的 Sub2API 实例',
+    title: 'LINX2 安装向导',
+    description: '配置您的 LINX2 实例',
     database: {
       title: '数据库配置',
       description: '连接到您的 PostgreSQL 数据库',
@@ -342,6 +342,34 @@ export default {
         withSuffix: '{time} 后解除'
       }
     }
+  },
+
+  adminCompliance: {
+    title: '部署与运营合规确认',
+    blockingNotice: '继续使用控制台前，须完成部署与运营合规确认。',
+    riskNotice: '本确认用于以清晰、显著、可留痕的方式提示自部署实例的合规义务与运营风险。',
+    version: '协议版本',
+    openDocument: '在 GitHub 查看协议文件',
+    documentSource: '协议正文来自本项目仓库中的 Markdown 文件。修改协议内容时必须同步递增协议版本；已确认的旧版本将失效，控制台使用者须重新确认。',
+    inputLabel: '请逐字输入以下确认短语',
+    inputPlaceholder: '输入确认短语以继续',
+    inputMismatch: '确认短语不匹配，请逐字输入提示内容。',
+    legalNote: '本确认用于明确自部署实例与开源项目、著作权人、贡献者及维护者之间的非关联关系和责任边界；部署、运营或控制相关实例的主体应独立承担其适用义务。',
+    logout: '退出登录',
+    accept: '确认并继续',
+    accepted: '合规确认已记录',
+    acceptFailed: '提交确认失败'
+  },
+
+  legal: {
+    loadFailed: '文档加载失败',
+    retryLater: '请稍后刷新页面重试。',
+    notFound: '文档不存在',
+    notFoundDescription: '当前条款文档不存在或已被管理员移除。',
+    updatedAt: '更新日期：{date}',
+    empty: '暂无正文内容',
+    loginAgreement: '登录条款',
+    adminCompliance: '部署与运营合规承诺'
   },
 
   // Navigation
@@ -614,6 +642,25 @@ export default {
     title: '仪表盘',
     welcomeMessage: '欢迎回来！这是您账户的概览。',
     balance: '余额',
+    subscriptionBalance: '订阅余额',
+    currentSubscription: '当前订阅',
+    noCurrentSubscription: '未开通订阅',
+    subscriptionRemaining: '剩余 {remaining} / {total}',
+    rechargeBalance: '充值余额',
+    balanceOrderHint: '优先消耗订阅额度，再使用充值余额。',
+    balanceFallbackToggle: {
+      title: '月卡用完后使用余额',
+      enabledHint: '开启后，月卡 7 日额度用完会自动扣充值余额继续请求。',
+      disabledHint: '默认关闭。月卡 7 日额度用完后会停止请求，即使账户仍有余额。',
+    },
+    subscriptionPlan: '套餐：{plan}',
+    subscriptionPlanCount: '{count} 个有效套餐',
+    subscriptionResetAt: '{time} 重置',
+    subscriptionPlanPeriod: '月',
+    subscriptionWeeklyQuota: '{amount} / 7 天',
+    subscriptionAllRoutes: 'Claude Code + OpenAI',
+    renewSubscription: '续费月卡',
+    pendingSubscriptionChange: '{plan} 将于 {time} 生效',
     apiKeys: 'API 密钥',
     todayRequests: '今日请求',
     todayCost: '今日消费',
@@ -701,12 +748,21 @@ export default {
     copyToClipboard: '复制到剪贴板',
     copied: '已复制！',
     importToCcSwitch: '导入到 CCS',
+    cannotImportUnconfiguredKey: '无法导入未配置的密钥',
     enable: '启用',
     disable: '禁用',
     nameLabel: '名称',
     namePlaceholder: '我的 API 密钥',
     groupLabel: '分组',
     selectGroup: '选择分组',
+    keyTypeLabel: '密钥类型',
+    selectKeyType: '选择密钥类型',
+    keyTypeHint: '管理员会控制该类型密钥实际路由到哪个账号分组。',
+    keyTypes: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      unknown: '未配置'
+    },
     statusLabel: '状态',
     selectStatus: '选择状态',
     saving: '保存中...',
@@ -1559,7 +1615,7 @@ export default {
         step1: {
           title: '创建 R2 存储桶',
           line1: '登录 Cloudflare Dashboard (dash.cloudflare.com)，左侧菜单选择「R2 对象存储」',
-          line2: '点击「创建存储桶」，输入名称（如 sub2api-backups），选择区域',
+          line2: '点击「创建存储桶」，输入名称（如 linx2-backups），选择区域',
           line3: '点击创建完成'
         },
         step2: {
@@ -1820,6 +1876,16 @@ export default {
       allGroups: '全部分组',
       searchGroups: '搜索分组...',
       fuzzySearch: '模糊搜索',
+      apiKeyGroupFilter: 'API Key 分组',
+      apiKeyGroupExclusive: '专用分组',
+      apiKeyGroupPublic: '公开分组',
+      apiKeyGroupSubscription: '订阅分组',
+      apiKeyGroupDisabled: '已禁用分组',
+      authorizedGroupFilter: '授权分组',
+      allAuthorizedGroups: '全部授权分组',
+      searchAuthorizedGroups: '搜索授权分组...',
+      allApiKeyGroups: '全部 API Key 分组',
+      searchApiKeyGroups: '搜索 API Key 分组...',
       statusFilter: '状态筛选',
       allStatuses: '全部状态',
       admin: '管理员',
@@ -2075,6 +2141,18 @@ export default {
         failedToReorder: '更新排序失败',
         keyExists: '属性键已存在',
         dragToReorder: '拖拽排序'
+      },
+      keyRoutes: {
+        action: '平台路由',
+        title: '平台路由',
+        description: '为该用户未来创建普通 API Key 选择默认分组。',
+        anthropicLabel: 'Anthropic 默认分组',
+        openaiLabel: 'OpenAI 默认分组',
+        useGlobalDefault: '使用全局默认',
+        hint: '仅显示匹配平台的活跃分组。已有 API Key 不会被修改。',
+        loadFailed: '加载平台路由失败',
+        updateSuccess: '平台路由已更新',
+        updateFailed: '更新平台路由失败'
       },
       platformQuota: {
         menuItem: '平台限额',
@@ -2956,8 +3034,10 @@ export default {
       daily: '每日',
       weekly: '每周',
       monthly: '每月',
+      sevenDay: '7 日额度',
       noLimits: '未配置限额',
       unlimited: '无限制',
+      remaining: '剩余 {amount}',
       resetNow: '即将重置',
       windowNotActive: '窗口未激活',
       resetInMinutes: '{minutes} 分钟后重置',
@@ -3170,7 +3250,7 @@ export default {
         expiresAt: '过期时间',
         actions: '操作'
       },
-      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
+      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 LINX2 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 LINX2 端解除该限制。',
       allPrivacyModes: '全部Privacy状态',
       privacyUnset: '未设置',
       privacyTrainingOff: '已关闭训练数据共享',
@@ -3625,7 +3705,7 @@ export default {
       poolMode: '池模式',
       poolModeHint: '上游为账号池时启用，错误不标记本地账号状态',
       poolModeInfo:
-        '启用后，上游 429/403/401 错误将自动重试而不标记账号限流或错误，适用于上游指向另一个 sub2api 实例的场景。',
+        '启用后，上游 429/403/401 错误将自动重试而不标记账号限流或错误，适用于上游指向另一个 LINX2 实例的场景。',
       poolModeRetryCount: '同账号重试次数',
       poolModeRetryCountHint: '仅在池模式下生效。0 表示不原地重试；默认 {default}，最大 {max}。',
       poolModeRetryStatusCodes: '同账号重试状态码',
@@ -5666,7 +5746,7 @@ export default {
       },
       linuxdo: {
         title: 'LinuxDo Connect 登录',
-        description: '配置 LinuxDo Connect OAuth，用于 Sub2API 用户登录',
+        description: '配置 LinuxDo Connect OAuth，用于 LINX2 用户登录',
         enable: '启用 LinuxDo 登录',
         enableHint: '在登录/注册页面显示 LinuxDo 登录入口',
         clientId: 'Client ID',
@@ -5685,7 +5765,7 @@ export default {
       },
       dingtalk: {
         title: '钉钉登录',
-        description: '配置钉钉 OAuth，用于 Sub2API 用户登录',
+        description: '配置钉钉 OAuth，用于 LINX2 用户登录',
         enable: '启用钉钉登录-企业内部应用',
         enableHint: '在登录/注册页面显示钉钉登录入口',
         clientId: 'Client ID（AppKey）',
@@ -5792,6 +5872,13 @@ export default {
         defaultSubscriptionsDuplicate: '默认订阅存在重复分组：{groupId}。每个分组只能出现一次。',
         subscriptionGroup: '订阅分组',
         subscriptionValidityDays: '有效期（天）',
+        providerRoutes: '默认 API Key 平台路由',
+        providerRoutesHint: '普通用户未来创建 Anthropic 或 OpenAI API Key 时使用；不会修改已有 Key。',
+        providerRouteUseNone: '不使用全局默认',
+        defaultAnthropicGroup: '默认 Anthropic 分组',
+        defaultAnthropicGroupPlaceholder: '不使用全局 Anthropic 默认分组',
+        defaultOpenAIGroup: '默认 OpenAI 分组',
+        defaultOpenAIGroupPlaceholder: '不使用全局 OpenAI 默认分组',
         defaultPlatformQuotas: '默认平台限额（注册时分配）',
         defaultPlatformQuotasHint: '新用户注册时自动写入平台限额记录；已有用户不受影响。留空 = 该平台该窗口不限制。',
         platformQuotaNotice: '月限额为 30 天滚动窗口，非自然月',
@@ -5884,7 +5971,7 @@ export default {
           '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'LINX2',
         siteSubtitle: '站点副标题',
         siteSubtitleHint: '显示在登录和注册页面',
         siteSubtitlePlaceholder: '订阅转 API 转换平台',
@@ -6175,7 +6262,7 @@ export default {
         fromEmail: '发件人邮箱',
         fromEmailPlaceholder: "noreply{'@'}example.com",
         fromName: '发件人名称',
-        fromNamePlaceholder: 'Sub2API',
+        fromNamePlaceholder: 'LINX2',
         useTls: '使用 TLS',
         useTlsHint: '为 SMTP 连接启用 TLS 加密'
       },
@@ -6700,6 +6787,7 @@ export default {
     daily: '每日',
     weekly: '每周',
     monthly: '每月',
+    sevenDay: '7 天',
     daysRemaining: '剩余 {days} 天',
     expired: '已过期',
     expiresToday: '今天到期',
@@ -6795,6 +6883,11 @@ export default {
     noExpiration: '无到期时间',
     unlimited: '无限制',
     unlimitedDesc: '该订阅无用量限制',
+    plan: '当前套餐',
+    sevenDayQuota: '7 天额度',
+    nextReset: '下次重置',
+    remaining: '剩余 {amount}',
+    balanceOrderHint: '优先消耗订阅额度，再使用充值余额。',
     daily: '每日',
     weekly: '每周',
     monthly: '每月',
@@ -6821,16 +6914,16 @@ export default {
     // Admin tour steps
     admin: {
       welcome: {
-        title: '👋 欢迎使用 Sub2API',
+        title: '👋 欢迎使用 LINX2',
         description:
-          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Sub2API 是一个强大的 AI 服务中转平台，让您轻松管理和分发 AI 服务。</p><p style="margin-bottom: 12px;"><b>🎯 核心功能：</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>分组管理</b> - 创建不同的服务套餐（VIP、免费试用等）</li><li>🔗 <b>账号池</b> - 连接多个上游 AI 服务商账号</li><li>🔑 <b>密钥分发</b> - 为用户生成独立的 API Key</li><li>💰 <b>计费管理</b> - 灵活的费率和配额控制</li></ul><p style="color: #10b981; font-weight: 600;">接下来，我们将用 3 分钟带您完成首次配置 →</p></div>',
+          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">LINX2 是一个强大的 AI 服务中转平台，让您轻松管理和分发 AI 服务。</p><p style="margin-bottom: 12px;"><b>🎯 核心功能：</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>分组管理</b> - 创建不同的服务套餐（VIP、免费试用等）</li><li>🔗 <b>账号池</b> - 连接多个上游 AI 服务商账号</li><li>🔑 <b>密钥分发</b> - 为用户生成独立的 API Key</li><li>💰 <b>计费管理</b> - 灵活的费率和配额控制</li></ul><p style="color: #10b981; font-weight: 600;">接下来，我们将用 3 分钟带您完成首次配置 →</p></div>',
         nextBtn: '开始配置 🚀',
         prevBtn: '跳过'
       },
       groupManage: {
         title: '📦 第一步：分组管理',
         description:
-          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>什么是分组？</b></p><p style="margin-bottom: 12px;">分组是 Sub2API 的核心概念，它就像一个"服务套餐"：</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 每个分组可以包含多个上游账号</li><li>💰 每个分组有独立的计费倍率</li><li>👥 可以设置为公开或专属分组</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 示例：</b>您可以创建"VIP专线"（高倍率）和"免费试用"（低倍率）两个分组</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 点击左侧的"分组管理"开始</p></div>'
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>什么是分组？</b></p><p style="margin-bottom: 12px;">分组是 LINX2 的核心概念，它就像一个"服务套餐"：</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 每个分组可以包含多个上游账号</li><li>💰 每个分组有独立的计费倍率</li><li>👥 可以设置为公开或专属分组</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 示例：</b>您可以创建"VIP专线"（高倍率）和"免费试用"（低倍率）两个分组</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 点击左侧的"分组管理"开始</p></div>'
       },
       createGroup: {
         title: '➕ 创建新分组',
@@ -6942,9 +7035,9 @@ export default {
     // User tour steps
     user: {
       welcome: {
-        title: '👋 欢迎使用 Sub2API',
+        title: '👋 欢迎使用 LINX2',
         description:
-          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">您好！欢迎来到 Sub2API AI 服务平台。</p><p style="margin-bottom: 12px;"><b>🎯 快速开始：</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 创建 API 密钥</li><li>📋 复制密钥到您的应用</li><li>🚀 开始使用 AI 服务</li></ul><p style="color: #10b981; font-weight: 600;">只需 1 分钟，让我们开始吧 →</p></div>',
+          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">您好！欢迎来到 LINX2 AI 服务平台。</p><p style="margin-bottom: 12px;"><b>🎯 快速开始：</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 创建 API 密钥</li><li>📋 复制密钥到您的应用</li><li>🚀 开始使用 AI 服务</li></ul><p style="color: #10b981; font-weight: 600;">只需 1 分钟，让我们开始吧 →</p></div>',
         nextBtn: '开始 🚀',
         prevBtn: '跳过'
       },
@@ -7140,13 +7233,27 @@ export default {
     },
     subscribeNow: '立即开通',
     renewNow: '续费',
+    switchSubscription: '切换订阅',
+    currentSubscription: '当前订阅',
     selectPlan: '选择套餐',
     planFeatures: '功能特性',
+    subscription: {
+      quotaFirstHint: '使用时优先扣除月卡 7 日额度，不足时再使用充值余额。',
+    },
+    switchConfirm: {
+      upgradeTitle: '确认升级订阅',
+      upgradeMessage: '支付完成后会立即升级到新套餐，并重新开始新的 7 日额度周期，同时延长订阅有效期。',
+      downgradeTitle: '确认降档订阅',
+      downgradeMessage: '支付完成后，当前套餐会继续使用到本期到期；较低档位将在下一个付费周期开始时生效。',
+      confirm: '确认继续',
+    },
     planCard: {
       rate: '倍率',
       dailyLimit: '日限额',
       weeklyLimit: '周限额',
       monthlyLimit: '月限额',
+      sevenDayQuota: '7 日额度',
+      totalMonthlyQuota: '总共可获取',
       quota: '配额',
       unlimited: '无限制',
       models: '模型',
@@ -7235,9 +7342,19 @@ export default {
       deletePlanConfirm: '确定要删除此套餐吗？',
       originalPrice: '原价',
       price: '价格',
+      sevenDayQuota: '7 日额度（USD）',
+      sevenDayQuotaHint: '留空表示不设置套餐级 7 日额度。',
       validityDays: '有效期（天）',
       validityUnit: '有效期单位',
       sortOrder: '排序',
+      seatLimit: '名额上限',
+      seatLimitPlaceholder: '留空表示不限制',
+      seatUsage: '名额',
+      seatUnlimited: '不限制',
+      seatFull: '已满',
+      seatOverLimit: '已超额',
+      seatLimitHint: '留空表示不限制，0 表示禁止新用户开通。',
+      seatLimitLowerThanUsed: '当前已超出新上限，已有用户不受影响，新用户暂不能开通。',
       forSale: '上架状态',
       onSale: '上架',
       offSale: '下架',

@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { ApiKey, CreateApiKeyRequest, UpdateApiKeyRequest, PaginatedResponse } from '@/types'
+import type { ApiKey, ApiKeyType, CreateApiKeyRequest, UpdateApiKeyRequest, PaginatedResponse } from '@/types'
 
 /**
  * List all API keys for current user
@@ -48,7 +48,7 @@ export async function getById(id: number): Promise<ApiKey> {
 /**
  * Create new API key
  * @param name - Key name
- * @param groupId - Optional group ID
+ * @param keyType - Provider key type
  * @param customKey - Optional custom key value
  * @param ipWhitelist - Optional IP whitelist
  * @param ipBlacklist - Optional IP blacklist
@@ -59,7 +59,7 @@ export async function getById(id: number): Promise<ApiKey> {
  */
 export async function create(
   name: string,
-  groupId?: number | null,
+  keyType: Exclude<ApiKeyType, 'unknown'>,
   customKey?: string,
   ipWhitelist?: string[],
   ipBlacklist?: string[],
@@ -67,10 +67,7 @@ export async function create(
   expiresInDays?: number,
   rateLimitData?: { rate_limit_5h?: number; rate_limit_1d?: number; rate_limit_7d?: number }
 ): Promise<ApiKey> {
-  const payload: CreateApiKeyRequest = { name }
-  if (groupId !== undefined) {
-    payload.group_id = groupId
-  }
+  const payload: CreateApiKeyRequest = { name, key_type: keyType }
   if (customKey) {
     payload.custom_key = customKey
   }

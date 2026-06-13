@@ -53,6 +53,8 @@ type User struct {
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
 	// BalanceNotifyEnabled holds the value of the "balance_notify_enabled" field.
 	BalanceNotifyEnabled bool `json:"balance_notify_enabled,omitempty"`
+	// SubscriptionBalanceFallbackEnabled holds the value of the "subscription_balance_fallback_enabled" field.
+	SubscriptionBalanceFallbackEnabled bool `json:"subscription_balance_fallback_enabled,omitempty"`
 	// BalanceNotifyThresholdType holds the value of the "balance_notify_threshold_type" field.
 	BalanceNotifyThresholdType string `json:"balance_notify_threshold_type,omitempty"`
 	// BalanceNotifyThreshold holds the value of the "balance_notify_threshold" field.
@@ -97,11 +99,13 @@ type UserEdges struct {
 	PendingAuthSessions []*PendingAuthSession `json:"pending_auth_sessions,omitempty"`
 	// PlatformQuotas holds the value of the platform_quotas edge.
 	PlatformQuotas []*UserPlatformQuota `json:"platform_quotas,omitempty"`
+	// APIKeyRoutes holds the value of the api_key_routes edge.
+	APIKeyRoutes []*UserAPIKeyRoute `json:"api_key_routes,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [14]bool
+	loadedTypes [15]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -221,10 +225,19 @@ func (e UserEdges) PlatformQuotasOrErr() ([]*UserPlatformQuota, error) {
 	return nil, &NotLoadedError{edge: "platform_quotas"}
 }
 
+// APIKeyRoutesOrErr returns the APIKeyRoutes value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) APIKeyRoutesOrErr() ([]*UserAPIKeyRoute, error) {
+	if e.loadedTypes[13] {
+		return e.APIKeyRoutes, nil
+	}
+	return nil, &NotLoadedError{edge: "api_key_routes"}
+}
+
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[13] {
+	if e.loadedTypes[14] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -235,7 +248,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled:
+		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
@@ -379,6 +392,12 @@ func (_m *User) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.BalanceNotifyEnabled = value.Bool
 			}
+		case user.FieldSubscriptionBalanceFallbackEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_balance_fallback_enabled", values[i])
+			} else if value.Valid {
+				_m.SubscriptionBalanceFallbackEnabled = value.Bool
+			}
 		case user.FieldBalanceNotifyThresholdType:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field balance_notify_threshold_type", values[i])
@@ -488,6 +507,11 @@ func (_m *User) QueryPlatformQuotas() *UserPlatformQuotaQuery {
 	return NewUserClient(_m.config).QueryPlatformQuotas(_m)
 }
 
+// QueryAPIKeyRoutes queries the "api_key_routes" edge of the User entity.
+func (_m *User) QueryAPIKeyRoutes() *UserAPIKeyRouteQuery {
+	return NewUserClient(_m.config).QueryAPIKeyRoutes(_m)
+}
+
 // QueryUserAllowedGroups queries the "user_allowed_groups" edge of the User entity.
 func (_m *User) QueryUserAllowedGroups() *UserAllowedGroupQuery {
 	return NewUserClient(_m.config).QueryUserAllowedGroups(_m)
@@ -579,6 +603,9 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("balance_notify_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BalanceNotifyEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("subscription_balance_fallback_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SubscriptionBalanceFallbackEnabled))
 	builder.WriteString(", ")
 	builder.WriteString("balance_notify_threshold_type=")
 	builder.WriteString(_m.BalanceNotifyThresholdType)

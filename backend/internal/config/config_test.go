@@ -50,6 +50,28 @@ func TestNormalizeRunMode(t *testing.T) {
 	}
 }
 
+func TestDefaultCSPPolicyAllows51LA(t *testing.T) {
+	if !cspDirectiveContains(DefaultCSPPolicy, "script-src", "https://sdk.51.la") {
+		t.Fatalf("DefaultCSPPolicy script-src should allow 51.LA SDK script: %q", DefaultCSPPolicy)
+	}
+}
+
+func cspDirectiveContains(policy, directive, value string) bool {
+	for _, rawDirective := range strings.Split(policy, ";") {
+		fields := strings.Fields(strings.TrimSpace(rawDirective))
+		if len(fields) == 0 || fields[0] != directive {
+			continue
+		}
+		for _, field := range fields[1:] {
+			if field == value {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

@@ -63,6 +63,32 @@ func IsAllowedQuotaPlatform(s string) bool {
 	return false
 }
 
+const (
+	APIKeyTypeAnthropic = PlatformAnthropic
+	APIKeyTypeOpenAI    = PlatformOpenAI
+	APIKeyTypeUnknown   = "unknown"
+)
+
+func NormalizeAPIKeyType(raw string) string {
+	switch raw {
+	case APIKeyTypeAnthropic, APIKeyTypeOpenAI:
+		return raw
+	default:
+		return ""
+	}
+}
+
+func APIKeyTypeFromGroupPlatform(platform string) string {
+	switch platform {
+	case PlatformAnthropic:
+		return APIKeyTypeAnthropic
+	case PlatformOpenAI:
+		return APIKeyTypeOpenAI
+	default:
+		return ""
+	}
+}
+
 // Account type constants
 const (
 	AccountTypeOAuth          = domain.AccountTypeOAuth          // OAuth类型账号（full scope: profile + inference）
@@ -256,10 +282,12 @@ const (
 	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
 
 	// 默认配置
-	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量
-	SettingKeyDefaultBalance       = "default_balance"        // 新用户默认余额
-	SettingKeyDefaultSubscriptions = "default_subscriptions"  // 新用户默认订阅列表（JSON）
-	SettingKeyDefaultUserRPMLimit  = "default_user_rpm_limit" // 新用户默认 RPM 限制（0 = 不限制）
+	SettingKeyDefaultConcurrency      = "default_concurrency"        // 新用户默认并发量
+	SettingKeyDefaultBalance          = "default_balance"            // 新用户默认余额
+	SettingKeyDefaultSubscriptions    = "default_subscriptions"      // 新用户默认订阅列表（JSON）
+	SettingKeyDefaultUserRPMLimit     = "default_user_rpm_limit"     // 新用户默认 RPM 限制（0 = 不限制）
+	SettingKeyDefaultAnthropicGroupID = "default_anthropic_group_id" // Anthropic API Key 默认分组
+	SettingKeyDefaultOpenAIGroupID    = "default_openai_group_id"    // OpenAI API Key 默认分组
 
 	// 第三方认证来源默认授予配置
 	SettingKeyAuthSourceDefaultEmailBalance             = "auth_source_default_email_balance"

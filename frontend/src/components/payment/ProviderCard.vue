@@ -1,8 +1,8 @@
 <template>
   <div
     :class="[
-      'group relative rounded-lg border transition-all',
-      enabled ? 'border-gray-200 dark:border-dark-600' : 'border-gray-200 bg-gray-50 opacity-50 dark:border-dark-700 dark:bg-dark-800/50',
+      'linx-panel group relative transition-colors',
+      enabled ? 'hover:border-linear-hairline-strong hover:bg-linear-surface-2' : 'bg-gray-50 opacity-50 dark:bg-linear-surface-1/50',
     ]"
     :title="!enabled ? t('admin.settings.payment.typeDisabled') + ' — ' + t('admin.settings.payment.enableTypesFirst') : undefined"
   >

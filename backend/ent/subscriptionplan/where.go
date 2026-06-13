@@ -79,6 +79,11 @@ func OriginalPrice(v float64) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldOriginalPrice, v))
 }
 
+// SevenDayQuotaUsd applies equality check predicate on the "seven_day_quota_usd" field. It's identical to SevenDayQuotaUsdEQ.
+func SevenDayQuotaUsd(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSevenDayQuotaUsd, v))
+}
+
 // ValidityDays applies equality check predicate on the "validity_days" field. It's identical to ValidityDaysEQ.
 func ValidityDays(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldValidityDays, v))
@@ -107,6 +112,11 @@ func ForSale(v bool) predicate.SubscriptionPlan {
 // SortOrder applies equality check predicate on the "sort_order" field. It's identical to SortOrderEQ.
 func SortOrder(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSortOrder, v))
+}
+
+// SeatLimit applies equality check predicate on the "seat_limit" field. It's identical to SeatLimitEQ.
+func SeatLimit(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSeatLimit, v))
 }
 
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
@@ -377,6 +387,56 @@ func OriginalPriceIsNil() predicate.SubscriptionPlan {
 // OriginalPriceNotNil applies the NotNil predicate on the "original_price" field.
 func OriginalPriceNotNil() predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldOriginalPrice))
+}
+
+// SevenDayQuotaUsdEQ applies the EQ predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdEQ(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdNEQ applies the NEQ predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdNEQ(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNEQ(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdIn applies the In predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdIn(vs ...float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIn(FieldSevenDayQuotaUsd, vs...))
+}
+
+// SevenDayQuotaUsdNotIn applies the NotIn predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdNotIn(vs ...float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotIn(FieldSevenDayQuotaUsd, vs...))
+}
+
+// SevenDayQuotaUsdGT applies the GT predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdGT(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGT(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdGTE applies the GTE predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdGTE(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGTE(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdLT applies the LT predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdLT(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLT(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdLTE applies the LTE predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdLTE(v float64) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLTE(FieldSevenDayQuotaUsd, v))
+}
+
+// SevenDayQuotaUsdIsNil applies the IsNil predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldSevenDayQuotaUsd))
+}
+
+// SevenDayQuotaUsdNotNil applies the NotNil predicate on the "seven_day_quota_usd" field.
+func SevenDayQuotaUsdNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldSevenDayQuotaUsd))
 }
 
 // ValidityDaysEQ applies the EQ predicate on the "validity_days" field.
@@ -662,6 +722,56 @@ func SortOrderLT(v int) predicate.SubscriptionPlan {
 // SortOrderLTE applies the LTE predicate on the "sort_order" field.
 func SortOrderLTE(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldLTE(FieldSortOrder, v))
+}
+
+// SeatLimitEQ applies the EQ predicate on the "seat_limit" field.
+func SeatLimitEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSeatLimit, v))
+}
+
+// SeatLimitNEQ applies the NEQ predicate on the "seat_limit" field.
+func SeatLimitNEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNEQ(FieldSeatLimit, v))
+}
+
+// SeatLimitIn applies the In predicate on the "seat_limit" field.
+func SeatLimitIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIn(FieldSeatLimit, vs...))
+}
+
+// SeatLimitNotIn applies the NotIn predicate on the "seat_limit" field.
+func SeatLimitNotIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotIn(FieldSeatLimit, vs...))
+}
+
+// SeatLimitGT applies the GT predicate on the "seat_limit" field.
+func SeatLimitGT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGT(FieldSeatLimit, v))
+}
+
+// SeatLimitGTE applies the GTE predicate on the "seat_limit" field.
+func SeatLimitGTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGTE(FieldSeatLimit, v))
+}
+
+// SeatLimitLT applies the LT predicate on the "seat_limit" field.
+func SeatLimitLT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLT(FieldSeatLimit, v))
+}
+
+// SeatLimitLTE applies the LTE predicate on the "seat_limit" field.
+func SeatLimitLTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLTE(FieldSeatLimit, v))
+}
+
+// SeatLimitIsNil applies the IsNil predicate on the "seat_limit" field.
+func SeatLimitIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldSeatLimit))
+}
+
+// SeatLimitNotNil applies the NotNil predicate on the "seat_limit" field.
+func SeatLimitNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldSeatLimit))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

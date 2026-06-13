@@ -98,6 +98,11 @@ type BindUserAuthIdentityChannelRequest struct {
 	Metadata       map[string]any `json:"metadata"`
 }
 
+type UpdateUserAPIKeyRoutesRequest struct {
+	AnthropicGroupID *int64 `json:"anthropic_group_id"`
+	OpenAIGroupID    *int64 `json:"openai_group_id"`
+}
+
 // List handles listing all users with pagination
 // GET /api/v1/admin/users
 // Query params:
@@ -106,6 +111,7 @@ type BindUserAuthIdentityChannelRequest struct {
 //   - search: search in email, username
 //   - attr[{id}]: filter by custom attribute value, e.g. attr[1]=company
 //   - group_name: fuzzy filter by allowed group name
+//   - api_key_group_id: filter by the exact group bound to the user's API keys
 func (h *UserHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 
@@ -122,6 +128,11 @@ func (h *UserHandler) List(c *gin.Context) {
 		Search:     search,
 		GroupName:  strings.TrimSpace(c.Query("group_name")),
 		Attributes: parseAttributeFilters(c),
+	}
+	if raw := strings.TrimSpace(c.Query("api_key_group_id")); raw != "" {
+		if id, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && id > 0 {
+			filters.APIKeyGroupID = id
+		}
 	}
 	sortBy := c.DefaultQuery("sort_by", "created_at")
 	sortOrder := c.DefaultQuery("sort_order", "desc")
@@ -559,6 +570,42 @@ func (h *UserHandler) BatchUpdateConcurrency(c *gin.Context) {
 
 // GetUserPlatformQuotas GET /admin/users/:id/platform-quotas
 // admin 视角：D14 lazy 归零 + 暴露 *_window_start 调试字段
+func (h *UserHandler) GetUserAPIKeyRoutes(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	routes, err := h.adminService.GetUserAPIKeyRoutes(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.UserAPIKeyRoutesFromServiceAdmin(routes))
+}
+
+func (h *UserHandler) UpdateUserAPIKeyRoutes(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	var req UpdateUserAPIKeyRoutesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	routes, err := h.adminService.UpdateUserAPIKeyRoutes(c.Request.Context(), userID, service.UserAPIKeyRouteUpdate{
+		AnthropicGroupID: req.AnthropicGroupID,
+		OpenAIGroupID:    req.OpenAIGroupID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.UserAPIKeyRoutesFromServiceAdmin(routes))
+}
+
 func (h *UserHandler) GetUserPlatformQuotas(c *gin.Context) {
 	idStr := c.Param("id")
 	userID, err := strconv.ParseInt(idStr, 10, 64)

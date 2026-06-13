@@ -85,6 +85,11 @@ func Name(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldName, v))
 }
 
+// KeyType applies equality check predicate on the "key_type" field. It's identical to KeyTypeEQ.
+func KeyType(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeyType, v))
+}
+
 // GroupID applies equality check predicate on the "group_id" field. It's identical to GroupIDEQ.
 func GroupID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldGroupID, v))
@@ -438,6 +443,81 @@ func NameEqualFold(v string) predicate.APIKey {
 // NameContainsFold applies the ContainsFold predicate on the "name" field.
 func NameContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldName, v))
+}
+
+// KeyTypeEQ applies the EQ predicate on the "key_type" field.
+func KeyTypeEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeyType, v))
+}
+
+// KeyTypeNEQ applies the NEQ predicate on the "key_type" field.
+func KeyTypeNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldKeyType, v))
+}
+
+// KeyTypeIn applies the In predicate on the "key_type" field.
+func KeyTypeIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldKeyType, vs...))
+}
+
+// KeyTypeNotIn applies the NotIn predicate on the "key_type" field.
+func KeyTypeNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldKeyType, vs...))
+}
+
+// KeyTypeGT applies the GT predicate on the "key_type" field.
+func KeyTypeGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldKeyType, v))
+}
+
+// KeyTypeGTE applies the GTE predicate on the "key_type" field.
+func KeyTypeGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldKeyType, v))
+}
+
+// KeyTypeLT applies the LT predicate on the "key_type" field.
+func KeyTypeLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldKeyType, v))
+}
+
+// KeyTypeLTE applies the LTE predicate on the "key_type" field.
+func KeyTypeLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldKeyType, v))
+}
+
+// KeyTypeContains applies the Contains predicate on the "key_type" field.
+func KeyTypeContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldKeyType, v))
+}
+
+// KeyTypeHasPrefix applies the HasPrefix predicate on the "key_type" field.
+func KeyTypeHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldKeyType, v))
+}
+
+// KeyTypeHasSuffix applies the HasSuffix predicate on the "key_type" field.
+func KeyTypeHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldKeyType, v))
+}
+
+// KeyTypeIsNil applies the IsNil predicate on the "key_type" field.
+func KeyTypeIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldKeyType))
+}
+
+// KeyTypeNotNil applies the NotNil predicate on the "key_type" field.
+func KeyTypeNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldKeyType))
+}
+
+// KeyTypeEqualFold applies the EqualFold predicate on the "key_type" field.
+func KeyTypeEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldKeyType, v))
+}
+
+// KeyTypeContainsFold applies the ContainsFold predicate on the "key_type" field.
+func KeyTypeContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldKeyType, v))
 }
 
 // GroupIDEQ applies the EQ predicate on the "group_id" field.

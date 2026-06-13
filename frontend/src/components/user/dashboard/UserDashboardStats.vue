@@ -1,30 +1,112 @@
 <template>
-  <!-- Row 1: Core Stats -->
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-    <!-- Balance -->
-    <div v-if="!isSimple" class="card p-4">
-      <div class="flex items-center gap-3">
-        <div class="rounded-lg bg-emerald-100 p-2 dark:bg-emerald-900/30">
-          <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <!-- Balance Cards -->
+  <div v-if="!isSimple" class="space-y-4">
+    <div class="linx-panel p-6">
+      <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-orange-500 dark:text-orange-300">{{ t('dashboard.currentSubscription') }}</p>
+          <p v-if="subscriptionPlanLabel" class="mt-2 text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">
+            {{ subscriptionPlanLabel }}
+          </p>
+          <p v-else class="mt-2 text-lg font-semibold tracking-[-0.03em] text-gray-400 dark:text-gray-500">
+            {{ t('dashboard.noCurrentSubscription') }}
+          </p>
+        </div>
+        <div v-if="subscriptionBalance" class="min-w-0 lg:w-80">
+          <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
+            {{ t('dashboard.subscriptionRemaining', {
+              remaining: `$${formatBalance(subscriptionBalance.remaining)}`,
+              total: `$${formatBalance(subscriptionBalance.total)}`,
+            }) }}
+          </p>
+          <div
+            class="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700"
+            role="progressbar"
+            :aria-valuenow="subscriptionRemainingPercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div
+              class="h-full rounded-full bg-green-500 transition-all dark:bg-green-400"
+              :style="{ width: `${subscriptionRemainingPercent}%` }"
+            />
+          </div>
+          <p v-if="subscriptionBalance.resetAt" class="mt-2 text-xs text-gray-500 dark:text-linear-ink-subtle">
+            {{ t('dashboard.subscriptionResetAt', { time: formatResetTime(subscriptionBalance.resetAt) }) }}
+          </p>
+        </div>
+      </div>
+
+      <div v-if="dashboardPlans.length > 0" class="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="dashboard-subscription-plans">
+        <SubscriptionPlanCard
+          v-for="plan in dashboardPlans"
+          :key="plan.id"
+          :plan="plan"
+          :active-subscriptions="activeSubscriptions"
+          :pending-notice="pendingNoticeForPlan(plan)"
+          @select="handlePlanSelect"
+        />
+      </div>
+      <p v-else class="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-800/60 dark:text-linear-ink-subtle">
+        {{ t('payment.noPlans') }}
+      </p>
+    </div>
+
+    <div class="linx-panel p-6">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-500 dark:text-emerald-300">{{ t('dashboard.rechargeBalance') }}</p>
+          <p class="mt-3 text-3xl font-bold tracking-[-0.05em] text-gray-950 dark:text-linear-ink">${{ formatBalance(balance) }}</p>
+          <p class="mt-3 text-sm text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.balanceOrderHint') }}</p>
+        </div>
+        <div class="rounded-2xl bg-emerald-100 p-3 dark:bg-emerald-900/30">
+          <svg class="h-7 w-7 text-emerald-600 dark:text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
           </svg>
         </div>
-        <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.balance') }}</p>
-          <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatBalance(balance) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.available') }}</p>
+      </div>
+
+      <div class="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p id="subscription-balance-fallback-toggle-label" class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
+              {{ t('dashboard.balanceFallbackToggle.title') }}
+            </p>
+            <p class="mt-1 text-xs leading-relaxed text-gray-500 dark:text-linear-ink-subtle">
+              {{ t(balanceFallbackEnabled ? 'dashboard.balanceFallbackToggle.enabledHint' : 'dashboard.balanceFallbackToggle.disabledHint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            :class="balanceFallbackEnabled ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-gray-300 dark:bg-dark-600'"
+            role="switch"
+            :aria-checked="balanceFallbackEnabled"
+            aria-labelledby="subscription-balance-fallback-toggle-label"
+            :disabled="savingBalanceFallback"
+            data-testid="subscription-balance-fallback-toggle"
+            @click="toggleBalanceFallback"
+          >
+            <span
+              class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
+              :class="balanceFallbackEnabled ? 'translate-x-5' : 'translate-x-0'"
+            />
+          </button>
         </div>
       </div>
     </div>
+  </div>
 
+  <!-- Row 1: Core Stats -->
+  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
     <!-- API Keys -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
           <Icon name="key" size="md" class="text-blue-600 dark:text-blue-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.apiKeys') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.apiKeys') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ stats?.total_api_keys || 0 }}</p>
           <p class="text-xs text-green-600 dark:text-green-400">{{ stats?.active_api_keys || 0 }} {{ t('common.active') }}</p>
         </div>
@@ -32,33 +114,33 @@
     </div>
 
     <!-- Today Requests -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
           <Icon name="chart" size="md" class="text-green-600 dark:text-green-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayRequests') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.todayRequests') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ stats?.today_requests || 0 }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.total') }}: {{ formatNumber(stats?.total_requests || 0) }}</p>
+          <p class="text-xs linx-muted">{{ t('common.total') }}: {{ formatNumber(stats?.total_requests || 0) }}</p>
         </div>
       </div>
     </div>
 
     <!-- Today Cost -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
           <Icon name="dollar" size="md" class="text-purple-600 dark:text-purple-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayCost') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.todayCost') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.today_actual_cost || 0) }}</span>
             <span class="text-sm font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.today_cost || 0) }}</span>
           </p>
           <p class="text-xs">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('common.total') }}: </span>
+            <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t('common.total') }}: </span>
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.total_actual_cost || 0) }}</span>
             <span class="text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.total_cost || 0) }}</span>
           </p>
@@ -70,73 +152,73 @@
   <!-- Row 2: Token Stats -->
   <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
     <!-- Today Tokens -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
           <Icon name="cube" size="md" class="text-amber-600 dark:text-amber-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayTokens') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.todayTokens') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.today_tokens || 0) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.input') }}: {{ formatTokens(stats?.today_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.today_output_tokens || 0) }}</p>
+          <p class="text-xs linx-muted">{{ t('dashboard.input') }}: {{ formatTokens(stats?.today_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.today_output_tokens || 0) }}</p>
         </div>
       </div>
     </div>
 
     <!-- Total Tokens -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-indigo-100 p-2 dark:bg-indigo-900/30">
           <Icon name="database" size="md" class="text-indigo-600 dark:text-indigo-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.totalTokens') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.totalTokens') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.total_tokens || 0) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.input') }}: {{ formatTokens(stats?.total_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.total_output_tokens || 0) }}</p>
+          <p class="text-xs linx-muted">{{ t('dashboard.input') }}: {{ formatTokens(stats?.total_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.total_output_tokens || 0) }}</p>
         </div>
       </div>
     </div>
 
     <!-- Performance (RPM/TPM) -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-violet-100 p-2 dark:bg-violet-900/30">
           <Icon name="bolt" size="md" class="text-violet-600 dark:text-violet-400" :stroke-width="2" />
         </div>
         <div class="flex-1">
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.performance') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.performance') }}</p>
           <div class="flex items-baseline gap-2">
             <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.rpm || 0) }}</p>
-            <span class="text-xs text-gray-500 dark:text-gray-400">RPM</span>
+            <span class="text-xs linx-muted">RPM</span>
           </div>
           <div class="flex items-baseline gap-2">
             <p class="text-sm font-semibold text-violet-600 dark:text-violet-400">{{ formatTokens(stats?.tpm || 0) }}</p>
-            <span class="text-xs text-gray-500 dark:text-gray-400">TPM</span>
+            <span class="text-xs linx-muted">TPM</span>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Avg Response Time -->
-    <div class="card p-4">
+    <div class="linx-panel p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-rose-100 p-2 dark:bg-rose-900/30">
           <Icon name="clock" size="md" class="text-rose-600 dark:text-rose-400" :stroke-width="2" />
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.avgResponse') }}</p>
+          <p class="text-xs font-medium linx-muted">{{ t('dashboard.avgResponse') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatDuration(stats?.average_duration_ms || 0) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.averageTime') }}</p>
+          <p class="text-xs linx-muted">{{ t('dashboard.averageTime') }}</p>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Row 3: Per-platform breakdown -->
-  <div v-if="!isSimple && platformCards.length > 0" class="card p-4">
+  <div v-if="!isSimple && platformCards.length > 0" class="linx-panel p-4">
     <div class="mb-3 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('dashboard.platformBreakdown') }}</h3>
-      <span class="text-xs text-gray-500 dark:text-gray-400">
+      <h3 class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">{{ t('dashboard.platformBreakdown') }}</h3>
+      <span class="text-xs linx-muted">
         {{ t('dashboard.platformCount', { count: sortedPlatforms.length }) }}
       </span>
     </div>
@@ -152,7 +234,7 @@
         ]"
       >
         <div class="flex items-center justify-between">
-          <span class="text-sm font-semibold text-gray-900 dark:text-white">
+          <span class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
             {{ item.isOther ? t('dashboard.platformOther') : platformLabel(item.platform) }}
           </span>
           <span class="font-mono text-sm text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">
@@ -161,17 +243,17 @@
         </div>
         <div class="mt-2 space-y-1 text-xs">
           <div class="flex items-center justify-between">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('dashboard.todayCost') }}</span>
+            <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.todayCost') }}</span>
             <span class="font-mono text-gray-900 dark:text-white">${{ formatCost(item.today_actual_cost) }}</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('dashboard.requests') }}</span>
+            <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.requests') }}</span>
             <span class="font-mono text-gray-700 dark:text-gray-300">
               {{ item.total_requests > 0 ? formatNumber(item.total_requests) : '-' }}
             </span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('dashboard.tokens') }}</span>
+            <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.tokens') }}</span>
             <span class="font-mono text-gray-700 dark:text-gray-300">
               {{ item.total_tokens > 0 ? formatTokens(item.total_tokens) : '-' }}
             </span>
@@ -188,7 +270,7 @@
               <!-- limit=0：完全禁用 -->
               <template v-if="(quotaVal(item.quota, `${w}_limit_usd`) as number) === 0">
                 <div class="flex items-center justify-between text-xs">
-                  <span class="text-gray-600 dark:text-gray-300">{{ t(`dashboard.platformQuota.${w}`) }}</span>
+                  <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t(`dashboard.platformQuota.${w}`) }}</span>
                   <span class="font-mono text-red-500">{{ t('dashboard.platformQuota.disabled') }}</span>
                 </div>
                 <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700">
@@ -198,7 +280,7 @@
               <!-- limit>0：正常用量进度条 -->
               <template v-else>
                 <div class="flex items-center justify-between text-xs">
-                  <span class="text-gray-600 dark:text-gray-300">{{ t(`dashboard.platformQuota.${w}`) }}</span>
+                  <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t(`dashboard.platformQuota.${w}`) }}</span>
                   <span class="font-mono text-gray-700 dark:text-gray-200">
                     ${{ formatUsd((quotaVal(item.quota, `${w}_usage_usd`) as number) ?? 0) }} / ${{ formatUsd(quotaVal(item.quota, `${w}_limit_usd`) as number) }}
                   </span>
@@ -223,11 +305,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+import { userAPI } from '@/api/user'
 import Icon from '@/components/icons/Icon.vue'
+import { useAuthStore } from '@/stores/auth'
+import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
-import type { PlatformQuotaItem } from '@/types'
+import type { PlatformQuotaItem, SubscriptionBalanceSummary, UserSubscription } from '@/types'
+import type { SubscriptionPlan } from '@/types/payment'
+import {
+  displayMonthlyPlanName,
+  getMonthlyPlanCards,
+  monthlyPlanKeyFromName,
+  type MonthlyPlanKey,
+  type SubscriptionPlanSelectIntent,
+} from '@/utils/monthlyPlans'
 
 interface FusedPlatformCard {
   platform: string
@@ -244,8 +338,23 @@ const props = defineProps<{
   balance: number
   isSimple: boolean
   platformQuotas?: PlatformQuotaItem[] | null
+  subscriptionBalance?: SubscriptionBalanceSummary | null
+  subscriptionPlans?: SubscriptionPlan[]
+  activeSubscriptions?: UserSubscription[]
+  subscriptionBalanceFallbackEnabled?: boolean
 }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const router = useRouter()
+const authStore = useAuthStore()
+
+const balanceFallbackEnabled = ref(props.subscriptionBalanceFallbackEnabled ?? false)
+const savingBalanceFallback = ref(false)
+
+watch(() => props.subscriptionBalanceFallbackEnabled, (value) => {
+  if (!savingBalanceFallback.value) {
+    balanceFallbackEnabled.value = value ?? false
+  }
+})
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -255,6 +364,112 @@ const PLATFORM_LABELS: Record<string, string> = {
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
+
+const subscriptionPlanLabel = computed(() => {
+  if (!props.subscriptionBalance) return null
+  if (props.subscriptionBalance.displayMode === 'multiple') {
+    return t('dashboard.subscriptionPlanCount', {
+      count: props.subscriptionBalance.activePlanCount ?? props.subscriptionBalance.planNames?.length ?? 0,
+    })
+  }
+  return displayMonthlyPlanName(props.subscriptionBalance.planName, String(locale.value))
+})
+
+const subscriptionRemainingPercent = computed(() => {
+  if (!props.subscriptionBalance?.total) return 0
+  return calcPercent(props.subscriptionBalance.remaining, props.subscriptionBalance.total)
+})
+
+const monthlyPlanGroupId = computed(() => {
+  return props.subscriptionPlans?.find(plan => monthlyPlanKeyFromName(plan.name))?.group_id
+    ?? props.activeSubscriptions?.find(sub => monthlyPlanKeyFromName(sub.plan_name))?.group_id
+    ?? 0
+})
+
+const planByKey = computed(() => {
+  const map = new Map<MonthlyPlanKey, SubscriptionPlan>()
+  for (const plan of props.subscriptionPlans ?? []) {
+    const key = monthlyPlanKeyFromName(plan.name)
+    if (key) map.set(key, plan)
+  }
+  return map
+})
+
+const dashboardPlans = computed<SubscriptionPlan[]>(() => {
+  const groupId = monthlyPlanGroupId.value
+  return getMonthlyPlanCards(String(locale.value)).map((display, index) => {
+    const existing = planByKey.value.get(display.key)
+    if (existing) return existing
+    return {
+      id: -(index + 1),
+      group_id: groupId,
+      group_platform: 'anthropic',
+      group_name: 'LINX2 Subscription',
+      rate_multiplier: 1,
+      daily_limit_usd: null,
+      weekly_limit_usd: null,
+      monthly_limit_usd: null,
+      supported_model_scopes: [],
+      name: display.name,
+      description: display.description,
+      price: display.priceCny,
+      original_price: 0,
+      seven_day_quota_usd: display.sevenDayQuotaUsd,
+      validity_days: 30,
+      validity_unit: 'day',
+      features: display.benefits,
+      for_sale: true,
+      sort_order: display.rank,
+    }
+  })
+})
+
+function handlePlanSelect(plan: SubscriptionPlan, intent: SubscriptionPlanSelectIntent) {
+  router.push({
+    path: '/purchase',
+    query: {
+      tab: 'subscription',
+      plan: String(plan.id),
+      intent,
+    },
+  })
+}
+
+async function toggleBalanceFallback() {
+  if (savingBalanceFallback.value) return
+
+  const previous = balanceFallbackEnabled.value
+  const next = !previous
+  balanceFallbackEnabled.value = next
+  savingBalanceFallback.value = true
+
+  try {
+    const updated = await userAPI.updateProfile({ subscription_balance_fallback_enabled: next })
+    authStore.user = updated
+    balanceFallbackEnabled.value = updated.subscription_balance_fallback_enabled ?? next
+  } catch (error) {
+    console.error('Failed to update subscription balance fallback preference:', error)
+    balanceFallbackEnabled.value = previous
+  } finally {
+    savingBalanceFallback.value = false
+  }
+}
+
+function pendingNoticeForPlan(plan: SubscriptionPlan): string {
+  const active = props.activeSubscriptions?.find(sub => {
+    if (sub.status !== 'active') return false
+    if (sub.plan_id != null && sub.plan_id === plan.id) return true
+    const activeKey = monthlyPlanKeyFromName(sub.plan_name)
+    const planKey = monthlyPlanKeyFromName(plan.name)
+    return !!activeKey && !!planKey && activeKey === planKey
+  })
+  if (!active?.scheduled_plan_name || !active.scheduled_plan_effective_at) return ''
+  const nextPlanName = displayMonthlyPlanName(active.scheduled_plan_name, String(locale.value)) || active.scheduled_plan_name
+  return t('dashboard.pendingSubscriptionChange', {
+    plan: nextPlanName,
+    time: formatResetTime(active.scheduled_plan_effective_at),
+  })
+}
 
 const sortedPlatforms = computed(() => {
   const list = props.stats?.by_platform ?? []
@@ -365,13 +580,12 @@ function formatResetTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hour}:${minute}`
 }
 
 const formatBalance = (b: number) =>

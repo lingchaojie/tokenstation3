@@ -213,6 +213,47 @@
 
           <template #cell-usage="{ row }">
             <div class="min-w-[280px] space-y-2">
+              <!-- Seven-day Usage -->
+              <div v-if="row.seven_day_limit_usd != null" class="usage-row">
+                <div class="flex items-center gap-2">
+                  <span class="usage-label">{{ t('admin.subscriptions.sevenDay') }}</span>
+                  <div class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
+                    <div
+                      class="h-1.5 rounded-full transition-all"
+                      :class="getProgressClass(row.seven_day_usage_usd, row.seven_day_limit_usd)"
+                      :style="{
+                        width: getProgressWidth(row.seven_day_usage_usd, row.seven_day_limit_usd)
+                      }"
+                    ></div>
+                  </div>
+                  <span class="usage-amount">
+                    ${{ row.seven_day_usage_usd?.toFixed(2) || '0.00' }}
+                    <span class="text-gray-400">/</span>
+                    ${{ row.seven_day_limit_usd.toFixed(2) }}
+                  </span>
+                </div>
+                <div class="reset-info" v-if="row.seven_day_reset_at || row.seven_day_remaining_usd != null">
+                  <svg
+                    class="h-3 w-3"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <span v-if="row.seven_day_reset_at">{{ formatResetAt(row.seven_day_reset_at) }}</span>
+                  <span v-if="row.seven_day_reset_at && row.seven_day_remaining_usd != null" class="text-gray-400">·</span>
+                  <span v-if="row.seven_day_remaining_usd != null">
+                    {{ t('admin.subscriptions.remaining', { amount: `$${row.seven_day_remaining_usd.toFixed(2)}` }) }}
+                  </span>
+                </div>
+              </div>
+
               <!-- Daily Usage -->
               <div v-if="row.group?.daily_limit_usd" class="usage-row">
                 <div class="flex items-center gap-2">
@@ -327,6 +368,7 @@
               <!-- No Limits - Unlimited badge -->
               <div
                 v-if="
+                  row.seven_day_limit_usd == null &&
                   !row.group?.daily_limit_usd &&
                   !row.group?.weekly_limit_usd &&
                   !row.group?.monthly_limit_usd
@@ -1345,6 +1387,11 @@ const formatDailyUsageWindow = (subscription: UserSubscription): string => {
   }
 
   return formatResetTime(subscription.daily_window_start, 'daily')
+}
+
+const formatResetAt = (resetAt: string): string => {
+  const parts = getRemainingDurationParts(resetAt)
+  return parts ? formatResetDuration(parts) : t('admin.subscriptions.windowNotActive')
 }
 
 // Format reset time based on window start and period type

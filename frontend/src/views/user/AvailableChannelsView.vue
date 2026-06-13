@@ -1,6 +1,7 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
+    <div class="linear-available-channels-page space-y-5">
+      <TablePageLayout>
       <template #filters>
         <div class="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div class="flex flex-1 flex-wrap items-center gap-3">
@@ -44,7 +45,8 @@
           :empty-label="t('availableChannels.empty')"
         />
       </template>
-    </TablePageLayout>
+      </TablePageLayout>
+    </div>
   </AppLayout>
 </template>
 

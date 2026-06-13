@@ -118,13 +118,13 @@ func (f fakeGoogleSubscriptionRepo) GetByID(ctx context.Context, id int64) (*ser
 	return nil, errors.New("not implemented")
 }
 func (f fakeGoogleSubscriptionRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
-	return nil, errors.New("not implemented")
-}
-func (f fakeGoogleSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	if f.getActive != nil {
 		return f.getActive(ctx, userID, groupID)
 	}
 	return nil, errors.New("not implemented")
+}
+func (f fakeGoogleSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+	return f.GetByUserIDAndGroupID(ctx, userID, groupID)
 }
 func (f fakeGoogleSubscriptionRepo) Update(ctx context.Context, sub *service.UserSubscription) error {
 	return errors.New("not implemented")
@@ -159,6 +159,21 @@ func (f fakeGoogleSubscriptionRepo) UpdateStatus(ctx context.Context, subscripti
 func (f fakeGoogleSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
 }
+func (f fakeGoogleSubscriptionRepo) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	return errors.New("not implemented")
+}
+func (f fakeGoogleSubscriptionRepo) SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	return errors.New("not implemented")
+}
+func (f fakeGoogleSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context, id int64) error {
+	return nil
+}
+func (f fakeGoogleSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
+	return nil, false, nil
+}
+func (f fakeGoogleSubscriptionRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	return errors.New("not implemented")
+}
 func (f fakeGoogleSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	if f.activateWindow != nil {
 		return f.activateWindow(ctx, id, start)
@@ -171,7 +186,7 @@ func (f fakeGoogleSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int6
 	}
 	return errors.New("not implemented")
 }
-func (f fakeGoogleSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, start time.Time) error {
+func (f fakeGoogleSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, _ *time.Time, start time.Time) error {
 	if f.resetWeekly != nil {
 		return f.resetWeekly(ctx, id, start)
 	}
@@ -669,6 +684,232 @@ func TestApiKeyAuthWithSubscriptionGoogle_TouchesLastUsedInStandardMode(t *testi
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 1, touchCalls)
+}
+
+func TestApiKeyAuthWithSubscriptionGoogle_WeeklyLimitExceededUsesBalanceFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	weeklyLimit := 1.0
+	baseGroup := &service.Group{
+		ID:               78,
+		Name:             "gemini-sub-weekly",
+		Status:           service.StatusActive,
+		Platform:         service.PlatformGemini,
+		Hydrated:         true,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+		WeeklyLimitUSD:   &weeklyLimit,
+	}
+
+	newRouter := func(t *testing.T, balance float64, optIn bool) (*gin.Engine, string) {
+		t.Helper()
+		user := &service.User{
+			ID:                                 int64(1000 + int(balance*10)),
+			Role:                               service.RoleUser,
+			Status:                             service.StatusActive,
+			Balance:                            balance,
+			Concurrency:                        3,
+			SubscriptionBalanceFallbackEnabled: optIn,
+		}
+		group := *baseGroup
+		apiKey := &service.APIKey{
+			ID:     502 + user.ID,
+			UserID: user.ID,
+			Key:    "google-sub-weekly-fallback",
+			Status: service.StatusActive,
+			User:   user,
+			Group:  &group,
+		}
+		apiKey.GroupID = &group.ID
+		apiKeyService := newTestAPIKeyService(fakeAPIKeyRepo{
+			getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+				if key != apiKey.Key {
+					return nil, service.ErrAPIKeyNotFound
+				}
+				clone := *apiKey
+				return &clone, nil
+			},
+		})
+		now := time.Now()
+		sub := &service.UserSubscription{
+			ID:                602 + user.ID,
+			UserID:            user.ID,
+			GroupID:           group.ID,
+			Status:            service.SubscriptionStatusActive,
+			ExpiresAt:         now.Add(24 * time.Hour),
+			WeeklyWindowStart: &now,
+			WeeklyUsageUSD:    weeklyLimit + 0.1,
+		}
+		subscriptionService := service.NewSubscriptionService(nil, fakeGoogleSubscriptionRepo{
+			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				if userID != user.ID || groupID != group.ID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
+			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
+		}, nil, nil, &config.Config{RunMode: config.RunModeStandard})
+
+		r := gin.New()
+		r.Use(APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, &config.Config{RunMode: config.RunModeStandard}))
+		r.GET("/v1beta/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+		return r, apiKey.Key
+	}
+
+	t.Run("positive balance with opt-in allows fallback", func(t *testing.T) {
+		r, key := newRouter(t, 10, true)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("positive balance without opt-in rejects with Google quota error", func(t *testing.T) {
+		r, key := newRouter(t, 10, false)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
+		require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
+		require.Contains(t, resp.Error.Message, "weekly usage limit exceeded")
+	})
+
+	t.Run("zero balance rejects with Google error", func(t *testing.T) {
+		r, key := newRouter(t, 0, true)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
+		require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
+		require.Contains(t, resp.Error.Message, "weekly usage limit exceeded")
+	})
+}
+
+func TestApiKeyAuthWithSubscriptionGoogle_AbsentEffectiveSevenDayLimitRequiresBalanceFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	baseGroup := &service.Group{
+		ID:               88,
+		Name:             "gemini-sub-absent-quota",
+		Status:           service.StatusActive,
+		Platform:         service.PlatformGemini,
+		Hydrated:         true,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+	}
+
+	newRouter := func(t *testing.T, balance float64, optIn bool) (*gin.Engine, string) {
+		t.Helper()
+		user := &service.User{
+			ID:                                 int64(1100 + int(balance*10)),
+			Role:                               service.RoleUser,
+			Status:                             service.StatusActive,
+			Balance:                            balance,
+			Concurrency:                        3,
+			SubscriptionBalanceFallbackEnabled: optIn,
+		}
+		group := *baseGroup
+		apiKey := &service.APIKey{
+			ID:     702 + user.ID,
+			UserID: user.ID,
+			Key:    "google-sub-absent-quota",
+			Status: service.StatusActive,
+			User:   user,
+			Group:  &group,
+		}
+		apiKey.GroupID = &group.ID
+		apiKeyService := newTestAPIKeyService(fakeAPIKeyRepo{
+			getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+				if key != apiKey.Key {
+					return nil, service.ErrAPIKeyNotFound
+				}
+				clone := *apiKey
+				return &clone, nil
+			},
+		})
+		now := time.Now()
+		sub := &service.UserSubscription{
+			ID:        802 + user.ID,
+			UserID:    user.ID,
+			GroupID:   group.ID,
+			Status:    service.SubscriptionStatusActive,
+			ExpiresAt: now.Add(24 * time.Hour),
+		}
+		subscriptionService := service.NewSubscriptionService(nil, fakeGoogleSubscriptionRepo{
+			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				if userID != user.ID || groupID != group.ID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
+			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
+		}, nil, nil, &config.Config{RunMode: config.RunModeStandard})
+
+		r := gin.New()
+		r.Use(APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, &config.Config{RunMode: config.RunModeStandard}))
+		r.GET("/v1beta/test", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+		return r, apiKey.Key
+	}
+
+	t.Run("positive balance with opt-in allows fallback", func(t *testing.T) {
+		r, key := newRouter(t, 10, true)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("positive balance without opt-in rejects with Google quota error", func(t *testing.T) {
+		r, key := newRouter(t, 10, false)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusTooManyRequests, resp.Error.Code)
+		require.Equal(t, "RESOURCE_EXHAUSTED", resp.Error.Status)
+		require.Contains(t, resp.Error.Message, "weekly usage limit exceeded")
+	})
+
+	t.Run("zero balance rejects with Google error", func(t *testing.T) {
+		r, key := newRouter(t, 0, true)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+		req.Header.Set("x-goog-api-key", key)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		var resp googleErrorResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Equal(t, http.StatusForbidden, resp.Error.Code)
+		require.Equal(t, "PERMISSION_DENIED", resp.Error.Status)
+		require.Equal(t, "Insufficient account balance", resp.Error.Message)
+	})
 }
 
 func TestApiKeyAuthWithSubscriptionGoogle_SubscriptionLimitExceededReturns429(t *testing.T) {

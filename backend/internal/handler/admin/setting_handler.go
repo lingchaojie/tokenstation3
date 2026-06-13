@@ -234,6 +234,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           settings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    settings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
+		DefaultAnthropicGroupID:                settings.DefaultAnthropicGroupID,
+		DefaultOpenAIGroupID:                   settings.DefaultOpenAIGroupID,
 		EnableModelFallback:                    settings.EnableModelFallback,
 		FallbackModelAnthropic:                 settings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    settings.FallbackModelOpenAI,
@@ -516,6 +518,8 @@ type UpdateSettingsRequest struct {
 	AffiliateRebatePerInviteeCap              *float64                          `json:"affiliate_rebate_per_invitee_cap"`
 	DefaultUserRPMLimit                       int                               `json:"default_user_rpm_limit"`
 	DefaultSubscriptions                      []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
+	DefaultAnthropicGroupID                   *int64                            `json:"default_anthropic_group_id"`
+	DefaultOpenAIGroupID                      *int64                            `json:"default_openai_group_id"`
 	AuthSourceDefaultEmailBalance             *float64                          `json:"auth_source_default_email_balance"`
 	AuthSourceDefaultEmailConcurrency         *int                              `json:"auth_source_default_email_concurrency"`
 	AuthSourceDefaultEmailSubscriptions       *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_email_subscriptions"`
@@ -662,6 +666,34 @@ type UpdateSettingsRequest struct {
 	AuthSourceDingTalkPlatformQuotas map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_dingtalk_platform_quotas"`
 
 	AllowUserViewErrorRequests *bool `json:"allow_user_view_error_requests"`
+
+	defaultAnthropicGroupIDPresent bool
+	defaultOpenAIGroupIDPresent    bool
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type updateSettingsRequestAlias UpdateSettingsRequest
+	var decoded updateSettingsRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	*r = UpdateSettingsRequest(decoded)
+	_, r.defaultAnthropicGroupIDPresent = fields["default_anthropic_group_id"]
+	_, r.defaultOpenAIGroupIDPresent = fields["default_openai_group_id"]
+	return nil
+}
+
+func optionalInt64FromRequest(value *int64, present bool, previous *int64) *int64 {
+	if present {
+		return value
+	}
+	return previous
 }
 
 // UpdateSettings 更新系统设置
@@ -1584,6 +1616,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           affiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    req.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
+		DefaultAnthropicGroupID:                optionalInt64FromRequest(req.DefaultAnthropicGroupID, req.defaultAnthropicGroupIDPresent, previousSettings.DefaultAnthropicGroupID),
+		DefaultOpenAIGroupID:                   optionalInt64FromRequest(req.DefaultOpenAIGroupID, req.defaultOpenAIGroupIDPresent, previousSettings.DefaultOpenAIGroupID),
 		EnableModelFallback:                    req.EnableModelFallback,
 		FallbackModelAnthropic:                 req.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    req.FallbackModelOpenAI,
@@ -2027,6 +2061,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:           updatedSettings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    updatedSettings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   updatedDefaultSubscriptions,
+		DefaultAnthropicGroupID:                updatedSettings.DefaultAnthropicGroupID,
+		DefaultOpenAIGroupID:                   updatedSettings.DefaultOpenAIGroupID,
 		EnableModelFallback:                    updatedSettings.EnableModelFallback,
 		FallbackModelAnthropic:                 updatedSettings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    updatedSettings.FallbackModelOpenAI,

@@ -106,15 +106,24 @@ export interface SubscriptionPlan {
   group_id: number
   group_platform?: string
   group_name?: string
+  product_name?: string
   rate_multiplier?: number
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   supported_model_scopes?: string[]
+  seat_limit?: number | null
+  seat_used?: number
+  seat_available?: number | null
+  seat_full?: boolean
+  seat_over_limit?: boolean
   name: string
   description: string
   price: number
   original_price?: number
+  seven_day_quota_usd?: number | null
+  /** Allows admin plan edits to explicitly clear nullable quota fields when supported by API */
+  clear_seven_day_quota_usd?: boolean
   validity_days: number
   validity_unit: string
   /** Stored as JSON string in backend; API layer should parse before use */

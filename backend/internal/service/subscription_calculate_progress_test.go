@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +115,114 @@ func TestCalculateProgress_WeeklyUsage(t *testing.T) {
 	assert.Equal(t, 25.0, progress.Weekly.UsedUSD)
 	assert.Equal(t, 25.0, progress.Weekly.RemainingUSD)
 	assert.Equal(t, 50.0, progress.Weekly.Percentage)
+}
+
+func TestCalculateProgress_SevenDaySnapshotOverridesGroupWeeklyLimit(t *testing.T) {
+	svc := newTestSubscriptionService()
+	now := time.Now()
+	weeklyStart := now.Add(-3 * 24 * time.Hour)
+	planID := int64(10)
+	planName := "Starter"
+
+	sub := &UserSubscription{
+		ID:                1,
+		PlanID:            &planID,
+		PlanName:          &planName,
+		SevenDayLimitUSD:  ptrFloat64(100.0),
+		ExpiresAt:         now.Add(10 * 24 * time.Hour),
+		WeeklyUsageUSD:    25.0,
+		WeeklyWindowStart: ptrTime(weeklyStart),
+	}
+	group := &Group{
+		Name:           "Pro",
+		WeeklyLimitUSD: ptrFloat64(50.0),
+	}
+
+	progress := svc.calculateProgress(sub, group)
+
+	require.NotNil(t, progress.Weekly, "snapshot seven-day quota should produce weekly progress")
+	assert.Equal(t, 100.0, progress.Weekly.LimitUSD)
+	assert.Equal(t, 25.0, progress.Weekly.UsedUSD)
+	assert.Equal(t, 75.0, progress.Weekly.RemainingUSD)
+	assert.Equal(t, 25.0, progress.Weekly.Percentage)
+}
+
+func TestCalculateProgress_ZeroSevenDaySnapshotOmitsWeeklyProgress(t *testing.T) {
+	svc := newTestSubscriptionService()
+	now := time.Now()
+	weeklyStart := now.Add(-3 * 24 * time.Hour)
+	planID := int64(10)
+
+	sub := &UserSubscription{
+		ID:                1,
+		PlanID:            &planID,
+		SevenDayLimitUSD:  ptrFloat64(0),
+		ExpiresAt:         now.Add(10 * 24 * time.Hour),
+		WeeklyUsageUSD:    25.0,
+		WeeklyWindowStart: ptrTime(weeklyStart),
+	}
+	group := &Group{
+		Name:           "Zero Limit Plan",
+		WeeklyLimitUSD: ptrFloat64(50.0),
+	}
+
+	progress := svc.calculateProgress(sub, group)
+
+	assert.Nil(t, progress.Weekly, "zero seven-day snapshot limit should be treated as no weekly progress limit")
+	payload, err := json.Marshal(progress)
+	require.NoError(t, err)
+	jsonText := string(payload)
+	assert.NotContains(t, jsonText, "NaN")
+	assert.NotContains(t, jsonText, "Inf")
+	assert.False(t, strings.Contains(jsonText, "\"weekly\""), "weekly progress should be omitted when no valid weekly limit exists")
+}
+
+func TestCalculateProgress_LegacySubscriptionFallsBackToGroupWeeklyLimit(t *testing.T) {
+	svc := newTestSubscriptionService()
+	now := time.Now()
+	weeklyStart := now.Add(-3 * 24 * time.Hour)
+
+	sub := &UserSubscription{
+		ID:                1,
+		ExpiresAt:         now.Add(10 * 24 * time.Hour),
+		WeeklyUsageUSD:    20.0,
+		WeeklyWindowStart: ptrTime(weeklyStart),
+	}
+	group := &Group{
+		Name:           "Legacy",
+		WeeklyLimitUSD: ptrFloat64(50.0),
+	}
+
+	progress := svc.calculateProgress(sub, group)
+
+	require.NotNil(t, progress.Weekly, "legacy subscriptions without a plan snapshot should fall back to group weekly quota")
+	assert.Equal(t, 50.0, progress.Weekly.LimitUSD)
+	assert.Equal(t, 20.0, progress.Weekly.UsedUSD)
+	assert.Equal(t, 30.0, progress.Weekly.RemainingUSD)
+	assert.Equal(t, 40.0, progress.Weekly.Percentage)
+}
+
+func TestCalculateProgress_PlanBackedNilSevenDayLimitDoesNotFallBackToGroupWeeklyLimit(t *testing.T) {
+	svc := newTestSubscriptionService()
+	now := time.Now()
+	weeklyStart := now.Add(-3 * 24 * time.Hour)
+	planID := int64(10)
+
+	sub := &UserSubscription{
+		ID:                1,
+		PlanID:            &planID,
+		ExpiresAt:         now.Add(10 * 24 * time.Hour),
+		WeeklyUsageUSD:    20.0,
+		WeeklyWindowStart: ptrTime(weeklyStart),
+	}
+	group := &Group{
+		Name:           "Unlimited Plan",
+		WeeklyLimitUSD: ptrFloat64(50.0),
+	}
+
+	progress := svc.calculateProgress(sub, group)
+
+	assert.Nil(t, progress.Weekly, "plan-backed subscriptions with nil seven-day quota should not fall back to group weekly quota")
 }
 
 func TestCalculateProgress_MonthlyUsage(t *testing.T) {

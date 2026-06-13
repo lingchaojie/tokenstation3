@@ -43,7 +43,18 @@
         <div><label class="input-label">{{ t('payment.admin.validityUnit') }} <span class="text-red-500">*</span></label><Select v-model="planForm.validity_unit" :options="validityUnitOptions" /></div>
       </div>
       <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="input-label">{{ t('payment.admin.sevenDayQuota') }}</label>
+          <input v-model="planForm.seven_day_quota_usd" data-testid="plan-seven-day-quota" type="number" step="0.01" min="0" class="input" />
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.sevenDayQuotaHint') }}</p>
+        </div>
         <div><label class="input-label">{{ t('payment.admin.sortOrder') }}</label><input v-model.number="planForm.sort_order" type="number" min="0" class="input" /></div>
+        <div>
+          <label class="input-label">{{ t('payment.admin.seatLimit') }}</label>
+          <input :value="planForm.seat_limit" type="number" min="0" step="1" class="input" :placeholder="t('payment.admin.seatLimitPlaceholder')" @input="setSeatLimitInput" />
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.seatLimitHint') }}</p>
+          <p v-if="seatLimitLowerThanUsed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ t('payment.admin.seatLimitLowerThanUsed') }}</p>
+        </div>
       </div>
       <div>
         <label class="input-label">{{ t('payment.admin.features') }}</label>
@@ -105,7 +116,19 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const saving = ref(false)
-const planForm = reactive({ name: '', group_id: null as number | null, description: '', price: 0, original_price: 0, validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
+const planForm = reactive({
+  name: '',
+  group_id: null as number | null,
+  description: '',
+  price: 0,
+  original_price: 0,
+  seven_day_quota_usd: null as number | string | null,
+  validity_days: 30,
+  validity_unit: 'days',
+  sort_order: 0,
+  seat_limit: '',
+  for_sale: true,
+})
 const planFeaturesText = ref('')
 
 const validityUnitOptions = computed(() => [
@@ -129,22 +152,74 @@ const selectedGroupInfo = computed(() => {
   return props.groups.find(g => g.id === planForm.group_id) || null
 })
 
+const seatLimitLowerThanUsed = computed(() => {
+  if (!props.plan) return false
+  const trimmed = planForm.seat_limit.trim()
+  if (!trimmed) return false
+  const value = Number(trimmed)
+  if (!Number.isInteger(value) || value < 0) return false
+  return value < (props.plan.seat_used || 0)
+})
+
+function setSeatLimitInput(event: Event) {
+  planForm.seat_limit = (event.target as HTMLInputElement).value
+}
+
 // Reset form when dialog opens
 watch(() => props.show, (visible) => {
   if (!visible) return
   if (props.plan) {
-    Object.assign(planForm, { name: props.plan.name, group_id: props.plan.group_id, description: props.plan.description, price: props.plan.price, original_price: props.plan.original_price || 0, validity_days: props.plan.validity_days, validity_unit: props.plan.validity_unit || 'days', sort_order: props.plan.sort_order || 0, for_sale: props.plan.for_sale })
+    Object.assign(planForm, {
+      name: props.plan.name,
+      group_id: props.plan.group_id,
+      description: props.plan.description,
+      price: props.plan.price,
+      original_price: props.plan.original_price || 0,
+      seven_day_quota_usd: props.plan.seven_day_quota_usd ?? null,
+      validity_days: props.plan.validity_days,
+      validity_unit: props.plan.validity_unit || 'days',
+      sort_order: props.plan.sort_order || 0,
+      seat_limit: props.plan.seat_limit == null ? '' : String(props.plan.seat_limit),
+      for_sale: props.plan.for_sale,
+    })
     planFeaturesText.value = (props.plan.features || []).join('\n')
   } else {
-    Object.assign(planForm, { name: '', group_id: null, description: '', price: 0, original_price: 0, validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
+    Object.assign(planForm, {
+      name: '',
+      group_id: null,
+      description: '',
+      price: 0,
+      original_price: 0,
+      seven_day_quota_usd: null,
+      validity_days: 30,
+      validity_unit: 'days',
+      sort_order: 0,
+      seat_limit: '',
+      for_sale: true,
+    })
     planFeaturesText.value = ''
   }
-})
+}, { immediate: true })
+
+function parseSeatLimit(): number | null {
+  const trimmed = planForm.seat_limit.trim()
+  if (!trimmed) return null
+  const value = Number(trimmed)
+  if (!Number.isInteger(value) || value < 0) throw new Error(t('payment.admin.seatLimitHint'))
+  return value
+}
+
+function parseNullableNumber(value: number | string | null): number | null {
+  if (value === null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
 
 /** Build request payload with snake_case keys matching backend JSON tags */
 function buildPlanPayload() {
   const features = planFeaturesText.value.split('\n').map(f => f.trim()).filter(Boolean).join('\n')
-  return {
+  const sevenDayQuota = parseNullableNumber(planForm.seven_day_quota_usd)
+  const payload: Record<string, unknown> = {
     name: planForm.name,
     group_id: planForm.group_id,
     description: planForm.description,
@@ -153,9 +228,17 @@ function buildPlanPayload() {
     validity_days: planForm.validity_days,
     validity_unit: planForm.validity_unit,
     sort_order: planForm.sort_order,
+    seat_limit: parseSeatLimit(),
     for_sale: planForm.for_sale,
     features,
+    seven_day_quota_usd: sevenDayQuota,
   }
+
+  if (props.plan && props.plan.seven_day_quota_usd != null && sevenDayQuota === null) {
+    payload.clear_seven_day_quota_usd = true
+  }
+
+  return payload
 }
 
 async function handleSavePlan() {
@@ -171,9 +254,15 @@ async function handleSavePlan() {
     appStore.showError(t('payment.admin.validityDaysRequired'))
     return
   }
+  let data: ReturnType<typeof buildPlanPayload>
+  try {
+    data = buildPlanPayload()
+  } catch (err: unknown) {
+    appStore.showError(err instanceof Error ? err.message : t('common.error'))
+    return
+  }
   saving.value = true
   try {
-    const data = buildPlanPayload()
     if (props.plan) { await adminPaymentAPI.updatePlan(props.plan.id, data) }
     else { await adminPaymentAPI.createPlan(data) }
     appStore.showSuccess(t('common.saved'))

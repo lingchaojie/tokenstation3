@@ -43,6 +43,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
+		SetNillableKeyType(nonEmptyStringPtr(key.KeyType)).
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
@@ -131,6 +132,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldUserID,
 			apikey.FieldGroupID,
 			apikey.FieldName,
+			apikey.FieldKeyType,
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
 			apikey.FieldIPBlacklist,
@@ -151,6 +153,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				user.FieldBalance,
 				user.FieldConcurrency,
 				user.FieldBalanceNotifyEnabled,
+				user.FieldSubscriptionBalanceFallbackEnabled,
 				user.FieldBalanceNotifyThresholdType,
 				user.FieldBalanceNotifyThreshold,
 				user.FieldBalanceNotifyExtraEmails,
@@ -227,6 +230,12 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		SetUsage1d(key.Usage1d).
 		SetUsage7d(key.Usage7d).
 		SetUpdatedAt(now)
+	if key.ClearKeyType {
+		builder.ClearKeyType()
+	} else if key.KeyType != "" {
+		builder.SetKeyType(key.KeyType)
+	}
+
 	if key.GroupID != nil {
 		builder.SetGroupID(*key.GroupID)
 	} else {
@@ -464,6 +473,7 @@ func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, par
 
 	keysQuery := q.
 		WithUser().
+		WithGroup().
 		Offset(params.Offset()).
 		Limit(params.Limit())
 	for _, order := range apiKeyListOrder(params) {
@@ -549,6 +559,52 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 		SetGroupID(newGroupID).
 		Save(ctx)
 	return int64(n), err
+}
+
+func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate service.APIKeyGroupKeyTypeUpdate) (int64, error) {
+	client := clientFromContext(ctx, r.client)
+	update := client.APIKey.Update().
+		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
+		SetGroupID(newGroupID)
+	if keyTypeUpdate.ClearKeyType {
+		update.ClearKeyType()
+	} else {
+		update.SetNillableKeyType(nonEmptyStringPtr(keyTypeUpdate.KeyType))
+	}
+	n, err := update.Save(ctx)
+	return int64(n), err
+}
+
+func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx context.Context, userID int64, keyType string, groupID int64) (int64, error) {
+	if keyType == "" || userID <= 0 || groupID <= 0 {
+		return 0, nil
+	}
+	client := clientFromContext(ctx, r.client)
+	res, err := client.ExecContext(ctx, `
+		UPDATE api_keys AS ak
+		SET group_id = $3,
+		    key_type = $2,
+		    updated_at = NOW()
+		FROM groups AS g
+		WHERE ak.deleted_at IS NULL
+		  AND ak.user_id = $1
+		  AND (
+		    ak.key_type = $2
+		    OR (
+		      (ak.key_type IS NULL OR ak.key_type = '')
+		      AND ak.group_id = g.id
+		      AND g.deleted_at IS NULL
+		      AND g.platform = $2
+		    )
+		  )`, userID, keyType, groupID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
 }
 
 // CountByGroupID 获取分组的 API Key 数量
@@ -702,6 +758,7 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		UserID:        m.UserID,
 		Key:           m.Key,
 		Name:          m.Name,
+		KeyType:       derefString(m.KeyType),
 		Status:        m.Status,
 		IPWhitelist:   m.IPWhitelist,
 		IPBlacklist:   m.IPBlacklist,
@@ -744,29 +801,30 @@ func userEntityToService(u *dbent.User) *service.User {
 		return nil
 	}
 	out := &service.User{
-		ID:                         u.ID,
-		Email:                      u.Email,
-		Username:                   u.Username,
-		Notes:                      u.Notes,
-		PasswordHash:               u.PasswordHash,
-		Role:                       u.Role,
-		Balance:                    u.Balance,
-		Concurrency:                u.Concurrency,
-		Status:                     u.Status,
-		SignupSource:               u.SignupSource,
-		LastLoginAt:                u.LastLoginAt,
-		LastActiveAt:               u.LastActiveAt,
-		TotpSecretEncrypted:        u.TotpSecretEncrypted,
-		TotpEnabled:                u.TotpEnabled,
-		TotpEnabledAt:              u.TotpEnabledAt,
-		BalanceNotifyEnabled:       u.BalanceNotifyEnabled,
-		BalanceNotifyThresholdType: u.BalanceNotifyThresholdType,
-		BalanceNotifyThreshold:     u.BalanceNotifyThreshold,
-		TotalRecharged:             u.TotalRecharged,
-		RPMLimit:                   u.RpmLimit,
-		CreatedAt:                  u.CreatedAt,
-		UpdatedAt:                  u.UpdatedAt,
-		DeletedAt:                  u.DeletedAt,
+		ID:                                 u.ID,
+		Email:                              u.Email,
+		Username:                           u.Username,
+		Notes:                              u.Notes,
+		PasswordHash:                       u.PasswordHash,
+		Role:                               u.Role,
+		Balance:                            u.Balance,
+		Concurrency:                        u.Concurrency,
+		Status:                             u.Status,
+		SignupSource:                       u.SignupSource,
+		LastLoginAt:                        u.LastLoginAt,
+		LastActiveAt:                       u.LastActiveAt,
+		TotpSecretEncrypted:                u.TotpSecretEncrypted,
+		TotpEnabled:                        u.TotpEnabled,
+		TotpEnabledAt:                      u.TotpEnabledAt,
+		BalanceNotifyEnabled:               u.BalanceNotifyEnabled,
+		SubscriptionBalanceFallbackEnabled: u.SubscriptionBalanceFallbackEnabled,
+		BalanceNotifyThresholdType:         u.BalanceNotifyThresholdType,
+		BalanceNotifyThreshold:             u.BalanceNotifyThreshold,
+		TotalRecharged:                     u.TotalRecharged,
+		RPMLimit:                           u.RpmLimit,
+		CreatedAt:                          u.CreatedAt,
+		UpdatedAt:                          u.UpdatedAt,
+		DeletedAt:                          u.DeletedAt,
 	}
 	// Parse extra emails JSON (supports both old []string and new []NotifyEmailEntry format)
 	if u.BalanceNotifyExtraEmails != "" && u.BalanceNotifyExtraEmails != "[]" {
@@ -817,6 +875,13 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
+}
+
+func nonEmptyStringPtr(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 func derefString(s *string) string {

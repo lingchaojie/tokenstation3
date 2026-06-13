@@ -9,98 +9,116 @@ import (
 )
 
 func TestValidatePlanRequired_AllValid(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", nil)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", nil, nil)
 	require.NoError(t, err)
 }
 
 func TestValidatePlanRequired_EmptyName(t *testing.T) {
-	err := validatePlanRequired("", 1, 9.99, 30, "days", nil)
+	err := validatePlanRequired("", 1, 9.99, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "plan name")
 }
 
 func TestValidatePlanRequired_WhitespaceName(t *testing.T) {
-	err := validatePlanRequired("   ", 1, 9.99, 30, "days", nil)
+	err := validatePlanRequired("   ", 1, 9.99, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "plan name")
 }
 
 func TestValidatePlanRequired_ZeroGroupID(t *testing.T) {
-	err := validatePlanRequired("Pro", 0, 9.99, 30, "days", nil)
+	err := validatePlanRequired("Pro", 0, 9.99, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "group")
 }
 
 func TestValidatePlanRequired_NegativeGroupID(t *testing.T) {
-	err := validatePlanRequired("Pro", -1, 9.99, 30, "days", nil)
+	err := validatePlanRequired("Pro", -1, 9.99, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "group")
 }
 
 func TestValidatePlanRequired_ZeroPrice(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 0, 30, "days", nil)
+	err := validatePlanRequired("Pro", 1, 0, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "price")
 }
 
 func TestValidatePlanRequired_NegativePrice(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, -5, 30, "days", nil)
+	err := validatePlanRequired("Pro", 1, -5, 30, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "price")
 }
 
 func TestValidatePlanRequired_ZeroValidityDays(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 9.99, 0, "days", nil)
+	err := validatePlanRequired("Pro", 1, 9.99, 0, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "validity days")
 }
 
 func TestValidatePlanRequired_NegativeValidityDays(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 9.99, -7, "days", nil)
+	err := validatePlanRequired("Pro", 1, 9.99, -7, "days", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "validity days")
 }
 
 func TestValidatePlanRequired_EmptyValidityUnit(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "", nil)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "validity unit")
 }
 
 func TestValidatePlanRequired_WhitespaceValidityUnit(t *testing.T) {
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "   ", nil)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "   ", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "validity unit")
 }
 
 func TestValidatePlanRequired_NameValidatedFirst(t *testing.T) {
-	err := validatePlanRequired("", 0, 0, 0, "", nil)
+	err := validatePlanRequired("", 0, 0, 0, "", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "plan name")
 }
 
 func TestValidatePlanRequired_TrimmedValidName(t *testing.T) {
-	err := validatePlanRequired("  Pro  ", 1, 9.99, 30, "days", nil)
+	err := validatePlanRequired("  Pro  ", 1, 9.99, 30, "days", nil, nil)
 	require.NoError(t, err)
 }
 
 func TestValidatePlanRequired_NegativeOriginalPrice(t *testing.T) {
 	neg := -10.0
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &neg)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &neg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "original price")
 }
 
 func TestValidatePlanRequired_ZeroOriginalPrice(t *testing.T) {
 	zero := 0.0
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &zero)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &zero, nil)
 	require.NoError(t, err)
 }
 
 func TestValidatePlanRequired_ValidOriginalPrice(t *testing.T) {
 	op := 19.99
-	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &op)
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", &op, nil)
 	require.NoError(t, err)
+}
+
+func TestValidatePlanRequired_SeatLimitAllowsNilZeroPositive(t *testing.T) {
+	zero := 0
+	one := 1
+
+	require.NoError(t, validatePlanRequired("Pro", 1, 9.99, 30, "days", nil, nil))
+	require.NoError(t, validatePlanRequired("Pro", 1, 9.99, 30, "days", nil, &zero))
+	require.NoError(t, validatePlanRequired("Pro", 1, 9.99, 30, "days", nil, &one))
+}
+
+func TestValidatePlanRequired_SeatLimitRejectsNegative(t *testing.T) {
+	negative := -1
+
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "days", nil, &negative)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "seat limit")
 }
 
 // --- validatePlanPatch tests ---
@@ -127,6 +145,48 @@ func TestValidatePlanPatch_ValidOriginalPrice(t *testing.T) {
 func TestValidatePlanPatch_NilOriginalPrice(t *testing.T) {
 	err := validatePlanPatch(UpdatePlanRequest{OriginalPrice: nil})
 	require.NoError(t, err)
+}
+
+func TestValidatePlanPatch_SeatLimitAllowsClearZeroPositive(t *testing.T) {
+	var clear OptionalInt
+	require.NoError(t, clear.UnmarshalJSON([]byte("null")))
+
+	var zero OptionalInt
+	require.NoError(t, zero.UnmarshalJSON([]byte("0")))
+
+	var positive OptionalInt
+	require.NoError(t, positive.UnmarshalJSON([]byte("42")))
+
+	require.NoError(t, validatePlanPatch(UpdatePlanRequest{SeatLimit: clear}))
+	require.NoError(t, validatePlanPatch(UpdatePlanRequest{SeatLimit: zero}))
+	require.NoError(t, validatePlanPatch(UpdatePlanRequest{SeatLimit: positive}))
+}
+
+func TestValidatePlanPatch_SeatLimitRejectsNegative(t *testing.T) {
+	var seatLimit OptionalInt
+	require.NoError(t, seatLimit.UnmarshalJSON([]byte("-1")))
+
+	err := validatePlanPatch(UpdatePlanRequest{SeatLimit: seatLimit})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "seat limit")
+}
+
+func TestOptionalIntTracksAbsentNullAndValue(t *testing.T) {
+	var absent OptionalInt
+	require.False(t, absent.Set)
+	require.Nil(t, absent.Value)
+
+	var nullValue OptionalInt
+	require.NoError(t, nullValue.UnmarshalJSON([]byte("null")))
+	require.True(t, nullValue.Set)
+	require.Nil(t, nullValue.Value)
+
+	var numberValue OptionalInt
+	require.NoError(t, numberValue.UnmarshalJSON([]byte("7")))
+	require.True(t, numberValue.Set)
+	require.NotNil(t, numberValue.Value)
+	require.Equal(t, 7, *numberValue.Value)
 }
 
 // --- validatePlanPatch: other fields ---

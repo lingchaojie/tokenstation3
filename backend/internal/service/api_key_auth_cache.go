@@ -8,6 +8,7 @@ type APIKeyAuthSnapshot struct {
 	APIKeyID    int64                    `json:"api_key_id"`
 	UserID      int64                    `json:"user_id"`
 	GroupID     *int64                   `json:"group_id,omitempty"`
+	KeyType     string                   `json:"key_type"`
 	Name        string                   `json:"name"`
 	Status      string                   `json:"status"`
 	IPWhitelist []string                 `json:"ip_whitelist,omitempty"`
@@ -38,13 +39,14 @@ type APIKeyAuthUserSnapshot struct {
 	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
 
 	// Balance notification fields (required for CheckBalanceAfterDeduction)
-	Email                      string             `json:"email"`
-	Username                   string             `json:"username"`
-	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
-	BalanceNotifyThresholdType string             `json:"balance_notify_threshold_type"`
-	BalanceNotifyThreshold     *float64           `json:"balance_notify_threshold,omitempty"`
-	BalanceNotifyExtraEmails   []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
-	TotalRecharged             float64            `json:"total_recharged"`
+	Email                              string             `json:"email"`
+	Username                           string             `json:"username"`
+	BalanceNotifyEnabled               bool               `json:"balance_notify_enabled"`
+	SubscriptionBalanceFallbackEnabled bool               `json:"subscription_balance_fallback_enabled"`
+	BalanceNotifyThresholdType         string             `json:"balance_notify_threshold_type"`
+	BalanceNotifyThreshold             *float64           `json:"balance_notify_threshold,omitempty"`
+	BalanceNotifyExtraEmails           []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
+	TotalRecharged                     float64            `json:"total_recharged"`
 
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 兜底判断。
 	RPMLimit int `json:"rpm_limit"`

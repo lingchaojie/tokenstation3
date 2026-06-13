@@ -68,6 +68,20 @@ func (_c *SubscriptionPlanCreate) SetNillableOriginalPrice(v *float64) *Subscrip
 	return _c
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (_c *SubscriptionPlanCreate) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanCreate {
+	_c.mutation.SetSevenDayQuotaUsd(v)
+	return _c
+}
+
+// SetNillableSevenDayQuotaUsd sets the "seven_day_quota_usd" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableSevenDayQuotaUsd(v *float64) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetSevenDayQuotaUsd(*v)
+	}
+	return _c
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_c *SubscriptionPlanCreate) SetValidityDays(v int) *SubscriptionPlanCreate {
 	_c.mutation.SetValidityDays(v)
@@ -148,6 +162,20 @@ func (_c *SubscriptionPlanCreate) SetSortOrder(v int) *SubscriptionPlanCreate {
 func (_c *SubscriptionPlanCreate) SetNillableSortOrder(v *int) *SubscriptionPlanCreate {
 	if v != nil {
 		_c.SetSortOrder(*v)
+	}
+	return _c
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (_c *SubscriptionPlanCreate) SetSeatLimit(v int) *SubscriptionPlanCreate {
+	_c.mutation.SetSeatLimit(v)
+	return _c
+}
+
+// SetNillableSeatLimit sets the "seat_limit" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableSeatLimit(v *int) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetSeatLimit(*v)
 	}
 	return _c
 }
@@ -300,6 +328,11 @@ func (_c *SubscriptionPlanCreate) check() error {
 	if _, ok := _c.mutation.SortOrder(); !ok {
 		return &ValidationError{Name: "sort_order", err: errors.New(`ent: missing required field "SubscriptionPlan.sort_order"`)}
 	}
+	if v, ok := _c.mutation.SeatLimit(); ok {
+		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
+			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "SubscriptionPlan.created_at"`)}
 	}
@@ -353,6 +386,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 		_spec.SetField(subscriptionplan.FieldOriginalPrice, field.TypeFloat64, value)
 		_node.OriginalPrice = &value
 	}
+	if value, ok := _c.mutation.SevenDayQuotaUsd(); ok {
+		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
+		_node.SevenDayQuotaUsd = &value
+	}
 	if value, ok := _c.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
 		_node.ValidityDays = value
@@ -376,6 +413,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 	if value, ok := _c.mutation.SortOrder(); ok {
 		_spec.SetField(subscriptionplan.FieldSortOrder, field.TypeInt, value)
 		_node.SortOrder = value
+	}
+	if value, ok := _c.mutation.SeatLimit(); ok {
+		_spec.SetField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
+		_node.SeatLimit = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldCreatedAt, field.TypeTime, value)
@@ -521,6 +562,30 @@ func (u *SubscriptionPlanUpsert) ClearOriginalPrice() *SubscriptionPlanUpsert {
 	return u
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldSevenDayQuotaUsd, v)
+	return u
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldSevenDayQuotaUsd)
+	return u
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldSevenDayQuotaUsd, v)
+	return u
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsert) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldSevenDayQuotaUsd)
+	return u
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (u *SubscriptionPlanUpsert) SetValidityDays(v int) *SubscriptionPlanUpsert {
 	u.Set(subscriptionplan.FieldValidityDays, v)
@@ -602,6 +667,30 @@ func (u *SubscriptionPlanUpsert) UpdateSortOrder() *SubscriptionPlanUpsert {
 // AddSortOrder adds v to the "sort_order" field.
 func (u *SubscriptionPlanUpsert) AddSortOrder(v int) *SubscriptionPlanUpsert {
 	u.Add(subscriptionplan.FieldSortOrder, v)
+	return u
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) SetSeatLimit(v int) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldSeatLimit, v)
+	return u
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateSeatLimit() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldSeatLimit)
+	return u
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) AddSeatLimit(v int) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldSeatLimit, v)
+	return u
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsert) ClearSeatLimit() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldSeatLimit)
 	return u
 }
 
@@ -760,6 +849,34 @@ func (u *SubscriptionPlanUpsertOne) ClearOriginalPrice() *SubscriptionPlanUpsert
 	})
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSevenDayQuotaUsd(v)
+	})
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSevenDayQuotaUsd(v)
+	})
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSevenDayQuotaUsd()
+	})
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertOne) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSevenDayQuotaUsd()
+	})
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (u *SubscriptionPlanUpsertOne) SetValidityDays(v int) *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
@@ -855,6 +972,34 @@ func (u *SubscriptionPlanUpsertOne) AddSortOrder(v int) *SubscriptionPlanUpsertO
 func (u *SubscriptionPlanUpsertOne) UpdateSortOrder() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateSortOrder()
+	})
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) SetSeatLimit(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSeatLimit(v)
+	})
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) AddSeatLimit(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSeatLimit(v)
+	})
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateSeatLimit() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSeatLimit()
+	})
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsertOne) ClearSeatLimit() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSeatLimit()
 	})
 }
 
@@ -1181,6 +1326,34 @@ func (u *SubscriptionPlanUpsertBulk) ClearOriginalPrice() *SubscriptionPlanUpser
 	})
 }
 
+// SetSevenDayQuotaUsd sets the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) SetSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSevenDayQuotaUsd(v)
+	})
+}
+
+// AddSevenDayQuotaUsd adds v to the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) AddSevenDayQuotaUsd(v float64) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSevenDayQuotaUsd(v)
+	})
+}
+
+// UpdateSevenDayQuotaUsd sets the "seven_day_quota_usd" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateSevenDayQuotaUsd() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSevenDayQuotaUsd()
+	})
+}
+
+// ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
+func (u *SubscriptionPlanUpsertBulk) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSevenDayQuotaUsd()
+	})
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (u *SubscriptionPlanUpsertBulk) SetValidityDays(v int) *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
@@ -1276,6 +1449,34 @@ func (u *SubscriptionPlanUpsertBulk) AddSortOrder(v int) *SubscriptionPlanUpsert
 func (u *SubscriptionPlanUpsertBulk) UpdateSortOrder() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateSortOrder()
+	})
+}
+
+// SetSeatLimit sets the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) SetSeatLimit(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetSeatLimit(v)
+	})
+}
+
+// AddSeatLimit adds v to the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) AddSeatLimit(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddSeatLimit(v)
+	})
+}
+
+// UpdateSeatLimit sets the "seat_limit" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateSeatLimit() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateSeatLimit()
+	})
+}
+
+// ClearSeatLimit clears the value of the "seat_limit" field.
+func (u *SubscriptionPlanUpsertBulk) ClearSeatLimit() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearSeatLimit()
 	})
 }
 

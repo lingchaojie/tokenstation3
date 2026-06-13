@@ -31,11 +31,12 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		DailyLimitUSD:    &limit,
 	}
 	user := &service.User{
-		ID:          7,
-		Role:        service.RoleUser,
-		Status:      service.StatusActive,
-		Balance:     10,
-		Concurrency: 3,
+		ID:                                 7,
+		Role:                               service.RoleUser,
+		Status:                             service.StatusActive,
+		Balance:                            10,
+		Concurrency:                        3,
+		SubscriptionBalanceFallbackEnabled: true,
 	}
 	apiKey := &service.APIKey{
 		ID:     100,
@@ -174,6 +175,187 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 
 		require.Equal(t, http.StatusTooManyRequests, w.Code)
 		require.Contains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
+	})
+
+	t.Run("standard_mode_resets_expired_weekly_window_before_context_handoff", func(t *testing.T) {
+		cfg := &config.Config{RunMode: config.RunModeStandard}
+
+		now := time.Now()
+		weeklyLimit := 1.0
+		resetUser := *user
+		resetUser.Balance = 0
+		resetGroup := *group
+		resetGroup.DailyLimitUSD = nil
+		resetGroup.WeeklyLimitUSD = &weeklyLimit
+		resetAPIKey := *apiKey
+		resetAPIKey.User = &resetUser
+		resetAPIKey.Group = &resetGroup
+		oldWindowStart := now.Add(-7 * 24 * time.Hour)
+		sub := &service.UserSubscription{
+			ID:                57,
+			UserID:            resetUser.ID,
+			GroupID:           resetGroup.ID,
+			Status:            service.SubscriptionStatusActive,
+			ExpiresAt:         now.Add(24 * time.Hour),
+			WeeklyWindowStart: &oldWindowStart,
+			WeeklyUsageUSD:    weeklyLimit,
+		}
+		resetAPIKeyRepo := &stubApiKeyRepo{
+			getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+				if key != resetAPIKey.Key {
+					return nil, service.ErrAPIKeyNotFound
+				}
+				clone := resetAPIKey
+				return &clone, nil
+			},
+		}
+		resetCalled := false
+		subscriptionRepo := &stubUserSubscriptionRepo{
+			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				if userID != sub.UserID || groupID != sub.GroupID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
+			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetWeekly: func(ctx context.Context, id int64, start time.Time) error {
+				resetCalled = true
+				require.Equal(t, sub.ID, id)
+				require.True(t, !start.Before(oldWindowStart.Add(7*24*time.Hour)), "reset should preserve exact seven-day boundary semantics")
+				return nil
+			},
+			resetMonthly: func(ctx context.Context, id int64, start time.Time) error { return nil },
+		}
+		resetAPIKeyService := service.NewAPIKeyService(resetAPIKeyRepo, nil, nil, nil, nil, nil, cfg)
+		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+		router := newAuthTestRouter(resetAPIKeyService, subscriptionService, cfg)
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/t", nil)
+		req.Header.Set("x-api-key", resetAPIKey.Key)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		require.True(t, resetCalled, "expired weekly window must be reset synchronously before request proceeds")
+	})
+
+	t.Run("standard_mode_rejects_weekly_quota_exhausted_subscription_without_balance_fallback_opt_in", func(t *testing.T) {
+		cfg := &config.Config{RunMode: config.RunModeStandard}
+
+		now := time.Now()
+		weeklyLimit := 1.0
+		fallbackUser := *user
+		fallbackUser.Balance = 10
+		fallbackUser.SubscriptionBalanceFallbackEnabled = false
+		fallbackGroup := *group
+		fallbackGroup.DailyLimitUSD = nil
+		fallbackGroup.WeeklyLimitUSD = &weeklyLimit
+		fallbackAPIKey := *apiKey
+		fallbackAPIKey.User = &fallbackUser
+		fallbackAPIKey.Group = &fallbackGroup
+		sub := &service.UserSubscription{
+			ID:                56,
+			UserID:            fallbackUser.ID,
+			GroupID:           fallbackGroup.ID,
+			Status:            service.SubscriptionStatusActive,
+			ExpiresAt:         now.Add(24 * time.Hour),
+			WeeklyWindowStart: &now,
+			WeeklyUsageUSD:    weeklyLimit + 0.1,
+		}
+		fallbackAPIKeyRepo := &stubApiKeyRepo{
+			getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+				if key != fallbackAPIKey.Key {
+					return nil, service.ErrAPIKeyNotFound
+				}
+				clone := fallbackAPIKey
+				return &clone, nil
+			},
+		}
+		fallbackAPIKeyService := service.NewAPIKeyService(fallbackAPIKeyRepo, nil, nil, nil, nil, nil, cfg)
+		subscriptionRepo := &stubUserSubscriptionRepo{
+			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				if userID != sub.UserID || groupID != sub.GroupID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
+			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
+		}
+		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+		router := newAuthTestRouter(fallbackAPIKeyService, subscriptionService, cfg)
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/t", nil)
+		req.Header.Set("x-api-key", fallbackAPIKey.Key)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusTooManyRequests, w.Code)
+	})
+
+	t.Run("standard_mode_allows_weekly_quota_exhausted_subscription_when_balance_can_fallback", func(t *testing.T) {
+		cfg := &config.Config{RunMode: config.RunModeStandard}
+
+		now := time.Now()
+		weeklyLimit := 1.0
+		fallbackUser := *user
+		fallbackUser.Balance = 10
+		fallbackUser.SubscriptionBalanceFallbackEnabled = true
+		fallbackGroup := *group
+		fallbackGroup.DailyLimitUSD = nil
+		fallbackGroup.WeeklyLimitUSD = &weeklyLimit
+		fallbackAPIKey := *apiKey
+		fallbackAPIKey.User = &fallbackUser
+		fallbackAPIKey.Group = &fallbackGroup
+		sub := &service.UserSubscription{
+			ID:                56,
+			UserID:            fallbackUser.ID,
+			GroupID:           fallbackGroup.ID,
+			Status:            service.SubscriptionStatusActive,
+			ExpiresAt:         now.Add(24 * time.Hour),
+			WeeklyWindowStart: &now,
+			WeeklyUsageUSD:    weeklyLimit + 0.1,
+		}
+		fallbackAPIKeyRepo := &stubApiKeyRepo{
+			getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+				if key != fallbackAPIKey.Key {
+					return nil, service.ErrAPIKeyNotFound
+				}
+				clone := fallbackAPIKey
+				return &clone, nil
+			},
+		}
+		fallbackAPIKeyService := service.NewAPIKeyService(fallbackAPIKeyRepo, nil, nil, nil, nil, nil, cfg)
+		subscriptionRepo := &stubUserSubscriptionRepo{
+			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				if userID != sub.UserID || groupID != sub.GroupID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
+			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
+			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
+		}
+		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+		router := newAuthTestRouter(fallbackAPIKeyService, subscriptionService, cfg)
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/t", nil)
+		req.Header.Set("x-api-key", fallbackAPIKey.Key)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
 	})
 }
 
@@ -1066,14 +1248,14 @@ func (r *stubUserSubscriptionRepo) GetByID(ctx context.Context, id int64) (*serv
 }
 
 func (r *stubUserSubscriptionRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (r *stubUserSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	if r.getActive != nil {
 		return r.getActive(ctx, userID, groupID)
 	}
 	return nil, errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+	return r.GetByUserIDAndGroupID(ctx, userID, groupID)
 }
 
 func (r *stubUserSubscriptionRepo) Update(ctx context.Context, sub *service.UserSubscription) error {
@@ -1119,6 +1301,25 @@ func (r *stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscription
 	return errors.New("not implemented")
 }
 
+func (r *stubUserSubscriptionRepo) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) ClearScheduledPlanChange(ctx context.Context, id int64) error {
+	return nil
+}
+
+func (r *stubUserSubscriptionRepo) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
+	return nil, false, nil
+}
+func (r *stubUserSubscriptionRepo) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	if r.activateWindow != nil {
 		return r.activateWindow(ctx, id, start)
@@ -1133,7 +1334,7 @@ func (r *stubUserSubscriptionRepo) ResetDailyUsage(ctx context.Context, id int64
 	return errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *stubUserSubscriptionRepo) ResetWeeklyUsage(ctx context.Context, id int64, _ *time.Time, newWindowStart time.Time) error {
 	if r.resetWeekly != nil {
 		return r.resetWeekly(ctx, id, newWindowStart)
 	}

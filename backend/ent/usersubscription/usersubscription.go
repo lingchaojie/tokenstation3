@@ -25,6 +25,24 @@ const (
 	FieldUserID = "user_id"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldPlanID holds the string denoting the plan_id field in the database.
+	FieldPlanID = "plan_id"
+	// FieldPlanName holds the string denoting the plan_name field in the database.
+	FieldPlanName = "plan_name"
+	// FieldSevenDayLimitUsd holds the string denoting the seven_day_limit_usd field in the database.
+	FieldSevenDayLimitUsd = "seven_day_limit_usd"
+	// FieldScheduledPlanID holds the string denoting the scheduled_plan_id field in the database.
+	FieldScheduledPlanID = "scheduled_plan_id"
+	// FieldScheduledPlanName holds the string denoting the scheduled_plan_name field in the database.
+	FieldScheduledPlanName = "scheduled_plan_name"
+	// FieldScheduledSevenDayLimitUsd holds the string denoting the scheduled_seven_day_limit_usd field in the database.
+	FieldScheduledSevenDayLimitUsd = "scheduled_seven_day_limit_usd"
+	// FieldScheduledPlanEffectiveAt holds the string denoting the scheduled_plan_effective_at field in the database.
+	FieldScheduledPlanEffectiveAt = "scheduled_plan_effective_at"
+	// FieldScheduledExpiresAt holds the string denoting the scheduled_expires_at field in the database.
+	FieldScheduledExpiresAt = "scheduled_expires_at"
+	// FieldScheduledOrderID holds the string denoting the scheduled_order_id field in the database.
+	FieldScheduledOrderID = "scheduled_order_id"
 	// FieldStartsAt holds the string denoting the starts_at field in the database.
 	FieldStartsAt = "starts_at"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
@@ -97,6 +115,15 @@ var Columns = []string{
 	FieldDeletedAt,
 	FieldUserID,
 	FieldGroupID,
+	FieldPlanID,
+	FieldPlanName,
+	FieldSevenDayLimitUsd,
+	FieldScheduledPlanID,
+	FieldScheduledPlanName,
+	FieldScheduledSevenDayLimitUsd,
+	FieldScheduledPlanEffectiveAt,
+	FieldScheduledExpiresAt,
+	FieldScheduledOrderID,
 	FieldStartsAt,
 	FieldExpiresAt,
 	FieldStatus,
@@ -135,6 +162,10 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// PlanNameValidator is a validator for the "plan_name" field. It is called by the builders before save.
+	PlanNameValidator func(string) error
+	// ScheduledPlanNameValidator is a validator for the "scheduled_plan_name" field. It is called by the builders before save.
+	ScheduledPlanNameValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -180,6 +211,51 @@ func ByUserID(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByPlanID orders the results by the plan_id field.
+func ByPlanID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanID, opts...).ToFunc()
+}
+
+// ByPlanName orders the results by the plan_name field.
+func ByPlanName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanName, opts...).ToFunc()
+}
+
+// BySevenDayLimitUsd orders the results by the seven_day_limit_usd field.
+func BySevenDayLimitUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSevenDayLimitUsd, opts...).ToFunc()
+}
+
+// ByScheduledPlanID orders the results by the scheduled_plan_id field.
+func ByScheduledPlanID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledPlanID, opts...).ToFunc()
+}
+
+// ByScheduledPlanName orders the results by the scheduled_plan_name field.
+func ByScheduledPlanName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledPlanName, opts...).ToFunc()
+}
+
+// ByScheduledSevenDayLimitUsd orders the results by the scheduled_seven_day_limit_usd field.
+func ByScheduledSevenDayLimitUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledSevenDayLimitUsd, opts...).ToFunc()
+}
+
+// ByScheduledPlanEffectiveAt orders the results by the scheduled_plan_effective_at field.
+func ByScheduledPlanEffectiveAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledPlanEffectiveAt, opts...).ToFunc()
+}
+
+// ByScheduledExpiresAt orders the results by the scheduled_expires_at field.
+func ByScheduledExpiresAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledExpiresAt, opts...).ToFunc()
+}
+
+// ByScheduledOrderID orders the results by the scheduled_order_id field.
+func ByScheduledOrderID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScheduledOrderID, opts...).ToFunc()
 }
 
 // ByStartsAt orders the results by the starts_at field.

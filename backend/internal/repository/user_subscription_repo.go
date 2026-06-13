@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -28,6 +30,15 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 	builder := client.UserSubscription.Create().
 		SetUserID(sub.UserID).
 		SetGroupID(sub.GroupID).
+		SetNillablePlanID(sub.PlanID).
+		SetNillablePlanName(sub.PlanName).
+		SetNillableSevenDayLimitUsd(sub.SevenDayLimitUSD).
+		SetNillableScheduledPlanID(sub.ScheduledPlanID).
+		SetNillableScheduledPlanName(sub.ScheduledPlanName).
+		SetNillableScheduledSevenDayLimitUsd(sub.ScheduledSevenDayLimitUSD).
+		SetNillableScheduledPlanEffectiveAt(sub.ScheduledPlanEffectiveAt).
+		SetNillableScheduledExpiresAt(sub.ScheduledExpiresAt).
+		SetNillableScheduledOrderID(sub.ScheduledOrderID).
 		SetExpiresAt(sub.ExpiresAt).
 		SetNillableDailyWindowStart(sub.DailyWindowStart).
 		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
@@ -50,6 +61,9 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 	}
 	// Keep compatibility with historical behavior: always store notes as a string value.
 	builder.SetNotes(sub.Notes)
+	if sub.PlanID != nil {
+		builder.SetPlanID(*sub.PlanID)
+	}
 
 	created, err := builder.Save(ctx)
 	if err == nil {
@@ -122,6 +136,52 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetNillableAssignedBy(sub.AssignedBy).
 		SetAssignedAt(sub.AssignedAt).
 		SetNotes(sub.Notes)
+
+	if sub.PlanID != nil {
+		builder.SetPlanID(*sub.PlanID)
+	} else {
+		builder.ClearPlanID()
+	}
+	if sub.PlanName != nil {
+		builder.SetPlanName(*sub.PlanName)
+	} else {
+		builder.ClearPlanName()
+	}
+	if sub.SevenDayLimitUSD != nil {
+		builder.SetSevenDayLimitUsd(*sub.SevenDayLimitUSD)
+	} else {
+		builder.ClearSevenDayLimitUsd()
+	}
+	if sub.ScheduledPlanID != nil {
+		builder.SetScheduledPlanID(*sub.ScheduledPlanID)
+	} else {
+		builder.ClearScheduledPlanID()
+	}
+	if sub.ScheduledPlanName != nil {
+		builder.SetScheduledPlanName(*sub.ScheduledPlanName)
+	} else {
+		builder.ClearScheduledPlanName()
+	}
+	if sub.ScheduledSevenDayLimitUSD != nil {
+		builder.SetScheduledSevenDayLimitUsd(*sub.ScheduledSevenDayLimitUSD)
+	} else {
+		builder.ClearScheduledSevenDayLimitUsd()
+	}
+	if sub.ScheduledPlanEffectiveAt != nil {
+		builder.SetScheduledPlanEffectiveAt(*sub.ScheduledPlanEffectiveAt)
+	} else {
+		builder.ClearScheduledPlanEffectiveAt()
+	}
+	if sub.ScheduledExpiresAt != nil {
+		builder.SetScheduledExpiresAt(*sub.ScheduledExpiresAt)
+	} else {
+		builder.ClearScheduledExpiresAt()
+	}
+	if sub.ScheduledOrderID != nil {
+		builder.SetScheduledOrderID(*sub.ScheduledOrderID)
+	} else {
+		builder.ClearScheduledOrderID()
+	}
 
 	updated, err := builder.Save(ctx)
 	if err == nil {
@@ -299,6 +359,168 @@ func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscripti
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
+func (r *userSubscriptionRepository) UpdatePlanSnapshot(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, windowStart time.Time, expiresAt time.Time, notes *string) error {
+	client := clientFromContext(ctx, r.client)
+	now := time.Now()
+	existing, err := client.UserSubscription.Get(ctx, id)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+
+	update := client.UserSubscription.UpdateOneID(id).
+		SetExpiresAt(expiresAt).
+		SetStatus(service.SubscriptionStatusActive).
+		SetUpdatedAt(now).
+		ClearScheduledPlanID().
+		ClearScheduledPlanName().
+		ClearScheduledSevenDayLimitUsd().
+		ClearScheduledPlanEffectiveAt().
+		ClearScheduledExpiresAt().
+		ClearScheduledOrderID()
+	if !existing.ExpiresAt.After(now) {
+		update.SetStartsAt(windowStart).
+			SetDailyWindowStart(windowStart).
+			SetWeeklyWindowStart(windowStart).
+			SetMonthlyWindowStart(windowStart).
+			SetDailyUsageUsd(0).
+			SetWeeklyUsageUsd(0).
+			SetMonthlyUsageUsd(0)
+	} else {
+		update.SetWeeklyWindowStart(windowStart).
+			SetWeeklyUsageUsd(0)
+	}
+	if planID != nil {
+		update.SetPlanID(*planID)
+	} else {
+		update.ClearPlanID()
+	}
+	if planName != nil {
+		update.SetPlanName(*planName)
+	} else {
+		update.ClearPlanName()
+	}
+	if sevenDayLimitUSD != nil {
+		update.SetSevenDayLimitUsd(*sevenDayLimitUSD)
+	} else {
+		update.ClearSevenDayLimitUsd()
+	}
+	if notes != nil {
+		update.SetNotes(*notes)
+	}
+	_, err = update.Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) SchedulePlanChange(ctx context.Context, id int64, planID *int64, planName *string, sevenDayLimitUSD *float64, effectiveAt time.Time, expiresAt time.Time, orderID *int64, notes *string) error {
+	client := clientFromContext(ctx, r.client)
+	update := client.UserSubscription.UpdateOneID(id).
+		SetScheduledPlanEffectiveAt(effectiveAt).
+		SetScheduledExpiresAt(expiresAt).
+		SetUpdatedAt(time.Now())
+	if planID != nil {
+		update.SetScheduledPlanID(*planID)
+	} else {
+		update.ClearScheduledPlanID()
+	}
+	if planName != nil {
+		update.SetScheduledPlanName(*planName)
+	} else {
+		update.ClearScheduledPlanName()
+	}
+	if sevenDayLimitUSD != nil {
+		update.SetScheduledSevenDayLimitUsd(*sevenDayLimitUSD)
+	} else {
+		update.ClearScheduledSevenDayLimitUsd()
+	}
+	if orderID != nil {
+		update.SetScheduledOrderID(*orderID)
+	} else {
+		update.ClearScheduledOrderID()
+	}
+	if notes != nil {
+		update.SetNotes(*notes)
+	}
+	_, err := update.Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) ClearScheduledPlanChange(ctx context.Context, id int64) error {
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserSubscription.UpdateOneID(id).
+		ClearScheduledPlanID().
+		ClearScheduledPlanName().
+		ClearScheduledSevenDayLimitUsd().
+		ClearScheduledPlanEffectiveAt().
+		ClearScheduledExpiresAt().
+		ClearScheduledOrderID().
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
+	client := clientFromContext(ctx, r.client)
+	const updateSQL = `
+		UPDATE user_subscriptions
+		SET
+			plan_id = scheduled_plan_id,
+			plan_name = scheduled_plan_name,
+			seven_day_limit_usd = scheduled_seven_day_limit_usd,
+			starts_at = scheduled_plan_effective_at,
+			expires_at = scheduled_expires_at,
+			status = $3,
+			daily_window_start = scheduled_plan_effective_at,
+			weekly_window_start = scheduled_plan_effective_at,
+			monthly_window_start = scheduled_plan_effective_at,
+			daily_usage_usd = 0,
+			weekly_usage_usd = 0,
+			monthly_usage_usd = 0,
+			scheduled_plan_id = NULL,
+			scheduled_plan_name = NULL,
+			scheduled_seven_day_limit_usd = NULL,
+			scheduled_plan_effective_at = NULL,
+			scheduled_expires_at = NULL,
+			scheduled_order_id = NULL,
+			updated_at = $2
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND scheduled_plan_effective_at IS NOT NULL
+			AND scheduled_plan_effective_at <= $2
+		RETURNING id
+	`
+	var appliedID int64
+	err := scanSingleRow(ctx, client, updateSQL, []any{id, now, service.SubscriptionStatusActive}, &appliedID)
+	if err == nil {
+		sub, getErr := r.GetByID(ctx, appliedID)
+		if getErr != nil {
+			return nil, true, getErr
+		}
+		return sub, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
+	}
+
+	exists, err := client.UserSubscription.Query().
+		Where(usersubscription.IDEQ(id)).
+		Exist(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, service.ErrSubscriptionNotFound
+	}
+	return nil, false, nil
+}
+
+func (r *userSubscriptionRepository) UpdatePlanID(ctx context.Context, subscriptionID int64, planID int64) error {
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
+		SetPlanID(planID).
+		Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
 func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.UpdateOneID(id).
@@ -318,13 +540,35 @@ func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
-func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
+func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
+	update := client.UserSubscription.Update().
+		Where(usersubscription.IDEQ(id)).
 		SetWeeklyUsageUsd(0).
-		SetWeeklyWindowStart(newWindowStart).
-		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+		SetWeeklyWindowStart(newWindowStart)
+	if expectedWindowStart != nil {
+		update.Where(usersubscription.Or(
+			usersubscription.WeeklyWindowStartEQ(*expectedWindowStart),
+			usersubscription.WeeklyWindowStartLTE(expectedWindowStart.Add(-7*24*time.Hour)),
+		))
+	}
+	affected, err := update.Save(ctx)
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+	if expectedWindowStart != nil {
+		exists, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Exist(ctx)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+	}
+	return service.ErrSubscriptionNotFound
 }
 
 func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {
@@ -375,10 +619,27 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 
 func (r *userSubscriptionRepository) BatchUpdateExpiredStatus(ctx context.Context) (int64, error) {
 	client := clientFromContext(ctx, r.client)
+	now := time.Now()
+	dueIDs, err := client.UserSubscription.Query().
+		Where(
+			usersubscription.StatusEQ(service.SubscriptionStatusActive),
+			usersubscription.ScheduledPlanEffectiveAtNotNil(),
+			usersubscription.ScheduledPlanEffectiveAtLTE(now),
+		).
+		IDs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, id := range dueIDs {
+		if _, _, err := r.ApplyScheduledPlanChange(ctx, id, now); err != nil {
+			return 0, err
+		}
+	}
 	n, err := client.UserSubscription.Update().
 		Where(
 			usersubscription.StatusEQ(service.SubscriptionStatusActive),
-			usersubscription.ExpiresAtLTE(time.Now()),
+			usersubscription.ExpiresAtLTE(now),
+			usersubscription.ScheduledPlanEffectiveAtIsNil(),
 		).
 		SetStatus(service.SubscriptionStatusExpired).
 		Save(ctx)
@@ -430,23 +691,32 @@ func userSubscriptionEntityToService(m *dbent.UserSubscription) *service.UserSub
 		return nil
 	}
 	out := &service.UserSubscription{
-		ID:                 m.ID,
-		UserID:             m.UserID,
-		GroupID:            m.GroupID,
-		StartsAt:           m.StartsAt,
-		ExpiresAt:          m.ExpiresAt,
-		Status:             m.Status,
-		DailyWindowStart:   m.DailyWindowStart,
-		WeeklyWindowStart:  m.WeeklyWindowStart,
-		MonthlyWindowStart: m.MonthlyWindowStart,
-		DailyUsageUSD:      m.DailyUsageUsd,
-		WeeklyUsageUSD:     m.WeeklyUsageUsd,
-		MonthlyUsageUSD:    m.MonthlyUsageUsd,
-		AssignedBy:         m.AssignedBy,
-		AssignedAt:         m.AssignedAt,
-		Notes:              derefString(m.Notes),
-		CreatedAt:          m.CreatedAt,
-		UpdatedAt:          m.UpdatedAt,
+		ID:                        m.ID,
+		UserID:                    m.UserID,
+		GroupID:                   m.GroupID,
+		PlanID:                    m.PlanID,
+		PlanName:                  m.PlanName,
+		SevenDayLimitUSD:          m.SevenDayLimitUsd,
+		ScheduledPlanID:           m.ScheduledPlanID,
+		ScheduledPlanName:         m.ScheduledPlanName,
+		ScheduledSevenDayLimitUSD: m.ScheduledSevenDayLimitUsd,
+		ScheduledPlanEffectiveAt:  m.ScheduledPlanEffectiveAt,
+		ScheduledExpiresAt:        m.ScheduledExpiresAt,
+		ScheduledOrderID:          m.ScheduledOrderID,
+		StartsAt:                  m.StartsAt,
+		ExpiresAt:                 m.ExpiresAt,
+		Status:                    m.Status,
+		DailyWindowStart:          m.DailyWindowStart,
+		WeeklyWindowStart:         m.WeeklyWindowStart,
+		MonthlyWindowStart:        m.MonthlyWindowStart,
+		DailyUsageUSD:             m.DailyUsageUsd,
+		WeeklyUsageUSD:            m.WeeklyUsageUsd,
+		MonthlyUsageUSD:           m.MonthlyUsageUsd,
+		AssignedBy:                m.AssignedBy,
+		AssignedAt:                m.AssignedAt,
+		Notes:                     derefString(m.Notes),
+		CreatedAt:                 m.CreatedAt,
+		UpdatedAt:                 m.UpdatedAt,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
@@ -475,6 +745,15 @@ func applyUserSubscriptionEntityToService(dst *service.UserSubscription, src *db
 		return
 	}
 	dst.ID = src.ID
+	dst.PlanID = src.PlanID
+	dst.PlanName = src.PlanName
+	dst.SevenDayLimitUSD = src.SevenDayLimitUsd
+	dst.ScheduledPlanID = src.ScheduledPlanID
+	dst.ScheduledPlanName = src.ScheduledPlanName
+	dst.ScheduledSevenDayLimitUSD = src.ScheduledSevenDayLimitUsd
+	dst.ScheduledPlanEffectiveAt = src.ScheduledPlanEffectiveAt
+	dst.ScheduledExpiresAt = src.ScheduledExpiresAt
+	dst.ScheduledOrderID = src.ScheduledOrderID
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 }

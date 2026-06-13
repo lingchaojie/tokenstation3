@@ -47,36 +47,29 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 // GetPlans returns subscription plans available for sale.
 // GET /api/v1/payment/plans
 func (h *PaymentHandler) GetPlans(c *gin.Context) {
-	plans, err := h.configService.ListPlansForSale(c.Request.Context())
+	ctx := c.Request.Context()
+	plans, err := h.configService.ListPlansForSale(ctx)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	// Enrich plans with group platform for frontend color coding
-	type planWithPlatform struct {
-		ID            int64    `json:"id"`
-		GroupID       int64    `json:"group_id"`
-		GroupPlatform string   `json:"group_platform"`
-		Name          string   `json:"name"`
-		Description   string   `json:"description"`
-		Price         float64  `json:"price"`
-		OriginalPrice *float64 `json:"original_price,omitempty"`
-		ValidityDays  int      `json:"validity_days"`
-		ValidityUnit  string   `json:"validity_unit"`
-		Features      string   `json:"features"`
-		ProductName   string   `json:"product_name"`
-		ForSale       bool     `json:"for_sale"`
-		SortOrder     int      `json:"sort_order"`
+	seatSummaries, err := h.configService.SeatSummariesForPlans(ctx, plans)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
-	platformMap := h.configService.GetGroupPlatformMap(c.Request.Context(), plans)
+	platformMap := h.configService.GetGroupPlatformMap(ctx, plans)
 	result := make([]planWithPlatform, 0, len(plans))
 	for _, p := range plans {
-		result = append(result, planWithPlatform{
+		plan := planWithPlatform{
 			ID: int64(p.ID), GroupID: p.GroupID, GroupPlatform: platformMap[p.GroupID],
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
-			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
+			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
+			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
 			ProductName: p.ProductName, ForSale: p.ForSale, SortOrder: p.SortOrder,
-		})
+		}
+		applySeatSummaryToPlanWithPlatform(&plan, seatSummaries[p.ID])
+		result = append(result, plan)
 	}
 	response.Success(c, result)
 }
@@ -113,21 +106,33 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	}
 
 	// Fetch plans with group info
-	plans, _ := h.configService.ListPlansForSale(ctx)
+	plans, err := h.configService.ListPlansForSale(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	seatSummaries, err := h.configService.SeatSummariesForPlans(ctx, plans)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	groupInfo := h.configService.GetGroupInfoMap(ctx, plans)
 	planList := make([]checkoutPlan, 0, len(plans))
 	for _, p := range plans {
 		gi := groupInfo[p.GroupID]
-		planList = append(planList, checkoutPlan{
+		plan := checkoutPlan{
 			ID: int64(p.ID), GroupID: p.GroupID,
 			GroupPlatform: gi.Platform, GroupName: gi.Name,
 			RateMultiplier: gi.RateMultiplier, DailyLimitUSD: gi.DailyLimitUSD,
 			WeeklyLimitUSD: gi.WeeklyLimitUSD, MonthlyLimitUSD: gi.MonthlyLimitUSD,
 			ModelScopes: gi.ModelScopes,
 			Name:        p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
-			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
+			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
+			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
 			ProductName: p.ProductName,
-		})
+		}
+		applySeatSummaryToCheckoutPlan(&plan, seatSummaries[p.ID])
+		planList = append(planList, plan)
 	}
 
 	response.Success(c, checkoutInfoResponse{
@@ -145,6 +150,48 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	})
 }
 
+type planWithPlatform struct {
+	ID               int64    `json:"id"`
+	GroupID          int64    `json:"group_id"`
+	GroupPlatform    string   `json:"group_platform"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Price            float64  `json:"price"`
+	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
+	ValidityDays     int      `json:"validity_days"`
+	ValidityUnit     string   `json:"validity_unit"`
+	Features         string   `json:"features"`
+	ProductName      string   `json:"product_name"`
+	ForSale          bool     `json:"for_sale"`
+	SortOrder        int      `json:"sort_order"`
+	SeatLimit        *int     `json:"seat_limit"`
+	SeatUsed         int      `json:"seat_used"`
+	SeatAvailable    *int     `json:"seat_available,omitempty"`
+	SeatFull         bool     `json:"seat_full"`
+	SeatOverLimit    bool     `json:"seat_over_limit"`
+}
+
+type publicPlan struct {
+	ID               int64    `json:"id"`
+	GroupID          int64    `json:"group_id"`
+	GroupPlatform    string   `json:"group_platform"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Price            float64  `json:"price"`
+	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
+	ValidityDays     int      `json:"validity_days"`
+	ValidityUnit     string   `json:"validity_unit"`
+	Features         []string `json:"features"`
+	SortOrder        int      `json:"sort_order"`
+	SeatLimit        *int     `json:"seat_limit"`
+	SeatUsed         int      `json:"seat_used"`
+	SeatAvailable    *int     `json:"seat_available,omitempty"`
+	SeatFull         bool     `json:"seat_full"`
+	SeatOverLimit    bool     `json:"seat_over_limit"`
+}
+
 type checkoutInfoResponse struct {
 	Methods                   map[string]service.MethodLimits `json:"methods"`
 	GlobalMin                 float64                         `json:"global_min"`
@@ -160,23 +207,62 @@ type checkoutInfoResponse struct {
 }
 
 type checkoutPlan struct {
-	ID              int64    `json:"id"`
-	GroupID         int64    `json:"group_id"`
-	GroupPlatform   string   `json:"group_platform"`
-	GroupName       string   `json:"group_name"`
-	RateMultiplier  float64  `json:"rate_multiplier"`
-	DailyLimitUSD   *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD *float64 `json:"monthly_limit_usd"`
-	ModelScopes     []string `json:"supported_model_scopes"`
-	Name            string   `json:"name"`
-	Description     string   `json:"description"`
-	Price           float64  `json:"price"`
-	OriginalPrice   *float64 `json:"original_price,omitempty"`
-	ValidityDays    int      `json:"validity_days"`
-	ValidityUnit    string   `json:"validity_unit"`
-	Features        []string `json:"features"`
-	ProductName     string   `json:"product_name"`
+	ID               int64    `json:"id"`
+	GroupID          int64    `json:"group_id"`
+	GroupPlatform    string   `json:"group_platform"`
+	GroupName        string   `json:"group_name"`
+	RateMultiplier   float64  `json:"rate_multiplier"`
+	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
+	WeeklyLimitUSD   *float64 `json:"weekly_limit_usd"`
+	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
+	ModelScopes      []string `json:"supported_model_scopes"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Price            float64  `json:"price"`
+	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
+	ValidityDays     int      `json:"validity_days"`
+	ValidityUnit     string   `json:"validity_unit"`
+	Features         []string `json:"features"`
+	ProductName      string   `json:"product_name"`
+	SeatLimit        *int     `json:"seat_limit"`
+	SeatUsed         int      `json:"seat_used"`
+	SeatAvailable    *int     `json:"seat_available,omitempty"`
+	SeatFull         bool     `json:"seat_full"`
+	SeatOverLimit    bool     `json:"seat_over_limit"`
+}
+
+func applySeatSummaryToCheckoutPlan(plan *checkoutPlan, summary service.PlanSeatSummary) {
+	if plan == nil {
+		return
+	}
+	plan.SeatLimit = summary.SeatLimit
+	plan.SeatUsed = summary.SeatUsed
+	plan.SeatAvailable = summary.SeatAvailable
+	plan.SeatFull = summary.SeatFull
+	plan.SeatOverLimit = summary.SeatOverLimit
+}
+
+func applySeatSummaryToPlanWithPlatform(plan *planWithPlatform, summary service.PlanSeatSummary) {
+	if plan == nil {
+		return
+	}
+	plan.SeatLimit = summary.SeatLimit
+	plan.SeatUsed = summary.SeatUsed
+	plan.SeatAvailable = summary.SeatAvailable
+	plan.SeatFull = summary.SeatFull
+	plan.SeatOverLimit = summary.SeatOverLimit
+}
+
+func applySeatSummaryToPublicPlan(plan *publicPlan, summary service.PlanSeatSummary) {
+	if plan == nil {
+		return
+	}
+	plan.SeatLimit = summary.SeatLimit
+	plan.SeatUsed = summary.SeatUsed
+	plan.SeatAvailable = summary.SeatAvailable
+	plan.SeatFull = summary.SeatFull
+	plan.SeatOverLimit = summary.SeatOverLimit
 }
 
 // parseFeatures splits a newline-separated features string into a string slice.
@@ -194,6 +280,42 @@ func parseFeatures(raw string) []string {
 		return []string{}
 	}
 	return out
+}
+
+// GetPublicPlans returns saleable subscription plans for the public homepage.
+// GET /api/v1/payment/public/plans
+func (h *PaymentHandler) GetPublicPlans(c *gin.Context) {
+	ctx := c.Request.Context()
+	plans, err := h.configService.ListPlansForSale(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	seatSummaries, err := h.configService.SeatSummariesForPlans(ctx, plans)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	platformMap := h.configService.GetGroupPlatformMap(ctx, plans)
+	result := make([]publicPlan, 0, len(plans))
+	for _, p := range plans {
+		plan := publicPlan{
+			ID:            int64(p.ID),
+			GroupID:       p.GroupID,
+			GroupPlatform: platformMap[p.GroupID],
+			Name:          p.Name,
+			Description:   p.Description,
+			Price:         p.Price,
+			OriginalPrice: p.OriginalPrice,
+			ValidityDays:  p.ValidityDays,
+			ValidityUnit:  p.ValidityUnit,
+			Features:      parseFeatures(p.Features),
+			SortOrder:     p.SortOrder,
+		}
+		applySeatSummaryToPublicPlan(&plan, seatSummaries[p.ID])
+		result = append(result, plan)
+	}
+	response.Success(c, result)
 }
 
 // GetLimits returns per-payment-type limits derived from enabled provider instances.

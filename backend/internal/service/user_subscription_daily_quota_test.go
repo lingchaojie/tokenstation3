@@ -1,3 +1,5 @@
+//go:build unit
+
 package service
 
 import (
@@ -12,11 +14,19 @@ import (
 type dailyResetTrackingUserSubRepo struct {
 	userSubRepoNoop
 
-	resetDailyCalled bool
+	resetDailyCalled  bool
+	resetWeeklyCalled bool
+	weeklyWindowStart time.Time
 }
 
 func (r *dailyResetTrackingUserSubRepo) ResetDailyUsage(context.Context, int64, time.Time) error {
 	r.resetDailyCalled = true
+	return nil
+}
+
+func (r *dailyResetTrackingUserSubRepo) ResetWeeklyUsage(_ context.Context, _ int64, _ *time.Time, windowStart time.Time) error {
+	r.resetWeeklyCalled = true
+	r.weeklyWindowStart = windowStart
 	return nil
 }
 
@@ -151,6 +161,31 @@ func TestCheckAndResetWindows_MultiDaySubscriptionStillResetsDailyUsage(t *testi
 	require.NoError(t, err)
 	require.True(t, repo.resetDailyCalled, "多日订阅仍应重置过期 daily window")
 	require.Equal(t, 0.0, sub.DailyUsageUSD)
+}
+
+func TestCheckAndResetWindowsAt_WeeklyResetUsesExactNow(t *testing.T) {
+	now := time.Date(2026, 6, 11, 15, 4, 5, 123456789, time.UTC)
+	weeklyWindowStart := now.Add(-7 * 24 * time.Hour)
+	repo := &dailyResetTrackingUserSubRepo{}
+	svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
+	sub := &UserSubscription{
+		ID:                1,
+		UserID:            10,
+		GroupID:           20,
+		StartsAt:          weeklyWindowStart,
+		ExpiresAt:         now.Add(24 * time.Hour),
+		WeeklyUsageUSD:    10,
+		WeeklyWindowStart: &weeklyWindowStart,
+	}
+
+	err := svc.CheckAndResetWindowsAt(context.Background(), sub, now)
+
+	require.NoError(t, err)
+	require.True(t, repo.resetWeeklyCalled)
+	require.Equal(t, now, repo.weeklyWindowStart)
+	require.NotNil(t, sub.WeeklyWindowStart)
+	require.Equal(t, now, *sub.WeeklyWindowStart)
+	require.Equal(t, 0.0, sub.WeeklyUsageUSD)
 }
 
 func TestValidateAndCheckLimits_DailyCardDoesNotAllowSecondQuotaAfterMidnight(t *testing.T) {

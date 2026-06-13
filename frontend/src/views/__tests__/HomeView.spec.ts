@@ -12,7 +12,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock } = vi.hoist
       doc_url?: string
       home_content?: string
     },
-    siteName: 'Sub2API',
+    siteName: 'LINX2',
     siteLogo: '',
     siteSubtitle: 'AI API Gateway Platform',
     docUrl: '',
@@ -98,6 +98,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string) => messages[key] ?? key,
+      locale: { value: 'zh' },
     }),
   }
 })
@@ -120,7 +121,7 @@ function mountHome() {
 describe('HomeView landing page', () => {
   beforeEach(() => {
     appState.cachedPublicSettings = null
-    appState.siteName = 'Sub2API'
+    appState.siteName = 'LINX2'
     appState.siteLogo = ''
     appState.siteSubtitle = 'AI API Gateway Platform'
     appState.docUrl = ''
@@ -140,7 +141,7 @@ describe('HomeView landing page', () => {
     })
   })
 
-  it('renders the black-orange enterprise API landing shell by default', async () => {
+  it('renders the dark-orange LINX2 landing shell with LINX2 subscription plans by default', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',
       site_subtitle: 'Custom subtitle should not replace the approved hero copy',
@@ -152,18 +153,126 @@ describe('HomeView landing page', () => {
 
     const text = wrapper.text()
     expect(text).toContain('Fuse API')
-    expect(text).toContain('Claude Code & Codex API')
-    expect(text).toContain('企业级编程 API 服务')
-    expect(text).toContain('稳定、低延迟、可观测')
-    expect(text).toContain('统一 API 接入')
-    expect(text).toContain('智能账号池调度')
-    expect(text).toContain('用量与余额管理')
+    expect(text).toContain('统一 AI 编程 API · Claude / OpenAI 兼容路由')
+    expect(text).toContain('一个密钥，接入 Claude 与 OpenAI 编程模型。')
     expect(text).toContain('Claude Code')
     expect(text).toContain('Codex')
-    expect(text).toContain('OpenAI 兼容')
-    expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/landing-icon.jpg')
-    expect(wrapper.get('a[href="/login"]').text()).toContain('立即开始')
-    expect(wrapper.get('a[href="https://docs.example.test"]').text()).toContain('查看文档')
+    expect(text).toContain('可用路由')
+    expect(text).toContain('Anthropic Messages')
+    expect(text).toContain('OpenAI Responses')
+    expect(text).toContain('OpenAI Chat Completions')
+    expect(text).toContain('OpenAI Images')
+    expect(text).toContain('ANTHROPIC_AUTH_TOKEN')
+    expect(text).toContain('OPENAI_API_KEY')
+    expect(text).not.toMatch(/(^|\s)API_KEY=lx2_/)
+    expect(text).not.toContain('Gemini')
+
+    expect(text).toContain('LINX2 订阅方案')
+    expect(text).toContain('Basic 月卡')
+    expect(text).toContain('Plus 月卡')
+    expect(text).toContain('Pro 月卡')
+    expect(text).toContain('Max 月卡')
+    expect(text).toContain('¥179')
+    expect(text).toContain('¥399')
+    expect(text).toContain('¥799')
+    expect(text).toContain('¥1599')
+    expect(text).toContain('$50 / 7 天')
+    expect(text).toContain('$110 / 7 天')
+    expect(text).toContain('$260 / 7 天')
+    expect(text).toContain('$550 / 7 天')
+    expect(text).toContain('总共可获取 $200')
+    expect(text).toContain('总共可获取 $440')
+    expect(text).toContain('总共可获取 $1,040')
+    expect(text).toContain('总共可获取 $2,200')
+    expect(text).toContain('每周发放充值额度')
+    expect(text).toContain('所有档位都支持 Claude Code 与 OpenAI 兼容接口')
+    expect(text).toContain('轻量 Claude Code 会话')
+    expect(text).toContain('OpenAI 兼容接口调试')
+    expect(text).toContain('高频 Claude Code / OpenAI 生产流量')
+    expect(text).toContain('价格透明，上游模型价格直传')
+    expect(text).toContain('按每百万 Token 计价')
+    expect(text).toContain('Anthropic')
+    expect(text).toContain('OpenAI')
+    expect(text).toContain('Claude Fable 5')
+    expect(text).toContain('Claude Mythos 5')
+    expect(text).toContain('GPT-5.5')
+    expect(text).toContain('GPT-5.4 Mini')
+    expect(text).toContain('$50.00')
+    expect(text).toContain('$30.00')
+    expect(text).toContain('$4.50')
+
+    const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
+    expect(headerNav.text()).toContain('能力')
+    expect(headerNav.text()).toContain('价格')
+    expect(headerNav.get('a[href="#pricing"]').exists()).toBe(true)
+
+    const routeGrid = wrapper.get('[data-testid="homepage-route-grid"]')
+    expect(routeGrid.text()).toContain('Anthropic Messages')
+    expect(routeGrid.text()).toContain('OpenAI Responses')
+    expect(routeGrid.text()).toContain('OpenAI Chat Completions')
+    expect(routeGrid.text()).toContain('OpenAI Images')
+
+    const pricingGrid = wrapper.get('[data-testid="linear-pricing-grid"]')
+    expect(pricingGrid.findAll('[data-testid="pricing-plan-card"]').length).toBe(4)
+    expect(pricingGrid.find('[data-testid="pricing-model-row"]').exists()).toBe(false)
+    const pricingCards = pricingGrid.findAll('[data-testid="pricing-plan-card"]')
+    const expectedPlans = [
+      { name: 'Basic 月卡', price: '¥179', quota: '$50 / 7 天', monthlyTotal: '$200' },
+      { name: 'Plus 月卡', price: '¥399', quota: '$110 / 7 天', monthlyTotal: '$440' },
+      { name: 'Pro 月卡', price: '¥799', quota: '$260 / 7 天', monthlyTotal: '$1,040' },
+      { name: 'Max 月卡', price: '¥1599', quota: '$550 / 7 天', monthlyTotal: '$2,200' },
+    ]
+    expectedPlans.forEach((plan, index) => {
+      const cardText = pricingCards[index].text()
+      expect(cardText).toContain(plan.name)
+      expect(cardText).toContain(plan.price)
+      expect(cardText).toContain('/ 月')
+      expect(cardText).toContain(plan.quota)
+      expect(cardText).toContain(`总共可获取 ${plan.monthlyTotal}`)
+      const planCta = pricingCards[index].get('a[href="/purchase?tab=subscription"]')
+      expect(planCta.text()).toContain('选择方案')
+      expect(planCta.attributes('aria-label')).toContain(plan.name)
+    })
+    const pricingCtaLabels = pricingCards.map((card) => card.get('a[href="/purchase?tab=subscription"]').attributes('aria-label'))
+    expect(new Set(pricingCtaLabels).size).toBe(expectedPlans.length)
+
+    const subscriptionSection = wrapper.get('section#pricing')
+    const modelPricingSection = wrapper.get('section#model-pricing')
+    expect(subscriptionSection.text()).toContain('LINX2 订阅方案')
+    expect(subscriptionSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
+    expect(modelPricingSection.text()).toContain('价格透明，上游模型价格直传')
+    expect(modelPricingSection.text()).toContain('Claude Mythos 5')
+    expect(subscriptionSection.element.compareDocumentPosition(modelPricingSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const header = wrapper.get('header')
+    expect(header.classes()).toContain('bg-linear-canvas/90')
+    expect(header.classes()).not.toContain('bg-linear-canvas/88')
+
+    const footerBrand = wrapper.get('[data-testid="homepage-footer-brand"]')
+    expect(footerBrand.classes()).toContain('items-center')
+    expect(footerBrand.text()).toContain('LINX2.Ltd')
+
+    expect(text).not.toContain('GitHub')
+    expect(wrapper.get('img[alt="Fuse API logo"]').attributes('src')).toBe('/linx2-icon.png')
+    const headerCta = wrapper.get('a[href="/login"]')
+    expect(headerCta.text()).toContain('立即开始')
+    expect(headerCta.classes()).toContain('bg-primary-500')
+    expect(headerCta.classes()).not.toContain('ui-theme-toggle')
+
+    const themeToggle = wrapper.get('[data-testid="homepage-theme-toggle"]')
+    expect(themeToggle.classes()).toContain('ui-theme-toggle')
+    expect(themeToggle.classes()).not.toContain('bg-primary-500')
+
+    const accentBadges = wrapper.findAll('.ui-accent-badge')
+    expect(accentBadges.length).toBeGreaterThanOrEqual(6)
+
+    const accentDots = wrapper.findAll('.ui-accent-dot')
+    expect(accentDots.length).toBeGreaterThanOrEqual(2)
+
+    const docsLinks = wrapper.findAll('a[href="https://docs.example.test"]')
+    expect(docsLinks.length).toBeGreaterThan(0)
+    expect(docsLinks[0].text()).toContain('文档')
+    expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
   })
 
   it('routes authenticated admin users to the dashboard CTA', async () => {
@@ -175,12 +284,15 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const headerCta = wrapper.get('header a[href="/admin/dashboard"]')
+    const userInitial = headerCta.get('.ui-avatar-identity-sm')
+    expect(userInitial.text()).toBe('A')
+    expect(userInitial.classes()).not.toContain('bg-white/15')
     expect(headerCta.text()).toContain('进入控制台')
     expect(headerCta.attributes('aria-label')).toBe('进入控制台')
     expect(wrapper.text()).toContain('控制台')
   })
 
-  it('keeps the header CTA compact and accessible on mobile screens', async () => {
+  it('shows an accessible labelled sign-in CTA in the header', async () => {
     const wrapper = mountHome()
     await flushPromises()
 
@@ -189,12 +301,7 @@ describe('HomeView landing page', () => {
 
     expect(headerCta.attributes('aria-label')).toBe('立即开始')
     expect(headerCta.classes()).toContain('h-10')
-    expect(headerCta.classes()).toContain('w-10')
-    expect(headerCta.classes()).toContain('px-0')
-    expect(headerCta.classes()).toContain('sm:w-auto')
-    expect(headerCta.classes()).toContain('sm:px-4')
-    expect(headerCtaLabel.classes()).toContain('hidden')
-    expect(headerCtaLabel.classes()).toContain('sm:inline')
+    expect(headerCtaLabel.text()).toBe('立即开始')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {
@@ -209,7 +316,7 @@ describe('HomeView landing page', () => {
     const iframe = wrapper.get('iframe')
     expect(iframe.attributes('src')).toBe('https://landing.example.test')
     expect(iframe.attributes('title')).toBe('Fuse API custom home content')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
   it('renders Markdown custom home content before the default landing page', async () => {
@@ -222,7 +329,7 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.get('h1').text()).toBe('Custom Home')
     expect(wrapper.html()).toContain('<strong>custom</strong>')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
   it('renders HTML custom home content before the default landing page', async () => {
@@ -235,6 +342,37 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
-    expect(wrapper.text()).not.toContain('企业级编程 API 服务')
+    expect(wrapper.find('.linear-landing').exists()).toBe(false)
+  })
+
+  it('renders a Linear-style product console landing experience without decorative mesh glow', async () => {
+    appState.cachedPublicSettings = {
+      site_name: 'Fuse API',
+      doc_url: 'https://docs.example.test',
+    }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    expect(wrapper.find('.linear-landing').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="linear-product-console"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="linear-pricing-grid"]').exists()).toBe(true)
+    expect(wrapper.html()).not.toContain('bg-mesh-gradient')
+    expect(wrapper.html()).not.toContain('blur-3xl')
+    expect(wrapper.text()).toContain('API Gateway Console')
+    expect(wrapper.text()).toContain('Base URL')
+  })
+
+  it('keeps the default Linear landing in a local dark scope for light-mode users', async () => {
+    localStorage.setItem('theme', 'light')
+    document.documentElement.classList.remove('dark')
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const landing = wrapper.get('.linear-landing')
+    expect(landing.classes()).toContain('dark')
+    expect(landing.classes()).toContain('bg-linear-canvas')
+    expect(wrapper.find('[data-testid="linear-product-console"] .linx-panel-strong').exists()).toBe(true)
   })
 })
