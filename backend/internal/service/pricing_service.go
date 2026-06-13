@@ -542,6 +542,26 @@ func (s *PricingService) validatePricingURL(raw string) (string, error) {
 	return normalized, nil
 }
 
+// GetCatalogModelPricing returns pricing only when the model exists in the loaded
+// pricing catalog. Unlike GetModelPricing, it does not synthesize family/default
+// fallbacks, so public catalog surfaces never display invented rows.
+func (s *PricingService) GetCatalogModelPricing(modelName string) *LiteLLMModelPricing {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	modelLower := strings.ToLower(strings.TrimSpace(modelName))
+	if modelLower == "" {
+		return nil
+	}
+
+	for _, candidate := range s.buildModelLookupCandidates(modelLower) {
+		if pricing, ok := s.pricingData[candidate]; ok {
+			return pricing
+		}
+	}
+	return nil
+}
+
 // GetModelPricing 获取模型价格（带模糊匹配）
 func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing {
 	s.mu.RLock()

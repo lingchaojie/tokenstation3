@@ -2,6 +2,10 @@ export const BILLING_MODE_TOKEN = 'token'
 export const BILLING_MODE_PER_REQUEST = 'per_request'
 export const BILLING_MODE_IMAGE = 'image'
 
+function hasImageUsageShape(row: Pick<ImageBillingRow, 'image_count' | 'billing_mode'> | null | undefined): boolean {
+  return (row?.image_count ?? 0) > 0 && row?.billing_mode !== BILLING_MODE_TOKEN
+}
+
 export function getBillingModeLabel(mode: string | null | undefined, t: (key: string) => string): string {
   switch (mode) {
     case BILLING_MODE_PER_REQUEST: return t('admin.usage.billingModePerRequest')
@@ -25,10 +29,11 @@ interface ImageBillingRow {
 }
 
 export function isImageUsage(row: Pick<ImageBillingRow, 'image_count' | 'billing_mode'> | null | undefined): boolean {
-  return (row?.image_count ?? 0) > 0 && row?.billing_mode !== BILLING_MODE_TOKEN
+  return hasImageUsageShape(row)
 }
 
 export function getDisplayBillingMode(row: Pick<ImageBillingRow, 'billing_mode' | 'image_count'> | null | undefined): string | null | undefined {
+  if (hasImageUsageShape(row)) return BILLING_MODE_IMAGE
   return row?.billing_mode
 }
 

@@ -10,11 +10,12 @@
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
       <!-- Custom Logo or Default Logo -->
       <div class="sidebar-logo flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white p-1 ring-1 ring-black/5">
-        <img v-if="settingsLoaded" :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+        <img v-if="settingsLoaded" :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
       </div>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
         <span class="sidebar-brand-title text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
-          {{ siteName }}
+          <LinxWordmark v-if="usesDefaultBrand" />
+          <span v-else>{{ siteName }}</span>
         </span>
         <!-- Version Badge -->
         <VersionBadge :version="siteVersion" />
@@ -185,6 +186,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
+import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 
@@ -242,8 +244,10 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 const expandedGroups = ref<Set<string>>(new Set())
 
 // Site settings from appStore (cached, no flicker)
-const siteName = computed(() => appStore.siteName)
+const DEFAULT_SITE_NAME = 'LINX2.AI'
+const siteName = computed(() => appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => appStore.siteLogo)
+const usesDefaultBrand = computed(() => siteName.value.trim().toUpperCase() === DEFAULT_SITE_NAME)
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 

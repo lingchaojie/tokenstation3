@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -119,4 +121,118 @@ func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *
 	require.True(t, resp.Data.WeChatOAuthEnabled)
 	require.True(t, resp.Data.WeChatOAuthOpenEnabled)
 	require.True(t, resp.Data.WeChatOAuthMPEnabled)
+}
+
+func TestSettingHandler_GetPublicModelPricing_ReturnsCuratedPricingFromFallbackData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	pricingService := service.NewPricingService(&config.Config{
+		Pricing: config.PricingConfig{
+			DataDir:      t.TempDir(),
+			FallbackFile: filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"),
+		},
+	}, nil)
+	require.NoError(t, pricingService.Initialize())
+	defer pricingService.Stop()
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+	h.SetPricingService(pricingService)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-pricing", nil)
+
+	h.GetPublicModelPricing(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Providers []struct {
+				Provider    string `json:"provider"`
+				AccentColor string `json:"accent_color"`
+				Models      []struct {
+					Name                string  `json:"name"`
+					Model               string  `json:"model"`
+					InputPerMillion     float64 `json:"input_per_million"`
+					OutputPerMillion    float64 `json:"output_per_million"`
+					CacheReadPerMillion float64 `json:"cache_read_per_million"`
+				} `json:"models"`
+			} `json:"providers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Len(t, resp.Data.Providers, 2)
+
+	anthropic := resp.Data.Providers[0]
+	require.Equal(t, "Anthropic", anthropic.Provider)
+	require.Equal(t, "#d97745", anthropic.AccentColor)
+	require.NotEmpty(t, anthropic.Models)
+	require.Equal(t, "Claude Opus 4.8", anthropic.Models[0].Name)
+	require.Equal(t, "claude-opus-4-8", anthropic.Models[0].Model)
+	require.InDelta(t, 5.0, anthropic.Models[0].InputPerMillion, 0.001)
+	require.InDelta(t, 25.0, anthropic.Models[0].OutputPerMillion, 0.001)
+	require.InDelta(t, 0.5, anthropic.Models[0].CacheReadPerMillion, 0.001)
+	for _, model := range anthropic.Models {
+		require.NotEqual(t, "Claude Mythos 5", model.Name)
+	}
+
+	openai := resp.Data.Providers[1]
+	require.Equal(t, "OpenAI", openai.Provider)
+	require.Equal(t, "gpt-5.5", openai.Models[0].Model)
+}
+
+func TestSettingHandler_GetPublicModelPricing_OmitsMissingCuratedModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fallbackFile := filepath.Join(t.TempDir(), "model_pricing.json")
+	require.NoError(t, os.WriteFile(fallbackFile, []byte(`{
+		"claude-opus-4-8": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"cache_read_input_token_cost": 0.0000005,
+			"litellm_provider": "anthropic",
+			"mode": "chat"
+		}
+	}`), 0o644))
+
+	pricingService := service.NewPricingService(&config.Config{
+		Pricing: config.PricingConfig{
+			DataDir:      t.TempDir(),
+			FallbackFile: fallbackFile,
+		},
+	}, nil)
+	require.NoError(t, pricingService.Initialize())
+	defer pricingService.Stop()
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+	h.SetPricingService(pricingService)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-pricing", nil)
+
+	h.GetPublicModelPricing(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Providers []struct {
+				Provider string `json:"provider"`
+				Models   []struct {
+					Model string `json:"model"`
+				} `json:"models"`
+			} `json:"providers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Len(t, resp.Data.Providers, 1)
+	require.Equal(t, "Anthropic", resp.Data.Providers[0].Provider)
+	require.Len(t, resp.Data.Providers[0].Models, 1)
+	require.Equal(t, "claude-opus-4-8", resp.Data.Providers[0].Models[0].Model)
 }

@@ -123,7 +123,7 @@ describe('SubscriptionsView', () => {
 
     expect(text).toContain('Active plan')
     expect(text).toContain('Plus monthly')
-    expect(text).toContain('For everyday development when LINX2 is your steady personal coding gateway.')
+    expect(text).toContain('For regular development days where LINX2.AI becomes the default gateway for individual work.')
     expect(text).toContain('7-day quota')
     expect(text).toContain('$37.50')
     expect(text).toContain('$72.50')
