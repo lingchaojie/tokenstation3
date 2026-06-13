@@ -422,6 +422,15 @@ export default {
   auth: {
     welcomeBack: '欢迎回来',
     signInToAccount: '登录您的账户以继续',
+    layout: {
+      kicker: 'AI 网关平台',
+      title: '一个入口管理模型、密钥和用量。',
+      description: '登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。',
+      baseUrl: '基础地址',
+      routes: '路由',
+      billing: '计费',
+      billingValue: '用量账本已启用',
+    },
     signIn: '登录',
     signingIn: '登录中...',
     createAccount: '创建账户',

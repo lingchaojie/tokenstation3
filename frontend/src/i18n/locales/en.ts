@@ -422,6 +422,15 @@ export default {
   auth: {
     welcomeBack: 'Welcome Back',
     signInToAccount: 'Sign in to your account to continue',
+    layout: {
+      kicker: 'AI Gateway Platform',
+      title: 'One gateway for models, keys, and usage.',
+      description: 'Sign in to manage API keys, plans, billing, and channel access through a calm Linear-style console.',
+      baseUrl: 'Base URL',
+      routes: 'Routes',
+      billing: 'Billing',
+      billingValue: 'Usage ledger enabled',
+    },
     signIn: 'Sign In',
     signingIn: 'Signing in...',
     createAccount: 'Create Account',

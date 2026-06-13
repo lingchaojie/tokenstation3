@@ -1,7 +1,10 @@
+/* eslint-disable @typescript-eslint/triple-slash-reference */
+/// <reference path="../../../vite-env.d.ts" />
+
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import AuthLayout from '@/components/layout/AuthLayout.vue'
+import AuthLayout from '../../../components/layout/AuthLayout.vue'
 import LoginView from '../LoginView.vue'
 
 const fetchPublicSettings = vi.hoisted(() => vi.fn())
@@ -62,6 +65,13 @@ vi.mock('vue-i18n', () => ({
       'auth.signingIn': 'Signing in',
       'auth.dontHaveAccount': 'No account?',
       'auth.signUp': 'Sign up',
+      'auth.layout.kicker': 'AI 网关平台',
+      'auth.layout.title': '一个入口管理模型、密钥和用量。',
+      'auth.layout.description': '登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。',
+      'auth.layout.baseUrl': '基础地址',
+      'auth.layout.routes': '路由',
+      'auth.layout.billing': '计费',
+      'auth.layout.billingValue': '用量账本已启用',
     }[key] ?? key),
   }),
 }))
@@ -83,10 +93,30 @@ describe('Auth Linear shell', () => {
     expect(wrapper.find('[data-testid="auth-product-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="auth-card"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LINX2.AI')
-    expect(wrapper.text()).toContain('One gateway for models, keys, and usage.')
+    expect(wrapper.text()).toContain('一个入口管理模型、密钥和用量。')
     expect(wrapper.text()).not.toContain('订阅转 API')
     expect(wrapper.text()).not.toContain('Subscription to API')
     expect(wrapper.html()).not.toContain('blur-3xl')
+  })
+
+  it('uses i18n copy for the product panel instead of hardcoded English', () => {
+    const wrapper = mount(AuthLayout, {
+      slots: { default: '<div data-testid="auth-slot">Auth form</div>' },
+    })
+
+    const productPanel = wrapper.find('[data-testid="auth-product-panel"]')
+
+    expect(productPanel.text()).toContain('AI 网关平台')
+    expect(productPanel.text()).toContain('一个入口管理模型、密钥和用量。')
+    expect(productPanel.text()).toContain('登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。')
+    expect(productPanel.text()).toContain('基础地址')
+    expect(productPanel.text()).toContain('路由')
+    expect(productPanel.text()).toContain('计费')
+    expect(productPanel.text()).toContain('用量账本已启用')
+
+    expect(productPanel.text()).not.toContain('One gateway for models, keys, and usage.')
+    expect(productPanel.text()).not.toContain('Sign in to manage API keys')
+    expect(productPanel.text()).not.toContain('Usage ledger enabled')
   })
 
   it('renders LoginView inside the shared Linear auth card', async () => {

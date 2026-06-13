@@ -16,18 +16,18 @@
             </div>
           </div>
 
-          <p class="linx-section-kicker">AI Gateway Platform</p>
+          <p class="linx-section-kicker">{{ t('auth.layout.kicker') }}</p>
           <h1 class="mt-4 max-w-md text-5xl font-semibold leading-[1.02] tracking-[-0.06em] text-linear-ink">
-            One gateway for models, keys, and usage.
+            {{ t('auth.layout.title') }}
           </h1>
           <p class="mt-5 max-w-md text-sm leading-6 text-linear-ink-subtle">
-            Sign in to manage API keys, plans, billing, and channel access through a calm Linear-style console.
+            {{ t('auth.layout.description') }}
           </p>
 
           <div class="mt-8 rounded-xl border border-linear-hairline bg-linear-canvas p-4 font-mono text-xs text-linear-ink-muted">
-            <div class="linx-data-row"><span>Base URL</span><span class="text-primary-300">https://linx2.ai/api</span></div>
-            <div class="linx-data-row"><span>Routes</span><span>Claude · Codex · Gemini</span></div>
-            <div class="linx-data-row"><span>Billing</span><span>Usage ledger enabled</span></div>
+            <div class="linx-data-row"><span>{{ t('auth.layout.baseUrl') }}</span><span class="text-primary-300">https://linx2.ai/api</span></div>
+            <div class="linx-data-row"><span>{{ t('auth.layout.routes') }}</span><span>Claude · Codex · Gemini</span></div>
+            <div class="linx-data-row"><span>{{ t('auth.layout.billing') }}</span><span>{{ t('auth.layout.billingValue') }}</span></div>
           </div>
         </div>
       </section>
@@ -64,10 +64,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { sanitizeUrl } from '@/utils/url'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const DEFAULT_SITE_NAME = 'LINX2.AI'
 
