@@ -7,10 +7,29 @@ import {
   shouldEnable51laAnalytics
 } from '../analytics51la'
 
+type TestLaCollectWindow = Window &
+  typeof globalThis & {
+    LA?: {
+      id?: string
+      ck?: string
+      d?: HTMLScriptElement
+      ids?: Array<{
+        id: string
+        ck: string
+        d?: HTMLScriptElement
+        autoTrack?: boolean
+        hashMode?: boolean
+        screenRecord?: boolean
+      }>
+    }
+  }
+
+const analyticsWindow = window as TestLaCollectWindow
+
 function resetAnalyticsDom(): void {
   document.head.innerHTML = ''
   document.body.innerHTML = ''
-  delete window.LA
+  delete analyticsWindow.LA
 }
 
 afterEach(() => {
@@ -38,7 +57,7 @@ describe('init51laAnalytics', () => {
     })
 
     expect(document.getElementById('LA_COLLECT')).toBeNull()
-    expect(window.LA).toBeUndefined()
+    expect(analyticsWindow.LA).toBeUndefined()
   })
 
   it('does not inject the SDK on non-official production hosts', () => {
@@ -50,7 +69,7 @@ describe('init51laAnalytics', () => {
     })
 
     expect(document.getElementById('LA_COLLECT')).toBeNull()
-    expect(window.LA).toBeUndefined()
+    expect(analyticsWindow.LA).toBeUndefined()
   })
 
   it('injects the 51.LA SDK before the first existing body script on linx2.ai production', () => {
@@ -82,12 +101,12 @@ describe('init51laAnalytics', () => {
     expect(sdkScript?.parentElement).toBe(document.body)
     expect(sdkScript?.nextElementSibling).toBe(appScript)
     expect(appScript.previousElementSibling).toBe(sdkScript)
-    expect(window.LA?.ids).toHaveLength(1)
-    expect(window.LA?.ids?.[0]).toMatchObject(LA_COLLECT_CONFIG)
-    expect(window.LA?.ids?.[0]?.d).toBe(sdkScript)
-    expect(window.LA?.ids?.[0]).not.toHaveProperty('autoTrack')
-    expect(window.LA?.ids?.[0]).not.toHaveProperty('hashMode')
-    expect(window.LA?.ids?.[0]).not.toHaveProperty('screenRecord')
+    expect(analyticsWindow.LA?.ids).toHaveLength(1)
+    expect(analyticsWindow.LA?.ids?.[0]).toMatchObject(LA_COLLECT_CONFIG)
+    expect(analyticsWindow.LA?.ids?.[0]?.d).toBe(sdkScript)
+    expect(analyticsWindow.LA?.ids?.[0]).not.toHaveProperty('autoTrack')
+    expect(analyticsWindow.LA?.ids?.[0]).not.toHaveProperty('hashMode')
+    expect(analyticsWindow.LA?.ids?.[0]).not.toHaveProperty('screenRecord')
   })
 
   it('injects the 51.LA SDK on www.linx2.ai production', () => {
@@ -99,7 +118,7 @@ describe('init51laAnalytics', () => {
     })
 
     expect(document.getElementById('LA_COLLECT')).not.toBeNull()
-    expect(window.LA?.ids).toHaveLength(1)
+    expect(analyticsWindow.LA?.ids).toHaveLength(1)
   })
 
   it('does not inject duplicate SDK scripts when called more than once', () => {
@@ -117,7 +136,7 @@ describe('init51laAnalytics', () => {
     })
 
     expect(document.querySelectorAll('script#LA_COLLECT')).toHaveLength(1)
-    expect(window.LA?.ids).toHaveLength(1)
+    expect(analyticsWindow.LA?.ids).toHaveLength(1)
   })
 
   it('leaves the page untouched when an SDK script already exists', () => {
@@ -142,7 +161,7 @@ describe('init51laAnalytics', () => {
     expect(existingScript.getAttribute('charset')).toBe('ISO-8859-1')
     expect(existingScript.getAttribute('data-sentinel')).toBe('keep-me')
     expect(existingScript.textContent).toBe('window.__existing51laSentinel = true')
-    expect(window.LA).toBeUndefined()
+    expect(analyticsWindow.LA).toBeUndefined()
   })
 
   it('injects the SDK when a non-script element uses the LA_COLLECT id', () => {
@@ -163,16 +182,16 @@ describe('init51laAnalytics', () => {
     expect(sdkScript?.src).toBe(LA_SDK_SRC)
     expect(document.querySelectorAll('script#LA_COLLECT')).toHaveLength(1)
     expect(document.getElementById('LA_COLLECT')).toBe(nonScriptElement)
-    expect(window.LA?.ids).toHaveLength(1)
-    expect(window.LA?.ids?.[0]).toMatchObject(LA_COLLECT_CONFIG)
-    expect(window.LA?.ids?.[0]?.d).toBe(sdkScript)
+    expect(analyticsWindow.LA?.ids).toHaveLength(1)
+    expect(analyticsWindow.LA?.ids?.[0]).toMatchObject(LA_COLLECT_CONFIG)
+    expect(analyticsWindow.LA?.ids?.[0]?.d).toBe(sdkScript)
   })
 
   it('reuses an existing 51.LA queue when present', () => {
     const existingQueuedEntry = { id: 'already-queued', ck: 'already-queued' }
     const existingIds = [existingQueuedEntry]
     const existingQueue = { ids: existingIds }
-    window.LA = existingQueue
+    analyticsWindow.LA = existingQueue
 
     init51laAnalytics({
       isProduction: true,
@@ -181,10 +200,10 @@ describe('init51laAnalytics', () => {
       document
     })
 
-    expect(window.LA).toBe(existingQueue)
-    expect(window.LA.ids).toBe(existingIds)
-    expect(window.LA.ids).toHaveLength(2)
-    expect(window.LA.ids?.[0]).toBe(existingQueuedEntry)
-    expect(window.LA.ids?.[1]).toMatchObject(LA_COLLECT_CONFIG)
+    expect(analyticsWindow.LA).toBe(existingQueue)
+    expect(analyticsWindow.LA.ids).toBe(existingIds)
+    expect(analyticsWindow.LA.ids).toHaveLength(2)
+    expect(analyticsWindow.LA.ids?.[0]).toBe(existingQueuedEntry)
+    expect(analyticsWindow.LA.ids?.[1]).toMatchObject(LA_COLLECT_CONFIG)
   })
 })

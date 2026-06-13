@@ -4,6 +4,17 @@ interface LaCollectConfig {
   d?: HTMLScriptElement
 }
 
+interface LaCollectQueue {
+  id?: string
+  ck?: string
+  d?: HTMLScriptElement
+  ids?: LaCollectConfig[]
+}
+
+type LaCollectWindow = Window & {
+  LA?: LaCollectQueue
+}
+
 export const LA_SDK_SRC = 'https://sdk.51.la/js-sdk-pro.min.js'
 export const LA_COLLECT_CONFIG = {
   id: '3QEWeLJeam88CaLO',
@@ -20,10 +31,10 @@ export interface ShouldEnable51laAnalyticsOptions {
 
 export interface Init51laAnalyticsOptions extends ShouldEnable51laAnalyticsOptions {
   document?: Document
-  window?: Window
+  window?: LaCollectWindow
 }
 
-function getRuntimeWindow(): Window | undefined {
+function getRuntimeWindow(): LaCollectWindow | undefined {
   return typeof window === 'undefined' ? undefined : window
 }
 

@@ -105,8 +105,8 @@ func TestAdminUserAPIKeyRoutes_ResponseUsesSnakeCaseDTO(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	body := decodeJSONResponse(t, w.Body.Bytes())
-	data := body["data"].(map[string]any)
-	anthropic := data["anthropic"].(map[string]any)
+	data := requireJSONObject(t, body["data"], "data")
+	anthropic := requireJSONObject(t, data["anthropic"], "data.anthropic")
 	require.Equal(t, float64(42), anthropic["user_id"])
 	require.Equal(t, service.APIKeyTypeAnthropic, anthropic["key_type"])
 	require.Equal(t, float64(10), anthropic["group_id"])
@@ -115,7 +115,7 @@ func TestAdminUserAPIKeyRoutes_ResponseUsesSnakeCaseDTO(t *testing.T) {
 	require.NotContains(t, anthropic, "UserID")
 	require.NotContains(t, anthropic, "KeyType")
 	require.NotContains(t, anthropic, "GroupID")
-	group := anthropic["group"].(map[string]any)
+	group := requireJSONObject(t, anthropic["group"], "data.anthropic.group")
 	require.Equal(t, float64(10), group["id"])
 	require.Equal(t, "anthropic group", group["name"])
 	require.Equal(t, service.PlatformAnthropic, group["platform"])
@@ -142,8 +142,8 @@ func TestAdminUserAPIKeyRoutes_UpdateResponseUsesSnakeCaseDTO(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	body := decodeJSONResponse(t, w.Body.Bytes())
-	data := body["data"].(map[string]any)
-	openAI := data["openai"].(map[string]any)
+	data := requireJSONObject(t, body["data"], "data")
+	openAI := requireJSONObject(t, data["openai"], "data.openai")
 	require.Equal(t, float64(42), openAI["user_id"])
 	require.Equal(t, service.APIKeyTypeOpenAI, openAI["key_type"])
 	require.NotContains(t, openAI, "UserID")
@@ -155,4 +155,11 @@ func decodeJSONResponse(t *testing.T, raw []byte) map[string]any {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
 	return body
+}
+
+func requireJSONObject(t *testing.T, value any, path string) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	require.Truef(t, ok, "%s must be an object", path)
+	return object
 }
