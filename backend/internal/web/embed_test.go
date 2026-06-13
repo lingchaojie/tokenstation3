@@ -243,7 +243,7 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 		assert.Contains(t, body, `nonce="`+testNonce+`"`)
 	})
 
-	t.Run("caches_html_content", func(t *testing.T) {
+	t.Run("reuses_rendered_html_when_settings_hash_is_unchanged", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
 		}
@@ -259,19 +259,23 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 
 		server.serveIndexHTML(c1)
 		assert.Equal(t, 1, provider.called)
+		etag1 := w1.Header().Get("ETag")
+		require.NotEmpty(t, etag1)
 
-		// Second request - should use cache
+		// Second request should re-read settings to validate the cache key,
+		// but reuse the rendered HTML when the settings hash is unchanged.
 		w2 := httptest.NewRecorder()
 		c2, _ := gin.CreateTestContext(w2)
 		c2.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 		c2.Set(middleware.CSPNonceKey, "nonce2")
 
 		server.serveIndexHTML(c2)
-		// Settings provider should not be called again
-		assert.Equal(t, 1, provider.called)
+		assert.Equal(t, 2, provider.called)
+		assert.Equal(t, etag1, w2.Header().Get("ETag"))
 
-		// But nonce should be different
+		// Nonce replacement must remain request-specific.
 		assert.Contains(t, w2.Body.String(), `nonce="nonce2"`)
+		assert.NotContains(t, w2.Body.String(), NonceHTMLPlaceholder)
 	})
 
 	t.Run("sets_etag_header", func(t *testing.T) {
@@ -326,6 +330,76 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 
 		assert.Equal(t, http.StatusNotModified, w2.Code)
 		assert.Empty(t, w2.Body.String())
+	})
+
+	t.Run("refreshes_cached_html_when_settings_hash_changes_without_invalidate", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]any{"payment_enabled": false},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		w1 := httptest.NewRecorder()
+		c1, _ := gin.CreateTestContext(w1)
+		c1.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c1.Set(middleware.CSPNonceKey, "nonce1")
+
+		server.serveIndexHTML(c1)
+		require.Equal(t, http.StatusOK, w1.Code)
+		require.Contains(t, w1.Body.String(), `"payment_enabled":false`)
+		oldETag := w1.Header().Get("ETag")
+		require.NotEmpty(t, oldETag)
+
+		provider.settings = map[string]any{"payment_enabled": true}
+
+		w2 := httptest.NewRecorder()
+		c2, _ := gin.CreateTestContext(w2)
+		c2.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c2.Set(middleware.CSPNonceKey, "nonce2")
+
+		server.serveIndexHTML(c2)
+		require.Equal(t, http.StatusOK, w2.Code)
+		assert.Contains(t, w2.Body.String(), `"payment_enabled":true`)
+		assert.NotContains(t, w2.Body.String(), `"payment_enabled":false`)
+		assert.NotEqual(t, oldETag, w2.Header().Get("ETag"))
+		assert.Contains(t, w2.Body.String(), `nonce="nonce2"`)
+		assert.NotContains(t, w2.Body.String(), NonceHTMLPlaceholder)
+	})
+
+	t.Run("does_not_return_304_for_old_etag_after_settings_change", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]any{"payment_enabled": false},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(middleware.CSPNonceKey, "test-nonce")
+			c.Next()
+		})
+		router.Use(server.Middleware())
+
+		w1 := httptest.NewRecorder()
+		req1 := httptest.NewRequest(http.MethodGet, "/", nil)
+		router.ServeHTTP(w1, req1)
+
+		oldETag := w1.Header().Get("ETag")
+		require.NotEmpty(t, oldETag)
+		require.Contains(t, w1.Body.String(), `"payment_enabled":false`)
+
+		provider.settings = map[string]any{"payment_enabled": true}
+
+		w2 := httptest.NewRecorder()
+		req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+		req2.Header.Set("If-None-Match", oldETag)
+		router.ServeHTTP(w2, req2)
+
+		require.Equal(t, http.StatusOK, w2.Code)
+		assert.Contains(t, w2.Body.String(), `"payment_enabled":true`)
+		assert.NotEqual(t, oldETag, w2.Header().Get("ETag"))
 	})
 
 	t.Run("sets_cache_control_header", func(t *testing.T) {
@@ -671,7 +745,7 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 func TestHTMLCache(t *testing.T) {
 	t.Run("new_cache_returns_nil", func(t *testing.T) {
 		cache := NewHTMLCache()
-		assert.Nil(t, cache.Get())
+		assert.Nil(t, cache.Get(hashBytes([]byte(`{"key":"value"}`))))
 	})
 
 	t.Run("set_and_get", func(t *testing.T) {
@@ -682,10 +756,12 @@ func TestHTMLCache(t *testing.T) {
 		settings := []byte(`{"key":"value"}`)
 		cache.Set(html, settings)
 
-		result := cache.Get()
+		settingsHash := hashBytes(settings)
+		result := cache.Get(settingsHash)
 		require.NotNil(t, result)
 		assert.Equal(t, html, result.Content)
 		assert.NotEmpty(t, result.ETag)
+		assert.Equal(t, settingsHash, result.SettingsHash)
 	})
 
 	t.Run("invalidate_clears_cache", func(t *testing.T) {
@@ -696,35 +772,50 @@ func TestHTMLCache(t *testing.T) {
 		settings := []byte(`{"key":"value"}`)
 		cache.Set(html, settings)
 
-		require.NotNil(t, cache.Get())
+		settingsHash := hashBytes(settings)
+		require.NotNil(t, cache.Get(settingsHash))
 
 		cache.Invalidate()
 
-		assert.Nil(t, cache.Get())
+		assert.Nil(t, cache.Get(settingsHash))
 	})
 
-	t.Run("etag_changes_with_settings", func(t *testing.T) {
+	t.Run("get_returns_nil_when_settings_hash_changes_without_invalidate", func(t *testing.T) {
+		cache := NewHTMLCache()
+		cache.SetBaseHTML([]byte("<html></html>"))
+
+		html := []byte("<html><body>test</body></html>")
+		oldSettings := []byte(`{"payment_enabled":false}`)
+		newSettings := []byte(`{"payment_enabled":true}`)
+
+		cache.Set(html, oldSettings)
+
+		require.NotNil(t, cache.Get(hashBytes(oldSettings)))
+		assert.Nil(t, cache.Get(hashBytes(newSettings)))
+	})
+
+	t.Run("etag_changes_with_settings_without_invalidate", func(t *testing.T) {
 		cache := NewHTMLCache()
 		cache.SetBaseHTML([]byte("<html></html>"))
 
 		html := []byte("<html><body>test</body></html>")
 
-		cache.Set(html, []byte(`{"v":1}`))
-		etag1 := cache.Get().ETag
+		first := cache.Set(html, []byte(`{"v":1}`))
+		second := cache.Set(html, []byte(`{"v":2}`))
 
-		cache.Invalidate()
-		cache.Set(html, []byte(`{"v":2}`))
-		etag2 := cache.Get().ETag
-
-		assert.NotEqual(t, etag1, etag2)
+		require.NotNil(t, first)
+		require.NotNil(t, second)
+		assert.NotEqual(t, first.ETag, second.ETag)
 	})
 
 	t.Run("etag_format", func(t *testing.T) {
 		cache := NewHTMLCache()
 		cache.SetBaseHTML([]byte("<html></html>"))
 
-		cache.Set([]byte("<html></html>"), []byte(`{}`))
-		result := cache.Get()
+		settings := []byte(`{}`)
+		cache.Set([]byte("<html></html>"), settings)
+		result := cache.Get(hashBytes(settings))
+		require.NotNil(t, result)
 
 		// ETag should be quoted
 		assert.True(t, strings.HasPrefix(result.ETag, `"`))

@@ -403,6 +403,23 @@ func (s *paymentConfigSettingRepoStub) GetAll(context.Context) (map[string]strin
 }
 func (s *paymentConfigSettingRepoStub) Delete(context.Context, string) error { return nil }
 
+func TestUpdatePaymentConfig_PersistsPaymentEnabledPublicSetting(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+
+	enabled := true
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+
+	if repo.values[SettingPaymentEnabled] != "true" {
+		t.Fatalf("payment enabled = %q, want true", repo.values[SettingPaymentEnabled])
+	}
+}
+
 func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
 	svc := &PaymentConfigService{settingRepo: repo}
