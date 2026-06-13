@@ -501,6 +501,7 @@ func TestAPIContracts(t *testing.T) {
 							"id": 502,
 							"user_id": 1,
 							"group_id": 11,
+							"plan_id": null,
 							"plan_name": null,
 							"scheduled_plan_id": null,
 							"scheduled_plan_name": null,
