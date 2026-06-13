@@ -407,15 +407,6 @@ func renewedSubscriptionTerm(existingSub *UserSubscription, notes string, starts
 	return &renewed
 }
 
-func renewedActiveSubscriptionTerm(existingSub *UserSubscription, notes string, expiresAt time.Time) *UserSubscription {
-	renewed := *existingSub
-	renewed.ExpiresAt = expiresAt
-	renewed.Status = SubscriptionStatusActive
-	renewed.Notes = notes
-	clearScheduledPlanChangeFields(&renewed)
-	return &renewed
-}
-
 func clearScheduledPlanChangeFields(sub *UserSubscription) {
 	if sub == nil {
 		return

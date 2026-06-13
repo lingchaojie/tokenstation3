@@ -591,7 +591,7 @@ type UserSubscription struct {
 	ID      int64  `json:"id"`
 	UserID  int64  `json:"user_id"`
 	GroupID int64  `json:"group_id"`
-	PlanID  *int64 `json:"plan_id,omitempty"`
+	PlanID  *int64 `json:"plan_id"`
 
 	SeatLimit     *int `json:"seat_limit,omitempty"`
 	SeatUsed      *int `json:"seat_used,omitempty"`
