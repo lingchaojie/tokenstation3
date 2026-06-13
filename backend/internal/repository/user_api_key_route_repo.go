@@ -4,6 +4,7 @@ import (
 	"context"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/userapikeyroute"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -17,7 +18,8 @@ func NewUserAPIKeyRouteRepository(client *dbent.Client) service.UserAPIKeyRouteR
 }
 
 func (r *userAPIKeyRouteRepository) GetByUserID(ctx context.Context, userID int64) ([]service.UserAPIKeyRoute, error) {
-	rows, err := r.client.UserAPIKeyRoute.Query().
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.UserAPIKeyRoute.Query().
 		Where(userapikeyroute.UserIDEQ(userID)).
 		WithGroup().
 		All(ctx)
@@ -32,7 +34,8 @@ func (r *userAPIKeyRouteRepository) GetByUserID(ctx context.Context, userID int6
 }
 
 func (r *userAPIKeyRouteRepository) GetByUserIDAndKeyType(ctx context.Context, userID int64, keyType string) (*service.UserAPIKeyRoute, error) {
-	row, err := r.client.UserAPIKeyRoute.Query().
+	client := clientFromContext(ctx, r.client)
+	row, err := client.UserAPIKeyRoute.Query().
 		Where(userapikeyroute.UserIDEQ(userID), userapikeyroute.KeyTypeEQ(keyType)).
 		WithGroup().
 		Only(ctx)
@@ -46,7 +49,8 @@ func (r *userAPIKeyRouteRepository) GetByUserIDAndKeyType(ctx context.Context, u
 }
 
 func (r *userAPIKeyRouteRepository) Upsert(ctx context.Context, route service.UserAPIKeyRoute) (*service.UserAPIKeyRoute, error) {
-	rowID, err := r.client.UserAPIKeyRoute.Create().
+	client := clientFromContext(ctx, r.client)
+	rowID, err := client.UserAPIKeyRoute.Create().
 		SetUserID(route.UserID).
 		SetKeyType(route.KeyType).
 		SetGroupID(route.GroupID).
@@ -56,7 +60,7 @@ func (r *userAPIKeyRouteRepository) Upsert(ctx context.Context, route service.Us
 	if err != nil {
 		return nil, err
 	}
-	created, err := r.client.UserAPIKeyRoute.Query().Where(userapikeyroute.IDEQ(rowID)).WithGroup().Only(ctx)
+	created, err := client.UserAPIKeyRoute.Query().Where(userapikeyroute.IDEQ(rowID)).WithGroup().Only(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +68,29 @@ func (r *userAPIKeyRouteRepository) Upsert(ctx context.Context, route service.Us
 }
 
 func (r *userAPIKeyRouteRepository) DeleteByUserIDAndKeyType(ctx context.Context, userID int64, keyType string) error {
-	_, err := r.client.UserAPIKeyRoute.Delete().
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserAPIKeyRoute.Delete().
 		Where(userapikeyroute.UserIDEQ(userID), userapikeyroute.KeyTypeEQ(keyType)).
+		Exec(ctx)
+	return err
+}
+
+func (r *userAPIKeyRouteRepository) ReconcileGroupReplacement(ctx context.Context, userID, oldGroupID, newGroupID int64, newGroupKeyType string) error {
+	client := clientFromContext(ctx, r.client)
+	basePredicates := []predicate.UserAPIKeyRoute{
+		userapikeyroute.UserIDEQ(userID),
+		userapikeyroute.GroupIDEQ(oldGroupID),
+	}
+	if newGroupKeyType == service.APIKeyTypeAnthropic || newGroupKeyType == service.APIKeyTypeOpenAI {
+		if _, err := client.UserAPIKeyRoute.Update().
+			Where(append(basePredicates, userapikeyroute.KeyTypeEQ(newGroupKeyType))...).
+			SetGroupID(newGroupID).
+			Save(ctx); err != nil {
+			return err
+		}
+	}
+	_, err := client.UserAPIKeyRoute.Delete().
+		Where(append(basePredicates, userapikeyroute.KeyTypeNEQ(newGroupKeyType))...).
 		Exec(ctx)
 	return err
 }

@@ -563,6 +563,47 @@ func TestAdminService_ReplaceUserGroup_PassesClearKeyTypeForUnmappedTargetPlatfo
 	require.True(t, apiKeyRepo.bulkKeyTypeUpdate.ClearKeyType)
 }
 
+func TestAdminService_ReplaceUserGroup_MovesMatchingUserAPIKeyRoute(t *testing.T) {
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{bulkMigrated: 1}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 20, Name: "openai", Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeStandard}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeOpenAI): {UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, userAPIKeyRouteRepo: routeRepo, entClient: newAdminAPIKeyServiceTestEntClient(t)}
+
+	result, err := svc.ReplaceUserGroup(context.Background(), 42, 10, 20)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.MigratedKeys)
+	require.Equal(t, 1, routeRepo.reconcileCalls)
+	require.Equal(t, int64(42), routeRepo.reconcileUserID)
+	require.Equal(t, int64(10), routeRepo.reconcileOldGroupID)
+	require.Equal(t, int64(20), routeRepo.reconcileNewGroupID)
+	require.Equal(t, APIKeyTypeOpenAI, routeRepo.reconcileNewGroupKeyType)
+	route, ok := routeRepo.routes[routeKey(42, APIKeyTypeOpenAI)]
+	require.True(t, ok)
+	require.Equal(t, int64(20), route.GroupID)
+}
+
+func TestAdminService_ReplaceUserGroup_RemovesMismatchedUserAPIKeyRoute(t *testing.T) {
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{bulkMigrated: 1}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 20, Name: "openai", Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeStandard}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{
+		routeKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: 10},
+	}}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, userAPIKeyRouteRepo: routeRepo, entClient: newAdminAPIKeyServiceTestEntClient(t)}
+
+	result, err := svc.ReplaceUserGroup(context.Background(), 42, 10, 20)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.MigratedKeys)
+	require.Equal(t, 1, routeRepo.reconcileCalls)
+	require.Equal(t, APIKeyTypeOpenAI, routeRepo.reconcileNewGroupKeyType)
+	require.NotContains(t, routeRepo.routes, routeKey(42, APIKeyTypeAnthropic))
+}
+
 // ---------------------------------------------------------------------------
 // Tests: AllowedGroup auto-sync
 // ---------------------------------------------------------------------------

@@ -64,10 +64,16 @@ func (s *userAPIKeyRouteGroupRepoStub) UpdateSortOrders(context.Context, []Group
 }
 
 type userAPIKeyRouteRepoStub struct {
-	routes           map[string]UserAPIKeyRoute
-	getByUserIDCalls int
-	upsertCalls      int
-	deleteCalls      int
+	routes                       map[string]UserAPIKeyRoute
+	getByUserIDCalls             int
+	upsertCalls                  int
+	deleteCalls                  int
+	reconcileCalls               int
+	reconcileUserID              int64
+	reconcileOldGroupID          int64
+	reconcileNewGroupID          int64
+	reconcileNewGroupKeyType     string
+	reconcileGroupReplacementErr error
 }
 
 func routeKey(userID int64, keyType string) string {
@@ -106,6 +112,29 @@ func (r *userAPIKeyRouteRepoStub) Upsert(_ context.Context, route UserAPIKeyRout
 func (r *userAPIKeyRouteRepoStub) DeleteByUserIDAndKeyType(_ context.Context, userID int64, keyType string) error {
 	r.deleteCalls++
 	delete(r.routes, routeKey(userID, keyType))
+	return nil
+}
+
+func (r *userAPIKeyRouteRepoStub) ReconcileGroupReplacement(_ context.Context, userID, oldGroupID, newGroupID int64, newGroupKeyType string) error {
+	r.reconcileCalls++
+	r.reconcileUserID = userID
+	r.reconcileOldGroupID = oldGroupID
+	r.reconcileNewGroupID = newGroupID
+	r.reconcileNewGroupKeyType = newGroupKeyType
+	if r.reconcileGroupReplacementErr != nil {
+		return r.reconcileGroupReplacementErr
+	}
+	for key, route := range r.routes {
+		if route.UserID != userID || route.GroupID != oldGroupID {
+			continue
+		}
+		if route.KeyType == newGroupKeyType {
+			route.GroupID = newGroupID
+			r.routes[key] = route
+			continue
+		}
+		delete(r.routes, key)
+	}
 	return nil
 }
 

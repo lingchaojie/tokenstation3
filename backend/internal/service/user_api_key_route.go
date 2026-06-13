@@ -30,4 +30,5 @@ type UserAPIKeyRouteRepository interface {
 	GetByUserIDAndKeyType(ctx context.Context, userID int64, keyType string) (*UserAPIKeyRoute, error)
 	Upsert(ctx context.Context, route UserAPIKeyRoute) (*UserAPIKeyRoute, error)
 	DeleteByUserIDAndKeyType(ctx context.Context, userID int64, keyType string) error
+	ReconcileGroupReplacement(ctx context.Context, userID, oldGroupID, newGroupID int64, newGroupKeyType string) error
 }

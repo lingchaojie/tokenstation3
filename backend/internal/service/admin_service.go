@@ -2627,7 +2627,14 @@ func (s *adminServiceImpl) ReplaceUserGroup(ctx context.Context, userID, oldGrou
 		return nil, fmt.Errorf("migrate api keys: %w", err)
 	}
 
-	// 3. 移除旧分组权限
+	// 3. 同步用户 API Key 类型路由，避免保留指向旧分组的 per-user 路由。
+	if s.userAPIKeyRouteRepo != nil {
+		if err := s.userAPIKeyRouteRepo.ReconcileGroupReplacement(opCtx, userID, oldGroupID, newGroupID, keyTypeUpdate.KeyType); err != nil {
+			return nil, fmt.Errorf("reconcile user api key routes: %w", err)
+		}
+	}
+
+	// 4. 移除旧分组权限
 	if err := s.userRepo.RemoveGroupFromUserAllowedGroups(opCtx, userID, oldGroupID); err != nil {
 		return nil, fmt.Errorf("remove old group from allowed groups: %w", err)
 	}

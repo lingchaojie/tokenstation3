@@ -34,6 +34,10 @@ func (r apiKeyProviderRouteRepoStub) DeleteByUserIDAndKeyType(context.Context, i
 	return nil
 }
 
+func (r apiKeyProviderRouteRepoStub) ReconcileGroupReplacement(context.Context, int64, int64, int64, string) error {
+	return nil
+}
+
 type defaultAPIKeyGroupSettingsStub struct {
 	ids map[string]*int64
 }
