@@ -812,11 +812,18 @@ export default {
         noteWindows:
           '按 Win+R，输入 %userprofile%\\.codex 打开配置目录。如目录不存在，请先手动创建。'
       },
+      pythonSdk: {
+        description: '使用以下 Python SDK 示例，通过此 API 密钥和基础地址创建客户端。',
+        note: '请先安装对应的 SDK 包，然后将此代码片段粘贴到你的 Python 项目或脚本中。'
+      },
       cliTabs: {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
+        anthropicPythonSdk: 'Python SDK',
+        openaiPythonSdk: 'Python SDK',
+        openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
         opencode: 'OpenCode'
       },
       antigravity: {

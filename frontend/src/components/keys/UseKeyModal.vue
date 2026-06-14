@@ -270,6 +270,8 @@ const clientTabs = computed((): TabConfig[] => {
       const tabs: TabConfig[] = [
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
         { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
+        { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
+        { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
       ]
       if (props.allowMessagesDispatch) {
         tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
@@ -291,6 +293,7 @@ const clientTabs = computed((): TabConfig[] => {
     default:
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+        { id: 'anthropic-python-sdk', label: t('keys.useKeyModal.cliTabs.anthropicPythonSdk'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
       ]
   }
@@ -309,7 +312,9 @@ const openaiTabs: TabConfig[] = [
   { id: 'windows', label: 'Windows', icon: WindowsIcon }
 ]
 
-const showShellTabs = computed(() => activeClientTab.value !== 'opencode')
+const pythonSdkTabs = new Set(['anthropic-python-sdk', 'openai-python-sdk', 'openai-imagen2-python-sdk'])
+
+const showShellTabs = computed(() => activeClientTab.value !== 'opencode' && !pythonSdkTabs.has(activeClientTab.value))
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
@@ -320,6 +325,9 @@ const currentTabs = computed(() => {
 })
 
 const platformDescription = computed(() => {
+  if (pythonSdkTabs.has(activeClientTab.value)) {
+    return t('keys.useKeyModal.pythonSdk.description')
+  }
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -336,6 +344,9 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (pythonSdkTabs.has(activeClientTab.value)) {
+    return t('keys.useKeyModal.pythonSdk.note')
+  }
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -420,6 +431,12 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'codex-ws') {
         return generateOpenAIWsFiles(baseUrl, apiKey)
       }
+      if (activeClientTab.value === 'openai-python-sdk') {
+        return [generateOpenAIPythonSdkFile(baseUrl, apiKey)]
+      }
+      if (activeClientTab.value === 'openai-imagen2-python-sdk') {
+        return [generateOpenAIImagen2PythonSdkFile(baseUrl, apiKey)]
+      }
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
       return [generateGeminiCliContent(baseUrl, apiKey)]
@@ -429,9 +446,32 @@ const currentFiles = computed((): FileConfig[] => {
       }
       return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
     default:
+      if (activeClientTab.value === 'anthropic-python-sdk') {
+        return [generateAnthropicPythonSdkFile(baseUrl, apiKey)]
+      }
       return generateAnthropicFiles(baseUrl, apiKey)
   }
 })
+
+function generateAnthropicPythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
+  return {
+    path: 'anthropic_client.py',
+    content: `from anthropic import Anthropic
+
+client = Anthropic(
+    api_key="${apiKey}",
+    base_url="${baseUrl}",
+)
+
+message = client.messages.create(
+    model="claude-opus-4-7",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello, Claude"}],
+)
+
+print(message.content[0].text)`
+  }
+}
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string
@@ -523,6 +563,45 @@ ${keyword('$env:')}${variable('GEMINI_MODEL')}${operator('=')}${string(`"${model
   }
 
   return { path, content, highlighted }
+}
+
+function generateOpenAIPythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
+  return {
+    path: 'openai_client.py',
+    content: `from openai import OpenAI
+
+client = OpenAI(
+    api_key="${apiKey}",
+    base_url="${baseUrl}",
+)
+
+response = client.responses.create(
+    model="gpt-5.5",
+    input="Hello, GPT",
+)
+
+print(response.output_text)`
+  }
+}
+
+function generateOpenAIImagen2PythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
+  return {
+    path: 'imagen2_client.py',
+    content: `from openai import OpenAI
+
+client = OpenAI(
+    api_key="${apiKey}",
+    base_url="${baseUrl}",
+)
+
+image = client.images.generate(
+    model="imagen-2",
+    prompt="A fox mascot using an AI gateway",
+    size="1024x1024",
+)
+
+print(image.data[0].url)`
+  }
 }
 
 function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {

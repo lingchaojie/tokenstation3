@@ -812,11 +812,18 @@ export default {
         note: 'Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it.',
         noteWindows: 'Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.',
       },
+      pythonSdk: {
+        description: 'Use the following Python SDK example to create a client with this API key and base URL.',
+        note: 'Install the matching SDK package first, then paste this snippet into your Python project or script.',
+      },
       cliTabs: {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
+        anthropicPythonSdk: 'Python SDK',
+        openaiPythonSdk: 'Python SDK',
+        openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
         opencode: 'OpenCode',
       },
       antigravity: {
