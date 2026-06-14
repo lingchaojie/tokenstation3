@@ -445,7 +445,7 @@ describe('HomeView landing page', () => {
     expect(wrapper.text()).toContain('Base URL')
   })
 
-  it('keeps the default Linear landing in a local dark scope for light-mode users', async () => {
+  it('honors light mode without forcing a local dark scope', async () => {
     localStorage.setItem('theme', 'light')
     document.documentElement.classList.remove('dark')
 
@@ -453,7 +453,7 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const landing = wrapper.get('.linear-landing')
-    expect(landing.classes()).toContain('dark')
+    expect(landing.classes()).not.toContain('dark')
     expect(landing.classes()).toContain('bg-linear-canvas')
     expect(wrapper.find('[data-testid="linear-product-console"] .linx-panel-strong').exists()).toBe(true)
   })

@@ -86,6 +86,7 @@ describe("SubscriptionPlanCard", () => {
           name: "Plus monthly",
           description: "Everyday development",
           price: 399,
+          original_price: 499,
           seven_day_quota_usd: 110,
           features: ["Larger seven-day quota", "Recharge fallback"],
           sort_order: 20,
@@ -95,9 +96,13 @@ describe("SubscriptionPlanCard", () => {
 
     const text = wrapper.text();
 
+    expect(text).toContain("¥399");
+    expect(text).toContain("¥499");
     expect(text).toContain("$110 / 7 days");
     expect(text).toContain("Total obtainable");
     expect(text).toContain("$440");
+    expect(text).not.toContain("$399");
+    expect(text).not.toContain("$499");
     expect(text).not.toContain("Rate");
     expect(text).not.toContain("×1");
   });

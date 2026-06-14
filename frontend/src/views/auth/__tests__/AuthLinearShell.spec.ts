@@ -89,7 +89,9 @@ describe('Auth Linear shell', () => {
       slots: { default: '<div data-testid="auth-slot">Auth form</div>' },
     })
 
-    expect(wrapper.find('.linear-auth-shell').exists()).toBe(true)
+    const shell = wrapper.get('.linear-auth-shell')
+    expect(shell.classes()).not.toContain('dark')
+    expect(shell.classes()).toContain('bg-linear-canvas')
     expect(wrapper.find('[data-testid="auth-product-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="auth-card"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LINX2.AI')

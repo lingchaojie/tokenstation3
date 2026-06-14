@@ -88,11 +88,11 @@ describe('AdminPaymentPlansView', () => {
     showError.mockReset()
   })
 
-  it('shows a seven-day quota column and formats missing quotas as a dash', async () => {
+  it('shows user-paid prices as CNY while keeping quota totals in USD', async () => {
     getPlans.mockResolvedValue({
       data: [
-        planFixture({ id: 1, name: 'Plus monthly', seven_day_quota_usd: 110 }),
-        planFixture({ id: 2, name: 'Legacy monthly', seven_day_quota_usd: null }),
+        planFixture({ id: 1, name: 'Plus monthly', price: 399, original_price: 499, seven_day_quota_usd: 110 }),
+        planFixture({ id: 2, name: 'Legacy monthly', price: 179, seven_day_quota_usd: null }),
       ],
     })
 
@@ -101,7 +101,11 @@ describe('AdminPaymentPlansView', () => {
 
     const text = wrapper.text()
     expect(text).toContain('payment.admin.sevenDayQuota')
+    expect(text).toContain('¥399.00')
+    expect(text).toContain('¥499.00')
     expect(text).toContain('$110.00')
     expect(text).toContain('-')
+    expect(text).not.toContain('$399.00')
+    expect(text).not.toContain('$499.00')
   })
 })

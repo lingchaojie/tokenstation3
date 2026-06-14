@@ -1,5 +1,5 @@
 <template>
-  <div class="dark linear-auth-shell relative min-h-screen overflow-hidden bg-linear-canvas text-linear-ink">
+  <div class="linear-auth-shell relative min-h-screen overflow-hidden bg-linear-canvas text-linear-ink">
     <div class="mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 gap-8 px-4 py-8 lg:grid-cols-[0.95fr_1.05fr] lg:items-center lg:px-8">
       <section data-testid="auth-product-panel" class="hidden lg:block">
         <div class="linx-panel-strong p-8">

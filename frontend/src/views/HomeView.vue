@@ -14,7 +14,7 @@
   <!-- Default Home Page -->
   <div
     v-else
-    class="dark linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-100"
+    class="linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-900 dark:selection:text-primary-100"
   >
     <!-- Announcement bar -->
     <div

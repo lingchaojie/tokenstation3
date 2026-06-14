@@ -14,15 +14,18 @@ function cssBlock(selector: string): string {
 }
 
 describe('LINX2 Linear-inspired theme contract', () => {
-  it('keeps LINX2 orange primary tokens and adds Linear-like dark surface tokens', () => {
+  it('keeps LINX2 orange primary tokens and maps Linear tokens through theme variables', () => {
     expect(tailwindSource).toContain("500: '#f97316'")
     expect(tailwindSource).toContain('linear: {')
-    expect(tailwindSource).toContain("canvas: '#010102'")
+    expect(tailwindSource).toContain("canvas: 'rgb(var(--linear-canvas) / <alpha-value>)'")
     expect(tailwindSource).toContain("surface: {")
-    expect(tailwindSource).toContain("1: '#0f1011'")
-    expect(tailwindSource).toContain("hairline: '#23252a'")
+    expect(tailwindSource).toContain("1: 'rgb(var(--linear-surface-1) / <alpha-value>)'")
+    expect(tailwindSource).toContain("hairline: 'rgb(var(--linear-hairline) / <alpha-value>)'")
     expect(tailwindSource).toContain("ink: {")
-    expect(tailwindSource).toContain("DEFAULT: '#f7f8f8'")
+    expect(tailwindSource).toContain("DEFAULT: 'rgb(var(--linear-ink) / <alpha-value>)'")
+    expect(styleSource).toContain('--linear-canvas: 249 250 251')
+    expect(styleSource).toContain('.dark {')
+    expect(styleSource).toContain('--linear-canvas: 1 1 2')
   })
 
   it('uses restrained primary buttons without gradient or glow-heavy shadow', () => {

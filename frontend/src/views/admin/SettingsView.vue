@@ -3126,39 +3126,6 @@
               </div>
 
               <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
-                <div class="mb-3">
-                  <label class="font-medium text-gray-900 dark:text-white">
-                    {{ t("admin.settings.defaults.providerRoutes") }}
-                  </label>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.defaults.providerRoutesHint") }}
-                  </p>
-                </div>
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {{ t("admin.settings.defaults.defaultAnthropicGroup") }}
-                    </label>
-                    <Select
-                      v-model="form.default_anthropic_group_id"
-                      :options="providerDefaultGroupOptions.anthropic"
-                      :placeholder="t('admin.settings.defaults.defaultAnthropicGroupPlaceholder')"
-                    />
-                  </div>
-                  <div>
-                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {{ t("admin.settings.defaults.defaultOpenAIGroup") }}
-                    </label>
-                    <Select
-                      v-model="form.default_openai_group_id"
-                      :options="providerDefaultGroupOptions.openai"
-                      :placeholder="t('admin.settings.defaults.defaultOpenAIGroupPlaceholder')"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                 <div class="mb-3 flex items-center justify-between">
                   <div>
                     <label class="font-medium text-gray-900 dark:text-white">
@@ -4546,6 +4513,39 @@
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {{ t("admin.settings.site.apiBaseUrlHint") }}
                 </p>
+              </div>
+
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div class="mb-3">
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.defaults.providerRoutes") }}
+                  </label>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.defaults.providerRoutesHint") }}
+                  </p>
+                </div>
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.defaultAnthropicGroup") }}
+                    </label>
+                    <Select
+                      v-model="form.default_anthropic_group_id"
+                      :options="providerDefaultGroupOptions.anthropic"
+                      :placeholder="t('admin.settings.defaults.defaultAnthropicGroupPlaceholder')"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.defaultOpenAIGroup") }}
+                    </label>
+                    <Select
+                      v-model="form.default_openai_group_id"
+                      :options="providerDefaultGroupOptions.openai"
+                      :placeholder="t('admin.settings.defaults.defaultOpenAIGroupPlaceholder')"
+                    />
+                  </div>
+                </div>
               </div>
 
               <!-- Global Table Preferences -->
