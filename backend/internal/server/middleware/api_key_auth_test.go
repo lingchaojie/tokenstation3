@@ -1258,6 +1258,18 @@ func (r *stubUserSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Conte
 	return r.GetByUserIDAndGroupID(ctx, userID, groupID)
 }
 
+func (r *stubUserSubscriptionRepo) GetGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) GetActiveGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, service.ErrSubscriptionNotFound
+}
+
+func (r *stubUserSubscriptionRepo) GetActivePlanBackedByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, service.ErrSubscriptionNotFound
+}
+
 func (r *stubUserSubscriptionRepo) Update(ctx context.Context, sub *service.UserSubscription) error {
 	return errors.New("not implemented")
 }
@@ -1284,6 +1296,10 @@ func (r *stubUserSubscriptionRepo) List(ctx context.Context, params pagination.P
 
 func (r *stubUserSubscriptionRepo) ExistsByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (bool, error) {
 	return false, errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) ExistsGenericByUserID(ctx context.Context, userID int64) (bool, error) {
+	return false, nil
 }
 
 func (r *stubUserSubscriptionRepo) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {

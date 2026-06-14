@@ -123,20 +123,18 @@ func TestPaymentGetPlansIncludesSeatSummaryFields(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data []struct {
-			ID            int64  `json:"id"`
-			GroupPlatform string `json:"group_platform"`
-			SeatLimit     *int   `json:"seat_limit"`
-			SeatUsed      int    `json:"seat_used"`
-			SeatAvailable *int   `json:"seat_available"`
-			SeatFull      bool   `json:"seat_full"`
-			SeatOverLimit bool   `json:"seat_over_limit"`
+			ID            int64 `json:"id"`
+			SeatLimit     *int  `json:"seat_limit"`
+			SeatUsed      int   `json:"seat_used"`
+			SeatAvailable *int  `json:"seat_available"`
+			SeatFull      bool  `json:"seat_full"`
+			SeatOverLimit bool  `json:"seat_over_limit"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Len(t, resp.Data, 1)
 	require.Equal(t, plan.ID, resp.Data[0].ID)
-	require.Equal(t, domain.PlatformAnthropic, resp.Data[0].GroupPlatform)
 	require.NotNil(t, resp.Data[0].SeatLimit)
 	require.Equal(t, 2, *resp.Data[0].SeatLimit)
 	require.Equal(t, 1, resp.Data[0].SeatUsed)
@@ -206,8 +204,6 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 		Code int `json:"code"`
 		Data []struct {
 			ID            int64    `json:"id"`
-			GroupID       int64    `json:"group_id"`
-			GroupPlatform string   `json:"group_platform"`
 			Name          string   `json:"name"`
 			Description   string   `json:"description"`
 			Price         float64  `json:"price"`
@@ -229,8 +225,6 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 	require.Len(t, resp.Data, 1)
 	got := resp.Data[0]
 	require.Equal(t, plan.ID, got.ID)
-	require.Equal(t, plan.GroupID, got.GroupID)
-	require.Equal(t, domain.PlatformAnthropic, got.GroupPlatform)
 	require.Equal(t, "Seat Plan", got.Name)
 	require.Equal(t, "Seat desc", got.Description)
 	require.Equal(t, 12.5, got.Price)

@@ -728,6 +728,29 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_SoftDeletedGroup() {
 	s.Require().ErrorIs(err, service.ErrSubscriptionNotFound)
 }
 
+func (s *UserSubscriptionRepoSuite) TestIncrementUsage_GenericSubscriptionWithoutGroup() {
+	user := s.mustCreateUser("generic-usage@test.com", service.RoleUser)
+	now := time.Now()
+	sub, err := s.client.UserSubscription.Create().
+		SetUserID(user.ID).
+		SetStartsAt(now.Add(-1 * time.Hour)).
+		SetExpiresAt(now.Add(24 * time.Hour)).
+		SetStatus(service.SubscriptionStatusActive).
+		SetAssignedAt(now).
+		SetNotes("").
+		Save(s.ctx)
+	s.Require().NoError(err, "create generic subscription")
+
+	err = s.repo.IncrementUsage(s.ctx, sub.ID, 1.0)
+	s.Require().NoError(err, "generic subscription usage should not require a group")
+
+	after, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err, "GetByID")
+	s.Require().InDelta(1.0, after.DailyUsageUSD, 1e-6)
+	s.Require().InDelta(1.0, after.WeeklyUsageUSD, 1e-6)
+	s.Require().InDelta(1.0, after.MonthlyUsageUSD, 1e-6)
+}
+
 func (s *UserSubscriptionRepoSuite) TestIncrementUsage_NotFound() {
 	err := s.repo.IncrementUsage(s.ctx, 999999, 1.0)
 	s.Require().Error(err, "should fail for non-existent subscription")
