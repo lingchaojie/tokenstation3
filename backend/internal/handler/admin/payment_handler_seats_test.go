@@ -100,7 +100,6 @@ func TestAdminListPlansReturnsMappedSeatSummaryResponse(t *testing.T) {
 		Code int `json:"code"`
 		Data []struct {
 			ID            int64     `json:"id"`
-			GroupID       int64     `json:"group_id"`
 			Name          string    `json:"name"`
 			Description   string    `json:"description"`
 			Price         float64   `json:"price"`
@@ -125,7 +124,7 @@ func TestAdminListPlansReturnsMappedSeatSummaryResponse(t *testing.T) {
 	require.Len(t, resp.Data, 1)
 	got := resp.Data[0]
 	require.Equal(t, plan.ID, got.ID)
-	require.Equal(t, plan.GroupID, got.GroupID)
+	require.NotContains(t, recorder.Body.String(), "group_id")
 	require.Equal(t, "Admin Seat Plan", got.Name)
 	require.Equal(t, "Admin desc", got.Description)
 	require.Equal(t, 25.0, got.Price)
