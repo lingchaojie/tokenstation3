@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -43,7 +44,11 @@ func (s *PaymentConfigService) PublicPlansForSale(ctx context.Context) ([]Public
 	if err != nil {
 		return nil, err
 	}
-	return clonePublicPlans(value.([]PublicPlanResponse)), nil
+	plans, ok := value.([]PublicPlanResponse)
+	if !ok {
+		return nil, fmt.Errorf("public plans cache returned unexpected type %T", value)
+	}
+	return clonePublicPlans(plans), nil
 }
 
 func (s *PaymentConfigService) listPublicPlansForSale(ctx context.Context) ([]PublicPlanResponse, error) {

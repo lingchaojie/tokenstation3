@@ -564,6 +564,7 @@ func TestAPIContracts(t *testing.T) {
 						"used_at": "2025-01-02T03:04:05Z",
 						"created_at": "2025-01-02T03:04:05Z",
 						"group_id": null,
+						"plan_id": null,
 						"validity_days": 0
 					}
 				]
