@@ -175,6 +175,20 @@ describe('HomeView landing page', () => {
     })
   })
 
+  it('renders the configured site subtitle in the header brand area', async () => {
+    appState.cachedPublicSettings = {
+      site_name: 'LINX2.AI',
+      site_subtitle: 'Link 2 All AI Model',
+    }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    expect(wrapper.get('header a').text()).toContain('LINX2.AI')
+    expect(wrapper.get('header a').text()).toContain('Link 2 All AI Model')
+    expect(wrapper.text()).toContain('一个网关密钥，接入 Claude 与 OpenAI 模型。')
+  })
+
   it('renders the LINX2.AI gateway landing shell with subscription plans by default', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',

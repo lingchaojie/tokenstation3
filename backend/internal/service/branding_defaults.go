@@ -3,13 +3,13 @@ package service
 import "strings"
 
 const (
-	defaultBrandSiteName     = "LINX2"
+	defaultBrandSiteName     = "LINX2.AI"
 	defaultBrandSiteSubtitle = "Link 2 All AI Model"
 )
 
 func isLegacyDefaultSiteName(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "sub2api", "linx2.ai":
+	case "sub2api", "linx2":
 		return true
 	default:
 		return false

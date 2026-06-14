@@ -5825,7 +5825,7 @@ export default {
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
         siteName: 'Site Name',
-        siteNamePlaceholder: 'LINX2',
+        siteNamePlaceholder: 'LINX2.AI',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
         siteSubtitlePlaceholder: 'Link 2 All AI Model',

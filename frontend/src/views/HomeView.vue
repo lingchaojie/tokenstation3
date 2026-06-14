@@ -44,7 +44,7 @@
               <LinxWordmark v-if="usesDefaultBrand" />
               <span v-else>{{ siteName }}</span>
             </span>
-            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">AI Gateway Platform</span>
+            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">{{ siteSubtitle }}</span>
           </span>
         </router-link>
 
@@ -458,6 +458,7 @@ const brandIconUrl = '/linx2-icon.png'
 // Site settings
 const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI Gateway Platform')
 const brandLogo = computed(() => siteLogo.value || brandIconUrl)
 const usesDefaultBrand = computed(() => siteName.value.trim().toUpperCase() === DEFAULT_SITE_NAME)
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')

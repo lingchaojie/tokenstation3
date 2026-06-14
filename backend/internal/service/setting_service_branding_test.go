@@ -60,27 +60,27 @@ func (s *settingBrandingRepoStub) Delete(ctx context.Context, key string) error 
 	return nil
 }
 
-func TestSettingService_GetPublicSettings_UsesLINX2BrandingDefaults(t *testing.T) {
+func TestSettingService_GetPublicSettings_UsesLINX2AIBrandingDefaults(t *testing.T) {
 	svc := NewSettingService(&settingBrandingRepoStub{values: map[string]string{}}, &config.Config{})
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, "LINX2", settings.SiteName)
+	require.Equal(t, "LINX2.AI", settings.SiteName)
 	require.Equal(t, "Link 2 All AI Model", settings.SiteSubtitle)
 }
 
-func TestSettingService_GetSiteName_FallsBackToLINX2BrandingDefault(t *testing.T) {
+func TestSettingService_GetSiteName_FallsBackToLINX2AIBrandingDefault(t *testing.T) {
 	svc := NewSettingService(&settingBrandingRepoStub{values: map[string]string{}}, &config.Config{})
 
-	require.Equal(t, "LINX2", svc.GetSiteName(context.Background()))
+	require.Equal(t, "LINX2.AI", svc.GetSiteName(context.Background()))
 }
 
-func TestSettingService_InitializeDefaultSettings_SetsLINX2BrandingDefaults(t *testing.T) {
+func TestSettingService_InitializeDefaultSettings_SetsLINX2AIBrandingDefaults(t *testing.T) {
 	repo := &settingBrandingRepoStub{values: map[string]string{}}
 	svc := NewSettingService(repo, &config.Config{})
 
 	require.NoError(t, svc.InitializeDefaultSettings(context.Background()))
-	require.Equal(t, "LINX2", repo.values[SettingKeySiteName])
+	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])
 	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
 }
 
@@ -93,11 +93,11 @@ func TestSettingService_InitializeDefaultSettings_MigratesLegacySub2APIBrandingD
 	svc := NewSettingService(repo, &config.Config{})
 
 	require.NoError(t, svc.InitializeDefaultSettings(context.Background()))
-	require.Equal(t, "LINX2", repo.values[SettingKeySiteName])
+	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])
 	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
 }
 
-func TestSettingService_InitializeDefaultSettings_MigratesLegacyLINX2AIBrandingDefaults(t *testing.T) {
+func TestSettingService_InitializeDefaultSettings_MigratesLegacyDescriptionOnly(t *testing.T) {
 	repo := &settingBrandingRepoStub{values: map[string]string{
 		SettingKeyRegistrationEnabled: "true",
 		SettingKeySiteName:            "LINX2.AI",
@@ -106,7 +106,20 @@ func TestSettingService_InitializeDefaultSettings_MigratesLegacyLINX2AIBrandingD
 	svc := NewSettingService(repo, &config.Config{})
 
 	require.NoError(t, svc.InitializeDefaultSettings(context.Background()))
-	require.Equal(t, "LINX2", repo.values[SettingKeySiteName])
+	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])
+	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
+}
+
+func TestSettingService_InitializeDefaultSettings_MigratesErroneousLINX2SiteNameDefault(t *testing.T) {
+	repo := &settingBrandingRepoStub{values: map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+		SettingKeySiteName:            "LINX2",
+		SettingKeySiteSubtitle:        "Link 2 All AI Model",
+	}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	require.NoError(t, svc.InitializeDefaultSettings(context.Background()))
+	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])
 	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
 }
 

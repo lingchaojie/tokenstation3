@@ -7070,7 +7070,7 @@ const form = reactive<SettingsForm>({
   default_openai_group_id: null,
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
-  site_name: "LINX2",
+  site_name: "LINX2.AI",
   site_logo: "",
   site_subtitle: "Link 2 All AI Model",
   api_base_url: "",
