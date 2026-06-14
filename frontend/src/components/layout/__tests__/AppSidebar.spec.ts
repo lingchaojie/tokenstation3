@@ -53,3 +53,15 @@ describe('AppSidebar theme toggle color hierarchy', () => {
     expect(componentSource).not.toContain('text-amber-500')
   })
 })
+
+describe('AppSidebar admin personal dashboard navigation', () => {
+  it('reuses the self dashboard item but remaps it into the admin my-account route namespace', () => {
+    const adminPersonalBuilder = componentSource.match(
+      /function buildAdminPersonalNavItems\(\): NavItem\[] \{[\s\S]*?\n\}/,
+    )?.[0]
+
+    expect(adminPersonalBuilder).toContain('buildSelfNavItems(true)')
+    expect(adminPersonalBuilder).toContain("'/dashboard': '/admin/my-account/dashboard'")
+    expect(componentSource).toContain('finalizeNav(buildAdminPersonalNavItems())')
+  })
+})

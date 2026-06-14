@@ -459,16 +459,9 @@ func TestPaymentConfigServicePlanSevenDayQuota(t *testing.T) {
 	client := newPaymentConfigServiceTestClient(t)
 	svc := &PaymentConfigService{entClient: client}
 
-	group, err := client.Group.Create().
-		SetName("Quota Test Group").
-		Save(ctx)
-	if err != nil {
-		t.Fatalf("create group: %v", err)
-	}
 	quota := 110.0
 
 	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
-		GroupID:          group.ID,
 		Name:             "Plus monthly",
 		Description:      "Everyday development",
 		Price:            399,
@@ -525,16 +518,8 @@ func TestPaymentConfigServicePlanSevenDayQuotaRejectsInvalidValues(t *testing.T)
 	client := newPaymentConfigServiceTestClient(t)
 	svc := &PaymentConfigService{entClient: client}
 
-	group, err := client.Group.Create().
-		SetName("Quota Validation Group").
-		Save(ctx)
-	if err != nil {
-		t.Fatalf("create group: %v", err)
-	}
-
 	negativeQuota := -1.0
-	_, err = svc.CreatePlan(ctx, CreatePlanRequest{
-		GroupID:          group.ID,
+	_, err := svc.CreatePlan(ctx, CreatePlanRequest{
 		Name:             "Invalid quota plan",
 		Description:      "Negative quotas are not allowed",
 		Price:            100,
@@ -552,7 +537,6 @@ func TestPaymentConfigServicePlanSevenDayQuotaRejectsInvalidValues(t *testing.T)
 
 	quota := 25.0
 	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
-		GroupID:          group.ID,
 		Name:             "Valid quota plan",
 		Description:      "Valid quota",
 		Price:            100,

@@ -835,9 +835,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		LoginAgreementDocuments:          loginAgreementDocuments,
 		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "LINX2.AI"),
+		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, defaultBrandSiteName),
 		SiteLogo:                         settings[SettingKeySiteLogo],
-		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "AI Gateway Platform"),
+		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, defaultBrandSiteSubtitle),
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
 		ContactInfo:                      settings[SettingKeyContactInfo],
 		DocURL:                           settings[SettingKeyDocURL],
@@ -2521,7 +2521,7 @@ func (s *SettingService) IsTotpEncryptionKeyConfigured() bool {
 func (s *SettingService) GetSiteName(ctx context.Context) string {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeySiteName)
 	if err != nil || value == "" {
-		return "LINX2.AI"
+		return defaultBrandSiteName
 	}
 	return value
 }
@@ -2703,8 +2703,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 检查是否已有设置
 	_, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEnabled)
 	if err == nil {
-		// 已有设置，不需要初始化
-		return nil
+		// 已有设置时仍要迁移旧品牌默认值；管理员自定义值不覆盖。
+		return s.migrateLegacyBrandingDefaults(ctx)
 	}
 	if !errors.Is(err, ErrSettingNotFound) {
 		return fmt.Errorf("check existing settings: %w", err)
@@ -2736,7 +2736,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyLoginAgreementUpdatedAt:                   defaultLoginAgreementDate,
 		SettingKeyLoginAgreementDocuments:                   loginAgreementDocumentsJSON,
 		SettingKeyAPIKeyACLTrustForwardedIP:                 "false",
-		SettingKeySiteName:                                  "LINX2.AI",
+		SettingKeySiteName:                                  defaultBrandSiteName,
+		SettingKeySiteSubtitle:                              defaultBrandSiteSubtitle,
 		SettingKeySiteLogo:                                  "",
 		SettingKeyPurchaseSubscriptionEnabled:               "false",
 		SettingKeyPurchaseSubscriptionURL:                   "",
@@ -2891,6 +2892,29 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	return s.settingRepo.SetMultiple(ctx, defaults)
 }
 
+func (s *SettingService) migrateLegacyBrandingDefaults(ctx context.Context) error {
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeySiteName, SettingKeySiteSubtitle})
+	if err != nil {
+		return fmt.Errorf("get legacy branding settings: %w", err)
+	}
+
+	updates := make(map[string]string)
+	if isLegacyDefaultSiteName(settings[SettingKeySiteName]) {
+		updates[SettingKeySiteName] = defaultBrandSiteName
+	}
+	if isLegacyDefaultSiteSubtitle(settings[SettingKeySiteSubtitle]) {
+		updates[SettingKeySiteSubtitle] = defaultBrandSiteSubtitle
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return fmt.Errorf("migrate legacy branding settings: %w", err)
+	}
+	return nil
+}
+
 // parseSettings 解析设置到结构体
 func (s *SettingService) parseSettings(settings map[string]string) *SystemSettings {
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
@@ -2928,9 +2952,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
 		TurnstileSecretKeyConfigured:     settings[SettingKeyTurnstileSecretKey] != "",
 		APIKeyACLTrustForwardedIP:        apiKeyACLTrustForwardedIP,
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "LINX2.AI"),
+		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, defaultBrandSiteName),
 		SiteLogo:                         settings[SettingKeySiteLogo],
-		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "AI Gateway Platform"),
+		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, defaultBrandSiteSubtitle),
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
 		ContactInfo:                      settings[SettingKeyContactInfo],
 		DocURL:                           settings[SettingKeyDocURL],

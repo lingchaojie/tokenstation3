@@ -22,7 +22,7 @@ const (
 	quotaDimWeekly = "weekly"
 	quotaDimTotal  = "total"
 
-	defaultSiteName = "LINX2.AI"
+	defaultSiteName = defaultBrandSiteName
 )
 
 // quotaDimLabels maps dimension names to display labels.

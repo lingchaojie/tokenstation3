@@ -379,6 +379,13 @@ func (s *PaymentService) sendSubscriptionPurchaseSuccessNotification(ctx context
 				variables["expiry_time"] = sub.ExpiresAt.Format("2006-01-02 15:04")
 			}
 		}
+	} else if o.PlanID != nil && s.subscriptionSvc != nil {
+		if sub, err := s.subscriptionSvc.GetActiveGenericSubscription(ctx, o.UserID); err == nil && sub != nil {
+			if sub.PlanName != nil && strings.TrimSpace(*sub.PlanName) != "" {
+				variables["subscription_group"] = *sub.PlanName
+			}
+			variables["expiry_time"] = sub.ExpiresAt.Format("2006-01-02 15:04")
+		}
 	}
 	return s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
 		Event:          NotificationEmailEventSubscriptionPurchaseSuccess,
@@ -405,7 +412,7 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	if o.Status != OrderStatusPaid && o.Status != OrderStatusFailed {
 		return infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
 	}
-	if o.SubscriptionGroupID == nil || o.SubscriptionDays == nil {
+	if o.SubscriptionDays == nil || (o.PlanID == nil && o.SubscriptionGroupID == nil) {
 		return infraerrors.BadRequest("INVALID_STATUS", "missing subscription info")
 	}
 	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(oid), paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed)).SetStatus(OrderStatusRecharging).Save(ctx)
@@ -423,8 +430,26 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 }
 
 func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error {
-	gid := *o.SubscriptionGroupID
 	days := *o.SubscriptionDays
+	orderNote := fmt.Sprintf("payment order %d", o.ID)
+
+	// Idempotency: check durable completion marker first.
+	if s.hasAuditLog(ctx, o.ID, "SUBSCRIPTION_SUCCESS") {
+		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", paymentOrderSubscriptionGroupIDLogValue(o))
+		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
+	}
+	if s.subscriptionHasOrderNote(ctx, o.UserID, o.SubscriptionGroupID, orderNote) {
+		slog.Info("subscription already contains payment order note, skipping", "orderID", o.ID, "groupID", paymentOrderSubscriptionGroupIDLogValue(o))
+		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
+	}
+	if o.PlanID != nil {
+		return s.doSubWithPlanSeat(ctx, o, days, orderNote)
+	}
+	if o.SubscriptionGroupID == nil {
+		return infraerrors.BadRequest("INVALID_STATUS", "missing subscription group")
+	}
+
+	gid := *o.SubscriptionGroupID
 	g, err := s.groupRepo.GetByID(ctx, gid)
 	if err != nil || g.Status != payment.EntityStatusActive {
 		return fmt.Errorf("group %d no longer exists or inactive", gid)
@@ -432,19 +457,7 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 	if !g.IsSubscriptionType() {
 		return ErrGroupNotSubscriptionType
 	}
-	// Idempotency: check durable completion marker first.
-	if s.hasAuditLog(ctx, o.ID, "SUBSCRIPTION_SUCCESS") {
-		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", gid)
-		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
-	}
-	orderNote := fmt.Sprintf("payment order %d", o.ID)
-	if s.subscriptionHasOrderNote(ctx, o.UserID, gid, orderNote) {
-		slog.Info("subscription already contains payment order note, skipping", "orderID", o.ID, "groupID", gid)
-		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
-	}
-	if o.PlanID != nil {
-		return s.doSubWithPlanSeat(ctx, o, gid, days, orderNote)
-	}
+
 	orderID := o.ID
 	_, _, err = s.subscriptionSvc.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{
 		UserID:       o.UserID,
@@ -460,7 +473,18 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 }
 
-func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.PaymentOrder, groupID int64, days int, orderNote string) error {
+func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.PaymentOrder, days int, orderNote string) error {
+	if o.SubscriptionGroupID != nil && *o.SubscriptionGroupID > 0 {
+		gid := *o.SubscriptionGroupID
+		g, err := s.groupRepo.GetByID(ctx, gid)
+		if err != nil || g.Status != payment.EntityStatusActive {
+			return fmt.Errorf("group %d no longer exists or inactive", gid)
+		}
+		if !g.IsSubscriptionType() {
+			return ErrGroupNotSubscriptionType
+		}
+	}
+
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin plan seat transaction: %w", err)
@@ -490,9 +514,8 @@ func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.Payment
 	planID := int64(plan.ID)
 	planName := plan.Name
 	orderID := o.ID
-	_, _, err = s.subscriptionSvc.assignOrExtendSubscriptionTerm(txCtx, &AssignSubscriptionInput{
+	input := &AssignSubscriptionInput{
 		UserID:           o.UserID,
-		GroupID:          groupID,
 		PlanID:           &planID,
 		PlanName:         &planName,
 		SevenDayLimitUSD: plan.SevenDayQuotaUsd,
@@ -500,7 +523,13 @@ func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.Payment
 		AssignedBy:       0,
 		OrderID:          &orderID,
 		Notes:            orderNote,
-	})
+	}
+	if o.SubscriptionGroupID != nil && *o.SubscriptionGroupID > 0 {
+		input.GroupID = *o.SubscriptionGroupID
+		_, _, err = s.subscriptionSvc.assignOrExtendSubscriptionTerm(txCtx, input)
+	} else {
+		_, _, err = s.subscriptionSvc.AssignOrExtendGenericPlanSubscription(txCtx, input)
+	}
 	if err != nil {
 		return fmt.Errorf("assign subscription: %w", err)
 	}
@@ -519,11 +548,26 @@ func (s *PaymentService) hasAuditLog(ctx context.Context, orderID int64, action 
 	return c > 0
 }
 
-func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID, groupID int64, orderNote string) bool {
+func paymentOrderSubscriptionGroupIDLogValue(o *dbent.PaymentOrder) int64 {
+	if o == nil || o.SubscriptionGroupID == nil {
+		return 0
+	}
+	return *o.SubscriptionGroupID
+}
+
+func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID int64, groupID *int64, orderNote string) bool {
 	if s == nil || s.subscriptionSvc == nil || strings.TrimSpace(orderNote) == "" {
 		return false
 	}
-	sub, err := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	var (
+		sub *UserSubscription
+		err error
+	)
+	if groupID != nil && *groupID > 0 {
+		sub, err = s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(ctx, userID, *groupID)
+	} else {
+		sub, err = s.subscriptionSvc.userSubRepo.GetGenericByUserID(ctx, userID)
+	}
 	if err != nil || sub == nil {
 		return false
 	}

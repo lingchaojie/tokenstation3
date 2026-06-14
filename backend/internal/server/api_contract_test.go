@@ -1139,7 +1139,7 @@ func TestAPIContracts(t *testing.T) {
 					"google_oauth_frontend_redirect_url": "/auth/oauth/callback",
 					"site_name": "LINX2.AI",
 					"site_logo": "",
-					"site_subtitle": "AI Gateway Platform",
+					"site_subtitle": "Link 2 All AI Model",
 					"api_base_url": "",
 					"api_key_acl_trust_forwarded_ip": false,
 					"contact_info": "",

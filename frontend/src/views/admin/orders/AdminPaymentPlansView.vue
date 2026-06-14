@@ -11,21 +11,8 @@
 
       <!-- Plans Table -->
       <DataTable :columns="planColumns" :data="plans" :loading="plansLoading">
-        <template #cell-name="{ value, row }">
-          <span class="text-sm font-medium" :class="getPlanNameClass(row.group_id)">{{ value }}</span>
-        </template>
-        <template #cell-group_id="{ value }">
-          <span v-if="isGroupMissing(value)" class="text-sm">
-            <span class="text-gray-400">#{{ value }}</span>
-            <span class="ml-1 badge badge-danger">{{ t('payment.admin.groupMissing') }}</span>
-          </span>
-          <GroupBadge
-            v-else-if="getGroup(value)"
-            :name="getGroup(value)!.name"
-            :platform="getGroup(value)!.platform"
-            :rate-multiplier="getGroup(value)!.rate_multiplier"
-          />
-          <span v-else class="text-sm text-gray-400">-</span>
+        <template #cell-name="{ value }">
+          <span class="text-sm font-medium text-gray-900 dark:text-white">{{ value }}</span>
         </template>
         <template #cell-price="{ value, row }">
           <div class="text-sm">
@@ -38,7 +25,7 @@
           <span v-else class="text-sm text-gray-400">-</span>
         </template>
         <template #cell-validity_days="{ value, row }">
-          <span class="text-sm">{{ value }} {{ t('payment.admin.' + (row.validity_unit || 'days')) }}</span>
+          <span class="text-sm">{{ value }} {{ t('payment.admin.' + validityUnitLabelKey(row.validity_unit)) }}</span>
         </template>
         <template #cell-seat_limit="{ row }">
           <span v-if="row.seat_limit === null || row.seat_limit === undefined" class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.admin.seatUnlimited') }}</span>
@@ -75,7 +62,7 @@
     </div>
 
     <!-- Plan Edit Dialog -->
-    <PlanEditDialog :show="showPlanDialog" :plan="editingPlan" :groups="groups" @close="showPlanDialog = false" @saved="loadPlans" />
+    <PlanEditDialog :show="showPlanDialog" :plan="editingPlan" @close="showPlanDialog = false" @saved="loadPlans" />
 
     <ConfirmDialog :show="showDeletePlanDialog" :title="t('payment.admin.deletePlan')" :message="t('payment.admin.deletePlanConfirm')" :confirm-text="t('common.delete')" danger @confirm="handleDeletePlan" @cancel="showDeletePlanDialog = false" />
   </AppLayout>
@@ -87,44 +74,16 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
-import adminAPI from '@/api/admin'
 import type { SubscriptionPlan } from '@/types/payment'
-import type { AdminGroup } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import GroupBadge from '@/components/common/GroupBadge.vue'
 import PlanEditDialog from './PlanEditDialog.vue'
-import { platformTextClass } from '@/utils/platformColors'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-
-// ==================== Groups ====================
-
-const groups = ref<AdminGroup[]>([])
-
-async function loadGroups() {
-  try {
-    groups.value = await adminAPI.groups.getAll()
-  } catch { /* ignore */ }
-}
-
-function getGroup(id: number): AdminGroup | undefined {
-  return groups.value.find(g => g.id === id)
-}
-
-function isGroupMissing(id: number): boolean {
-  return id > 0 && !groups.value.find(g => g.id === id)
-}
-
-function getPlanNameClass(groupId: number): string {
-  const group = getGroup(groupId)
-  return group ? platformTextClass(group.platform) : 'text-gray-900 dark:text-white'
-}
-
 
 // ==================== Plans ====================
 
@@ -138,7 +97,6 @@ const deletingPlanId = ref<number | null>(null)
 const planColumns = computed((): Column[] => [
   { key: 'id', label: 'ID' },
   { key: 'name', label: t('payment.admin.planName') },
-  { key: 'group_id', label: t('payment.admin.group') },
   { key: 'price', label: t('payment.admin.price') },
   { key: 'seven_day_quota_usd', label: t('payment.admin.sevenDayQuota') },
   { key: 'validity_days', label: t('payment.admin.validityDays') },
@@ -173,6 +131,19 @@ function formatMoney(value: number | null | undefined): string {
   return (value ?? 0).toFixed(2)
 }
 
+function validityUnitLabelKey(unit: string | null | undefined): string {
+  switch (unit) {
+    case 'week':
+    case 'weeks':
+      return 'weeks'
+    case 'month':
+    case 'months':
+      return 'months'
+    default:
+      return 'days'
+  }
+}
+
 function getSeatUsageClass(plan: SubscriptionPlan): string {
   const base = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium'
   if (plan.seat_over_limit) return `${base} bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300`
@@ -200,7 +171,6 @@ async function handleDeletePlan() {
 // ==================== Lifecycle ====================
 
 onMounted(() => {
-  loadGroups()
   loadPlans()
 })
 </script>

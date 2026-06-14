@@ -80,7 +80,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 		if isSubscriptionType && subscriptionService != nil {
-			subscription, err := subscriptionService.GetActiveSubscription(
+			subscription, err := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
 				c.Request.Context(),
 				apiKey.User.ID,
 				apiKey.Group.ID,

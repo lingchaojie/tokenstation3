@@ -123,8 +123,17 @@ func (f fakeGoogleSubscriptionRepo) GetByUserIDAndGroupID(ctx context.Context, u
 	}
 	return nil, errors.New("not implemented")
 }
+func (f fakeGoogleSubscriptionRepo) GetGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, service.ErrSubscriptionNotFound
+}
 func (f fakeGoogleSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	return f.GetByUserIDAndGroupID(ctx, userID, groupID)
+}
+func (f fakeGoogleSubscriptionRepo) GetActiveGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, service.ErrSubscriptionNotFound
+}
+func (f fakeGoogleSubscriptionRepo) GetActivePlanBackedByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, service.ErrSubscriptionNotFound
 }
 func (f fakeGoogleSubscriptionRepo) Update(ctx context.Context, sub *service.UserSubscription) error {
 	return errors.New("not implemented")
@@ -146,6 +155,9 @@ func (f fakeGoogleSubscriptionRepo) List(ctx context.Context, params pagination.
 }
 func (f fakeGoogleSubscriptionRepo) ExistsByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (bool, error) {
 	return false, errors.New("not implemented")
+}
+func (f fakeGoogleSubscriptionRepo) ExistsGenericByUserID(ctx context.Context, userID int64) (bool, error) {
+	return false, nil
 }
 func (f fakeGoogleSubscriptionRepo) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {
 	return errors.New("not implemented")

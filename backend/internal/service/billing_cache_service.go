@@ -461,7 +461,15 @@ func (s *BillingCacheService) convertToPortsData(data *subscriptionCacheData) *S
 // getSubscriptionFromDB 从数据库获取订阅数据
 func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID, groupID int64) (*subscriptionCacheData, error) {
 	now := time.Now()
-	sub, err := s.subRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	var (
+		sub *UserSubscription
+		err error
+	)
+	if groupID <= 0 {
+		sub, err = s.subRepo.GetGenericByUserID(ctx, userID)
+	} else {
+		sub, err = s.subRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get subscription: %w", err)
 	}
@@ -890,7 +898,8 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 // checkSubscriptionEligibility 检查订阅模式资格
 func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, userID int64, group *Group, subscription *UserSubscription) error {
 	// 获取订阅缓存数据
-	subData, err := s.GetSubscriptionStatus(ctx, userID, group.ID)
+	cacheGroupID := subscriptionCacheGroupID(subscription)
+	subData, err := s.GetSubscriptionStatus(ctx, userID, cacheGroupID)
 	if err != nil {
 		if s.circuitBreaker != nil {
 			s.circuitBreaker.OnFailure(err)
@@ -928,8 +937,8 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		subscription.WeeklyUsageUSD = 0
 		subscription.WeeklyWindowStart = &now
 		if s.cache != nil {
-			if err := s.cache.InvalidateSubscriptionCache(ctx, userID, group.ID); err != nil {
-				logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache after weekly reset failed for user %d group %d: %v", userID, group.ID, err)
+			if err := s.cache.InvalidateSubscriptionCache(ctx, userID, cacheGroupID); err != nil {
+				logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache after weekly reset failed for user %d group %d: %v", userID, cacheGroupID, err)
 				return ErrBillingServiceUnavailable.WithCause(err)
 			}
 		}

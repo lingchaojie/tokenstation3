@@ -85,6 +85,12 @@ func (_u *UserSubscriptionUpdate) SetNillableGroupID(v *int64) *UserSubscription
 	return _u
 }
 
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *UserSubscriptionUpdate) ClearGroupID() *UserSubscriptionUpdate {
+	_u.mutation.ClearGroupID()
+	return _u
+}
+
 // SetPlanID sets the "plan_id" field.
 func (_u *UserSubscriptionUpdate) SetPlanID(v int64) *UserSubscriptionUpdate {
 	_u.mutation.ResetPlanID()
@@ -669,9 +675,6 @@ func (_u *UserSubscriptionUpdate) check() error {
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
 	}
-	if _u.mutation.GroupCleared() && len(_u.mutation.GroupIDs()) > 0 {
-		return errors.New(`ent: clearing a required unique edge "UserSubscription.group"`)
-	}
 	return nil
 }
 
@@ -1022,6 +1025,12 @@ func (_u *UserSubscriptionUpdateOne) SetNillableGroupID(v *int64) *UserSubscript
 	if v != nil {
 		_u.SetGroupID(*v)
 	}
+	return _u
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearGroupID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearGroupID()
 	return _u
 }
 
@@ -1621,9 +1630,6 @@ func (_u *UserSubscriptionUpdateOne) check() error {
 	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
-	}
-	if _u.mutation.GroupCleared() && len(_u.mutation.GroupIDs()) > 0 {
-		return errors.New(`ent: clearing a required unique edge "UserSubscription.group"`)
 	}
 	return nil
 }

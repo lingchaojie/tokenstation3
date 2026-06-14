@@ -29,7 +29,6 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 	client := clientFromContext(ctx, r.client)
 	builder := client.UserSubscription.Create().
 		SetUserID(sub.UserID).
-		SetGroupID(sub.GroupID).
 		SetNillablePlanID(sub.PlanID).
 		SetNillablePlanName(sub.PlanName).
 		SetNillableSevenDayLimitUsd(sub.SevenDayLimitUSD).
@@ -52,6 +51,9 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		builder.SetStartsAt(time.Now())
 	} else {
 		builder.SetStartsAt(sub.StartsAt)
+	}
+	if sub.GroupID > 0 {
+		builder.SetGroupID(sub.GroupID)
 	}
 	if sub.Status != "" {
 		builder.SetStatus(sub.Status)
@@ -98,6 +100,17 @@ func (r *userSubscriptionRepository) GetByUserIDAndGroupID(ctx context.Context, 
 	return userSubscriptionEntityToService(m), nil
 }
 
+func (r *userSubscriptionRepository) GetGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	client := clientFromContext(ctx, r.client)
+	m, err := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDIsNil()).
+		Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
 func (r *userSubscriptionRepository) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	client := clientFromContext(ctx, r.client)
 	m, err := client.UserSubscription.Query().
@@ -115,6 +128,40 @@ func (r *userSubscriptionRepository) GetActiveByUserIDAndGroupID(ctx context.Con
 	return userSubscriptionEntityToService(m), nil
 }
 
+func (r *userSubscriptionRepository) GetActiveGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	client := clientFromContext(ctx, r.client)
+	m, err := client.UserSubscription.Query().
+		Where(
+			usersubscription.UserIDEQ(userID),
+			usersubscription.GroupIDIsNil(),
+			usersubscription.StatusEQ(service.SubscriptionStatusActive),
+			usersubscription.ExpiresAtGT(time.Now()),
+		).
+		Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
+func (r *userSubscriptionRepository) GetActivePlanBackedByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	client := clientFromContext(ctx, r.client)
+	m, err := client.UserSubscription.Query().
+		Where(
+			usersubscription.UserIDEQ(userID),
+			usersubscription.PlanIDNotNil(),
+			usersubscription.StatusEQ(service.SubscriptionStatusActive),
+			usersubscription.ExpiresAtGT(time.Now()),
+		).
+		WithGroup().
+		Order(dbent.Desc(usersubscription.FieldCreatedAt)).
+		First(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
 func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.UserSubscription) error {
 	if sub == nil {
 		return service.ErrSubscriptionNilInput
@@ -123,7 +170,6 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 	client := clientFromContext(ctx, r.client)
 	builder := client.UserSubscription.UpdateOneID(sub.ID).
 		SetUserID(sub.UserID).
-		SetGroupID(sub.GroupID).
 		SetStartsAt(sub.StartsAt).
 		SetExpiresAt(sub.ExpiresAt).
 		SetStatus(sub.Status).
@@ -137,6 +183,11 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetAssignedAt(sub.AssignedAt).
 		SetNotes(sub.Notes)
 
+	if sub.GroupID > 0 {
+		builder.SetGroupID(sub.GroupID)
+	} else {
+		builder.ClearGroupID()
+	}
 	if sub.PlanID != nil {
 		builder.SetPlanID(*sub.PlanID)
 	} else {
@@ -332,6 +383,13 @@ func (r *userSubscriptionRepository) ExistsByUserIDAndGroupID(ctx context.Contex
 	client := clientFromContext(ctx, r.client)
 	return client.UserSubscription.Query().
 		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDEQ(groupID)).
+		Exist(ctx)
+}
+
+func (r *userSubscriptionRepository) ExistsGenericByUserID(ctx context.Context, userID int64) (bool, error) {
+	client := clientFromContext(ctx, r.client)
+	return client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDIsNil()).
 		Exist(ctx)
 }
 
@@ -591,11 +649,8 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 			weekly_usage_usd = us.weekly_usage_usd + $1,
 			monthly_usage_usd = us.monthly_usage_usd + $1,
 			updated_at = NOW()
-		FROM groups g
 		WHERE us.id = $2
 			AND us.deleted_at IS NULL
-			AND us.group_id = g.id
-			AND g.deleted_at IS NULL
 	`
 
 	client := clientFromContext(ctx, r.client)
@@ -745,6 +800,8 @@ func applyUserSubscriptionEntityToService(dst *service.UserSubscription, src *db
 		return
 	}
 	dst.ID = src.ID
+	dst.UserID = src.UserID
+	dst.GroupID = src.GroupID
 	dst.PlanID = src.PlanID
 	dst.PlanName = src.PlanName
 	dst.SevenDayLimitUSD = src.SevenDayLimitUsd

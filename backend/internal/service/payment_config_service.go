@@ -152,7 +152,6 @@ type UpdateProviderInstanceRequest struct {
 	AllowUserRefund *bool             `json:"allow_user_refund"`
 }
 type CreatePlanRequest struct {
-	GroupID          int64    `json:"group_id"`
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
@@ -189,7 +188,6 @@ func (o *OptionalInt) UnmarshalJSON(data []byte) error {
 }
 
 type UpdatePlanRequest struct {
-	GroupID               *int64      `json:"group_id"`
 	Name                  *string     `json:"name"`
 	Description           *string     `json:"description"`
 	Price                 *float64    `json:"price"`

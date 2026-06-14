@@ -1,10 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminPaymentPlansView from '../AdminPaymentPlansView.vue'
-import type { SubscriptionPlan } from '@/types/payment'
+import type { SubscriptionPlan } from '../../../../types/payment'
 
 const getPlans = vi.hoisted(() => vi.fn())
-const getAllGroups = vi.hoisted(() => vi.fn())
 const showError = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-i18n', async () => {
@@ -17,21 +16,17 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-vi.mock('@/api/admin/payment', () => ({
-  adminPaymentAPI: {
+vi.mock('@/api/admin/payment', () => {
+  const paymentAPI = {
     getPlans,
     updatePlan: vi.fn(),
     deletePlan: vi.fn(),
-  },
-}))
-
-vi.mock('@/api/admin', () => ({
-  default: {
-    groups: {
-      getAll: getAllGroups,
-    },
-  },
-}))
+  }
+  return {
+    adminPaymentAPI: paymentAPI,
+    default: paymentAPI,
+  }
+})
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -43,10 +38,6 @@ vi.mock('@/stores/app', () => ({
 function planFixture(overrides: Partial<SubscriptionPlan> = {}): SubscriptionPlan {
   return {
     id: 1,
-    group_id: 2,
-    group_platform: 'anthropic',
-    group_name: 'LINX2 Subscription',
-    rate_multiplier: 1,
     name: 'Plus monthly',
     description: 'Everyday development',
     price: 399,
@@ -85,10 +76,6 @@ function mountView() {
         },
         ConfirmDialog: true,
         Icon: true,
-        GroupBadge: {
-          props: ['name'],
-          template: '<span>{{ name }}</span>',
-        },
         PlanEditDialog: true,
       },
     },
@@ -98,7 +85,6 @@ function mountView() {
 describe('AdminPaymentPlansView', () => {
   beforeEach(() => {
     getPlans.mockReset().mockResolvedValue({ data: [] })
-    getAllGroups.mockReset().mockResolvedValue([])
     showError.mockReset()
   })
 

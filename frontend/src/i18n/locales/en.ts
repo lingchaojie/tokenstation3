@@ -422,6 +422,15 @@ export default {
   auth: {
     welcomeBack: 'Welcome Back',
     signInToAccount: 'Sign in to your account to continue',
+    layout: {
+      kicker: 'AI Gateway Platform',
+      title: 'One gateway for models, keys, and usage.',
+      description: 'Sign in to manage API keys, plans, billing, and channel access through a calm Linear-style console.',
+      baseUrl: 'Base URL',
+      routes: 'Routes',
+      billing: 'Billing',
+      billingValue: 'Usage ledger enabled',
+    },
     signIn: 'Sign In',
     signingIn: 'Signing in...',
     createAccount: 'Create Account',
@@ -2092,11 +2101,11 @@ export default {
       keyRoutes: {
         action: 'Provider Routes',
         title: 'Provider Routes',
-        description: 'Choose per-user default groups for future normal-user API key creation.',
+        description: 'Choose per-user default groups for matching-platform API keys.',
         anthropicLabel: 'Anthropic Default Group',
         openaiLabel: 'OpenAI Default Group',
         useGlobalDefault: 'Use global default',
-        hint: 'Only active groups for the matching provider are shown. Existing API keys are not changed.',
+        hint: 'Only active groups for the matching provider are shown. Saving applies immediately to existing matching-platform API keys and future keys.',
         loadFailed: 'Failed to load provider routes',
         updateSuccess: 'Provider routes updated',
         updateFailed: 'Failed to update provider routes'
@@ -5819,7 +5828,7 @@ export default {
         siteNamePlaceholder: 'LINX2.AI',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
-        siteSubtitlePlaceholder: 'AI Gateway Platform',
+        siteSubtitlePlaceholder: 'Link 2 All AI Model',
         siteSubtitleHint: 'Displayed on login and register pages',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
@@ -7059,6 +7068,7 @@ export default {
     planFeatures: 'Features',
     subscription: {
       quotaFirstHint: 'Usage consumes subscription quota first, then recharge balance if needed.',
+      genericLabel: 'Subscription plan',
     },
     switchConfirm: {
       upgradeTitle: 'Confirm subscription upgrade',
@@ -7083,6 +7093,7 @@ export default {
     years: 'years',
     oneMonth: '1 Month',
     oneYear: '1 Year',
+    perWeek: 'week',
     perMonth: 'month',
     perYear: 'year',
     admin: {

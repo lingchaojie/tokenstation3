@@ -194,31 +194,13 @@ func (h *PaymentHandler) ListPlans(c *gin.Context) {
 	}
 	result := make([]adminPlanResponse, 0, len(plans))
 	for _, p := range plans {
-		plan := adminPlanResponse{
-			ID:            int64(p.ID),
-			GroupID:       p.GroupID,
-			Name:          p.Name,
-			Description:   p.Description,
-			Price:         p.Price,
-			OriginalPrice: p.OriginalPrice,
-			ValidityDays:  p.ValidityDays,
-			ValidityUnit:  p.ValidityUnit,
-			Features:      p.Features,
-			ProductName:   p.ProductName,
-			ForSale:       p.ForSale,
-			SortOrder:     p.SortOrder,
-			CreatedAt:     p.CreatedAt,
-			UpdatedAt:     p.UpdatedAt,
-		}
-		applySeatSummaryToAdminPlan(&plan, seatSummaries[p.ID])
-		result = append(result, plan)
+		result = append(result, newAdminPlanResponse(p, seatSummaries[p.ID]))
 	}
 	response.Success(c, result)
 }
 
 type adminPlanResponse struct {
 	ID            int64     `json:"id"`
-	GroupID       int64     `json:"group_id"`
 	Name          string    `json:"name"`
 	Description   string    `json:"description"`
 	Price         float64   `json:"price"`
@@ -236,6 +218,29 @@ type adminPlanResponse struct {
 	SeatAvailable *int      `json:"seat_available,omitempty"`
 	SeatFull      bool      `json:"seat_full"`
 	SeatOverLimit bool      `json:"seat_over_limit"`
+}
+
+func newAdminPlanResponse(p *dbent.SubscriptionPlan, summary service.PlanSeatSummary) adminPlanResponse {
+	if p == nil {
+		return adminPlanResponse{}
+	}
+	plan := adminPlanResponse{
+		ID:            int64(p.ID),
+		Name:          p.Name,
+		Description:   p.Description,
+		Price:         p.Price,
+		OriginalPrice: p.OriginalPrice,
+		ValidityDays:  p.ValidityDays,
+		ValidityUnit:  p.ValidityUnit,
+		Features:      p.Features,
+		ProductName:   p.ProductName,
+		ForSale:       p.ForSale,
+		SortOrder:     p.SortOrder,
+		CreatedAt:     p.CreatedAt,
+		UpdatedAt:     p.UpdatedAt,
+	}
+	applySeatSummaryToAdminPlan(&plan, summary)
+	return plan
 }
 
 func applySeatSummaryToAdminPlan(plan *adminPlanResponse, summary service.PlanSeatSummary) {
@@ -262,7 +267,12 @@ func (h *PaymentHandler) CreatePlan(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Created(c, plan)
+	seatSummary, err := h.configService.SeatSummaryForPlan(c.Request.Context(), plan)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, newAdminPlanResponse(plan, seatSummary))
 }
 
 // UpdatePlan updates an existing subscription plan.
@@ -282,7 +292,12 @@ func (h *PaymentHandler) UpdatePlan(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, plan)
+	seatSummary, err := h.configService.SeatSummaryForPlan(c.Request.Context(), plan)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, newAdminPlanResponse(plan, seatSummary))
 }
 
 // DeletePlan deletes a subscription plan.

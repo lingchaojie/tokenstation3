@@ -7072,7 +7072,7 @@ const form = reactive<SettingsForm>({
   default_user_rpm_limit: 0,
   site_name: "LINX2.AI",
   site_logo: "",
-  site_subtitle: "AI Gateway Platform",
+  site_subtitle: "Link 2 All AI Model",
   api_base_url: "",
   contact_info: "",
   doc_url: "",

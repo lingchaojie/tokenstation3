@@ -47,7 +47,7 @@
         <p v-if="monthlyTotalLabel" class="inline-flex rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-600 dark:border-linear-hairline dark:bg-linear-surface-2 dark:text-linear-ink-muted">
           {{ t('payment.planCard.totalMonthlyQuota') }} {{ monthlyTotalLabel }}
         </p>
-        <p v-if="!sevenDayQuotaLabel && plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="inline-flex rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-600 dark:border-linear-hairline dark:bg-linear-surface-2 dark:text-linear-ink-muted">
+        <p v-if="!sevenDayQuotaLabel && plan.seven_day_quota_usd == null" class="inline-flex rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-600 dark:border-linear-hairline dark:bg-linear-surface-2 dark:text-linear-ink-muted">
           {{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}
         </p>
       </div>
@@ -132,26 +132,27 @@ const localeValue = computed(() => {
   if (raw && typeof raw === 'object' && 'value' in raw) return String((raw as { value?: string }).value || '')
   return ''
 })
-const platform = computed(() => props.plan.group_platform || '')
 const monthlyDisplay = computed(() => getMonthlyPlanDisplayFromPlan(props.plan, localeValue.value))
 const displayName = computed(() => props.displayName || monthlyDisplay.value?.name || props.plan.name)
 const displayDescription = computed(() => props.displayDescription || monthlyDisplay.value?.description || props.plan.description || '')
 const displayFeatures = computed(() => props.displayFeatures ?? monthlyDisplay.value?.benefits ?? props.plan.features)
 const planKey = computed(() => monthlyPlanKeyFromName(props.plan.name))
-const activeSameGroupSubscription = computed(() =>
-  props.activeSubscriptions?.find(s => s.group_id === props.plan.group_id && s.status === 'active') ?? null
+const activeGenericSubscription = computed(() =>
+  props.activeSubscriptions?.find((subscription) => {
+    if (subscription.status !== 'active') return false
+    if (subscription.plan_id != null && subscription.plan_id === props.plan.id) return true
+    const activeKey = monthlyPlanKeyFromName(subscription.plan_name)
+    return !!activeKey && !!planKey.value && activeKey === planKey.value
+  }) ?? null
 )
-const isCurrentPlan = computed(() => {
-  const active = activeSameGroupSubscription.value
-  if (!active) return false
-  if (active.plan_id != null && active.plan_id === props.plan.id) return true
-  const activeKey = monthlyPlanKeyFromName(active.plan_name)
-  return !!activeKey && !!planKey.value && activeKey === planKey.value
-})
-const hasActiveSameGroupSubscription = computed(() => activeSameGroupSubscription.value !== null)
+const hasAnyActiveGenericSubscription = computed(() =>
+  props.activeSubscriptions?.some(subscription => subscription.status === 'active') ?? false
+)
+const isCurrentPlan = computed(() => activeGenericSubscription.value !== null)
+const hasActiveGenericSubscription = computed(() => isCurrentPlan.value || hasAnyActiveGenericSubscription.value)
 const actionIntent = computed<SubscriptionPlanSelectIntent>(() => {
   if (isCurrentPlan.value) return 'renew'
-  if (hasActiveSameGroupSubscription.value) return 'switch'
+  if (hasActiveGenericSubscription.value) return 'switch'
   return 'subscribe'
 })
 const actionLabel = computed(() => {
@@ -183,12 +184,12 @@ const monthlyTotalLabel = computed(() => {
 
 
 // Derived color classes from central config
-const accentClass = computed(() => platformAccentBarClass(platform.value))
-const borderClass = computed(() => platformBorderClass(platform.value))
-const textClass = computed(() => platformTextClass(platform.value))
-const iconClass = computed(() => platformIconClass(platform.value))
-const btnClass = computed(() => platformButtonClass(platform.value))
-const discountClass = computed(() => platformDiscountClass(platform.value))
+const accentClass = computed(() => platformAccentBarClass(''))
+const borderClass = computed(() => platformBorderClass(''))
+const textClass = computed(() => platformTextClass(''))
+const iconClass = computed(() => platformIconClass(''))
+const btnClass = computed(() => platformButtonClass(''))
+const discountClass = computed(() => platformDiscountClass(''))
 const discountText = computed(() => {
   if (!props.plan.original_price || props.plan.original_price <= 0) return ''
   const pct = Math.round((1 - props.plan.price / props.plan.original_price) * 100)
@@ -197,8 +198,9 @@ const discountText = computed(() => {
 
 const validitySuffix = computed(() => {
   const u = props.plan.validity_unit || 'day'
-  if (u === 'month') return t('payment.perMonth')
-  if (u === 'year') return t('payment.perYear')
+  if (u === 'week' || u === 'weeks') return t('payment.perWeek')
+  if (u === 'month' || u === 'months') return t('payment.perMonth')
+  if (u === 'year' || u === 'years') return t('payment.perYear')
   return `${props.plan.validity_days}${t('payment.days')}`
 })
 </script>

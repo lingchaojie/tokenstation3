@@ -76,8 +76,17 @@ func (userSubRepoNoop) GetByID(context.Context, int64) (*UserSubscription, error
 func (userSubRepoNoop) GetByUserIDAndGroupID(context.Context, int64, int64) (*UserSubscription, error) {
 	panic("unexpected GetByUserIDAndGroupID call")
 }
+func (userSubRepoNoop) GetGenericByUserID(context.Context, int64) (*UserSubscription, error) {
+	panic("unexpected GetGenericByUserID call")
+}
 func (userSubRepoNoop) GetActiveByUserIDAndGroupID(context.Context, int64, int64) (*UserSubscription, error) {
 	panic("unexpected GetActiveByUserIDAndGroupID call")
+}
+func (userSubRepoNoop) GetActiveGenericByUserID(context.Context, int64) (*UserSubscription, error) {
+	panic("unexpected GetActiveGenericByUserID call")
+}
+func (userSubRepoNoop) GetActivePlanBackedByUserID(context.Context, int64) (*UserSubscription, error) {
+	panic("unexpected GetActivePlanBackedByUserID call")
 }
 func (userSubRepoNoop) Update(context.Context, *UserSubscription) error {
 	panic("unexpected Update call")
@@ -97,6 +106,9 @@ func (userSubRepoNoop) List(context.Context, pagination.PaginationParams, *int64
 }
 func (userSubRepoNoop) ExistsByUserIDAndGroupID(context.Context, int64, int64) (bool, error) {
 	panic("unexpected ExistsByUserIDAndGroupID call")
+}
+func (userSubRepoNoop) ExistsGenericByUserID(context.Context, int64) (bool, error) {
+	panic("unexpected ExistsGenericByUserID call")
 }
 func (userSubRepoNoop) ExtendExpiry(context.Context, int64, time.Time) error {
 	panic("unexpected ExtendExpiry call")
@@ -190,6 +202,10 @@ func (s *subscriptionUserSubRepoStub) ExistsByUserIDAndGroupID(_ context.Context
 	return ok, nil
 }
 
+func (s *subscriptionUserSubRepoStub) ExistsGenericByUserID(ctx context.Context, userID int64) (bool, error) {
+	return s.ExistsByUserIDAndGroupID(ctx, userID, 0)
+}
+
 func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
 	sub := s.byUserGroup[s.key(userID, groupID)]
 	if sub == nil {
@@ -203,6 +219,36 @@ func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, u
 		sub.MonthlyUsageUSD += s.concurrentMonthlyUsageDelta
 	}
 	return &cp, nil
+}
+
+func (s *subscriptionUserSubRepoStub) GetGenericByUserID(ctx context.Context, userID int64) (*UserSubscription, error) {
+	return s.GetByUserIDAndGroupID(ctx, userID, 0)
+}
+
+func (s *subscriptionUserSubRepoStub) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	sub, err := s.GetByUserIDAndGroupID(ctx, userID, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
+		return nil, ErrSubscriptionNotFound
+	}
+	return sub, nil
+}
+
+func (s *subscriptionUserSubRepoStub) GetActiveGenericByUserID(ctx context.Context, userID int64) (*UserSubscription, error) {
+	return s.GetActiveByUserIDAndGroupID(ctx, userID, 0)
+}
+
+func (s *subscriptionUserSubRepoStub) GetActivePlanBackedByUserID(_ context.Context, userID int64) (*UserSubscription, error) {
+	now := time.Now()
+	for _, sub := range s.byID {
+		if sub != nil && sub.UserID == userID && sub.PlanID != nil && sub.Status == SubscriptionStatusActive && sub.ExpiresAt.After(now) {
+			cp := *sub
+			return &cp, nil
+		}
+	}
+	return nil, ErrSubscriptionNotFound
 }
 
 func (s *subscriptionUserSubRepoStub) Create(_ context.Context, sub *UserSubscription) error {
@@ -394,6 +440,35 @@ func (s *subscriptionUserSubRepoStub) UpdatePlanID(_ context.Context, subscripti
 	}
 	existing.PlanID = &planID
 	return nil
+}
+
+func TestResolveActiveSubscriptionForRoutedGroupIgnoresUnrelatedLegacyPlanBackedSubscription(t *testing.T) {
+	now := time.Now()
+	userSubRepo := newSubscriptionUserSubRepoStub()
+	planID := int64(7)
+	userSubRepo.seed(&UserSubscription{
+		UserID:    42,
+		GroupID:   999,
+		PlanID:    &planID,
+		Status:    SubscriptionStatusActive,
+		StartsAt:  now.Add(-time.Hour),
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now.Add(time.Minute),
+	})
+	userSubRepo.seed(&UserSubscription{
+		UserID:    42,
+		GroupID:   20,
+		Status:    SubscriptionStatusActive,
+		StartsAt:  now.Add(-time.Hour),
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	})
+	svc := NewSubscriptionService(nil, userSubRepo, nil, nil, nil)
+
+	got, err := svc.ResolveActiveSubscriptionForRoutedGroup(context.Background(), 42, 20)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(20), got.GroupID)
 }
 
 func TestAssignOrExtendSubscription_NonExpiredRenewalWithPlanIDPreservesConcurrentUsage(t *testing.T) {

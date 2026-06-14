@@ -123,7 +123,7 @@ describe('SubscriptionsView', () => {
 
     expect(text).toContain('Active plan')
     expect(text).toContain('Plus monthly')
-    expect(text).toContain('For regular development days where LINX2.AI becomes the default gateway for individual work.')
+    expect(text).toContain('For everyday development when LINX2 is your steady personal coding gateway.')
     expect(text).toContain('7-day quota')
     expect(text).toContain('$37.50')
     expect(text).toContain('$72.50')
@@ -135,6 +135,43 @@ describe('SubscriptionsView', () => {
     expect(text).toContain('Subscription quota is used before recharge balance.')
     expect(text).toContain('Daily')
     expect(text).toContain('Monthly')
+  })
+
+  it('renews generic subscriptions by plan id instead of nullable group id', async () => {
+    mockGetMySubscriptions.mockResolvedValue([
+      {
+        id: 3,
+        user_id: 1,
+        group_id: null,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        status: 'active',
+        starts_at: '2030-01-01T00:00:00Z',
+        expires_at: '2030-02-01T00:00:00Z',
+        daily_usage_usd: 0,
+        weekly_usage_usd: 0,
+        monthly_usage_usd: 0,
+        seven_day_limit_usd: 260,
+        seven_day_usage_usd: 0,
+        seven_day_remaining_usd: 260,
+        seven_day_reset_at: null,
+        daily_window_start: null,
+        weekly_window_start: null,
+        monthly_window_start: null,
+        created_at: '2030-01-01T00:00:00Z',
+        updated_at: '2030-01-01T00:00:00Z',
+      },
+    ])
+
+    const wrapper = mount(SubscriptionsView)
+    await flushPromises()
+
+    await wrapper.get('button').trigger('click')
+
+    expect(mockPush).toHaveBeenCalledWith({
+      path: '/purchase',
+      query: { tab: 'subscription', plan: '7', intent: 'renew' },
+    })
   })
 
   it('does not show unlimited for seven-day quota-only subscriptions', async () => {

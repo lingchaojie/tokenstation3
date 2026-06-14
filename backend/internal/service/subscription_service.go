@@ -114,7 +114,8 @@ func (s *SubscriptionService) initSubCache(cfg *config.Config) {
 	s.subCacheJitter = sc.JitterPercent
 }
 
-// subCacheKey 生成订阅缓存 key（热路径，避免 fmt.Sprintf 开销）
+// subCacheKey 生成订阅缓存 key（热路径，避免 fmt.Sprintf 开销）。
+// groupID=0 is reserved for generic plan entitlements shared by routed subscription groups.
 func subCacheKey(userID, groupID int64) string {
 	return "sub:" + strconv.FormatInt(userID, 10) + ":" + strconv.FormatInt(groupID, 10)
 }
@@ -185,9 +186,25 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 	return s.assignOrExtendSubscriptionTerm(ctx, input)
 }
 
+func (s *SubscriptionService) AssignOrExtendGenericPlanSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
+	if input == nil {
+		return nil, false, ErrSubscriptionNilInput
+	}
+	cp := *input
+	cp.GroupID = 0
+	return s.assignOrExtendSubscriptionTerm(ctx, &cp)
+}
+
+func (s *SubscriptionService) getExistingSubscriptionForAssign(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, error) {
+	if input.GroupID <= 0 {
+		return s.userSubRepo.GetGenericByUserID(ctx, input.UserID)
+	}
+	return s.userSubRepo.GetByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
+}
+
 func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
 	// 查询是否已有订阅
-	existingSub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
+	existingSub, err := s.getExistingSubscriptionForAssign(ctx, input)
 	if err != nil {
 		// 不存在记录是正常情况，其他错误需要返回
 		existingSub = nil
@@ -261,9 +278,10 @@ func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context
 		}
 
 		// 失效订阅缓存
-		s.InvalidateSubCache(input.UserID, input.GroupID)
+		cacheGroupID := subscriptionCacheGroupID(existingSub)
+		s.InvalidateSubCache(input.UserID, cacheGroupID)
 		if s.billingCacheService != nil {
-			userID, groupID := input.UserID, input.GroupID
+			userID, groupID := input.UserID, cacheGroupID
 			go func() {
 				cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -283,9 +301,10 @@ func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context
 	}
 
 	// 失效订阅缓存
-	s.InvalidateSubCache(input.UserID, input.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(sub)
+	s.InvalidateSubCache(input.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
-		userID, groupID := input.UserID, input.GroupID
+		userID, groupID := input.UserID, cacheGroupID
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -681,9 +700,10 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 	}
 
 	// 失效订阅缓存
-	s.InvalidateSubCache(input.UserID, input.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(sub)
+	s.InvalidateSubCache(input.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
-		userID, groupID := input.UserID, input.GroupID
+		userID, groupID := input.UserID, cacheGroupID
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -785,9 +805,10 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 	}
 
 	// 失效订阅缓存
-	s.InvalidateSubCache(sub.UserID, sub.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(sub)
+	s.InvalidateSubCache(sub.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
-		userID, groupID := sub.UserID, sub.GroupID
+		userID, groupID := sub.UserID, cacheGroupID
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -852,9 +873,10 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 	}
 
 	// 失效订阅缓存
-	s.InvalidateSubCache(sub.UserID, sub.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(sub)
+	s.InvalidateSubCache(sub.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
-		userID, groupID := sub.UserID, sub.GroupID
+		userID, groupID := sub.UserID, cacheGroupID
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -885,9 +907,10 @@ func (s *SubscriptionService) applyScheduledPlanChangeIfDueAt(ctx context.Contex
 	if !changed || applied == nil {
 		return sub, nil
 	}
-	s.InvalidateSubCache(applied.UserID, applied.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(applied)
+	s.InvalidateSubCache(applied.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
-		userID, groupID := applied.UserID, applied.GroupID
+		userID, groupID := applied.UserID, cacheGroupID
 		go func() {
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -901,11 +924,37 @@ func subscriptionActiveAt(sub *UserSubscription, now time.Time) bool {
 	return sub != nil && sub.Status == SubscriptionStatusActive && sub.ExpiresAt.After(now)
 }
 
+func subscriptionCacheGroupID(sub *UserSubscription) int64 {
+	if sub == nil || sub.GroupID <= 0 {
+		return 0
+	}
+	return sub.GroupID
+}
+
 // GetActiveSubscription 获取用户对特定分组的有效订阅
 // 使用 L1 缓存 + singleflight 加速中间件热路径。
 // 返回缓存对象的浅拷贝，调用方可安全修改字段而不会污染缓存或触发 data race。
 func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
-	key := subCacheKey(userID, groupID)
+	return s.getActiveSubscriptionCached(ctx, userID, groupID, func(ctx context.Context) (*UserSubscription, error) {
+		return s.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	})
+}
+
+func (s *SubscriptionService) GetActiveGenericSubscription(ctx context.Context, userID int64) (*UserSubscription, error) {
+	return s.getActiveSubscriptionCached(ctx, userID, 0, func(ctx context.Context) (*UserSubscription, error) {
+		return s.userSubRepo.GetGenericByUserID(ctx, userID)
+	})
+}
+
+func (s *SubscriptionService) ResolveActiveSubscriptionForRoutedGroup(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	if sub, err := s.GetActiveGenericSubscription(ctx, userID); err == nil && sub != nil {
+		return sub, nil
+	}
+	return s.GetActiveSubscription(ctx, userID, groupID)
+}
+
+func (s *SubscriptionService) getActiveSubscriptionCached(ctx context.Context, userID, cacheGroupID int64, load func(context.Context) (*UserSubscription, error)) (*UserSubscription, error) {
+	key := subCacheKey(userID, cacheGroupID)
 	now := time.Now()
 
 	// L1 缓存命中：返回浅拷贝
@@ -921,7 +970,7 @@ func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID,
 
 	// singleflight 防止并发击穿
 	value, err, _ := s.subCacheGroup.Do(key, func() (any, error) {
-		sub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+		sub, err := load(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1104,12 +1153,13 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	// Invalidate L1 ristretto cache. Ristretto's Del() is asynchronous by design,
 	// so call Wait() immediately after to flush pending operations and guarantee
 	// the deleted key is not returned on the very next Get() call.
-	s.InvalidateSubCache(sub.UserID, sub.GroupID)
+	cacheGroupID := subscriptionCacheGroupID(sub)
+	s.InvalidateSubCache(sub.UserID, cacheGroupID)
 	if s.subCacheL1 != nil {
 		s.subCacheL1.Wait()
 	}
 	if s.billingCacheService != nil {
-		_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
+		_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, cacheGroupID)
 	}
 	// Return the refreshed subscription from DB
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
@@ -1160,12 +1210,13 @@ func (s *SubscriptionService) CheckAndResetWindowsAt(ctx context.Context, sub *U
 
 	// 如果有窗口被重置，失效缓存以保持一致性
 	if needsInvalidateCache {
-		s.InvalidateSubCache(sub.UserID, sub.GroupID)
+		cacheGroupID := subscriptionCacheGroupID(sub)
+		s.InvalidateSubCache(sub.UserID, cacheGroupID)
 		if s.subCacheL1 != nil {
 			s.subCacheL1.Wait()
 		}
 		if s.billingCacheService != nil {
-			_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
+			_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, cacheGroupID)
 		}
 	}
 
@@ -1273,7 +1324,7 @@ func (s *SubscriptionService) doWindowMaintenance(sub *UserSubscription) {
 	}
 
 	// 失效 L1 缓存，确保后续请求拿到更新后的数据
-	s.InvalidateSubCache(sub.UserID, sub.GroupID)
+	s.InvalidateSubCache(sub.UserID, subscriptionCacheGroupID(sub))
 }
 
 // RecordUsage 记录使用量到订阅
@@ -1311,7 +1362,7 @@ func (s *SubscriptionService) GetSubscriptionProgress(ctx context.Context, subsc
 	}
 
 	group := sub.Group
-	if group == nil {
+	if group == nil && sub.GroupID > 0 {
 		group, err = s.groupRepo.GetByID(ctx, sub.GroupID)
 		if err != nil {
 			return nil, err
@@ -1323,15 +1374,21 @@ func (s *SubscriptionService) GetSubscriptionProgress(ctx context.Context, subsc
 
 // calculateProgress 根据已加载的订阅和分组数据计算使用进度（纯内存计算，无 DB 查询）
 func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Group) *SubscriptionProgress {
+	groupName := "Subscription"
+	if group != nil && strings.TrimSpace(group.Name) != "" {
+		groupName = group.Name
+	} else if sub.PlanName != nil && strings.TrimSpace(*sub.PlanName) != "" {
+		groupName = *sub.PlanName
+	}
 	progress := &SubscriptionProgress{
 		ID:            sub.ID,
-		GroupName:     group.Name,
+		GroupName:     groupName,
 		ExpiresAt:     sub.ExpiresAt,
 		ExpiresInDays: sub.DaysRemaining(),
 	}
 
 	// 日进度
-	if group.HasDailyLimit() && sub.DailyWindowStart != nil {
+	if group != nil && group.HasDailyLimit() && sub.DailyWindowStart != nil {
 		limit := *group.DailyLimitUSD
 		resetsAt := sub.DailyWindowStart.Add(24 * time.Hour)
 		if dailyResetTime := sub.DailyResetTime(); dailyResetTime != nil {
@@ -1382,7 +1439,7 @@ func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Gr
 	}
 
 	// 月进度
-	if group.HasMonthlyLimit() && sub.MonthlyWindowStart != nil {
+	if group != nil && group.HasMonthlyLimit() && sub.MonthlyWindowStart != nil {
 		limit := *group.MonthlyLimitUSD
 		resetsAt := sub.MonthlyWindowStart.Add(30 * 24 * time.Hour)
 		progress.Monthly = &UsageWindowProgress{
@@ -1420,7 +1477,7 @@ func (s *SubscriptionService) GetUserSubscriptionsWithProgress(ctx context.Conte
 	for i := range subs {
 		sub := &subs[i]
 		group := sub.Group
-		if group == nil {
+		if group == nil && sub.GroupID > 0 {
 			continue
 		}
 		progresses = append(progresses, *s.calculateProgress(sub, group))

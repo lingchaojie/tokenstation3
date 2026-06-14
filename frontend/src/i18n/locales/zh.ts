@@ -422,6 +422,15 @@ export default {
   auth: {
     welcomeBack: '欢迎回来',
     signInToAccount: '登录您的账户以继续',
+    layout: {
+      kicker: 'AI 网关平台',
+      title: '一个入口管理模型、密钥和用量。',
+      description: '登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。',
+      baseUrl: '基础地址',
+      routes: '路由',
+      billing: '计费',
+      billingValue: '用量账本已启用',
+    },
     signIn: '登录',
     signingIn: '登录中...',
     createAccount: '创建账户',
@@ -2145,11 +2154,11 @@ export default {
       keyRoutes: {
         action: '平台路由',
         title: '平台路由',
-        description: '为该用户未来创建普通 API Key 选择默认分组。',
+        description: '为该用户设置 Anthropic / OpenAI API Key 的平台路由。',
         anthropicLabel: 'Anthropic 默认分组',
         openaiLabel: 'OpenAI 默认分组',
         useGlobalDefault: '使用全局默认',
-        hint: '仅显示匹配平台的活跃分组。已有 API Key 不会被修改。',
+        hint: '仅显示匹配平台的活跃分组。保存后会立即更新该用户已有的对应平台 API Key，后续新建 API Key 也会使用该路由。清空后将使用全局默认。',
         loadFailed: '加载平台路由失败',
         updateSuccess: '平台路由已更新',
         updateFailed: '更新平台路由失败'
@@ -5974,7 +5983,7 @@ export default {
         siteNamePlaceholder: 'LINX2.AI',
         siteSubtitle: '站点副标题',
         siteSubtitleHint: '显示在登录和注册页面',
-        siteSubtitlePlaceholder: 'AI 网关平台',
+        siteSubtitlePlaceholder: 'Link 2 All AI Model',
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"和"导入到 CC Switch"功能，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
@@ -7239,6 +7248,7 @@ export default {
     planFeatures: '功能特性',
     subscription: {
       quotaFirstHint: '使用时优先扣除月卡 7 日额度，不足时再使用充值余额。',
+      genericLabel: '订阅套餐',
     },
     switchConfirm: {
       upgradeTitle: '确认升级订阅',
@@ -7263,6 +7273,7 @@ export default {
     years: '年',
     oneMonth: '1 个月',
     oneYear: '1 年',
+    perWeek: '周',
     perMonth: '月',
     perYear: '年',
     admin: {
