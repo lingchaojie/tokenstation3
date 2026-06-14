@@ -3,8 +3,8 @@ package service
 import "time"
 
 type UserSubscription struct {
-	ID      int64
-	UserID  int64
+	ID     int64
+	UserID int64
 	// GroupID is 0 for generic plan entitlements that are not bound to a routed group.
 	GroupID int64
 	PlanID  *int64
