@@ -22,11 +22,20 @@
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.sevenDayQuotaHint') }}</p>
         </div>
         <div><label class="input-label">{{ t('payment.admin.sortOrder') }}</label><input v-model.number="planForm.sort_order" type="number" min="0" class="input" /></div>
-        <div>
-          <label class="input-label">{{ t('payment.admin.seatLimit') }}</label>
-          <input :value="planForm.seat_limit" type="number" min="0" step="1" class="input" :placeholder="t('payment.admin.seatLimitPlaceholder')" @input="setSeatLimitInput" />
-          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.seatLimitHint') }}</p>
-          <p v-if="seatLimitLowerThanUsed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ t('payment.admin.seatLimitLowerThanUsed') }}</p>
+        <div class="col-span-2 grid grid-cols-2 gap-3">
+          <div>
+            <label class="input-label">{{ t('payment.admin.virtualSeatStart') }}</label>
+            <input :value="planForm.virtual_seat_start" data-testid="plan-virtual-seat-start" type="number" min="0" step="1" class="input" :placeholder="t('payment.admin.seatLimitPlaceholder')" @input="setVirtualSeatStartInput" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.virtualSeatTotal') }}</label>
+            <input :value="planForm.virtual_seat_total" data-testid="plan-virtual-seat-total" type="number" min="0" step="1" class="input" :placeholder="t('payment.admin.seatLimitPlaceholder')" @input="setVirtualSeatTotalInput" />
+          </div>
+          <div class="col-span-2">
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.virtualSeatRangeHint') }}</p>
+            <p v-if="derivedSeatLimit !== null" class="mt-1 text-xs text-gray-600 dark:text-gray-300">{{ t('payment.admin.derivedSeatLimit') }}: {{ derivedSeatLimit }}</p>
+            <p v-if="seatLimitLowerThanUsed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ t('payment.admin.seatLimitLowerThanUsed') }}</p>
+          </div>
         </div>
       </div>
       <div>
@@ -93,7 +102,8 @@ const planForm = reactive({
   validity_days: 30,
   validity_unit: 'day',
   sort_order: 0,
-  seat_limit: '',
+  virtual_seat_start: '',
+  virtual_seat_total: '',
   for_sale: true,
 })
 const planFeaturesText = ref('')
@@ -117,23 +127,36 @@ function normalizeValidityUnit(unit: string | null | undefined): string {
   }
 }
 
-const seatLimitLowerThanUsed = computed(() => {
-  if (!props.plan) return false
-  const trimmed = planForm.seat_limit.trim()
-  if (!trimmed) return false
-  const value = Number(trimmed)
-  if (!Number.isInteger(value) || value < 0) return false
-  return value < (props.plan.seat_used || 0)
+const derivedSeatLimit = computed(() => {
+  try {
+    const { start, total } = parseVirtualSeatRange()
+    return start === null || total === null ? null : total - start
+  } catch {
+    return null
+  }
 })
 
-function setSeatLimitInput(event: Event) {
-  planForm.seat_limit = (event.target as HTMLInputElement).value
+const seatLimitLowerThanUsed = computed(() => {
+  if (!props.plan || derivedSeatLimit.value === null) return false
+  return derivedSeatLimit.value < (props.plan.seat_used || 0)
+})
+
+function setVirtualSeatStartInput(event: Event) {
+  planForm.virtual_seat_start = (event.target as HTMLInputElement).value
+}
+
+function setVirtualSeatTotalInput(event: Event) {
+  planForm.virtual_seat_total = (event.target as HTMLInputElement).value
 }
 
 // Reset form when dialog opens
 watch(() => props.show, (visible) => {
   if (!visible) return
   if (props.plan) {
+    const shouldUseSeatLimitFallback = props.plan.virtual_seat_start == null && props.plan.virtual_seat_total == null && props.plan.seat_limit != null
+    const virtualSeatStart = shouldUseSeatLimitFallback ? '0' : props.plan.virtual_seat_start == null ? '' : String(props.plan.virtual_seat_start)
+    const virtualSeatTotal = shouldUseSeatLimitFallback ? String(props.plan.seat_limit) : props.plan.virtual_seat_total == null ? '' : String(props.plan.virtual_seat_total)
+
     Object.assign(planForm, {
       name: props.plan.name,
       description: props.plan.description,
@@ -143,7 +166,8 @@ watch(() => props.show, (visible) => {
       validity_days: props.plan.validity_days,
       validity_unit: normalizeValidityUnit(props.plan.validity_unit),
       sort_order: props.plan.sort_order || 0,
-      seat_limit: props.plan.seat_limit == null ? '' : String(props.plan.seat_limit),
+      virtual_seat_start: virtualSeatStart,
+      virtual_seat_total: virtualSeatTotal,
       for_sale: props.plan.for_sale,
     })
     planFeaturesText.value = (props.plan.features || []).join('\n')
@@ -157,19 +181,32 @@ watch(() => props.show, (visible) => {
       validity_days: 30,
       validity_unit: 'day',
       sort_order: 0,
-      seat_limit: '',
+      virtual_seat_start: '',
+      virtual_seat_total: '',
       for_sale: true,
     })
     planFeaturesText.value = ''
   }
 }, { immediate: true })
 
-function parseSeatLimit(): number | null {
-  const trimmed = planForm.seat_limit.trim()
-  if (!trimmed) return null
-  const value = Number(trimmed)
-  if (!Number.isInteger(value) || value < 0) throw new Error(t('payment.admin.seatLimitHint'))
-  return value
+function parseVirtualSeatRange(): { start: number | null; total: number | null } {
+  const startTrimmed = planForm.virtual_seat_start.trim()
+  const totalTrimmed = planForm.virtual_seat_total.trim()
+
+  if (!startTrimmed && !totalTrimmed) {
+    return { start: null, total: null }
+  }
+  if (!startTrimmed || !totalTrimmed) {
+    throw new Error(t('payment.admin.virtualSeatRangeRequired'))
+  }
+
+  const start = Number(startTrimmed)
+  const total = Number(totalTrimmed)
+  if (!Number.isInteger(start) || !Number.isInteger(total) || start < 0 || total < 0 || total < start) {
+    throw new Error(t('payment.admin.virtualSeatRangeInvalid'))
+  }
+
+  return { start, total }
 }
 
 function parseNullableNumber(value: number | string | null): number | null {
@@ -182,6 +219,7 @@ function parseNullableNumber(value: number | string | null): number | null {
 function buildPlanPayload() {
   const features = planFeaturesText.value.split('\n').map(f => f.trim()).filter(Boolean).join('\n')
   const sevenDayQuota = parseNullableNumber(planForm.seven_day_quota_usd)
+  const virtualSeatRange = parseVirtualSeatRange()
   const payload: Record<string, unknown> = {
     name: planForm.name,
     description: planForm.description,
@@ -190,7 +228,8 @@ function buildPlanPayload() {
     validity_days: planForm.validity_days,
     validity_unit: normalizeValidityUnit(planForm.validity_unit),
     sort_order: planForm.sort_order,
-    seat_limit: parseSeatLimit(),
+    virtual_seat_start: virtualSeatRange.start,
+    virtual_seat_total: virtualSeatRange.total,
     for_sale: planForm.for_sale,
     features,
     seven_day_quota_usd: sevenDayQuota,

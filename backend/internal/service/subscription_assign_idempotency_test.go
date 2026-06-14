@@ -442,6 +442,16 @@ func (s *subscriptionUserSubRepoStub) UpdatePlanID(_ context.Context, subscripti
 	return nil
 }
 
+func (s *subscriptionUserSubRepoStub) Delete(_ context.Context, id int64) error {
+	existing := s.byID[id]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	delete(s.byID, id)
+	delete(s.byUserGroup, s.key(existing.UserID, existing.GroupID))
+	return nil
+}
+
 func TestResolveActiveSubscriptionForRoutedGroupIgnoresUnrelatedLegacyPlanBackedSubscription(t *testing.T) {
 	now := time.Now()
 	userSubRepo := newSubscriptionUserSubRepoStub()
@@ -511,6 +521,54 @@ func TestAssignOrExtendSubscription_NonExpiredRenewalWithPlanIDPreservesConcurre
 	require.Equal(t, 12.75, renewed.DailyUsageUSD)
 	require.Equal(t, 34.75, renewed.WeeklyUsageUSD)
 	require.Equal(t, 57.50, renewed.MonthlyUsageUSD)
+}
+
+func ptrSubscriptionString(value string) *string {
+	return &value
+}
+
+func ptrSubscriptionFloat64(value float64) *float64 {
+	return &value
+}
+
+func TestAssignOrExtendGenericPlanSubscriptionInvalidatesPublicPlansCache(t *testing.T) {
+	planID := int64(77)
+	subRepo := newSubscriptionUserSubRepoStub()
+	svc := NewSubscriptionService(nil, subRepo, nil, nil, nil)
+	invalidateCalls := 0
+	svc.SetPublicPlansCacheInvalidator(func() { invalidateCalls++ })
+
+	_, reused, err := svc.AssignOrExtendGenericPlanSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:           7001,
+		PlanID:           &planID,
+		PlanName:         ptrSubscriptionString("Pro monthly"),
+		SevenDayLimitUSD: ptrSubscriptionFloat64(260),
+		ValidityDays:     30,
+	})
+
+	require.NoError(t, err)
+	require.False(t, reused)
+	require.Equal(t, 1, invalidateCalls)
+}
+
+func TestRevokeSubscriptionWithPlanIDInvalidatesPublicPlansCache(t *testing.T) {
+	planID := int64(77)
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        12,
+		UserID:    7002,
+		GroupID:   0,
+		PlanID:    &planID,
+		Status:    SubscriptionStatusActive,
+		StartsAt:  time.Now().Add(-time.Hour),
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	svc := NewSubscriptionService(nil, subRepo, nil, nil, nil)
+	invalidateCalls := 0
+	svc.SetPublicPlansCacheInvalidator(func() { invalidateCalls++ })
+
+	require.NoError(t, svc.RevokeSubscription(context.Background(), 12))
+	require.Equal(t, 1, invalidateCalls)
 }
 
 func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {

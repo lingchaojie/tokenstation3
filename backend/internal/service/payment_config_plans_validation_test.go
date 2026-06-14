@@ -177,6 +177,100 @@ func TestOptionalIntTracksAbsentNullAndValue(t *testing.T) {
 	require.Equal(t, 7, *numberValue.Value)
 }
 
+func TestDeriveSeatLimitFromVirtualRange(t *testing.T) {
+	start := 4900
+	total := 5000
+
+	limit, err := deriveSeatLimitFromVirtualRange(&start, &total)
+
+	require.NoError(t, err)
+	require.NotNil(t, limit)
+	require.Equal(t, 100, *limit)
+}
+
+func TestDeriveSeatLimitFromVirtualRangeAllowsUnlimited(t *testing.T) {
+	limit, err := deriveSeatLimitFromVirtualRange(nil, nil)
+
+	require.NoError(t, err)
+	require.Nil(t, limit)
+}
+
+func TestDeriveSeatLimitFromVirtualRangeRejectsPartialRange(t *testing.T) {
+	start := 4900
+
+	_, err := deriveSeatLimitFromVirtualRange(&start, nil)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "virtual seat")
+}
+
+func TestDeriveSeatLimitFromVirtualRangeRejectsNegativeValues(t *testing.T) {
+	start := -1
+	total := 5000
+
+	_, err := deriveSeatLimitFromVirtualRange(&start, &total)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ">= 0")
+}
+
+func TestDeriveSeatLimitFromVirtualRangeRejectsTotalBelowStart(t *testing.T) {
+	start := 5001
+	total := 5000
+
+	_, err := deriveSeatLimitFromVirtualRange(&start, &total)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ">= start")
+}
+
+func TestDeriveSeatLimitFromOptionalVirtualRangeTracksAbsentClearAndValue(t *testing.T) {
+	limit, set, err := deriveSeatLimitFromOptionalVirtualRange(OptionalInt{}, OptionalInt{})
+	require.NoError(t, err)
+	require.False(t, set)
+	require.Nil(t, limit)
+
+	var clearStart OptionalInt
+	require.NoError(t, clearStart.UnmarshalJSON([]byte("null")))
+	var clearTotal OptionalInt
+	require.NoError(t, clearTotal.UnmarshalJSON([]byte("null")))
+	limit, set, err = deriveSeatLimitFromOptionalVirtualRange(clearStart, clearTotal)
+	require.NoError(t, err)
+	require.True(t, set)
+	require.Nil(t, limit)
+
+	var valueStart OptionalInt
+	require.NoError(t, valueStart.UnmarshalJSON([]byte("4900")))
+	var valueTotal OptionalInt
+	require.NoError(t, valueTotal.UnmarshalJSON([]byte("5000")))
+	limit, set, err = deriveSeatLimitFromOptionalVirtualRange(valueStart, valueTotal)
+	require.NoError(t, err)
+	require.True(t, set)
+	require.NotNil(t, limit)
+	require.Equal(t, 100, *limit)
+}
+
+func TestEnsureSeatLimitMatchesVirtualRangeRejectsConflict(t *testing.T) {
+	seatLimit := 99
+	derivedLimit := 100
+
+	err := ensureSeatLimitMatchesVirtualRange(&seatLimit, &derivedLimit)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "seat limit")
+}
+
+func TestNormalizeCreatePlanSeatRangeRejectsConflictingExplicitSeatLimit(t *testing.T) {
+	seatLimit := 99
+	start := 4900
+	total := 5000
+
+	_, _, _, err := normalizeCreatePlanSeatRange(&seatLimit, &start, &total)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "seat limit")
+}
+
 // --- validatePlanPatch: other fields ---
 
 func ptrStr(s string) *string     { return &s }

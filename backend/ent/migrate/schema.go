@@ -1253,6 +1253,8 @@ var (
 		{Name: "for_sale", Type: field.TypeBool, Default: true},
 		{Name: "sort_order", Type: field.TypeInt, Default: 0},
 		{Name: "seat_limit", Type: field.TypeInt, Nullable: true},
+		{Name: "virtual_seat_start", Type: field.TypeInt, Nullable: true},
+		{Name: "virtual_seat_total", Type: field.TypeInt, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 	}

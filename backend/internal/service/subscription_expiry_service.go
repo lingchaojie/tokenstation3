@@ -37,6 +37,8 @@ type SubscriptionExpiryService struct {
 	lockCache  LeaderLockCache
 	db         *sql.DB
 	instanceID string
+
+	publicPlansCacheInvalidator func()
 }
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
@@ -65,6 +67,20 @@ func (s *SubscriptionExpiryService) SetSettingRepository(settingRepo SettingRepo
 
 func (s *SubscriptionExpiryService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
 	s.notificationEmailService = notificationEmailService
+}
+
+func (s *SubscriptionExpiryService) SetPublicPlansCacheInvalidator(invalidator func()) {
+	if s == nil {
+		return
+	}
+	s.publicPlansCacheInvalidator = invalidator
+}
+
+func (s *SubscriptionExpiryService) invalidatePublicPlansCache() {
+	if s == nil || s.publicPlansCacheInvalidator == nil {
+		return
+	}
+	s.publicPlansCacheInvalidator()
 }
 
 func (s *SubscriptionExpiryService) Start() {
@@ -110,6 +126,7 @@ func (s *SubscriptionExpiryService) runOnce() {
 	}
 	if updated > 0 {
 		log.Printf("[SubscriptionExpiry] Updated %d expired subscriptions", updated)
+		s.invalidatePublicPlansCache()
 	}
 	s.sendExpiryReminders(ctx)
 }

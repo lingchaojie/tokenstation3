@@ -119,6 +119,16 @@ func SeatLimit(v int) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldSeatLimit, v))
 }
 
+// VirtualSeatStart applies equality check predicate on the "virtual_seat_start" field. It's identical to VirtualSeatStartEQ.
+func VirtualSeatStart(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatTotal applies equality check predicate on the "virtual_seat_total" field. It's identical to VirtualSeatTotalEQ.
+func VirtualSeatTotal(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldVirtualSeatTotal, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldCreatedAt, v))
@@ -782,6 +792,106 @@ func SeatLimitIsNil() predicate.SubscriptionPlan {
 // SeatLimitNotNil applies the NotNil predicate on the "seat_limit" field.
 func SeatLimitNotNil() predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldSeatLimit))
+}
+
+// VirtualSeatStartEQ applies the EQ predicate on the "virtual_seat_start" field.
+func VirtualSeatStartEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartNEQ applies the NEQ predicate on the "virtual_seat_start" field.
+func VirtualSeatStartNEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNEQ(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartIn applies the In predicate on the "virtual_seat_start" field.
+func VirtualSeatStartIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIn(FieldVirtualSeatStart, vs...))
+}
+
+// VirtualSeatStartNotIn applies the NotIn predicate on the "virtual_seat_start" field.
+func VirtualSeatStartNotIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotIn(FieldVirtualSeatStart, vs...))
+}
+
+// VirtualSeatStartGT applies the GT predicate on the "virtual_seat_start" field.
+func VirtualSeatStartGT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGT(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartGTE applies the GTE predicate on the "virtual_seat_start" field.
+func VirtualSeatStartGTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGTE(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartLT applies the LT predicate on the "virtual_seat_start" field.
+func VirtualSeatStartLT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLT(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartLTE applies the LTE predicate on the "virtual_seat_start" field.
+func VirtualSeatStartLTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLTE(FieldVirtualSeatStart, v))
+}
+
+// VirtualSeatStartIsNil applies the IsNil predicate on the "virtual_seat_start" field.
+func VirtualSeatStartIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldVirtualSeatStart))
+}
+
+// VirtualSeatStartNotNil applies the NotNil predicate on the "virtual_seat_start" field.
+func VirtualSeatStartNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldVirtualSeatStart))
+}
+
+// VirtualSeatTotalEQ applies the EQ predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldEQ(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalNEQ applies the NEQ predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalNEQ(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNEQ(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalIn applies the In predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIn(FieldVirtualSeatTotal, vs...))
+}
+
+// VirtualSeatTotalNotIn applies the NotIn predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalNotIn(vs ...int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotIn(FieldVirtualSeatTotal, vs...))
+}
+
+// VirtualSeatTotalGT applies the GT predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalGT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGT(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalGTE applies the GTE predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalGTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldGTE(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalLT applies the LT predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalLT(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLT(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalLTE applies the LTE predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalLTE(v int) predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldLTE(FieldVirtualSeatTotal, v))
+}
+
+// VirtualSeatTotalIsNil applies the IsNil predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldVirtualSeatTotal))
+}
+
+// VirtualSeatTotalNotNil applies the NotNil predicate on the "virtual_seat_total" field.
+func VirtualSeatTotalNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldVirtualSeatTotal))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

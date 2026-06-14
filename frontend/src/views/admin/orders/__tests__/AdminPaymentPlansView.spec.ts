@@ -108,4 +108,48 @@ describe('AdminPaymentPlansView', () => {
     expect(text).not.toContain('$399.00')
     expect(text).not.toContain('$499.00')
   })
+
+  it('shows real seat usage and virtual display range for limited plans', async () => {
+    getPlans.mockResolvedValue({
+      data: [
+        planFixture({
+          id: 3,
+          name: 'Pro monthly',
+          seat_limit: 100,
+          seat_used: 12,
+          virtual_seat_start: 4900,
+          virtual_seat_total: 5000,
+        }),
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('12/100')
+    expect(text).toContain('4912/5000')
+  })
+
+  it('shows unlimited label without virtual display for unlimited plans with virtual fields', async () => {
+    getPlans.mockResolvedValue({
+      data: [
+        planFixture({
+          id: 4,
+          name: 'Unlimited monthly',
+          seat_limit: null,
+          seat_used: 12,
+          virtual_seat_start: 4900,
+          virtual_seat_total: 5000,
+        }),
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.admin.seatUnlimited')
+    expect(text).not.toContain('4912/5000')
+  })
 })

@@ -67,6 +67,14 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			NonNegative(),
+		field.Int("virtual_seat_start").
+			Optional().
+			Nillable().
+			NonNegative(),
+		field.Int("virtual_seat_total").
+			Optional().
+			Nillable().
+			NonNegative(),
 		field.Time("created_at").
 			Immutable().
 			Default(time.Now).

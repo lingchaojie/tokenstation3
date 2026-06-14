@@ -78,6 +78,14 @@ function mountDialog(plan: SubscriptionPlan | null) {
   })
 }
 
+async function fillRequiredCreateFields(wrapper: ReturnType<typeof mountDialog>) {
+  await wrapper.find('input[type="text"]').setValue('Pro monthly')
+  await wrapper.find('textarea').setValue('Primary development')
+  const numberInputs = wrapper.findAll('input[type="number"]')
+  await numberInputs[0].setValue('799')
+  await numberInputs[2].setValue('30')
+}
+
 describe('PlanEditDialog', () => {
   beforeEach(() => {
     createPlan.mockReset().mockResolvedValue({})
@@ -161,5 +169,96 @@ describe('PlanEditDialog', () => {
       clear_seven_day_quota_usd: true,
     }))
     expect(payload).not.toHaveProperty('group_id')
+  })
+
+  it('submits virtual seat range without direct seat_limit when creating a limited plan', async () => {
+    const wrapper = mountDialog(null)
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await fillRequiredCreateFields(wrapper)
+    await wrapper.find('[data-testid="plan-virtual-seat-start"]').setValue('4900')
+    await wrapper.find('[data-testid="plan-virtual-seat-total"]').setValue('5000')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createPlan.mock.calls[0][0]
+    expect(payload).toEqual(expect.objectContaining({
+      virtual_seat_start: 4900,
+      virtual_seat_total: 5000,
+    }))
+    expect(payload).not.toHaveProperty('seat_limit')
+  })
+
+  it('shows the derived real seat count from the virtual seat range', async () => {
+    const wrapper = mountDialog(null)
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await wrapper.find('[data-testid="plan-virtual-seat-start"]').setValue('4900')
+    await wrapper.find('[data-testid="plan-virtual-seat-total"]').setValue('5000')
+
+    expect(wrapper.text()).toContain('payment.admin.derivedSeatLimit: 100')
+  })
+
+  it('blocks submit when only one virtual seat range value is filled', async () => {
+    const wrapper = mountDialog(null)
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await fillRequiredCreateFields(wrapper)
+    await wrapper.find('[data-testid="plan-virtual-seat-start"]').setValue('4900')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createPlan).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('payment.admin.virtualSeatRangeRequired')
+  })
+
+  it('blocks submit when the virtual seat range is inverted', async () => {
+    const wrapper = mountDialog(null)
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await fillRequiredCreateFields(wrapper)
+    await wrapper.find('[data-testid="plan-virtual-seat-start"]').setValue('5000')
+    await wrapper.find('[data-testid="plan-virtual-seat-total"]').setValue('4900')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createPlan).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('payment.admin.virtualSeatRangeInvalid')
+  })
+
+  it('prefills virtual seat range values when editing an existing plan', async () => {
+    const wrapper = mountDialog(planFixture({ virtual_seat_start: 4900, virtual_seat_total: 5000 }))
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    expect((wrapper.find('[data-testid="plan-virtual-seat-start"]').element as HTMLInputElement).value).toBe('4900')
+    expect((wrapper.find('[data-testid="plan-virtual-seat-total"]').element as HTMLInputElement).value).toBe('5000')
+  })
+
+  it('falls back to legacy seat limit when editing a plan without virtual seat values', async () => {
+    const wrapper = mountDialog(planFixture({
+      seat_limit: 100,
+      virtual_seat_start: null,
+      virtual_seat_total: null,
+    }))
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    expect((wrapper.find('[data-testid="plan-virtual-seat-start"]').element as HTMLInputElement).value).toBe('0')
+    expect((wrapper.find('[data-testid="plan-virtual-seat-total"]').element as HTMLInputElement).value).toBe('100')
+
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = updatePlan.mock.calls[0][1]
+    expect(payload).toEqual(expect.objectContaining({
+      virtual_seat_start: 0,
+      virtual_seat_total: 100,
+    }))
+    expect(payload).not.toHaveProperty('seat_limit')
   })
 })

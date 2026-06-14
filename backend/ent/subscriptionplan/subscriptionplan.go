@@ -39,6 +39,10 @@ const (
 	FieldSortOrder = "sort_order"
 	// FieldSeatLimit holds the string denoting the seat_limit field in the database.
 	FieldSeatLimit = "seat_limit"
+	// FieldVirtualSeatStart holds the string denoting the virtual_seat_start field in the database.
+	FieldVirtualSeatStart = "virtual_seat_start"
+	// FieldVirtualSeatTotal holds the string denoting the virtual_seat_total field in the database.
+	FieldVirtualSeatTotal = "virtual_seat_total"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -63,6 +67,8 @@ var Columns = []string{
 	FieldForSale,
 	FieldSortOrder,
 	FieldSeatLimit,
+	FieldVirtualSeatStart,
+	FieldVirtualSeatTotal,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -100,6 +106,10 @@ var (
 	DefaultSortOrder int
 	// SeatLimitValidator is a validator for the "seat_limit" field. It is called by the builders before save.
 	SeatLimitValidator func(int) error
+	// VirtualSeatStartValidator is a validator for the "virtual_seat_start" field. It is called by the builders before save.
+	VirtualSeatStartValidator func(int) error
+	// VirtualSeatTotalValidator is a validator for the "virtual_seat_total" field. It is called by the builders before save.
+	VirtualSeatTotalValidator func(int) error
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -179,6 +189,16 @@ func BySortOrder(opts ...sql.OrderTermOption) OrderOption {
 // BySeatLimit orders the results by the seat_limit field.
 func BySeatLimit(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSeatLimit, opts...).ToFunc()
+}
+
+// ByVirtualSeatStart orders the results by the virtual_seat_start field.
+func ByVirtualSeatStart(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVirtualSeatStart, opts...).ToFunc()
+}
+
+// ByVirtualSeatTotal orders the results by the virtual_seat_total field.
+func ByVirtualSeatTotal(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVirtualSeatTotal, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

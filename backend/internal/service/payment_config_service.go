@@ -8,11 +8,14 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -164,6 +167,8 @@ type CreatePlanRequest struct {
 	ForSale          bool     `json:"for_sale"`
 	SortOrder        int      `json:"sort_order"`
 	SeatLimit        *int     `json:"seat_limit"`
+	VirtualSeatStart *int     `json:"virtual_seat_start"`
+	VirtualSeatTotal *int     `json:"virtual_seat_total"`
 }
 
 // OptionalInt preserves PATCH semantics for nullable integer fields.
@@ -201,6 +206,36 @@ type UpdatePlanRequest struct {
 	ForSale               *bool       `json:"for_sale"`
 	SortOrder             *int        `json:"sort_order"`
 	SeatLimit             OptionalInt `json:"seat_limit"`
+	VirtualSeatStart      OptionalInt `json:"virtual_seat_start"`
+	VirtualSeatTotal      OptionalInt `json:"virtual_seat_total"`
+}
+
+const publicPlansCacheTTL = 60 * time.Second
+
+// PublicPlanResponse is the safe public payload for saleable subscription plans.
+type PublicPlanResponse struct {
+	ID               int64    `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Price            float64  `json:"price"`
+	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
+	ValidityDays     int      `json:"validity_days"`
+	ValidityUnit     string   `json:"validity_unit"`
+	Features         []string `json:"features"`
+	SortOrder        int      `json:"sort_order"`
+	SeatLimit        *int     `json:"seat_limit"`
+	SeatUsed         int      `json:"seat_used"`
+	SeatAvailable    *int     `json:"seat_available,omitempty"`
+	SeatFull         bool     `json:"seat_full"`
+	SeatOverLimit    bool     `json:"seat_over_limit"`
+	VirtualSeatStart *int     `json:"virtual_seat_start"`
+	VirtualSeatTotal *int     `json:"virtual_seat_total"`
+}
+
+type publicPlansCacheEntry struct {
+	plans     []PublicPlanResponse
+	expiresAt time.Time
 }
 
 // PaymentConfigService manages payment configuration and CRUD for
@@ -209,6 +244,11 @@ type PaymentConfigService struct {
 	entClient     *dbent.Client
 	settingRepo   SettingRepository
 	encryptionKey []byte
+
+	publicPlansCacheMu      sync.RWMutex
+	publicPlansCache        publicPlansCacheEntry
+	publicPlansCacheVersion uint64
+	publicPlansCacheGroup   singleflight.Group
 }
 
 // NewPaymentConfigService creates a new PaymentConfigService.

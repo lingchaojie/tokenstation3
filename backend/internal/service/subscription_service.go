@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -55,6 +56,8 @@ type SubscriptionService struct {
 	subCacheJitter int // 抖动百分比
 
 	maintenanceQueue *SubscriptionMaintenanceQueue
+
+	publicPlansCacheInvalidator func()
 }
 
 // NewSubscriptionService 创建订阅服务
@@ -68,6 +71,45 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 	svc.initSubCache(cfg)
 	svc.initMaintenanceQueue(cfg)
 	return svc
+}
+
+func (s *SubscriptionService) SetPublicPlansCacheInvalidator(invalidator func()) {
+	if s == nil {
+		return
+	}
+	s.publicPlansCacheInvalidator = invalidator
+}
+
+func (s *SubscriptionService) invalidatePublicPlansCache() {
+	if s == nil || s.publicPlansCacheInvalidator == nil {
+		return
+	}
+	s.publicPlansCacheInvalidator()
+}
+
+func (s *SubscriptionService) invalidatePublicPlansCacheIfPlanSeatChanged(ctx context.Context, input *AssignSubscriptionInput, subs ...*UserSubscription) {
+	if s == nil || dbent.TxFromContext(ctx) != nil {
+		return
+	}
+	if s.planSeatCacheMayHaveChanged(ctx, input, subs...) {
+		s.invalidatePublicPlansCache()
+	}
+}
+
+func (s *SubscriptionService) planSeatCacheMayHaveChanged(ctx context.Context, input *AssignSubscriptionInput, subs ...*UserSubscription) bool {
+	if input != nil && input.PlanID != nil {
+		return true
+	}
+	for _, sub := range subs {
+		if sub != nil && sub.PlanID != nil {
+			return true
+		}
+	}
+	if s == nil || s.entClient == nil || input == nil || input.GroupID <= 0 {
+		return false
+	}
+	exists, err := s.entClient.SubscriptionPlan.Query().Where(subscriptionplan.GroupIDEQ(input.GroupID)).Exist(ctx)
+	return err == nil && exists
 }
 
 func (s *SubscriptionService) initMaintenanceQueue(cfg *config.Config) {
@@ -288,6 +330,7 @@ func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context
 				_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 			}()
 		}
+		s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, input, existingSub)
 
 		// 返回更新后的订阅
 		sub, err := s.userSubRepo.GetByID(ctx, existingSub.ID)
@@ -311,6 +354,7 @@ func (s *SubscriptionService) assignOrExtendSubscriptionTerm(ctx context.Context
 			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 		}()
 	}
+	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, input, sub)
 
 	return sub, false, nil // false 表示是新建
 }
@@ -710,6 +754,7 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 		}()
 	}
+	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, input, sub)
 
 	return sub, false, nil
 }
@@ -815,6 +860,7 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 		}()
 	}
+	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, nil, sub)
 
 	return nil
 }
@@ -883,6 +929,7 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 		}()
 	}
+	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, nil, sub)
 
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }
@@ -917,6 +964,7 @@ func (s *SubscriptionService) applyScheduledPlanChangeIfDueAt(ctx context.Contex
 			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
 		}()
 	}
+	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, nil, sub, applied)
 	return applied, nil
 }
 

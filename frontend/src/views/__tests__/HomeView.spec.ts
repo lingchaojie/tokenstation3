@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import HomeView from '../HomeView.vue'
 
-const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelPricingMock } = vi.hoisted(() => ({
+const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelPricingMock, getPublicPlansMock } = vi.hoisted(() => ({
   appState: {
     cachedPublicSettings: null as null | {
       site_name?: string
@@ -26,6 +26,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicMo
   fetchPublicSettingsMock: vi.fn(),
   checkAuthMock: vi.fn(),
   getPublicModelPricingMock: vi.fn(),
+  getPublicPlansMock: vi.fn(),
 }))
 
 vi.mock('@/stores', () => ({
@@ -66,6 +67,12 @@ vi.mock('@/stores', () => ({
 
 vi.mock('@/api/settings', () => ({
   getPublicModelPricing: getPublicModelPricingMock,
+}))
+
+vi.mock('@/api/payment', () => ({
+  paymentAPI: {
+    getPublicPlans: getPublicPlansMock,
+  },
 }))
 
 const messages: Record<string, string> = {
@@ -164,8 +171,10 @@ describe('HomeView landing page', () => {
     fetchPublicSettingsMock.mockReset()
     checkAuthMock.mockReset()
     getPublicModelPricingMock.mockReset()
+    getPublicPlansMock.mockReset()
     fetchPublicSettingsMock.mockResolvedValue({})
     getPublicModelPricingMock.mockResolvedValue(modelPricingFixture)
+    getPublicPlansMock.mockResolvedValue([])
     document.documentElement.classList.remove('dark')
     localStorage.clear()
 
@@ -345,6 +354,79 @@ describe('HomeView landing page', () => {
     expect(docsLinks.length).toBeGreaterThan(0)
     expect(docsLinks[0].text()).toContain('文档')
     expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
+  })
+
+  it('renders homepage limited-seat ribbons from public subscription plans', async () => {
+    getPublicPlansMock.mockResolvedValue([
+      {
+        id: 11,
+        name: 'Pro monthly',
+        description: 'Public Pro desc',
+        price: 799,
+        original_price: 999,
+        seven_day_quota_usd: 260,
+        features: [],
+        validity_days: 30,
+        validity_unit: 'day',
+        for_sale: true,
+        sort_order: 30,
+        seat_limit: 100,
+        seat_used: 12,
+        seat_available: 88,
+        seat_full: false,
+        seat_over_limit: false,
+        virtual_seat_start: 4900,
+        virtual_seat_total: 5000,
+      },
+      {
+        id: 12,
+        name: 'Max monthly',
+        description: 'Public Max desc',
+        price: 1599,
+        original_price: 0,
+        seven_day_quota_usd: 550,
+        features: [],
+        validity_days: 30,
+        validity_unit: 'day',
+        for_sale: true,
+        sort_order: 40,
+        seat_limit: null,
+        seat_used: 99,
+        virtual_seat_start: 9900,
+        virtual_seat_total: 10000,
+      },
+    ])
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const pricingGrid = wrapper.get('[data-testid="linear-pricing-grid"]')
+    const ribbons = pricingGrid.findAll('[data-testid="homepage-limited-seat-ribbon"]')
+    expect(getPublicPlansMock).toHaveBeenCalledTimes(1)
+    expect(ribbons).toHaveLength(1)
+    expect(ribbons[0].text()).toContain('限时名额：4912/5000')
+    expect(ribbons[0].classes()).toEqual(expect.arrayContaining([
+      'w-[220px]',
+      'right-[-54px]',
+      'top-7',
+      'from-orange-950',
+      'via-orange-800',
+      'to-orange-700',
+    ]))
+    expect(pricingGrid.text()).not.toContain('9999/10000')
+  })
+
+  it('keeps static homepage pricing when public subscription plans fail to load', async () => {
+    getPublicPlansMock.mockRejectedValue(new Error('network'))
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const pricingGrid = wrapper.get('[data-testid="linear-pricing-grid"]')
+    expect(pricingGrid.findAll('[data-testid="pricing-plan-card"]')).toHaveLength(4)
+    expect(pricingGrid.text()).toContain('Basic 月卡')
+    expect(pricingGrid.text()).toContain('¥179')
+    expect(pricingGrid.find('[data-testid="homepage-limited-seat-ribbon"]').exists()).toBe(false)
   })
 
   it('renders the orange-X LINX2.AI wordmark for the default brand', async () => {

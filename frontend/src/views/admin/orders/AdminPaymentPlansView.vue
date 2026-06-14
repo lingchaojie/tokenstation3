@@ -30,6 +30,7 @@
         <template #cell-seat_limit="{ row }">
           <span v-if="row.seat_limit === null || row.seat_limit === undefined" class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.admin.seatUnlimited') }}</span>
           <span v-else :class="getSeatUsageClass(row)">{{ row.seat_used || 0 }}/{{ row.seat_limit }}</span>
+          <span v-for="display in virtualSeatDisplays(row)" :key="display" class="ml-1 text-xs text-gray-500 dark:text-gray-400">· {{ t('payment.admin.virtualSeatDisplay') }} {{ display }}</span>
         </template>
         <template #cell-for_sale="{ value, row }">
           <button
@@ -149,6 +150,18 @@ function getSeatUsageClass(plan: SubscriptionPlan): string {
   if (plan.seat_over_limit) return `${base} bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300`
   if (plan.seat_full) return `${base} bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300`
   return `${base} bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300`
+}
+
+function virtualSeatDisplay(plan: SubscriptionPlan): string {
+  if (plan.seat_limit === null || plan.seat_limit === undefined) return ''
+  if (plan.virtual_seat_start === null || plan.virtual_seat_start === undefined) return ''
+  if (plan.virtual_seat_total === null || plan.virtual_seat_total === undefined) return ''
+  return `${plan.virtual_seat_start + (plan.seat_used || 0)}/${plan.virtual_seat_total}`
+}
+
+function virtualSeatDisplays(plan: SubscriptionPlan): string[] {
+  const display = virtualSeatDisplay(plan)
+  return display ? [display] : []
 }
 
 /** Quick toggle for_sale from the list */

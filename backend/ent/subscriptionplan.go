@@ -43,6 +43,10 @@ type SubscriptionPlan struct {
 	SortOrder int `json:"sort_order,omitempty"`
 	// SeatLimit holds the value of the "seat_limit" field.
 	SeatLimit *int `json:"seat_limit,omitempty"`
+	// VirtualSeatStart holds the value of the "virtual_seat_start" field.
+	VirtualSeatStart *int `json:"virtual_seat_start,omitempty"`
+	// VirtualSeatTotal holds the value of the "virtual_seat_total" field.
+	VirtualSeatTotal *int `json:"virtual_seat_total,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -59,7 +63,7 @@ func (*SubscriptionPlan) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case subscriptionplan.FieldPrice, subscriptionplan.FieldOriginalPrice, subscriptionplan.FieldSevenDayQuotaUsd:
 			values[i] = new(sql.NullFloat64)
-		case subscriptionplan.FieldID, subscriptionplan.FieldGroupID, subscriptionplan.FieldValidityDays, subscriptionplan.FieldSortOrder, subscriptionplan.FieldSeatLimit:
+		case subscriptionplan.FieldID, subscriptionplan.FieldGroupID, subscriptionplan.FieldValidityDays, subscriptionplan.FieldSortOrder, subscriptionplan.FieldSeatLimit, subscriptionplan.FieldVirtualSeatStart, subscriptionplan.FieldVirtualSeatTotal:
 			values[i] = new(sql.NullInt64)
 		case subscriptionplan.FieldName, subscriptionplan.FieldDescription, subscriptionplan.FieldValidityUnit, subscriptionplan.FieldFeatures, subscriptionplan.FieldProductName:
 			values[i] = new(sql.NullString)
@@ -167,6 +171,20 @@ func (_m *SubscriptionPlan) assignValues(columns []string, values []any) error {
 				_m.SeatLimit = new(int)
 				*_m.SeatLimit = int(value.Int64)
 			}
+		case subscriptionplan.FieldVirtualSeatStart:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field virtual_seat_start", values[i])
+			} else if value.Valid {
+				_m.VirtualSeatStart = new(int)
+				*_m.VirtualSeatStart = int(value.Int64)
+			}
+		case subscriptionplan.FieldVirtualSeatTotal:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field virtual_seat_total", values[i])
+			} else if value.Valid {
+				_m.VirtualSeatTotal = new(int)
+				*_m.VirtualSeatTotal = int(value.Int64)
+			}
 		case subscriptionplan.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -257,6 +275,16 @@ func (_m *SubscriptionPlan) String() string {
 	builder.WriteString(", ")
 	if v := _m.SeatLimit; v != nil {
 		builder.WriteString("seat_limit=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.VirtualSeatStart; v != nil {
+		builder.WriteString("virtual_seat_start=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.VirtualSeatTotal; v != nil {
+		builder.WriteString("virtual_seat_total=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")

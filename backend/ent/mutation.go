@@ -31551,6 +31551,10 @@ type SubscriptionPlanMutation struct {
 	addsort_order          *int
 	seat_limit             *int
 	addseat_limit          *int
+	virtual_seat_start     *int
+	addvirtual_seat_start  *int
+	virtual_seat_total     *int
+	addvirtual_seat_total  *int
 	created_at             *time.Time
 	updated_at             *time.Time
 	clearedFields          map[string]struct{}
@@ -32321,6 +32325,146 @@ func (m *SubscriptionPlanMutation) ResetSeatLimit() {
 	delete(m.clearedFields, subscriptionplan.FieldSeatLimit)
 }
 
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (m *SubscriptionPlanMutation) SetVirtualSeatStart(i int) {
+	m.virtual_seat_start = &i
+	m.addvirtual_seat_start = nil
+}
+
+// VirtualSeatStart returns the value of the "virtual_seat_start" field in the mutation.
+func (m *SubscriptionPlanMutation) VirtualSeatStart() (r int, exists bool) {
+	v := m.virtual_seat_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVirtualSeatStart returns the old "virtual_seat_start" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldVirtualSeatStart(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVirtualSeatStart is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVirtualSeatStart requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVirtualSeatStart: %w", err)
+	}
+	return oldValue.VirtualSeatStart, nil
+}
+
+// AddVirtualSeatStart adds i to the "virtual_seat_start" field.
+func (m *SubscriptionPlanMutation) AddVirtualSeatStart(i int) {
+	if m.addvirtual_seat_start != nil {
+		*m.addvirtual_seat_start += i
+	} else {
+		m.addvirtual_seat_start = &i
+	}
+}
+
+// AddedVirtualSeatStart returns the value that was added to the "virtual_seat_start" field in this mutation.
+func (m *SubscriptionPlanMutation) AddedVirtualSeatStart() (r int, exists bool) {
+	v := m.addvirtual_seat_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (m *SubscriptionPlanMutation) ClearVirtualSeatStart() {
+	m.virtual_seat_start = nil
+	m.addvirtual_seat_start = nil
+	m.clearedFields[subscriptionplan.FieldVirtualSeatStart] = struct{}{}
+}
+
+// VirtualSeatStartCleared returns if the "virtual_seat_start" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) VirtualSeatStartCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldVirtualSeatStart]
+	return ok
+}
+
+// ResetVirtualSeatStart resets all changes to the "virtual_seat_start" field.
+func (m *SubscriptionPlanMutation) ResetVirtualSeatStart() {
+	m.virtual_seat_start = nil
+	m.addvirtual_seat_start = nil
+	delete(m.clearedFields, subscriptionplan.FieldVirtualSeatStart)
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (m *SubscriptionPlanMutation) SetVirtualSeatTotal(i int) {
+	m.virtual_seat_total = &i
+	m.addvirtual_seat_total = nil
+}
+
+// VirtualSeatTotal returns the value of the "virtual_seat_total" field in the mutation.
+func (m *SubscriptionPlanMutation) VirtualSeatTotal() (r int, exists bool) {
+	v := m.virtual_seat_total
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVirtualSeatTotal returns the old "virtual_seat_total" field's value of the SubscriptionPlan entity.
+// If the SubscriptionPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SubscriptionPlanMutation) OldVirtualSeatTotal(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVirtualSeatTotal is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVirtualSeatTotal requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVirtualSeatTotal: %w", err)
+	}
+	return oldValue.VirtualSeatTotal, nil
+}
+
+// AddVirtualSeatTotal adds i to the "virtual_seat_total" field.
+func (m *SubscriptionPlanMutation) AddVirtualSeatTotal(i int) {
+	if m.addvirtual_seat_total != nil {
+		*m.addvirtual_seat_total += i
+	} else {
+		m.addvirtual_seat_total = &i
+	}
+}
+
+// AddedVirtualSeatTotal returns the value that was added to the "virtual_seat_total" field in this mutation.
+func (m *SubscriptionPlanMutation) AddedVirtualSeatTotal() (r int, exists bool) {
+	v := m.addvirtual_seat_total
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (m *SubscriptionPlanMutation) ClearVirtualSeatTotal() {
+	m.virtual_seat_total = nil
+	m.addvirtual_seat_total = nil
+	m.clearedFields[subscriptionplan.FieldVirtualSeatTotal] = struct{}{}
+}
+
+// VirtualSeatTotalCleared returns if the "virtual_seat_total" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) VirtualSeatTotalCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldVirtualSeatTotal]
+	return ok
+}
+
+// ResetVirtualSeatTotal resets all changes to the "virtual_seat_total" field.
+func (m *SubscriptionPlanMutation) ResetVirtualSeatTotal() {
+	m.virtual_seat_total = nil
+	m.addvirtual_seat_total = nil
+	delete(m.clearedFields, subscriptionplan.FieldVirtualSeatTotal)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *SubscriptionPlanMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -32427,7 +32571,7 @@ func (m *SubscriptionPlanMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SubscriptionPlanMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 17)
 	if m.group_id != nil {
 		fields = append(fields, subscriptionplan.FieldGroupID)
 	}
@@ -32466,6 +32610,12 @@ func (m *SubscriptionPlanMutation) Fields() []string {
 	}
 	if m.seat_limit != nil {
 		fields = append(fields, subscriptionplan.FieldSeatLimit)
+	}
+	if m.virtual_seat_start != nil {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatStart)
+	}
+	if m.virtual_seat_total != nil {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatTotal)
 	}
 	if m.created_at != nil {
 		fields = append(fields, subscriptionplan.FieldCreatedAt)
@@ -32507,6 +32657,10 @@ func (m *SubscriptionPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.SortOrder()
 	case subscriptionplan.FieldSeatLimit:
 		return m.SeatLimit()
+	case subscriptionplan.FieldVirtualSeatStart:
+		return m.VirtualSeatStart()
+	case subscriptionplan.FieldVirtualSeatTotal:
+		return m.VirtualSeatTotal()
 	case subscriptionplan.FieldCreatedAt:
 		return m.CreatedAt()
 	case subscriptionplan.FieldUpdatedAt:
@@ -32546,6 +32700,10 @@ func (m *SubscriptionPlanMutation) OldField(ctx context.Context, name string) (e
 		return m.OldSortOrder(ctx)
 	case subscriptionplan.FieldSeatLimit:
 		return m.OldSeatLimit(ctx)
+	case subscriptionplan.FieldVirtualSeatStart:
+		return m.OldVirtualSeatStart(ctx)
+	case subscriptionplan.FieldVirtualSeatTotal:
+		return m.OldVirtualSeatTotal(ctx)
 	case subscriptionplan.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case subscriptionplan.FieldUpdatedAt:
@@ -32650,6 +32808,20 @@ func (m *SubscriptionPlanMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetSeatLimit(v)
 		return nil
+	case subscriptionplan.FieldVirtualSeatStart:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVirtualSeatStart(v)
+		return nil
+	case subscriptionplan.FieldVirtualSeatTotal:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVirtualSeatTotal(v)
+		return nil
 	case subscriptionplan.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -32693,6 +32865,12 @@ func (m *SubscriptionPlanMutation) AddedFields() []string {
 	if m.addseat_limit != nil {
 		fields = append(fields, subscriptionplan.FieldSeatLimit)
 	}
+	if m.addvirtual_seat_start != nil {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatStart)
+	}
+	if m.addvirtual_seat_total != nil {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatTotal)
+	}
 	return fields
 }
 
@@ -32715,6 +32893,10 @@ func (m *SubscriptionPlanMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedSortOrder()
 	case subscriptionplan.FieldSeatLimit:
 		return m.AddedSeatLimit()
+	case subscriptionplan.FieldVirtualSeatStart:
+		return m.AddedVirtualSeatStart()
+	case subscriptionplan.FieldVirtualSeatTotal:
+		return m.AddedVirtualSeatTotal()
 	}
 	return nil, false
 }
@@ -32773,6 +32955,20 @@ func (m *SubscriptionPlanMutation) AddField(name string, value ent.Value) error 
 		}
 		m.AddSeatLimit(v)
 		return nil
+	case subscriptionplan.FieldVirtualSeatStart:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVirtualSeatStart(v)
+		return nil
+	case subscriptionplan.FieldVirtualSeatTotal:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddVirtualSeatTotal(v)
+		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan numeric field %s", name)
 }
@@ -32792,6 +32988,12 @@ func (m *SubscriptionPlanMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(subscriptionplan.FieldSeatLimit) {
 		fields = append(fields, subscriptionplan.FieldSeatLimit)
+	}
+	if m.FieldCleared(subscriptionplan.FieldVirtualSeatStart) {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatStart)
+	}
+	if m.FieldCleared(subscriptionplan.FieldVirtualSeatTotal) {
+		fields = append(fields, subscriptionplan.FieldVirtualSeatTotal)
 	}
 	return fields
 }
@@ -32818,6 +33020,12 @@ func (m *SubscriptionPlanMutation) ClearField(name string) error {
 		return nil
 	case subscriptionplan.FieldSeatLimit:
 		m.ClearSeatLimit()
+		return nil
+	case subscriptionplan.FieldVirtualSeatStart:
+		m.ClearVirtualSeatStart()
+		return nil
+	case subscriptionplan.FieldVirtualSeatTotal:
+		m.ClearVirtualSeatTotal()
 		return nil
 	}
 	return fmt.Errorf("unknown SubscriptionPlan nullable field %s", name)
@@ -32865,6 +33073,12 @@ func (m *SubscriptionPlanMutation) ResetField(name string) error {
 		return nil
 	case subscriptionplan.FieldSeatLimit:
 		m.ResetSeatLimit()
+		return nil
+	case subscriptionplan.FieldVirtualSeatStart:
+		m.ResetVirtualSeatStart()
+		return nil
+	case subscriptionplan.FieldVirtualSeatTotal:
+		m.ResetVirtualSeatTotal()
 		return nil
 	case subscriptionplan.FieldCreatedAt:
 		m.ResetCreatedAt()

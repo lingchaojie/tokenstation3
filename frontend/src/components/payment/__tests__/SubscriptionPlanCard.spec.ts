@@ -214,18 +214,88 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.emitted("select")?.[0][1]).toBe("subscribe");
   });
 
-  it("shows the current opened count tag for limited plans", () => {
-    const text = mountPlanCard({ seat_limit: 100, seat_used: 12 }).text();
+  it("reserves a top-right gutter for the virtual limited-seat ribbon", () => {
+    const wrapper = mountPlanCard({
+      seat_limit: 100,
+      seat_used: 12,
+      virtual_seat_start: 4900,
+      virtual_seat_total: 5000,
+    });
 
-    expect(text).toContain("当前已开通 12/100");
+    const ribbon = wrapper.get('[data-testid="limited-seat-ribbon"]');
+    expect(ribbon.text()).toContain("限时名额：4912/5000");
+    expect(ribbon.classes()).toEqual(expect.arrayContaining([
+      "from-orange-950",
+      "via-orange-800",
+      "to-orange-700",
+      "drop-shadow-sm",
+      "w-[220px]",
+      "right-[-54px]",
+      "top-7",
+    ]));
+    expect(ribbon.classes()).not.toContain("to-amber-300");
+    expect(ribbon.classes()).not.toContain("to-orange-500");
+
+    expect(wrapper.get('[data-testid="plan-card-header"]').classes()).toEqual(expect.arrayContaining([
+      "limited-seat-ribbon-gutter",
+      "min-h-[112px]",
+      "pt-16",
+    ]));
+    expect(wrapper.get('[data-testid="plan-price-block"]').classes()).toEqual(expect.arrayContaining([
+      "mt-2",
+      "self-start",
+    ]));
+    expect(wrapper.text()).not.toContain("当前已开通");
+  });
+
+  it("applies tier-aware gradient styling to monthly plan cards", () => {
+    const basic = mountPlanCard({ name: "Basic monthly" });
+    const plus = mountPlanCard({ name: "Plus monthly" });
+    const pro = mountPlanCard({ name: "Pro monthly" });
+    const max = mountPlanCard({ name: "Max monthly" });
+
+    expect(basic.classes()).toEqual(expect.arrayContaining([
+      "linx-plan-tier-basic",
+      "bg-gradient-to-br",
+      "border-orange-200/40",
+      "hover:shadow-[0_18px_50px_rgba(249,115,22,0.14)]",
+    ]));
+    expect(plus.classes()).toEqual(expect.arrayContaining([
+      "linx-plan-tier-plus",
+      "bg-gradient-to-br",
+      "border-orange-300/45",
+      "hover:shadow-[0_20px_56px_rgba(249,115,22,0.16)]",
+    ]));
+    expect(pro.classes()).toEqual(expect.arrayContaining([
+      "linx-plan-tier-pro",
+      "bg-gradient-to-br",
+      "border-orange-400/55",
+      "shadow-[0_20px_60px_rgba(249,115,22,0.16)]",
+    ]));
+    expect(max.classes()).toEqual(expect.arrayContaining([
+      "linx-plan-tier-max",
+      "bg-gradient-to-br",
+      "border-orange-500/60",
+      "hover:shadow-[0_24px_70px_rgba(249,115,22,0.2)]",
+    ]));
+
+    expect(plus.classes()).not.toContain("hover:bg-linear-surface-2");
+  });
+
+  it("falls back to real limited-seat numbers when virtual display fields are absent", () => {
+    const wrapper = mountPlanCard({ seat_limit: 100, seat_used: 12 });
+
+    const ribbon = wrapper.get('[data-testid="limited-seat-ribbon"]');
+    expect(ribbon.text()).toContain("限时名额：12/100");
+    expect(wrapper.text()).not.toContain("当前已开通");
   });
 
   it("does not show plan-seat text for unlimited plans", () => {
     const text = mountPlanCard({ seat_limit: null, seat_used: 12 }).text();
 
-    expect(text).not.toContain("当前已开通");
+    expect(text).not.toContain("限时名额");
     expect(text).not.toContain("12/100");
-    expect(text).not.toContain("名额");
+    expect(text).not.toContain("当前已开通");
   });
 
   it("disables full limited plans for new openings and does not emit select", async () => {

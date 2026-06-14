@@ -109,6 +109,8 @@ export interface SubscriptionPlan {
   seat_available?: number | null
   seat_full?: boolean
   seat_over_limit?: boolean
+  virtual_seat_start?: number | null
+  virtual_seat_total?: number | null
   name: string
   description: string
   price: number
