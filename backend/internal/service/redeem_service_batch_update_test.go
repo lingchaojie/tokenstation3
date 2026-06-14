@@ -73,3 +73,82 @@ func TestRedeemService_BatchUpdate_RejectsCoreFieldsForUsedCodes(t *testing.T) {
 	require.True(t, infraerrors.IsBadRequest(err))
 	require.False(t, repo.batchUpdateCalled)
 }
+
+func TestRedeemService_BatchUpdate_RejectsInvalidPlanID(t *testing.T) {
+	repo := &redeemRepoStub{}
+	svc := &RedeemService{redeemRepo: repo}
+	badPlanID := int64(0)
+
+	result, err := svc.BatchUpdate(context.Background(), &RedeemCodeBatchUpdateInput{
+		IDs: []int64{42},
+		Fields: RedeemCodeBatchUpdateFields{
+			PlanID: NullableInt64Update{Set: true, Value: &badPlanID},
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.False(t, repo.batchUpdateCalled)
+}
+
+func TestRedeemService_BatchUpdate_RejectsPlanIDForNonSubscriptionCode(t *testing.T) {
+	planID := int64(10)
+	repo := &redeemRepoStub{codesByID: map[int64]*RedeemCode{
+		42: {ID: 42, Type: RedeemTypeBalance, Status: StatusUnused},
+	}}
+	svc := &RedeemService{redeemRepo: repo}
+
+	result, err := svc.BatchUpdate(context.Background(), &RedeemCodeBatchUpdateInput{
+		IDs: []int64{42},
+		Fields: RedeemCodeBatchUpdateFields{
+			PlanID: NullableInt64Update{Set: true, Value: &planID},
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.False(t, repo.batchUpdateCalled)
+}
+
+func TestRedeemService_BatchUpdate_RejectsSubscriptionTargetConflictAfterUpdate(t *testing.T) {
+	groupID := int64(5)
+	planID := int64(10)
+	repo := &redeemRepoStub{codesByID: map[int64]*RedeemCode{
+		42: {ID: 42, Type: RedeemTypeSubscription, Status: StatusUnused, GroupID: &groupID},
+	}}
+	svc := &RedeemService{redeemRepo: repo}
+
+	result, err := svc.BatchUpdate(context.Background(), &RedeemCodeBatchUpdateInput{
+		IDs: []int64{42},
+		Fields: RedeemCodeBatchUpdateFields{
+			PlanID: NullableInt64Update{Set: true, Value: &planID},
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.False(t, repo.batchUpdateCalled)
+}
+
+func TestRedeemService_BatchUpdate_RejectsSubscriptionMissingTargetAfterUpdate(t *testing.T) {
+	groupID := int64(5)
+	repo := &redeemRepoStub{codesByID: map[int64]*RedeemCode{
+		42: {ID: 42, Type: RedeemTypeSubscription, Status: StatusUnused, GroupID: &groupID},
+	}}
+	svc := &RedeemService{redeemRepo: repo}
+
+	result, err := svc.BatchUpdate(context.Background(), &RedeemCodeBatchUpdateInput{
+		IDs: []int64{42},
+		Fields: RedeemCodeBatchUpdateFields{
+			GroupID: NullableInt64Update{Set: true, Value: nil},
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.False(t, repo.batchUpdateCalled)
+}

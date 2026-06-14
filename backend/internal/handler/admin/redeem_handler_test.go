@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -63,15 +64,14 @@ func TestCreateAndRedeem_TypeDefaultsToBalance(t *testing.T) {
 		"omitting type should default to balance and pass validation")
 }
 
-func TestCreateAndRedeem_SubscriptionRequiresGroupID(t *testing.T) {
+func TestCreateAndRedeem_SubscriptionRequiresPlanOrGroup(t *testing.T) {
 	h := newCreateAndRedeemHandler()
 	code := postCreateAndRedeemValidation(t, h, map[string]any{
-		"code":          "test-sub-no-group",
+		"code":          "test-sub-no-target",
 		"type":          "subscription",
 		"value":         29.9,
 		"user_id":       1,
 		"validity_days": 30,
-		// group_id 缺失
 	})
 
 	assert.Equal(t, http.StatusBadRequest, code)
@@ -127,6 +127,98 @@ func TestCreateAndRedeem_SubscriptionValidParamsPassValidation(t *testing.T) {
 		"valid subscription params should pass validation")
 }
 
+func TestCreateAndRedeem_SubscriptionPlanModeAllowsDefaultDuration(t *testing.T) {
+	planID := int64(7)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":    "test-sub-plan-default-days",
+		"type":    "subscription",
+		"value":   29.9,
+		"user_id": 1,
+		"plan_id": planID,
+	})
+
+	assert.NotEqual(t, http.StatusBadRequest, code,
+		"plan subscription params should pass validation without validity_days")
+}
+
+func TestCreateAndRedeem_SubscriptionPlanModeRejectsNegativeDuration(t *testing.T) {
+	planID := int64(7)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":          "test-sub-plan-negative-days",
+		"type":          "subscription",
+		"value":         29.9,
+		"user_id":       1,
+		"plan_id":       planID,
+		"validity_days": -7,
+	})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
+func TestCreateAndRedeem_SubscriptionRejectsPlanAndGroupTogether(t *testing.T) {
+	planID := int64(7)
+	groupID := int64(5)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":          "test-sub-plan-and-group",
+		"type":          "subscription",
+		"value":         29.9,
+		"user_id":       1,
+		"plan_id":       planID,
+		"group_id":      groupID,
+		"validity_days": 30,
+	})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
+func TestCreateAndRedeem_SubscriptionRejectsProvidedZeroPlanID(t *testing.T) {
+	groupID := int64(5)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":          "test-sub-zero-plan-id",
+		"type":          "subscription",
+		"value":         29.9,
+		"user_id":       1,
+		"group_id":      groupID,
+		"plan_id":       0,
+		"validity_days": 30,
+	})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
+func TestCreateAndRedeem_SubscriptionRejectsProvidedZeroGroupID(t *testing.T) {
+	planID := int64(7)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":     "test-sub-zero-group-id",
+		"type":     "subscription",
+		"value":    29.9,
+		"user_id":  1,
+		"plan_id":  planID,
+		"group_id": 0,
+	})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
+func TestCreateAndRedeem_NonSubscriptionRejectsPlanID(t *testing.T) {
+	planID := int64(7)
+	h := newCreateAndRedeemHandler()
+	code := postCreateAndRedeemValidation(t, h, map[string]any{
+		"code":    "test-balance-plan-id",
+		"type":    "balance",
+		"value":   50.0,
+		"user_id": 1,
+		"plan_id": planID,
+	})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
 func TestCreateAndRedeem_BalanceIgnoresSubscriptionFields(t *testing.T) {
 	h := newCreateAndRedeemHandler()
 	// balance 类型不传 group_id 和 validity_days，不应报 400
@@ -139,6 +231,17 @@ func TestCreateAndRedeem_BalanceIgnoresSubscriptionFields(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusBadRequest, code,
 		"balance type should not require group_id or validity_days")
+}
+
+func TestRedeemBatchUpdateFieldsFromDTO_MapsPlanID(t *testing.T) {
+	planID := int64(123)
+
+	fields := redeemBatchUpdateFieldsFromDTO(dto.BatchUpdateRedeemCodeFields{
+		PlanID: dto.NullableInt64Field{Set: true, Value: &planID},
+	})
+
+	require.True(t, fields.PlanID.Set)
+	require.Equal(t, &planID, fields.PlanID.Value)
 }
 
 func TestResolveRedeemCodeExpiresAt_FromDays(t *testing.T) {

@@ -1328,6 +1328,16 @@ export interface UsageCleanupTask {
   updated_at: string
 }
 
+export interface RedeemCodePlanSummary {
+  id: number
+  name: string
+  product_name: string
+  validity_days: number
+  validity_unit: string
+  seven_day_quota_usd?: number | null
+  for_sale: boolean
+}
+
 export interface RedeemCode {
   id: number
   code: string
@@ -1340,17 +1350,20 @@ export interface RedeemCode {
   expires_at?: string | null
   updated_at?: string
   notes?: string
-  group_id?: number | null // 订阅类型专用
+  group_id?: number | null // 订阅类型专用（旧分组模式）
+  plan_id?: number | null // 订阅类型专用（套餐模式）
   validity_days?: number // 订阅类型专用
   user?: User
   group?: Group // 关联的分组
+  plan?: RedeemCodePlanSummary // 关联的套餐；套餐已删除/缺失时可能为空
 }
 
 export interface GenerateRedeemCodesRequest {
   count: number
   type: RedeemCodeType
   value: number
-  group_id?: number | null // 订阅类型专用
+  group_id?: number | null // 订阅类型专用（旧分组模式）
+  plan_id?: number | null // 订阅类型专用（套餐模式）
   validity_days?: number // 订阅类型专用
   expires_at?: string | null
   expires_in_days?: number
@@ -1361,6 +1374,7 @@ export interface BatchUpdateRedeemCodeFields {
   expires_at?: string | null
   notes?: string
   group_id?: number | null
+  plan_id?: number | null
 }
 
 export interface BatchUpdateRedeemCodesRequest {

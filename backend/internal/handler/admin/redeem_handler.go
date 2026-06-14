@@ -37,8 +37,9 @@ type GenerateRedeemCodesRequest struct {
 	Count         int        `json:"count" binding:"required,min=1,max=100"`
 	Type          string     `json:"type" binding:"required,oneof=balance concurrency subscription invitation"`
 	Value         float64    `json:"value"`
-	GroupID       *int64     `json:"group_id"`      // 订阅类型必填
-	ValidityDays  int        `json:"validity_days"` // 订阅类型使用，正数增加/负数退款扣减
+	GroupID       *int64     `json:"group_id"` // 订阅类型分组模式必填
+	PlanID        *int64     `json:"plan_id"`
+	ValidityDays  int        `json:"validity_days"` // 订阅类型使用，分组模式正数增加/负数退款扣减
 	ExpiresAt     *time.Time `json:"expires_at"`
 	ExpiresInDays *int       `json:"expires_in_days" binding:"omitempty,min=1,max=3650"`
 }
@@ -50,8 +51,9 @@ type CreateAndRedeemCodeRequest struct {
 	Type          string     `json:"type" binding:"omitempty,oneof=balance concurrency subscription invitation"` // 不传时默认 balance（向后兼容）
 	Value         float64    `json:"value" binding:"required"`
 	UserID        int64      `json:"user_id" binding:"required,gt=0"`
-	GroupID       *int64     `json:"group_id"`      // subscription 类型必填
-	ValidityDays  int        `json:"validity_days"` // subscription 类型：正数增加，负数退款扣减
+	GroupID       *int64     `json:"group_id"` // subscription 类型分组模式必填
+	PlanID        *int64     `json:"plan_id"`
+	ValidityDays  int        `json:"validity_days"` // subscription 类型：分组模式正数增加，负数退款扣减
 	Notes         string     `json:"notes"`
 	ExpiresAt     *time.Time `json:"expires_at"`
 	ExpiresInDays *int       `json:"expires_in_days" binding:"omitempty,min=1,max=3650"`
@@ -79,6 +81,40 @@ func resolveRedeemCodeExpiresAt(expiresAt *time.Time, expiresInDays *int) (*time
 		return nil, infraerrors.BadRequest("REDEEM_CODE_EXPIRES_AT_INVALID", "expires_at must be in the future")
 	}
 	return &expires, nil
+}
+
+func validateSubscriptionRedeemTarget(codeType string, groupID, planID *int64, validityDays int) error {
+	if groupID != nil && *groupID <= 0 {
+		return infraerrors.BadRequest("REDEEM_CODE_GROUP_ID_INVALID", "group_id must be positive")
+	}
+	if planID != nil && *planID <= 0 {
+		return infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id must be positive")
+	}
+	if codeType != "subscription" {
+		if planID != nil {
+			return infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id is only valid for subscription type")
+		}
+		return nil
+	}
+
+	hasGroup := groupID != nil
+	hasPlan := planID != nil
+	if hasGroup && hasPlan {
+		return infraerrors.BadRequest("REDEEM_CODE_TARGET_CONFLICT", "plan_id and group_id cannot both be set for subscription type")
+	}
+	if !hasGroup && !hasPlan {
+		return infraerrors.BadRequest("REDEEM_CODE_TARGET_REQUIRED", "plan_id or group_id is required for subscription type")
+	}
+	if hasPlan {
+		if validityDays < 0 {
+			return infraerrors.BadRequest("REDEEM_CODE_VALIDITY_DAYS_INVALID", "validity_days cannot be negative for plan subscription redeem codes")
+		}
+		return nil
+	}
+	if validityDays == 0 {
+		return infraerrors.BadRequest("REDEEM_CODE_VALIDITY_DAYS_REQUIRED", "validity_days must not be zero for subscription group redeem codes")
+	}
+	return nil
 }
 
 // List handles listing all redeem codes with pagination
@@ -141,6 +177,10 @@ func (h *RedeemHandler) Generate(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := validateSubscriptionRedeemTarget(req.Type, req.GroupID, req.PlanID, req.ValidityDays); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	executeAdminIdempotentJSON(c, "admin.redeem_codes.generate", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		codes, execErr := h.adminService.GenerateRedeemCodes(ctx, &service.GenerateRedeemCodesInput{
@@ -148,6 +188,7 @@ func (h *RedeemHandler) Generate(c *gin.Context) {
 			Type:         req.Type,
 			Value:        req.Value,
 			GroupID:      req.GroupID,
+			PlanID:       req.PlanID,
 			ValidityDays: req.ValidityDays,
 			ExpiresAt:    expiresAt,
 		})
@@ -183,15 +224,9 @@ func (h *RedeemHandler) CreateAndRedeem(c *gin.Context) {
 		req.Type = "balance"
 	}
 
-	if req.Type == "subscription" {
-		if req.GroupID == nil {
-			response.BadRequest(c, "group_id is required for subscription type")
-			return
-		}
-		if req.ValidityDays == 0 {
-			response.BadRequest(c, "validity_days must not be zero for subscription type")
-			return
-		}
+	if err := validateSubscriptionRedeemTarget(req.Type, req.GroupID, req.PlanID, req.ValidityDays); err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
 
 	expiresAt, err := resolveRedeemCodeExpiresAt(req.ExpiresAt, req.ExpiresInDays)
@@ -216,6 +251,7 @@ func (h *RedeemHandler) CreateAndRedeem(c *gin.Context) {
 			Status:       service.StatusUnused,
 			Notes:        req.Notes,
 			GroupID:      req.GroupID,
+			PlanID:       req.PlanID,
 			ValidityDays: req.ValidityDays,
 			ExpiresAt:    expiresAt,
 		})
@@ -348,6 +384,9 @@ func redeemBatchUpdateFieldsFromDTO(in dto.BatchUpdateRedeemCodeFields) service.
 	}
 	if in.GroupID.Set {
 		out.GroupID = service.NullableInt64Update{Set: true, Value: in.GroupID.Value}
+	}
+	if in.PlanID.Set {
+		out.PlanID = service.NullableInt64Update{Set: true, Value: in.PlanID.Value}
 	}
 	return out
 }

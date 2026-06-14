@@ -78,6 +78,10 @@ func (SubscriptionPlan) Fields() []ent.Field {
 	}
 }
 
+func (SubscriptionPlan) Edges() []ent.Edge {
+	return nil
+}
+
 func (SubscriptionPlan) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("for_sale"),

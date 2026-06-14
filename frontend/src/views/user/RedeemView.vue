@@ -106,13 +106,7 @@
                       {{ t('redeem.concurrentRequests') }}
                     </p>
                     <p v-else-if="redeemResult.type === 'subscription'" class="font-medium">
-                      {{ t('redeem.subscriptionAssigned') }}
-                      <span v-if="redeemResult.group_name"> - {{ redeemResult.group_name }}</span>
-                      <span v-if="redeemResult.validity_days">
-                        ({{
-                          t('redeem.subscriptionDays', { days: redeemResult.validity_days })
-                        }})</span
-                      >
+                      {{ getRedeemResultSubscriptionText(redeemResult) }}
                     </p>
                     <p v-if="redeemResult.new_balance !== undefined">
                       {{ t('redeem.newBalance') }}:
@@ -347,7 +341,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { useSubscriptionStore } from '@/stores/subscriptions'
-import { redeemAPI, authAPI, type RedeemHistoryItem } from '@/api'
+import { redeemAPI, authAPI, type RedeemHistoryItem, type RedeemResult } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatDateTime } from '@/utils/format'
@@ -361,15 +355,7 @@ const user = computed(() => authStore.user)
 
 const redeemCode = ref('')
 const submitting = ref(false)
-const redeemResult = ref<{
-  message: string
-  type: string
-  value: number
-  new_balance?: number
-  new_concurrency?: number
-  group_name?: string
-  validity_days?: number
-} | null>(null)
+const redeemResult = ref<RedeemResult | null>(null)
 const errorMessage = ref('')
 
 // History data
@@ -390,6 +376,46 @@ const isAdminAdjustment = (type: string) => {
   return type === 'admin_balance' || type === 'admin_concurrency'
 }
 
+const isPlanSubscription = (item: RedeemHistoryItem | RedeemResult) => {
+  return item.type === 'subscription' && Boolean(item.plan_id || item.plan)
+}
+
+const getPlanDisplayName = (item: RedeemHistoryItem | RedeemResult) => {
+  if (item.plan?.name) return item.plan.name
+  if (item.plan_id) return t('redeem.planFallback', { id: item.plan_id })
+  return t('common.unknown')
+}
+
+const getSubscriptionDurationDays = (item: RedeemHistoryItem | RedeemResult) => {
+  if (item.validity_days && item.validity_days > 0) return item.validity_days
+  const planSubscription = isPlanSubscription(item)
+  if (planSubscription && item.plan?.validity_days && item.plan.validity_days > 0) {
+    return item.plan.validity_days
+  }
+  if (!planSubscription && item.value && item.value > 0) return Math.round(item.value)
+  return null
+}
+
+const formatSubscriptionDuration = (item: RedeemHistoryItem | RedeemResult) => {
+  const days = getSubscriptionDurationDays(item)
+  return days ? t('redeem.subscriptionDays', { days }) : t('redeem.subscriptionDurationUnknown')
+}
+
+const getRedeemResultSubscriptionText = (result: RedeemResult) => {
+  if (isPlanSubscription(result)) {
+    return t('redeem.planActivated', {
+      planName: getPlanDisplayName(result),
+      duration: formatSubscriptionDuration(result)
+    })
+  }
+
+  const groupName = result.group_name ? ` - ${result.group_name}` : ''
+  const days = result.validity_days
+    ? ` (${t('redeem.subscriptionDays', { days: result.validity_days })})`
+    : ''
+  return `${t('redeem.subscriptionAssigned')}${groupName}${days}`
+}
+
 const getHistoryItemTitle = (item: RedeemHistoryItem) => {
   if (item.type === 'balance') {
     return t('redeem.balanceAddedRedeem')
@@ -400,6 +426,9 @@ const getHistoryItemTitle = (item: RedeemHistoryItem) => {
   } else if (item.type === 'admin_concurrency') {
     return item.value >= 0 ? t('redeem.concurrencyAddedAdmin') : t('redeem.concurrencyReducedAdmin')
   } else if (item.type === 'subscription') {
+    if (isPlanSubscription(item)) {
+      return t('redeem.planHistoryTitle', { planName: getPlanDisplayName(item) })
+    }
     return t('redeem.subscriptionAssigned')
   }
   return t('common.unknown')
@@ -410,6 +439,10 @@ const formatHistoryValue = (item: RedeemHistoryItem) => {
     const sign = item.value >= 0 ? '+' : ''
     return `${sign}$${item.value.toFixed(2)}`
   } else if (isSubscriptionType(item.type)) {
+    if (isPlanSubscription(item)) {
+      return formatSubscriptionDuration(item)
+    }
+
     // 订阅类型显示有效天数和分组名称
     const days = item.validity_days || Math.round(item.value)
     const groupName = item.group?.name || ''

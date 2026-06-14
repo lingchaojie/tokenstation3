@@ -38,6 +38,8 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// redeem_codes: subscription fields
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)
+	requireColumn(t, tx, "redeem_codes", "plan_id", "bigint", 0, true)
+	requireForeignKeyAbsent(t, tx, "redeem_codes", "plan_id", "subscription_plans")
 	requireColumn(t, tx, "redeem_codes", "validity_days", "integer", 0, false)
 
 	// usage_logs: billing_type used by filters/stats
@@ -233,6 +235,29 @@ LIMIT 1
 `, table, column, refTable).Scan(&actual)
 	require.NoError(t, err, "query foreign key action for %s.%s -> %s", table, column, refTable)
 	require.Equal(t, expected, actual, "unexpected ON DELETE action for %s.%s -> %s", table, column, refTable)
+}
+
+func requireForeignKeyAbsent(t *testing.T, tx *sql.Tx, table, column, refTable string) {
+	t.Helper()
+
+	var exists bool
+	err := tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_constraint c
+	JOIN pg_class tbl ON tbl.oid = c.conrelid
+	JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+	JOIN pg_class ref_tbl ON ref_tbl.oid = c.confrelid
+	JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(c.conkey)
+	WHERE ns.nspname = 'public'
+	  AND c.contype = 'f'
+	  AND tbl.relname = $1
+	  AND attr.attname = $2
+	  AND ref_tbl.relname = $3
+)
+	`, table, column, refTable).Scan(&exists)
+	require.NoError(t, err, "query foreign key existence for %s.%s -> %s", table, column, refTable)
+	require.False(t, exists, "expected no foreign key for %s.%s -> %s", table, column, refTable)
 }
 
 func requireConstraintDefinitionContains(t *testing.T, tx *sql.Tx, table, constraint string, fragments ...string) {

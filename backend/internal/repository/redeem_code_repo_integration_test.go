@@ -49,6 +49,24 @@ func (s *RedeemCodeRepoSuite) createGroup(name string) *dbent.Group {
 	return g
 }
 
+func (s *RedeemCodeRepoSuite) createPlan(name string) *dbent.SubscriptionPlan {
+	group := s.createGroup(uniqueTestValue(s.T(), "plan-group"))
+	plan, err := s.client.SubscriptionPlan.Create().
+		SetGroupID(group.ID).
+		SetName(name).
+		SetDescription("").
+		SetPrice(9.99).
+		SetValidityDays(30).
+		SetValidityUnit("days").
+		SetFeatures("").
+		SetProductName("").
+		SetForSale(true).
+		SetSortOrder(0).
+		Save(s.ctx)
+	s.Require().NoError(err, "create subscription plan")
+	return plan
+}
+
 // --- Create / CreateBatch / GetByID / GetByCode ---
 
 func (s *RedeemCodeRepoSuite) TestCreate() {
@@ -355,6 +373,51 @@ func (s *RedeemCodeRepoSuite) TestBatchUpdate_UsedCodeRejectsSensitiveFields() {
 	s.Require().Equal(service.StatusUsed, got.Status)
 }
 
+func (s *RedeemCodeRepoSuite) TestBatchUpdate_UsedCodeRaceRejectsSensitiveFields() {
+	code := &service.RedeemCode{
+		Code:   "BATCH-UP-RACE",
+		Type:   service.RedeemTypeBalance,
+		Value:  10,
+		Status: service.StatusUnused,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, code))
+
+	raceInjected := false
+	s.client.RedeemCode.Use(func(next dbent.Mutator) dbent.Mutator {
+		return dbent.MutateFunc(func(ctx context.Context, m dbent.Mutation) (dbent.Value, error) {
+			if !raceInjected && m.Op().Is(dbent.OpUpdate) {
+				if mutation, ok := m.(*dbent.RedeemCodeMutation); ok {
+					ids, err := mutation.IDs(ctx)
+					if err != nil {
+						return nil, err
+					}
+					for _, id := range ids {
+						if id == code.ID {
+							raceInjected = true
+							_, err := s.client.RedeemCode.UpdateOneID(code.ID).
+								SetStatus(service.StatusUsed).
+								Save(ctx)
+							if err != nil {
+								return nil, err
+							}
+							break
+						}
+					}
+				}
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	status := service.StatusDisabled
+	_, err := s.repo.BatchUpdate(s.ctx, []int64{code.ID}, service.RedeemCodeBatchUpdateFields{Status: &status})
+	s.Require().ErrorIs(err, service.ErrRedeemCodeUsed)
+
+	got, getErr := s.repo.GetByID(s.ctx, code.ID)
+	s.Require().NoError(getErr)
+	s.Require().Equal(service.StatusUsed, got.Status)
+}
+
 // --- Use ---
 
 func (s *RedeemCodeRepoSuite) TestUse() {
@@ -459,6 +522,53 @@ func (s *RedeemCodeRepoSuite) TestListByUser_WithGroupPreload() {
 	s.Require().Len(codes, 1)
 	s.Require().NotNil(codes[0].Group)
 	s.Require().Equal(group.ID, codes[0].Group.ID)
+}
+
+func (s *RedeemCodeRepoSuite) TestListByUser_HydratesPlanWithoutEntEdge() {
+	user := s.createUser(uniqueTestValue(s.T(), "plan") + "@example.com")
+	plan := s.createPlan(uniqueTestValue(s.T(), "listby-plan"))
+
+	_, err := s.client.RedeemCode.Create().
+		SetCode("WITH-PLAN").
+		SetType(service.RedeemTypeSubscription).
+		SetStatus(service.StatusUsed).
+		SetValue(0).
+		SetNotes("").
+		SetValidityDays(30).
+		SetUsedBy(user.ID).
+		SetUsedAt(time.Now()).
+		SetPlanID(plan.ID).
+		Save(s.ctx)
+	s.Require().NoError(err)
+
+	codes, err := s.repo.ListByUser(s.ctx, user.ID, 10)
+	s.Require().NoError(err)
+	s.Require().Len(codes, 1)
+	s.Require().NotNil(codes[0].Plan)
+	s.Require().Equal(plan.ID, codes[0].Plan.ID)
+	s.Require().NotNil(codes[0].PlanID)
+	s.Require().Equal(plan.ID, *codes[0].PlanID)
+}
+
+func (s *RedeemCodeRepoSuite) TestListWithFilters_PreservesPlanIDWhenPlanMissing() {
+	missingPlanID := int64(987654321)
+	code := &service.RedeemCode{
+		Code:         "MISSING-PLAN",
+		Type:         service.RedeemTypeSubscription,
+		Value:        0,
+		Status:       service.StatusUnused,
+		PlanID:       &missingPlanID,
+		ValidityDays: 30,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, code))
+
+	codes, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.RedeemTypeSubscription, service.StatusUnused, "missing-plan")
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(codes, 1)
+	s.Require().Nil(codes[0].Plan)
+	s.Require().NotNil(codes[0].PlanID)
+	s.Require().Equal(missingPlanID, *codes[0].PlanID)
 }
 
 func (s *RedeemCodeRepoSuite) TestListByUser_DefaultLimit() {

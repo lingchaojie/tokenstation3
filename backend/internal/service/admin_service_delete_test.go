@@ -341,6 +341,7 @@ func (s *proxyRepoStub) CountExpiringSoon(_ context.Context, _ time.Time) (int64
 type redeemRepoStub struct {
 	deleteErrByID map[int64]error
 	deletedIDs    []int64
+	codesByID     map[int64]*RedeemCode
 
 	batchUpdateIDs    []int64
 	batchUpdateFields RedeemCodeBatchUpdateFields
@@ -358,6 +359,13 @@ func (s *redeemRepoStub) CreateBatch(ctx context.Context, codes []RedeemCode) er
 }
 
 func (s *redeemRepoStub) GetByID(ctx context.Context, id int64) (*RedeemCode, error) {
+	if s.codesByID != nil {
+		if code, ok := s.codesByID[id]; ok {
+			copy := *code
+			return &copy, nil
+		}
+		return nil, ErrRedeemCodeNotFound
+	}
 	panic("unexpected GetByID call")
 }
 

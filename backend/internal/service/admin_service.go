@@ -430,7 +430,8 @@ type GenerateRedeemCodesInput struct {
 	Count        int
 	Type         string
 	Value        float64
-	GroupID      *int64 // 订阅类型专用：关联的分组ID
+	GroupID      *int64 // 订阅类型分组模式：关联的分组ID
+	PlanID       *int64 // 订阅类型计划模式：关联的订阅计划ID
 	ValidityDays int    // 订阅类型专用：有效天数
 	ExpiresAt    *time.Time
 }
@@ -3500,18 +3501,45 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 		return nil, ErrRedeemCodeExpired
 	}
 
-	// 如果是订阅类型，验证必须有 GroupID
-	if input.Type == RedeemTypeSubscription {
-		if input.GroupID == nil {
-			return nil, errors.New("group_id is required for subscription type")
+	if input.GroupID != nil && *input.GroupID <= 0 {
+		return nil, infraerrors.BadRequest("REDEEM_CODE_GROUP_ID_INVALID", "group_id must be positive")
+	}
+	if input.PlanID != nil && *input.PlanID <= 0 {
+		return nil, infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id must be positive")
+	}
+
+	if input.Type != RedeemTypeSubscription {
+		if input.PlanID != nil {
+			return nil, infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id is only valid for subscription type")
 		}
-		// 验证分组存在且为订阅类型
-		group, err := s.groupRepo.GetByID(ctx, *input.GroupID)
-		if err != nil {
-			return nil, fmt.Errorf("group not found: %w", err)
+	} else {
+		hasGroup := input.GroupID != nil
+		hasPlan := input.PlanID != nil
+		if hasGroup == hasPlan {
+			return nil, infraerrors.BadRequest("REDEEM_CODE_TARGET_REQUIRED", "exactly one of plan_id or group_id is required for subscription type")
 		}
-		if !group.IsSubscriptionType() {
-			return nil, errors.New("group must be subscription type")
+		if hasPlan {
+			if input.ValidityDays < 0 {
+				return nil, infraerrors.BadRequest("REDEEM_CODE_VALIDITY_DAYS_INVALID", "validity_days cannot be negative for plan subscription redeem codes")
+			}
+			if _, err := s.entClient.SubscriptionPlan.Get(ctx, *input.PlanID); err != nil {
+				if dbent.IsNotFound(err) {
+					return nil, infraerrors.NotFound("PLAN_NOT_FOUND", "subscription plan not found")
+				}
+				return nil, err
+			}
+		} else {
+			if input.ValidityDays == 0 {
+				return nil, infraerrors.BadRequest("REDEEM_CODE_VALIDITY_DAYS_REQUIRED", "validity_days must not be zero for subscription group redeem codes")
+			}
+			// 验证分组存在且为订阅类型
+			group, err := s.groupRepo.GetByID(ctx, *input.GroupID)
+			if err != nil {
+				return nil, fmt.Errorf("group not found: %w", err)
+			}
+			if !group.IsSubscriptionType() {
+				return nil, errors.New("group must be subscription type")
+			}
 		}
 	}
 
@@ -3531,8 +3559,9 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 		// 订阅类型专用字段
 		if input.Type == RedeemTypeSubscription {
 			code.GroupID = input.GroupID
+			code.PlanID = input.PlanID
 			code.ValidityDays = input.ValidityDays
-			if code.ValidityDays <= 0 {
+			if code.PlanID == nil && code.ValidityDays == 0 {
 				code.ValidityDays = 30 // 默认30天
 			}
 		}
