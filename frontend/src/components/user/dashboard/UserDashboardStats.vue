@@ -380,12 +380,6 @@ const subscriptionRemainingPercent = computed(() => {
   return calcPercent(props.subscriptionBalance.remaining, props.subscriptionBalance.total)
 })
 
-const monthlyPlanGroupId = computed(() => {
-  return props.subscriptionPlans?.find(plan => monthlyPlanKeyFromName(plan.name))?.group_id
-    ?? props.activeSubscriptions?.find(sub => monthlyPlanKeyFromName(sub.plan_name))?.group_id
-    ?? 0
-})
-
 const planByKey = computed(() => {
   const map = new Map<MonthlyPlanKey, SubscriptionPlan>()
   for (const plan of props.subscriptionPlans ?? []) {
@@ -396,20 +390,11 @@ const planByKey = computed(() => {
 })
 
 const dashboardPlans = computed<SubscriptionPlan[]>(() => {
-  const groupId = monthlyPlanGroupId.value
   return getMonthlyPlanCards(String(locale.value)).map((display, index) => {
     const existing = planByKey.value.get(display.key)
     if (existing) return existing
     return {
       id: -(index + 1),
-      group_id: groupId,
-      group_platform: 'anthropic',
-      group_name: 'LINX2 Subscription',
-      rate_multiplier: 1,
-      daily_limit_usd: null,
-      weekly_limit_usd: null,
-      monthly_limit_usd: null,
-      supported_model_scopes: [],
       name: display.name,
       description: display.description,
       price: display.priceCny,

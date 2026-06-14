@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
-import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
+import { PAYMENT_RECOVERY_STORAGE_KEY } from '../../../components/payment/paymentFlow'
 
 const routeState = vi.hoisted(() => ({
   path: '/purchase',
@@ -119,23 +119,16 @@ function checkoutInfoFixture() {
 function monthlyPlanFixture(id: number, name: string, price: number, sevenDayQuota: number) {
   return {
     id,
-    group_id: 3,
     name,
     description: '',
     price,
     original_price: 0,
     validity_days: 30,
     validity_unit: 'day',
-    rate_multiplier: 1,
     seven_day_quota_usd: sevenDayQuota,
-    daily_limit_usd: null,
-    weekly_limit_usd: 999,
-    monthly_limit_usd: null,
     features: [],
-    group_platform: 'openai',
     sort_order: id,
     for_sale: true,
-    group_name: 'OpenAI',
   }
 }
 
@@ -144,6 +137,19 @@ function checkoutInfoWithPlansFixture() {
     data: {
       ...checkoutInfoFixture().data,
       plans: [monthlyPlanFixture(7, 'Plus monthly', 399, 110)],
+    },
+  }
+}
+
+function checkoutInfoWithWeeklyPlanFixture() {
+  return {
+    data: {
+      ...checkoutInfoFixture().data,
+      plans: [{
+        ...monthlyPlanFixture(7, 'Weekly plan', 99, 30),
+        validity_days: 1,
+        validity_unit: 'week',
+      }],
     },
   }
 }
@@ -350,7 +356,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
   it('shows selected subscription plan seven-day quota and quota-first hint', async () => {
     routeState.query = {
       tab: 'subscription',
-      group: '3',
+      plan: '7',
     }
     getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
 
@@ -371,6 +377,26 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(text).not.toContain('payment.planCard.rate')
     expect(text).not.toContain('×1')
     expect(text).not.toContain('$999')
+  })
+
+  it('shows selected weekly subscription plan validity as weeks instead of days', async () => {
+    routeState.query = {
+      tab: 'subscription',
+      plan: '7',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithWeeklyPlanFixture())
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('/ payment.perWeek')
+    expect(text).not.toContain('/ 1payment.days')
   })
 
   it('shows active subscription seven-day quota instead of unlimited', async () => {

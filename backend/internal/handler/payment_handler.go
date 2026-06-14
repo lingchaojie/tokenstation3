@@ -58,11 +58,10 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	platformMap := h.configService.GetGroupPlatformMap(ctx, plans)
 	result := make([]planWithPlatform, 0, len(plans))
 	for _, p := range plans {
 		plan := planWithPlatform{
-			ID: int64(p.ID), GroupID: p.GroupID, GroupPlatform: platformMap[p.GroupID],
+			ID:   int64(p.ID),
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
@@ -105,7 +104,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		return
 	}
 
-	// Fetch plans with group info
+	// Fetch saleable subscription plans.
 	plans, err := h.configService.ListPlansForSale(ctx)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -116,17 +115,11 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	groupInfo := h.configService.GetGroupInfoMap(ctx, plans)
 	planList := make([]checkoutPlan, 0, len(plans))
 	for _, p := range plans {
-		gi := groupInfo[p.GroupID]
 		plan := checkoutPlan{
-			ID: int64(p.ID), GroupID: p.GroupID,
-			GroupPlatform: gi.Platform, GroupName: gi.Name,
-			RateMultiplier: gi.RateMultiplier, DailyLimitUSD: gi.DailyLimitUSD,
-			WeeklyLimitUSD: gi.WeeklyLimitUSD, MonthlyLimitUSD: gi.MonthlyLimitUSD,
-			ModelScopes: gi.ModelScopes,
-			Name:        p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
+			ID:   int64(p.ID),
+			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
 			ProductName: p.ProductName,
@@ -152,8 +145,6 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 
 type planWithPlatform struct {
 	ID               int64    `json:"id"`
-	GroupID          int64    `json:"group_id"`
-	GroupPlatform    string   `json:"group_platform"`
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
@@ -174,8 +165,6 @@ type planWithPlatform struct {
 
 type publicPlan struct {
 	ID               int64    `json:"id"`
-	GroupID          int64    `json:"group_id"`
-	GroupPlatform    string   `json:"group_platform"`
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
@@ -208,14 +197,6 @@ type checkoutInfoResponse struct {
 
 type checkoutPlan struct {
 	ID               int64    `json:"id"`
-	GroupID          int64    `json:"group_id"`
-	GroupPlatform    string   `json:"group_platform"`
-	GroupName        string   `json:"group_name"`
-	RateMultiplier   float64  `json:"rate_multiplier"`
-	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD   *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
-	ModelScopes      []string `json:"supported_model_scopes"`
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
@@ -296,13 +277,10 @@ func (h *PaymentHandler) GetPublicPlans(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	platformMap := h.configService.GetGroupPlatformMap(ctx, plans)
 	result := make([]publicPlan, 0, len(plans))
 	for _, p := range plans {
 		plan := publicPlan{
 			ID:            int64(p.ID),
-			GroupID:       p.GroupID,
-			GroupPlatform: platformMap[p.GroupID],
 			Name:          p.Name,
 			Description:   p.Description,
 			Price:         p.Price,

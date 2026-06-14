@@ -40,7 +40,7 @@
               <div>
                 <div class="flex items-center gap-2">
                   <h3 class="font-semibold text-gray-900 dark:text-white">
-                    {{ subscription.group?.name || `Group #${subscription.group_id}` }}
+                    {{ displaySubscriptionTitle(subscription) }}
                   </h3>
                 </div>
                 <p v-if="displaySubscriptionDescription(subscription)" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
@@ -70,7 +70,7 @@
               <button
                 v-if="subscription.status === 'active'"
                 :class="['rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors', platformButtonClass(subscription.group?.platform || '')]"
-                @click="router.push({ path: '/purchase', query: { tab: 'subscription', group: String(subscription.group_id) } })"
+                @click="renewSubscription(subscription)"
               >
                 {{ t('payment.renewNow') }}
               </button>
@@ -322,20 +322,20 @@ const activeLocale = computed<'en' | 'zh'>(() => String(i18n.locale.value).start
 
 const monthlyPlanCopy: Record<string, { en: { name: string; description: string }; zh: { name: string; description: string } }> = {
   basic: {
-    en: { name: 'Basic monthly', description: 'For focused LINX2.AI trials, small automations, and keeping a personal coding agent online.' },
-    zh: { name: 'Basic 月卡', description: '适合轻量试用、小型自动化，以及保持个人编程 Agent 在线。' },
+    en: { name: 'Basic monthly', description: 'Start with LINX2 essentials for focused personal usage and predictable weekly capacity.' },
+    zh: { name: 'Basic 月卡', description: '适合轻量试用和低频个人开发，每 7 天发放一次基础额度。' },
   },
   plus: {
-    en: { name: 'Plus monthly', description: 'For regular development days where LINX2.AI becomes the default gateway for individual work.' },
-    zh: { name: 'Plus 月卡', description: '适合日常开发，把 LINX2.AI 作为个人工作的默认统一网关。' },
+    en: { name: 'Plus monthly', description: 'For everyday development when LINX2 is your steady personal coding gateway.' },
+    zh: { name: 'Plus 月卡', description: '适合日常开发和稳定个人使用，把 LINX2 作为默认编程网关。' },
   },
   pro: {
-    en: { name: 'Pro monthly', description: 'For primary projects, heavier agent loops, and teams that need more room before fallback billing.' },
-    zh: { name: 'Pro 月卡', description: '适合主力项目、更重的 Agent 循环，以及需要更大订阅额度的团队。' },
+    en: { name: 'Pro monthly', description: 'For primary development workflows, heavier agent loops, and higher-frequency usage.' },
+    zh: { name: 'Pro 月卡', description: '适合主力开发流程、更高频的 Agent 循环和项目工作负载。' },
   },
   max: {
-    en: { name: 'Max monthly', description: 'For demanding users running parallel projects, longer sessions, and high-intensity LINX2.AI traffic.' },
-    zh: { name: 'Max 月卡', description: '适合并行项目、长会话和高强度 LINX2.AI 流量。' },
+    en: { name: 'Max monthly', description: 'For heavy usage, parallel projects, longer sessions, and higher concurrency needs.' },
+    zh: { name: 'Max 月卡', description: '适合高强度使用、并行项目、长会话和更高并发需求。' },
   },
 }
 
@@ -351,7 +351,21 @@ function defaultMonthlyPlanKey(name?: string | null): string | null {
 function displaySubscriptionPlanName(subscription: UserSubscription): string {
   const key = defaultMonthlyPlanKey(subscription.plan_name)
   if (key) return monthlyPlanCopy[key][activeLocale.value].name
-  return subscription.plan_name || subscription.group?.name || `Group #${subscription.group_id}`
+  return subscription.plan_name || subscription.group?.name || t('payment.activeSubscription')
+}
+
+function displaySubscriptionTitle(subscription: UserSubscription): string {
+  return subscription.group?.name || displaySubscriptionPlanName(subscription)
+}
+
+function renewSubscription(subscription: UserSubscription) {
+  const query: Record<string, string> = { tab: 'subscription', intent: 'renew' }
+  if (subscription.plan_id != null) {
+    query.plan = String(subscription.plan_id)
+  } else if (subscription.group_id != null) {
+    query.group = String(subscription.group_id)
+  }
+  router.push({ path: '/purchase', query })
 }
 
 function displaySubscriptionDescription(subscription: UserSubscription): string {

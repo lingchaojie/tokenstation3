@@ -147,7 +147,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 
 		if isSubscriptionType && subscriptionService != nil {
-			sub, subErr := subscriptionService.GetActiveSubscription(
+			sub, subErr := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
 				c.Request.Context(),
 				apiKey.User.ID,
 				apiKey.Group.ID,

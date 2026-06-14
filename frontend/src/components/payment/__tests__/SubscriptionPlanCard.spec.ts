@@ -7,6 +7,7 @@ import SubscriptionPlanCard from "../SubscriptionPlanCard.vue";
 
 const i18nMessages = vi.hoisted(() => ({
   "payment.days": "days",
+  "payment.perWeek": "week",
   "payment.currentSubscription": "Current subscription",
   "payment.models": "Models",
   "payment.planCard.quota": "Quota",
@@ -29,21 +30,13 @@ vi.mock("vue-i18n", () => ({
 
 const basePlan = (overrides: Record<string, unknown> = {}) => ({
   id: 1,
-  group_id: 10,
-  group_platform: "openai",
-  group_name: "OpenAI",
   name: "Pro",
   description: "",
   price: 10,
   original_price: 0,
   features: [],
-  rate_multiplier: 1,
-  daily_limit_usd: null,
-  weekly_limit_usd: null,
-  monthly_limit_usd: null,
   validity_days: 30,
   validity_unit: "day",
-  supported_model_scopes: ["claude", "gemini_text", "gemini_image"],
   for_sale: true,
   sort_order: 1,
   ...overrides,
@@ -52,14 +45,19 @@ const basePlan = (overrides: Record<string, unknown> = {}) => ({
 const activeSubscription = (overrides: Record<string, unknown> = {}) => ({
   id: 99,
   user_id: 1,
-  group_id: 10,
+  group_id: null,
   plan_id: 1,
+  plan_name: "Pro",
   status: "active" as const,
   starts_at: "2026-01-01T00:00:00Z",
   expires_at: "2026-02-01T00:00:00Z",
   daily_usage_usd: 0,
   weekly_usage_usd: 0,
   monthly_usage_usd: 0,
+  seven_day_limit_usd: null,
+  seven_day_usage_usd: 0,
+  seven_day_remaining_usd: null,
+  seven_day_reset_at: null,
   daily_window_start: null,
   weekly_window_start: null,
   monthly_window_start: null,
@@ -69,41 +67,29 @@ const activeSubscription = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const mountPlanCard = (
-  groupPlatform: string,
   planOverrides: Record<string, unknown> = {},
   activeSubscriptions: Array<Record<string, unknown>> = [],
 ) =>
   mount(SubscriptionPlanCard, {
     props: {
-      plan: basePlan({ group_platform: groupPlatform, ...planOverrides }),
+      plan: basePlan(planOverrides),
       activeSubscriptions,
     },
   });
 
 describe("SubscriptionPlanCard", () => {
-  it("renders plan seven-day quota and hides legacy weekly limit when present", () => {
+  it("renders plan seven-day quota from generic plan fields", () => {
     const wrapper = mount(SubscriptionPlanCard, {
       props: {
-        plan: {
+        plan: basePlan({
           id: 2,
-          group_id: 1,
-          group_platform: "anthropic",
-          group_name: "LINX2 Subscription",
-          rate_multiplier: 1,
-          daily_limit_usd: null,
-          weekly_limit_usd: 999,
-          monthly_limit_usd: null,
-          supported_model_scopes: ["claude"],
           name: "Plus monthly",
           description: "Everyday development",
           price: 399,
-          validity_days: 30,
-          validity_unit: "day",
           seven_day_quota_usd: 110,
           features: ["Larger seven-day quota", "Recharge fallback"],
-          for_sale: true,
           sort_order: 20,
-        },
+        }),
       },
       });
 
@@ -114,11 +100,17 @@ describe("SubscriptionPlanCard", () => {
     expect(text).toContain("$440");
     expect(text).not.toContain("Rate");
     expect(text).not.toContain("×1");
-    expect(text).not.toContain("$999");
+  });
+
+  it("displays weekly validity units as weeks instead of days", () => {
+    const text = mountPlanCard({ validity_days: 1, validity_unit: "week" }).text();
+
+    expect(text).toContain("/ week");
+    expect(text).not.toContain("/ 1days");
   });
 
   it("does not show provider model scope tags", () => {
-    const text = mountPlanCard("antigravity").text();
+    const text = mountPlanCard().text();
 
     expect(text).not.toContain("Gemini");
     expect(text).not.toContain("Imagen");
@@ -127,26 +119,17 @@ describe("SubscriptionPlanCard", () => {
   it("shows current plan marker and separate renew button", () => {
     const wrapper = mount(SubscriptionPlanCard, {
       props: {
-        plan: {
+        plan: basePlan({
           id: 7,
-          group_id: 3,
-          group_platform: "anthropic",
           name: "Pro monthly",
-          description: "",
           price: 799,
-          validity_days: 30,
-          validity_unit: "day",
           seven_day_quota_usd: 260,
-          features: [],
-          rate_multiplier: 1,
-          for_sale: true,
-          sort_order: 1,
-        },
+        }),
         activeSubscriptions: [
           {
             id: 9,
             user_id: 1,
-            group_id: 3,
+            group_id: null,
             plan_id: 7,
             plan_name: "Pro monthly",
             status: "active",
@@ -176,29 +159,20 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.emitted("select")?.[0][1]).toBe("renew");
   });
 
-  it("shows switch subscription for non-current active same-group plans", () => {
+  it("shows switch subscription for another active generic plan", () => {
     const wrapper = mount(SubscriptionPlanCard, {
       props: {
-        plan: {
+        plan: basePlan({
           id: 8,
-          group_id: 3,
-          group_platform: "anthropic",
           name: "Max monthly",
-          description: "",
           price: 1599,
-          validity_days: 30,
-          validity_unit: "day",
           seven_day_quota_usd: 550,
-          features: [],
-          rate_multiplier: 1,
-          for_sale: true,
-          sort_order: 1,
-        },
+        }),
         activeSubscriptions: [
           {
             id: 9,
             user_id: 1,
-            group_id: 3,
+            group_id: null,
             plan_id: 7,
             plan_name: "Pro monthly",
             status: "active",
@@ -228,7 +202,7 @@ describe("SubscriptionPlanCard", () => {
   });
 
   it("shows subscribe CTA when there is no active subscription", () => {
-    const wrapper = mountPlanCard("anthropic");
+    const wrapper = mountPlanCard();
 
     expect(wrapper.text()).toContain("Subscribe now");
     wrapper.get("button").trigger("click");
@@ -236,13 +210,13 @@ describe("SubscriptionPlanCard", () => {
   });
 
   it("shows the current opened count tag for limited plans", () => {
-    const text = mountPlanCard("openai", { seat_limit: 100, seat_used: 12 }).text();
+    const text = mountPlanCard({ seat_limit: 100, seat_used: 12 }).text();
 
     expect(text).toContain("当前已开通 12/100");
   });
 
   it("does not show plan-seat text for unlimited plans", () => {
-    const text = mountPlanCard("openai", { seat_limit: null, seat_used: 12 }).text();
+    const text = mountPlanCard({ seat_limit: null, seat_used: 12 }).text();
 
     expect(text).not.toContain("当前已开通");
     expect(text).not.toContain("12/100");
@@ -250,7 +224,7 @@ describe("SubscriptionPlanCard", () => {
   });
 
   it("disables full limited plans for new openings and does not emit select", async () => {
-    const wrapper = mountPlanCard("openai", {
+    const wrapper = mountPlanCard({
       seat_limit: 100,
       seat_used: 100,
       seat_full: true,
@@ -265,11 +239,10 @@ describe("SubscriptionPlanCard", () => {
     expect(wrapper.emitted("select")).toBeUndefined();
   });
 
-  it("does not treat a different plan in the same group as a renewal", async () => {
+  it("does not treat a different active generic plan as a renewal", async () => {
     const wrapper = mountPlanCard(
-      "openai",
-      { id: 7, group_id: 10, seat_limit: 100, seat_used: 100, seat_full: true },
-      [activeSubscription({ plan_id: 8, group_id: 10 })],
+      { id: 7, name: "Max monthly", seat_limit: 100, seat_used: 100, seat_full: true },
+      [activeSubscription({ plan_id: 8, plan_name: "Pro monthly" })],
     );
     const button = wrapper.get("button");
 
@@ -283,7 +256,6 @@ describe("SubscriptionPlanCard", () => {
 
   it("allows same-plan renewal even when a limited plan is full", async () => {
     const wrapper = mountPlanCard(
-      "openai",
       { id: 7, seat_limit: 100, seat_used: 100, seat_full: true },
       [activeSubscription({ plan_id: 7 })],
     );

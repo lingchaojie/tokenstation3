@@ -2,8 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import PlanEditDialog from '../PlanEditDialog.vue'
-import type { SubscriptionPlan } from '@/types/payment'
-import type { AdminGroup } from '@/types'
+import type { SubscriptionPlan } from '../../../../types/payment'
 
 const createPlan = vi.hoisted(() => vi.fn())
 const updatePlan = vi.hoisted(() => vi.fn())
@@ -34,33 +33,16 @@ vi.mock('@/stores/app', () => ({
   }),
 }))
 
-const groups: AdminGroup[] = [
-  {
-    id: 2,
-    name: 'LINX2 Subscription',
-    platform: 'anthropic',
-    rate_multiplier: 1,
-    subscription_type: 'subscription',
-    daily_limit_usd: null,
-    weekly_limit_usd: null,
-    monthly_limit_usd: null,
-  } as AdminGroup,
-]
-
 function planFixture(overrides: Partial<SubscriptionPlan> = {}): SubscriptionPlan {
   return {
     id: 1,
-    group_id: 2,
-    group_platform: 'anthropic',
-    group_name: 'LINX2 Subscription',
-    rate_multiplier: 1,
     name: 'Plus monthly',
     description: 'Everyday development',
     price: 399,
     original_price: 0,
     seven_day_quota_usd: 110,
     validity_days: 30,
-    validity_unit: 'days',
+    validity_unit: 'day',
     features: ['Seven-day quota'],
     for_sale: true,
     sort_order: 20,
@@ -73,7 +55,6 @@ function mountDialog(plan: SubscriptionPlan | null) {
     props: {
       show: false,
       plan,
-      groups,
     },
     global: {
       stubs: {
@@ -86,16 +67,12 @@ function mountDialog(plan: SubscriptionPlan | null) {
           emits: ['update:modelValue'],
           methods: {
             onChange(event: Event) {
-              this.$emit('update:modelValue', Number((event.target as HTMLSelectElement).value))
+              this.$emit('update:modelValue', (event.target as HTMLSelectElement).value)
             },
           },
           template: '<select :value="modelValue == null ? \'\' : modelValue" @change="onChange"><option v-for="option in options" :key="option.value" :value="option.value">{{ option.label }}</option></select>',
         },
         Icon: true,
-        GroupBadge: {
-          props: ['name'],
-          template: '<span>{{ name }}</span>',
-        },
       },
     },
   })
@@ -115,7 +92,6 @@ describe('PlanEditDialog', () => {
     await nextTick()
 
     await wrapper.find('input[type="text"]').setValue('Pro monthly')
-    await wrapper.find('select').setValue('2')
     await wrapper.find('textarea').setValue('Primary development')
     const numberInputs = wrapper.findAll('input[type="number"]')
     await numberInputs[0].setValue('799')
@@ -127,8 +103,44 @@ describe('PlanEditDialog', () => {
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(createPlan).toHaveBeenCalledWith(expect.objectContaining({
+    const payload = createPlan.mock.calls[0][0]
+    expect(payload).toEqual(expect.objectContaining({
       seven_day_quota_usd: 260,
+    }))
+    expect(payload).not.toHaveProperty('group_id')
+  })
+
+  it('submits backend-compatible singular validity unit values', async () => {
+    const wrapper = mountDialog(null)
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await wrapper.find('input[type="text"]').setValue('Weekly plan')
+    await wrapper.find('textarea').setValue('Weekly quota')
+    const numberInputs = wrapper.findAll('input[type="number"]')
+    await numberInputs[0].setValue('99')
+    await numberInputs[2].setValue('1')
+    await wrapper.find('select').setValue('week')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createPlan.mock.calls[0][0]).toEqual(expect.objectContaining({
+      validity_days: 1,
+      validity_unit: 'week',
+    }))
+  })
+
+  it('normalizes legacy plural validity units when updating an existing plan', async () => {
+    const wrapper = mountDialog(planFixture({ validity_days: 1, validity_unit: 'months' }))
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updatePlan).toHaveBeenCalledWith(1, expect.objectContaining({
+      validity_days: 1,
+      validity_unit: 'month',
     }))
   })
 
@@ -143,9 +155,11 @@ describe('PlanEditDialog', () => {
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
+    const payload = updatePlan.mock.calls[0][1]
     expect(updatePlan).toHaveBeenCalledWith(1, expect.objectContaining({
       seven_day_quota_usd: null,
       clear_seven_day_quota_usd: true,
     }))
+    expect(payload).not.toHaveProperty('group_id')
   })
 })

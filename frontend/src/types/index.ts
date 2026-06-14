@@ -1558,7 +1558,7 @@ export interface ChangePasswordRequest {
 export interface UserSubscription {
   id: number
   user_id: number
-  group_id: number
+  group_id: number | null
   plan_id: number | null
   plan_name: string | null
   scheduled_plan_id?: number | null

@@ -103,7 +103,7 @@
                   <span v-if="selectedPlan.original_price" class="text-sm text-gray-400 line-through dark:text-gray-500">
                     {{ formatSelectedPaymentAmount(selectedPlan.original_price) }}
                   </span>
-                  <span :class="['text-3xl font-bold', planTextClass]">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
+                  <span class="text-3xl font-bold text-primary-600 dark:text-primary-400">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
                   <span class="text-sm text-gray-500 dark:text-gray-400">/ {{ planValiditySuffix }}</span>
                 </div>
                 <!-- Description -->
@@ -112,10 +112,6 @@
                 </p>
                 <!-- Limits grid -->
                 <div class="mt-3 grid grid-cols-2 gap-3">
-                  <div v-if="selectedPlan.daily_limit_usd != null">
-                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.dailyLimit') }}</span>
-                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.daily_limit_usd }}</div>
-                  </div>
                   <div v-if="selectedPlan.seven_day_quota_usd != null" class="rounded-lg bg-amber-500/10 p-3">
                     <span class="text-xs text-gray-600 dark:text-amber-200">{{ t('payment.planCard.sevenDayQuota') }}</span>
                     <div class="text-lg font-semibold text-amber-600 dark:text-amber-300">${{ formatUSD(selectedPlan.seven_day_quota_usd) }}</div>
@@ -124,15 +120,7 @@
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.totalMonthlyQuota') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ formatUSD(selectedPlan.seven_day_quota_usd * 4) }}</div>
                   </div>
-                  <div v-else-if="selectedPlan.weekly_limit_usd != null">
-                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.weeklyLimit') }}</span>
-                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ formatUSD(selectedPlan.weekly_limit_usd) }}</div>
-                  </div>
-                  <div v-if="selectedPlan.monthly_limit_usd != null">
-                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.monthlyLimit') }}</span>
-                    <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.monthly_limit_usd }}</div>
-                  </div>
-                  <div v-if="selectedPlan.seven_day_quota_usd == null && selectedPlan.daily_limit_usd == null && selectedPlan.weekly_limit_usd == null && selectedPlan.monthly_limit_usd == null">
+                  <div v-else>
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.quota') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">{{ t('payment.planCard.unlimited') }}</div>
                   </div>
@@ -197,15 +185,15 @@
                 <div class="space-y-2">
                   <div v-for="sub in activeSubscriptions" :key="sub.id"
                     class="linx-panel flex items-center gap-3 px-3 py-2">
-                    <div :class="['h-6 w-1 shrink-0 rounded-full', platformAccentBarClass(sub.group?.platform || '')]" />
+                    <div class="h-6 w-1 shrink-0 rounded-full bg-gradient-to-b from-primary-400 to-primary-500" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.plan_name ? displaySubscriptionName(sub.plan_name) : (sub.group?.name || t('payment.groupFallback', { id: sub.group_id })) }}</span>
+                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ activeSubscriptionLabel(sub) }}</span>
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
                         <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.sevenDayQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd) }}</span>
                         <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.totalMonthlyQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd * 4) }}</span>
-                        <span v-if="sub.group?.daily_limit_usd == null && sub.seven_day_limit_usd == null && sub.group?.weekly_limit_usd == null && sub.group?.monthly_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
+                        <span v-if="sub.seven_day_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
                         <span v-if="sub.expires_at">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expires_at) }) }}</span>
                         <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
                       </div>
@@ -300,7 +288,6 @@ import {
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
-import { platformAccentBarClass, platformTextClass } from '@/utils/platformColors'
 import {
   displayMonthlyPlanName,
   getMonthlyPlanDisplayFromPlan,
@@ -354,6 +341,14 @@ function displayPlanFeatures(plan: SubscriptionPlan): string[] {
 
 function displaySubscriptionName(planName: string): string {
   return displayMonthlyPlanName(planName, activeLocale.value) || planName
+}
+
+function activeSubscriptionLabel(subscription: { plan_name?: string | null; group?: { name?: string | null } | null; group_id?: number | null }): string {
+  if (subscription.plan_name) return displaySubscriptionName(subscription.plan_name)
+  if (subscription.group?.name) return subscription.group.name
+  return subscription.group_id != null
+    ? t('payment.groupFallback', { id: subscription.group_id })
+    : t('payment.subscription.genericLabel')
 }
 
 function getDaysRemaining(expiresAt: string): number {
@@ -714,56 +709,61 @@ const paymentButtonClass = computed(() => {
   return 'btn-primary'
 })
 
-// Subscription confirm: platform accent colors (clean card, no gradient)
-const planTextClass = computed(() => platformTextClass(selectedPlan.value?.group_platform || ''))
-
 // Renewal modal state
 const showRenewalModal = ref(false)
-const renewGroupId = ref<number | null>(null)
-const renewalPlans = computed(() => {
-  if (renewGroupId.value == null) return []
-  return checkout.value.plans.filter(p => p.group_id === renewGroupId.value)
-})
+const renewalPlans = computed(() => checkout.value.plans)
 
 const planValiditySuffix = computed(() => {
   if (!selectedPlan.value) return ''
   const u = selectedPlan.value.validity_unit || 'day'
-  if (u === 'month') return t('payment.perMonth')
-  if (u === 'year') return t('payment.perYear')
+  if (u === 'week' || u === 'weeks') return t('payment.perWeek')
+  if (u === 'month' || u === 'months') return t('payment.perMonth')
+  if (u === 'year' || u === 'years') return t('payment.perYear')
   return `${selectedPlan.value.validity_days}${t('payment.days')}`
 })
-
-function activeSubscriptionForPlan(plan: SubscriptionPlan) {
-  return activeSubscriptions.value.find(sub => sub.group_id === plan.group_id && sub.status === 'active') ?? null
-}
 
 function planKey(plan: SubscriptionPlan): MonthlyPlanKey | null {
   return monthlyPlanKeyFromName(plan.name)
 }
 
-function activePlanKeyForPlan(plan: SubscriptionPlan): MonthlyPlanKey | null {
-  return monthlyPlanKeyFromName(activeSubscriptionForPlan(plan)?.plan_name)
+function activeSubscriptionForPlan(plan: SubscriptionPlan) {
+  const nextKey = planKey(plan)
+  const active = activeSubscriptions.value.filter(sub => sub.status === 'active')
+  return active.find(sub => sub.plan_id != null && sub.plan_id === plan.id)
+    ?? active.find((sub) => {
+      const activeKey = monthlyPlanKeyFromName(sub.plan_name)
+      return !!activeKey && !!nextKey && activeKey === nextKey
+    })
+    ?? active.find((sub) => {
+      return sub.seven_day_limit_usd != null
+        && plan.seven_day_quota_usd != null
+        && Math.abs(sub.seven_day_limit_usd - plan.seven_day_quota_usd) < 0.000001
+    })
+    ?? null
+}
+
+function firstActiveSubscription() {
+  return activeSubscriptions.value.find(sub => sub.status === 'active') ?? null
 }
 
 function classifyPlanSelection(plan: SubscriptionPlan): SwitchConfirmKind | 'renew' | 'subscribe' {
-  const active = activeSubscriptionForPlan(plan)
+  const matchedActive = activeSubscriptionForPlan(plan)
+  if (matchedActive) return 'renew'
+  const active = firstActiveSubscription()
   if (!active) return 'subscribe'
-  if (active.plan_id != null && active.plan_id === plan.id) return 'renew'
-  const currentKey = activePlanKeyForPlan(plan)
+  const currentKey = monthlyPlanKeyFromName(active.plan_name)
   const nextKey = planKey(plan)
   if (currentKey && nextKey) {
-    if (currentKey === nextKey) return 'renew'
     return monthlyPlanRank[nextKey] > monthlyPlanRank[currentKey] ? 'upgrade' : 'downgrade'
   }
   if (active.seven_day_limit_usd != null && plan.seven_day_quota_usd != null) {
-    if (Math.abs(active.seven_day_limit_usd - plan.seven_day_quota_usd) < 0.000001) return 'renew'
     return plan.seven_day_quota_usd > active.seven_day_limit_usd ? 'upgrade' : 'downgrade'
   }
   return 'upgrade'
 }
 
 function isSamePlanRenewal(plan: SubscriptionPlan): boolean {
-  return activeSubscriptions.value.some(s => s.status === 'active' && s.plan_id === plan.id)
+  return activeSubscriptionForPlan(plan) !== null
 }
 
 function isPlanFullForNewOpening(plan: SubscriptionPlan): boolean {
@@ -794,7 +794,6 @@ function selectPlan(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectInten
 function selectPlanFromModal(plan: SubscriptionPlan, intent?: SubscriptionPlanSelectIntent) {
   if (warnIfPlanFullForNewOpening(plan)) return
   showRenewalModal.value = false
-  renewGroupId.value = null
   selectPlan(plan, intent)
 }
 
@@ -820,7 +819,6 @@ function cancelSwitchSelection() {
 
 function closeRenewalModal() {
   showRenewalModal.value = false
-  renewGroupId.value = null
 }
 
 async function handleSubmitRecharge() {
@@ -1230,12 +1228,9 @@ onMounted(async () => {
       if (route.query.plan) {
         selectPlanFromQuery()
       } else if (route.query.group) {
-        const groupId = Number(route.query.group)
-        const groupPlans = checkout.value.plans.filter(p => p.group_id === groupId)
-        if (groupPlans.length === 1) {
-          selectPlan(groupPlans[0], 'renew')
-        } else if (groupPlans.length > 1) {
-          renewGroupId.value = groupId
+        if (checkout.value.plans.length === 1) {
+          selectPlan(checkout.value.plans[0], 'renew')
+        } else if (checkout.value.plans.length > 1) {
           showRenewalModal.value = true
         }
       }

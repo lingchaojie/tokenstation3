@@ -31600,10 +31600,24 @@ func (m *SubscriptionPlanMutation) AddedGroupID() (r int64, exists bool) {
 	return *v, true
 }
 
+// ClearGroupID clears the value of the "group_id" field.
+func (m *SubscriptionPlanMutation) ClearGroupID() {
+	m.group_id = nil
+	m.addgroup_id = nil
+	m.clearedFields[subscriptionplan.FieldGroupID] = struct{}{}
+}
+
+// GroupIDCleared returns if the "group_id" field was cleared in this mutation.
+func (m *SubscriptionPlanMutation) GroupIDCleared() bool {
+	_, ok := m.clearedFields[subscriptionplan.FieldGroupID]
+	return ok
+}
+
 // ResetGroupID resets all changes to the "group_id" field.
 func (m *SubscriptionPlanMutation) ResetGroupID() {
 	m.group_id = nil
 	m.addgroup_id = nil
+	delete(m.clearedFields, subscriptionplan.FieldGroupID)
 }
 
 // SetName sets the "name" field.
@@ -32660,6 +32674,9 @@ func (m *SubscriptionPlanMutation) AddField(name string, value ent.Value) error 
 // mutation.
 func (m *SubscriptionPlanMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(subscriptionplan.FieldGroupID) {
+		fields = append(fields, subscriptionplan.FieldGroupID)
+	}
 	if m.FieldCleared(subscriptionplan.FieldOriginalPrice) {
 		fields = append(fields, subscriptionplan.FieldOriginalPrice)
 	}
@@ -32683,6 +32700,9 @@ func (m *SubscriptionPlanMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *SubscriptionPlanMutation) ClearField(name string) error {
 	switch name {
+	case subscriptionplan.FieldGroupID:
+		m.ClearGroupID()
+		return nil
 	case subscriptionplan.FieldOriginalPrice:
 		m.ClearOriginalPrice()
 		return nil
@@ -46604,9 +46624,22 @@ func (m *UserSubscriptionMutation) OldGroupID(ctx context.Context) (v int64, err
 	return oldValue.GroupID, nil
 }
 
+// ClearGroupID clears the value of the "group_id" field.
+func (m *UserSubscriptionMutation) ClearGroupID() {
+	m.group = nil
+	m.clearedFields[usersubscription.FieldGroupID] = struct{}{}
+}
+
+// GroupIDCleared returns if the "group_id" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) GroupIDCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldGroupID]
+	return ok
+}
+
 // ResetGroupID resets all changes to the "group_id" field.
 func (m *UserSubscriptionMutation) ResetGroupID() {
 	m.group = nil
+	delete(m.clearedFields, usersubscription.FieldGroupID)
 }
 
 // SetPlanID sets the "plan_id" field.
@@ -47747,7 +47780,7 @@ func (m *UserSubscriptionMutation) ClearGroup() {
 
 // GroupCleared reports if the "group" edge to the Group entity was cleared.
 func (m *UserSubscriptionMutation) GroupCleared() bool {
-	return m.clearedgroup
+	return m.GroupIDCleared() || m.clearedgroup
 }
 
 // GroupIDs returns the "group" edge IDs in the mutation.
@@ -48417,6 +48450,9 @@ func (m *UserSubscriptionMutation) ClearedFields() []string {
 	if m.FieldCleared(usersubscription.FieldDeletedAt) {
 		fields = append(fields, usersubscription.FieldDeletedAt)
 	}
+	if m.FieldCleared(usersubscription.FieldGroupID) {
+		fields = append(fields, usersubscription.FieldGroupID)
+	}
 	if m.FieldCleared(usersubscription.FieldPlanID) {
 		fields = append(fields, usersubscription.FieldPlanID)
 	}
@@ -48475,6 +48511,9 @@ func (m *UserSubscriptionMutation) ClearField(name string) error {
 	switch name {
 	case usersubscription.FieldDeletedAt:
 		m.ClearDeletedAt()
+		return nil
+	case usersubscription.FieldGroupID:
+		m.ClearGroupID()
 		return nil
 	case usersubscription.FieldPlanID:
 		m.ClearPlanID()

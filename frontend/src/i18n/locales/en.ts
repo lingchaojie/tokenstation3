@@ -2101,11 +2101,11 @@ export default {
       keyRoutes: {
         action: 'Provider Routes',
         title: 'Provider Routes',
-        description: 'Choose per-user default groups for future normal-user API key creation.',
+        description: 'Choose per-user default groups for matching-platform API keys.',
         anthropicLabel: 'Anthropic Default Group',
         openaiLabel: 'OpenAI Default Group',
         useGlobalDefault: 'Use global default',
-        hint: 'Only active groups for the matching provider are shown. Existing API keys are not changed.',
+        hint: 'Only active groups for the matching provider are shown. Saving applies immediately to existing matching-platform API keys and future keys.',
         loadFailed: 'Failed to load provider routes',
         updateSuccess: 'Provider routes updated',
         updateFailed: 'Failed to update provider routes'
@@ -7068,6 +7068,7 @@ export default {
     planFeatures: 'Features',
     subscription: {
       quotaFirstHint: 'Usage consumes subscription quota first, then recharge balance if needed.',
+      genericLabel: 'Subscription plan',
     },
     switchConfirm: {
       upgradeTitle: 'Confirm subscription upgrade',
@@ -7092,6 +7093,7 @@ export default {
     years: 'years',
     oneMonth: '1 Month',
     oneYear: '1 Year',
+    perWeek: 'week',
     perMonth: 'month',
     perYear: 'year',
     admin: {

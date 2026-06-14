@@ -49,6 +49,12 @@ func (_u *SubscriptionPlanUpdate) AddGroupID(v int64) *SubscriptionPlanUpdate {
 	return _u
 }
 
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *SubscriptionPlanUpdate) ClearGroupID() *SubscriptionPlanUpdate {
+	_u.mutation.ClearGroupID()
+	return _u
+}
+
 // SetName sets the "name" field.
 func (_u *SubscriptionPlanUpdate) SetName(v string) *SubscriptionPlanUpdate {
 	_u.mutation.SetName(v)
@@ -367,6 +373,9 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if value, ok := _u.mutation.AddedGroupID(); ok {
 		_spec.AddField(subscriptionplan.FieldGroupID, field.TypeInt64, value)
 	}
+	if _u.mutation.GroupIDCleared() {
+		_spec.ClearField(subscriptionplan.FieldGroupID, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(subscriptionplan.FieldName, field.TypeString, value)
 	}
@@ -471,6 +480,12 @@ func (_u *SubscriptionPlanUpdateOne) SetNillableGroupID(v *int64) *SubscriptionP
 // AddGroupID adds value to the "group_id" field.
 func (_u *SubscriptionPlanUpdateOne) AddGroupID(v int64) *SubscriptionPlanUpdateOne {
 	_u.mutation.AddGroupID(v)
+	return _u
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *SubscriptionPlanUpdateOne) ClearGroupID() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearGroupID()
 	return _u
 }
 
@@ -821,6 +836,9 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	}
 	if value, ok := _u.mutation.AddedGroupID(); ok {
 		_spec.AddField(subscriptionplan.FieldGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.GroupIDCleared() {
+		_spec.ClearField(subscriptionplan.FieldGroupID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(subscriptionplan.FieldName, field.TypeString, value)

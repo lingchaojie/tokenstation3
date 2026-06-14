@@ -169,6 +169,16 @@ func GroupIDLTE(v int64) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldLTE(FieldGroupID, v))
 }
 
+// GroupIDIsNil applies the IsNil predicate on the "group_id" field.
+func GroupIDIsNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldIsNull(FieldGroupID))
+}
+
+// GroupIDNotNil applies the NotNil predicate on the "group_id" field.
+func GroupIDNotNil() predicate.SubscriptionPlan {
+	return predicate.SubscriptionPlan(sql.FieldNotNull(FieldGroupID))
+}
+
 // NameEQ applies the EQ predicate on the "name" field.
 func NameEQ(v string) predicate.SubscriptionPlan {
 	return predicate.SubscriptionPlan(sql.FieldEQ(FieldName, v))

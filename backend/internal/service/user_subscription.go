@@ -5,6 +5,7 @@ import "time"
 type UserSubscription struct {
 	ID      int64
 	UserID  int64
+	// GroupID is 0 for generic plan entitlements that are not bound to a routed group.
 	GroupID int64
 	PlanID  *int64
 
@@ -129,7 +130,7 @@ func (s *UserSubscription) MonthlyResetTime() *time.Time {
 }
 
 func (s *UserSubscription) CheckDailyLimit(group *Group, additionalCost float64) bool {
-	if !group.HasDailyLimit() {
+	if group == nil || !group.HasDailyLimit() {
 		return true
 	}
 	return s.DailyUsageUSD+additionalCost <= *group.DailyLimitUSD
@@ -177,7 +178,7 @@ func (s *UserSubscription) CheckWeeklyLimit(group *Group, additionalCost float64
 }
 
 func (s *UserSubscription) CheckMonthlyLimit(group *Group, additionalCost float64) bool {
-	if !group.HasMonthlyLimit() {
+	if group == nil || !group.HasMonthlyLimit() {
 		return true
 	}
 	return s.MonthlyUsageUSD+additionalCost <= *group.MonthlyLimitUSD

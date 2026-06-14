@@ -137,13 +137,6 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	if err != nil || !plan.ForSale {
 		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan not found or not for sale")
 	}
-	group, err := s.groupRepo.GetByID(ctx, plan.GroupID)
-	if err != nil || group.Status != payment.EntityStatusActive {
-		return nil, infraerrors.NotFound("GROUP_NOT_FOUND", "subscription group is no longer available")
-	}
-	if !group.IsSubscriptionType() {
-		return nil, infraerrors.BadRequest("GROUP_TYPE_MISMATCH", "group is not a subscription type")
-	}
 	if err := s.configService.ValidatePlanSeatAvailable(ctx, plan, req.UserID); err != nil {
 		return nil, err
 	}
@@ -208,7 +201,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		b.SetProviderSnapshot(providerSnapshot)
 	}
 	if plan != nil {
-		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
+		b.SetPlanID(plan.ID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
 	}
 	order, err := b.Save(ctx)
 	if err != nil {
@@ -519,7 +512,7 @@ func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, limit
 	if hasPaymentProductNameAffix(cfg) {
 		return applyPaymentProductNameAffix(amountStr, cfg)
 	}
-	return "LINX2.AI " + amountStr + " " + currency
+	return "Sub2API " + amountStr + " " + currency
 }
 
 func hasPaymentProductNameAffix(cfg *PaymentConfig) bool {
