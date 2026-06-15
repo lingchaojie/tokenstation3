@@ -52,7 +52,7 @@ func bindJSONWithFieldPresence(c *gin.Context, out any) (map[string]json.RawMess
 
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
-	Name          string   `json:"name" binding:"required"`
+	Name string `json:"name" binding:"required"`
 	// KeyType is optional: when omitted the key is created as a provider-agnostic
 	// unified key (group_binding_mode = auto). When set it must be a valid provider.
 	KeyType       string   `json:"key_type" binding:"omitempty,oneof=anthropic openai"`
