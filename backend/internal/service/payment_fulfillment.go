@@ -537,6 +537,9 @@ func (s *PaymentService) doSubWithPlanSeat(ctx context.Context, o *dbent.Payment
 		return fmt.Errorf("commit plan seat transaction: %w", err)
 	}
 	txClosed = true
+	if s.configService != nil {
+		s.configService.InvalidatePublicPlansCache()
+	}
 	return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 }
 

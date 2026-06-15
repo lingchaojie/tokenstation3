@@ -97,6 +97,20 @@ func TestSettingService_InitializeDefaultSettings_MigratesLegacySub2APIBrandingD
 	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
 }
 
+func TestProvideSettingService_MigratesLegacyBrandingDefaultsOnStartup(t *testing.T) {
+	repo := &settingBrandingRepoStub{values: map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+		SettingKeySiteName:            "Sub2API",
+		SettingKeySiteSubtitle:        "Subscription to API Conversion Platform",
+	}}
+
+	_, err := ProvideSettingService(repo, nil, nil, &config.Config{})
+
+	require.NoError(t, err)
+	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])
+	require.Equal(t, "Link 2 All AI Model", repo.values[SettingKeySiteSubtitle])
+}
+
 func TestSettingService_InitializeDefaultSettings_MigratesLegacyDescriptionOnly(t *testing.T) {
 	repo := &settingBrandingRepoStub{values: map[string]string{
 		SettingKeyRegistrationEnabled: "true",

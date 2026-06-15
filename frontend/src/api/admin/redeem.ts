@@ -12,6 +12,13 @@ import type {
   PaginatedResponse
 } from '@/types'
 
+type GenerateRedeemCodesOptions = {
+  groupId?: number | null
+  planId?: number | null
+  validityDays?: number
+  expiresInDays?: number | null
+}
+
 /**
  * List all redeem codes with pagination
  * @param page - Page number (default: 1)
@@ -59,8 +66,8 @@ export async function getById(id: number): Promise<RedeemCode> {
  * @param count - Number of codes to generate
  * @param type - Type of redeem code
  * @param value - Value of the code
- * @param groupId - Group ID (required for subscription type)
- * @param validityDays - Validity days (for subscription type)
+ * @param groupIdOrOptions - Legacy group ID or options for subscription target selection
+ * @param validityDays - Validity days (for legacy positional subscription calls)
  * @param expiresInDays - Days before the code itself expires
  * @returns Array of generated redeem codes
  */
@@ -68,7 +75,7 @@ export async function generate(
   count: number,
   type: RedeemCodeType,
   value: number,
-  groupId?: number | null,
+  groupIdOrOptions?: number | null | GenerateRedeemCodesOptions,
   validityDays?: number,
   expiresInDays?: number | null
 ): Promise<RedeemCode[]> {
@@ -77,16 +84,30 @@ export async function generate(
     type,
     value
   }
+  let options: GenerateRedeemCodesOptions
+  if (typeof groupIdOrOptions === 'object' && groupIdOrOptions !== null) {
+    options = groupIdOrOptions
+  } else {
+    options = {
+      groupId: groupIdOrOptions,
+      validityDays,
+      expiresInDays
+    }
+  }
 
   // 订阅类型专用字段
   if (type === 'subscription') {
-    payload.group_id = groupId
-    if (validityDays && validityDays > 0) {
-      payload.validity_days = validityDays
+    if (options.planId !== undefined) {
+      payload.plan_id = options.planId
+    } else if (options.groupId !== undefined) {
+      payload.group_id = options.groupId
+    }
+    if (options.validityDays !== undefined) {
+      payload.validity_days = options.validityDays
     }
   }
-  if (expiresInDays && expiresInDays > 0) {
-    payload.expires_in_days = expiresInDays
+  if (options.expiresInDays && options.expiresInDays > 0) {
+    payload.expires_in_days = options.expiresInDays
   }
 
   const { data } = await apiClient.post<RedeemCode[]>('/admin/redeem-codes/generate', payload)

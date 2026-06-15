@@ -1418,7 +1418,7 @@ func init() {
 	// redeemcode.DefaultCreatedAt holds the default value on creation for the created_at field.
 	redeemcode.DefaultCreatedAt = redeemcodeDescCreatedAt.Default.(func() time.Time)
 	// redeemcodeDescValidityDays is the schema descriptor for validity_days field.
-	redeemcodeDescValidityDays := redeemcodeFields[10].Descriptor()
+	redeemcodeDescValidityDays := redeemcodeFields[11].Descriptor()
 	// redeemcode.DefaultValidityDays holds the default value on creation for the validity_days field.
 	redeemcode.DefaultValidityDays = redeemcodeDescValidityDays.Default.(int)
 	securitysecretMixin := schema.SecuritySecret{}.Mixin()
@@ -1540,12 +1540,20 @@ func init() {
 	subscriptionplanDescSeatLimit := subscriptionplanFields[12].Descriptor()
 	// subscriptionplan.SeatLimitValidator is a validator for the "seat_limit" field. It is called by the builders before save.
 	subscriptionplan.SeatLimitValidator = subscriptionplanDescSeatLimit.Validators[0].(func(int) error)
+	// subscriptionplanDescVirtualSeatStart is the schema descriptor for virtual_seat_start field.
+	subscriptionplanDescVirtualSeatStart := subscriptionplanFields[13].Descriptor()
+	// subscriptionplan.VirtualSeatStartValidator is a validator for the "virtual_seat_start" field. It is called by the builders before save.
+	subscriptionplan.VirtualSeatStartValidator = subscriptionplanDescVirtualSeatStart.Validators[0].(func(int) error)
+	// subscriptionplanDescVirtualSeatTotal is the schema descriptor for virtual_seat_total field.
+	subscriptionplanDescVirtualSeatTotal := subscriptionplanFields[14].Descriptor()
+	// subscriptionplan.VirtualSeatTotalValidator is a validator for the "virtual_seat_total" field. It is called by the builders before save.
+	subscriptionplan.VirtualSeatTotalValidator = subscriptionplanDescVirtualSeatTotal.Validators[0].(func(int) error)
 	// subscriptionplanDescCreatedAt is the schema descriptor for created_at field.
-	subscriptionplanDescCreatedAt := subscriptionplanFields[13].Descriptor()
+	subscriptionplanDescCreatedAt := subscriptionplanFields[15].Descriptor()
 	// subscriptionplan.DefaultCreatedAt holds the default value on creation for the created_at field.
 	subscriptionplan.DefaultCreatedAt = subscriptionplanDescCreatedAt.Default.(func() time.Time)
 	// subscriptionplanDescUpdatedAt is the schema descriptor for updated_at field.
-	subscriptionplanDescUpdatedAt := subscriptionplanFields[14].Descriptor()
+	subscriptionplanDescUpdatedAt := subscriptionplanFields[16].Descriptor()
 	// subscriptionplan.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	subscriptionplan.DefaultUpdatedAt = subscriptionplanDescUpdatedAt.Default.(func() time.Time)
 	// subscriptionplan.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

@@ -8,7 +8,32 @@
   }
 
   html {
+    --linear-canvas: 249 250 251;
+    --linear-surface-1: 255 255 255;
+    --linear-surface-2: 248 250 252;
+    --linear-surface-3: 241 245 249;
+    --linear-surface-4: 226 232 240;
+    --linear-hairline: 226 232 240;
+    --linear-hairline-strong: 203 213 225;
+    --linear-ink: 15 23 42;
+    --linear-ink-muted: 51 65 85;
+    --linear-ink-subtle: 100 116 139;
+    --linear-ink-tertiary: 148 163 184;
     @apply scroll-smooth antialiased;
+  }
+
+  .dark {
+    --linear-canvas: 1 1 2;
+    --linear-surface-1: 15 16 17;
+    --linear-surface-2: 20 21 22;
+    --linear-surface-3: 24 25 26;
+    --linear-surface-4: 25 26 27;
+    --linear-hairline: 35 37 42;
+    --linear-hairline-strong: 52 52 58;
+    --linear-ink: 247 248 248;
+    --linear-ink-muted: 208 214 224;
+    --linear-ink-subtle: 138 143 152;
+    --linear-ink-tertiary: 98 102 109;
   }
 
   body {

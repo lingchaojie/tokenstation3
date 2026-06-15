@@ -7,7 +7,9 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -34,6 +36,7 @@ func (r *redeemCodeRepository) Create(ctx context.Context, code *service.RedeemC
 		SetNillableUsedBy(code.UsedBy).
 		SetNillableUsedAt(code.UsedAt).
 		SetNillableGroupID(code.GroupID).
+		SetNillablePlanID(code.PlanID).
 		Save(ctx)
 	if err == nil {
 		code.ID = created.ID
@@ -60,7 +63,8 @@ func (r *redeemCodeRepository) CreateBatch(ctx context.Context, codes []service.
 			SetNillableExpiresAt(c.ExpiresAt).
 			SetNillableUsedBy(c.UsedBy).
 			SetNillableUsedAt(c.UsedAt).
-			SetNillableGroupID(c.GroupID)
+			SetNillableGroupID(c.GroupID).
+			SetNillablePlanID(c.PlanID)
 		builders = append(builders, b)
 	}
 
@@ -68,7 +72,7 @@ func (r *redeemCodeRepository) CreateBatch(ctx context.Context, codes []service.
 }
 
 func (r *redeemCodeRepository) GetByID(ctx context.Context, id int64) (*service.RedeemCode, error) {
-	m, err := r.client.RedeemCode.Query().
+	m, err := clientFromContext(ctx, r.client).RedeemCode.Query().
 		Where(redeemcode.IDEQ(id)).
 		Only(ctx)
 	if err != nil {
@@ -77,11 +81,15 @@ func (r *redeemCodeRepository) GetByID(ctx context.Context, id int64) (*service.
 		}
 		return nil, err
 	}
-	return redeemCodeEntityToService(m), nil
+	out := redeemCodeEntityToService(m)
+	if err := r.hydrateRedeemCodePlan(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *redeemCodeRepository) GetByCode(ctx context.Context, code string) (*service.RedeemCode, error) {
-	m, err := r.client.RedeemCode.Query().
+	m, err := clientFromContext(ctx, r.client).RedeemCode.Query().
 		Where(redeemcode.CodeEQ(code)).
 		Only(ctx)
 	if err != nil {
@@ -90,7 +98,11 @@ func (r *redeemCodeRepository) GetByCode(ctx context.Context, code string) (*ser
 		}
 		return nil, err
 	}
-	return redeemCodeEntityToService(m), nil
+	out := redeemCodeEntityToService(m)
+	if err := r.hydrateRedeemCodePlan(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *redeemCodeRepository) Delete(ctx context.Context, id int64) error {
@@ -161,6 +173,9 @@ func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagin
 	}
 
 	outCodes := redeemCodeEntitiesToService(codes)
+	if err := r.hydrateRedeemCodePlans(ctx, outCodes); err != nil {
+		return nil, nil, err
+	}
 
 	return outCodes, paginationResultFromTotal(int64(total), params), nil
 }
@@ -218,6 +233,11 @@ func (r *redeemCodeRepository) Update(ctx context.Context, code *service.RedeemC
 		up.SetGroupID(*code.GroupID)
 	} else {
 		up.ClearGroupID()
+	}
+	if code.PlanID != nil {
+		up.SetPlanID(*code.PlanID)
+	} else {
+		up.ClearPlanID()
 	}
 	if code.ExpiresAt != nil {
 		up.SetExpiresAt(*code.ExpiresAt)
@@ -288,8 +308,34 @@ func (r *redeemCodeRepository) batchUpdate(ctx context.Context, client *dbent.Cl
 			}
 		}
 	}
+	for _, code := range existing {
+		groupID := code.GroupID
+		if fields.GroupID.Set {
+			groupID = fields.GroupID.Value
+		}
+		planID := code.PlanID
+		if fields.PlanID.Set {
+			planID = fields.PlanID.Value
+		}
+
+		if code.Type != service.RedeemTypeSubscription {
+			if planID != nil {
+				return 0, infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id is only valid for subscription type")
+			}
+			continue
+		}
+		if groupID != nil && planID != nil {
+			return 0, infraerrors.BadRequest("REDEEM_CODE_TARGET_CONFLICT", "plan_id and group_id cannot both be set for subscription type")
+		}
+		if groupID == nil && planID == nil {
+			return 0, infraerrors.BadRequest("REDEEM_CODE_TARGET_REQUIRED", "plan_id or group_id is required for subscription type")
+		}
+	}
 
 	up := client.RedeemCode.Update().Where(redeemcode.IDIn(ids...))
+	if fields.TouchesUsedSensitiveFields() {
+		up.Where(redeemcode.StatusNEQ(service.StatusUsed))
+	}
 	if fields.Status != nil {
 		up.SetStatus(*fields.Status)
 	}
@@ -310,12 +356,30 @@ func (r *redeemCodeRepository) batchUpdate(ctx context.Context, client *dbent.Cl
 			up.ClearGroupID()
 		}
 	}
+	if fields.PlanID.Set {
+		if fields.PlanID.Value != nil {
+			up.SetPlanID(*fields.PlanID.Value)
+		} else {
+			up.ClearPlanID()
+		}
+	}
 
 	affected, err := up.Save(ctx)
 	if err != nil {
 		return 0, err
 	}
 	if affected != len(ids) {
+		if fields.TouchesUsedSensitiveFields() {
+			remaining, countErr := client.RedeemCode.Query().
+				Where(redeemcode.IDIn(ids...)).
+				Count(ctx)
+			if countErr != nil {
+				return 0, countErr
+			}
+			if remaining == len(ids) {
+				return 0, service.ErrRedeemCodeUsed
+			}
+		}
 		return 0, service.ErrRedeemCodeNotFound
 	}
 	return int64(affected), nil
@@ -354,7 +418,11 @@ func (r *redeemCodeRepository) ListByUser(ctx context.Context, userID int64, lim
 		return nil, err
 	}
 
-	return redeemCodeEntitiesToService(codes), nil
+	outCodes := redeemCodeEntitiesToService(codes)
+	if err := r.hydrateRedeemCodePlans(ctx, outCodes); err != nil {
+		return nil, err
+	}
+	return outCodes, nil
 }
 
 // ListByUserPaginated returns paginated balance/concurrency history for a user.
@@ -383,7 +451,64 @@ func (r *redeemCodeRepository) ListByUserPaginated(ctx context.Context, userID i
 		return nil, nil, err
 	}
 
-	return redeemCodeEntitiesToService(codes), paginationResultFromTotal(int64(total), params), nil
+	outCodes := redeemCodeEntitiesToService(codes)
+	if err := r.hydrateRedeemCodePlans(ctx, outCodes); err != nil {
+		return nil, nil, err
+	}
+	return outCodes, paginationResultFromTotal(int64(total), params), nil
+}
+
+func (r *redeemCodeRepository) hydrateRedeemCodePlan(ctx context.Context, code *service.RedeemCode) error {
+	if code == nil || code.PlanID == nil {
+		return nil
+	}
+	codes := []service.RedeemCode{*code}
+	if err := r.hydrateRedeemCodePlans(ctx, codes); err != nil {
+		return err
+	}
+	code.Plan = codes[0].Plan
+	return nil
+}
+
+func (r *redeemCodeRepository) hydrateRedeemCodePlans(ctx context.Context, codes []service.RedeemCode) error {
+	if len(codes) == 0 {
+		return nil
+	}
+
+	planIDs := make([]int64, 0, len(codes))
+	seen := make(map[int64]struct{}, len(codes))
+	for i := range codes {
+		if codes[i].PlanID == nil {
+			continue
+		}
+		id := *codes[i].PlanID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		planIDs = append(planIDs, id)
+	}
+	if len(planIDs) == 0 {
+		return nil
+	}
+
+	plans, err := clientFromContext(ctx, r.client).SubscriptionPlan.Query().
+		Where(subscriptionplan.IDIn(planIDs...)).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	plansByID := make(map[int64]*dbent.SubscriptionPlan, len(plans))
+	for _, plan := range plans {
+		plansByID[plan.ID] = plan
+	}
+	for i := range codes {
+		if codes[i].PlanID == nil {
+			continue
+		}
+		codes[i].Plan = plansByID[*codes[i].PlanID]
+	}
+	return nil
 }
 
 // SumPositiveBalanceByUser returns total recharged amount (sum of value > 0 where type is balance/admin_balance).
@@ -424,6 +549,7 @@ func redeemCodeEntityToService(m *dbent.RedeemCode) *service.RedeemCode {
 		CreatedAt:    m.CreatedAt,
 		ExpiresAt:    m.ExpiresAt,
 		GroupID:      m.GroupID,
+		PlanID:       m.PlanID,
 		ValidityDays: m.ValidityDays,
 	}
 	if m.Edges.User != nil {

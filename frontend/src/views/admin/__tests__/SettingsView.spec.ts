@@ -473,6 +473,16 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openGeneralTab(wrapper: ReturnType<typeof mountView>) {
+  const generalTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.general"));
+
+  expect(generalTabButton).toBeDefined();
+  await generalTabButton?.trigger("click");
+  await flushPromises();
+}
+
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
@@ -658,7 +668,18 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openUsersTab(wrapper);
+    await openGeneralTab(wrapper);
+    const providerRouteLabels = wrapper
+      .findAll("label")
+      .filter((node) =>
+        [
+          "admin.settings.defaults.providerRoutes",
+          "admin.settings.defaults.defaultAnthropicGroup",
+          "admin.settings.defaults.defaultOpenAIGroup",
+        ].some((label) => node.text().includes(label)),
+      );
+    expect(providerRouteLabels).toHaveLength(3);
+    providerRouteLabels.forEach((label) => expect(label.isVisible()).toBe(true));
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
 

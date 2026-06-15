@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, type PropType } from 'vue'
 
 import RedeemView from '../RedeemView.vue'
 
-const { listRedeemCodes, batchUpdateRedeemCodes, getAllGroups, showSuccess, showError, showInfo } =
+const { listRedeemCodes, batchUpdateRedeemCodes, getAllGroups, getPlans, showSuccess, showError, showInfo } =
   vi.hoisted(() => ({
     listRedeemCodes: vi.fn(),
     batchUpdateRedeemCodes: vi.fn(),
     getAllGroups: vi.fn(),
+    getPlans: vi.fn(),
     showSuccess: vi.fn(),
     showError: vi.fn(),
     showInfo: vi.fn()
@@ -25,6 +27,9 @@ vi.mock('@/api/admin', () => ({
     },
     groups: {
       getAll: getAllGroups
+    },
+    payment: {
+      getPlans
     }
   }
 }))
@@ -77,10 +82,18 @@ const DataTableStub = {
   `
 }
 
-const SelectStub = {
-  props: ['modelValue', 'options'],
+type SelectOption = { value: unknown; label: string }
+
+const SelectStub = defineComponent({
+  props: {
+    modelValue: null,
+    options: {
+      type: Array as PropType<SelectOption[]>,
+      default: () => [],
+    },
+  },
   emits: ['update:modelValue', 'change'],
-  setup(props: { options: Array<{ value: unknown; label: string }> }, { emit }: { emit: (event: string, ...args: unknown[]) => void }) {
+  setup(props, { emit }) {
     const onChange = (event: Event) => {
       const raw = (event.target as HTMLSelectElement).value
       const option = props.options.find((item) => String(item.value ?? '') === raw)
@@ -96,8 +109,8 @@ const SelectStub = {
         {{ option.label }}
       </option>
     </select>
-  `
-}
+  `,
+})
 
 describe('admin RedeemView batch update', () => {
   beforeEach(() => {
@@ -107,6 +120,7 @@ describe('admin RedeemView batch update', () => {
     listRedeemCodes.mockReset()
     batchUpdateRedeemCodes.mockReset()
     getAllGroups.mockReset()
+    getPlans.mockReset()
     showSuccess.mockReset()
     showError.mockReset()
     showInfo.mockReset()
@@ -143,6 +157,7 @@ describe('admin RedeemView batch update', () => {
     })
     batchUpdateRedeemCodes.mockResolvedValue({ updated: 1, message: 'ok' })
     getAllGroups.mockResolvedValue([])
+    getPlans.mockResolvedValue({ data: [] })
   })
 
   it('submits only checked fields for selected redeem codes', async () => {

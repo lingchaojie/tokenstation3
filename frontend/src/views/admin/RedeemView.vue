@@ -132,10 +132,18 @@
             <span class="text-sm font-medium text-gray-900 dark:text-white">
               <template v-if="row.type === 'balance'">${{ value.toFixed(2) }}</template>
               <template v-else-if="row.type === 'subscription'">
-                {{ row.validity_days || 30 }} {{ t('admin.redeem.days') }}
-                <span v-if="row.group" class="ml-1 text-xs text-gray-500 dark:text-gray-400"
-                  >({{ row.group.name }})</span
-                >
+                <template v-if="row.plan_id">
+                  <span>{{ getRedeemCodePlanName(row) }}</span>
+                  <span class="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ getRedeemCodePlanDuration(row) }}
+                  </span>
+                </template>
+                <template v-else>
+                  {{ row.validity_days || 30 }} {{ t('admin.redeem.days') }}
+                  <span v-if="row.group" class="ml-1 text-xs text-gray-500 dark:text-gray-400"
+                    >({{ row.group.name }})</span
+                  >
+                </template>
               </template>
               <template v-else>{{ value }}</template>
             </span>
@@ -282,10 +290,10 @@
           <h2 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
             {{ t('admin.redeem.generateCodesTitle') }}
           </h2>
-          <form @submit.prevent="handleGenerateCodes" class="space-y-4">
+          <form data-test="generate-form" @submit.prevent="handleGenerateCodes" class="space-y-4">
             <div>
               <label class="input-label">{{ t('admin.redeem.codeType') }}</label>
-              <Select v-model="generateForm.type" :options="typeOptions" />
+              <Select data-test="generate-type-select" v-model="generateForm.type" :options="typeOptions" />
             </div>
             <!-- 余额/并发类型：显示数值输入 -->
             <div v-if="generateForm.type !== 'subscription' && generateForm.type !== 'invitation'">
@@ -311,50 +319,87 @@
                 {{ t('admin.redeem.invitationHint') }}
               </p>
             </div>
-            <!-- 订阅类型：显示分组选择和有效天数 -->
+            <!-- 订阅类型：显示套餐/旧分组模式选择和有效天数 -->
             <template v-if="generateForm.type === 'subscription'">
               <div>
-                <label class="input-label">{{ t('admin.redeem.selectGroup') }}</label>
+                <label class="input-label">{{ t('admin.redeem.subscriptionMode') }}</label>
                 <Select
-                  v-model="generateForm.group_id"
-                  :options="subscriptionGroupOptions"
-                  :placeholder="t('admin.redeem.selectGroupPlaceholder')"
-                >
-                  <template #selected="{ option }">
-                    <GroupBadge
-                      v-if="option"
-                      :name="(option as unknown as GroupOption).label"
-                      :platform="(option as unknown as GroupOption).platform"
-                      :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                      :rate-multiplier="(option as unknown as GroupOption).rate"
-                    />
-                    <span v-else class="text-gray-400">{{
-                      t('admin.redeem.selectGroupPlaceholder')
-                    }}</span>
-                  </template>
-                  <template #option="{ option, selected }">
-                    <GroupOptionItem
-                      :name="(option as unknown as GroupOption).label"
-                      :platform="(option as unknown as GroupOption).platform"
-                      :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                      :rate-multiplier="(option as unknown as GroupOption).rate"
-                      :description="(option as unknown as GroupOption).description"
-                      :selected="selected"
-                    />
-                  </template>
-                </Select>
-              </div>
-              <div>
-                <label class="input-label">{{ t('admin.redeem.validityDays') }}</label>
-                <input
-                  v-model.number="generateForm.validity_days"
-                  type="number"
-                  min="1"
-                  max="365"
-                  required
-                  class="input"
+                  data-test="subscription-mode-select"
+                  v-model="generateForm.subscription_mode"
+                  :options="subscriptionModeOptions"
                 />
               </div>
+
+              <template v-if="generateForm.subscription_mode === 'plan'">
+                <div>
+                  <label class="input-label">{{ t('admin.redeem.selectPlan') }}</label>
+                  <Select
+                    data-test="subscription-plan-select"
+                    v-model="generateForm.plan_id"
+                    :options="subscriptionPlanOptions"
+                    :placeholder="t('admin.redeem.selectPlanPlaceholder')"
+                    :empty-text="t('admin.redeem.noPlansAvailable')"
+                  />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.redeem.validityDaysOverride') }}</label>
+                  <input
+                    data-test="subscription-plan-validity-days-input"
+                    v-model="generateForm.plan_validity_days"
+                    type="number"
+                    min="0"
+                    max="3650"
+                    step="1"
+                    class="input"
+                    :placeholder="t('admin.redeem.planValidityDaysPlaceholder')"
+                  />
+                </div>
+              </template>
+
+              <template v-else>
+                <div>
+                  <label class="input-label">{{ t('admin.redeem.selectGroup') }}</label>
+                  <Select
+                    data-test="subscription-group-select"
+                    v-model="generateForm.group_id"
+                    :options="subscriptionGroupOptions"
+                    :placeholder="t('admin.redeem.selectGroupPlaceholder')"
+                  >
+                    <template #selected="{ option }">
+                      <GroupBadge
+                        v-if="option"
+                        :name="(option as unknown as GroupOption).label"
+                        :platform="(option as unknown as GroupOption).platform"
+                        :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                        :rate-multiplier="(option as unknown as GroupOption).rate"
+                      />
+                      <span v-else class="text-gray-400">{{
+                        t('admin.redeem.selectGroupPlaceholder')
+                      }}</span>
+                    </template>
+                    <template #option="{ option, selected }">
+                      <GroupOptionItem
+                        :name="(option as unknown as GroupOption).label"
+                        :platform="(option as unknown as GroupOption).platform"
+                        :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                        :rate-multiplier="(option as unknown as GroupOption).rate"
+                        :description="(option as unknown as GroupOption).description"
+                        :selected="selected"
+                      />
+                    </template>
+                  </Select>
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.redeem.validityDays') }}</label>
+                  <input
+                    data-test="subscription-group-validity-days-input"
+                    v-model.number="generateForm.validity_days"
+                    type="number"
+                    required
+                    class="input"
+                  />
+                </div>
+              </template>
             </template>
             <div>
               <label class="input-label">{{ t('admin.redeem.codeExpiry') }}</label>
@@ -388,6 +433,7 @@
             <div>
               <label class="input-label">{{ t('admin.redeem.count') }}</label>
               <input
+                data-test="generate-count-input"
                 v-model.number="generateForm.count"
                 type="number"
                 min="1"
@@ -622,7 +668,8 @@ import type {
   Group,
   GroupPlatform,
   SubscriptionType,
-  BatchUpdateRedeemCodeFields
+  BatchUpdateRedeemCodeFields,
+  SubscriptionPlan
 } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -652,6 +699,7 @@ const showGenerateDialog = ref(false)
 const showResultDialog = ref(false)
 const generatedCodes = ref<RedeemCode[]>([])
 const subscriptionGroups = ref<Group[]>([])
+const subscriptionPlans = ref<SubscriptionPlan[]>([])
 
 // 订阅类型分组选项
 const subscriptionGroupOptions = computed(() => {
@@ -671,6 +719,18 @@ const batchGroupOptions = computed(() => [
   { value: null, label: t('admin.redeem.clearGroup') },
   ...subscriptionGroupOptions.value
 ])
+
+const subscriptionModeOptions = computed(() => [
+  { value: 'plan', label: t('admin.redeem.planActivationMode') },
+  { value: 'group', label: t('admin.redeem.legacyGroupMode') }
+])
+
+const subscriptionPlanOptions = computed(() =>
+  subscriptionPlans.value.map((plan) => ({
+    value: plan.id,
+    label: formatSubscriptionPlanOption(plan)
+  }))
+)
 
 const generatedCodesText = computed(() => {
   return generatedCodes.value.map((code) => code.code).join('\n')
@@ -831,11 +891,68 @@ const generateForm = reactive({
   type: 'balance' as RedeemCodeType,
   value: 10,
   count: 1,
+  subscription_mode: 'plan' as 'plan' | 'group',
+  plan_id: null as number | null,
   group_id: null as number | null,
+  plan_validity_days: '' as string | number,
   validity_days: 30,
   expiry_option: 'never' as RedeemCodeExpiryOption,
   custom_expiry_days: 7
 })
+
+const normalizePlanValidityDays = (): number | undefined | null => {
+  if (generateForm.plan_validity_days === '' || generateForm.plan_validity_days == null) {
+    return undefined
+  }
+  const days = Number(generateForm.plan_validity_days)
+  if (!Number.isInteger(days) || days < 0) {
+    return null
+  }
+  return days
+}
+
+const formatMoney = (value: number | null | undefined): string => (value ?? 0).toFixed(2)
+
+const validityUnitLabel = (unit: string | null | undefined): string => {
+  switch (unit) {
+    case 'week':
+    case 'weeks':
+      return t('payment.admin.weeks')
+    case 'month':
+    case 'months':
+      return t('payment.admin.months')
+    default:
+      return t('payment.admin.days')
+  }
+}
+
+const formatSubscriptionPlanOption = (plan: SubscriptionPlan): string => {
+  const productPrefix = plan.product_name ? `${plan.product_name} / ` : ''
+  const saleStatus = plan.for_sale ? t('admin.redeem.planForSale') : t('admin.redeem.planNotForSale')
+  return `${productPrefix}${plan.name} · $${formatMoney(plan.price)} · ${plan.validity_days} ${validityUnitLabel(plan.validity_unit)} · ${saleStatus}`
+}
+
+const getRedeemCodePlanName = (code: RedeemCode): string => {
+  if (code.plan) {
+    return code.plan.product_name
+      ? `${code.plan.product_name} / ${code.plan.name}`
+      : code.plan.name
+  }
+  return t('admin.redeem.planFallback', { id: code.plan_id })
+}
+
+const getRedeemCodePlanDuration = (code: RedeemCode): string => {
+  if (code.validity_days && code.validity_days > 0) {
+    return `(${code.validity_days} ${t('admin.redeem.days')})`
+  }
+  if (code.plan?.validity_days) {
+    return `(${t('admin.redeem.planDefaultDuration', {
+      days: code.plan.validity_days,
+      unit: validityUnitLabel(code.plan.validity_unit)
+    })})`
+  }
+  return `(${t('admin.redeem.planDefault')})`
+}
 
 // 监听类型变化，邀请码类型时自动设置 value 为 0
 watch(
@@ -845,6 +962,23 @@ watch(
       generateForm.value = 0
     } else if (generateForm.value === 0) {
       generateForm.value = 10
+    }
+
+    if (newType === 'subscription') {
+      generateForm.subscription_mode = 'plan'
+      generateForm.group_id = null
+    }
+  }
+)
+
+watch(
+  () => generateForm.subscription_mode,
+  (mode) => {
+    if (mode === 'plan') {
+      generateForm.group_id = null
+    } else {
+      generateForm.plan_id = null
+      generateForm.plan_validity_days = ''
     }
   }
 )
@@ -1018,33 +1152,59 @@ const buildBatchUpdateFields = (): BatchUpdateRedeemCodeFields | null => {
 }
 
 const handleGenerateCodes = async () => {
-  // 订阅类型必须选择分组
-  if (generateForm.type === 'subscription' && !generateForm.group_id) {
-    appStore.showError(t('admin.redeem.groupRequired'))
-    return
-  }
-
   const expiresInDays = getRedeemCodeExpiresInDays()
   if (expiresInDays === null) {
     appStore.showError(t('admin.redeem.expiryDaysRequired'))
     return
   }
 
+  let planValidityDays: number | undefined | null
+  if (generateForm.type === 'subscription' && generateForm.subscription_mode === 'plan') {
+    if (!generateForm.plan_id) {
+      appStore.showError(t('admin.redeem.planRequired'))
+      return
+    }
+    planValidityDays = normalizePlanValidityDays()
+    if (planValidityDays === null) {
+      appStore.showError(t('admin.redeem.planValidityDaysInvalid'))
+      return
+    }
+  }
+
+  if (generateForm.type === 'subscription' && generateForm.subscription_mode === 'group' && !generateForm.group_id) {
+    appStore.showError(t('admin.redeem.groupRequired'))
+    return
+  }
+
   generating.value = true
   try {
-    const result = await adminAPI.redeem.generate(
-      generateForm.count,
-      generateForm.type,
-      generateForm.value,
-      generateForm.type === 'subscription' ? generateForm.group_id : undefined,
-      generateForm.type === 'subscription' ? generateForm.validity_days : undefined,
-      expiresInDays
-    )
+    const result = generateForm.type === 'subscription' && generateForm.subscription_mode === 'plan'
+      ? await adminAPI.redeem.generate(
+        generateForm.count,
+        generateForm.type,
+        generateForm.value,
+        {
+          planId: generateForm.plan_id,
+          validityDays: planValidityDays ?? undefined,
+          expiresInDays
+        }
+      )
+      : await adminAPI.redeem.generate(
+        generateForm.count,
+        generateForm.type,
+        generateForm.value,
+        generateForm.type === 'subscription' ? generateForm.group_id : undefined,
+        generateForm.type === 'subscription' ? generateForm.validity_days : undefined,
+        expiresInDays
+      )
     showGenerateDialog.value = false
     generatedCodes.value = result
     showResultDialog.value = true
     // 重置表单
+    generateForm.subscription_mode = 'plan'
+    generateForm.plan_id = null
     generateForm.group_id = null
+    generateForm.plan_validity_days = ''
     generateForm.validity_days = 30
     generateForm.expiry_option = 'never'
     generateForm.custom_expiry_days = 7
@@ -1177,9 +1337,24 @@ const loadSubscriptionGroups = async () => {
   }
 }
 
+const loadSubscriptionPlans = async () => {
+  try {
+    const response = await adminAPI.payment.getPlans()
+    subscriptionPlans.value = (response.data || []).map((plan: Omit<SubscriptionPlan, 'features'> & { features: string | string[] }) => ({
+      ...plan,
+      features: typeof plan.features === 'string'
+        ? plan.features.split('\n').map((feature: string) => feature.trim()).filter(Boolean)
+        : (plan.features || [])
+    }))
+  } catch (error) {
+    console.error('Error loading subscription plans:', error)
+  }
+}
+
 onMounted(() => {
   loadCodes()
   loadSubscriptionGroups()
+  loadSubscriptionPlans()
 })
 
 onUnmounted(() => {

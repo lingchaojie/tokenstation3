@@ -48,20 +48,20 @@ export default {
           950: '#020617'
         },
         linear: {
-          canvas: '#010102',
+          canvas: 'rgb(var(--linear-canvas) / <alpha-value>)',
           surface: {
-            1: '#0f1011',
-            2: '#141516',
-            3: '#18191a',
-            4: '#191a1b'
+            1: 'rgb(var(--linear-surface-1) / <alpha-value>)',
+            2: 'rgb(var(--linear-surface-2) / <alpha-value>)',
+            3: 'rgb(var(--linear-surface-3) / <alpha-value>)',
+            4: 'rgb(var(--linear-surface-4) / <alpha-value>)'
           },
-          hairline: '#23252a',
-          'hairline-strong': '#34343a',
+          hairline: 'rgb(var(--linear-hairline) / <alpha-value>)',
+          'hairline-strong': 'rgb(var(--linear-hairline-strong) / <alpha-value>)',
           ink: {
-            DEFAULT: '#f7f8f8',
-            muted: '#d0d6e0',
-            subtle: '#8a8f98',
-            tertiary: '#62666d'
+            DEFAULT: 'rgb(var(--linear-ink) / <alpha-value>)',
+            muted: 'rgb(var(--linear-ink-muted) / <alpha-value>)',
+            subtle: 'rgb(var(--linear-ink-subtle) / <alpha-value>)',
+            tertiary: 'rgb(var(--linear-ink-tertiary) / <alpha-value>)'
           }
         }
       },

@@ -1254,12 +1254,12 @@ func (r *stubUserSubscriptionRepo) GetByUserIDAndGroupID(ctx context.Context, us
 	return nil, errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) GetGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
-	return nil, service.ErrSubscriptionNotFound
-}
-
 func (r *stubUserSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	return r.GetByUserIDAndGroupID(ctx, userID, groupID)
+}
+
+func (r *stubUserSubscriptionRepo) GetGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (r *stubUserSubscriptionRepo) GetActiveGenericByUserID(ctx context.Context, userID int64) (*service.UserSubscription, error) {

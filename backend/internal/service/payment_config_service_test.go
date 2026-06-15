@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
@@ -452,6 +454,331 @@ func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 
 func paymentConfigStrPtr(value string) *string {
 	return &value
+}
+
+func TestPaymentConfigServicePlanVirtualSeatRangeDerivesSeatLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	start := 4900
+	total := 5000
+	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:             "Pro monthly",
+		Description:      "Primary development",
+		Price:            799,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Seven-day quota",
+		ProductName:      "LINX2 Pro monthly",
+		ForSale:          true,
+		SortOrder:        30,
+		VirtualSeatStart: &start,
+		VirtualSeatTotal: &total,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan returned error: %v", err)
+	}
+	if created.SeatLimit == nil || *created.SeatLimit != 100 {
+		t.Fatalf("created.SeatLimit = %v, want 100", created.SeatLimit)
+	}
+	if created.VirtualSeatStart == nil || *created.VirtualSeatStart != 4900 {
+		t.Fatalf("created.VirtualSeatStart = %v, want 4900", created.VirtualSeatStart)
+	}
+	if created.VirtualSeatTotal == nil || *created.VirtualSeatTotal != 5000 {
+		t.Fatalf("created.VirtualSeatTotal = %v, want 5000", created.VirtualSeatTotal)
+	}
+
+	updatedStart := 120
+	updatedTotal := 150
+	var virtualStart OptionalInt
+	if err := virtualStart.UnmarshalJSON([]byte(strconv.Itoa(updatedStart))); err != nil {
+		t.Fatalf("decode virtual start: %v", err)
+	}
+	var virtualTotal OptionalInt
+	if err := virtualTotal.UnmarshalJSON([]byte(strconv.Itoa(updatedTotal))); err != nil {
+		t.Fatalf("decode virtual total: %v", err)
+	}
+	updated, err := svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		VirtualSeatStart: virtualStart,
+		VirtualSeatTotal: virtualTotal,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan returned error: %v", err)
+	}
+	if updated.SeatLimit == nil || *updated.SeatLimit != 30 {
+		t.Fatalf("updated.SeatLimit = %v, want 30", updated.SeatLimit)
+	}
+	if updated.VirtualSeatStart == nil || *updated.VirtualSeatStart != 120 {
+		t.Fatalf("updated.VirtualSeatStart = %v, want 120", updated.VirtualSeatStart)
+	}
+	if updated.VirtualSeatTotal == nil || *updated.VirtualSeatTotal != 150 {
+		t.Fatalf("updated.VirtualSeatTotal = %v, want 150", updated.VirtualSeatTotal)
+	}
+
+	var clearStart OptionalInt
+	if err := clearStart.UnmarshalJSON([]byte("null")); err != nil {
+		t.Fatalf("decode clear start: %v", err)
+	}
+	var clearTotal OptionalInt
+	if err := clearTotal.UnmarshalJSON([]byte("null")); err != nil {
+		t.Fatalf("decode clear total: %v", err)
+	}
+	cleared, err := svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		VirtualSeatStart: clearStart,
+		VirtualSeatTotal: clearTotal,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan clear range returned error: %v", err)
+	}
+	if cleared.SeatLimit != nil {
+		t.Fatalf("cleared.SeatLimit = %v, want nil", cleared.SeatLimit)
+	}
+	if cleared.VirtualSeatStart != nil {
+		t.Fatalf("cleared.VirtualSeatStart = %v, want nil", cleared.VirtualSeatStart)
+	}
+	if cleared.VirtualSeatTotal != nil {
+		t.Fatalf("cleared.VirtualSeatTotal = %v, want nil", cleared.VirtualSeatTotal)
+	}
+}
+
+func TestPaymentConfigServicePlanVirtualSeatRangeRejectsInvalidCreate(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	start := 5000
+	total := 4900
+	_, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:             "Invalid virtual range",
+		Description:      "invalid",
+		Price:            799,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature",
+		ProductName:      "Invalid",
+		ForSale:          true,
+		SortOrder:        40,
+		VirtualSeatStart: &start,
+		VirtualSeatTotal: &total,
+	})
+	if err == nil {
+		t.Fatal("CreatePlan with invalid virtual range returned nil error")
+	}
+	if !strings.Contains(err.Error(), ">= start") {
+		t.Fatalf("CreatePlan error = %q, want message containing >= start", err.Error())
+	}
+}
+
+func TestPaymentConfigServicePlanVirtualSeatRangeRejectsConflictingSeatLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	start := 4900
+	total := 5000
+	seatLimit := 99
+	_, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:             "Conflicting virtual range",
+		Description:      "invalid",
+		Price:            799,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature",
+		ProductName:      "Invalid",
+		ForSale:          true,
+		SortOrder:        40,
+		SeatLimit:        &seatLimit,
+		VirtualSeatStart: &start,
+		VirtualSeatTotal: &total,
+	})
+	if err == nil {
+		t.Fatal("CreatePlan with conflicting seat limit returned nil error")
+	}
+	if !strings.Contains(err.Error(), "seat limit") {
+		t.Fatalf("CreatePlan error = %q, want message containing seat limit", err.Error())
+	}
+
+	validSeatLimit := 100
+	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:             "Valid virtual range",
+		Description:      "valid",
+		Price:            799,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature",
+		ProductName:      "Valid",
+		ForSale:          true,
+		SortOrder:        41,
+		SeatLimit:        &validSeatLimit,
+		VirtualSeatStart: &start,
+		VirtualSeatTotal: &total,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan with matching seat limit returned error: %v", err)
+	}
+
+	var optionalLimit OptionalInt
+	if err := optionalLimit.UnmarshalJSON([]byte(strconv.Itoa(seatLimit))); err != nil {
+		t.Fatalf("decode conflicting seat limit: %v", err)
+	}
+	var virtualStart OptionalInt
+	if err := virtualStart.UnmarshalJSON([]byte(strconv.Itoa(start))); err != nil {
+		t.Fatalf("decode virtual start: %v", err)
+	}
+	var virtualTotal OptionalInt
+	if err := virtualTotal.UnmarshalJSON([]byte(strconv.Itoa(total))); err != nil {
+		t.Fatalf("decode virtual total: %v", err)
+	}
+
+	_, err = svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		SeatLimit:        optionalLimit,
+		VirtualSeatStart: virtualStart,
+		VirtualSeatTotal: virtualTotal,
+	})
+	if err == nil {
+		t.Fatal("UpdatePlan with conflicting seat limit returned nil error")
+	}
+	if !strings.Contains(err.Error(), "seat limit") {
+		t.Fatalf("UpdatePlan error = %q, want message containing seat limit", err.Error())
+	}
+}
+
+func TestPaymentConfigServicePlanVirtualSeatRangeDerivesLegacySeatLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	seatLimit := 42
+	created, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:         "Legacy seat limit",
+		Description:  "Legacy direct seat_limit path",
+		Price:        199,
+		ValidityDays: 30,
+		ValidityUnit: "day",
+		Features:     "Feature",
+		ProductName:  "Legacy",
+		ForSale:      true,
+		SortOrder:    41,
+		SeatLimit:    &seatLimit,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan returned error: %v", err)
+	}
+	if created.SeatLimit == nil || *created.SeatLimit != 42 {
+		t.Fatalf("created.SeatLimit = %v, want 42", created.SeatLimit)
+	}
+	if created.VirtualSeatStart == nil || *created.VirtualSeatStart != 0 {
+		t.Fatalf("created.VirtualSeatStart = %v, want 0", created.VirtualSeatStart)
+	}
+	if created.VirtualSeatTotal == nil || *created.VirtualSeatTotal != 42 {
+		t.Fatalf("created.VirtualSeatTotal = %v, want 42", created.VirtualSeatTotal)
+	}
+
+	updatedLimit := 55
+	var optionalLimit OptionalInt
+	if err := optionalLimit.UnmarshalJSON([]byte(strconv.Itoa(updatedLimit))); err != nil {
+		t.Fatalf("decode seat limit: %v", err)
+	}
+	updated, err := svc.UpdatePlan(ctx, int64(created.ID), UpdatePlanRequest{
+		SeatLimit: optionalLimit,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan returned error: %v", err)
+	}
+	if updated.SeatLimit == nil || *updated.SeatLimit != 55 {
+		t.Fatalf("updated.SeatLimit = %v, want 55", updated.SeatLimit)
+	}
+	if updated.VirtualSeatStart == nil || *updated.VirtualSeatStart != 0 {
+		t.Fatalf("updated.VirtualSeatStart = %v, want 0", updated.VirtualSeatStart)
+	}
+	if updated.VirtualSeatTotal == nil || *updated.VirtualSeatTotal != 55 {
+		t.Fatalf("updated.VirtualSeatTotal = %v, want 55", updated.VirtualSeatTotal)
+	}
+}
+
+func TestPaymentConfigServicePublicPlansForSaleCachesAndInvalidates(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := &PaymentConfigService{entClient: client}
+
+	seatLimit := 100
+	start := 4900
+	initialTotal := 5000
+	plan, err := svc.CreatePlan(ctx, CreatePlanRequest{
+		Name:             "Pro monthly",
+		Description:      "Primary development",
+		Price:            799,
+		ValidityDays:     30,
+		ValidityUnit:     "day",
+		Features:         "Feature one\nFeature two",
+		ProductName:      "LINX2 Pro monthly",
+		ForSale:          true,
+		SortOrder:        30,
+		SeatLimit:        &seatLimit,
+		VirtualSeatStart: &start,
+		VirtualSeatTotal: &initialTotal,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlan returned error: %v", err)
+	}
+	user := client.User.Create().SetEmail("seat-cache@example.com").SetPasswordHash("hash").SaveX(ctx)
+	client.UserSubscription.Create().
+		SetUserID(user.ID).
+		SetPlanID(plan.ID).
+		SetStartsAt(time.Now().Add(-time.Hour)).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetStatus(SubscriptionStatusActive).
+		SaveX(ctx)
+
+	first, err := svc.PublicPlansForSale(ctx)
+	if err != nil {
+		t.Fatalf("PublicPlansForSale returned error: %v", err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("PublicPlansForSale len = %d, want 1", len(first))
+	}
+	if first[0].SeatUsed != 1 {
+		t.Fatalf("first SeatUsed = %d, want 1", first[0].SeatUsed)
+	}
+	if first[0].VirtualSeatTotal == nil || *first[0].VirtualSeatTotal != 5000 {
+		t.Fatalf("first VirtualSeatTotal = %v, want 5000", first[0].VirtualSeatTotal)
+	}
+	first[0].Features[0] = "mutated"
+	if first[0].SeatLimit != nil {
+		*first[0].SeatLimit = 1
+	}
+
+	updatedTotal := 5001
+	if _, err := client.SubscriptionPlan.UpdateOneID(plan.ID).SetSeatLimit(101).SetVirtualSeatTotal(updatedTotal).Save(ctx); err != nil {
+		t.Fatalf("direct update plan: %v", err)
+	}
+
+	cached, err := svc.PublicPlansForSale(ctx)
+	if err != nil {
+		t.Fatalf("PublicPlansForSale cached returned error: %v", err)
+	}
+	if cached[0].Features[0] != "Feature one" {
+		t.Fatalf("cached features were mutated: %v", cached[0].Features)
+	}
+	if cached[0].SeatLimit == nil || *cached[0].SeatLimit != 100 {
+		t.Fatalf("cached SeatLimit = %v, want original 100", cached[0].SeatLimit)
+	}
+	if cached[0].VirtualSeatTotal == nil || *cached[0].VirtualSeatTotal != 5000 {
+		t.Fatalf("cached VirtualSeatTotal = %v, want cached 5000", cached[0].VirtualSeatTotal)
+	}
+
+	svc.InvalidatePublicPlansCache()
+	reloaded, err := svc.PublicPlansForSale(ctx)
+	if err != nil {
+		t.Fatalf("PublicPlansForSale after invalidate returned error: %v", err)
+	}
+	if reloaded[0].SeatLimit == nil || *reloaded[0].SeatLimit != 101 {
+		t.Fatalf("reloaded SeatLimit = %v, want 101", reloaded[0].SeatLimit)
+	}
+	if reloaded[0].VirtualSeatTotal == nil || *reloaded[0].VirtualSeatTotal != 5001 {
+		t.Fatalf("reloaded VirtualSeatTotal = %v, want 5001", reloaded[0].VirtualSeatTotal)
+	}
 }
 
 func TestPaymentConfigServicePlanSevenDayQuota(t *testing.T) {

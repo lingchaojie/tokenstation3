@@ -14,7 +14,7 @@
   <!-- Default Home Page -->
   <div
     v-else
-    class="dark linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-100"
+    class="linear-landing min-h-screen bg-linear-canvas text-linear-ink selection:bg-primary-500/30 selection:text-primary-900 dark:selection:text-primary-100"
   >
     <!-- Announcement bar -->
     <div
@@ -262,10 +262,17 @@
               v-for="plan in subscriptionPlans"
               :key="plan.name"
               data-testid="pricing-plan-card"
-              class="linx-panel group flex h-full min-w-0 flex-col p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
+              class="linx-panel group relative flex h-full min-w-0 flex-col overflow-hidden p-6 text-left transition-colors hover:border-primary-500/45 hover:bg-linear-surface-2"
               :class="plan.featured ? 'border-primary-500/45 bg-primary-500/[0.045]' : ''"
             >
-              <div class="flex items-center justify-between gap-3">
+              <span
+                v-if="plan.limitedSeatLabel"
+                data-testid="homepage-limited-seat-ribbon"
+                class="pointer-events-none absolute right-[-54px] top-7 z-20 w-[220px] rotate-45 whitespace-nowrap bg-gradient-to-r from-orange-950 via-orange-800 to-orange-700 py-1.5 text-center text-[11px] font-black tracking-[-0.01em] text-white drop-shadow-sm shadow-[0_12px_30px_rgba(249,115,22,0.35)] ring-1 ring-white/20 [text-shadow:0_1px_2px_rgba(0,0,0,0.45)] dark:from-orange-950 dark:via-orange-800 dark:to-orange-700"
+              >
+                {{ plan.limitedSeatLabel }}
+              </span>
+              <div :class="['flex items-center justify-between gap-3', plan.limitedSeatLabel ? 'min-h-[96px] pt-14' : '']">
                 <h3 class="text-xl font-semibold tracking-[-0.035em] text-linear-ink">{{ plan.name }}</h3>
                 <span class="font-mono-brand ui-accent-badge rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wider">
                   {{ plan.badge }}
@@ -444,8 +451,10 @@ import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'
-import { getMonthlyPlanCards } from '@/utils/monthlyPlans'
+import { getMonthlyPlanCards, getMonthlyPlanDisplayFromPlan, monthlyPlanKeyFromName } from '@/utils/monthlyPlans'
 import { getPublicModelPricing, type PublicModelPricingProvider } from '@/api/settings'
+import { paymentAPI } from '@/api/payment'
+import type { SubscriptionPlan } from '@/types/payment'
 
 const { t, locale } = useI18n()
 
@@ -490,6 +499,7 @@ const routeCards = [
 
 const visibleModelCount = 4
 const modelPricingGroups = ref<PublicModelPricingProvider[]>([])
+const publicSubscriptionPlans = ref<SubscriptionPlan[]>([])
 const expandedModelProviders = ref<Record<string, boolean>>({})
 
 function formatModelPrice(value: number): string {
@@ -525,6 +535,15 @@ async function loadModelPricing() {
   } catch (error) {
     console.error('Failed to load public model pricing:', error)
     modelPricingGroups.value = []
+  }
+}
+
+async function loadPublicSubscriptionPlans() {
+  try {
+    publicSubscriptionPlans.value = await paymentAPI.getPublicPlans()
+  } catch (error) {
+    console.error('Failed to load public subscription plans:', error)
+    publicSubscriptionPlans.value = []
   }
 }
 
@@ -666,16 +685,42 @@ const copies = {
 
 const localeCode = computed(() => (String(locale.value).startsWith('zh') ? 'zh' : 'en'))
 const copy = computed(() => copies[localeCode.value])
-const subscriptionPlans = computed(() => getMonthlyPlanCards(localeCode.value).map(plan => ({
-  name: plan.name,
-  badge: plan.badge,
-  price: plan.priceLabel,
-  quota: plan.quotaLabel,
-  monthlyTotal: plan.monthlyTotalLabel,
-  description: plan.description,
-  benefits: plan.benefits,
-  featured: plan.featured,
-})))
+
+const publicPlanByMonthlyKey = computed(() => {
+  const byKey: Partial<Record<string, SubscriptionPlan>> = {}
+  for (const plan of publicSubscriptionPlans.value) {
+    const key = monthlyPlanKeyFromName(plan.name)
+    if (key && !byKey[key]) {
+      byKey[key] = plan
+    }
+  }
+  return byKey
+})
+
+function limitedSeatLabelForPlan(plan: SubscriptionPlan | undefined): string {
+  if (!plan || plan.seat_limit === null || plan.seat_limit === undefined) return ''
+  const seatUsed = plan.seat_used || 0
+  if (plan.virtual_seat_start !== null && plan.virtual_seat_start !== undefined && plan.virtual_seat_total !== null && plan.virtual_seat_total !== undefined) {
+    return `限时名额：${plan.virtual_seat_start + seatUsed}/${plan.virtual_seat_total}`
+  }
+  return `限时名额：${seatUsed}/${plan.seat_limit}`
+}
+
+const subscriptionPlans = computed(() => getMonthlyPlanCards(localeCode.value).map(plan => {
+  const publicPlan = publicPlanByMonthlyKey.value[plan.key]
+  const display = publicPlan ? getMonthlyPlanDisplayFromPlan(publicPlan, localeCode.value) ?? plan : plan
+  return {
+    name: display.name,
+    badge: display.badge,
+    price: display.priceLabel,
+    quota: display.quotaLabel,
+    monthlyTotal: display.monthlyTotalLabel,
+    description: display.description,
+    benefits: display.benefits,
+    featured: display.featured,
+    limitedSeatLabel: limitedSeatLabelForPlan(publicPlan),
+  }
+}))
 
 
 // Theme
@@ -726,6 +771,7 @@ onMounted(() => {
     appStore.fetchPublicSettings()
   }
   loadModelPricing()
+  loadPublicSubscriptionPlans()
 })
 </script>
 

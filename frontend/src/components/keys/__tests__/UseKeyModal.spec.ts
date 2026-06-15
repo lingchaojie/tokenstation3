@@ -17,6 +17,154 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('renders Anthropic Python SDK client config', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'anthropic'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const sdkTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.anthropicPythonSdk')
+    )
+
+    expect(sdkTab).toBeDefined()
+    await sdkTab!.trigger('click')
+    await nextTick()
+
+    const codeBlock = wrapper.find('pre code')
+    expect(codeBlock.exists()).toBe(true)
+    expect(codeBlock.text()).toContain('from anthropic import Anthropic')
+    expect(codeBlock.text()).toContain('client = Anthropic(')
+    expect(codeBlock.text()).toContain('api_key="sk-test"')
+    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+  })
+
+  it('renders Python SDK guidance for SDK tabs', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const sdkTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.openaiPythonSdk')
+    )
+
+    expect(sdkTab).toBeDefined()
+    await sdkTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.pythonSdk.description')
+    expect(wrapper.text()).toContain('keys.useKeyModal.pythonSdk.note')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.openai.description')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.openai.note')
+  })
+
+  it('renders OpenAI Python SDK responses config', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const sdkTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.openaiPythonSdk')
+    )
+
+    expect(sdkTab).toBeDefined()
+    await sdkTab!.trigger('click')
+    await nextTick()
+
+    const codeBlock = wrapper.find('pre code')
+    expect(codeBlock.exists()).toBe(true)
+    expect(codeBlock.text()).toContain('from openai import OpenAI')
+    expect(codeBlock.text()).toContain('client = OpenAI(')
+    expect(codeBlock.text()).toContain('api_key="sk-test"')
+    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+    expect(codeBlock.text()).toContain('response = client.responses.create(')
+    expect(codeBlock.text()).toContain('model="gpt-5.5"')
+    expect(codeBlock.text()).toContain('print(response.output_text)')
+  })
+
+  it('renders OpenAI Imagen 2 Python SDK image generation config', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const imagenTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk')
+    )
+
+    expect(imagenTab).toBeDefined()
+    await imagenTab!.trigger('click')
+    await nextTick()
+
+    const codeBlock = wrapper.find('pre code')
+    expect(codeBlock.exists()).toBe(true)
+    expect(codeBlock.text()).toContain('from openai import OpenAI')
+    expect(codeBlock.text()).toContain('client = OpenAI(')
+    expect(codeBlock.text()).toContain('api_key="sk-test"')
+    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+    expect(codeBlock.text()).toContain('image = client.images.generate(')
+    expect(codeBlock.text()).toContain('model="imagen-2"')
+    expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
+  })
+
   it('renders GPT-5.5 and goals feature in OpenAI Codex config', () => {
     const wrapper = mount(UseKeyModal, {
       props: {

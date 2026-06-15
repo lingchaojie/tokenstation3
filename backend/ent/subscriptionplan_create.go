@@ -188,6 +188,34 @@ func (_c *SubscriptionPlanCreate) SetNillableSeatLimit(v *int) *SubscriptionPlan
 	return _c
 }
 
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (_c *SubscriptionPlanCreate) SetVirtualSeatStart(v int) *SubscriptionPlanCreate {
+	_c.mutation.SetVirtualSeatStart(v)
+	return _c
+}
+
+// SetNillableVirtualSeatStart sets the "virtual_seat_start" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableVirtualSeatStart(v *int) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetVirtualSeatStart(*v)
+	}
+	return _c
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (_c *SubscriptionPlanCreate) SetVirtualSeatTotal(v int) *SubscriptionPlanCreate {
+	_c.mutation.SetVirtualSeatTotal(v)
+	return _c
+}
+
+// SetNillableVirtualSeatTotal sets the "virtual_seat_total" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableVirtualSeatTotal(v *int) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetVirtualSeatTotal(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *SubscriptionPlanCreate) SetCreatedAt(v time.Time) *SubscriptionPlanCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -338,6 +366,16 @@ func (_c *SubscriptionPlanCreate) check() error {
 			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.VirtualSeatStart(); ok {
+		if err := subscriptionplan.VirtualSeatStartValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_start", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_start": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.VirtualSeatTotal(); ok {
+		if err := subscriptionplan.VirtualSeatTotalValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_total", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_total": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "SubscriptionPlan.created_at"`)}
 	}
@@ -422,6 +460,14 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 	if value, ok := _c.mutation.SeatLimit(); ok {
 		_spec.SetField(subscriptionplan.FieldSeatLimit, field.TypeInt, value)
 		_node.SeatLimit = &value
+	}
+	if value, ok := _c.mutation.VirtualSeatStart(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt, value)
+		_node.VirtualSeatStart = &value
+	}
+	if value, ok := _c.mutation.VirtualSeatTotal(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt, value)
+		_node.VirtualSeatTotal = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldCreatedAt, field.TypeTime, value)
@@ -702,6 +748,54 @@ func (u *SubscriptionPlanUpsert) AddSeatLimit(v int) *SubscriptionPlanUpsert {
 // ClearSeatLimit clears the value of the "seat_limit" field.
 func (u *SubscriptionPlanUpsert) ClearSeatLimit() *SubscriptionPlanUpsert {
 	u.SetNull(subscriptionplan.FieldSeatLimit)
+	return u
+}
+
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsert) SetVirtualSeatStart(v int) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldVirtualSeatStart, v)
+	return u
+}
+
+// UpdateVirtualSeatStart sets the "virtual_seat_start" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateVirtualSeatStart() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldVirtualSeatStart)
+	return u
+}
+
+// AddVirtualSeatStart adds v to the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsert) AddVirtualSeatStart(v int) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldVirtualSeatStart, v)
+	return u
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsert) ClearVirtualSeatStart() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldVirtualSeatStart)
+	return u
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsert) SetVirtualSeatTotal(v int) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldVirtualSeatTotal, v)
+	return u
+}
+
+// UpdateVirtualSeatTotal sets the "virtual_seat_total" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateVirtualSeatTotal() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldVirtualSeatTotal)
+	return u
+}
+
+// AddVirtualSeatTotal adds v to the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsert) AddVirtualSeatTotal(v int) *SubscriptionPlanUpsert {
+	u.Add(subscriptionplan.FieldVirtualSeatTotal, v)
+	return u
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsert) ClearVirtualSeatTotal() *SubscriptionPlanUpsert {
+	u.SetNull(subscriptionplan.FieldVirtualSeatTotal)
 	return u
 }
 
@@ -1018,6 +1112,62 @@ func (u *SubscriptionPlanUpsertOne) UpdateSeatLimit() *SubscriptionPlanUpsertOne
 func (u *SubscriptionPlanUpsertOne) ClearSeatLimit() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearSeatLimit()
+	})
+}
+
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertOne) SetVirtualSeatStart(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetVirtualSeatStart(v)
+	})
+}
+
+// AddVirtualSeatStart adds v to the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertOne) AddVirtualSeatStart(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddVirtualSeatStart(v)
+	})
+}
+
+// UpdateVirtualSeatStart sets the "virtual_seat_start" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateVirtualSeatStart() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateVirtualSeatStart()
+	})
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertOne) ClearVirtualSeatStart() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearVirtualSeatStart()
+	})
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertOne) SetVirtualSeatTotal(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetVirtualSeatTotal(v)
+	})
+}
+
+// AddVirtualSeatTotal adds v to the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertOne) AddVirtualSeatTotal(v int) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddVirtualSeatTotal(v)
+	})
+}
+
+// UpdateVirtualSeatTotal sets the "virtual_seat_total" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateVirtualSeatTotal() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateVirtualSeatTotal()
+	})
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertOne) ClearVirtualSeatTotal() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearVirtualSeatTotal()
 	})
 }
 
@@ -1502,6 +1652,62 @@ func (u *SubscriptionPlanUpsertBulk) UpdateSeatLimit() *SubscriptionPlanUpsertBu
 func (u *SubscriptionPlanUpsertBulk) ClearSeatLimit() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearSeatLimit()
+	})
+}
+
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertBulk) SetVirtualSeatStart(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetVirtualSeatStart(v)
+	})
+}
+
+// AddVirtualSeatStart adds v to the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertBulk) AddVirtualSeatStart(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddVirtualSeatStart(v)
+	})
+}
+
+// UpdateVirtualSeatStart sets the "virtual_seat_start" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateVirtualSeatStart() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateVirtualSeatStart()
+	})
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (u *SubscriptionPlanUpsertBulk) ClearVirtualSeatStart() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearVirtualSeatStart()
+	})
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertBulk) SetVirtualSeatTotal(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetVirtualSeatTotal(v)
+	})
+}
+
+// AddVirtualSeatTotal adds v to the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertBulk) AddVirtualSeatTotal(v int) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.AddVirtualSeatTotal(v)
+	})
+}
+
+// UpdateVirtualSeatTotal sets the "virtual_seat_total" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateVirtualSeatTotal() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateVirtualSeatTotal()
+	})
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (u *SubscriptionPlanUpsertBulk) ClearVirtualSeatTotal() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.ClearVirtualSeatTotal()
 	})
 }
 

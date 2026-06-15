@@ -67,6 +67,14 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			NonNegative(),
+		field.Int("virtual_seat_start").
+			Optional().
+			Nillable().
+			NonNegative(),
+		field.Int("virtual_seat_total").
+			Optional().
+			Nillable().
+			NonNegative(),
 		field.Time("created_at").
 			Immutable().
 			Default(time.Now).
@@ -76,6 +84,10 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			UpdateDefault(time.Now).
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 	}
+}
+
+func (SubscriptionPlan) Edges() []ent.Edge {
+	return nil
 }
 
 func (SubscriptionPlan) Indexes() []ent.Index {

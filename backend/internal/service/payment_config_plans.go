@@ -10,6 +10,74 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+func deriveSeatLimitFromVirtualRange(start, total *int) (*int, error) {
+	if start == nil && total == nil {
+		return nil, nil
+	}
+	if start == nil || total == nil {
+		return nil, infraerrors.BadRequest("PLAN_VIRTUAL_SEAT_RANGE_INCOMPLETE", "virtual seat start and total must be set together")
+	}
+	if *start < 0 || *total < 0 {
+		return nil, infraerrors.BadRequest("PLAN_VIRTUAL_SEAT_RANGE_INVALID", "virtual seat values must be >= 0")
+	}
+	if *total < *start {
+		return nil, infraerrors.BadRequest("PLAN_VIRTUAL_SEAT_RANGE_INVALID", "virtual seat total must be >= start")
+	}
+	limit := *total - *start
+	return &limit, nil
+}
+
+func deriveSeatLimitFromOptionalVirtualRange(start, total OptionalInt) (*int, bool, error) {
+	if !start.Set && !total.Set {
+		return nil, false, nil
+	}
+	if start.Set != total.Set {
+		return nil, true, infraerrors.BadRequest("PLAN_VIRTUAL_SEAT_RANGE_INCOMPLETE", "virtual seat start and total must be set together")
+	}
+	if start.Value == nil && total.Value == nil {
+		return nil, true, nil
+	}
+	if start.Value == nil || total.Value == nil {
+		return nil, true, infraerrors.BadRequest("PLAN_VIRTUAL_SEAT_RANGE_INCOMPLETE", "virtual seat start and total must be set together")
+	}
+	limit, err := deriveSeatLimitFromVirtualRange(start.Value, total.Value)
+	return limit, true, err
+}
+
+func virtualSeatRangeFromLimit(limit *int) (*int, *int) {
+	if limit == nil {
+		return nil, nil
+	}
+	start := 0
+	total := *limit
+	return &start, &total
+}
+
+func ensureSeatLimitMatchesVirtualRange(seatLimit, derivedLimit *int) error {
+	if seatLimit == nil && derivedLimit == nil {
+		return nil
+	}
+	if seatLimit == nil || derivedLimit == nil || *seatLimit != *derivedLimit {
+		return infraerrors.BadRequest("PLAN_SEAT_LIMIT_CONFLICT", "seat limit must match virtual seat total minus start")
+	}
+	return nil
+}
+
+func normalizeCreatePlanSeatRange(seatLimit, virtualStart, virtualTotal *int) (*int, *int, *int, error) {
+	if virtualStart != nil || virtualTotal != nil {
+		derivedLimit, err := deriveSeatLimitFromVirtualRange(virtualStart, virtualTotal)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := ensureSeatLimitMatchesVirtualRange(seatLimit, derivedLimit); seatLimit != nil && err != nil {
+			return nil, nil, nil, err
+		}
+		return derivedLimit, virtualStart, virtualTotal, nil
+	}
+	start, total := virtualSeatRangeFromLimit(seatLimit)
+	return seatLimit, start, total, nil
+}
+
 // validatePlanRequired checks that all required fields for a plan are provided.
 func validatePlanRequired(name string, price float64, validityDays int, validityUnit string, originalPrice *float64, seatLimit *int) error {
 	if strings.TrimSpace(name) == "" {
@@ -73,7 +141,11 @@ func (s *PaymentConfigService) ListPlansForSale(ctx context.Context) ([]*dbent.S
 }
 
 func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanRequest) (*dbent.SubscriptionPlan, error) {
-	if err := validatePlanRequired(req.Name, req.Price, req.ValidityDays, req.ValidityUnit, req.OriginalPrice, req.SeatLimit); err != nil {
+	seatLimit, virtualStart, virtualTotal, err := normalizeCreatePlanSeatRange(req.SeatLimit, req.VirtualSeatStart, req.VirtualSeatTotal)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePlanRequired(req.Name, req.Price, req.ValidityDays, req.ValidityUnit, req.OriginalPrice, seatLimit); err != nil {
 		return nil, err
 	}
 	if req.SevenDayQuotaUSD != nil && *req.SevenDayQuotaUSD < 0 {
@@ -90,10 +162,17 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	if req.SevenDayQuotaUSD != nil {
 		b.SetSevenDayQuotaUsd(*req.SevenDayQuotaUSD)
 	}
-	if req.SeatLimit != nil {
-		b.SetSeatLimit(*req.SeatLimit)
+	if seatLimit != nil {
+		b.SetSeatLimit(*seatLimit)
+		b.SetVirtualSeatStart(*virtualStart)
+		b.SetVirtualSeatTotal(*virtualTotal)
 	}
-	return b.Save(ctx)
+	plan, err := b.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.InvalidatePublicPlansCache()
+	return plan, nil
 }
 
 // UpdatePlan updates a subscription plan by ID (patch semantics).
@@ -139,14 +218,52 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 	if req.SortOrder != nil {
 		u.SetSortOrder(*req.SortOrder)
 	}
+	if err := applyPlanSeatRangeUpdate(u, req); err != nil {
+		return nil, err
+	}
+	plan, err := u.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.InvalidatePublicPlansCache()
+	return plan, nil
+}
+
+func applyPlanSeatRangeUpdate(u *dbent.SubscriptionPlanUpdateOne, req UpdatePlanRequest) error {
+	seatLimit, virtualRangeSet, err := deriveSeatLimitFromOptionalVirtualRange(req.VirtualSeatStart, req.VirtualSeatTotal)
+	if err != nil {
+		return err
+	}
+	if virtualRangeSet {
+		if req.SeatLimit.Set {
+			if err := ensureSeatLimitMatchesVirtualRange(req.SeatLimit.Value, seatLimit); err != nil {
+				return err
+			}
+		}
+		if seatLimit == nil {
+			u.ClearSeatLimit()
+			u.ClearVirtualSeatStart()
+			u.ClearVirtualSeatTotal()
+			return nil
+		}
+		u.SetSeatLimit(*seatLimit)
+		u.SetVirtualSeatStart(*req.VirtualSeatStart.Value)
+		u.SetVirtualSeatTotal(*req.VirtualSeatTotal.Value)
+		return nil
+	}
 	if req.SeatLimit.Set {
 		if req.SeatLimit.Value == nil {
 			u.ClearSeatLimit()
-		} else {
-			u.SetSeatLimit(*req.SeatLimit.Value)
+			u.ClearVirtualSeatStart()
+			u.ClearVirtualSeatTotal()
+			return nil
 		}
+		start, total := virtualSeatRangeFromLimit(req.SeatLimit.Value)
+		u.SetSeatLimit(*req.SeatLimit.Value)
+		u.SetVirtualSeatStart(*start)
+		u.SetVirtualSeatTotal(*total)
 	}
-	return u.Save(ctx)
+	return nil
 }
 
 func (s *PaymentConfigService) DeletePlan(ctx context.Context, id int64) error {
@@ -158,7 +275,11 @@ func (s *PaymentConfigService) DeletePlan(ctx context.Context, id int64) error {
 		return infraerrors.Conflict("PENDING_ORDERS",
 			fmt.Sprintf("this plan has %d in-progress orders and cannot be deleted — wait for orders to complete first", count))
 	}
-	return s.entClient.SubscriptionPlan.DeleteOneID(id).Exec(ctx)
+	if err := s.entClient.SubscriptionPlan.DeleteOneID(id).Exec(ctx); err != nil {
+		return err
+	}
+	s.InvalidatePublicPlansCache()
+	return nil
 }
 
 // GetPlan returns a subscription plan by ID.

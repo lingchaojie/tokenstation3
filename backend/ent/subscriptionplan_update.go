@@ -283,6 +283,60 @@ func (_u *SubscriptionPlanUpdate) ClearSeatLimit() *SubscriptionPlanUpdate {
 	return _u
 }
 
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdate) SetVirtualSeatStart(v int) *SubscriptionPlanUpdate {
+	_u.mutation.ResetVirtualSeatStart()
+	_u.mutation.SetVirtualSeatStart(v)
+	return _u
+}
+
+// SetNillableVirtualSeatStart sets the "virtual_seat_start" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdate) SetNillableVirtualSeatStart(v *int) *SubscriptionPlanUpdate {
+	if v != nil {
+		_u.SetVirtualSeatStart(*v)
+	}
+	return _u
+}
+
+// AddVirtualSeatStart adds value to the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdate) AddVirtualSeatStart(v int) *SubscriptionPlanUpdate {
+	_u.mutation.AddVirtualSeatStart(v)
+	return _u
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdate) ClearVirtualSeatStart() *SubscriptionPlanUpdate {
+	_u.mutation.ClearVirtualSeatStart()
+	return _u
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdate) SetVirtualSeatTotal(v int) *SubscriptionPlanUpdate {
+	_u.mutation.ResetVirtualSeatTotal()
+	_u.mutation.SetVirtualSeatTotal(v)
+	return _u
+}
+
+// SetNillableVirtualSeatTotal sets the "virtual_seat_total" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdate) SetNillableVirtualSeatTotal(v *int) *SubscriptionPlanUpdate {
+	if v != nil {
+		_u.SetVirtualSeatTotal(*v)
+	}
+	return _u
+}
+
+// AddVirtualSeatTotal adds value to the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdate) AddVirtualSeatTotal(v int) *SubscriptionPlanUpdate {
+	_u.mutation.AddVirtualSeatTotal(v)
+	return _u
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdate) ClearVirtualSeatTotal() *SubscriptionPlanUpdate {
+	_u.mutation.ClearVirtualSeatTotal()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *SubscriptionPlanUpdate) SetUpdatedAt(v time.Time) *SubscriptionPlanUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -350,6 +404,16 @@ func (_u *SubscriptionPlanUpdate) check() error {
 	if v, ok := _u.mutation.SeatLimit(); ok {
 		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
 			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VirtualSeatStart(); ok {
+		if err := subscriptionplan.VirtualSeatStartValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_start", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_start": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VirtualSeatTotal(); ok {
+		if err := subscriptionplan.VirtualSeatTotalValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_total", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_total": %w`, err)}
 		}
 	}
 	return nil
@@ -438,6 +502,24 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if _u.mutation.SeatLimitCleared() {
 		_spec.ClearField(subscriptionplan.FieldSeatLimit, field.TypeInt)
+	}
+	if value, ok := _u.mutation.VirtualSeatStart(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVirtualSeatStart(); ok {
+		_spec.AddField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt, value)
+	}
+	if _u.mutation.VirtualSeatStartCleared() {
+		_spec.ClearField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt)
+	}
+	if value, ok := _u.mutation.VirtualSeatTotal(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVirtualSeatTotal(); ok {
+		_spec.AddField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt, value)
+	}
+	if _u.mutation.VirtualSeatTotalCleared() {
+		_spec.ClearField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldUpdatedAt, field.TypeTime, value)
@@ -717,6 +799,60 @@ func (_u *SubscriptionPlanUpdateOne) ClearSeatLimit() *SubscriptionPlanUpdateOne
 	return _u
 }
 
+// SetVirtualSeatStart sets the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdateOne) SetVirtualSeatStart(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.ResetVirtualSeatStart()
+	_u.mutation.SetVirtualSeatStart(v)
+	return _u
+}
+
+// SetNillableVirtualSeatStart sets the "virtual_seat_start" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdateOne) SetNillableVirtualSeatStart(v *int) *SubscriptionPlanUpdateOne {
+	if v != nil {
+		_u.SetVirtualSeatStart(*v)
+	}
+	return _u
+}
+
+// AddVirtualSeatStart adds value to the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdateOne) AddVirtualSeatStart(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.AddVirtualSeatStart(v)
+	return _u
+}
+
+// ClearVirtualSeatStart clears the value of the "virtual_seat_start" field.
+func (_u *SubscriptionPlanUpdateOne) ClearVirtualSeatStart() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearVirtualSeatStart()
+	return _u
+}
+
+// SetVirtualSeatTotal sets the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdateOne) SetVirtualSeatTotal(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.ResetVirtualSeatTotal()
+	_u.mutation.SetVirtualSeatTotal(v)
+	return _u
+}
+
+// SetNillableVirtualSeatTotal sets the "virtual_seat_total" field if the given value is not nil.
+func (_u *SubscriptionPlanUpdateOne) SetNillableVirtualSeatTotal(v *int) *SubscriptionPlanUpdateOne {
+	if v != nil {
+		_u.SetVirtualSeatTotal(*v)
+	}
+	return _u
+}
+
+// AddVirtualSeatTotal adds value to the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdateOne) AddVirtualSeatTotal(v int) *SubscriptionPlanUpdateOne {
+	_u.mutation.AddVirtualSeatTotal(v)
+	return _u
+}
+
+// ClearVirtualSeatTotal clears the value of the "virtual_seat_total" field.
+func (_u *SubscriptionPlanUpdateOne) ClearVirtualSeatTotal() *SubscriptionPlanUpdateOne {
+	_u.mutation.ClearVirtualSeatTotal()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *SubscriptionPlanUpdateOne) SetUpdatedAt(v time.Time) *SubscriptionPlanUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -797,6 +933,16 @@ func (_u *SubscriptionPlanUpdateOne) check() error {
 	if v, ok := _u.mutation.SeatLimit(); ok {
 		if err := subscriptionplan.SeatLimitValidator(v); err != nil {
 			return &ValidationError{Name: "seat_limit", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.seat_limit": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VirtualSeatStart(); ok {
+		if err := subscriptionplan.VirtualSeatStartValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_start", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_start": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.VirtualSeatTotal(); ok {
+		if err := subscriptionplan.VirtualSeatTotalValidator(v); err != nil {
+			return &ValidationError{Name: "virtual_seat_total", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.virtual_seat_total": %w`, err)}
 		}
 	}
 	return nil
@@ -902,6 +1048,24 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	}
 	if _u.mutation.SeatLimitCleared() {
 		_spec.ClearField(subscriptionplan.FieldSeatLimit, field.TypeInt)
+	}
+	if value, ok := _u.mutation.VirtualSeatStart(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVirtualSeatStart(); ok {
+		_spec.AddField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt, value)
+	}
+	if _u.mutation.VirtualSeatStartCleared() {
+		_spec.ClearField(subscriptionplan.FieldVirtualSeatStart, field.TypeInt)
+	}
+	if value, ok := _u.mutation.VirtualSeatTotal(); ok {
+		_spec.SetField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVirtualSeatTotal(); ok {
+		_spec.AddField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt, value)
+	}
+	if _u.mutation.VirtualSeatTotalCleared() {
+		_spec.ClearField(subscriptionplan.FieldVirtualSeatTotal, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(subscriptionplan.FieldUpdatedAt, field.TypeTime, value)

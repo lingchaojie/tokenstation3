@@ -363,6 +363,16 @@ type ProxyAccountSummary struct {
 	Notes    *string `json:"notes,omitempty"`
 }
 
+type RedeemCodePlanSummary struct {
+	ID               int64    `json:"id"`
+	Name             string   `json:"name"`
+	ProductName      string   `json:"product_name"`
+	ValidityDays     int      `json:"validity_days"`
+	ValidityUnit     string   `json:"validity_unit"`
+	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd,omitempty"`
+	ForSale          bool     `json:"for_sale"`
+}
+
 type RedeemCode struct {
 	ID        int64      `json:"id"`
 	Code      string     `json:"code"`
@@ -375,14 +385,16 @@ type RedeemCode struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
 	GroupID      *int64 `json:"group_id"`
+	PlanID       *int64 `json:"plan_id"`
 	ValidityDays int    `json:"validity_days"`
 
 	// Notes is only populated for admin_balance/admin_concurrency types
 	// so users can see why they were charged or credited
 	Notes *string `json:"notes,omitempty"`
 
-	User  *User  `json:"user,omitempty"`
-	Group *Group `json:"group,omitempty"`
+	User  *User                  `json:"user,omitempty"`
+	Group *Group                 `json:"group,omitempty"`
+	Plan  *RedeemCodePlanSummary `json:"plan,omitempty"`
 }
 
 // AdminRedeemCode 是管理员接口使用的 redeem code DTO（包含 notes 等字段）。
@@ -436,6 +448,7 @@ type BatchUpdateRedeemCodeFields struct {
 	ExpiresAt NullableTimeField  `json:"expires_at,omitempty"`
 	Notes     *string            `json:"notes,omitempty"`
 	GroupID   NullableInt64Field `json:"group_id,omitempty"`
+	PlanID    NullableInt64Field `json:"plan_id,omitempty"`
 
 	Type  *string  `json:"type,omitempty"`
 	Value *float64 `json:"value,omitempty"`

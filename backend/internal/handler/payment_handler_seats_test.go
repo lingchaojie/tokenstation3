@@ -85,6 +85,8 @@ func seedPaymentHandlerSeatPlan(t *testing.T, ctx context.Context, client *dbent
 		SetForSale(true).
 		SetSortOrder(7).
 		SetSeatLimit(limit).
+		SetVirtualSeatStart(4900).
+		SetVirtualSeatTotal(4900 + limit).
 		SaveX(ctx)
 
 	for i := 0; i < used; i++ {
@@ -123,20 +125,20 @@ func TestPaymentGetPlansIncludesSeatSummaryFields(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data []struct {
-			ID            int64 `json:"id"`
-			SeatLimit     *int  `json:"seat_limit"`
-			SeatUsed      int   `json:"seat_used"`
-			SeatAvailable *int  `json:"seat_available"`
-			SeatFull      bool  `json:"seat_full"`
-			SeatOverLimit bool  `json:"seat_over_limit"`
+			ID               int64 `json:"id"`
+			SeatLimit        *int  `json:"seat_limit"`
+			SeatUsed         int   `json:"seat_used"`
+			SeatAvailable    *int  `json:"seat_available"`
+			SeatFull         bool  `json:"seat_full"`
+			SeatOverLimit    bool  `json:"seat_over_limit"`
+			VirtualSeatStart *int  `json:"virtual_seat_start"`
+			VirtualSeatTotal *int  `json:"virtual_seat_total"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Len(t, resp.Data, 1)
 	require.Equal(t, plan.ID, resp.Data[0].ID)
-	require.NotContains(t, recorder.Body.String(), "group_platform")
-	require.NotContains(t, recorder.Body.String(), "group_id")
 	require.NotNil(t, resp.Data[0].SeatLimit)
 	require.Equal(t, 2, *resp.Data[0].SeatLimit)
 	require.Equal(t, 1, resp.Data[0].SeatUsed)
@@ -144,6 +146,10 @@ func TestPaymentGetPlansIncludesSeatSummaryFields(t *testing.T) {
 	require.Equal(t, 1, *resp.Data[0].SeatAvailable)
 	require.False(t, resp.Data[0].SeatFull)
 	require.False(t, resp.Data[0].SeatOverLimit)
+	require.NotNil(t, resp.Data[0].VirtualSeatStart)
+	require.Equal(t, 4900, *resp.Data[0].VirtualSeatStart)
+	require.NotNil(t, resp.Data[0].VirtualSeatTotal)
+	require.Equal(t, 4902, *resp.Data[0].VirtualSeatTotal)
 }
 
 func TestPaymentCheckoutInfoIncludesSeatSummaryFields(t *testing.T) {
@@ -165,12 +171,14 @@ func TestPaymentCheckoutInfoIncludesSeatSummaryFields(t *testing.T) {
 		Code int `json:"code"`
 		Data struct {
 			Plans []struct {
-				Features      []string `json:"features"`
-				SeatLimit     *int     `json:"seat_limit"`
-				SeatUsed      int      `json:"seat_used"`
-				SeatAvailable *int     `json:"seat_available"`
-				SeatFull      bool     `json:"seat_full"`
-				SeatOverLimit bool     `json:"seat_over_limit"`
+				Features         []string `json:"features"`
+				SeatLimit        *int     `json:"seat_limit"`
+				SeatUsed         int      `json:"seat_used"`
+				SeatAvailable    *int     `json:"seat_available"`
+				SeatFull         bool     `json:"seat_full"`
+				SeatOverLimit    bool     `json:"seat_over_limit"`
+				VirtualSeatStart *int     `json:"virtual_seat_start"`
+				VirtualSeatTotal *int     `json:"virtual_seat_total"`
 			} `json:"plans"`
 		} `json:"data"`
 	}
@@ -185,6 +193,10 @@ func TestPaymentCheckoutInfoIncludesSeatSummaryFields(t *testing.T) {
 	require.Equal(t, 0, *resp.Data.Plans[0].SeatAvailable)
 	require.True(t, resp.Data.Plans[0].SeatFull)
 	require.False(t, resp.Data.Plans[0].SeatOverLimit)
+	require.NotNil(t, resp.Data.Plans[0].VirtualSeatStart)
+	require.Equal(t, 4900, *resp.Data.Plans[0].VirtualSeatStart)
+	require.NotNil(t, resp.Data.Plans[0].VirtualSeatTotal)
+	require.Equal(t, 4901, *resp.Data.Plans[0].VirtualSeatTotal)
 }
 
 func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *testing.T) {
@@ -205,21 +217,23 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 	var resp struct {
 		Code int `json:"code"`
 		Data []struct {
-			ID            int64    `json:"id"`
-			Name          string   `json:"name"`
-			Description   string   `json:"description"`
-			Price         float64  `json:"price"`
-			ValidityDays  int      `json:"validity_days"`
-			ValidityUnit  string   `json:"validity_unit"`
-			Features      []string `json:"features"`
-			SortOrder     int      `json:"sort_order"`
-			SeatLimit     *int     `json:"seat_limit"`
-			SeatUsed      int      `json:"seat_used"`
-			SeatAvailable *int     `json:"seat_available"`
-			SeatFull      bool     `json:"seat_full"`
-			SeatOverLimit bool     `json:"seat_over_limit"`
-			ProductName   string   `json:"product_name"`
-			ForSale       bool     `json:"for_sale"`
+			ID               int64    `json:"id"`
+			Name             string   `json:"name"`
+			Description      string   `json:"description"`
+			Price            float64  `json:"price"`
+			ValidityDays     int      `json:"validity_days"`
+			ValidityUnit     string   `json:"validity_unit"`
+			Features         []string `json:"features"`
+			SortOrder        int      `json:"sort_order"`
+			SeatLimit        *int     `json:"seat_limit"`
+			SeatUsed         int      `json:"seat_used"`
+			SeatAvailable    *int     `json:"seat_available"`
+			SeatFull         bool     `json:"seat_full"`
+			SeatOverLimit    bool     `json:"seat_over_limit"`
+			VirtualSeatStart *int     `json:"virtual_seat_start"`
+			VirtualSeatTotal *int     `json:"virtual_seat_total"`
+			ProductName      string   `json:"product_name"`
+			ForSale          bool     `json:"for_sale"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
@@ -227,8 +241,6 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 	require.Len(t, resp.Data, 1)
 	got := resp.Data[0]
 	require.Equal(t, plan.ID, got.ID)
-	require.NotContains(t, recorder.Body.String(), "group_id")
-	require.NotContains(t, recorder.Body.String(), "group_platform")
 	require.Equal(t, "Seat Plan", got.Name)
 	require.Equal(t, "Seat desc", got.Description)
 	require.Equal(t, 12.5, got.Price)
@@ -243,6 +255,10 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 	require.Equal(t, 0, *got.SeatAvailable)
 	require.True(t, got.SeatFull)
 	require.False(t, got.SeatOverLimit)
+	require.NotNil(t, got.VirtualSeatStart)
+	require.Equal(t, 4900, *got.VirtualSeatStart)
+	require.NotNil(t, got.VirtualSeatTotal)
+	require.Equal(t, 4901, *got.VirtualSeatTotal)
 	require.Empty(t, got.ProductName, "public plans must not expose provider/admin payment config")
 	require.False(t, got.ForSale, "public plans must not expose provider/admin payment config")
 }

@@ -11,7 +11,8 @@ import (
 )
 
 type subscriptionExpiryRepoStub struct {
-	listCalls int
+	listCalls      int
+	expiredUpdated int64
 }
 
 func (r *subscriptionExpiryRepoStub) Create(context.Context, *UserSubscription) error {
@@ -127,7 +128,7 @@ func (r *subscriptionExpiryRepoStub) IncrementUsage(context.Context, int64, floa
 }
 
 func (r *subscriptionExpiryRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
-	return 0, nil
+	return r.expiredUpdated, nil
 }
 
 type subscriptionExpirySettingRepoStub struct {
@@ -168,6 +169,28 @@ func (r *subscriptionExpirySettingRepoStub) GetAll(context.Context) (map[string]
 
 func (r *subscriptionExpirySettingRepoStub) Delete(context.Context, string) error {
 	return nil
+}
+
+func TestSubscriptionExpiryService_InvalidatesPublicPlansCacheWhenSubscriptionsExpire(t *testing.T) {
+	repo := &subscriptionExpiryRepoStub{expiredUpdated: 2}
+	svc := NewSubscriptionExpiryService(repo, time.Minute)
+	invalidateCalls := 0
+	svc.SetPublicPlansCacheInvalidator(func() { invalidateCalls++ })
+
+	svc.runOnce()
+
+	require.Equal(t, 1, invalidateCalls)
+}
+
+func TestSubscriptionExpiryService_DoesNotInvalidatePublicPlansCacheWithoutExpiredUpdates(t *testing.T) {
+	repo := &subscriptionExpiryRepoStub{}
+	svc := NewSubscriptionExpiryService(repo, time.Minute)
+	invalidateCalls := 0
+	svc.SetPublicPlansCacheInvalidator(func() { invalidateCalls++ })
+
+	svc.runOnce()
+
+	require.Zero(t, invalidateCalls)
 }
 
 func TestSubscriptionExpiryService_ExpiryReminderEnabledDefaultsToTrue(t *testing.T) {

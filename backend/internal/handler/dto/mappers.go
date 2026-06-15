@@ -596,9 +596,21 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 		CreatedAt:    rc.CreatedAt,
 		ExpiresAt:    rc.ExpiresAt,
 		GroupID:      rc.GroupID,
+		PlanID:       rc.PlanID,
 		ValidityDays: rc.ValidityDays,
 		User:         UserFromServiceShallow(rc.User),
 		Group:        GroupFromServiceShallow(rc.Group),
+	}
+	if rc.Plan != nil {
+		out.Plan = &RedeemCodePlanSummary{
+			ID:               rc.Plan.ID,
+			Name:             rc.Plan.Name,
+			ProductName:      rc.Plan.ProductName,
+			ValidityDays:     rc.Plan.ValidityDays,
+			ValidityUnit:     rc.Plan.ValidityUnit,
+			SevenDayQuotaUSD: rc.Plan.SevenDayQuotaUsd,
+			ForSale:          rc.Plan.ForSale,
+		}
 	}
 	if rc.IsExpired() {
 		out.Status = service.StatusExpired

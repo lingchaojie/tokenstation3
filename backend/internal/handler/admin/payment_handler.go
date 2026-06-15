@@ -200,24 +200,26 @@ func (h *PaymentHandler) ListPlans(c *gin.Context) {
 }
 
 type adminPlanResponse struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
-	Price         float64   `json:"price"`
-	OriginalPrice *float64  `json:"original_price,omitempty"`
-	ValidityDays  int       `json:"validity_days"`
-	ValidityUnit  string    `json:"validity_unit"`
-	Features      string    `json:"features"`
-	ProductName   string    `json:"product_name"`
-	ForSale       bool      `json:"for_sale"`
-	SortOrder     int       `json:"sort_order"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	SeatLimit     *int      `json:"seat_limit"`
-	SeatUsed      int       `json:"seat_used"`
-	SeatAvailable *int      `json:"seat_available,omitempty"`
-	SeatFull      bool      `json:"seat_full"`
-	SeatOverLimit bool      `json:"seat_over_limit"`
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	Description      string    `json:"description"`
+	Price            float64   `json:"price"`
+	OriginalPrice    *float64  `json:"original_price,omitempty"`
+	ValidityDays     int       `json:"validity_days"`
+	ValidityUnit     string    `json:"validity_unit"`
+	Features         string    `json:"features"`
+	ProductName      string    `json:"product_name"`
+	ForSale          bool      `json:"for_sale"`
+	SortOrder        int       `json:"sort_order"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	SeatLimit        *int      `json:"seat_limit"`
+	SeatUsed         int       `json:"seat_used"`
+	SeatAvailable    *int      `json:"seat_available,omitempty"`
+	SeatFull         bool      `json:"seat_full"`
+	SeatOverLimit    bool      `json:"seat_over_limit"`
+	VirtualSeatStart *int      `json:"virtual_seat_start"`
+	VirtualSeatTotal *int      `json:"virtual_seat_total"`
 }
 
 func newAdminPlanResponse(p *dbent.SubscriptionPlan, summary service.PlanSeatSummary) adminPlanResponse {
@@ -225,19 +227,21 @@ func newAdminPlanResponse(p *dbent.SubscriptionPlan, summary service.PlanSeatSum
 		return adminPlanResponse{}
 	}
 	plan := adminPlanResponse{
-		ID:            int64(p.ID),
-		Name:          p.Name,
-		Description:   p.Description,
-		Price:         p.Price,
-		OriginalPrice: p.OriginalPrice,
-		ValidityDays:  p.ValidityDays,
-		ValidityUnit:  p.ValidityUnit,
-		Features:      p.Features,
-		ProductName:   p.ProductName,
-		ForSale:       p.ForSale,
-		SortOrder:     p.SortOrder,
-		CreatedAt:     p.CreatedAt,
-		UpdatedAt:     p.UpdatedAt,
+		ID:               int64(p.ID),
+		Name:             p.Name,
+		Description:      p.Description,
+		Price:            p.Price,
+		OriginalPrice:    p.OriginalPrice,
+		ValidityDays:     p.ValidityDays,
+		ValidityUnit:     p.ValidityUnit,
+		Features:         p.Features,
+		ProductName:      p.ProductName,
+		ForSale:          p.ForSale,
+		SortOrder:        p.SortOrder,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
+		VirtualSeatStart: p.VirtualSeatStart,
+		VirtualSeatTotal: p.VirtualSeatTotal,
 	}
 	applySeatSummaryToAdminPlan(&plan, summary)
 	return plan

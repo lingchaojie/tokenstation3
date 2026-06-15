@@ -98,6 +98,7 @@ type RedeemCodeBatchUpdateFields struct {
 	ExpiresAt NullableTimeUpdate
 	Notes     *string
 	GroupID   NullableInt64Update
+	PlanID    NullableInt64Update
 
 	// Core fields are intentionally modeled only so service validation can
 	// reject payloads that try to mutate redemption value semantics in bulk.
@@ -110,6 +111,7 @@ func (f RedeemCodeBatchUpdateFields) HasChanges() bool {
 		f.ExpiresAt.Set ||
 		f.Notes != nil ||
 		f.GroupID.Set ||
+		f.PlanID.Set ||
 		f.Type != nil ||
 		f.Value != nil
 }
@@ -119,7 +121,7 @@ func (f RedeemCodeBatchUpdateFields) HasCoreFieldChanges() bool {
 }
 
 func (f RedeemCodeBatchUpdateFields) TouchesUsedSensitiveFields() bool {
-	return f.Status != nil || f.ExpiresAt.Set || f.GroupID.Set
+	return f.Status != nil || f.ExpiresAt.Set || f.GroupID.Set || f.PlanID.Set
 }
 
 type RedeemCodeBatchUpdateInput struct {
@@ -267,6 +269,56 @@ func (s *RedeemService) CreateCode(ctx context.Context, code *RedeemCode) error 
 	return nil
 }
 
+func (s *RedeemService) validateBatchUpdateTargetState(ctx context.Context, ids []int64, fields RedeemCodeBatchUpdateFields) error {
+	if !fields.GroupID.Set && !fields.PlanID.Set {
+		return nil
+	}
+	for _, id := range ids {
+		code, err := s.redeemRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+
+		if fields.TouchesUsedSensitiveFields() && code.IsUsed() {
+			return ErrRedeemCodeUsed
+		}
+
+		groupID := code.GroupID
+		if fields.GroupID.Set {
+			groupID = fields.GroupID.Value
+		}
+		planID := code.PlanID
+		if fields.PlanID.Set {
+			planID = fields.PlanID.Value
+		}
+
+		if code.Type != RedeemTypeSubscription {
+			if planID != nil {
+				return infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id is only valid for subscription type")
+			}
+			continue
+		}
+		if groupID != nil && planID != nil {
+			return infraerrors.BadRequest("REDEEM_CODE_TARGET_CONFLICT", "plan_id and group_id cannot both be set for subscription type")
+		}
+		if groupID == nil && planID == nil {
+			return infraerrors.BadRequest("REDEEM_CODE_TARGET_REQUIRED", "plan_id or group_id is required for subscription type")
+		}
+		if planID != nil {
+			if s.entClient == nil {
+				return infraerrors.InternalServer("REDEEM_CODE_PLAN_VALIDATION_UNAVAILABLE", "subscription plan validation unavailable")
+			}
+			if _, err := s.entClient.SubscriptionPlan.Get(ctx, *planID); err != nil {
+				if dbent.IsNotFound(err) {
+					return infraerrors.NotFound("PLAN_NOT_FOUND", "subscription plan not found")
+				}
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (s *RedeemService) BatchUpdate(ctx context.Context, input *RedeemCodeBatchUpdateInput) (*RedeemCodeBatchUpdateResult, error) {
 	if input == nil {
 		return nil, infraerrors.BadRequest("REDEEM_CODE_BATCH_UPDATE_INVALID", "batch update input is required")
@@ -313,6 +365,12 @@ func (s *RedeemService) BatchUpdate(ctx context.Context, input *RedeemCodeBatchU
 	}
 	if input.Fields.GroupID.Set && input.Fields.GroupID.Value != nil && *input.Fields.GroupID.Value <= 0 {
 		return nil, infraerrors.BadRequest("REDEEM_CODE_GROUP_ID_INVALID", "group_id must be positive")
+	}
+	if input.Fields.PlanID.Set && input.Fields.PlanID.Value != nil && *input.Fields.PlanID.Value <= 0 {
+		return nil, infraerrors.BadRequest("REDEEM_CODE_PLAN_ID_INVALID", "plan_id must be positive")
+	}
+	if err := s.validateBatchUpdateTargetState(ctx, ids, input.Fields); err != nil {
+		return nil, err
 	}
 
 	updated, err := s.redeemRepo.BatchUpdate(ctx, ids, input.Fields)
@@ -407,11 +465,6 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		return nil, ErrRedeemCodeUsed
 	}
 
-	// 验证兑换码类型的前置条件
-	if redeemCode.Type == RedeemTypeSubscription && redeemCode.GroupID == nil {
-		return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid subscription redeem code: missing group_id")
-	}
-
 	// 获取用户信息
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
@@ -460,26 +513,8 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		}
 
 	case RedeemTypeSubscription:
-		validityDays := redeemCode.ValidityDays
-		if validityDays < 0 {
-			// 负数天数：缩短订阅，减到 0 则取消订阅
-			if err := s.reduceOrCancelSubscription(txCtx, userID, *redeemCode.GroupID, -validityDays, redeemCode.Code); err != nil {
-				return nil, fmt.Errorf("reduce or cancel subscription: %w", err)
-			}
-		} else {
-			if validityDays == 0 {
-				validityDays = 30
-			}
-			_, _, err := s.subscriptionService.AssignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
-				UserID:       userID,
-				GroupID:      *redeemCode.GroupID,
-				ValidityDays: validityDays,
-				AssignedBy:   0, // 系统分配
-				Notes:        fmt.Sprintf("通过兑换码 %s 兑换", redeemCode.Code),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("assign or extend subscription: %w", err)
-			}
+		if err := s.redeemSubscriptionCode(txCtx, userID, redeemCode); err != nil {
+			return nil, err
 		}
 
 	default:
@@ -506,6 +541,97 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	}
 
 	return redeemCode, nil
+}
+
+func (s *RedeemService) redeemSubscriptionCode(ctx context.Context, userID int64, redeemCode *RedeemCode) error {
+	if redeemCode.PlanID != nil {
+		if redeemCode.ValidityDays < 0 {
+			return infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid subscription redeem code: negative validity_days is not allowed for plan codes")
+		}
+		return s.redeemPlanSubscriptionCode(ctx, userID, redeemCode)
+	}
+	if redeemCode.GroupID == nil {
+		return infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid subscription redeem code: missing group_id")
+	}
+
+	validityDays := redeemCode.ValidityDays
+	if validityDays < 0 {
+		// 负数天数：缩短订阅，减到 0 则取消订阅
+		if err := s.reduceOrCancelSubscription(ctx, userID, *redeemCode.GroupID, -validityDays, redeemCode.Code); err != nil {
+			return fmt.Errorf("reduce or cancel subscription: %w", err)
+		}
+		return nil
+	}
+
+	if validityDays == 0 {
+		validityDays = 30
+	}
+	_, _, err := s.subscriptionService.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{
+		UserID:       userID,
+		GroupID:      *redeemCode.GroupID,
+		ValidityDays: validityDays,
+		AssignedBy:   0, // 系统分配
+		Notes:        fmt.Sprintf("通过兑换码 %s 兑换", redeemCode.Code),
+	})
+	if err != nil {
+		return fmt.Errorf("assign or extend subscription: %w", err)
+	}
+	return nil
+}
+
+func (s *RedeemService) redeemPlanSubscriptionCode(ctx context.Context, userID int64, redeemCode *RedeemCode) error {
+	if s.entClient == nil {
+		return infraerrors.InternalServer("REDEEM_PLAN_CONFIG_INVALID", "redeem service ent client is not configured")
+	}
+	if s.subscriptionService == nil {
+		return infraerrors.InternalServer("REDEEM_SUBSCRIPTION_SERVICE_INVALID", "subscription service is not configured")
+	}
+
+	plan, err := s.lockRedeemPlanForUpdate(ctx, *redeemCode.PlanID)
+	if err != nil {
+		return err
+	}
+
+	paymentConfigService := NewPaymentConfigService(s.entClient, nil, nil)
+	if err := paymentConfigService.ValidatePlanSeatAvailable(ctx, plan, userID); err != nil {
+		return err
+	}
+
+	validityDays := redeemCode.ValidityDays
+	if validityDays <= 0 {
+		validityDays = plan.ValidityDays
+	}
+	planID := plan.ID
+	planName := plan.Name
+	input := &AssignSubscriptionInput{
+		UserID:           userID,
+		ValidityDays:     validityDays,
+		AssignedBy:       0,
+		Notes:            fmt.Sprintf("通过兑换码 %s 兑换", redeemCode.Code),
+		PlanID:           &planID,
+		PlanName:         &planName,
+		SevenDayLimitUSD: plan.SevenDayQuotaUsd,
+	}
+
+	if plan.GroupID > 0 {
+		input.GroupID = plan.GroupID
+		if _, _, err := s.subscriptionService.assignOrExtendSubscriptionTerm(ctx, input); err != nil {
+			return fmt.Errorf("assign or extend plan subscription: %w", err)
+		}
+		return nil
+	}
+
+	if _, _, err := s.subscriptionService.AssignOrExtendGenericPlanSubscription(ctx, input); err != nil {
+		return fmt.Errorf("assign or extend generic plan subscription: %w", err)
+	}
+	return nil
+}
+
+func (s *RedeemService) lockRedeemPlanForUpdate(ctx context.Context, planID int64) (*dbent.SubscriptionPlan, error) {
+	if s.entClient == nil {
+		return nil, infraerrors.InternalServer("REDEEM_PLAN_CONFIG_INVALID", "redeem service ent client is not configured")
+	}
+	return NewPaymentConfigService(s.entClient, nil, nil).LockPlanForUpdate(ctx, planID)
 }
 
 // invalidateRedeemCaches 失效兑换相关的缓存

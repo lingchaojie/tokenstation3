@@ -66,6 +66,8 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
 			ProductName: p.ProductName, ForSale: p.ForSale, SortOrder: p.SortOrder,
+			VirtualSeatStart: p.VirtualSeatStart,
+			VirtualSeatTotal: p.VirtualSeatTotal,
 		}
 		applySeatSummaryToPlanWithPlatform(&plan, seatSummaries[p.ID])
 		result = append(result, plan)
@@ -122,7 +124,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
-			ProductName: p.ProductName,
+			ProductName:      p.ProductName,
+			VirtualSeatStart: p.VirtualSeatStart,
+			VirtualSeatTotal: p.VirtualSeatTotal,
 		}
 		applySeatSummaryToCheckoutPlan(&plan, seatSummaries[p.ID])
 		planList = append(planList, plan)
@@ -161,24 +165,8 @@ type planWithPlatform struct {
 	SeatAvailable    *int     `json:"seat_available,omitempty"`
 	SeatFull         bool     `json:"seat_full"`
 	SeatOverLimit    bool     `json:"seat_over_limit"`
-}
-
-type publicPlan struct {
-	ID               int64    `json:"id"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Price            float64  `json:"price"`
-	OriginalPrice    *float64 `json:"original_price,omitempty"`
-	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
-	ValidityDays     int      `json:"validity_days"`
-	ValidityUnit     string   `json:"validity_unit"`
-	Features         []string `json:"features"`
-	SortOrder        int      `json:"sort_order"`
-	SeatLimit        *int     `json:"seat_limit"`
-	SeatUsed         int      `json:"seat_used"`
-	SeatAvailable    *int     `json:"seat_available,omitempty"`
-	SeatFull         bool     `json:"seat_full"`
-	SeatOverLimit    bool     `json:"seat_over_limit"`
+	VirtualSeatStart *int     `json:"virtual_seat_start"`
+	VirtualSeatTotal *int     `json:"virtual_seat_total"`
 }
 
 type checkoutInfoResponse struct {
@@ -211,6 +199,8 @@ type checkoutPlan struct {
 	SeatAvailable    *int     `json:"seat_available,omitempty"`
 	SeatFull         bool     `json:"seat_full"`
 	SeatOverLimit    bool     `json:"seat_over_limit"`
+	VirtualSeatStart *int     `json:"virtual_seat_start"`
+	VirtualSeatTotal *int     `json:"virtual_seat_total"`
 }
 
 func applySeatSummaryToCheckoutPlan(plan *checkoutPlan, summary service.PlanSeatSummary) {
@@ -225,17 +215,6 @@ func applySeatSummaryToCheckoutPlan(plan *checkoutPlan, summary service.PlanSeat
 }
 
 func applySeatSummaryToPlanWithPlatform(plan *planWithPlatform, summary service.PlanSeatSummary) {
-	if plan == nil {
-		return
-	}
-	plan.SeatLimit = summary.SeatLimit
-	plan.SeatUsed = summary.SeatUsed
-	plan.SeatAvailable = summary.SeatAvailable
-	plan.SeatFull = summary.SeatFull
-	plan.SeatOverLimit = summary.SeatOverLimit
-}
-
-func applySeatSummaryToPublicPlan(plan *publicPlan, summary service.PlanSeatSummary) {
 	if plan == nil {
 		return
 	}
@@ -266,34 +245,12 @@ func parseFeatures(raw string) []string {
 // GetPublicPlans returns saleable subscription plans for the public homepage.
 // GET /api/v1/payment/public/plans
 func (h *PaymentHandler) GetPublicPlans(c *gin.Context) {
-	ctx := c.Request.Context()
-	plans, err := h.configService.ListPlansForSale(ctx)
+	plans, err := h.configService.PublicPlansForSale(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	seatSummaries, err := h.configService.SeatSummariesForPlans(ctx, plans)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	result := make([]publicPlan, 0, len(plans))
-	for _, p := range plans {
-		plan := publicPlan{
-			ID:            int64(p.ID),
-			Name:          p.Name,
-			Description:   p.Description,
-			Price:         p.Price,
-			OriginalPrice: p.OriginalPrice,
-			ValidityDays:  p.ValidityDays,
-			ValidityUnit:  p.ValidityUnit,
-			Features:      parseFeatures(p.Features),
-			SortOrder:     p.SortOrder,
-		}
-		applySeatSummaryToPublicPlan(&plan, seatSummaries[p.ID])
-		result = append(result, plan)
-	}
-	response.Success(c, result)
+	response.Success(c, plans)
 }
 
 // GetLimits returns per-payment-type limits derived from enabled provider instances.

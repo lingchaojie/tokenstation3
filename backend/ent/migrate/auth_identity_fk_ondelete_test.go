@@ -46,6 +46,22 @@ func TestPaymentOrdersOutTradeNoPartialUniqueIndex(t *testing.T) {
 	require.Equal(t, (&entsql.IndexAnnotation{Where: "out_trade_no <> ''"}).Where, idx.Annotation.Where)
 }
 
+func TestRedeemCodesPlanIDDoesNotCreateForeignKey(t *testing.T) {
+	for _, fk := range RedeemCodesTable.ForeignKeys {
+		if fk.RefTable == SubscriptionPlansTable {
+			require.NotContains(t, foreignKeyColumns(fk), "plan_id", "redeem_codes.plan_id must remain a plain nullable column without a hard FK")
+		}
+	}
+}
+
+func foreignKeyColumns(fk *entschema.ForeignKey) []string {
+	columns := make([]string, 0, len(fk.Columns))
+	for _, column := range fk.Columns {
+		columns = append(columns, column.Name)
+	}
+	return columns
+}
+
 func findForeignKeyBySymbol(t *testing.T, table *entschema.Table, symbol string) *entschema.ForeignKey {
 	t.Helper()
 

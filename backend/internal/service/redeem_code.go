@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"time"
+
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 )
 
 type RedeemCode struct {
@@ -19,10 +21,12 @@ type RedeemCode struct {
 	ExpiresAt *time.Time
 
 	GroupID      *int64
+	PlanID       *int64
 	ValidityDays int
 
 	User  *User
 	Group *Group
+	Plan  *dbent.SubscriptionPlan
 }
 
 func (r *RedeemCode) IsUsed() bool {

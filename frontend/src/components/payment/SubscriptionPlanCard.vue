@@ -1,16 +1,22 @@
 <template>
-  <div
-    :class="[
-      'linear-plan-card linx-panel group flex h-full flex-col p-5 transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2',
-      borderClass,
-    ]"
-  >
+  <div :class="rootCardClass">
+    <span
+      v-if="limitedSeatLabel"
+      data-testid="limited-seat-ribbon"
+      class="pointer-events-none absolute right-[-54px] top-7 z-20 w-[220px] rotate-45 whitespace-nowrap bg-gradient-to-r from-orange-950 via-orange-800 to-orange-700 py-1.5 text-center text-[11px] font-black tracking-[-0.01em] text-white drop-shadow-sm shadow-[0_12px_30px_rgba(249,115,22,0.35)] ring-1 ring-white/20 [text-shadow:0_1px_2px_rgba(0,0,0,0.45)] dark:from-orange-950 dark:via-orange-800 dark:to-orange-700"
+    >
+      {{ limitedSeatLabel }}
+    </span>
+
     <!-- Colored top accent bar -->
     <div :class="['mb-4 h-1 rounded-full', accentClass]" />
 
     <div class="flex flex-1 flex-col">
       <!-- Header: name + badge + price -->
-      <div class="mb-3 flex items-start justify-between gap-2">
+      <div
+        data-testid="plan-card-header"
+        :class="['mb-3 flex items-start justify-between gap-2', limitedSeatLabel ? 'limited-seat-ribbon-gutter min-h-[112px] pt-16' : '']"
+      >
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
             <h3 class="truncate text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">{{ displayName }}</h3>
@@ -21,20 +27,14 @@
           <p v-if="displayDescription" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400">
             {{ displayDescription }}
           </p>
-          <span
-            v-if="hasSeatLimit"
-            class="mt-2 inline-flex items-center rounded-full border border-orange-200/60 bg-orange-50 px-2.5 py-1 text-[11px] font-medium text-orange-700 shadow-sm dark:border-orange-400/20 dark:bg-orange-400/10 dark:text-orange-200"
-          >
-            当前已开通 {{ seatUsed }}/{{ plan.seat_limit }}
-          </span>
         </div>
-        <div class="shrink-0 text-right">
+        <div data-testid="plan-price-block" :class="['shrink-0 text-right', limitedSeatLabel ? 'mt-2 self-start' : '']">
           <div class="flex items-baseline gap-1">
             <span :class="['text-3xl font-semibold tracking-[-0.05em] text-gray-950 dark:text-linear-ink', textClass]">{{ priceLabel }}</span>
           </div>
           <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
           <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
-            <span class="text-xs text-gray-400 line-through dark:text-dark-500">${{ plan.original_price }}</span>
+            <span class="text-xs text-gray-400 line-through dark:text-dark-500">¥{{ plan.original_price }}</span>
             <span :class="['rounded px-1 py-0.5 text-[10px] font-semibold', discountClass]">{{ discountText }}</span>
           </div>
         </div>
@@ -137,6 +137,27 @@ const displayName = computed(() => props.displayName || monthlyDisplay.value?.na
 const displayDescription = computed(() => props.displayDescription || monthlyDisplay.value?.description || props.plan.description || '')
 const displayFeatures = computed(() => props.displayFeatures ?? monthlyDisplay.value?.benefits ?? props.plan.features)
 const planKey = computed(() => monthlyPlanKeyFromName(props.plan.name))
+const baseCardClass = 'linear-plan-card linx-panel group relative flex h-full flex-col overflow-hidden p-5 transition-colors'
+const tierCardClass = computed(() => {
+  switch (planKey.value) {
+    case 'basic':
+      return 'linx-plan-tier-basic border-orange-200/40 bg-gradient-to-br from-white via-orange-50/70 to-amber-100/70 hover:shadow-[0_18px_50px_rgba(249,115,22,0.14)] dark:border-orange-400/20 dark:from-[#15120f] dark:via-[#20150d] dark:to-[#2a1808] dark:hover:shadow-[0_20px_64px_rgba(249,115,22,0.18)]'
+    case 'plus':
+      return 'linx-plan-tier-plus border-orange-300/45 bg-gradient-to-br from-white via-orange-50 to-orange-200/75 hover:shadow-[0_20px_56px_rgba(249,115,22,0.16)] dark:border-orange-400/25 dark:from-[#17110d] dark:via-[#2a1608] dark:to-[#3a2109] dark:hover:shadow-[0_22px_70px_rgba(249,115,22,0.2)]'
+    case 'pro':
+      return 'linx-plan-tier-pro border-orange-400/55 bg-gradient-to-br from-white via-orange-100/90 to-rose-100/75 shadow-[0_20px_60px_rgba(249,115,22,0.16)] hover:shadow-[0_24px_68px_rgba(249,115,22,0.2)] dark:border-orange-300/35 dark:from-[#1c120d] dark:via-[#3a1708] dark:to-[#431407] dark:shadow-[0_24px_80px_rgba(249,115,22,0.22)]'
+    case 'max':
+      return 'linx-plan-tier-max border-orange-500/60 bg-gradient-to-br from-white via-orange-100 to-red-100/80 hover:shadow-[0_24px_70px_rgba(249,115,22,0.2)] dark:border-orange-300/40 dark:from-[#1f100c] dark:via-[#431407] dark:to-[#4a0d0d] dark:hover:shadow-[0_28px_88px_rgba(249,115,22,0.24)]'
+    default:
+      return ''
+  }
+})
+const rootCardClass = computed(() => {
+  if (tierCardClass.value) {
+    return [baseCardClass, tierCardClass.value]
+  }
+  return [baseCardClass, 'hover:border-linear-hairline-strong hover:bg-linear-surface-2', borderClass.value]
+})
 const activeGenericSubscription = computed(() =>
   props.activeSubscriptions?.find((subscription) => {
     if (subscription.status !== 'active') return false
@@ -162,6 +183,20 @@ const actionLabel = computed(() => {
 })
 const hasSeatLimit = computed(() => props.plan.seat_limit !== null && props.plan.seat_limit !== undefined)
 const seatUsed = computed(() => props.plan.seat_used || 0)
+const hasVirtualSeatRange = computed(() =>
+  props.plan.virtual_seat_start !== null &&
+  props.plan.virtual_seat_start !== undefined &&
+  props.plan.virtual_seat_total !== null &&
+  props.plan.virtual_seat_total !== undefined
+)
+const limitedSeatLabel = computed(() => {
+  if (!hasSeatLimit.value) return ''
+  if (hasVirtualSeatRange.value) {
+    const current = (props.plan.virtual_seat_start || 0) + seatUsed.value
+    return `限时名额：${current}/${props.plan.virtual_seat_total}`
+  }
+  return `限时名额：${seatUsed.value}/${props.plan.seat_limit}`
+})
 const isFullForNewOpening = computed(() => hasSeatLimit.value && props.plan.seat_full === true && !isCurrentPlan.value)
 const isDisabled = computed(() => isFullForNewOpening.value)
 const buttonText = computed(() => {

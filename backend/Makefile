@@ -1,4 +1,4 @@
-.PHONY: build generate test test-unit test-integration test-e2e
+.PHONY: build generate check-generate test test-unit test-integration test-e2e
 
 VERSION ?= $(shell tr -d '\r\n' < ./cmd/server/VERSION)
 LDFLAGS ?= -s -w -X main.Version=$(VERSION)
@@ -9,6 +9,9 @@ build:
 generate:
 	go generate ./ent
 	go generate ./cmd/server
+
+check-generate: generate
+	git diff --exit-code -- ent cmd/server/wire_gen.go cmd/server/wire_gen_test.go
 
 test:
 	go test ./...

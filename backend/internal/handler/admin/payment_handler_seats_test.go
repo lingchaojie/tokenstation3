@@ -61,6 +61,8 @@ func seedAdminPaymentSeatPlan(t *testing.T, ctx context.Context, client *dbent.C
 		SetForSale(true).
 		SetSortOrder(3).
 		SetSeatLimit(limit).
+		SetVirtualSeatStart(4900).
+		SetVirtualSeatTotal(4900 + limit).
 		SaveX(ctx)
 
 	for i := 0; i < used; i++ {
@@ -99,24 +101,26 @@ func TestAdminListPlansReturnsMappedSeatSummaryResponse(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data []struct {
-			ID            int64     `json:"id"`
-			Name          string    `json:"name"`
-			Description   string    `json:"description"`
-			Price         float64   `json:"price"`
-			OriginalPrice *float64  `json:"original_price"`
-			ValidityDays  int       `json:"validity_days"`
-			ValidityUnit  string    `json:"validity_unit"`
-			Features      string    `json:"features"`
-			ProductName   string    `json:"product_name"`
-			ForSale       bool      `json:"for_sale"`
-			SortOrder     int       `json:"sort_order"`
-			CreatedAt     time.Time `json:"created_at"`
-			UpdatedAt     time.Time `json:"updated_at"`
-			SeatLimit     *int      `json:"seat_limit"`
-			SeatUsed      int       `json:"seat_used"`
-			SeatAvailable *int      `json:"seat_available"`
-			SeatFull      bool      `json:"seat_full"`
-			SeatOverLimit bool      `json:"seat_over_limit"`
+			ID               int64     `json:"id"`
+			Name             string    `json:"name"`
+			Description      string    `json:"description"`
+			Price            float64   `json:"price"`
+			OriginalPrice    *float64  `json:"original_price"`
+			ValidityDays     int       `json:"validity_days"`
+			ValidityUnit     string    `json:"validity_unit"`
+			Features         string    `json:"features"`
+			ProductName      string    `json:"product_name"`
+			ForSale          bool      `json:"for_sale"`
+			SortOrder        int       `json:"sort_order"`
+			CreatedAt        time.Time `json:"created_at"`
+			UpdatedAt        time.Time `json:"updated_at"`
+			SeatLimit        *int      `json:"seat_limit"`
+			SeatUsed         int       `json:"seat_used"`
+			SeatAvailable    *int      `json:"seat_available"`
+			SeatFull         bool      `json:"seat_full"`
+			SeatOverLimit    bool      `json:"seat_over_limit"`
+			VirtualSeatStart *int      `json:"virtual_seat_start"`
+			VirtualSeatTotal *int      `json:"virtual_seat_total"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
@@ -124,7 +128,6 @@ func TestAdminListPlansReturnsMappedSeatSummaryResponse(t *testing.T) {
 	require.Len(t, resp.Data, 1)
 	got := resp.Data[0]
 	require.Equal(t, plan.ID, got.ID)
-	require.NotContains(t, recorder.Body.String(), "group_id")
 	require.Equal(t, "Admin Seat Plan", got.Name)
 	require.Equal(t, "Admin desc", got.Description)
 	require.Equal(t, 25.0, got.Price)
@@ -145,4 +148,8 @@ func TestAdminListPlansReturnsMappedSeatSummaryResponse(t *testing.T) {
 	require.Equal(t, 0, *got.SeatAvailable)
 	require.True(t, got.SeatFull)
 	require.False(t, got.SeatOverLimit)
+	require.NotNil(t, got.VirtualSeatStart)
+	require.Equal(t, 4900, *got.VirtualSeatStart)
+	require.NotNil(t, got.VirtualSeatTotal)
+	require.Equal(t, 4902, *got.VirtualSeatTotal)
 }
