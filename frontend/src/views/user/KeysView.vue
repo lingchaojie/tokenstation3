@@ -942,10 +942,19 @@ const appStore = useAppStore()
 const onboardingStore = useOnboardingStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
+// Only surface the key-type column when there is a non-unified key to show.
+// New users only ever have unified keys, so the column (and its "统一" label)
+// is hidden entirely for them.
+const hasNonUnifiedKey = computed(() =>
+  apiKeys.value.some((k) => k.key_type && k.key_type !== 'unified')
+)
+
 const columns = computed<Column[]>(() => [
   { key: 'name', label: t('common.name'), sortable: true },
   { key: 'key', label: t('keys.apiKey'), sortable: false },
-  { key: 'key_type', label: t('keys.keyTypeLabel'), sortable: false },
+  ...(hasNonUnifiedKey.value
+    ? [{ key: 'key_type', label: t('keys.keyTypeLabel'), sortable: false }]
+    : []),
   { key: 'usage', label: t('keys.usage'), sortable: false },
   { key: 'rate_limit', label: t('keys.rateLimitColumn'), sortable: false },
   { key: 'expires_at', label: t('keys.expiresAt'), sortable: true },
