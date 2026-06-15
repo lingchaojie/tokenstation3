@@ -770,6 +770,7 @@ export default {
     keyTypes: {
       anthropic: 'Anthropic',
       openai: 'OpenAI',
+      unified: '统一',
       unknown: '未配置'
     },
     statusLabel: '状态',
@@ -805,6 +806,11 @@ export default {
       noGroupTitle: '请先分配分组',
       noGroupDescription:
         '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
+      unified: {
+        description:
+          '这是一个统一密钥——同时适用于 Anthropic（Claude Code）和 OpenAI（Codex）客户端。请选择你所使用工具对应的标签页，转发服务会自动路由每个请求。',
+        note: '一个密钥，两种 provider。系统会根据请求是 Anthropic 还是 OpenAI，自动路由到管理员设置的默认分组。',
+      },
       openai: {
         description: '将以下配置文件添加到 Codex CLI 配置目录中。',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',

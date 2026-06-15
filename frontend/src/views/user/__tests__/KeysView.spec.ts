@@ -210,13 +210,12 @@ beforeEach(() => {
   usageGetDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
 })
 
-describe('keysAPI.create provider routing payload', () => {
-  it('sends key_type and omits group_id for normal user provider keys', async () => {
-    await create('Provider key', 'openai')
+describe('keysAPI.create unified key payload', () => {
+  it('omits key_type and group_id so the backend creates a provider-agnostic unified key', async () => {
+    await create('Unified key')
 
     expect(apiClient.post).toHaveBeenCalledWith('/keys', {
-      name: 'Provider key',
-      key_type: 'openai'
+      name: 'Unified key'
     })
   })
 })
@@ -250,6 +249,33 @@ describe('KeysView provider routing actions', () => {
     expect(modal.attributes('data-api-key')).toBe('sk-openai')
     expect(modal.attributes('data-platform')).toBe('openai')
     expect(modal.attributes('data-allow-messages-dispatch')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('passes the unified platform to UseKeyModal for provider-agnostic keys', async () => {
+    const key = makeApiKey({
+      id: 99,
+      key: 'sk-unified',
+      key_type: 'unified',
+      group_binding_mode: 'auto',
+      group_id: null
+    })
+    keysList.mockResolvedValue(listResponse([key]))
+
+    const wrapper = mountKeysView()
+    await flushPromises()
+    await nextTick()
+
+    const useKeyButton = wrapper.findAll('button').find((button) => button.text().includes('Use Key'))
+    expect(useKeyButton).toBeDefined()
+    await useKeyButton!.trigger('click')
+    await nextTick()
+
+    const modal = wrapper.find('[data-testid="use-key-modal"]')
+    expect(modal.attributes('data-show')).toBe('true')
+    expect(modal.attributes('data-api-key')).toBe('sk-unified')
+    expect(modal.attributes('data-platform')).toBe('unified')
 
     wrapper.unmount()
   })

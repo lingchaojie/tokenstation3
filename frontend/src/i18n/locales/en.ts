@@ -771,6 +771,7 @@ export default {
     keyTypes: {
       anthropic: 'Anthropic',
       openai: 'OpenAI',
+      unified: 'Unified',
       unknown: 'Unconfigured'
     },
     statusLabel: 'Status',
@@ -806,6 +807,10 @@ export default {
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       noGroupTitle: 'Please assign a group first',
       noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
+      unified: {
+        description: 'This is a unified key — it works with both Anthropic (Claude Code) and OpenAI (Codex) clients. Pick the tab for the tool you use; the service routes each request automatically.',
+        note: 'One key, both providers. Requests are automatically routed to the administrator-configured default group based on whether they target Anthropic or OpenAI.',
+      },
       openai: {
         description: 'Add the following configuration files to your Codex CLI config directory.',
         configTomlHint: 'Make sure the following content is at the beginning of the config.toml file',

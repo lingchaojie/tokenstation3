@@ -368,17 +368,6 @@
           />
         </div>
 
-        <div v-if="!showEditModal">
-          <label class="input-label">{{ t('keys.keyTypeLabel') }}</label>
-          <Select
-            v-model="formData.key_type"
-            :options="keyTypeOptions"
-            :placeholder="t('keys.selectKeyType')"
-            data-tour="key-form-key-type"
-          />
-          <p class="input-hint">{{ t('keys.keyTypeHint') }}</p>
-        </div>
-
         <!-- Custom Key Section (only for create) -->
         <div v-if="!showEditModal" class="space-y-3">
           <div class="flex items-center justify-between">
@@ -996,9 +985,10 @@ const pendingCcsRow = ref<ApiKey | null>(null)
 const selectedKey = ref<ApiKey | null>(null)
 const copiedKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
-const useKeyPlatform = computed<GroupPlatform | null>(() => {
-  if (selectedKey.value?.key_type === 'anthropic' || selectedKey.value?.key_type === 'openai') {
-    return selectedKey.value.key_type
+const useKeyPlatform = computed<GroupPlatform | 'unified' | null>(() => {
+  const keyType = selectedKey.value?.key_type
+  if (keyType === 'anthropic' || keyType === 'openai' || keyType === 'unified') {
+    return keyType
   }
   return null
 })
@@ -1006,7 +996,6 @@ let abortController: AbortController | null = null
 
 const formData = ref({
   name: '',
-  key_type: 'anthropic' as Exclude<ApiKeyType, 'unknown'>,
   status: 'active' as 'active' | 'inactive',
   use_custom_key: false,
   custom_key: '',
@@ -1065,15 +1054,11 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
   onFilterChange()
 }
 
-const keyTypeOptions = computed(() => [
-  { value: 'anthropic', label: t('keys.keyTypes.anthropic') },
-  { value: 'openai', label: t('keys.keyTypes.openai') }
-])
-
 const providerTypeLabel = (keyType: ApiKeyType) => t(`keys.keyTypes.${keyType}`)
 
 const providerTypeBadgeClass = (keyType: ApiKeyType) => {
-  if (keyType === 'anthropic') return 'badge-primary'
+  if (keyType === 'unified') return 'badge-primary'
+  if (keyType === 'anthropic') return 'badge-info'
   if (keyType === 'openai') return 'badge-success'
   return 'badge-gray'
 }
@@ -1188,7 +1173,6 @@ const editKey = (key: ApiKey) => {
   const hasExpiration = !!key.expires_at
   formData.value = {
     name: key.name,
-    key_type: key.key_type === 'unknown' ? 'anthropic' : key.key_type,
     status: key.status === 'quota_exhausted' || key.status === 'expired' ? 'inactive' : key.status,
     use_custom_key: false,
     custom_key: '',
@@ -1293,7 +1277,6 @@ const handleSubmit = async () => {
       const customKey = formData.value.use_custom_key ? formData.value.custom_key : undefined
       await keysAPI.create(
         formData.value.name,
-        formData.value.key_type,
         customKey,
         ipWhitelist,
         ipBlacklist,
@@ -1344,7 +1327,6 @@ const closeModals = () => {
   selectedKey.value = null
   formData.value = {
     name: '',
-    key_type: 'anthropic',
     status: 'active',
     use_custom_key: false,
     custom_key: '',
@@ -1430,11 +1412,12 @@ const importToCcswitch = (row: ApiKey) => {
 
 const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
-  if (row.key_type !== 'anthropic' && row.key_type !== 'openai') {
+  if (row.key_type !== 'anthropic' && row.key_type !== 'openai' && row.key_type !== 'unified') {
     appStore.showError(t('keys.cannotImportUnconfiguredKey'))
     return
   }
-  const platform = row.key_type
+  // Unified keys work with both providers; CC-Switch imports as Claude Code (Anthropic).
+  const platform = row.key_type === 'unified' ? 'anthropic' : row.key_type
 
   const usageScript = `({
     request: {

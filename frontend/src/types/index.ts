@@ -490,7 +490,9 @@ export interface PaginationConfig {
 
 export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 
-export type ApiKeyType = 'anthropic' | 'openai' | 'unknown'
+// 'unified' marks a provider-agnostic key (group_binding_mode = 'auto') that the
+// backend routes to the Anthropic or OpenAI default group based on the request.
+export type ApiKeyType = 'anthropic' | 'openai' | 'unified' | 'unknown'
 
 export type SubscriptionType = 'standard' | 'subscription'
 
@@ -565,7 +567,7 @@ export interface ModelsListConfig {
   models: string[]
 }
 
-export type ApiKeyGroupBindingMode = 'static' | 'default_follow'
+export type ApiKeyGroupBindingMode = 'static' | 'default_follow' | 'auto'
 
 export interface ApiKey {
   id: number
@@ -601,7 +603,9 @@ export interface ApiKey {
 
 export interface CreateApiKeyRequest {
   name: string
-  key_type: Exclude<ApiKeyType, 'unknown'>
+  // Omitted for unified keys; the backend creates a provider-agnostic key that
+  // auto-routes to the Anthropic/OpenAI default group per request.
+  key_type?: Exclude<ApiKeyType, 'unknown' | 'unified'>
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]
