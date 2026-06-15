@@ -113,6 +113,20 @@ func (_c *APIKeyCreate) SetNillableGroupID(v *int64) *APIKeyCreate {
 	return _c
 }
 
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (_c *APIKeyCreate) SetGroupBindingMode(v string) *APIKeyCreate {
+	_c.mutation.SetGroupBindingMode(v)
+	return _c
+}
+
+// SetNillableGroupBindingMode sets the "group_binding_mode" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableGroupBindingMode(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetGroupBindingMode(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *APIKeyCreate) SetStatus(v string) *APIKeyCreate {
 	_c.mutation.SetStatus(v)
@@ -397,6 +411,10 @@ func (_c *APIKeyCreate) defaults() error {
 		v := apikey.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.GroupBindingMode(); !ok {
+		v := apikey.DefaultGroupBindingMode
+		_c.mutation.SetGroupBindingMode(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := apikey.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -466,6 +484,14 @@ func (_c *APIKeyCreate) check() error {
 	if v, ok := _c.mutation.KeyType(); ok {
 		if err := apikey.KeyTypeValidator(v); err != nil {
 			return &ValidationError{Name: "key_type", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_type": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.GroupBindingMode(); !ok {
+		return &ValidationError{Name: "group_binding_mode", err: errors.New(`ent: missing required field "APIKey.group_binding_mode"`)}
+	}
+	if v, ok := _c.mutation.GroupBindingMode(); ok {
+		if err := apikey.GroupBindingModeValidator(v); err != nil {
+			return &ValidationError{Name: "group_binding_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.group_binding_mode": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
@@ -553,6 +579,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.KeyType(); ok {
 		_spec.SetField(apikey.FieldKeyType, field.TypeString, value)
 		_node.KeyType = &value
+	}
+	if value, ok := _c.mutation.GroupBindingMode(); ok {
+		_spec.SetField(apikey.FieldGroupBindingMode, field.TypeString, value)
+		_node.GroupBindingMode = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -819,6 +849,18 @@ func (u *APIKeyUpsert) UpdateGroupID() *APIKeyUpsert {
 // ClearGroupID clears the value of the "group_id" field.
 func (u *APIKeyUpsert) ClearGroupID() *APIKeyUpsert {
 	u.SetNull(apikey.FieldGroupID)
+	return u
+}
+
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (u *APIKeyUpsert) SetGroupBindingMode(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldGroupBindingMode, v)
+	return u
+}
+
+// UpdateGroupBindingMode sets the "group_binding_mode" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateGroupBindingMode() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldGroupBindingMode)
 	return u
 }
 
@@ -1265,6 +1307,20 @@ func (u *APIKeyUpsertOne) UpdateGroupID() *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) ClearGroupID() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (u *APIKeyUpsertOne) SetGroupBindingMode(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetGroupBindingMode(v)
+	})
+}
+
+// UpdateGroupBindingMode sets the "group_binding_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateGroupBindingMode() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateGroupBindingMode()
 	})
 }
 
@@ -1924,6 +1980,20 @@ func (u *APIKeyUpsertBulk) UpdateGroupID() *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) ClearGroupID() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (u *APIKeyUpsertBulk) SetGroupBindingMode(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetGroupBindingMode(v)
+	})
+}
+
+// UpdateGroupBindingMode sets the "group_binding_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateGroupBindingMode() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateGroupBindingMode()
 	})
 }
 

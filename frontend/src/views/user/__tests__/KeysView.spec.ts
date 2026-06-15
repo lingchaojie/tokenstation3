@@ -148,6 +148,7 @@ const makeApiKey = (overrides: Partial<ApiKey> = {}): ApiKey => ({
   name: 'Test key',
   group_id: null,
   key_type: 'anthropic',
+  group_binding_mode: 'default_follow',
   status: 'active',
   ip_whitelist: [],
   ip_blacklist: [],

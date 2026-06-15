@@ -14,6 +14,11 @@ const (
 	StatusAPIKeyExpired        = "expired"
 )
 
+const (
+	APIKeyGroupBindingModeStatic        = "static"
+	APIKeyGroupBindingModeDefaultFollow = "default_follow"
+)
+
 // Rate limit window durations
 const (
 	RateLimitWindow5h = 5 * time.Hour
@@ -36,11 +41,12 @@ type APIKey struct {
 	// ClearKeyType requests that repository update operations clear the stored
 	// nullable key_type column when KeyType is empty. Ordinary updates leave an
 	// empty KeyType unchanged so user-facing update flows cannot clear it.
-	ClearKeyType bool `json:"-"`
-	GroupID      *int64
-	Status       string
-	IPWhitelist  []string
-	IPBlacklist  []string
+	ClearKeyType     bool `json:"-"`
+	GroupID          *int64
+	GroupBindingMode string
+	Status           string
+	IPWhitelist      []string
+	IPBlacklist      []string
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`

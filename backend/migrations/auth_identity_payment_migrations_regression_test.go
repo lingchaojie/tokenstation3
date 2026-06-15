@@ -177,3 +177,15 @@ func TestMigration135AllowsGitHubAndGoogleAuthProviders(t *testing.T) {
 	require.Contains(t, sql, "'github'")
 	require.Contains(t, sql, "'google'")
 }
+
+func TestMigration156BackfillsProviderAPIKeysToFollowDefaultGroups(t *testing.T) {
+	content, err := FS.ReadFile("156_api_key_group_binding_mode.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS group_binding_mode VARCHAR(30) NOT NULL DEFAULT 'static'")
+	require.Contains(t, sql, "api_keys_group_binding_mode_check")
+	require.Contains(t, sql, "group_binding_mode = 'default_follow'")
+	require.Contains(t, sql, "g.platform IN ('anthropic', 'openai')")
+	require.Contains(t, sql, "SET key_type = g.platform")
+}

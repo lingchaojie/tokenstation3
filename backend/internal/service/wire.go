@@ -510,6 +510,9 @@ func ProvideAPIKeyService(
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
 	svc.SetProviderRouting(userAPIKeyRouteRepo, settingService)
+	if settingService != nil {
+		settingService.SetOnUpdateCallback(svc.InvalidateEffectiveGroupCache)
+	}
 	return svc
 }
 

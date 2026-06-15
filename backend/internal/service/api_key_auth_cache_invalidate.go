@@ -7,6 +7,7 @@ func (s *APIKeyService) InvalidateAuthCacheByKey(ctx context.Context, key string
 	if key == "" {
 		return
 	}
+	s.clearEffectiveGroupCache()
 	cacheKey := s.authCacheKey(key)
 	s.deleteAuthCache(ctx, cacheKey)
 }
@@ -16,6 +17,7 @@ func (s *APIKeyService) InvalidateAuthCacheByUserID(ctx context.Context, userID 
 	if userID <= 0 {
 		return
 	}
+	s.clearEffectiveGroupCache()
 	keys, err := s.apiKeyRepo.ListKeysByUserID(ctx, userID)
 	if err != nil {
 		return
@@ -28,6 +30,7 @@ func (s *APIKeyService) InvalidateAuthCacheByGroupID(ctx context.Context, groupI
 	if groupID <= 0 {
 		return
 	}
+	s.clearEffectiveGroupCache()
 	keys, err := s.apiKeyRepo.ListKeysByGroupID(ctx, groupID)
 	if err != nil {
 		return

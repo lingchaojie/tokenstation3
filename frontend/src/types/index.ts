@@ -565,6 +565,8 @@ export interface ModelsListConfig {
   models: string[]
 }
 
+export type ApiKeyGroupBindingMode = 'static' | 'default_follow'
+
 export interface ApiKey {
   id: number
   user_id: number
@@ -572,6 +574,7 @@ export interface ApiKey {
   name: string
   group_id: number | null
   key_type: ApiKeyType
+  group_binding_mode: ApiKeyGroupBindingMode
   status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
   ip_whitelist: string[]
   ip_blacklist: string[]

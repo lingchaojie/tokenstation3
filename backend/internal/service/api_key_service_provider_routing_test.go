@@ -39,10 +39,12 @@ func (r apiKeyProviderRouteRepoStub) ReconcileGroupReplacement(context.Context, 
 }
 
 type defaultAPIKeyGroupSettingsStub struct {
-	ids map[string]*int64
+	ids   map[string]*int64
+	calls int
 }
 
-func (s defaultAPIKeyGroupSettingsStub) GetDefaultAPIKeyGroupID(_ context.Context, keyType string) (*int64, error) {
+func (s *defaultAPIKeyGroupSettingsStub) GetDefaultAPIKeyGroupID(_ context.Context, keyType string) (*int64, error) {
+	s.calls++
 	return s.ids[keyType], nil
 }
 
@@ -81,7 +83,7 @@ func TestAPIKeyService_ResolveProviderGroup_UsesUserProviderRoute(t *testing.T) 
 	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{ID: routeGroupID, Platform: PlatformOpenAI, Status: StatusActive}}}
 	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
 		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: routeGroupID},
-	}}, defaultAPIKeyGroupSettingsStub{})
+	}}, &defaultAPIKeyGroupSettingsStub{})
 
 	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: userID, Status: StatusActive}, APIKeyTypeOpenAI)
 
@@ -96,7 +98,7 @@ func TestAPIKeyService_ResolveProviderGroup_FallsBackToGlobalProviderRoute(t *te
 	userID := int64(42)
 	globalGroupID := int64(10)
 	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{ID: globalGroupID, Platform: PlatformAnthropic, Status: StatusActive}}}
-	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &globalGroupID}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &globalGroupID}})
 
 	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: userID, Status: StatusActive}, APIKeyTypeAnthropic)
 
@@ -109,7 +111,7 @@ func TestAPIKeyService_ResolveProviderGroup_FallsBackToGlobalProviderRoute(t *te
 
 func TestAPIKeyService_ResolveProviderGroup_RejectsMissingDefault(t *testing.T) {
 	svc := &APIKeyService{}
-	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}})
 
 	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: 42, Status: StatusActive}, APIKeyTypeOpenAI)
 
@@ -121,7 +123,7 @@ func TestAPIKeyService_ResolveProviderGroup_RejectsMissingDefault(t *testing.T) 
 func TestAPIKeyService_ResolveProviderGroup_RejectsPlatformMismatch(t *testing.T) {
 	groupID := int64(10)
 	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{ID: groupID, Platform: PlatformAnthropic, Status: StatusActive}}}
-	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeOpenAI: &groupID}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeOpenAI: &groupID}})
 
 	resolvedGroupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: 42, Status: StatusActive}, APIKeyTypeOpenAI)
 
@@ -146,7 +148,7 @@ func TestAPIKeyService_CreatePersistsUserProviderRouteGroupAndKeyType(t *testing
 	)
 	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
 		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: routeGroupID},
-	}}, defaultAPIKeyGroupSettingsStub{})
+	}}, &defaultAPIKeyGroupSettingsStub{})
 
 	apiKey, err := svc.Create(context.Background(), userID, CreateAPIKeyRequest{
 		Name:      "OpenAI key",
@@ -180,7 +182,7 @@ func TestAPIKeyService_CreateFallsBackToDefaultProviderGroup(t *testing.T) {
 		nil,
 		nil,
 	)
-	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
 
 	_, err := svc.Create(context.Background(), userID, CreateAPIKeyRequest{
 		Name:      "Anthropic key",
@@ -191,6 +193,7 @@ func TestAPIKeyService_CreateFallsBackToDefaultProviderGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, apiKeyRepo.created)
 	require.Equal(t, APIKeyTypeAnthropic, apiKeyRepo.created.KeyType)
+	require.Equal(t, APIKeyGroupBindingModeDefaultFollow, apiKeyRepo.created.GroupBindingMode)
 	require.NotNil(t, apiKeyRepo.created.GroupID)
 	require.Equal(t, defaultGroupID, *apiKeyRepo.created.GroupID)
 }

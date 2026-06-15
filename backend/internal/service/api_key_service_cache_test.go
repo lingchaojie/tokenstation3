@@ -311,6 +311,219 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesKeyType(t *testing.T) {
 	require.Equal(t, APIKeyTypeOpenAI, roundTrip.KeyType)
 }
 
+func TestAPIKeyService_SnapshotRoundTrip_PreservesGroupBindingMode(t *testing.T) {
+	svc := NewAPIKeyService(nil, nil, nil, nil, nil, nil, &config.Config{})
+	groupID := int64(9)
+	apiKey := &APIKey{
+		ID:               1,
+		UserID:           2,
+		GroupID:          &groupID,
+		Key:              "k-openai",
+		KeyType:          APIKeyTypeOpenAI,
+		GroupBindingMode: APIKeyGroupBindingModeDefaultFollow,
+		Status:           StatusActive,
+		User: &User{
+			ID:          2,
+			Status:      StatusActive,
+			Role:        RoleUser,
+			Balance:     10,
+			Concurrency: 3,
+		},
+		Group: &Group{
+			ID:               groupID,
+			Name:             "openai",
+			Platform:         PlatformOpenAI,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeStandard,
+			RateMultiplier:   1,
+		},
+	}
+
+	snapshot := svc.snapshotFromAPIKey(context.Background(), apiKey)
+	roundTrip := svc.snapshotToAPIKey(apiKey.Key, snapshot)
+
+	require.NotNil(t, roundTrip)
+	require.Equal(t, APIKeyGroupBindingModeDefaultFollow, roundTrip.GroupBindingMode)
+}
+
+func TestAPIKeyService_GetByKey_DefaultFollowUsesCurrentDefaultGroupFromCachedSnapshot(t *testing.T) {
+	storedGroupID := int64(10)
+	currentDefaultGroupID := int64(20)
+	cache := &authCacheStub{}
+	repo := &authRepoStub{
+		getByKeyForAuth: func(context.Context, string) (*APIKey, error) {
+			return nil, errors.New("unexpected repo call")
+		},
+	}
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		storedGroupID:         {ID: storedGroupID, Name: "old", Platform: PlatformAnthropic, Status: StatusActive},
+		currentDefaultGroupID: {ID: currentDefaultGroupID, Name: "new", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	defaults := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &currentDefaultGroupID}}
+	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, cache, &config.Config{APIKeyAuth: config.APIKeyAuthCacheConfig{L2TTLSeconds: 60}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaults)
+	cache.getAuthCache = func(context.Context, string) (*APIKeyAuthCacheEntry, error) {
+		return &APIKeyAuthCacheEntry{Snapshot: &APIKeyAuthSnapshot{
+			Version:          apiKeyAuthSnapshotVersion,
+			APIKeyID:         1,
+			UserID:           42,
+			GroupID:          &storedGroupID,
+			KeyType:          APIKeyTypeAnthropic,
+			GroupBindingMode: APIKeyGroupBindingModeDefaultFollow,
+			Status:           StatusActive,
+			User: APIKeyAuthUserSnapshot{
+				ID:          42,
+				Status:      StatusActive,
+				Role:        RoleUser,
+				Balance:     10,
+				Concurrency: 3,
+			},
+			Group: &APIKeyAuthGroupSnapshot{
+				ID:               storedGroupID,
+				Name:             "old",
+				Platform:         PlatformAnthropic,
+				Status:           StatusActive,
+				SubscriptionType: SubscriptionTypeStandard,
+				RateMultiplier:   1,
+			},
+		}}, nil
+	}
+
+	apiKey, err := svc.GetByKey(context.Background(), "k-follow")
+
+	require.NoError(t, err)
+	require.NotNil(t, apiKey.GroupID)
+	require.Equal(t, currentDefaultGroupID, *apiKey.GroupID)
+	require.NotNil(t, apiKey.Group)
+	require.Equal(t, currentDefaultGroupID, apiKey.Group.ID)
+	require.Equal(t, 1, defaults.calls)
+}
+
+func TestAPIKeyService_GetByKey_DefaultFollowUsesUserRouteBeforeGlobalDefault(t *testing.T) {
+	storedGroupID := int64(10)
+	routeGroupID := int64(20)
+	defaultGroupID := int64(30)
+	cache := &authCacheStub{}
+	repo := &authRepoStub{
+		getByKeyForAuth: func(context.Context, string) (*APIKey, error) {
+			return nil, errors.New("unexpected repo call")
+		},
+	}
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		storedGroupID:  {ID: storedGroupID, Name: "old", Platform: PlatformAnthropic, Status: StatusActive},
+		routeGroupID:   {ID: routeGroupID, Name: "route", Platform: PlatformAnthropic, Status: StatusActive},
+		defaultGroupID: {ID: defaultGroupID, Name: "default", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	defaults := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}}
+	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, cache, &config.Config{APIKeyAuth: config.APIKeyAuthCacheConfig{L2TTLSeconds: 60}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(42, APIKeyTypeAnthropic): {UserID: 42, KeyType: APIKeyTypeAnthropic, GroupID: routeGroupID},
+	}}, defaults)
+	cache.getAuthCache = func(context.Context, string) (*APIKeyAuthCacheEntry, error) {
+		return &APIKeyAuthCacheEntry{Snapshot: &APIKeyAuthSnapshot{
+			Version:          apiKeyAuthSnapshotVersion,
+			APIKeyID:         1,
+			UserID:           42,
+			GroupID:          &storedGroupID,
+			KeyType:          APIKeyTypeAnthropic,
+			GroupBindingMode: APIKeyGroupBindingModeDefaultFollow,
+			Status:           StatusActive,
+			User:             APIKeyAuthUserSnapshot{ID: 42, Status: StatusActive, Role: RoleUser, Balance: 10, Concurrency: 3},
+			Group:            &APIKeyAuthGroupSnapshot{ID: storedGroupID, Name: "old", Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1},
+		}}, nil
+	}
+
+	apiKey, err := svc.GetByKey(context.Background(), "k-follow-route")
+
+	require.NoError(t, err)
+	require.NotNil(t, apiKey.GroupID)
+	require.Equal(t, routeGroupID, *apiKey.GroupID)
+	require.NotNil(t, apiKey.Group)
+	require.Equal(t, routeGroupID, apiKey.Group.ID)
+	require.Zero(t, defaults.calls)
+}
+
+func TestAPIKeyService_GetByKey_StaticProviderKeyKeepsStoredGroup(t *testing.T) {
+	storedGroupID := int64(10)
+	defaultGroupID := int64(20)
+	cache := &authCacheStub{}
+	repo := &authRepoStub{
+		getByKeyForAuth: func(context.Context, string) (*APIKey, error) {
+			return nil, errors.New("unexpected repo call")
+		},
+	}
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		storedGroupID:  {ID: storedGroupID, Name: "stored", Platform: PlatformAnthropic, Status: StatusActive},
+		defaultGroupID: {ID: defaultGroupID, Name: "default", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	defaults := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}}
+	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, cache, &config.Config{APIKeyAuth: config.APIKeyAuthCacheConfig{L2TTLSeconds: 60}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaults)
+	cache.getAuthCache = func(context.Context, string) (*APIKeyAuthCacheEntry, error) {
+		return &APIKeyAuthCacheEntry{Snapshot: &APIKeyAuthSnapshot{
+			Version:          apiKeyAuthSnapshotVersion,
+			APIKeyID:         1,
+			UserID:           42,
+			GroupID:          &storedGroupID,
+			KeyType:          APIKeyTypeAnthropic,
+			GroupBindingMode: APIKeyGroupBindingModeStatic,
+			Status:           StatusActive,
+			User:             APIKeyAuthUserSnapshot{ID: 42, Status: StatusActive, Role: RoleUser, Balance: 10, Concurrency: 3},
+			Group:            &APIKeyAuthGroupSnapshot{ID: storedGroupID, Name: "stored", Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1},
+		}}, nil
+	}
+
+	apiKey, err := svc.GetByKey(context.Background(), "k-static")
+
+	require.NoError(t, err)
+	require.NotNil(t, apiKey.GroupID)
+	require.Equal(t, storedGroupID, *apiKey.GroupID)
+	require.NotNil(t, apiKey.Group)
+	require.Equal(t, storedGroupID, apiKey.Group.ID)
+	require.Zero(t, defaults.calls)
+}
+
+func TestAPIKeyService_GetByKey_DefaultFollowCachesEffectiveGroupResolution(t *testing.T) {
+	storedGroupID := int64(10)
+	defaultGroupID := int64(20)
+	cache := &authCacheStub{}
+	repo := &authRepoStub{
+		getByKeyForAuth: func(context.Context, string) (*APIKey, error) {
+			return nil, errors.New("unexpected repo call")
+		},
+	}
+	groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+		storedGroupID:  {ID: storedGroupID, Name: "stored", Platform: PlatformAnthropic, Status: StatusActive},
+		defaultGroupID: {ID: defaultGroupID, Name: "default", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	defaults := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}}
+	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, cache, &config.Config{APIKeyAuth: config.APIKeyAuthCacheConfig{L2TTLSeconds: 60}})
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, defaults)
+	cache.getAuthCache = func(context.Context, string) (*APIKeyAuthCacheEntry, error) {
+		return &APIKeyAuthCacheEntry{Snapshot: &APIKeyAuthSnapshot{
+			Version:          apiKeyAuthSnapshotVersion,
+			APIKeyID:         1,
+			UserID:           42,
+			GroupID:          &storedGroupID,
+			KeyType:          APIKeyTypeAnthropic,
+			GroupBindingMode: APIKeyGroupBindingModeDefaultFollow,
+			Status:           StatusActive,
+			User:             APIKeyAuthUserSnapshot{ID: 42, Status: StatusActive, Role: RoleUser, Balance: 10, Concurrency: 3},
+			Group:            &APIKeyAuthGroupSnapshot{ID: storedGroupID, Name: "stored", Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeStandard, RateMultiplier: 1},
+		}}, nil
+	}
+
+	first, err := svc.GetByKey(context.Background(), "k-follow-cached")
+	require.NoError(t, err)
+	second, err := svc.GetByKey(context.Background(), "k-follow-cached")
+	require.NoError(t, err)
+
+	require.Equal(t, defaultGroupID, first.Group.ID)
+	require.Equal(t, defaultGroupID, second.Group.ID)
+	require.Equal(t, 1, defaults.calls)
+	require.Equal(t, 1, groupRepo.getByIDCalls)
+}
+
 func TestAPIKeyService_GetByKey_IgnoresLegacyAuthCacheSnapshotWithoutMessagesDispatchConfig(t *testing.T) {
 	cache := &authCacheStub{}
 	var repoCalls int32

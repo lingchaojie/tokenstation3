@@ -1113,7 +1113,15 @@ func (s *SettingService) IsOpenAIAllowClaudeCodeCodexPluginEnabled(ctx context.C
 // SetOnUpdateCallback sets a callback function to be called when settings are updated
 // This is used for cache invalidation (e.g., HTML cache in frontend server)
 func (s *SettingService) SetOnUpdateCallback(callback func()) {
-	s.onUpdate = callback
+	if s.onUpdate == nil {
+		s.onUpdate = callback
+		return
+	}
+	previous := s.onUpdate
+	s.onUpdate = func() {
+		previous()
+		callback()
+	}
 }
 
 // SetVersion sets the application version for injection into public settings
