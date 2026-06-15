@@ -93,7 +93,10 @@
           </template>
 
           <template #cell-key_type="{ row }">
-            <span :class="['badge', providerTypeBadgeClass(row.key_type)]">
+            <span
+              v-if="row.key_type !== 'unified'"
+              :class="['badge', providerTypeBadgeClass(row.key_type)]"
+            >
               {{ providerTypeLabel(row.key_type) }}
             </span>
           </template>
