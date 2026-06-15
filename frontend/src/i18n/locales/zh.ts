@@ -420,12 +420,12 @@ export default {
 
   // Auth
   auth: {
-    welcomeBack: '欢迎回来',
-    signInToAccount: '登录您的账户以继续',
+    welcomeBack: 'LINX2.AI 控制台',
+    signInToAccount: '登录后管理 Claude Code、Codex 与 OpenAI 兼容网关。',
     layout: {
-      kicker: 'AI 网关平台',
-      title: '一个入口管理模型、密钥和用量。',
-      description: '登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。',
+      kicker: 'LINX2.AI AI 网关平台',
+      title: '一个入口接入 Claude Code、Codex 与 OpenAI。',
+      description: '登录后管理 API 密钥、订阅额度、用量账单和 Claude / OpenAI 兼容路由。',
       baseUrl: '基础地址',
       routes: '路由',
       billing: '计费',
@@ -867,9 +867,7 @@ export default {
       title: '选择客户端',
       description: '请选择您要导入到 CC-Switch 的客户端类型：',
       claudeCode: 'Claude Code',
-      claudeCodeDesc: '导入为 Claude Code 配置',
-      geminiCli: 'Gemini CLI',
-      geminiCliDesc: '导入为 Gemini CLI 配置'
+      claudeCodeDesc: '导入为 Claude Code 配置'
     },
     // 配额和有效期
     quotaLimit: '额度限制',

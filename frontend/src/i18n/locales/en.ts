@@ -420,12 +420,12 @@ export default {
 
   // Auth
   auth: {
-    welcomeBack: 'Welcome Back',
-    signInToAccount: 'Sign in to your account to continue',
+    welcomeBack: 'LINX2.AI Console',
+    signInToAccount: 'Sign in to manage Claude Code, Codex, and OpenAI-compatible gateway access.',
     layout: {
-      kicker: 'AI Gateway Platform',
-      title: 'One gateway for models, keys, and usage.',
-      description: 'Sign in to manage API keys, plans, billing, and channel access through a calm Linear-style console.',
+      kicker: 'LINX2.AI AI Gateway Platform',
+      title: 'One gateway for Claude Code, Codex, and OpenAI.',
+      description: 'Manage API keys, subscription quota, usage billing, and Claude / OpenAI-compatible routes after signing in.',
       baseUrl: 'Base URL',
       routes: 'Routes',
       billing: 'Billing',
@@ -864,8 +864,6 @@ export default {
       description: 'Please select the client type to import to CC-Switch:',
       claudeCode: 'Claude Code',
       claudeCodeDesc: 'Import as Claude Code configuration',
-      geminiCli: 'Gemini CLI',
-      geminiCliDesc: 'Import as Gemini CLI configuration',
     },
     // Quota and expiration
     quotaLimit: 'Quota Limit',

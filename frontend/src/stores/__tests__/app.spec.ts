@@ -273,6 +273,29 @@ describe('useAppStore', () => {
       expect(store.publicSettingsLoaded).toBe(true)
     })
 
+    it('归一化旧的 Sub2API 注入品牌默认值', () => {
+      const windowAny = window as any
+      windowAny.__APP_CONFIG__ = {
+        site_name: 'Sub2API',
+        site_logo: '',
+        site_subtitle: 'Subscription to API Conversion Platform',
+      }
+
+      const store = useAppStore()
+      const result = store.initFromInjectedConfig()
+
+      expect(result).toBe(true)
+      expect(store.siteName).toBe('LINX2.AI')
+      expect(store.cachedPublicSettings?.site_name).toBe('LINX2.AI')
+      expect(store.cachedPublicSettings?.site_subtitle).toBe(
+        'AI Gateway Platform · Claude / OpenAI-compatible routes'
+      )
+      expect(windowAny.__APP_CONFIG__.site_name).toBe('LINX2.AI')
+      expect(windowAny.__APP_CONFIG__.site_subtitle).toBe(
+        'AI Gateway Platform · Claude / OpenAI-compatible routes'
+      )
+    })
+
     it('无注入配置时返回 false', () => {
       const store = useAppStore()
       const result = store.initFromInjectedConfig()

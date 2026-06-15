@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
@@ -24,6 +28,10 @@ const {
   copyToClipboard: vi.fn().mockResolvedValue(true),
   i18nMessages: {
     'keys.cannotImportUnconfiguredKey': 'Cannot import an unconfigured key',
+    'keys.ccsClientSelect.claudeCode': 'Claude Code',
+    'keys.ccsClientSelect.claudeCodeDesc': 'Import as Claude Code configuration',
+    'keys.ccsClientSelect.description': 'Please select the client type to import to CC-Switch:',
+    'keys.ccsClientSelect.title': 'Select Client',
     'keys.importToCcSwitch': 'Import to CCS',
     'keys.useKey': 'Use Key'
   } as Record<string, string>,
@@ -89,7 +97,16 @@ import { apiClient } from '@/api/client'
 import { create } from '@/api/keys'
 import KeysView from '../KeysView.vue'
 
+const keysViewSource = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '..', 'KeysView.vue'),
+  'utf8'
+)
+
 const AppLayoutStub = { template: '<div><slot /></div>' }
+const BaseDialogStub = {
+  props: ['show', 'title'],
+  template: '<section v-if="show" data-testid="base-dialog"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
+}
 const TablePageLayoutStub = {
   template: '<div><slot name="filters" /><slot name="actions" /><slot name="table" /><slot name="pagination" /></div>'
 }
@@ -170,7 +187,7 @@ const mountKeysView = () => mount(KeysView, {
       TablePageLayout: TablePageLayoutStub,
       DataTable: DataTableStub,
       Pagination: true,
-      BaseDialog: true,
+      BaseDialog: BaseDialogStub,
       ConfirmDialog: true,
       EmptyState: true,
       Select: true,
@@ -234,6 +251,12 @@ describe('KeysView provider routing actions', () => {
     expect(modal.attributes('data-allow-messages-dispatch')).toBe('true')
 
     wrapper.unmount()
+  })
+
+  it('does not expose the unavailable Gemini CC-Switch import route', () => {
+    expect(keysViewSource).not.toContain("handleCcsClientSelect('gemini')")
+    expect(keysViewSource).not.toContain("t('keys.ccsClientSelect.geminiCli')")
+    expect(keysViewSource).not.toContain("t('keys.ccsClientSelect.geminiCliDesc')")
   })
 
   it('rejects CCS import for unknown key types instead of importing them as Anthropic', async () => {
