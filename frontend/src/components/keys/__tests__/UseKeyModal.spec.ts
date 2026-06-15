@@ -22,7 +22,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'anthropic'
       },
       global: {
@@ -92,7 +92,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'openai'
       },
       global: {
@@ -131,7 +131,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'openai'
       },
       global: {

@@ -432,10 +432,10 @@ const currentFiles = computed((): FileConfig[] => {
         return generateOpenAIWsFiles(baseUrl, apiKey)
       }
       if (activeClientTab.value === 'openai-python-sdk') {
-        return [generateOpenAIPythonSdkFile(baseUrl, apiKey)]
+        return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
-        return [generateOpenAIImagen2PythonSdkFile(baseUrl, apiKey)]
+        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
@@ -447,7 +447,7 @@ const currentFiles = computed((): FileConfig[] => {
       return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
     default:
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(baseUrl, apiKey)]
+        return [generateAnthropicPythonSdkFile(apiBase, apiKey)]
       }
       return generateAnthropicFiles(baseUrl, apiKey)
   }
