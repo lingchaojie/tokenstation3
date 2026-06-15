@@ -54,8 +54,8 @@ vi.mock('vue-i18n', () => ({
   createI18n: () => ({ global: { t: (key: string) => key } }),
   useI18n: () => ({
     t: (key: string) => ({
-      'auth.welcomeBack': 'Welcome back',
-      'auth.signInToAccount': 'Sign in to continue',
+      'auth.welcomeBack': 'LINX2.AI 控制台',
+      'auth.signInToAccount': '登录后管理 Claude Code、Codex 与 OpenAI 兼容网关。',
       'auth.emailLabel': 'Email',
       'auth.emailPlaceholder': 'you@example.com',
       'auth.passwordLabel': 'Password',
@@ -65,9 +65,9 @@ vi.mock('vue-i18n', () => ({
       'auth.signingIn': 'Signing in',
       'auth.dontHaveAccount': 'No account?',
       'auth.signUp': 'Sign up',
-      'auth.layout.kicker': 'AI 网关平台',
-      'auth.layout.title': '一个入口管理模型、密钥和用量。',
-      'auth.layout.description': '登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。',
+      'auth.layout.kicker': 'LINX2.AI AI 网关平台',
+      'auth.layout.title': '一个入口接入 Claude Code、Codex 与 OpenAI。',
+      'auth.layout.description': '登录后管理 API 密钥、订阅额度、用量账单和 Claude / OpenAI 兼容路由。',
       'auth.layout.baseUrl': '基础地址',
       'auth.layout.routes': '路由',
       'auth.layout.billing': '计费',
@@ -76,7 +76,7 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
-describe('Auth Linear shell', () => {
+describe('Auth LINX2 shell', () => {
   beforeEach(() => {
     fetchPublicSettings.mockReset().mockResolvedValue({})
     login.mockReset()
@@ -84,7 +84,7 @@ describe('Auth Linear shell', () => {
     showWarning.mockReset()
   })
 
-  it('renders auth layout as a Linear-style product entry shell', () => {
+  it('renders auth layout as a LINX2 product entry shell', () => {
     const wrapper = mount(AuthLayout, {
       slots: { default: '<div data-testid="auth-slot">Auth form</div>' },
     })
@@ -95,7 +95,10 @@ describe('Auth Linear shell', () => {
     expect(wrapper.find('[data-testid="auth-product-panel"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="auth-card"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LINX2.AI')
-    expect(wrapper.text()).toContain('一个入口管理模型、密钥和用量。')
+    expect(wrapper.text()).toContain('一个入口接入 Claude Code、Codex 与 OpenAI。')
+    expect(wrapper.text()).toContain('Claude · Codex · OpenAI')
+    expect(wrapper.text()).not.toContain('Gemini')
+    expect(wrapper.text()).not.toContain('Linear')
     expect(wrapper.text()).not.toContain('订阅转 API')
     expect(wrapper.text()).not.toContain('Subscription to API')
     expect(wrapper.html()).not.toContain('blur-3xl')
@@ -108,20 +111,23 @@ describe('Auth Linear shell', () => {
 
     const productPanel = wrapper.find('[data-testid="auth-product-panel"]')
 
-    expect(productPanel.text()).toContain('AI 网关平台')
-    expect(productPanel.text()).toContain('一个入口管理模型、密钥和用量。')
-    expect(productPanel.text()).toContain('登录后即可在沉稳的 Linear 风格控制台中管理 API 密钥、套餐、账单和渠道访问。')
+    expect(productPanel.text()).toContain('LINX2.AI AI 网关平台')
+    expect(productPanel.text()).toContain('一个入口接入 Claude Code、Codex 与 OpenAI。')
+    expect(productPanel.text()).toContain('登录后管理 API 密钥、订阅额度、用量账单和 Claude / OpenAI 兼容路由。')
     expect(productPanel.text()).toContain('基础地址')
     expect(productPanel.text()).toContain('路由')
     expect(productPanel.text()).toContain('计费')
     expect(productPanel.text()).toContain('用量账本已启用')
+    expect(productPanel.text()).toContain('Claude · Codex · OpenAI')
 
+    expect(productPanel.text()).not.toContain('Gemini')
+    expect(productPanel.text()).not.toContain('Linear')
     expect(productPanel.text()).not.toContain('One gateway for models, keys, and usage.')
     expect(productPanel.text()).not.toContain('Sign in to manage API keys')
     expect(productPanel.text()).not.toContain('Usage ledger enabled')
   })
 
-  it('renders LoginView inside the shared Linear auth card', async () => {
+  it('renders LoginView inside the shared LINX2 auth card', async () => {
     const wrapper = mount(LoginView, {
       global: {
         stubs: {
@@ -135,6 +141,7 @@ describe('Auth Linear shell', () => {
           OidcOAuthSection: true,
           LoginAgreementPrompt: true,
           TotpLoginModal: true,
+          RouterLink: { props: ['to'], template: '<a :href="typeof to === \'string\' ? to : to.path"><slot /></a>' },
         },
       },
     })

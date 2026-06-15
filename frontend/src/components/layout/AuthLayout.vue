@@ -26,7 +26,7 @@
 
           <div class="mt-8 rounded-xl border border-linear-hairline bg-linear-canvas p-4 font-mono text-xs text-linear-ink-muted">
             <div class="linx-data-row"><span>{{ t('auth.layout.baseUrl') }}</span><span class="text-primary-300">https://linx2.ai/api</span></div>
-            <div class="linx-data-row"><span>{{ t('auth.layout.routes') }}</span><span>Claude · Codex · Gemini</span></div>
+            <div class="linx-data-row"><span>{{ t('auth.layout.routes') }}</span><span>Claude · Codex · OpenAI</span></div>
             <div class="linx-data-row"><span>{{ t('auth.layout.billing') }}</span><span>{{ t('auth.layout.billingValue') }}</span></div>
           </div>
         </div>
@@ -75,7 +75,9 @@ const DEFAULT_SITE_NAME = 'LINX2.AI'
 
 const siteName = computed(() => appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI 网关平台 · linx2.ai')
+const siteSubtitle = computed(
+  () => appStore.cachedPublicSettings?.site_subtitle || 'AI Gateway Platform · Claude / OpenAI-compatible routes'
+)
 const usesDefaultBrand = computed(() => siteName.value.trim().toUpperCase() === DEFAULT_SITE_NAME)
 
 const currentYear = computed(() => new Date().getFullYear())

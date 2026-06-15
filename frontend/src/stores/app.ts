@@ -14,6 +14,28 @@ import {
 } from '@/api/admin/system'
 import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
 
+const DEFAULT_SITE_NAME = 'LINX2.AI'
+const DEFAULT_SITE_SUBTITLE = 'AI Gateway Platform · Claude / OpenAI-compatible routes'
+
+function normalizeLegacySiteName(value: string | undefined): string {
+  const trimmed = value?.trim()
+  if (!trimmed) return DEFAULT_SITE_NAME
+  return ['sub2api', 'linx2'].includes(trimmed.toLowerCase()) ? DEFAULT_SITE_NAME : trimmed
+}
+
+function normalizeLegacySiteSubtitle(value: string | undefined): string {
+  const trimmed = value?.trim()
+  if (!trimmed) return ''
+  const legacyDefaults = new Set([
+    'Subscription to API Conversion Platform',
+    '订阅转 API 转换平台',
+    'AI Gateway Platform',
+    'AI 网关平台',
+    'Link 2 All AI Model'
+  ])
+  return legacyDefaults.has(trimmed) ? DEFAULT_SITE_SUBTITLE : trimmed
+}
+
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
 
@@ -25,7 +47,7 @@ export const useAppStore = defineStore('app', () => {
   // Public settings cache state
   const publicSettingsLoaded = ref<boolean>(false)
   const publicSettingsLoading = ref<boolean>(false)
-  const siteName = ref<string>('LINX2.AI')
+  const siteName = ref<string>(DEFAULT_SITE_NAME)
   const siteLogo = ref<string>('')
   const siteVersion = ref<string>('')
   const contactInfo = ref<string>('')
@@ -288,12 +310,17 @@ export const useAppStore = defineStore('app', () => {
    * Apply settings to store state (internal helper to avoid code duplication)
    */
   function applySettings(config: PublicSettings): void {
-    if (typeof window !== 'undefined') {
-      window.__APP_CONFIG__ = { ...config }
+    const normalizedConfig = {
+      ...config,
+      site_name: normalizeLegacySiteName(config.site_name),
+      site_subtitle: normalizeLegacySiteSubtitle(config.site_subtitle)
     }
-    cachedPublicSettings.value = config
-    siteName.value = config.site_name || 'LINX2.AI'
-    siteLogo.value = config.site_logo || ''
+    if (typeof window !== 'undefined') {
+      window.__APP_CONFIG__ = { ...normalizedConfig }
+    }
+    cachedPublicSettings.value = normalizedConfig
+    siteName.value = normalizedConfig.site_name
+    siteLogo.value = normalizedConfig.site_logo || ''
     siteVersion.value = config.version || ''
     contactInfo.value = config.contact_info || ''
     apiBaseUrl.value = config.api_base_url || ''
