@@ -115,6 +115,11 @@ func apiKeyResponseType(k *service.APIKey) string {
 	if k == nil {
 		return service.APIKeyTypeUnknown
 	}
+	// Provider-agnostic (auto) keys report as "unified" regardless of any
+	// per-request resolved group, so the UI can render a single SDK-agnostic key.
+	if k.GroupBindingMode == service.APIKeyGroupBindingModeAuto {
+		return service.APIKeyTypeUnified
+	}
 	if normalized := service.NormalizeAPIKeyType(k.KeyType); normalized != "" {
 		return normalized
 	}
@@ -126,37 +131,52 @@ func apiKeyResponseType(k *service.APIKey) string {
 	return service.APIKeyTypeUnknown
 }
 
+// normalizeAPIKeyGroupBindingMode mirrors the repository normalization so the
+// DTO faithfully reports static / default_follow / auto.
+func apiKeyGroupBindingMode(mode string) string {
+	switch mode {
+	case service.APIKeyGroupBindingModeDefaultFollow:
+		return service.APIKeyGroupBindingModeDefaultFollow
+	case service.APIKeyGroupBindingModeAuto:
+		return service.APIKeyGroupBindingModeAuto
+	default:
+		return service.APIKeyGroupBindingModeStatic
+	}
+}
+
 func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k == nil {
 		return nil
 	}
+	groupBindingMode := apiKeyGroupBindingMode(k.GroupBindingMode)
 	out := &APIKey{
-		ID:            k.ID,
-		UserID:        k.UserID,
-		Key:           k.Key,
-		Name:          k.Name,
-		KeyType:       apiKeyResponseType(k),
-		GroupID:       k.GroupID,
-		Status:        k.Status,
-		IPWhitelist:   k.IPWhitelist,
-		IPBlacklist:   k.IPBlacklist,
-		LastUsedAt:    k.LastUsedAt,
-		Quota:         k.Quota,
-		QuotaUsed:     k.QuotaUsed,
-		ExpiresAt:     k.ExpiresAt,
-		CreatedAt:     k.CreatedAt,
-		UpdatedAt:     k.UpdatedAt,
-		RateLimit5h:   k.RateLimit5h,
-		RateLimit1d:   k.RateLimit1d,
-		RateLimit7d:   k.RateLimit7d,
-		Usage5h:       k.EffectiveUsage5h(),
-		Usage1d:       k.EffectiveUsage1d(),
-		Usage7d:       k.EffectiveUsage7d(),
-		Window5hStart: k.Window5hStart,
-		Window1dStart: k.Window1dStart,
-		Window7dStart: k.Window7dStart,
-		User:          UserFromServiceShallow(k.User),
-		Group:         GroupFromServiceShallow(k.Group),
+		ID:               k.ID,
+		UserID:           k.UserID,
+		Key:              k.Key,
+		Name:             k.Name,
+		KeyType:          apiKeyResponseType(k),
+		GroupID:          k.GroupID,
+		GroupBindingMode: groupBindingMode,
+		Status:           k.Status,
+		IPWhitelist:      k.IPWhitelist,
+		IPBlacklist:      k.IPBlacklist,
+		LastUsedAt:       k.LastUsedAt,
+		Quota:            k.Quota,
+		QuotaUsed:        k.QuotaUsed,
+		ExpiresAt:        k.ExpiresAt,
+		CreatedAt:        k.CreatedAt,
+		UpdatedAt:        k.UpdatedAt,
+		RateLimit5h:      k.RateLimit5h,
+		RateLimit1d:      k.RateLimit1d,
+		RateLimit7d:      k.RateLimit7d,
+		Usage5h:          k.EffectiveUsage5h(),
+		Usage1d:          k.EffectiveUsage1d(),
+		Usage7d:          k.EffectiveUsage7d(),
+		Window5hStart:    k.Window5hStart,
+		Window1dStart:    k.Window1dStart,
+		Window7dStart:    k.Window7dStart,
+		User:             UserFromServiceShallow(k.User),
+		Group:            GroupFromServiceShallow(k.Group),
 	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)

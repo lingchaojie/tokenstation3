@@ -67,6 +67,10 @@ const (
 	APIKeyTypeAnthropic = PlatformAnthropic
 	APIKeyTypeOpenAI    = PlatformOpenAI
 	APIKeyTypeUnknown   = "unknown"
+	// APIKeyTypeUnified is a response-only pseudo-type reported for provider-agnostic
+	// keys (group_binding_mode = auto). It is never stored in the key_type column and
+	// is intentionally not accepted by NormalizeAPIKeyType.
+	APIKeyTypeUnified = "unified"
 )
 
 func NormalizeAPIKeyType(raw string) string {

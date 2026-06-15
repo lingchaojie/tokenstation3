@@ -52,8 +52,10 @@ func bindJSONWithFieldPresence(c *gin.Context, out any) (map[string]json.RawMess
 
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
-	Name          string   `json:"name" binding:"required"`
-	KeyType       string   `json:"key_type" binding:"required,oneof=anthropic openai"`
+	Name string `json:"name" binding:"required"`
+	// KeyType is optional: when omitted the key is created as a provider-agnostic
+	// unified key (group_binding_mode = auto). When set it must be a valid provider.
+	KeyType       string   `json:"key_type" binding:"omitempty,oneof=anthropic openai"`
 	GroupID       *int64   `json:"group_id"`        // nullable
 	CustomKey     *string  `json:"custom_key"`      // 可选的自定义key
 	IPWhitelist   []string `json:"ip_whitelist"`    // IP 白名单

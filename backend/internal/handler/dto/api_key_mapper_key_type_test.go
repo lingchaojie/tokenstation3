@@ -48,3 +48,32 @@ func TestAPIKeyFromService_UnknownForLegacyUngroupedKey(t *testing.T) {
 	require.NotNil(t, out)
 	require.Equal(t, service.APIKeyTypeUnknown, out.KeyType)
 }
+
+func TestAPIKeyFromService_MapsGroupBindingMode(t *testing.T) {
+	out := APIKeyFromService(&service.APIKey{
+		ID:               1,
+		UserID:           2,
+		Key:              "sk-test",
+		Name:             "follow",
+		Status:           service.StatusActive,
+		KeyType:          service.APIKeyTypeAnthropic,
+		GroupBindingMode: service.APIKeyGroupBindingModeDefaultFollow,
+	})
+
+	require.NotNil(t, out)
+	require.Equal(t, service.APIKeyGroupBindingModeDefaultFollow, out.GroupBindingMode)
+}
+
+func TestAPIKeyFromService_DefaultsEmptyGroupBindingModeToStatic(t *testing.T) {
+	out := APIKeyFromService(&service.APIKey{
+		ID:      1,
+		UserID:  2,
+		Key:     "sk-test",
+		Name:    "legacy",
+		Status:  service.StatusActive,
+		KeyType: service.APIKeyTypeUnknown,
+	})
+
+	require.NotNil(t, out)
+	require.Equal(t, service.APIKeyGroupBindingModeStatic, out.GroupBindingMode)
+}

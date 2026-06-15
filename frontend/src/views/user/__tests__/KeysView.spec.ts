@@ -148,6 +148,7 @@ const makeApiKey = (overrides: Partial<ApiKey> = {}): ApiKey => ({
   name: 'Test key',
   group_id: null,
   key_type: 'anthropic',
+  group_binding_mode: 'default_follow',
   status: 'active',
   ip_whitelist: [],
   ip_blacklist: [],
@@ -209,13 +210,12 @@ beforeEach(() => {
   usageGetDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
 })
 
-describe('keysAPI.create provider routing payload', () => {
-  it('sends key_type and omits group_id for normal user provider keys', async () => {
-    await create('Provider key', 'openai')
+describe('keysAPI.create unified key payload', () => {
+  it('omits key_type and group_id so the backend creates a provider-agnostic unified key', async () => {
+    await create('Unified key')
 
     expect(apiClient.post).toHaveBeenCalledWith('/keys', {
-      name: 'Provider key',
-      key_type: 'openai'
+      name: 'Unified key'
     })
   })
 })
@@ -253,6 +253,32 @@ describe('KeysView provider routing actions', () => {
     wrapper.unmount()
   })
 
+  it('passes the unified platform to UseKeyModal for provider-agnostic keys', async () => {
+    const key = makeApiKey({
+      id: 99,
+      key: 'sk-unified',
+      key_type: 'unified',
+      group_binding_mode: 'auto',
+      group_id: null
+    })
+    keysList.mockResolvedValue(listResponse([key]))
+
+    const wrapper = mountKeysView()
+    await flushPromises()
+    await nextTick()
+
+    const useKeyButton = wrapper.findAll('button').find((button) => button.text().includes('Use Key'))
+    expect(useKeyButton).toBeDefined()
+    await useKeyButton!.trigger('click')
+    await nextTick()
+
+    const modal = wrapper.find('[data-testid="use-key-modal"]')
+    expect(modal.attributes('data-show')).toBe('true')
+    expect(modal.attributes('data-api-key')).toBe('sk-unified')
+    expect(modal.attributes('data-platform')).toBe('unified')
+
+    wrapper.unmount()
+  })
   it('does not expose the unavailable Gemini CC-Switch import route', () => {
     expect(keysViewSource).not.toContain("handleCcsClientSelect('gemini')")
     expect(keysViewSource).not.toContain("t('keys.ccsClientSelect.geminiCli')")

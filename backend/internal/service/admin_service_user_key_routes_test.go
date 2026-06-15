@@ -12,10 +12,12 @@ import (
 )
 
 type userAPIKeyRouteGroupRepoStub struct {
-	groups map[int64]*Group
+	groups       map[int64]*Group
+	getByIDCalls int
 }
 
 func (s *userAPIKeyRouteGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	s.getByIDCalls++
 	if group, ok := s.groups[id]; ok {
 		clone := *group
 		return &clone, nil

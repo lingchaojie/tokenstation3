@@ -31,6 +31,8 @@ const (
 	FieldKeyType = "key_type"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldGroupBindingMode holds the string denoting the group_binding_mode field in the database.
+	FieldGroupBindingMode = "group_binding_mode"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldLastUsedAt holds the string denoting the last_used_at field in the database.
@@ -105,6 +107,7 @@ var Columns = []string{
 	FieldName,
 	FieldKeyType,
 	FieldGroupID,
+	FieldGroupBindingMode,
 	FieldStatus,
 	FieldLastUsedAt,
 	FieldIPWhitelist,
@@ -153,6 +156,10 @@ var (
 	NameValidator func(string) error
 	// KeyTypeValidator is a validator for the "key_type" field. It is called by the builders before save.
 	KeyTypeValidator func(string) error
+	// DefaultGroupBindingMode holds the default value on creation for the "group_binding_mode" field.
+	DefaultGroupBindingMode string
+	// GroupBindingModeValidator is a validator for the "group_binding_mode" field. It is called by the builders before save.
+	GroupBindingModeValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -221,6 +228,11 @@ func ByKeyType(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByGroupBindingMode orders the results by the group_binding_mode field.
+func ByGroupBindingMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGroupBindingMode, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

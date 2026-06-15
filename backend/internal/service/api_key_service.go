@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -49,11 +50,17 @@ const (
 	apiKeyLastUsedMinTouch = 30 * time.Second
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
+	apiKeyEffectiveGroupTTL   = 30 * time.Second
 )
 
 type APIKeyGroupKeyTypeUpdate struct {
 	KeyType      string
 	ClearKeyType bool
+}
+
+type apiKeyEffectiveGroupCacheEntry struct {
+	group     *Group
+	expiresAt time.Time
 }
 
 type APIKeyRepository interface {
@@ -224,6 +231,7 @@ type APIKeyService struct {
 	authCacheL1           *ristretto.Cache
 	authCfg               apiKeyAuthCacheConfig
 	authGroup             singleflight.Group
+	effectiveGroupCache   sync.Map // userID:keyType -> apiKeyEffectiveGroupCacheEntry
 	lastUsedTouchL1       sync.Map // keyID -> nextAllowedAt(time.Time)
 	lastUsedTouchSF       singleflight.Group
 }
@@ -260,6 +268,10 @@ func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidat
 func (s *APIKeyService) SetProviderRouting(routeRepo UserAPIKeyRouteRepository, defaults DefaultAPIKeyGroupSettings) {
 	s.userAPIKeyRouteRepo = routeRepo
 	s.defaultAPIKeyGroups = defaults
+}
+
+func (s *APIKeyService) InvalidateEffectiveGroupCache() {
+	s.clearEffectiveGroupCache()
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -343,6 +355,9 @@ func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID in
 func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group *Group) bool {
 	// 订阅类型分组：需要有效订阅
 	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return false
+		}
 		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
 		return err == nil // 有有效订阅则允许
 	}
@@ -351,6 +366,10 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 }
 
 func (s *APIKeyService) resolveProviderGroupForCreate(ctx context.Context, user *User, keyType string) (*int64, *Group, error) {
+	return s.resolveProviderGroup(ctx, user, keyType)
+}
+
+func (s *APIKeyService) resolveProviderGroup(ctx context.Context, user *User, keyType string) (*int64, *Group, error) {
 	keyType = NormalizeAPIKeyType(keyType)
 	if keyType == "" {
 		return nil, nil, ErrInvalidAPIKeyType
@@ -387,6 +406,104 @@ func (s *APIKeyService) resolveProviderGroupForCreate(ctx context.Context, user 
 		return nil, nil, ErrGroupNotAllowed
 	}
 	return groupID, group, nil
+}
+
+// ingressProviderFromContext returns the provider (anthropic/openai) detected
+// from the request path by handler.InboundEndpointMiddleware, or "" when none
+// applies (e.g. non-gateway contexts or Gemini endpoints).
+func ingressProviderFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(ctxkey.IngressProvider).(string); ok {
+		return NormalizeAPIKeyType(v)
+	}
+	return ""
+}
+
+// applyDefaultFollowGroup resolves the effective group for keys whose group is
+// determined dynamically at auth time:
+//   - default_follow: follows the admin default group for the key's stored key_type.
+//   - auto: provider-agnostic; follows the admin default group for the provider
+//     detected from the request path (ingress provider).
+//
+// Static keys keep their stored group. The (userID, provider) effective-group
+// cache is shared across both dynamic modes by design.
+func (s *APIKeyService) applyDefaultFollowGroup(ctx context.Context, apiKey *APIKey) error {
+	if apiKey == nil {
+		return nil
+	}
+	var keyType string
+	switch apiKey.GroupBindingMode {
+	case APIKeyGroupBindingModeDefaultFollow:
+		keyType = NormalizeAPIKeyType(apiKey.KeyType)
+	case APIKeyGroupBindingModeAuto:
+		keyType = ingressProviderFromContext(ctx)
+	default:
+		return nil
+	}
+	if keyType == "" || apiKey.User == nil {
+		return nil
+	}
+	cacheKey := apiKeyEffectiveGroupCacheKey(apiKey.User.ID, keyType)
+	if cached, ok := s.getCachedEffectiveGroup(cacheKey); ok {
+		id := cached.ID
+		apiKey.GroupID = &id
+		apiKey.Group = cached
+		return nil
+	}
+	groupID, group, err := s.resolveProviderGroup(ctx, apiKey.User, keyType)
+	if err != nil {
+		return err
+	}
+	apiKey.GroupID = groupID
+	apiKey.Group = group
+	s.setCachedEffectiveGroup(cacheKey, group)
+	return nil
+}
+
+func apiKeyEffectiveGroupCacheKey(userID int64, keyType string) string {
+	return strconv.FormatInt(userID, 10) + ":" + keyType
+}
+
+func (s *APIKeyService) getCachedEffectiveGroup(cacheKey string) (*Group, bool) {
+	value, ok := s.effectiveGroupCache.Load(cacheKey)
+	if !ok {
+		return nil, false
+	}
+	entry, ok := value.(apiKeyEffectiveGroupCacheEntry)
+	if !ok || entry.group == nil || time.Now().After(entry.expiresAt) {
+		s.effectiveGroupCache.Delete(cacheKey)
+		return nil, false
+	}
+	clone := *entry.group
+	return &clone, true
+}
+
+func (s *APIKeyService) setCachedEffectiveGroup(cacheKey string, group *Group) {
+	if group == nil {
+		return
+	}
+	clone := *group
+	s.effectiveGroupCache.Store(cacheKey, apiKeyEffectiveGroupCacheEntry{
+		group:     &clone,
+		expiresAt: time.Now().Add(apiKeyEffectiveGroupTTL),
+	})
+}
+
+func (s *APIKeyService) clearEffectiveGroupCache() {
+	s.effectiveGroupCache.Range(func(key, _ any) bool {
+		s.effectiveGroupCache.Delete(key)
+		return true
+	})
+}
+
+func (s *APIKeyService) prepareAPIKeyForAuth(ctx context.Context, apiKey *APIKey) error {
+	if err := s.applyDefaultFollowGroup(ctx, apiKey); err != nil {
+		return err
+	}
+	s.compileAPIKeyIPRules(apiKey)
+	return nil
 }
 
 // Create 创建API Key
@@ -474,21 +591,33 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
+	groupBindingMode := APIKeyGroupBindingModeStatic
+	if keyType != "" {
+		// Provider key: follows the admin default group for its single provider.
+		groupBindingMode = APIKeyGroupBindingModeDefaultFollow
+	} else if req.GroupID == nil {
+		// No provider chosen and no admin-assigned group → provider-agnostic
+		// unified key. The effective group is resolved per request from the
+		// ingress provider detected from the request path.
+		groupBindingMode = APIKeyGroupBindingModeAuto
+	}
+
 	// 创建API Key记录
 	apiKey := &APIKey{
-		UserID:      userID,
-		Key:         key,
-		Name:        html.EscapeString(req.Name),
-		KeyType:     keyType,
-		GroupID:     req.GroupID,
-		Status:      StatusActive,
-		IPWhitelist: req.IPWhitelist,
-		IPBlacklist: req.IPBlacklist,
-		Quota:       req.Quota,
-		QuotaUsed:   0,
-		RateLimit5h: req.RateLimit5h,
-		RateLimit1d: req.RateLimit1d,
-		RateLimit7d: req.RateLimit7d,
+		UserID:           userID,
+		Key:              key,
+		Name:             html.EscapeString(req.Name),
+		KeyType:          keyType,
+		GroupID:          req.GroupID,
+		GroupBindingMode: groupBindingMode,
+		Status:           StatusActive,
+		IPWhitelist:      req.IPWhitelist,
+		IPBlacklist:      req.IPBlacklist,
+		Quota:            req.Quota,
+		QuotaUsed:        0,
+		RateLimit5h:      req.RateLimit5h,
+		RateLimit1d:      req.RateLimit1d,
+		RateLimit7d:      req.RateLimit7d,
 	}
 
 	// Set expiration time if specified
@@ -547,7 +676,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			s.compileAPIKeyIPRules(apiKey)
+			if err := s.prepareAPIKeyForAuth(ctx, apiKey); err != nil {
+				return nil, err
+			}
 			return apiKey, nil
 		}
 	}
@@ -564,7 +695,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			s.compileAPIKeyIPRules(apiKey)
+			if err := s.prepareAPIKeyForAuth(ctx, apiKey); err != nil {
+				return nil, err
+			}
 			return apiKey, nil
 		}
 	} else {
@@ -576,7 +709,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			s.compileAPIKeyIPRules(apiKey)
+			if err := s.prepareAPIKeyForAuth(ctx, apiKey); err != nil {
+				return nil, err
+			}
 			return apiKey, nil
 		}
 	}
@@ -586,7 +721,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
 	apiKey.Key = key
-	s.compileAPIKeyIPRules(apiKey)
+	if err := s.prepareAPIKeyForAuth(ctx, apiKey); err != nil {
+		return nil, err
+	}
 	return apiKey, nil
 }
 

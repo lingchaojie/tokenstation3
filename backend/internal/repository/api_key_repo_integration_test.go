@@ -52,6 +52,29 @@ func (s *APIKeyRepoSuite) TestCreate() {
 	got, err := s.repo.GetByID(s.ctx, key.ID)
 	s.Require().NoError(err, "GetByID")
 	s.Require().Equal("sk-create-test", got.Key)
+	s.Require().Equal(service.APIKeyGroupBindingModeStatic, got.GroupBindingMode)
+}
+
+func (s *APIKeyRepoSuite) TestCreate_PreservesDefaultFollowGroupBindingMode() {
+	user := s.mustCreateUser("create-follow@test.com")
+	group := s.mustCreateGroup("g-create-follow")
+
+	key := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "sk-create-follow",
+		Name:             "Follow Key",
+		KeyType:          service.APIKeyTypeAnthropic,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeDefaultFollow,
+		Status:           service.StatusActive,
+	}
+
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	got, err := s.repo.GetByKeyForAuth(s.ctx, key.Key)
+	s.Require().NoError(err)
+	s.Require().Equal(service.APIKeyTypeAnthropic, got.KeyType)
+	s.Require().Equal(service.APIKeyGroupBindingModeDefaultFollow, got.GroupBindingMode)
 }
 
 func (s *APIKeyRepoSuite) TestGetByID_NotFound() {

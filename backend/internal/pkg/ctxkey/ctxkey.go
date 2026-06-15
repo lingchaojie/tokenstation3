@@ -8,6 +8,11 @@ const (
 	// ForcePlatform 强制平台（用于 /antigravity 路由），由 middleware.ForcePlatform 设置
 	ForcePlatform Key = "ctx_force_platform"
 
+	// IngressProvider 当前请求按入口路径（SDK 端点）推断出的 provider（anthropic/openai），
+	// 由 handler.InboundEndpointMiddleware 设置。统一（auto 绑定模式）Key 在鉴权时据此
+	// 解析对应 provider 的默认分组。
+	IngressProvider Key = "ctx_ingress_provider"
+
 	// RequestID 为服务端生成/透传的请求 ID。
 	RequestID Key = "ctx_request_id"
 

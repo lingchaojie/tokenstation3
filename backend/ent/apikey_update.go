@@ -140,6 +140,20 @@ func (_u *APIKeyUpdate) ClearGroupID() *APIKeyUpdate {
 	return _u
 }
 
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (_u *APIKeyUpdate) SetGroupBindingMode(v string) *APIKeyUpdate {
+	_u.mutation.SetGroupBindingMode(v)
+	return _u
+}
+
+// SetNillableGroupBindingMode sets the "group_binding_mode" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableGroupBindingMode(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetGroupBindingMode(*v)
+	}
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *APIKeyUpdate) SetStatus(v string) *APIKeyUpdate {
 	_u.mutation.SetStatus(v)
@@ -580,6 +594,11 @@ func (_u *APIKeyUpdate) check() error {
 			return &ValidationError{Name: "key_type", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GroupBindingMode(); ok {
+		if err := apikey.GroupBindingModeValidator(v); err != nil {
+			return &ValidationError{Name: "group_binding_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.group_binding_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := apikey.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "APIKey.status": %w`, err)}
@@ -623,6 +642,9 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.KeyTypeCleared() {
 		_spec.ClearField(apikey.FieldKeyType, field.TypeString)
+	}
+	if value, ok := _u.mutation.GroupBindingMode(); ok {
+		_spec.SetField(apikey.FieldGroupBindingMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -955,6 +977,20 @@ func (_u *APIKeyUpdateOne) SetNillableGroupID(v *int64) *APIKeyUpdateOne {
 // ClearGroupID clears the value of the "group_id" field.
 func (_u *APIKeyUpdateOne) ClearGroupID() *APIKeyUpdateOne {
 	_u.mutation.ClearGroupID()
+	return _u
+}
+
+// SetGroupBindingMode sets the "group_binding_mode" field.
+func (_u *APIKeyUpdateOne) SetGroupBindingMode(v string) *APIKeyUpdateOne {
+	_u.mutation.SetGroupBindingMode(v)
+	return _u
+}
+
+// SetNillableGroupBindingMode sets the "group_binding_mode" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableGroupBindingMode(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetGroupBindingMode(*v)
+	}
 	return _u
 }
 
@@ -1411,6 +1447,11 @@ func (_u *APIKeyUpdateOne) check() error {
 			return &ValidationError{Name: "key_type", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GroupBindingMode(); ok {
+		if err := apikey.GroupBindingModeValidator(v); err != nil {
+			return &ValidationError{Name: "group_binding_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.group_binding_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := apikey.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "APIKey.status": %w`, err)}
@@ -1471,6 +1512,9 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.KeyTypeCleared() {
 		_spec.ClearField(apikey.FieldKeyType, field.TypeString)
+	}
+	if value, ok := _u.mutation.GroupBindingMode(); ok {
+		_spec.SetField(apikey.FieldGroupBindingMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)

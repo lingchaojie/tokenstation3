@@ -145,7 +145,8 @@ interface Props {
   show: boolean
   apiKey: string
   baseUrl: string
-  platform: GroupPlatform | null
+  // 'unified' = provider-agnostic key that works with both Anthropic and OpenAI clients.
+  platform: GroupPlatform | 'unified' | null
   allowMessagesDispatch?: boolean
 }
 
@@ -266,6 +267,15 @@ const SparkleIcon = {
 const clientTabs = computed((): TabConfig[] => {
   if (!props.platform) return []
   switch (props.platform) {
+    case 'unified':
+      return [
+        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+        { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+        { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
+        { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+      ]
     case 'openai': {
       const tabs: TabConfig[] = [
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
@@ -329,6 +339,8 @@ const platformDescription = computed(() => {
     return t('keys.useKeyModal.pythonSdk.description')
   }
   switch (props.platform) {
+    case 'unified':
+      return t('keys.useKeyModal.unified.description')
     case 'openai':
       if (activeClientTab.value === 'claude') {
         return t('keys.useKeyModal.description')
@@ -348,6 +360,8 @@ const platformNote = computed(() => {
     return t('keys.useKeyModal.pythonSdk.note')
   }
   switch (props.platform) {
+    case 'unified':
+      return t('keys.useKeyModal.unified.note')
     case 'openai':
       if (activeClientTab.value === 'claude') {
         return t('keys.useKeyModal.note')
@@ -407,6 +421,11 @@ const currentFiles = computed((): FileConfig[] => {
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
+      case 'unified':
+        return [
+          generateOpenCodeConfig('anthropic', apiBase, apiKey, 'opencode.json (Claude)'),
+          generateOpenCodeConfig('openai', apiBase, apiKey, 'opencode.json (OpenAI)')
+        ]
       case 'anthropic':
         return [generateOpenCodeConfig('anthropic', apiBase, apiKey)]
       case 'openai':
@@ -424,32 +443,54 @@ const currentFiles = computed((): FileConfig[] => {
   }
 
   switch (props.platform) {
-    case 'openai':
-      if (activeClientTab.value === 'claude') {
-        return generateAnthropicFiles(baseUrl, apiKey)
+    case 'unified':
+      // Anthropic Python SDK appends /v1/messages itself, so base_url must be bare.
+      if (activeClientTab.value === 'anthropic-python-sdk') {
+        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
+      }
+      if (activeClientTab.value === 'codex') {
+        return generateOpenAIFiles(baseUrl, apiKey)
       }
       if (activeClientTab.value === 'codex-ws') {
         return generateOpenAIWsFiles(baseUrl, apiKey)
       }
       if (activeClientTab.value === 'openai-python-sdk') {
-        return [generateOpenAIPythonSdkFile(baseUrl, apiKey)]
+        return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
+      }
+      // default unified client is Claude Code; ANTHROPIC_BASE_URL must be bare.
+      return generateAnthropicFiles(baseRoot, apiKey)
+    case 'openai':
+      if (activeClientTab.value === 'claude') {
+        // ANTHROPIC_BASE_URL must be bare — Claude Code appends /v1/messages.
+        return generateAnthropicFiles(baseRoot, apiKey)
+      }
+      if (activeClientTab.value === 'codex-ws') {
+        return generateOpenAIWsFiles(baseUrl, apiKey)
+      }
+      if (activeClientTab.value === 'openai-python-sdk') {
+        return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
-        return [generateOpenAIImagen2PythonSdkFile(baseUrl, apiKey)]
+        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
-      return [generateGeminiCliContent(baseUrl, apiKey)]
+      // Gemini CLI appends /v1beta itself; GOOGLE_GEMINI_BASE_URL must be bare.
+      return [generateGeminiCliContent(baseRoot, apiKey)]
     case 'antigravity':
+      // Antigravity is mounted under /antigravity; Claude Code/Gemini CLI append
+      // /v1/messages and /v1beta themselves, so the base must be bare.
       if (activeClientTab.value === 'gemini') {
-        return [generateGeminiCliContent(`${baseUrl}/antigravity`, apiKey)]
+        return [generateGeminiCliContent(`${baseRoot}/antigravity`, apiKey)]
       }
-      return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
+      return generateAnthropicFiles(`${baseRoot}/antigravity`, apiKey)
     default:
+      // Anthropic Python SDK posts to /v1/messages itself; base_url must be bare.
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(baseUrl, apiKey)]
+        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
-      return generateAnthropicFiles(baseUrl, apiKey)
+      // Claude Code env vars: ANTHROPIC_BASE_URL must be bare for the same reason.
+      return generateAnthropicFiles(baseRoot, apiKey)
   }
 })
 

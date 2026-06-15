@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -125,15 +127,41 @@ func responsesSubpathSuffix(rawPath string) string {
 	return suffix
 }
 
+// InboundProviderFromPath maps a raw request path to the provider whose
+// admin default group should serve a provider-agnostic ("unified", auto
+// binding mode) API key. Detection is path/SDK-endpoint based:
+//
+//	OpenAI SDK surfaces  → chat/completions, responses, embeddings, images
+//	Anthropic (default)  → messages, models, usage, count_tokens, …
+//	Gemini (/v1beta)     → "" (unified keys do not serve Gemini)
+//
+// The empty string means "no unified routing for this endpoint".
+func InboundProviderFromPath(path string) string {
+	switch {
+	case strings.Contains(path, "/chat/completions"),
+		strings.Contains(path, "/responses"),
+		strings.Contains(path, "/embeddings"),
+		strings.Contains(path, "/images/"):
+		return service.PlatformOpenAI
+	case strings.Contains(path, "/v1beta"):
+		return ""
+	default:
+		return service.PlatformAnthropic
+	}
+}
+
 // ──────────────────────────────────────────────────────────
 // Middleware
 // ──────────────────────────────────────────────────────────
 
 // InboundEndpointMiddleware normalizes the request path and stores the
 // canonical inbound endpoint in gin.Context so that every handler in
-// the chain can read it via GetInboundEndpoint.
+// the chain can read it via GetInboundEndpoint. It additionally exposes
+// the detected ingress provider on the request context so the auth/service
+// layer can resolve the default group for provider-agnostic (auto) keys.
 //
-// Apply this middleware to all gateway route groups.
+// Apply this middleware to all gateway route groups, before the API key
+// auth middleware.
 func InboundEndpointMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.FullPath()
@@ -141,6 +169,18 @@ func InboundEndpointMiddleware() gin.HandlerFunc {
 			path = c.Request.URL.Path
 		}
 		c.Set(ctxKeyInboundEndpoint, NormalizeInboundEndpoint(path))
+
+		// Expose the ingress provider to the service layer (request context)
+		// so auto-bound keys resolve the right default group. Prefer the raw
+		// request path for substring matching across /v1 and alias routes.
+		rawPath := path
+		if c.Request != nil && c.Request.URL != nil && c.Request.URL.Path != "" {
+			rawPath = c.Request.URL.Path
+		}
+		if provider := InboundProviderFromPath(rawPath); provider != "" {
+			ctx := context.WithValue(c.Request.Context(), ctxkey.IngressProvider, provider)
+			c.Request = c.Request.WithContext(ctx)
+		}
 		c.Next()
 	}
 }

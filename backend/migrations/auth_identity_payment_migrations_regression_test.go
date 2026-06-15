@@ -177,3 +177,25 @@ func TestMigration135AllowsGitHubAndGoogleAuthProviders(t *testing.T) {
 	require.Contains(t, sql, "'github'")
 	require.Contains(t, sql, "'google'")
 }
+
+func TestMigration156BackfillsProviderAPIKeysToFollowDefaultGroups(t *testing.T) {
+	content, err := FS.ReadFile("156_api_key_group_binding_mode.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS group_binding_mode VARCHAR(30) NOT NULL DEFAULT 'static'")
+	require.Contains(t, sql, "api_keys_group_binding_mode_check")
+	require.Contains(t, sql, "group_binding_mode = 'default_follow'")
+	require.Contains(t, sql, "g.platform IN ('anthropic', 'openai')")
+	require.Contains(t, sql, "SET key_type = g.platform")
+}
+
+func TestMigration157AllowsAutoGroupBindingMode(t *testing.T) {
+	content, err := FS.ReadFile("157_api_key_group_binding_auto_mode.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	// Idempotent: drop then re-add the CHECK constraint with the new value.
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS api_keys_group_binding_mode_check")
+	require.Contains(t, sql, "CHECK (group_binding_mode IN ('static', 'default_follow', 'auto'))")
+}

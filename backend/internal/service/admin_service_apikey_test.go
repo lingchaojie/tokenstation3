@@ -380,7 +380,7 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_NilGroupID_NoOp(t *testing.T) {
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_Unbind(t *testing.T) {
-	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: int64Ptr(5), Group: &Group{ID: 5, Name: "Old"}, KeyType: APIKeyTypeOpenAI}
+	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: int64Ptr(5), Group: &Group{ID: 5, Name: "Old"}, KeyType: APIKeyTypeOpenAI, GroupBindingMode: APIKeyGroupBindingModeDefaultFollow}
 	repo := &apiKeyRepoStubForGroupUpdate{key: existing}
 	cache := &authCacheInvalidatorStub{}
 	svc := &adminServiceImpl{apiKeyRepo: repo, authCacheInvalidator: cache}
@@ -390,15 +390,17 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_Unbind(t *testing.T) {
 	require.Nil(t, got.APIKey.GroupID, "group_id should be nil after unbind")
 	require.Nil(t, got.APIKey.Group, "group object should be nil after unbind")
 	require.Equal(t, APIKeyTypeOpenAI, got.APIKey.KeyType, "unbind should not change key_type")
+	require.Equal(t, APIKeyGroupBindingModeStatic, got.APIKey.GroupBindingMode)
 	require.NotNil(t, repo.updated, "Update should have been called")
 	require.Nil(t, repo.updated.GroupID)
 	require.Equal(t, APIKeyTypeOpenAI, repo.updated.KeyType, "unbind should leave persisted key_type unchanged")
+	require.Equal(t, APIKeyGroupBindingModeStatic, repo.updated.GroupBindingMode)
 	require.False(t, repo.updated.ClearKeyType, "unbind should not request key_type clearing")
 	require.Equal(t, []string{"sk-test"}, cache.keys, "cache should be invalidated")
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_BindActiveGroup(t *testing.T) {
-	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: nil}
+	existing := &APIKey{ID: 1, Key: "sk-test", GroupID: nil, GroupBindingMode: APIKeyGroupBindingModeDefaultFollow}
 	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
 	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Pro", Status: StatusActive}}
 	cache := &authCacheInvalidatorStub{}
@@ -408,7 +410,9 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_BindActiveGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.APIKey.GroupID)
 	require.Equal(t, int64(10), *got.APIKey.GroupID)
+	require.Equal(t, APIKeyGroupBindingModeStatic, got.APIKey.GroupBindingMode)
 	require.Equal(t, int64(10), *apiKeyRepo.updated.GroupID)
+	require.Equal(t, APIKeyGroupBindingModeStatic, apiKeyRepo.updated.GroupBindingMode)
 	require.Equal(t, []string{"sk-test"}, cache.keys)
 	// M3: verify correct group ID was passed to repo
 	require.Equal(t, int64(10), groupRepo.lastGetByIDArg)

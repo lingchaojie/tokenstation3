@@ -22,7 +22,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'anthropic'
       },
       global: {
@@ -50,7 +50,47 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('from anthropic import Anthropic')
     expect(codeBlock.text()).toContain('client = Anthropic(')
     expect(codeBlock.text()).toContain('api_key="sk-test"')
-    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+    // IMPORTANT: base_url must NOT include /v1. The Anthropic Python SDK posts to
+    // its hardcoded /v1/messages endpoint, so a /v1-suffixed base_url would
+    // produce /v1/v1/messages and 404. Do not "fix" this back to /v1.
+    expect(codeBlock.text()).toContain('base_url="https://example.com"')
+    expect(codeBlock.text()).not.toContain('base_url="https://example.com/v1"')
+  })
+
+  it('strips trailing /v1 from Anthropic Python SDK base_url when admin set it on baseUrl', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'anthropic'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const sdkTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.anthropicPythonSdk')
+    )
+
+    expect(sdkTab).toBeDefined()
+    await sdkTab!.trigger('click')
+    await nextTick()
+
+    const codeBlock = wrapper.find('pre code')
+    expect(codeBlock.exists()).toBe(true)
+    // Even when admin's api_base_url ends with /v1, the generated example must
+    // pass a bare base_url to the Anthropic Python SDK.
+    expect(codeBlock.text()).toContain('base_url="https://example.com"')
+    expect(codeBlock.text()).not.toContain('base_url="https://example.com/v1"')
   })
 
   it('renders Python SDK guidance for SDK tabs', async () => {
@@ -92,7 +132,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'openai'
       },
       global: {
@@ -131,7 +171,7 @@ describe('UseKeyModal', () => {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl: 'https://example.com',
         platform: 'openai'
       },
       global: {
