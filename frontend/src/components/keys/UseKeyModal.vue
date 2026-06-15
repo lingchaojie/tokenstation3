@@ -444,8 +444,9 @@ const currentFiles = computed((): FileConfig[] => {
 
   switch (props.platform) {
     case 'unified':
+      // Anthropic Python SDK appends /v1/messages itself, so base_url must be bare.
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(apiBase, apiKey)]
+        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
       if (activeClientTab.value === 'codex') {
         return generateOpenAIFiles(baseUrl, apiKey)
@@ -456,11 +457,12 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
-      // default unified client is Claude Code
-      return generateAnthropicFiles(baseUrl, apiKey)
+      // default unified client is Claude Code; ANTHROPIC_BASE_URL must be bare.
+      return generateAnthropicFiles(baseRoot, apiKey)
     case 'openai':
       if (activeClientTab.value === 'claude') {
-        return generateAnthropicFiles(baseUrl, apiKey)
+        // ANTHROPIC_BASE_URL must be bare — Claude Code appends /v1/messages.
+        return generateAnthropicFiles(baseRoot, apiKey)
       }
       if (activeClientTab.value === 'codex-ws') {
         return generateOpenAIWsFiles(baseUrl, apiKey)
@@ -473,17 +475,22 @@ const currentFiles = computed((): FileConfig[] => {
       }
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
-      return [generateGeminiCliContent(baseUrl, apiKey)]
+      // Gemini CLI appends /v1beta itself; GOOGLE_GEMINI_BASE_URL must be bare.
+      return [generateGeminiCliContent(baseRoot, apiKey)]
     case 'antigravity':
+      // Antigravity is mounted under /antigravity; Claude Code/Gemini CLI append
+      // /v1/messages and /v1beta themselves, so the base must be bare.
       if (activeClientTab.value === 'gemini') {
-        return [generateGeminiCliContent(`${baseUrl}/antigravity`, apiKey)]
+        return [generateGeminiCliContent(`${baseRoot}/antigravity`, apiKey)]
       }
-      return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
+      return generateAnthropicFiles(`${baseRoot}/antigravity`, apiKey)
     default:
+      // Anthropic Python SDK posts to /v1/messages itself; base_url must be bare.
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(apiBase, apiKey)]
+        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
-      return generateAnthropicFiles(baseUrl, apiKey)
+      // Claude Code env vars: ANTHROPIC_BASE_URL must be bare for the same reason.
+      return generateAnthropicFiles(baseRoot, apiKey)
   }
 })
 
