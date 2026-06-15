@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 15 // v15: include API key group binding mode
+const apiKeyAuthSnapshotVersion = 16 // v16: support auto (provider-agnostic) binding mode
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int

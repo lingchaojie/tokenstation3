@@ -115,6 +115,11 @@ func apiKeyResponseType(k *service.APIKey) string {
 	if k == nil {
 		return service.APIKeyTypeUnknown
 	}
+	// Provider-agnostic (auto) keys report as "unified" regardless of any
+	// per-request resolved group, so the UI can render a single SDK-agnostic key.
+	if k.GroupBindingMode == service.APIKeyGroupBindingModeAuto {
+		return service.APIKeyTypeUnified
+	}
 	if normalized := service.NormalizeAPIKeyType(k.KeyType); normalized != "" {
 		return normalized
 	}
@@ -126,14 +131,24 @@ func apiKeyResponseType(k *service.APIKey) string {
 	return service.APIKeyTypeUnknown
 }
 
+// normalizeAPIKeyGroupBindingMode mirrors the repository normalization so the
+// DTO faithfully reports static / default_follow / auto.
+func apiKeyGroupBindingMode(mode string) string {
+	switch mode {
+	case service.APIKeyGroupBindingModeDefaultFollow:
+		return service.APIKeyGroupBindingModeDefaultFollow
+	case service.APIKeyGroupBindingModeAuto:
+		return service.APIKeyGroupBindingModeAuto
+	default:
+		return service.APIKeyGroupBindingModeStatic
+	}
+}
+
 func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k == nil {
 		return nil
 	}
-	groupBindingMode := service.APIKeyGroupBindingModeStatic
-	if k.GroupBindingMode == service.APIKeyGroupBindingModeDefaultFollow {
-		groupBindingMode = service.APIKeyGroupBindingModeDefaultFollow
-	}
+	groupBindingMode := apiKeyGroupBindingMode(k.GroupBindingMode)
 	out := &APIKey{
 		ID:               k.ID,
 		UserID:           k.UserID,

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -407,11 +408,40 @@ func (s *APIKeyService) resolveProviderGroup(ctx context.Context, user *User, ke
 	return groupID, group, nil
 }
 
+// ingressProviderFromContext returns the provider (anthropic/openai) detected
+// from the request path by handler.InboundEndpointMiddleware, or "" when none
+// applies (e.g. non-gateway contexts or Gemini endpoints).
+func ingressProviderFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(ctxkey.IngressProvider).(string); ok {
+		return NormalizeAPIKeyType(v)
+	}
+	return ""
+}
+
+// applyDefaultFollowGroup resolves the effective group for keys whose group is
+// determined dynamically at auth time:
+//   - default_follow: follows the admin default group for the key's stored key_type.
+//   - auto: provider-agnostic; follows the admin default group for the provider
+//     detected from the request path (ingress provider).
+//
+// Static keys keep their stored group. The (userID, provider) effective-group
+// cache is shared across both dynamic modes by design.
 func (s *APIKeyService) applyDefaultFollowGroup(ctx context.Context, apiKey *APIKey) error {
-	if apiKey == nil || apiKey.GroupBindingMode != APIKeyGroupBindingModeDefaultFollow {
+	if apiKey == nil {
 		return nil
 	}
-	keyType := NormalizeAPIKeyType(apiKey.KeyType)
+	var keyType string
+	switch apiKey.GroupBindingMode {
+	case APIKeyGroupBindingModeDefaultFollow:
+		keyType = NormalizeAPIKeyType(apiKey.KeyType)
+	case APIKeyGroupBindingModeAuto:
+		keyType = ingressProviderFromContext(ctx)
+	default:
+		return nil
+	}
 	if keyType == "" || apiKey.User == nil {
 		return nil
 	}
@@ -563,7 +593,13 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	groupBindingMode := APIKeyGroupBindingModeStatic
 	if keyType != "" {
+		// Provider key: follows the admin default group for its single provider.
 		groupBindingMode = APIKeyGroupBindingModeDefaultFollow
+	} else if req.GroupID == nil {
+		// No provider chosen and no admin-assigned group → provider-agnostic
+		// unified key. The effective group is resolved per request from the
+		// ingress provider detected from the request path.
+		groupBindingMode = APIKeyGroupBindingModeAuto
 	}
 
 	// 创建API Key记录

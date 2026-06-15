@@ -17,6 +17,10 @@ const (
 const (
 	APIKeyGroupBindingModeStatic        = "static"
 	APIKeyGroupBindingModeDefaultFollow = "default_follow"
+	// APIKeyGroupBindingModeAuto marks a provider-agnostic "unified" key: it
+	// stores neither key_type nor group_id, and resolves the effective default
+	// group per request from the ingress provider detected from the request path.
+	APIKeyGroupBindingModeAuto = "auto"
 )
 
 // Rate limit window durations

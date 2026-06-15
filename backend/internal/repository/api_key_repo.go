@@ -882,10 +882,14 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 }
 
 func normalizeAPIKeyGroupBindingMode(mode string) string {
-	if mode == service.APIKeyGroupBindingModeDefaultFollow {
+	switch mode {
+	case service.APIKeyGroupBindingModeDefaultFollow:
 		return service.APIKeyGroupBindingModeDefaultFollow
+	case service.APIKeyGroupBindingModeAuto:
+		return service.APIKeyGroupBindingModeAuto
+	default:
+		return service.APIKeyGroupBindingModeStatic
 	}
-	return service.APIKeyGroupBindingModeStatic
 }
 
 func nonEmptyStringPtr(v string) *string {
