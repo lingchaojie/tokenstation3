@@ -221,6 +221,13 @@
             </span>
           </template>
 
+          <template #cell-billing_type="{ row }">
+            <span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                  :class="getBillingTypeBadgeClass(row.billing_type)">
+              {{ getBillingTypeLabel(row.billing_type, t) }}
+            </span>
+          </template>
+
           <template #cell-billing_mode="{ row }">
             <span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
                   :class="getBillingModeBadgeClass(getDisplayBillingMode(row))">
@@ -630,6 +637,7 @@ import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
+import { getBillingTypeBadgeClass, getBillingTypeLabel } from '@/utils/billingType'
 import {
   BILLING_MODE_TOKEN,
   getBillingModeBadgeClass,
@@ -686,6 +694,7 @@ const columns = computed<Column[]>(() => [
   { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
   { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
   { key: 'stream', label: t('usage.type'), sortable: false },
+  { key: 'billing_type', label: t('admin.usage.billingType'), sortable: false },
   { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
@@ -981,7 +990,7 @@ const exportToCSV = async () => {
       'Reasoning Effort',
       'Inbound Endpoint',
       'Type',
-      'Billing Mode',
+      'Pricing Mode',
       'Input Tokens',
       'Output Tokens',
       'Cache Read Tokens',

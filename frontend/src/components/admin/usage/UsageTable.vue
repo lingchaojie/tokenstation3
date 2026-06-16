@@ -88,6 +88,12 @@
           </span>
         </template>
 
+        <template #cell-billing_type="{ row }">
+          <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="getBillingTypeBadgeClass(row.billing_type)">
+            {{ getBillingTypeLabel(row.billing_type, t) }}
+          </span>
+        </template>
+
         <template #cell-billing_mode="{ row }">
           <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="getBillingModeBadgeClass(getDisplayBillingMode(row))">
             {{ getBillingModeLabel(getDisplayBillingMode(row), t) }}
@@ -409,6 +415,7 @@ import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
+import { getBillingTypeBadgeClass, getBillingTypeLabel } from '@/utils/billingType'
 import {
   BILLING_MODE_TOKEN,
   getBillingModeLabel,

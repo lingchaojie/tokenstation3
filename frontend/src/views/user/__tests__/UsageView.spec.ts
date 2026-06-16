@@ -41,6 +41,10 @@ const messages: Record<string, string> = {
   'usage.duration': 'Duration',
   'usage.time': 'Time',
   'usage.userAgent': 'User Agent',
+  'admin.usage.billingType': 'Billing Type',
+  'admin.usage.billingMode': 'Pricing Mode',
+  'admin.usage.billingTypeBalance': 'Balance',
+  'admin.usage.billingTypeSubscription': 'Subscription',
   'usage.imageUnit': ' images',
   'usage.imageCount': 'Image count',
   'usage.imageBillingSize': 'Billing size',
@@ -92,10 +96,12 @@ const TablePageLayoutStub = {
   template: '<div><slot name="actions" /><slot name="filters" /><slot name="table" /><slot /></div>',
 }
 const DataTableStub = {
-  props: ['data'],
+  props: ['columns', 'data'],
   template: `
     <div>
+      <div data-test="usage-columns">{{ (columns || []).map((column) => column.key).join(',') }}</div>
       <div v-for="row in data" :key="row.request_id">
+        <slot name="cell-billing_type" :row="row" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
@@ -214,6 +220,44 @@ describe('user UsageView tooltip', () => {
     expect(text).toContain('$0.092883')
     expect(text).toContain('$5.0000 / 1M tokens')
     expect(text).toContain('$30.0000 / 1M tokens')
+  })
+
+  it('shows billing type before pricing mode in the usage table columns', async () => {
+    query.mockResolvedValue({
+      items: [],
+      total: 0,
+      pages: 0,
+    })
+    getStatsByDateRange.mockResolvedValue({
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      avg_duration_ms: 0,
+    })
+    list.mockResolvedValue({ items: [] })
+
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          TablePageLayout: TablePageLayoutStub,
+          Pagination: true,
+          EmptyState: true,
+          Select: true,
+          DateRangePicker: true,
+          DataTable: DataTableStub,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await nextTick()
+
+    const columns = wrapper.get('[data-test="usage-columns"]').text().split(',')
+    expect(columns).toContain('billing_type')
+    expect(columns.indexOf('billing_type')).toBeLessThan(columns.indexOf('billing_mode'))
   })
 
   it('exports csv with input and output unit price columns', async () => {
@@ -390,7 +434,7 @@ describe('user UsageView tooltip', () => {
       reader.onerror = () => reject(reader.error)
       reader.readAsText(exportedBlob as Blob)
     })
-    expect(csv).toContain('Billing Mode')
+    expect(csv).toContain('Pricing Mode')
     expect(csv).toContain('Image')
     expect(csv).not.toContain(',Token,0,0,0,0,')
 
