@@ -2174,6 +2174,7 @@ export default {
       sortOrderHint: 'Drag groups to adjust display order, groups at the top will be displayed first',
       sortOrderUpdated: 'Sort order updated',
       failedToUpdateSortOrder: 'Failed to update sort order',
+      defaultGroup: 'Default',
       allPlatforms: 'All Platforms',
       allStatus: 'All Status',
       allGroups: 'All Groups',
