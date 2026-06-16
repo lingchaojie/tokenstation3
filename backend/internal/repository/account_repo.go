@@ -653,6 +653,10 @@ func (r *accountRepository) ListOAuthRefreshCandidates(ctx context.Context) ([]s
 	if r.sql == nil {
 		return nil, errors.New("account repository SQL executor not configured")
 	}
+	// (cond) IS NOT TRUE 把 NULL 和 FALSE 都视为"可被刷新"。直接写
+	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
+	// 健康账号：temp_unschedulable_until=NULL）也排除，导致后台 token
+	// 刷新工作器漏掉所有正常账号 → access_token 到期后请求开始 401。
 	rows, err := r.sql.QueryContext(ctx, `
 		SELECT id
 		FROM accounts
@@ -662,10 +666,10 @@ func (r *accountRepository) ListOAuthRefreshCandidates(ctx context.Context) ([]s
 			AND platform IN ('anthropic', 'openai', 'gemini', 'antigravity')
 			AND credentials ? 'refresh_token'
 			AND btrim(credentials->>'refresh_token') <> ''
-			AND NOT (
+			AND (
 				temp_unschedulable_until > NOW()
 				AND temp_unschedulable_reason LIKE 'token refresh retry exhausted:%'
-			)
+			) IS NOT TRUE
 		ORDER BY priority ASC, id ASC
 	`)
 	if err != nil {
@@ -1878,7 +1882,11 @@ func mergeGroupIDs(a []int64, b []int64) []int64 {
 	return out
 }
 
-func buildSchedulerGroupPayload(groupIDs []int64) map[string]any {
+// buildSchedulerGroupPayload 构造 EventAccountChanged / EventAccountGroupsChanged
+// 事件的 payload。空 groupIDs 必须返回 untyped nil（any 而非 map[string]any(nil)），
+// 否则 enqueueSchedulerOutbox 的 "payload != nil" 接口判空会被 typed-nil 欺骗，
+// 把 payload marshal 成 "null" 写入 dedup_key 哈希，破坏与其他 nil-payload 调用的去重一致性。
+func buildSchedulerGroupPayload(groupIDs []int64) any {
 	if len(groupIDs) == 0 {
 		return nil
 	}

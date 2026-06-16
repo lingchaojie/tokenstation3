@@ -90,10 +90,18 @@
           default-sort-order="asc"
           @sort="handleSort"
         >
-          <template #cell-name="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{
-              value
-            }}</span>
+          <template #cell-name="{ row, value }">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="truncate font-medium text-gray-900 dark:text-white">{{
+                value
+              }}</span>
+              <span
+                v-if="isDefaultAPIKeyGroup(row)"
+                class="inline-flex flex-shrink-0 items-center rounded-full bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-700 ring-1 ring-inset ring-primary-200 dark:bg-primary-900/30 dark:text-primary-300 dark:ring-primary-800"
+              >
+                {{ t("admin.groups.defaultGroup") }}
+              </span>
+            </div>
           </template>
 
           <template #cell-platform="{ value }">
@@ -3193,6 +3201,13 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
 });
 
 const groups = ref<AdminGroup[]>([]);
+const defaultGroupIds = ref<{
+  anthropic: number | null;
+  openai: number | null;
+}>({
+  anthropic: null,
+  openai: null,
+});
 const loading = ref(false);
 const usageMap = ref<Map<number, { today_cost: number; total_cost: number }>>(
   new Map(),
@@ -3700,6 +3715,16 @@ const deleteConfirmMessage = computed(() => {
   return t("admin.groups.deleteConfirm", { name: deletingGroup.value.name });
 });
 
+const isDefaultAPIKeyGroup = (group: AdminGroup): boolean => {
+  if (group.platform === "anthropic") {
+    return defaultGroupIds.value.anthropic === group.id;
+  }
+  if (group.platform === "openai") {
+    return defaultGroupIds.value.openai === group.id;
+  }
+  return false;
+};
+
 const loadGroups = async () => {
   if (abortController) {
     abortController.abort();
@@ -3709,23 +3734,35 @@ const loadGroups = async () => {
   const { signal } = currentController;
   loading.value = true;
   try {
-    const response = await adminAPI.groups.list(
-      pagination.page,
-      pagination.page_size,
-      {
-        platform: (filters.platform as GroupPlatform) || undefined,
-        status: filters.status as any,
-        is_exclusive: filters.is_exclusive
-          ? filters.is_exclusive === "true"
-          : undefined,
-        search: searchQuery.value.trim() || undefined,
-        sort_by: sortState.sort_by,
-        sort_order: sortState.sort_order,
-      },
-      { signal },
-    );
+    const [response, settings] = await Promise.all([
+      adminAPI.groups.list(
+        pagination.page,
+        pagination.page_size,
+        {
+          platform: (filters.platform as GroupPlatform) || undefined,
+          status: filters.status as any,
+          is_exclusive: filters.is_exclusive
+            ? filters.is_exclusive === "true"
+            : undefined,
+          search: searchQuery.value.trim() || undefined,
+          sort_by: sortState.sort_by,
+          sort_order: sortState.sort_order,
+        },
+        { signal },
+      ),
+      adminAPI.settings.getSettings().catch((error) => {
+        console.error("Error loading default group settings:", error);
+        return null;
+      }),
+    ]);
     if (signal.aborted) return;
     groups.value = response.items;
+    if (settings) {
+      defaultGroupIds.value = {
+        anthropic: settings.default_anthropic_group_id ?? null,
+        openai: settings.default_openai_group_id ?? null,
+      };
+    }
     pagination.total = response.total;
     pagination.pages = response.pages;
     loadUsageSummary();
