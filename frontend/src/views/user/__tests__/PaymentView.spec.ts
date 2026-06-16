@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/triple-slash-reference */
+/// <reference path="../../../vite-env.d.ts" />
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
@@ -432,6 +435,67 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     const text = wrapper.text()
     expect(text).toContain('payment.planCard.sevenDayQuota: $110')
+    expect(text).not.toContain('payment.planCard.quota: payment.planCard.unlimited')
+  })
+
+  it('uses a generic label for universal active subscriptions without a plan name', async () => {
+    routeState.query = {
+      tab: 'subscription',
+    }
+    activeSubscriptionsState.value = [
+      {
+        id: 10,
+        group_id: 0,
+        plan_name: null,
+        status: 'active',
+        expires_at: null,
+        seven_day_limit_usd: null,
+        group: null,
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.subscription.genericLabel')
+    expect(text).not.toContain('payment.groupFallback')
+    expect(text).not.toContain('Group #0')
+  })
+
+  it('shows direct quota fields for universal active subscriptions without seven-day quota', async () => {
+    routeState.query = {
+      tab: 'subscription',
+    }
+    activeSubscriptionsState.value = [
+      {
+        id: 11,
+        group_id: null,
+        plan_name: 'Custom monthly',
+        status: 'active',
+        expires_at: null,
+        seven_day_limit_usd: null,
+        monthly_limit_usd: 500,
+        group: null,
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('Custom monthly')
+    expect(text).toContain('userSubscriptions.monthly: $500')
     expect(text).not.toContain('payment.planCard.quota: payment.planCard.unlimited')
   })
 

@@ -199,3 +199,25 @@ func TestMigration157AllowsAutoGroupBindingMode(t *testing.T) {
 	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS api_keys_group_binding_mode_check")
 	require.Contains(t, sql, "CHECK (group_binding_mode IN ('static', 'default_follow', 'auto'))")
 }
+
+func TestMigration158MakesPlanEntitlementsGeneric(t *testing.T) {
+	content, err := FS.ReadFile("158_make_subscription_entitlements_generic.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "UPDATE subscription_plans")
+	require.Contains(t, sql, "SET group_id = NULL")
+	require.Contains(t, sql, "WHERE group_id IS NOT NULL")
+	require.Contains(t, sql, "UPDATE user_subscriptions")
+	require.Contains(t, sql, "status = 'active'")
+	require.Contains(t, sql, "expires_at > NOW()")
+	require.Contains(t, sql, "group_id IS NOT NULL")
+	require.Contains(t, sql, "RAISE EXCEPTION")
+	require.Contains(t, sql, "would create duplicate generic subscriptions")
+	require.Contains(t, sql, "generic_subscription_conflicts")
+	require.Contains(t, sql, "existing_generic_subscriptions")
+	require.Contains(t, sql, "subscriptions_to_genericize")
+	require.Contains(t, sql, "group_id IS NULL")
+	require.NotContains(t, sql, "group_id IS NULL OR group_id IS NOT NULL")
+	require.NotContains(t, sql, "payment_orders")
+}

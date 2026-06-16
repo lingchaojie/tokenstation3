@@ -139,133 +139,38 @@
               }}</span>
             </div>
 
-            <!-- Daily Usage -->
-            <div v-if="subscription.group?.daily_limit_usd" class="space-y-2">
+            <!-- Direct usage quotas -->
+            <div
+              v-for="row in subscriptionDirectUsageRows(subscription)"
+              :key="row.key"
+              class="space-y-2"
+            >
               <div class="flex items-center justify-between">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('userSubscriptions.daily') }}
+                  {{ row.label }}
                 </span>
                 <span class="text-sm text-gray-500 dark:text-dark-400">
-                  ${{ (subscription.daily_usage_usd || 0).toFixed(2) }} / ${{
-                    subscription.group.daily_limit_usd.toFixed(2)
-                  }}
+                  ${{ formatUsd(row.used || 0) }} / ${{ formatUsd(row.limit) }}
                 </span>
               </div>
               <div class="relative h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
                 <div
                   class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
-                  :class="
-                    getProgressBarClass(
-                      subscription.daily_usage_usd,
-                      subscription.group.daily_limit_usd
-                    )
-                  "
-                  :style="{
-                    width: getProgressWidth(
-                      subscription.daily_usage_usd,
-                      subscription.group.daily_limit_usd
-                    )
-                  }"
+                  :class="getProgressBarClass(row.used, row.limit)"
+                  :style="{ width: getProgressWidth(row.used, row.limit) }"
                 ></div>
               </div>
               <p
-                v-if="subscription.daily_window_start"
+                v-if="row.resetText"
                 class="text-xs text-gray-500 dark:text-dark-400"
               >
-                {{ formatDailyUsageWindow(subscription) }}
-              </p>
-            </div>
-
-            <!-- Weekly Usage -->
-            <div v-if="subscription.group?.weekly_limit_usd" class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('userSubscriptions.weekly') }}
-                </span>
-                <span class="text-sm text-gray-500 dark:text-dark-400">
-                  ${{ (subscription.weekly_usage_usd || 0).toFixed(2) }} / ${{
-                    subscription.group.weekly_limit_usd.toFixed(2)
-                  }}
-                </span>
-              </div>
-              <div class="relative h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
-                <div
-                  class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
-                  :class="
-                    getProgressBarClass(
-                      subscription.weekly_usage_usd,
-                      subscription.group.weekly_limit_usd
-                    )
-                  "
-                  :style="{
-                    width: getProgressWidth(
-                      subscription.weekly_usage_usd,
-                      subscription.group.weekly_limit_usd
-                    )
-                  }"
-                ></div>
-              </div>
-              <p
-                v-if="subscription.weekly_window_start"
-                class="text-xs text-gray-500 dark:text-dark-400"
-              >
-                {{
-                  t('userSubscriptions.resetIn', {
-                    time: formatResetTime(subscription.weekly_window_start, 168)
-                  })
-                }}
-              </p>
-            </div>
-
-            <!-- Monthly Usage -->
-            <div v-if="subscription.group?.monthly_limit_usd" class="space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('userSubscriptions.monthly') }}
-                </span>
-                <span class="text-sm text-gray-500 dark:text-dark-400">
-                  ${{ (subscription.monthly_usage_usd || 0).toFixed(2) }} / ${{
-                    subscription.group.monthly_limit_usd.toFixed(2)
-                  }}
-                </span>
-              </div>
-              <div class="relative h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
-                <div
-                  class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
-                  :class="
-                    getProgressBarClass(
-                      subscription.monthly_usage_usd,
-                      subscription.group.monthly_limit_usd
-                    )
-                  "
-                  :style="{
-                    width: getProgressWidth(
-                      subscription.monthly_usage_usd,
-                      subscription.group.monthly_limit_usd
-                    )
-                  }"
-                ></div>
-              </div>
-              <p
-                v-if="subscription.monthly_window_start"
-                class="text-xs text-gray-500 dark:text-dark-400"
-              >
-                {{
-                  t('userSubscriptions.resetIn', {
-                    time: formatResetTime(subscription.monthly_window_start, 720)
-                  })
-                }}
+                {{ row.resetText }}
               </p>
             </div>
 
             <!-- No limits configured - Unlimited badge -->
             <div
-              v-if="
-                subscription.seven_day_limit_usd == null &&
-                !subscription.group?.daily_limit_usd &&
-                !subscription.group?.weekly_limit_usd &&
-                !subscription.group?.monthly_limit_usd
-              "
+              v-if="subscriptionUsageRows(subscription).length === 0"
               class="flex items-center justify-center rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 py-6 dark:from-emerald-900/20 dark:to-teal-900/20"
             >
               <div class="flex items-center gap-3">
@@ -372,6 +277,89 @@ function displaySubscriptionDescription(subscription: UserSubscription): string 
   const key = defaultMonthlyPlanKey(subscription.plan_name)
   if (key) return monthlyPlanCopy[key][activeLocale.value].description
   return subscription.group?.description || ''
+}
+
+function getDailyLimit(subscription: UserSubscription): number | null | undefined {
+  return subscription.daily_limit_usd ?? subscription.group?.daily_limit_usd
+}
+
+function getWeeklyLimit(subscription: UserSubscription): number | null | undefined {
+  return subscription.weekly_limit_usd ?? subscription.group?.weekly_limit_usd
+}
+
+function getMonthlyLimit(subscription: UserSubscription): number | null | undefined {
+  return subscription.monthly_limit_usd ?? subscription.group?.monthly_limit_usd
+}
+
+type UsageRowKey = 'seven-day' | 'daily' | 'weekly' | 'monthly'
+type UsageRow = { key: UsageRowKey; label: string; used: number; limit: number; resetText?: string }
+
+function subscriptionUsageRows(subscription: UserSubscription): UsageRow[] {
+  const rows: UsageRow[] = []
+
+  if (subscription.seven_day_limit_usd != null) {
+    rows.push({
+      key: 'seven-day',
+      label: t('userSubscriptions.sevenDayQuota'),
+      used: subscription.seven_day_usage_usd || 0,
+      limit: subscription.seven_day_limit_usd,
+    })
+  }
+
+  const dailyLimit = getDailyLimit(subscription)
+  if (dailyLimit != null) {
+    rows.push({
+      key: 'daily',
+      label: t('userSubscriptions.daily'),
+      used: subscription.daily_usage_usd || 0,
+      limit: dailyLimit,
+    })
+  }
+
+  const weeklyLimit = getWeeklyLimit(subscription)
+  if (weeklyLimit != null) {
+    rows.push({
+      key: 'weekly',
+      label: t('userSubscriptions.weekly'),
+      used: subscription.weekly_usage_usd || 0,
+      limit: weeklyLimit,
+    })
+  }
+
+  const monthlyLimit = getMonthlyLimit(subscription)
+  if (monthlyLimit != null) {
+    rows.push({
+      key: 'monthly',
+      label: t('userSubscriptions.monthly'),
+      used: subscription.monthly_usage_usd || 0,
+      limit: monthlyLimit,
+    })
+  }
+
+  return rows
+}
+
+function subscriptionDirectUsageRows(subscription: UserSubscription): UsageRow[] {
+  return subscriptionUsageRows(subscription)
+    .filter((row) => row.key !== 'seven-day')
+    .map((row) => ({ ...row, resetText: directUsageResetText(subscription, row.key) }))
+}
+
+function directUsageResetText(subscription: UserSubscription, key: UsageRowKey): string {
+  if (key === 'daily' && subscription.daily_window_start) {
+    return formatDailyUsageWindow(subscription)
+  }
+  if (key === 'weekly' && subscription.weekly_window_start) {
+    return t('userSubscriptions.resetIn', {
+      time: formatResetTime(subscription.weekly_window_start, 168)
+    })
+  }
+  if (key === 'monthly' && subscription.monthly_window_start) {
+    return t('userSubscriptions.resetIn', {
+      time: formatResetTime(subscription.monthly_window_start, 720)
+    })
+  }
+  return ''
 }
 
 function hasPlanSeatLimit(subscription: UserSubscription): boolean {

@@ -828,6 +828,27 @@ func UserSubscriptionFromServiceAdmin(sub *service.UserSubscription) *AdminUserS
 	}
 }
 
+func groupDailyLimit(group *service.Group) *float64 {
+	if group == nil {
+		return nil
+	}
+	return group.DailyLimitUSD
+}
+
+func groupWeeklyLimit(group *service.Group) *float64 {
+	if group == nil {
+		return nil
+	}
+	return group.WeeklyLimitUSD
+}
+
+func groupMonthlyLimit(group *service.Group) *float64 {
+	if group == nil {
+		return nil
+	}
+	return group.MonthlyLimitUSD
+}
+
 func userSubscriptionFromServiceBase(sub *service.UserSubscription, group *service.Group) UserSubscription {
 	return UserSubscription{
 		ID:                        sub.ID,
@@ -850,6 +871,9 @@ func userSubscriptionFromServiceBase(sub *service.UserSubscription, group *servi
 		DailyUsageUSD:             sub.DailyUsageUSD,
 		WeeklyUsageUSD:            sub.WeeklyUsageUSD,
 		MonthlyUsageUSD:           sub.MonthlyUsageUSD,
+		DailyLimitUSD:             groupDailyLimit(group),
+		WeeklyLimitUSD:            groupWeeklyLimit(group),
+		MonthlyLimitUSD:           groupMonthlyLimit(group),
 		SevenDayLimitUSD:          sub.EffectiveSevenDayLimit(group),
 		SevenDayUsageUSD:          sub.WeeklyUsageUSD,
 		SevenDayRemainingUSD:      sub.SevenDayRemaining(group),

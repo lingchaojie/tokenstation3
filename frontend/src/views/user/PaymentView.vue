@@ -183,18 +183,17 @@
               <div v-if="activeSubscriptions.length > 0">
                 <p class="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">{{ t('payment.activeSubscription') }}</p>
                 <div class="space-y-2">
-                  <div v-for="sub in activeSubscriptions" :key="sub.id"
+                  <div v-for="sub in activeSubscriptionDisplayItems" :key="sub.id"
                     class="linx-panel flex items-center gap-3 px-3 py-2">
                     <div class="h-6 w-1 shrink-0 rounded-full bg-gradient-to-b from-primary-400 to-primary-500" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ activeSubscriptionLabel(sub) }}</span>
+                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.label }}</span>
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
-                        <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.sevenDayQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd) }}</span>
-                        <span v-if="sub.seven_day_limit_usd != null">{{ t('payment.planCard.totalMonthlyQuota') }}: ${{ formatUSD(sub.seven_day_limit_usd * 4) }}</span>
-                        <span v-if="sub.seven_day_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
-                        <span v-if="sub.expires_at">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expires_at) }) }}</span>
+                        <span v-for="quota in sub.quotas" :key="quota.label">{{ quota.label }}: ${{ formatUSD(quota.value) }}</span>
+                        <span v-if="sub.quotas.length === 0">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
+                        <span v-if="sub.expiresAt">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expiresAt) }) }}</span>
                         <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
                       </div>
                     </div>
@@ -346,10 +345,34 @@ function displaySubscriptionName(planName: string): string {
 function activeSubscriptionLabel(subscription: { plan_name?: string | null; group?: { name?: string | null } | null; group_id?: number | null }): string {
   if (subscription.plan_name) return displaySubscriptionName(subscription.plan_name)
   if (subscription.group?.name) return subscription.group.name
-  return subscription.group_id != null
-    ? t('payment.groupFallback', { id: subscription.group_id })
-    : t('payment.subscription.genericLabel')
+  return t('payment.subscription.genericLabel')
 }
+
+function activeSubscriptionQuotaItems(subscription: {
+  seven_day_limit_usd?: number | null
+  daily_limit_usd?: number | null
+  weekly_limit_usd?: number | null
+  monthly_limit_usd?: number | null
+}) {
+  if (subscription.seven_day_limit_usd != null) {
+    return [
+      { label: t('payment.planCard.sevenDayQuota'), value: subscription.seven_day_limit_usd },
+      { label: t('payment.planCard.totalMonthlyQuota'), value: subscription.seven_day_limit_usd * 4 },
+    ]
+  }
+  return [
+    { label: t('userSubscriptions.daily'), value: subscription.daily_limit_usd },
+    { label: t('userSubscriptions.weekly'), value: subscription.weekly_limit_usd },
+    { label: t('userSubscriptions.monthly'), value: subscription.monthly_limit_usd },
+  ].filter((quota): quota is { label: string; value: number } => quota.value != null)
+}
+
+const activeSubscriptionDisplayItems = computed(() => activeSubscriptions.value.map((sub) => ({
+  id: sub.id,
+  label: activeSubscriptionLabel(sub),
+  quotas: activeSubscriptionQuotaItems(sub),
+  expiresAt: sub.expires_at,
+})))
 
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()

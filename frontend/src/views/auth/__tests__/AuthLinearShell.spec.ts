@@ -96,7 +96,7 @@ describe('Auth LINX2 shell', () => {
     expect(wrapper.find('[data-testid="auth-card"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LINX2.AI')
     expect(wrapper.text()).toContain('一个入口接入 Claude Code、Codex 与 OpenAI。')
-    expect(wrapper.text()).toContain('Claude · Codex · OpenAI')
+    expect(wrapper.text()).toContain('Anthropic · OpenAI')
     expect(wrapper.text()).not.toContain('Gemini')
     expect(wrapper.text()).not.toContain('Linear')
     expect(wrapper.text()).not.toContain('订阅转 API')
@@ -118,7 +118,7 @@ describe('Auth LINX2 shell', () => {
     expect(productPanel.text()).toContain('路由')
     expect(productPanel.text()).toContain('计费')
     expect(productPanel.text()).toContain('用量账本已启用')
-    expect(productPanel.text()).toContain('Claude · Codex · OpenAI')
+    expect(productPanel.text()).toContain('Anthropic · OpenAI')
 
     expect(productPanel.text()).not.toContain('Gemini')
     expect(productPanel.text()).not.toContain('Linear')

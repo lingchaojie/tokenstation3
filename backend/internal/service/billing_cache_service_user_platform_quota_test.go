@@ -863,6 +863,88 @@ func TestCheckBillingEligibility_SubscriptionMode_BypassesPlatformQuota(t *testi
 	}
 }
 
+func TestCheckBillingEligibility_StandardGroupWithSubscriptionBypassesBalanceAndPlatformQuota(t *testing.T) {
+	sevenDayLimit := 100.0
+	fake := &fakeZeroQuotaCache{userBalance: 100}
+	cfg := &config.Config{}
+	cfg.Billing.UserPlatformQuotaCacheTTLSeconds = 60
+	s := &BillingCacheService{
+		cache:                 fake,
+		cfg:                   cfg,
+		userPlatformQuotaRepo: &fakeQuotaRepo{},
+	}
+
+	standardGroup := &Group{
+		ID:               10,
+		SubscriptionType: SubscriptionTypeStandard,
+		Status:           StatusActive,
+	}
+	sub := &UserSubscription{Status: SubscriptionStatusActive, SevenDayLimitUSD: &sevenDayLimit}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, standardGroup, sub, "anthropic")
+	if err != nil {
+		t.Fatalf("standard group with active subscription should be subscription-eligible, got: %v", err)
+	}
+	if fake.balanceCalled {
+		t.Fatal("balance should not be checked when an active subscription is present")
+	}
+	if fake.called {
+		t.Fatal("platform quota should not be checked when an active subscription is present")
+	}
+}
+
+func TestCheckBillingEligibility_StandardGroupExhaustedSubscriptionWithoutFallbackRejectsBeforeBalance(t *testing.T) {
+	sevenDayLimit := 100.0
+	fake := &fakeZeroQuotaCache{
+		subscriptionWeeklyUsage: 100,
+		userBalance:             25,
+	}
+	s := &BillingCacheService{
+		cache: fake,
+		cfg:   &config.Config{},
+	}
+
+	standardGroup := &Group{
+		ID:               10,
+		SubscriptionType: SubscriptionTypeStandard,
+		Status:           StatusActive,
+	}
+	sub := &UserSubscription{Status: SubscriptionStatusActive, SevenDayLimitUSD: &sevenDayLimit}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, standardGroup, sub, "anthropic")
+	if !errors.Is(err, ErrWeeklyLimitExceeded) {
+		t.Fatalf("exhausted subscription without fallback should reject as weekly quota exceeded, got: %v", err)
+	}
+	if fake.balanceCalled {
+		t.Fatal("balance should not be checked when subscription fallback opt-in is disabled")
+	}
+}
+
+func TestCheckBillingEligibility_NilGroupWithSubscriptionUsesSubscriptionEligibility(t *testing.T) {
+	sevenDayLimit := 100.0
+	fake := &fakeZeroQuotaCache{userBalance: 100}
+	s := &BillingCacheService{
+		cache:                 fake,
+		cfg:                   &config.Config{},
+		userPlatformQuotaRepo: &fakeQuotaRepo{},
+	}
+	sub := &UserSubscription{Status: SubscriptionStatusActive, SevenDayLimitUSD: &sevenDayLimit}
+	user := &User{ID: 42}
+
+	err := s.CheckBillingEligibility(context.Background(), user, nil, nil, sub, "anthropic")
+	if err != nil {
+		t.Fatalf("nil group with active subscription should be subscription-eligible, got: %v", err)
+	}
+	if fake.balanceCalled {
+		t.Fatal("balance should not be checked when an active subscription is present")
+	}
+	if fake.called {
+		t.Fatal("platform quota should not be checked when an active subscription is present")
+	}
+}
+
 // TestCheckBillingEligibility_NonSubscriptionGroup_AppliesQuota 验证：
 // 非订阅模式（group=nil）用户 platform quota 超限时被拦截，quota cache 被查询。
 func TestCheckBillingEligibility_NonSubscriptionGroup_AppliesQuota(t *testing.T) {

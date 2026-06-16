@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/triple-slash-reference */
+/// <reference path="../../vite-env.d.ts" />
+
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -174,6 +177,47 @@ describe('SubscriptionsView', () => {
     })
   })
 
+  it('shows generic subscription plan names and direct quota limits without group fallbacks', async () => {
+    mockGetMySubscriptions.mockResolvedValue([
+      {
+        id: 4,
+        user_id: 1,
+        group_id: 0,
+        plan_id: 8,
+        plan_name: 'Max monthly',
+        status: 'active',
+        starts_at: '2030-01-01T00:00:00Z',
+        expires_at: '2030-02-01T00:00:00Z',
+        daily_usage_usd: 0,
+        weekly_usage_usd: 0,
+        monthly_usage_usd: 44,
+        monthly_limit_usd: 500,
+        seven_day_limit_usd: 550,
+        seven_day_usage_usd: 125,
+        seven_day_remaining_usd: 425,
+        seven_day_reset_at: null,
+        daily_window_start: null,
+        weekly_window_start: null,
+        monthly_window_start: '2030-01-01T00:00:00Z',
+        created_at: '2030-01-01T00:00:00Z',
+        updated_at: '2030-01-01T00:00:00Z',
+        group: null,
+      },
+    ])
+
+    const wrapper = mount(SubscriptionsView)
+    await flushPromises()
+
+    const text = wrapper.text()
+
+    expect(text).toContain('Max monthly')
+    expect(text).toContain('Monthly')
+    expect(text).toContain('$44.00')
+    expect(text).toContain('$500.00')
+    expect(text).not.toContain('Group #null')
+    expect(text).not.toContain('Group #0')
+  })
+
   it('does not show unlimited for seven-day quota-only subscriptions', async () => {
     mockGetMySubscriptions.mockResolvedValue([
       {
@@ -217,6 +261,45 @@ describe('SubscriptionsView', () => {
     expect(text).toContain('7-day quota')
     expect(text).toContain('$12.50')
     expect(text).toContain('$50.00')
+    expect(text).not.toContain('Unlimited')
+    expect(text).not.toContain('No usage limits')
+  })
+
+  it('treats explicit zero direct limits as configured quotas, not unlimited', async () => {
+    mockGetMySubscriptions.mockResolvedValue([
+      {
+        id: 5,
+        user_id: 1,
+        group_id: null,
+        plan_id: 9,
+        plan_name: 'Zero quota plan',
+        status: 'active',
+        starts_at: '2030-01-01T00:00:00Z',
+        expires_at: null,
+        daily_usage_usd: 0,
+        weekly_usage_usd: 0,
+        monthly_usage_usd: 0,
+        monthly_limit_usd: 0,
+        seven_day_limit_usd: null,
+        seven_day_usage_usd: 0,
+        seven_day_remaining_usd: null,
+        seven_day_reset_at: null,
+        daily_window_start: null,
+        weekly_window_start: null,
+        monthly_window_start: null,
+        created_at: '2030-01-01T00:00:00Z',
+        updated_at: '2030-01-01T00:00:00Z',
+        group: null,
+      },
+    ])
+
+    const wrapper = mount(SubscriptionsView)
+    await flushPromises()
+
+    const text = wrapper.text()
+
+    expect(text).toContain('Monthly')
+    expect(text).toContain('$0.00 / $0.00')
     expect(text).not.toContain('Unlimited')
     expect(text).not.toContain('No usage limits')
   })

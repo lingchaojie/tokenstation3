@@ -737,7 +737,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// 判断计费模式
-	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	isSubscriptionMode := subscription != nil
 	balanceFallback := false
 
 	if isSubscriptionMode {
@@ -899,12 +899,16 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, userID int64, group *Group, subscription *UserSubscription) error {
 	// 获取订阅缓存数据
 	cacheGroupID := subscriptionCacheGroupID(subscription)
+	routedGroupID := int64(0)
+	if group != nil {
+		routedGroupID = group.ID
+	}
 	subData, err := s.GetSubscriptionStatus(ctx, userID, cacheGroupID)
 	if err != nil {
 		if s.circuitBreaker != nil {
 			s.circuitBreaker.OnFailure(err)
 		}
-		logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription check failed for user %d group %d: %v", userID, group.ID, err)
+		logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription check failed for user %d group %d: %v", userID, routedGroupID, err)
 		return ErrBillingServiceUnavailable.WithCause(err)
 	}
 	if s.circuitBreaker != nil {
@@ -929,7 +933,7 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 				if s.circuitBreaker != nil {
 					s.circuitBreaker.OnFailure(err)
 				}
-				logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription weekly reset failed for user %d group %d: %v", userID, group.ID, err)
+				logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription weekly reset failed for user %d group %d: %v", userID, routedGroupID, err)
 				return ErrBillingServiceUnavailable.WithCause(err)
 			}
 		}
@@ -945,7 +949,7 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 	}
 
 	// 检查限额（使用传入的Group限额配置）
-	if group.HasDailyLimit() && subData.DailyUsage >= *group.DailyLimitUSD {
+	if group != nil && group.HasDailyLimit() && subData.DailyUsage >= *group.DailyLimitUSD {
 		return ErrDailyLimitExceeded
 	}
 
@@ -953,7 +957,7 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		return ErrWeeklyLimitExceeded
 	}
 
-	if group.HasMonthlyLimit() && subData.MonthlyUsage >= *group.MonthlyLimitUSD {
+	if group != nil && group.HasMonthlyLimit() && subData.MonthlyUsage >= *group.MonthlyLimitUSD {
 		return ErrMonthlyLimitExceeded
 	}
 

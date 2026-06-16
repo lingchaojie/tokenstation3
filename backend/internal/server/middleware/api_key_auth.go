@@ -138,27 +138,22 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
-		// ── 5. 加载订阅（订阅模式时始终加载） ───────────────────────
+		// ── 5. 加载订阅（模式无关，始终尝试） ───────────────────────
 
 		// skipBilling: /v1/usage 只需鉴权，跳过所有计费执行
 		skipBilling := c.Request.URL.Path == "/v1/usage"
 
+		// 模式无关：无论分组是订阅还是计费模式，只要用户有有效订阅（通用订阅优先）就加载它。
+		// 找不到订阅不再拦截 —— 降级到 §6 的余额校验（纯计费用户的自然路径）。
+		// 订阅额度用尽的拦截仍由 §6 的 ValidateAndCheckLimits + 余额回退开关处理。
 		var subscription *service.UserSubscription
-		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 
-		if isSubscriptionType && subscriptionService != nil {
-			sub, subErr := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
+		if subscriptionService != nil && apiKey.Group != nil {
+			if sub, subErr := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
 				c.Request.Context(),
 				apiKey.User.ID,
 				apiKey.Group.ID,
-			)
-			if subErr != nil {
-				if !skipBilling {
-					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
-					return
-				}
-				// skipBilling: 订阅不存在也放行，handler 会返回可用的数据
-			} else {
+			); subErr == nil {
 				subscription = sub
 			}
 		}
@@ -331,9 +326,7 @@ func validateAPIKeyGroupAllowed(apiKey *service.APIKey) bool {
 		return true
 	}
 	group := apiKey.Group
-	if group.IsSubscriptionType() {
-		return true
-	}
+	// 模式无关：订阅/计费模式不再决定访问权限。非独占分组对所有人开放；独占分组按白名单控制。
 	return apiKey.User.CanBindGroup(group.ID, group.IsExclusive)
 }
 
