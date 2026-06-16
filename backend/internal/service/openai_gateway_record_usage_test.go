@@ -1309,6 +1309,44 @@ func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingSetsSubscriptionFiel
 	require.Equal(t, 0, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_StandardGroupWithSubscriptionBillsSubscription(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	sevenDayLimit := 10.0
+	subscription := &UserSubscription{ID: 99, SevenDayLimitUSD: &sevenDayLimit}
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_standard_group_subscription_billing",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      100,
+			GroupID: i64p(88),
+			Group: &Group{
+				ID:               88,
+				SubscriptionType: SubscriptionTypeStandard,
+				RateMultiplier:   1.0,
+			},
+		},
+		User:         &User{ID: 200},
+		Account:      &Account{ID: 300},
+		Subscription: subscription,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, BillingTypeSubscription, usageRepo.lastLog.BillingType)
+	require.NotNil(t, usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, subscription.ID, *usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, 1, subRepo.incrementCalls)
+	require.Equal(t, 0, userRepo.deductCalls)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}

@@ -1594,10 +1594,13 @@ export interface UserSubscription {
   seat_over_limit?: boolean
   status: 'active' | 'expired' | 'revoked'
   starts_at: string
-  expires_at: string
+  expires_at: string | null
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  daily_limit_usd?: number | null
+  weekly_limit_usd?: number | null
+  monthly_limit_usd?: number | null
   seven_day_limit_usd: number | null
   seven_day_usage_usd: number
   seven_day_remaining_usd: number | null
@@ -1608,7 +1611,7 @@ export interface UserSubscription {
   created_at: string
   updated_at: string
   user?: User
-  group?: Group
+  group?: Group | null
 }
 
 export interface SubscriptionBalanceSummary {

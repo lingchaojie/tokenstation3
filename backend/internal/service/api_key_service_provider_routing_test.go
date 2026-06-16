@@ -109,6 +109,29 @@ func TestAPIKeyService_ResolveProviderGroup_FallsBackToGlobalProviderRoute(t *te
 	require.Equal(t, PlatformAnthropic, group.Platform)
 }
 
+// Mode-agnostic access: a subscription-mode default group must be resolvable even
+// when the user has no group-bound subscription for it (their universal/generic
+// subscription applies at billing time). Previously canUserBindGroup required a
+// group-bound subscription for subscription-type groups and rejected resolution.
+func TestAPIKeyService_ResolveProviderGroup_AllowsSubscriptionModeGroupWithoutGroupBoundSubscription(t *testing.T) {
+	userID := int64(42)
+	defaultGroupID := int64(3)
+	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+		ID:               defaultGroupID,
+		Platform:         PlatformAnthropic,
+		Status:           StatusActive,
+		SubscriptionType: SubscriptionTypeSubscription,
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+
+	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: userID, Status: StatusActive}, APIKeyTypeAnthropic)
+
+	require.NoError(t, err)
+	require.NotNil(t, groupID)
+	require.Equal(t, defaultGroupID, *groupID)
+	require.NotNil(t, group)
+}
+
 func TestAPIKeyService_ResolveProviderGroup_RejectsMissingDefault(t *testing.T) {
 	svc := &APIKeyService{}
 	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}})

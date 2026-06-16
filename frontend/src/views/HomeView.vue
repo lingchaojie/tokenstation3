@@ -320,6 +320,16 @@
           </div>
 
           <p class="mt-6 text-xs text-linear-ink-tertiary">{{ copy.pricingFootnote }}</p>
+
+          <!-- Pay-as-you-go header -->
+          <div class="mt-14 border-t border-linear-hairline pt-12" data-testid="homepage-payg-block">
+            <div class="max-w-2xl">
+              <p class="linx-section-kicker">{{ copy.paygKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.paygTitle }}</h2>
+              <p class="font-mono-brand mt-5 text-[clamp(1.6rem,3vw,2.1rem)] font-semibold tracking-[-0.04em] text-primary-300">{{ copy.paygRate }}</p>
+              <p class="mt-3 text-base leading-7 text-linear-ink-subtle">{{ copy.paygDescription }}</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -606,6 +616,10 @@ const copies = {
     planPeriod: '月',
     monthlyTotalLabel: '总共可获取',
     pricingFootnote: '订阅额度优先使用；额度不足时继续使用充值余额兜底，实际状态以购买页和控制台为准。',
+    paygKicker: '灵活计费',
+    paygTitle: '按量付费 Pay-as-you-go',
+    paygRate: '¥1 = $1',
+    paygDescription: '额度用完也不断流，充值余额按官方美元原价计费，用多少扣多少。',
     monthlyCardInfo: [
       { title: '每周发放充值额度', description: '月卡按 7 天为一个周期刷新额度，不直接增加账户充值余额。' },
       { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容网关，不按供应商拆分。' },
@@ -672,6 +686,10 @@ const copies = {
     planPeriod: 'month',
     monthlyTotalLabel: 'Total obtainable',
     pricingFootnote: 'Subscription quota is used first; recharge balance keeps overflow requests running. Purchase page and console state are authoritative.',
+    paygKicker: 'Flexible billing',
+    paygTitle: 'Pay-as-you-go',
+    paygRate: '¥1 = $1',
+    paygDescription: 'Never hit a wall — recharge balance is billed at official USD pricing, so you only pay for what you use.',
     monthlyCardInfo: [
       { title: 'Weekly recharge quota', description: 'Monthly cards refresh usable quota every seven days without adding to your recharge wallet.' },
       { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible gateway access without provider-specific splitting.' },

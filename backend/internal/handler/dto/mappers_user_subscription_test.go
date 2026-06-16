@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -103,4 +104,33 @@ func TestUserSubscriptionFromServiceWithGroup_DoesNotFallbackForPlanBackedNilQuo
 	require.Nil(t, got.SevenDayLimitUSD)
 	require.Nil(t, got.SevenDayRemainingUSD)
 	require.InDelta(t, 20.5, got.SevenDayUsageUSD, 1e-9)
+}
+
+func TestUserSubscriptionFromServiceWithGroup_EmitsDirectLimitFields(t *testing.T) {
+	t.Parallel()
+
+	dailyLimit := 10.0
+	weeklyLimit := 70.0
+	monthlyLimit := 300.0
+	sub := &service.UserSubscription{
+		ID:              1004,
+		UserID:          2005,
+		DailyUsageUSD:   1.25,
+		WeeklyUsageUSD:  20.5,
+		MonthlyUsageUSD: 90,
+	}
+	group := &service.Group{
+		DailyLimitUSD:   &dailyLimit,
+		WeeklyLimitUSD:  &weeklyLimit,
+		MonthlyLimitUSD: &monthlyLimit,
+	}
+
+	got := UserSubscriptionFromServiceWithGroup(sub, group)
+
+	require.NotNil(t, got)
+	body, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"daily_limit_usd":10`)
+	require.Contains(t, string(body), `"weekly_limit_usd":70`)
+	require.Contains(t, string(body), `"monthly_limit_usd":300`)
 }

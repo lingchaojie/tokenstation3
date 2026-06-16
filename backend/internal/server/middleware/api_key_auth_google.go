@@ -78,18 +78,20 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 
-		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
-		if isSubscriptionType && subscriptionService != nil {
-			subscription, err := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
+		// 模式无关：无论分组是订阅还是计费模式，只要用户有有效订阅（通用订阅优先）就加载它。
+		// 找不到订阅不再拦截 —— 降级到下方余额校验。订阅额度用尽仍由限额校验 + 回退开关处理。
+		var subscription *service.UserSubscription
+		if subscriptionService != nil && apiKey.Group != nil {
+			if sub, subErr := subscriptionService.ResolveActiveSubscriptionForRoutedGroup(
 				c.Request.Context(),
 				apiKey.User.ID,
 				apiKey.Group.ID,
-			)
-			if err != nil {
-				abortWithGoogleError(c, 403, "No active subscription found for this group")
-				return
+			); subErr == nil {
+				subscription = sub
 			}
+		}
 
+		if subscription != nil {
 			needsMaintenance, err := subscriptionService.ValidateAndCheckLimits(subscription, apiKey.Group)
 			if err != nil {
 				limitExceeded := errors.Is(err, service.ErrDailyLimitExceeded) ||

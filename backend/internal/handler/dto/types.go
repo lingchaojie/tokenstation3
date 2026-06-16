@@ -632,6 +632,9 @@ type UserSubscription struct {
 	DailyUsageUSD        float64    `json:"daily_usage_usd"`
 	WeeklyUsageUSD       float64    `json:"weekly_usage_usd"`
 	MonthlyUsageUSD      float64    `json:"monthly_usage_usd"`
+	DailyLimitUSD        *float64   `json:"daily_limit_usd"`
+	WeeklyLimitUSD       *float64   `json:"weekly_limit_usd"`
+	MonthlyLimitUSD      *float64   `json:"monthly_limit_usd"`
 	SevenDayLimitUSD     *float64   `json:"seven_day_limit_usd"`
 	SevenDayUsageUSD     float64    `json:"seven_day_usage_usd"`
 	SevenDayRemainingUSD *float64   `json:"seven_day_remaining_usd"`

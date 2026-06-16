@@ -441,6 +441,47 @@ func TestGatewayServiceRecordUsage_BillingErrorSkipsUsageLogWrite(t *testing.T) 
 	require.Equal(t, 0, usageRepo.calls)
 }
 
+func TestGatewayServiceRecordUsage_StandardGroupWithSubscriptionBillsSubscription(t *testing.T) {
+	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, subRepo)
+	sevenDayLimit := 10.0
+	subscription := &UserSubscription{ID: 99, SevenDayLimitUSD: &sevenDayLimit}
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_standard_group_subscription_billing",
+			Usage: ClaudeUsage{
+				InputTokens:  10,
+				OutputTokens: 5,
+			},
+			Model:    "claude-sonnet-4",
+			Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      100,
+			GroupID: i64p(88),
+			Group: &Group{
+				ID:               88,
+				SubscriptionType: SubscriptionTypeStandard,
+				RateMultiplier:   1.0,
+			},
+		},
+		User:         &User{ID: 200},
+		Account:      &Account{ID: 300},
+		Subscription: subscription,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, BillingTypeSubscription, usageRepo.lastLog.BillingType)
+	require.NotNil(t, usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, subscription.ID, *usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, 1, subRepo.incrementCalls)
+	require.Equal(t, 0, userRepo.deductCalls)
+}
+
 func TestGatewayServiceRecordUsage_ReasoningEffortPersisted(t *testing.T) {
 	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
 	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
