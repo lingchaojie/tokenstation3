@@ -414,11 +414,41 @@ func ingressProviderFromContext(ctx context.Context) string {
 	return ""
 }
 
+func ingressModelFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(ctxkey.IngressModel).(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func autoBindingKeyTypeFromContext(ctx context.Context) string {
+	keyType := ingressProviderFromContext(ctx)
+	if keyType != APIKeyTypeOpenAI {
+		return keyType
+	}
+	if modelFamilyAPIKeyType(ingressModelFromContext(ctx)) == APIKeyTypeAnthropic {
+		return APIKeyTypeAnthropic
+	}
+	return keyType
+}
+
+func modelFamilyAPIKeyType(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalized, "claude-") {
+		return APIKeyTypeAnthropic
+	}
+	return ""
+}
+
 // applyDefaultFollowGroup resolves the effective group for keys whose group is
 // determined dynamically at auth time:
 //   - default_follow: follows the admin default group for the key's stored key_type.
 //   - auto: provider-agnostic; follows the admin default group for the provider
-//     detected from the request path (ingress provider).
+//     detected from the request path, with Claude model names on OpenAI-compatible
+//     endpoints corrected to the Anthropic default group.
 //
 // Static keys keep their stored group. The (userID, provider) effective-group
 // cache is shared across both dynamic modes by design.
@@ -431,7 +461,7 @@ func (s *APIKeyService) applyDefaultFollowGroup(ctx context.Context, apiKey *API
 	case APIKeyGroupBindingModeDefaultFollow:
 		keyType = NormalizeAPIKeyType(apiKey.KeyType)
 	case APIKeyGroupBindingModeAuto:
-		keyType = ingressProviderFromContext(ctx)
+		keyType = autoBindingKeyTypeFromContext(ctx)
 	default:
 		return nil
 	}
