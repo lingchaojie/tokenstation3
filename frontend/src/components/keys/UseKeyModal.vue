@@ -270,23 +270,22 @@ const clientTabs = computed((): TabConfig[] => {
     case 'unified':
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
-        { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
-        { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
+        { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
       ]
     case 'openai': {
-      const tabs: TabConfig[] = [
-        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
-        { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
-        { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
-      ]
+      const tabs: TabConfig[] = []
       if (props.allowMessagesDispatch) {
         tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
       }
-      tabs.push({ id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon })
+      tabs.push(
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
+        { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+      )
       return tabs
     }
     case 'gemini':
@@ -328,13 +327,16 @@ const showShellTabs = computed(() => activeClientTab.value !== 'opencode' && !py
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
-  if (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws') {
+  if (activeClientTab.value === 'codex') {
     return openaiTabs
   }
   return shellTabs
 })
 
 const platformDescription = computed(() => {
+  if (activeClientTab.value === 'opencode') {
+    return t('keys.useKeyModal.opencode.description')
+  }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.description')
   }
@@ -451,9 +453,6 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'codex') {
         return generateOpenAIFiles(baseUrl, apiKey)
       }
-      if (activeClientTab.value === 'codex-ws') {
-        return generateOpenAIWsFiles(baseUrl, apiKey)
-      }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
@@ -463,9 +462,6 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'claude') {
         // ANTHROPIC_BASE_URL must be bare — Claude Code appends /v1/messages.
         return generateAnthropicFiles(baseRoot, apiKey)
-      }
-      if (activeClientTab.value === 'codex-ws') {
-        return generateOpenAIWsFiles(baseUrl, apiKey)
       }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
@@ -685,48 +681,6 @@ goals = true`
   ]
 }
 
-function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-
-  // config.toml content with WebSocket v2
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-supports_websockets = true
-requires_openai_auth = true
-
-[features]
-responses_websockets_v2 = true
-goals = true`
-
-  // auth.json content
-  const authContent = `{
-  "OPENAI_API_KEY": "${apiKey}"
-}`
-
-  return [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    },
-    {
-      path: `${configDir}/auth.json`,
-      content: authContent
-    }
-  ]
-}
-
 function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {
   const provider: Record<string, any> = {
     [platform]: {
@@ -736,118 +690,30 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const reasoningVariants = {
+    low: {},
+    medium: {},
+    high: {},
+    xhigh: {}
+  }
+  const openaiModel = (name: string, context: number, output = 128000) => ({
+    name,
+    limit: {
+      context,
+      output
+    },
+    options: {
+      store: false
+    },
+    variants: reasoningVariants
+  })
   const openaiModels = {
-    'gpt-5.2': {
-      name: 'GPT-5.2',
-      limit: {
-        context: 400000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.5': {
-      name: 'GPT-5.5',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.4': {
-      name: 'GPT-5.4',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.4-mini': {
-      name: 'GPT-5.4 Mini',
-      limit: {
-        context: 400000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.3-codex-spark': {
-      name: 'GPT-5.3 Codex Spark',
-      limit: {
-        context: 128000,
-        output: 32000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.3-codex': {
-      name: 'GPT-5.3 Codex',
-      limit: {
-        context: 400000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'codex-mini-latest': {
-      name: 'Codex Mini',
-      limit: {
-        context: 200000,
-        output: 100000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {}
-      }
-    }
+    'gpt-5.5': openaiModel('GPT-5.5', 1050000),
+    'gpt-5.4': openaiModel('GPT-5.4', 1050000),
+    'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),
+    'gpt-5.3-codex': openaiModel('GPT-5.3 Codex', 400000),
+    'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
+    'gpt-5.2': openaiModel('GPT-5.2', 400000)
   }
   const geminiModels = {
     'gemini-2.0-flash': {
@@ -1085,73 +951,55 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const claudeModel = (
+    name: string,
+    context: number,
+    output: number,
+    thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens: number }
+  ) => ({
+    name,
+    limit: {
+      context,
+      output
+    },
+    modalities: {
+      input: ['text', 'image', 'pdf'],
+      output: ['text']
+    },
+    ...(thinking ? { options: { thinking } } : {})
+  })
+  const claudeAdaptive = (name: string) => claudeModel(name, 1048576, 128000, { type: 'adaptive' })
+  const claudeThinking = (name: string, output = 128000) =>
+    claudeModel(name, 200000, output, { budgetTokens: 24576, type: 'enabled' })
   const claudeModels = {
-    'claude-fable-5': {
-      name: 'Claude Fable 5',
-      limit: {
-        context: 1048576,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          type: 'adaptive'
-        }
-      }
-    },
-    'claude-mythos-5': {
-      name: 'Claude Mythos 5',
-      limit: {
-        context: 1048576,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          type: 'adaptive'
-        }
-      }
-    },
-    'claude-opus-4-6-thinking': {
-      name: 'Claude 4.6 Opus (Thinking)',
-      limit: {
-        context: 200000,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'claude-sonnet-4-6': {
-      name: 'Claude 4.6 Sonnet',
-      limit: {
-        context: 200000,
-        output: 64000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
+    'claude-fable-5': claudeAdaptive('Claude Fable 5'),
+    'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
+    'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
+    'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),
+    'claude-opus-4-6': claudeModel('Claude Opus 4.6', 200000, 128000),
+    'claude-opus-4-5-20251101': claudeModel('Claude Opus 4.5', 200000, 128000),
+    'claude-sonnet-4-6': claudeThinking('Claude Sonnet 4.6', 64000),
+    'claude-sonnet-4-5-20250929': claudeModel('Claude Sonnet 4.5', 200000, 64000),
+    'claude-haiku-4-5-20251001': claudeModel('Claude Haiku 4.5', 200000, 64000),
+    'claude-sonnet-4-20250514': claudeModel('Claude Sonnet 4', 200000, 64000),
+    'claude-opus-4-20250514': claudeModel('Claude Opus 4', 200000, 128000),
+    'claude-opus-4-1-20250805': claudeModel('Claude Opus 4.1', 200000, 128000),
+    'claude-3-7-sonnet-20250219': claudeModel('Claude Sonnet 3.7', 200000, 64000),
+    'claude-3-5-sonnet-20241022': claudeModel('Claude Sonnet 3.5 20241022', 200000, 8192),
+    'claude-3-5-sonnet-20240620': claudeModel('Claude Sonnet 3.5 20240620', 200000, 8192),
+    'claude-3-5-haiku-20241022': claudeModel('Claude Haiku 3.5', 200000, 8192)
+  }
+  const antigravityClaudeModels = {
+    'claude-fable-5': claudeAdaptive('Claude Fable 5'),
+    'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
+    'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
+    'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),
+    'claude-opus-4-6': claudeModel('Claude Opus 4.6', 200000, 128000),
+    'claude-opus-4-6-thinking': claudeThinking('Claude Opus 4.6 Thinking'),
+    'claude-opus-4-5-thinking': claudeThinking('Claude Opus 4.5 Thinking'),
+    'claude-sonnet-4-6': claudeThinking('Claude Sonnet 4.6', 64000),
+    'claude-sonnet-4-5': claudeModel('Claude Sonnet 4.5', 200000, 64000),
+    'claude-sonnet-4-5-thinking': claudeThinking('Claude Sonnet 4.5 Thinking', 64000)
   }
 
   if (platform === 'gemini') {
@@ -1159,10 +1007,11 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].models = geminiModels
   } else if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
+    provider[platform].models = claudeModels
   } else if (platform === 'antigravity-claude') {
     provider[platform].npm = '@ai-sdk/anthropic'
     provider[platform].name = 'Antigravity (Claude)'
-    provider[platform].models = claudeModels
+    provider[platform].models = antigravityClaudeModels
   } else if (platform === 'antigravity-gemini') {
     provider[platform].npm = '@ai-sdk/google'
     provider[platform].name = 'Antigravity (Gemini)'
@@ -1186,12 +1035,30 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
           }
         }
       : undefined
+  const defaultModelByPlatform: Record<string, string> = {
+    anthropic: 'anthropic/claude-fable-5',
+    openai: 'openai/gpt-5.5',
+    gemini: 'gemini/gemini-2.5-flash',
+    'antigravity-claude': 'antigravity-claude/claude-fable-5',
+    'antigravity-gemini': 'antigravity-gemini/gemini-2.5-flash'
+  }
+  const smallModelByPlatform: Record<string, string> = {
+    anthropic: 'anthropic/claude-haiku-4-5-20251001',
+    openai: 'openai/gpt-5.3-codex-spark',
+    gemini: 'gemini/gemini-2.0-flash',
+    'antigravity-claude': 'antigravity-claude/claude-sonnet-4-5',
+    'antigravity-gemini': 'antigravity-gemini/gemini-2.5-flash-lite'
+  }
+  const defaultModel = defaultModelByPlatform[platform]
+  const smallModel = smallModelByPlatform[platform]
 
   const content = JSON.stringify(
     {
+      $schema: 'https://opencode.ai/config.json',
+      ...(defaultModel ? { model: defaultModel } : {}),
+      ...(smallModel ? { small_model: smallModel } : {}),
       provider,
-      ...(agent ? { agent } : {}),
-      $schema: 'https://opencode.ai/config.json'
+      ...(agent ? { agent } : {})
     },
     null,
     2

@@ -17,6 +17,39 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai',
+        allowMessagesDispatch: true
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const tabLabels = wrapper.findAll('nav[aria-label="Client"] button').map((button) => button.text())
+
+    expect(tabLabels).toEqual([
+      'keys.useKeyModal.cliTabs.claudeCode',
+      'keys.useKeyModal.cliTabs.codexCli',
+      'keys.useKeyModal.cliTabs.opencode',
+      'keys.useKeyModal.cliTabs.openaiPythonSdk',
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+    ])
+    expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
+  })
+
   it('renders Anthropic Python SDK client config', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -237,46 +270,6 @@ describe('UseKeyModal', () => {
     expect(configToml).toContain('[features]\ngoals = true')
   })
 
-  it('renders GPT-5.5 and goals feature in OpenAI Codex WebSocket config', async () => {
-    const wrapper = mount(UseKeyModal, {
-      props: {
-        show: true,
-        apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
-        platform: 'openai'
-      },
-      global: {
-        stubs: {
-          BaseDialog: {
-            template: '<div><slot /><slot name="footer" /></div>'
-          },
-          Icon: {
-            template: '<span />'
-          }
-        }
-      }
-    })
-
-    const wsTab = wrapper.findAll('button').find((button) =>
-      button.text().includes('keys.useKeyModal.cliTabs.codexCliWs')
-    )
-
-    expect(wsTab).toBeDefined()
-    await wsTab!.trigger('click')
-    await nextTick()
-
-    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) => content.includes('supports_websockets = true'))
-
-    expect(configToml).toBeDefined()
-    expect(configToml).toContain('model = "gpt-5.5"')
-    expect(configToml).toContain('review_model = "gpt-5.5"')
-    expect(configToml).not.toContain('model = "gpt-5.4"')
-    expect(configToml).not.toContain('model_context_window')
-    expect(configToml).not.toContain('model_auto_compact_token_limit')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
-  })
-
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -309,6 +302,85 @@ describe('UseKeyModal', () => {
     expect(codeBlock.exists()).toBe(true)
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Mini"')
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
+
+    const parsed = JSON.parse(codeBlock.text())
+    expect(parsed.$schema).toBe('https://opencode.ai/config.json')
+    expect(parsed.model).toBe('openai/gpt-5.5')
+    expect(parsed.small_model).toBe('openai/gpt-5.3-codex-spark')
+    expect(parsed.provider.openai.options).toEqual({
+      baseURL: 'https://example.com/v1',
+      apiKey: 'sk-test'
+    })
+    expect(Object.keys(parsed.provider.openai.models)).toEqual([
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex',
+      'gpt-5.3-codex-spark',
+      'gpt-5.2'
+    ])
+    expect(parsed.provider.openai.models).not.toHaveProperty('codex-mini-latest')
+    expect(parsed.provider.openai.models).not.toHaveProperty('codex-auto-review')
+    expect(parsed.provider.openai.models).not.toHaveProperty('gpt-image-2')
+    expect(parsed.provider.openai.models).not.toHaveProperty('gpt-4o-audio-preview')
+    expect(parsed.provider.openai.models).not.toHaveProperty('gpt-4o-realtime-preview')
+    expect(wrapper.text()).toContain('keys.useKeyModal.opencode.description')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.openai.description')
+  })
+
+  it('renders current Claude models in Anthropic OpenCode config', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'anthropic'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const parsed = JSON.parse(wrapper.find('pre code').text())
+    expect(parsed.model).toBe('anthropic/claude-fable-5')
+    expect(parsed.small_model).toBe('anthropic/claude-haiku-4-5-20251001')
+    expect(parsed.provider.anthropic.options).toEqual({
+      baseURL: 'https://example.com/v1',
+      apiKey: 'sk-test'
+    })
+    expect(Object.keys(parsed.provider.anthropic.models)).toEqual([
+      'claude-fable-5',
+      'claude-mythos-5',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-opus-4-5-20251101',
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-5-20250929',
+      'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-20250514',
+      'claude-opus-4-1-20250805',
+      'claude-3-7-sonnet-20250219',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-sonnet-20240620',
+      'claude-3-5-haiku-20241022'
+    ])
   })
 
   it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
