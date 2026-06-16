@@ -826,7 +826,6 @@ export default {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
-        codexCliWs: 'Codex CLI (WebSocket)',
         anthropicPythonSdk: 'Python SDK',
         openaiPythonSdk: 'Python SDK',
         openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
@@ -850,6 +849,7 @@ export default {
       opencode: {
         title: 'OpenCode 配置示例',
         subtitle: 'opencode.json',
+        description: '将以下配置写入 OpenCode 配置文件，使用当前支持的 Claude 或 OpenAI 模型通过此 API 密钥访问网关。',
         hint: '配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。可使用默认 provider（openai/anthropic/google）或自定义 provider_id。API Key 支持直接配置或通过客户端 /connect 命令配置。示例仅供参考，模型与选项可按需调整。'
       }
     },

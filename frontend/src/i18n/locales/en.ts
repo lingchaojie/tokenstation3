@@ -825,7 +825,6 @@ export default {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
-        codexCliWs: 'Codex CLI (WebSocket)',
         anthropicPythonSdk: 'Python SDK',
         openaiPythonSdk: 'Python SDK',
         openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
@@ -846,6 +845,7 @@ export default {
       opencode: {
         title: 'OpenCode Example',
         subtitle: 'opencode.json',
+        description: 'Add the following OpenCode config to use this API key with the currently supported Claude or OpenAI models.',
         hint: 'Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.',
       },
     },

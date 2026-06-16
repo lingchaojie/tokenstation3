@@ -75,6 +75,48 @@ func TestAPIKeyService_AutoBinding_ResolvesGroupByIngressProvider(t *testing.T) 
 	require.Equal(t, PlatformOpenAI, keyB.Group.Platform)
 }
 
+func TestAPIKeyService_AutoBinding_OpenAIIngressClaudeModelUsesAnthropicDefault(t *testing.T) {
+	userID := int64(7)
+	anthropicGroupID := int64(10)
+	openaiGroupID := int64(20)
+	svc := newAutoRoutingService(t, anthropicGroupID, openaiGroupID)
+
+	key := &APIKey{
+		UserID:           userID,
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+		User:             &User{ID: userID, Status: StatusActive},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.IngressProvider, PlatformOpenAI)
+	ctx = context.WithValue(ctx, ctxkey.IngressModel, "claude-opus-4-7")
+
+	require.NoError(t, svc.applyDefaultFollowGroup(ctx, key))
+	require.NotNil(t, key.GroupID)
+	require.Equal(t, anthropicGroupID, *key.GroupID)
+	require.NotNil(t, key.Group)
+	require.Equal(t, PlatformAnthropic, key.Group.Platform)
+}
+
+func TestAPIKeyService_AutoBinding_OpenAIIngressOpenAIModelKeepsOpenAIDefault(t *testing.T) {
+	userID := int64(7)
+	anthropicGroupID := int64(10)
+	openaiGroupID := int64(20)
+	svc := newAutoRoutingService(t, anthropicGroupID, openaiGroupID)
+
+	key := &APIKey{
+		UserID:           userID,
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+		User:             &User{ID: userID, Status: StatusActive},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.IngressProvider, PlatformOpenAI)
+	ctx = context.WithValue(ctx, ctxkey.IngressModel, "gpt-5.5")
+
+	require.NoError(t, svc.applyDefaultFollowGroup(ctx, key))
+	require.NotNil(t, key.GroupID)
+	require.Equal(t, openaiGroupID, *key.GroupID)
+	require.NotNil(t, key.Group)
+	require.Equal(t, PlatformOpenAI, key.Group.Platform)
+}
+
 func TestAPIKeyService_AutoBinding_NoIngressLeavesGroupUnresolved(t *testing.T) {
 	svc := newAutoRoutingService(t, 10, 20)
 	key := &APIKey{

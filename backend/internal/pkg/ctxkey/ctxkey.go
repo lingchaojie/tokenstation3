@@ -13,6 +13,10 @@ const (
 	// 解析对应 provider 的默认分组。
 	IngressProvider Key = "ctx_ingress_provider"
 
+	// IngressModel 当前请求体里的顶层 model 字段。由 handler.InboundEndpointMiddleware
+	// 在鉴权前尽量提取，用于统一 Key 对明显跨协议模型族请求做路由纠偏。
+	IngressModel Key = "ctx_ingress_model"
+
 	// RequestID 为服务端生成/透传的请求 ID。
 	RequestID Key = "ctx_request_id"
 
