@@ -25,6 +25,8 @@ const messages: Record<string, string> = {
   'admin.dashboard.day': 'Day',
   'admin.dashboard.hour': 'Hour',
   'admin.usage.failedToLoadUser': 'Failed to load user',
+  'admin.usage.billingType': 'Billing Type',
+  'admin.usage.billingMode': 'Pricing Mode',
 }
 
 const formatLocalDate = (date: Date): string => {
@@ -92,8 +94,14 @@ vi.mock('vue-router', () => ({
 const AppLayoutStub = { template: '<div><slot /></div>' }
 const UsageFiltersStub = { template: '<div><slot name="after-reset" /></div>' }
 const UsageTableStub = {
+  props: ['columns'],
   emits: ['userClick'],
-  template: '<div data-test="usage-table"><button class="user-click" @click="$emit(\'userClick\', 2)">user</button></div>',
+  template: `
+    <div data-test="usage-table">
+      <div data-test="usage-table-columns">{{ (columns || []).map((column) => column.key).join(',') }}</div>
+      <button class="user-click" @click="$emit('userClick', 2)">user</button>
+    </div>
+  `,
 }
 const ModelDistributionChartStub = {
   props: ['metric'],
@@ -292,6 +300,60 @@ describe('admin UsageView handleUserClick', () => {
     await flushPromises()
 
     expect(getById).toHaveBeenCalledWith(2, true)
+  })
+})
+
+describe('admin UsageView columns', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset()
+    getStats.mockReset()
+    getSnapshotV2.mockReset()
+    getById.mockReset()
+    getModelStats.mockReset()
+
+    list.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockResolvedValue({
+      total_requests: 0, total_input_tokens: 0, total_output_tokens: 0,
+      total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0,
+    })
+    getSnapshotV2.mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockResolvedValue({ models: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows billing type before pricing mode in the usage table', async () => {
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          UsageStatsCards: true,
+          UsageFilters: UsageFiltersStub,
+          UsageTable: UsageTableStub,
+          UsageExportProgress: true,
+          UsageCleanupDialog: true,
+          UserBalanceHistoryModal: true,
+          Pagination: true,
+          Select: true,
+          DateRangePicker: true,
+          Icon: true,
+          TokenUsageTrend: true,
+          ModelDistributionChart: true,
+          GroupDistributionChart: true,
+          EndpointDistributionChart: true,
+        },
+      },
+    })
+
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const columns = wrapper.get('[data-test="usage-table-columns"]').text().split(',')
+    expect(columns).toContain('billing_type')
+    expect(columns.indexOf('billing_type')).toBeLessThan(columns.indexOf('billing_mode'))
   })
 })
 

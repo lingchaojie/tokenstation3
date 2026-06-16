@@ -23,7 +23,7 @@ const messages: Record<string, string> = {
   'admin.usage.allBillingTypes': 'All Billing Types',
   'admin.usage.billingTypeBalance': 'Balance',
   'admin.usage.billingTypeSubscription': 'Subscription',
-  'admin.usage.billingMode': 'Billing Mode',
+  'admin.usage.billingMode': 'Pricing Mode',
   'admin.usage.allBillingModes': 'All Billing Modes',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per Request',
@@ -191,5 +191,15 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
 
     const opts = (wrapper.vm as any).modelOptions as Array<{ value: string | null; label: string }>
     expect(opts.map((o) => o.value)).toEqual([null, 'claude-3', 'gpt-4o'])
+  })
+})
+
+describe('UsageFilters — billing labels', () => {
+  it('labels billing_mode as pricing mode to distinguish it from billing type', () => {
+    const wrapper = mountFilters()
+
+    expect(wrapper.text()).toContain('Billing Type')
+    expect(wrapper.text()).toContain('Pricing Mode')
+    expect(wrapper.text()).not.toContain('Billing Mode')
   })
 })

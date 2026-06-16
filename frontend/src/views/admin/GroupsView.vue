@@ -509,10 +509,7 @@
           />
           <p class="input-hint">{{ t("admin.groups.form.rpmLimitHint") }}</p>
         </div>
-        <div
-          v-if="createForm.subscription_type !== 'subscription'"
-          data-tour="group-form-exclusive"
-        >
+        <div data-tour="group-form-exclusive">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.form.exclusive") }}
@@ -581,68 +578,6 @@
                   : t("admin.groups.public")
               }}
             </span>
-          </div>
-        </div>
-
-        <!-- Subscription Configuration -->
-        <div class="mt-4 border-t pt-4">
-          <div>
-            <label class="input-label">{{
-              t("admin.groups.subscription.type")
-            }}</label>
-            <Select
-              v-model="createForm.subscription_type"
-              :options="subscriptionTypeOptions"
-            />
-            <p class="input-hint">
-              {{ t("admin.groups.subscription.typeHint") }}
-            </p>
-          </div>
-
-          <!-- Subscription limits (only show when subscription type is selected) -->
-          <div
-            v-if="createForm.subscription_type === 'subscription'"
-            class="space-y-4 border-l-2 border-primary-200 pl-4 dark:border-primary-800"
-          >
-            <div>
-              <label class="input-label">{{
-                t("admin.groups.subscription.dailyLimit")
-              }}</label>
-              <input
-                v-model.number="createForm.daily_limit_usd"
-                type="number"
-                step="0.01"
-                min="0"
-                class="input"
-                :placeholder="t('admin.groups.subscription.noLimit')"
-              />
-            </div>
-            <div>
-              <label class="input-label">{{
-                t("admin.groups.subscription.weeklyLimit")
-              }}</label>
-              <input
-                v-model.number="createForm.weekly_limit_usd"
-                type="number"
-                step="0.01"
-                min="0"
-                class="input"
-                :placeholder="t('admin.groups.subscription.noLimit')"
-              />
-            </div>
-            <div>
-              <label class="input-label">{{
-                t("admin.groups.subscription.monthlyLimit")
-              }}</label>
-              <input
-                v-model.number="createForm.monthly_limit_usd"
-                type="number"
-                step="0.01"
-                min="0"
-                class="input"
-                :placeholder="t('admin.groups.subscription.noLimit')"
-              />
-            </div>
           </div>
         </div>
 
@@ -1375,11 +1310,10 @@
           </div>
         </div>
 
-        <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
+        <!-- 无效请求兜底（仅 anthropic/antigravity 平台） -->
         <div
           v-if="
-            ['anthropic', 'antigravity'].includes(createForm.platform) &&
-            createForm.subscription_type !== 'subscription'
+            ['anthropic', 'antigravity'].includes(createForm.platform)
           "
           class="border-t pt-4"
         >
