@@ -43,6 +43,9 @@
               <p class="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm leading-6 text-emerald-700 dark:text-emerald-200">
                 {{ t('payment.subscriptionOverflowPaygHint') }}
               </p>
+              <p class="mt-2 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-200">
+                {{ t('payment.rechargeBalanceUsageOnlyHint') }}
+              </p>
             </div>
             <div class="linx-panel p-5">
               <div class="flex items-start justify-between gap-4">

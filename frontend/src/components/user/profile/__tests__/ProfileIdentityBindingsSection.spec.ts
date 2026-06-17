@@ -47,6 +47,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
         if (key === 'profile.authBindings.status.notBound') return 'Not bound'
         if (key === 'profile.authBindings.providers.email') return 'Email'
         if (key === 'profile.authBindings.providers.linuxdo') return 'LinuxDo'
+        if (key === 'profile.authBindings.providers.dingtalk') return 'DingTalk'
         if (key === 'profile.authBindings.providers.wechat') return 'WeChat'
         if (key === 'profile.authBindings.providers.oidc') return params?.providerName || 'OIDC'
         if (key === 'profile.authBindings.bindAction') return `Bind ${params?.providerName || ''}`.trim()
@@ -627,5 +628,68 @@ describe('ProfileIdentityBindingsSection', () => {
 
     expect(wrapper.find('[data-testid="profile-binding-linuxdo-action"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="profile-binding-oidc-action"]').exists()).toBe(false)
+  })
+
+  it('hides disabled third-party providers that are not bound', () => {
+    const wrapper = mount(ProfileIdentityBindingsSection, {
+      global: {
+        plugins: [pinia],
+      },
+      props: {
+        user: createUser({
+          auth_bindings: {
+            email: { bound: true },
+            linuxdo: { bound: false },
+            dingtalk: { bound: false },
+            oidc: { bound: false },
+            wechat: { bound: false },
+          },
+        }),
+        linuxdoEnabled: false,
+        dingtalkEnabled: false,
+        oidcEnabled: false,
+        wechatEnabled: false,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="profile-binding-email-status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="profile-binding-linuxdo-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="profile-binding-dingtalk-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="profile-binding-oidc-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="profile-binding-wechat-status"]').exists()).toBe(false)
+  })
+
+  it('keeps disabled third-party providers visible when already bound', () => {
+    const wrapper = mount(ProfileIdentityBindingsSection, {
+      global: {
+        plugins: [pinia],
+      },
+      props: {
+        user: createUser({
+          linuxdo_bound: true,
+          auth_bindings: {
+            email: { bound: true },
+            linuxdo: {
+              bound: true,
+              display_name: 'linuxdo-handle',
+              can_unbind: true,
+            },
+            dingtalk: { bound: false },
+            oidc: { bound: false },
+            wechat: { bound: false },
+          },
+        }),
+        linuxdoEnabled: false,
+        dingtalkEnabled: false,
+        oidcEnabled: false,
+        wechatEnabled: false,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="profile-binding-linuxdo-status"]').text()).toBe('Bound')
+    expect(wrapper.get('[data-testid="profile-binding-linuxdo-unbind"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="profile-binding-dingtalk-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="profile-binding-oidc-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="profile-binding-wechat-status"]').exists()).toBe(false)
   })
 })
