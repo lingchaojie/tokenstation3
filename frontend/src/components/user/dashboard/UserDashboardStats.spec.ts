@@ -21,6 +21,7 @@ const messages = vi.hoisted(() => ({
   'dashboard.balanceFallbackToggle.enabledHint': 'When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.',
   'dashboard.balanceFallbackToggle.title': 'Use balance after monthly card quota',
   'dashboard.balanceOrderHint': 'Subscription quota is used before recharge balance.',
+  'dashboard.buySubscription': 'Buy subscription',
   'dashboard.input': 'Input',
   'dashboard.output': 'Output',
   'dashboard.performance': 'Performance',
@@ -39,6 +40,7 @@ const messages = vi.hoisted(() => ({
   'dashboard.subscriptionBalance': 'Subscription balance',
   'dashboard.currentSubscription': 'Current subscription',
   'dashboard.noCurrentSubscription': 'No active subscription',
+  'dashboard.noSubscriptionPurchaseHint': 'Choose a monthly card from the purchase page.',
   'dashboard.subscriptionRemaining': '{remaining} remaining of {total}',
   'dashboard.subscriptionPlan': 'Plan: {plan}',
   'dashboard.subscriptionPlanCount': '{count} active plans',
@@ -219,18 +221,14 @@ describe('UserDashboardStats', () => {
 
     expect(text).toContain('Current subscription')
     expect(text).toContain('Plus monthly')
-    expect(text).toContain('Basic monthly')
-    expect(text).toContain('Pro monthly')
-    expect(text).toContain('Max monthly')
-    expect(text).toContain('¥399')
-    expect(text).toContain('/ 30days')
-    expect(text).toContain('$110 / 7 days')
-    expect(text).toContain('Renew')
-    expect(text).toContain('Switch subscription')
-    expect(text).not.toContain('Claude Code + OpenAI')
+    expect(text).not.toContain('Basic monthly')
+    expect(text).not.toContain('Pro monthly')
+    expect(text).not.toContain('Max monthly')
+    expect(text).not.toContain('Renew')
+    expect(text).not.toContain('Switch subscription')
     expect(text).toContain('$72.50 remaining of $110.00')
     expect(text).toContain(`Resets ${formatExpectedResetTime('2030-01-08T12:00:00Z')}`)
-    expect(wrapper.findAll('[data-testid="dashboard-subscription-plans"] .linear-plan-card').length).toBe(4)
+    expect(wrapper.find('[data-testid="dashboard-subscription-plans"]').exists()).toBe(false)
     expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('66')
     expect(wrapper.find('[role="progressbar"] > div').attributes('style')).toContain('width: 66%;')
     expect(text).toContain('Recharge balance')
@@ -261,7 +259,32 @@ describe('UserDashboardStats', () => {
     expect(wrapper.text()).toContain('2 active plans')
   })
 
-  it('renders pending downgrade notice on the current plan card', () => {
+  it('shows a purchase button instead of subscription cards when no subscription is active', async () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+        subscriptionBalance: null,
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('No active subscription')
+    expect(text).toContain('Choose a monthly card from the purchase page.')
+    expect(text).toContain('Buy subscription')
+    expect(text).not.toContain('Basic monthly')
+    expect(wrapper.find('[data-testid="dashboard-subscription-plans"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="dashboard-buy-subscription"]').trigger('click')
+
+    expect(routerPush).toHaveBeenCalledWith({
+      path: '/purchase',
+      query: { tab: 'subscription' },
+    })
+  })
+
+  it('does not render pending downgrade notices on dashboard plan cards', () => {
     const wrapper = mount(UserDashboardStats, {
       props: {
         stats,
@@ -305,7 +328,7 @@ describe('UserDashboardStats', () => {
       },
     })
 
-    expect(wrapper.text()).toContain(`Basic monthly starts on ${formatExpectedResetTime('2030-02-01T00:00:00Z')}`)
+    expect(wrapper.text()).not.toContain(`Basic monthly starts on ${formatExpectedResetTime('2030-02-01T00:00:00Z')}`)
   })
 
   it('does not show balance cards in simple mode', () => {

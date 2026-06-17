@@ -654,6 +654,8 @@ export default {
     subscriptionBalance: '订阅余额',
     currentSubscription: '当前订阅',
     noCurrentSubscription: '未开通订阅',
+    noSubscriptionPurchaseHint: '当前没有订阅服务，可前往充值与订阅页面选择月卡套餐。',
+    buySubscription: '去购买订阅',
     subscriptionRemaining: '剩余 {remaining} / {total}',
     rechargeBalance: '充值余额',
     balanceOrderHint: '优先消耗订阅额度，再使用充值余额。',
@@ -7255,6 +7257,10 @@ export default {
     amountTooHigh: '最高金额为 {max}',
     amountNoMethod: '该金额没有可用的支付方式',
     rechargeRatePreview: '当前倍率：1 CNY = {usd} USD',
+    paygRechargeReminderTitle: 'Pay-as-you-go 按量付费',
+    paygRechargeReminderBody: '充值 1 人民币得 1 美金，余额按官方美元原价按量扣费，用多少扣多少。',
+    subscriptionOverflowPaygHint: '订阅套餐额度用完了怎么办？别担心，我们提供优惠的按量付费 Pay-as-you-go。',
+    subscriptionFallbackRequiredHint: '已有订阅时，需要在仪表盘打开 Fallback 按钮，系统才会在订阅额度用满时自动使用余额继续对话。',
     refundReason: '退款原因',
     refundReasonPlaceholder: '请描述您的退款原因',
     stripeLoadFailed: '支付组件加载失败，请刷新页面重试',
@@ -7325,6 +7331,8 @@ export default {
     subscription: {
       quotaFirstHint: '使用时优先扣除月卡 7 日额度，不足时再使用充值余额。',
       genericLabel: '订阅套餐',
+      currentPlanNoticeTitle: '当前套餐',
+      manageCurrentHint: '你可以在下方续费当前套餐，或选择其他套餐进行切换。',
     },
     switchConfirm: {
       upgradeTitle: '确认升级订阅',

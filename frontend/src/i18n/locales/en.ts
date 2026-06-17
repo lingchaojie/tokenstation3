@@ -655,6 +655,8 @@ export default {
     subscriptionBalance: 'Subscription balance',
     currentSubscription: 'Current subscription',
     noCurrentSubscription: 'No active subscription',
+    noSubscriptionPurchaseHint: 'You do not have a subscription yet. Choose a monthly plan from the purchase page.',
+    buySubscription: 'Buy subscription',
     subscriptionRemaining: '{remaining} remaining of {total}',
     rechargeBalance: 'Recharge balance',
     balanceOrderHint: 'Subscription quota is used before recharge balance.',
@@ -7074,6 +7076,10 @@ export default {
     amountTooHigh: 'Maximum amount is {max}',
     amountNoMethod: 'No payment method available for this amount',
     rechargeRatePreview: 'Current rate: 1 CNY = {usd} USD',
+    paygRechargeReminderTitle: 'Pay-as-you-go',
+    paygRechargeReminderBody: 'Recharge 1 RMB to receive 1 USD of balance. Balance is billed at official USD pricing and deducted only as you use it.',
+    subscriptionOverflowPaygHint: 'What if your subscription quota runs out? Pay-as-you-go keeps conversations running with discounted flexible billing.',
+    subscriptionFallbackRequiredHint: 'If you already have a subscription, turn on Fallback from the dashboard so balance is used automatically after subscription quota is exhausted.',
     refundReason: 'Refund Reason',
     refundReasonPlaceholder: 'Please describe your refund reason',
     stripeLoadFailed: 'Failed to load payment component. Please refresh and try again.',
@@ -7144,6 +7150,8 @@ export default {
     subscription: {
       quotaFirstHint: 'Usage consumes subscription quota first, then recharge balance if needed.',
       genericLabel: 'Subscription plan',
+      currentPlanNoticeTitle: 'Current plan',
+      manageCurrentHint: 'Renew your current plan below, or choose another plan to switch.',
     },
     switchConfirm: {
       upgradeTitle: 'Confirm subscription upgrade',

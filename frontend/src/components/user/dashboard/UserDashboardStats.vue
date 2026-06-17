@@ -11,6 +11,18 @@
           <p v-else class="mt-2 text-lg font-semibold tracking-[-0.03em] text-gray-400 dark:text-gray-500">
             {{ t('dashboard.noCurrentSubscription') }}
           </p>
+          <p v-if="!subscriptionBalance" class="mt-2 max-w-xl text-sm leading-6 text-gray-500 dark:text-linear-ink-subtle">
+            {{ t('dashboard.noSubscriptionPurchaseHint') }}
+          </p>
+          <button
+            v-if="!subscriptionBalance"
+            type="button"
+            data-testid="dashboard-buy-subscription"
+            class="mt-4 inline-flex items-center justify-center rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+            @click="goToSubscriptionPurchase"
+          >
+            {{ t('dashboard.buySubscription') }}
+          </button>
         </div>
         <div v-if="subscriptionBalance" class="min-w-0 lg:w-80">
           <p class="text-sm text-gray-500 dark:text-linear-ink-subtle">
@@ -36,20 +48,6 @@
           </p>
         </div>
       </div>
-
-      <div v-if="dashboardPlans.length > 0" class="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="dashboard-subscription-plans">
-        <SubscriptionPlanCard
-          v-for="plan in dashboardPlans"
-          :key="plan.id"
-          :plan="plan"
-          :active-subscriptions="activeSubscriptions"
-          :pending-notice="pendingNoticeForPlan(plan)"
-          @select="handlePlanSelect"
-        />
-      </div>
-      <p v-else class="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-800/60 dark:text-linear-ink-subtle">
-        {{ t('payment.noPlans') }}
-      </p>
     </div>
 
     <div class="linx-panel p-6">
@@ -311,17 +309,10 @@ import { useRouter } from 'vue-router'
 import { userAPI } from '@/api/user'
 import Icon from '@/components/icons/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
-import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem, SubscriptionBalanceSummary, UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
-import {
-  displayMonthlyPlanName,
-  getMonthlyPlanCards,
-  monthlyPlanKeyFromName,
-  type MonthlyPlanKey,
-  type SubscriptionPlanSelectIntent,
-} from '@/utils/monthlyPlans'
+import { displayMonthlyPlanName } from '@/utils/monthlyPlans'
 
 interface FusedPlatformCard {
   platform: string
@@ -380,42 +371,11 @@ const subscriptionRemainingPercent = computed(() => {
   return calcPercent(props.subscriptionBalance.remaining, props.subscriptionBalance.total)
 })
 
-const planByKey = computed(() => {
-  const map = new Map<MonthlyPlanKey, SubscriptionPlan>()
-  for (const plan of props.subscriptionPlans ?? []) {
-    const key = monthlyPlanKeyFromName(plan.name)
-    if (key) map.set(key, plan)
-  }
-  return map
-})
-
-const dashboardPlans = computed<SubscriptionPlan[]>(() => {
-  return getMonthlyPlanCards(String(locale.value)).map((display, index) => {
-    const existing = planByKey.value.get(display.key)
-    if (existing) return existing
-    return {
-      id: -(index + 1),
-      name: display.name,
-      description: display.description,
-      price: display.priceCny,
-      original_price: 0,
-      seven_day_quota_usd: display.sevenDayQuotaUsd,
-      validity_days: 30,
-      validity_unit: 'day',
-      features: display.benefits,
-      for_sale: true,
-      sort_order: display.rank,
-    }
-  })
-})
-
-function handlePlanSelect(plan: SubscriptionPlan, intent: SubscriptionPlanSelectIntent) {
+function goToSubscriptionPurchase() {
   router.push({
     path: '/purchase',
     query: {
       tab: 'subscription',
-      plan: String(plan.id),
-      intent,
     },
   })
 }
@@ -438,22 +398,6 @@ async function toggleBalanceFallback() {
   } finally {
     savingBalanceFallback.value = false
   }
-}
-
-function pendingNoticeForPlan(plan: SubscriptionPlan): string {
-  const active = props.activeSubscriptions?.find(sub => {
-    if (sub.status !== 'active') return false
-    if (sub.plan_id != null && sub.plan_id === plan.id) return true
-    const activeKey = monthlyPlanKeyFromName(sub.plan_name)
-    const planKey = monthlyPlanKeyFromName(plan.name)
-    return !!activeKey && !!planKey && activeKey === planKey
-  })
-  if (!active?.scheduled_plan_name || !active.scheduled_plan_effective_at) return ''
-  const nextPlanName = displayMonthlyPlanName(active.scheduled_plan_name, String(locale.value)) || active.scheduled_plan_name
-  return t('dashboard.pendingSubscriptionChange', {
-    plan: nextPlanName,
-    time: formatResetTime(active.scheduled_plan_effective_at),
-  })
 }
 
 const sortedPlatforms = computed(() => {
