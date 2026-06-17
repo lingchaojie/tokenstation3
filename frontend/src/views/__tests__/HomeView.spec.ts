@@ -249,6 +249,7 @@ describe('HomeView landing page', () => {
     expect(text).toContain('总共可获取 $2,200')
     expect(text).toContain('每周发放充值额度')
     expect(text).toContain('所有档位都支持 Claude Code 与 OpenAI 兼容网关')
+    expect(text).toContain('订阅套餐额度用完，任务和 Coding 却停不下来？')
     expect(text).toContain('轻量 Claude Code 会话')
     expect(text).toContain('OpenAI 兼容接口调试')
     expect(text).toContain('高频 Claude Code / OpenAI 生产流量')

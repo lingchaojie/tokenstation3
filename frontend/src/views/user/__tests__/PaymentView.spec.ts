@@ -516,6 +516,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(text).toContain('payment.paygRechargeReminderTitle')
     expect(text).toContain('payment.paygRechargeReminderBody')
     expect(text).toContain('payment.subscriptionOverflowPaygHint')
+    expect(text).toContain('payment.rechargeBalanceUsageOnlyHint')
     expect(text).toContain('dashboard.balanceFallbackToggle.title')
     expect(text).toContain('dashboard.balanceFallbackToggle.disabledHint')
     expect(text).not.toContain('payment.subscriptionFallbackRequiredHint')

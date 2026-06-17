@@ -619,7 +619,7 @@ const copies = {
     paygKicker: '灵活计费',
     paygTitle: '按量付费 Pay-as-you-go',
     paygRate: '¥1 = $1',
-    paygDescription: '额度用完也不断流，充值余额按官方美元原价计费，用多少扣多少。',
+    paygDescription: '订阅套餐额度用完，任务和 Coding 却停不下来？我们提供优惠的按量付费 Pay-as-you-go，充值余额按官方美元原价计费，用多少扣多少。',
     monthlyCardInfo: [
       { title: '每周发放充值额度', description: '月卡按 7 天为一个周期刷新额度，不直接增加账户充值余额。' },
       { title: '通用模型通道', description: '所有档位都支持 Claude Code 与 OpenAI 兼容网关，不按供应商拆分。' },
@@ -689,7 +689,7 @@ const copies = {
     paygKicker: 'Flexible billing',
     paygTitle: 'Pay-as-you-go',
     paygRate: '¥1 = $1',
-    paygDescription: 'Never hit a wall — recharge balance is billed at official USD pricing, so you only pay for what you use.',
+    paygDescription: 'Subscription quota used up but the task and coding session cannot stop? Pay-as-you-go keeps model calls running, billed from recharge balance at official USD pricing.',
     monthlyCardInfo: [
       { title: 'Weekly recharge quota', description: 'Monthly cards refresh usable quota every seven days without adding to your recharge wallet.' },
       { title: 'Universal model routes', description: 'Every tier supports Claude Code and OpenAI-compatible gateway access without provider-specific splitting.' },
