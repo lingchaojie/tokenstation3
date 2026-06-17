@@ -16,6 +16,14 @@ const routerPush = vi.hoisted(() => vi.fn())
 const routerResolve = vi.hoisted(() => vi.fn(() => ({ href: '/payment/stripe?mock=1' })))
 const createOrder = vi.hoisted(() => vi.fn())
 const refreshUser = vi.hoisted(() => vi.fn())
+const mockUpdateProfile = vi.hoisted(() => vi.fn())
+const authState = vi.hoisted(() => ({
+  user: {
+    username: 'demo-user',
+    balance: 0,
+    subscription_balance_fallback_enabled: false,
+  } as Record<string, unknown>,
+}))
 const activeSubscriptionsState = vi.hoisted(() => ({
   value: [] as Array<Record<string, unknown>>,
 }))
@@ -56,9 +64,11 @@ vi.mock('vue-i18n', async () => {
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
-    user: {
-      username: 'demo-user',
-      balance: 0,
+    get user() {
+      return authState.user
+    },
+    set user(value) {
+      authState.user = value
     },
     refreshUser,
   }),
@@ -90,6 +100,12 @@ vi.mock('@/stores', () => ({
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
+  },
+}))
+
+vi.mock('@/api/user', () => ({
+  userAPI: {
+    updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
   },
 }))
 
@@ -248,6 +264,12 @@ describe('PaymentView WeChat JSAPI flow', () => {
     showInfo.mockReset()
     showWarning.mockReset()
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
+    mockUpdateProfile.mockReset()
+    authState.user = {
+      username: 'demo-user',
+      balance: 0,
+      subscription_balance_fallback_enabled: false,
+    }
     activeSubscriptionsState.value = []
     bridgeInvoke.mockReset()
     window.localStorage.clear()
@@ -494,7 +516,35 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(text).toContain('payment.paygRechargeReminderTitle')
     expect(text).toContain('payment.paygRechargeReminderBody')
     expect(text).toContain('payment.subscriptionOverflowPaygHint')
-    expect(text).toContain('payment.subscriptionFallbackRequiredHint')
+    expect(text).toContain('dashboard.balanceFallbackToggle.title')
+    expect(text).toContain('dashboard.balanceFallbackToggle.disabledHint')
+    expect(text).not.toContain('payment.subscriptionFallbackRequiredHint')
+    expect(wrapper.find('[data-testid="payment-subscription-balance-fallback-toggle"]').exists()).toBe(true)
+  })
+
+  it('saves subscription balance fallback preference from the recharge tab', async () => {
+    routeState.query = {}
+    const updatedUser = {
+      username: 'demo-user',
+      balance: 0,
+      subscription_balance_fallback_enabled: true,
+    }
+    mockUpdateProfile.mockResolvedValue(updatedUser)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="payment-subscription-balance-fallback-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(mockUpdateProfile).toHaveBeenCalledWith({ subscription_balance_fallback_enabled: true })
+    expect(authState.user).toEqual(updatedUser)
+    expect(wrapper.text()).toContain('dashboard.balanceFallbackToggle.enabledHint')
   })
 
   it('uses a generic label for universal active subscriptions without a plan name', async () => {

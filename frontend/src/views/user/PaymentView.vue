@@ -44,8 +44,33 @@
                 {{ t('payment.subscriptionOverflowPaygHint') }}
               </p>
             </div>
-            <div class="rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-3 text-xs leading-5 text-amber-700 dark:text-amber-200">
-              {{ t('payment.subscriptionFallbackRequiredHint') }}
+            <div class="linx-panel p-5">
+              <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <p id="payment-subscription-balance-fallback-toggle-label" class="text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
+                    {{ t('dashboard.balanceFallbackToggle.title') }}
+                  </p>
+                  <p class="mt-1 text-xs leading-relaxed text-gray-500 dark:text-linear-ink-subtle">
+                    {{ t(balanceFallbackEnabled ? 'dashboard.balanceFallbackToggle.enabledHint' : 'dashboard.balanceFallbackToggle.disabledHint') }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  :class="balanceFallbackEnabled ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-gray-300 dark:bg-dark-600'"
+                  role="switch"
+                  :aria-checked="balanceFallbackEnabled"
+                  aria-labelledby="payment-subscription-balance-fallback-toggle-label"
+                  :disabled="savingBalanceFallback"
+                  data-testid="payment-subscription-balance-fallback-toggle"
+                  @click="toggleBalanceFallback"
+                >
+                  <span
+                    class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
+                    :class="balanceFallbackEnabled ? 'translate-x-5' : 'translate-x-0'"
+                  />
+                </button>
+              </div>
             </div>
             <div v-if="enabledMethods.length === 0" class="linx-panel py-16 text-center">
               <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
@@ -290,6 +315,7 @@ import { usePaymentStore } from '@/stores/payment'
 import { useSubscriptionStore } from '@/stores/subscriptions'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
+import { userAPI } from '@/api/user'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType } from '@/types/payment'
@@ -336,6 +362,14 @@ const appStore = useAppStore()
 
 const user = computed(() => authStore.user)
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
+const balanceFallbackEnabled = ref(false)
+const savingBalanceFallback = ref(false)
+
+watch(() => user.value?.subscription_balance_fallback_enabled, (value) => {
+  if (!savingBalanceFallback.value) {
+    balanceFallbackEnabled.value = value ?? false
+  }
+}, { immediate: true })
 
 const activeLocale = computed<'en' | 'zh'>(() => {
   const raw = i18n.locale as unknown
@@ -427,6 +461,26 @@ function pendingNoticeForPlan(plan: SubscriptionPlan): string {
     plan: displaySubscriptionName(active.scheduled_plan_name),
     time: formatResetTime(active.scheduled_plan_effective_at),
   })
+}
+
+async function toggleBalanceFallback() {
+  if (savingBalanceFallback.value) return
+
+  const previous = balanceFallbackEnabled.value
+  const next = !previous
+  balanceFallbackEnabled.value = next
+  savingBalanceFallback.value = true
+
+  try {
+    const updated = await userAPI.updateProfile({ subscription_balance_fallback_enabled: next })
+    authStore.user = updated
+    balanceFallbackEnabled.value = updated.subscription_balance_fallback_enabled ?? next
+  } catch (error) {
+    console.error('Failed to update subscription balance fallback preference:', error)
+    balanceFallbackEnabled.value = previous
+  } finally {
+    savingBalanceFallback.value = false
+  }
 }
 
 const loading = ref(true)
