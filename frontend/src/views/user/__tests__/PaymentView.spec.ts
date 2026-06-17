@@ -44,7 +44,12 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key,
+      t: (key: string, params?: Record<string, unknown>) => {
+        if (key === 'dashboard.pendingSubscriptionChange') {
+          return `${params?.plan || ''} starts on ${params?.time || ''}`
+        }
+        return key
+      },
     }),
   }
 })
@@ -215,9 +220,9 @@ const paymentViewStubs = {
   Teleport: true,
   Transition: false,
   SubscriptionPlanCard: {
-    props: ['plan'],
+    props: ['plan', 'displayName', 'pendingNotice', 'activeSubscriptions'],
     emits: ['select'],
-    template: '<button class="plan-card-stub" type="button" @click="$emit(\'select\', plan)">{{ plan.name }}</button>',
+    template: '<button class="plan-card-stub" type="button" @click="$emit(\'select\', plan)">{{ displayName || plan.name }}<span v-if="pendingNotice" class="pending-notice-stub">{{ pendingNotice }}</span><span class="active-count-stub">{{ activeSubscriptions?.length || 0 }}</span></button>',
   },
   ConfirmDialog: {
     props: ['show', 'title', 'message'],
@@ -436,6 +441,60 @@ describe('PaymentView WeChat JSAPI flow', () => {
     const text = wrapper.text()
     expect(text).toContain('payment.planCard.sevenDayQuota: $110')
     expect(text).not.toContain('payment.planCard.quota: payment.planCard.unlimited')
+  })
+
+  it('shows current subscription management notice above subscription cards for active subscribers', async () => {
+    routeState.query = {
+      tab: 'subscription',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithMonthlyPlansFixture())
+    activeSubscriptionsState.value = [
+      {
+        id: 9,
+        group_id: 3,
+        plan_id: 7,
+        plan_name: 'Pro monthly',
+        scheduled_plan_name: 'Basic monthly',
+        scheduled_plan_effective_at: '2099-02-01T00:00:00.000Z',
+        status: 'active',
+        seven_day_limit_usd: 260,
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ]
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.subscription.currentPlanNoticeTitle')
+    expect(text).toContain('Pro monthly')
+    expect(text).toContain('payment.subscription.manageCurrentHint')
+    expect(wrapper.findAll('.plan-card-stub').length).toBe(3)
+    expect(wrapper.findAll('.active-count-stub').every(node => node.text() === '1')).toBe(true)
+    expect(wrapper.find('.pending-notice-stub').text()).toContain('Basic monthly')
+  })
+
+  it('shows Pay-as-you-go and fallback guidance on the recharge tab', async () => {
+    routeState.query = {}
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.paygRechargeReminderTitle')
+    expect(text).toContain('payment.paygRechargeReminderBody')
+    expect(text).toContain('payment.subscriptionOverflowPaygHint')
+    expect(text).toContain('payment.subscriptionFallbackRequiredHint')
   })
 
   it('uses a generic label for universal active subscriptions without a plan name', async () => {

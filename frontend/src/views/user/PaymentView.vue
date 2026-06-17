@@ -37,6 +37,16 @@
               <p class="mt-1 text-base font-semibold text-gray-900 dark:text-white">{{ user?.username || '' }}</p>
               <p class="mt-0.5 text-sm font-medium text-green-600 dark:text-green-400">{{ t('payment.currentBalance') }}: {{ user?.balance?.toFixed(2) || '0.00' }}</p>
             </div>
+            <div class="linx-panel p-5">
+              <p class="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-500 dark:text-emerald-300">{{ t('payment.paygRechargeReminderTitle') }}</p>
+              <p class="mt-2 text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle">{{ t('payment.paygRechargeReminderBody') }}</p>
+              <p class="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm leading-6 text-emerald-700 dark:text-emerald-200">
+                {{ t('payment.subscriptionOverflowPaygHint') }}
+              </p>
+            </div>
+            <div class="rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-3 text-xs leading-5 text-amber-700 dark:text-amber-200">
+              {{ t('payment.subscriptionFallbackRequiredHint') }}
+            </div>
             <div v-if="enabledMethods.length === 0" class="linx-panel py-16 text-center">
               <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
             </div>
@@ -163,6 +173,37 @@
             </template>
             <!-- Plan list -->
             <template v-else>
+              <div v-if="activeSubscriptionDisplayItems.length > 0" class="linx-panel p-5">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p class="text-xs font-semibold uppercase tracking-[0.16em] text-orange-500 dark:text-orange-300">{{ t('payment.subscription.currentPlanNoticeTitle') }}</p>
+                    <p class="mt-2 text-sm leading-6 text-gray-500 dark:text-linear-ink-subtle">{{ t('payment.subscription.manageCurrentHint') }}</p>
+                  </div>
+                  <span class="badge badge-success w-fit shrink-0 text-[10px]">{{ t('userSubscriptions.status.active') }}</span>
+                </div>
+                <div class="mt-4 space-y-3">
+                  <div v-for="sub in activeSubscriptionDisplayItems" :key="sub.id"
+                    class="rounded-xl border border-orange-200/60 bg-orange-50/70 px-4 py-3 dark:border-orange-400/20 dark:bg-orange-500/10">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ sub.label }}</p>
+                        <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-linear-ink-subtle">
+                          <span v-for="quota in sub.quotas" :key="quota.label">{{ quota.label }}: ${{ formatUSD(quota.value) }}</span>
+                          <span v-if="sub.quotas.length === 0">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
+                          <span v-if="sub.expiresAt">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expiresAt) }) }}</span>
+                          <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
+                        </div>
+                        <p v-if="sub.scheduledPlanName && sub.scheduledEffectiveAt" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-200">
+                          {{ t('dashboard.pendingSubscriptionChange', {
+                            plan: displaySubscriptionName(sub.scheduledPlanName),
+                            time: formatResetTime(sub.scheduledEffectiveAt),
+                          }) }}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div v-if="checkout.plans.length === 0" class="linx-panel py-16 text-center">
                 <Icon name="gift" size="xl" class="mx-auto mb-3 text-gray-300 dark:text-dark-600" />
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
@@ -176,30 +217,9 @@
                   :display-name="displayPlanName(plan)"
                   :display-description="displayPlanDescription(plan)"
                   :display-features="displayPlanFeatures(plan)"
+                  :pending-notice="pendingNoticeForPlan(plan)"
                   @select="selectPlan"
                 />
-              </div>
-              <!-- Active subscriptions (compact, below plan list) -->
-              <div v-if="activeSubscriptions.length > 0">
-                <p class="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">{{ t('payment.activeSubscription') }}</p>
-                <div class="space-y-2">
-                  <div v-for="sub in activeSubscriptionDisplayItems" :key="sub.id"
-                    class="linx-panel flex items-center gap-3 px-3 py-2">
-                    <div class="h-6 w-1 shrink-0 rounded-full bg-gradient-to-b from-primary-400 to-primary-500" />
-                    <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-1.5">
-                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.label }}</span>
-                      </div>
-                      <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
-                        <span v-for="quota in sub.quotas" :key="quota.label">{{ quota.label }}: ${{ formatUSD(quota.value) }}</span>
-                        <span v-if="sub.quotas.length === 0">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
-                        <span v-if="sub.expiresAt">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expiresAt) }) }}</span>
-                        <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
-                      </div>
-                    </div>
-                    <span class="badge badge-success shrink-0 text-[10px]">{{ t('userSubscriptions.status.active') }}</span>
-                  </div>
-                </div>
               </div>
             </template>
           </template>
@@ -242,6 +262,7 @@
                 :display-name="displayPlanName(plan)"
                 :display-description="displayPlanDescription(plan)"
                 :display-features="displayPlanFeatures(plan)"
+                :pending-notice="pendingNoticeForPlan(plan)"
                 @select="selectPlanFromModal"
               />
             </div>
@@ -372,11 +393,40 @@ const activeSubscriptionDisplayItems = computed(() => activeSubscriptions.value.
   label: activeSubscriptionLabel(sub),
   quotas: activeSubscriptionQuotaItems(sub),
   expiresAt: sub.expires_at,
+  scheduledPlanName: sub.scheduled_plan_name,
+  scheduledEffectiveAt: sub.scheduled_plan_effective_at,
 })))
 
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+}
+
+function formatResetTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hour}:${minute}`
+}
+
+function pendingNoticeForPlan(plan: SubscriptionPlan): string {
+  const active = activeSubscriptions.value.find(sub => {
+    if (sub.status !== 'active') return false
+    if (sub.plan_id != null && sub.plan_id === plan.id) return true
+    const activeKey = monthlyPlanKeyFromName(sub.plan_name)
+    const nextKey = monthlyPlanKeyFromName(plan.name)
+    return !!activeKey && !!nextKey && activeKey === nextKey
+  })
+  if (!active?.scheduled_plan_name || !active.scheduled_plan_effective_at) return ''
+  return t('dashboard.pendingSubscriptionChange', {
+    plan: displaySubscriptionName(active.scheduled_plan_name),
+    time: formatResetTime(active.scheduled_plan_effective_at),
+  })
 }
 
 const loading = ref(true)
