@@ -1182,6 +1182,12 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		headers.Set("user-agent", codexCLIUserAgent)
 	}
 
+	recordCtx := context.Background()
+	if c != nil && c.Request != nil {
+		recordCtx = c.Request.Context()
+	}
+	s.recordUpstreamUserAgent(recordCtx, account, &http.Request{Header: headers})
+
 	return headers, sessionResolution
 }
 
