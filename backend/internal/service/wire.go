@@ -528,12 +528,22 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+// ProvideAccountUpstreamUserAgentRepositories adapts the single repository to
+// the variadic constructor dependency used to keep legacy service tests compact.
+func ProvideAccountUpstreamUserAgentRepositories(repo AccountUpstreamUserAgentRepository) []AccountUpstreamUserAgentRepository {
+	if repo == nil {
+		return nil
+	}
+	return []AccountUpstreamUserAgentRepository{repo}
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
 	NewAuthService,
 	NewUserService,
 	ProvideAPIKeyService,
+	ProvideAccountUpstreamUserAgentRepositories,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
 	NewAccountService,
