@@ -639,6 +639,7 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	upstreamUARepo        AccountUpstreamUserAgentRepository
 }
 
 // NewGatewayService creates a new GatewayService
@@ -670,6 +671,7 @@ func NewGatewayService(
 	resolver *ModelPricingResolver,
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	upstreamUARepos ...AccountUpstreamUserAgentRepository,
 ) *GatewayService {
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
@@ -706,6 +708,9 @@ func NewGatewayService(
 		resolver:              resolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+	}
+	if len(upstreamUARepos) > 0 {
+		svc.upstreamUARepo = upstreamUARepos[0]
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -5748,6 +5753,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
 
+	s.recordUpstreamUserAgent(ctx, account, req)
 	return req, body, nil
 }
 
@@ -6575,6 +6581,9 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, []byte, error) {
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
 		req, err := s.buildUpstreamRequestAnthropicVertex(ctx, c, account, body, token, modelID, reqStream)
+		if err == nil {
+			s.recordUpstreamUserAgent(ctx, account, req)
+		}
 		return req, body, err
 	}
 
@@ -6756,6 +6765,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
+	s.recordUpstreamUserAgent(ctx, account, req)
 	return req, body, nil
 }
 
@@ -10133,6 +10143,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
 
+	s.recordUpstreamUserAgent(ctx, account, req)
 	return req, nil
 }
 
@@ -10276,6 +10287,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
+	s.recordUpstreamUserAgent(ctx, account, req)
 	return req, body, nil
 }
 

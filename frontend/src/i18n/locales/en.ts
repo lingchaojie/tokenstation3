@@ -3246,6 +3246,15 @@ export default {
         actions: 'Actions'
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by LINX2, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within LINX2.',
+      upstreamUserAgents: {
+        menu: 'UA Info',
+        title: 'Upstream UA History',
+        empty: 'No upstream User-Agent has been recorded yet',
+        loadFailed: 'Failed to load upstream User-Agent history',
+        firstSeen: 'First seen',
+        lastSeen: 'Last request',
+        count: '{count} requests'
+      },
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',
       privacyTrainingOff: 'Training data sharing disabled',

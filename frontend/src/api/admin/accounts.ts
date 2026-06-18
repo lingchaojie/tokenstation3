@@ -266,6 +266,30 @@ export async function getUsage(id: number, source?: 'passive' | 'active', force?
   return data
 }
 
+export interface AccountUpstreamUserAgent {
+  account_id: number
+  user_agent: string
+  first_seen_at: string
+  last_seen_at: string
+  seen_count: number
+}
+
+export interface AccountUpstreamUserAgentsResponse {
+  items: AccountUpstreamUserAgent[]
+}
+
+export async function getUpstreamUserAgents(
+  id: number,
+  limit?: number
+): Promise<AccountUpstreamUserAgentsResponse> {
+  const params = limit ? { limit } : undefined
+  const { data } = await apiClient.get<AccountUpstreamUserAgentsResponse>(
+    `/admin/accounts/${id}/upstream-user-agents`,
+    params ? { params } : undefined
+  )
+  return data
+}
+
 /**
  * Clear account rate limit status
  * @param id - Account ID
@@ -790,6 +814,7 @@ export const accountsAPI = {
   getStats,
   clearError,
   getUsage,
+  getUpstreamUserAgents,
   getTodayStats,
   getBatchTodayStats,
   clearRateLimit,

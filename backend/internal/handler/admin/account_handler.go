@@ -58,6 +58,7 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	upstreamUARepo          service.AccountUpstreamUserAgentRepository
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -75,8 +76,9 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	upstreamUARepos ...service.AccountUpstreamUserAgentRepository,
 ) *AccountHandler {
-	return &AccountHandler{
+	h := &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
@@ -91,6 +93,10 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+	if len(upstreamUARepos) > 0 {
+		h.upstreamUARepo = upstreamUARepos[0]
+	}
+	return h
 }
 
 // CreateAccountRequest represents create account request
@@ -1104,6 +1110,47 @@ func (h *AccountHandler) GetStats(c *gin.Context) {
 	}
 
 	response.Success(c, stats)
+}
+
+// GetUpstreamUserAgents handles listing the real upstream User-Agent history for an account.
+// GET /api/v1/admin/accounts/:id/upstream-user-agents
+func (h *AccountHandler) GetUpstreamUserAgents(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	if _, err := h.adminService.GetAccount(c.Request.Context(), accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			response.BadRequest(c, "Invalid limit")
+			return
+		}
+		limit = parsed
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	if h.upstreamUARepo == nil {
+		response.Success(c, gin.H{"items": []service.AccountUpstreamUserAgent{}})
+		return
+	}
+
+	items, err := h.upstreamUARepo.ListByAccountID(c.Request.Context(), accountID, limit)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"items": items})
 }
 
 // ClearError handles clearing account error
