@@ -54,9 +54,12 @@ export interface PublicModelCatalogModel {
   modalities: string[]
   description: string
   context_window?: number
+  context_source_url?: string
   features: string[]
   pricing: PublicModelCatalogPricing
   price_status: 'confirmed' | 'unverified'
+  released_at: string
+  release_status: 'confirmed' | 'unverified'
   source_url?: string
   updated_at: string
 }

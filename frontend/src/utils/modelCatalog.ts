@@ -1,6 +1,6 @@
 import type { PublicModelCatalogModel } from '@/api/settings'
 
-export type ModelCatalogSortKey = 'default' | 'newest' | 'provider' | 'status'
+export type ModelCatalogSortKey = 'default' | 'newest' | 'provider'
 
 export interface ModelCatalogFilters {
   query: string
@@ -21,13 +21,22 @@ function providerRank(provider: string): number {
   return rank === -1 ? MODEL_PROVIDER_ORDER.length : rank
 }
 
+function releaseDate(model: PublicModelCatalogModel): string {
+  return model.released_at || model.updated_at || ''
+}
+
 export function formatModelCatalogAmount(value: number): string {
   return `$${Number(value.toFixed(6)).toString()}`
 }
 
 export function formatContextWindow(value?: number): string {
   if (!value || value <= 0) return ''
-  if (value >= 1000000) return `${Number((value / 1000000).toFixed(1)).toString()}M`
+  const oneMi = 1024 * 1024
+  if (value >= 1000000) {
+    if (value % oneMi === 0) return `${value / oneMi}M`
+    return `${Number((value / 1000000).toFixed(2)).toString()}M`
+  }
+  if (value >= 1024 && value % 1024 === 0) return `${value / 1024}K`
   if (value >= 1000) return `${Number((value / 1000).toFixed(0)).toString()}K`
   return value.toString()
 }
@@ -62,15 +71,17 @@ export function sortModelCatalog(
 ): PublicModelCatalogModel[] {
   const copy = [...models]
   if (sortKey === 'newest') {
-    return copy.sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.display_name.localeCompare(b.display_name))
+    return copy.sort((a, b) => releaseDate(b).localeCompare(releaseDate(a)) || a.display_name.localeCompare(b.display_name))
   }
   if (sortKey === 'provider') {
     return copy.sort((a, b) => providerRank(a.provider) - providerRank(b.provider) || a.display_name.localeCompare(b.display_name))
   }
-  if (sortKey === 'status') {
-    return copy.sort((a, b) => a.price_status.localeCompare(b.price_status) || a.display_name.localeCompare(b.display_name))
-  }
-  return copy
+  return copy.sort(
+    (a, b) =>
+      providerRank(a.provider) - providerRank(b.provider) ||
+      releaseDate(b).localeCompare(releaseDate(a)) ||
+      a.display_name.localeCompare(b.display_name),
+  )
 }
 
 export function buildModelCatalogProviderOptions(models: PublicModelCatalogModel[]): ModelCatalogProviderOption[] {

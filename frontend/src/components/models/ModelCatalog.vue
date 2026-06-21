@@ -23,7 +23,7 @@
     </header>
 
     <div class="linx-panel p-4">
-      <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_12rem_12rem]">
+      <div class="space-y-4">
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.searchLabel') }}</span>
           <input
@@ -35,32 +35,58 @@
           />
         </label>
 
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.providerLabel') }}</span>
-          <select v-model="provider" class="input w-full" data-testid="model-catalog-provider">
-            <option v-for="option in providerOptions" :key="option.value" :value="option.value">
-              {{ option.label }} ({{ option.count }})
-            </option>
-          </select>
-        </label>
+        <div>
+          <span class="mb-2 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.modelFilterLabel') }}</span>
+          <div class="flex flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible" role="listbox" :aria-label="t('modelCatalog.modelFilterLabel')">
+            <button
+              v-for="option in providerOptions"
+              :key="option.value"
+              class="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium transition-colors"
+              :class="provider === option.value
+                ? 'border-linear-ink bg-linear-surface-2 text-linear-ink shadow-sm'
+                : 'border-linear-hairline bg-linear-surface-0 text-linear-ink-muted hover:border-linear-ink-muted hover:text-linear-ink'"
+              type="button"
+              role="option"
+              :aria-selected="provider === option.value"
+              :aria-pressed="provider === option.value"
+              :data-provider="option.value"
+              data-testid="model-catalog-provider-chip"
+              @click="provider = option.value"
+            >
+              <span
+                v-if="option.value === 'all'"
+                class="flex h-5 min-w-5 items-center justify-center rounded-full bg-linear-surface-2 px-1.5 text-[11px] font-semibold"
+              >
+                {{ t('modelCatalog.allFilterShort') }}
+              </span>
+              <ModelIcon v-else :model="providerIconModel(option.value)" size="16px" aria-hidden="true" />
+              <span v-if="option.value !== 'all'" class="whitespace-nowrap">{{ option.label }}</span>
+              <span class="rounded-full bg-linear-surface-1 px-1.5 py-0.5 text-[11px] text-linear-ink-tertiary">
+                {{ option.count }}
+              </span>
+            </button>
+          </div>
+        </div>
 
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.modalityLabel') }}</span>
-          <select v-model="modality" class="input w-full" data-testid="model-catalog-modality">
-            <option v-for="option in modalityOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
+        <div class="grid gap-3 md:grid-cols-[12rem_12rem]">
+          <label class="block">
+            <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.modalityLabel') }}</span>
+            <select v-model="modality" class="input w-full" data-testid="model-catalog-modality">
+              <option v-for="option in modalityOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
 
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.sortLabel') }}</span>
-          <select v-model="sortKey" class="input w-full" data-testid="model-catalog-sort">
-            <option v-for="option in sortOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
+          <label class="block">
+            <span class="mb-1 block text-xs font-medium text-linear-ink-muted">{{ t('modelCatalog.sortLabel') }}</span>
+            <select v-model="sortKey" class="input w-full" data-testid="model-catalog-sort">
+              <option v-for="option in sortOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -94,27 +120,20 @@
 
     <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <article v-for="model in visibleModels" :key="`${model.provider}:${model.model_name}`" class="linx-panel flex min-w-0 flex-col p-5">
-        <div class="flex items-start justify-between gap-3">
+        <div class="flex items-start gap-3">
+          <span
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink"
+            aria-hidden="true"
+          >
+            <ModelIcon :model="model.model_name" size="21px" />
+          </span>
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <span
-                class="h-2.5 w-2.5 shrink-0 rounded-full"
-                :style="{ backgroundColor: providerAccent(model.provider) }"
-                aria-hidden="true"
-              />
               <p class="truncate text-xs font-medium text-linear-ink-muted">{{ model.provider_name }}</p>
             </div>
             <h3 class="mt-3 text-lg font-semibold text-linear-ink">{{ model.display_name }}</h3>
             <p class="mt-1 break-words font-mono text-xs text-linear-ink-tertiary">{{ model.model_name }}</p>
           </div>
-          <span
-            class="shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium"
-            :class="model.price_status === 'confirmed'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200'
-              : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'"
-          >
-            {{ model.price_status === 'confirmed' ? t('modelCatalog.stats.confirmed') : t('modelCatalog.pending') }}
-          </span>
         </div>
 
         <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ model.description }}</p>
@@ -153,18 +172,6 @@
           </div>
         </div>
 
-        <div class="mt-auto flex flex-wrap items-center justify-between gap-3 pt-5 text-xs text-linear-ink-tertiary">
-          <span>{{ t('modelCatalog.updated') }} {{ model.updated_at }}</span>
-          <a
-            v-if="model.source_url"
-            class="font-medium text-linear-ink-muted underline-offset-4 hover:text-linear-ink hover:underline"
-            :href="model.source_url"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {{ t('modelCatalog.source') }}
-          </a>
-        </div>
       </article>
     </div>
   </section>
@@ -175,6 +182,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { getPublicModelCatalog, type PublicModelCatalogModel, type PublicModelCatalogProvider } from '@/api/settings'
+import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
@@ -215,7 +223,6 @@ const sortOptions = computed<Array<{ value: ModelCatalogSortKey; label: string }
   { value: 'default', label: t('modelCatalog.sort.default') },
   { value: 'newest', label: t('modelCatalog.sort.newest') },
   { value: 'provider', label: t('modelCatalog.sort.provider') },
-  { value: 'status', label: t('modelCatalog.sort.status') },
 ])
 
 const visibleModels = computed(() => {
@@ -230,7 +237,7 @@ const visibleModels = computed(() => {
 const stats = computed(() => [
   { label: t('modelCatalog.stats.models'), value: models.value.length },
   { label: t('modelCatalog.stats.providers'), value: providers.value.length },
-  { label: t('modelCatalog.stats.confirmed'), value: models.value.filter((model) => model.price_status === 'confirmed').length },
+  { label: t('modelCatalog.stats.text'), value: models.value.filter((model) => model.modalities.includes('text')).length },
   { label: t('modelCatalog.stats.image'), value: models.value.filter((model) => model.modalities.includes('image')).length },
 ])
 
@@ -240,8 +247,18 @@ function modalityLabel(value: string): string {
   return label === key ? value : label
 }
 
-function providerAccent(providerKey: string): string {
-  return providers.value.find((item) => item.key === providerKey)?.accent_color ?? '#6b7280'
+function providerIconModel(providerKey: string): string {
+  const iconModels: Record<string, string> = {
+    anthropic: 'claude',
+    openai: 'gpt-5',
+    gemini: 'gemini',
+    qwen: 'qwen',
+    glm: 'glm',
+    deepseek: 'deepseek',
+    minimax: 'minimax',
+    kimi: 'kimi',
+  }
+  return iconModels[providerKey] ?? providerKey
 }
 
 function pricingRows(model: PublicModelCatalogModel): Array<{ key: string; label: string; value: string }> {

@@ -370,18 +370,21 @@ type PublicModelCatalogProvider struct {
 }
 
 type PublicModelCatalogModel struct {
-	Provider      string                    `json:"provider"`
-	ProviderName  string                    `json:"provider_name"`
-	ModelName     string                    `json:"model_name"`
-	DisplayName   string                    `json:"display_name"`
-	Modalities    []string                  `json:"modalities"`
-	Description   string                    `json:"description"`
-	ContextWindow int                       `json:"context_window,omitempty"`
-	Features      []string                  `json:"features"`
-	Pricing       PublicModelCatalogPricing `json:"pricing"`
-	PriceStatus   string                    `json:"price_status"`
-	SourceURL     string                    `json:"source_url,omitempty"`
-	UpdatedAt     string                    `json:"updated_at"`
+	Provider         string                    `json:"provider"`
+	ProviderName     string                    `json:"provider_name"`
+	ModelName        string                    `json:"model_name"`
+	DisplayName      string                    `json:"display_name"`
+	Modalities       []string                  `json:"modalities"`
+	Description      string                    `json:"description"`
+	ContextWindow    int                       `json:"context_window,omitempty"`
+	ContextSourceURL string                    `json:"context_source_url,omitempty"`
+	Features         []string                  `json:"features"`
+	Pricing          PublicModelCatalogPricing `json:"pricing"`
+	PriceStatus      string                    `json:"price_status"`
+	ReleasedAt       string                    `json:"released_at"`
+	ReleaseStatus    string                    `json:"release_status"`
+	SourceURL        string                    `json:"source_url,omitempty"`
+	UpdatedAt        string                    `json:"updated_at"`
 }
 
 type PublicModelCatalogPricing struct {

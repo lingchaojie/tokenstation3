@@ -261,14 +261,16 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 				ModelCount int    `json:"model_count"`
 			} `json:"providers"`
 			Models []struct {
-				Provider     string   `json:"provider"`
-				ProviderName string   `json:"provider_name"`
-				ModelName    string   `json:"model_name"`
-				DisplayName  string   `json:"display_name"`
-				Modalities   []string `json:"modalities"`
-				PriceStatus  string   `json:"price_status"`
-				SourceURL    string   `json:"source_url"`
-				Pricing      struct {
+				Provider      string   `json:"provider"`
+				ProviderName  string   `json:"provider_name"`
+				ModelName     string   `json:"model_name"`
+				DisplayName   string   `json:"display_name"`
+				Modalities    []string `json:"modalities"`
+				PriceStatus   string   `json:"price_status"`
+				ReleasedAt    string   `json:"released_at"`
+				ReleaseStatus string   `json:"release_status"`
+				SourceURL     string   `json:"source_url"`
+				Pricing       struct {
 					Currency            string  `json:"currency"`
 					Unit                string  `json:"unit"`
 					InputPerMillion     float64 `json:"input_per_million"`
@@ -287,11 +289,11 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Equal(t, "2026-06-21", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 43)
+	require.Len(t, resp.Data.Models, 41)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
-	require.Equal(t, 10, resp.Data.Providers[0].ModelCount)
+	require.Equal(t, 8, resp.Data.Providers[0].ModelCount)
 
 	for _, provider := range resp.Data.Providers {
 		key := strings.ToLower(provider.Key)
@@ -318,7 +320,79 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 		require.NotEmpty(t, model.ProviderName)
 		require.NotEmpty(t, model.DisplayName)
 		require.NotEmpty(t, model.Modalities)
+		require.NotEmpty(t, model.ReleasedAt)
+		require.Contains(t, []string{"confirmed", "unverified"}, model.ReleaseStatus)
 	}
+
+	anthropic := make([]struct {
+		Provider      string   `json:"provider"`
+		ProviderName  string   `json:"provider_name"`
+		ModelName     string   `json:"model_name"`
+		DisplayName   string   `json:"display_name"`
+		Modalities    []string `json:"modalities"`
+		PriceStatus   string   `json:"price_status"`
+		ReleasedAt    string   `json:"released_at"`
+		ReleaseStatus string   `json:"release_status"`
+		SourceURL     string   `json:"source_url"`
+		Pricing       struct {
+			Currency            string  `json:"currency"`
+			Unit                string  `json:"unit"`
+			InputPerMillion     float64 `json:"input_per_million"`
+			OutputPerMillion    float64 `json:"output_per_million"`
+			CacheReadPerMillion float64 `json:"cache_read_per_million"`
+			Note                string  `json:"note"`
+			PriceLines          []struct {
+				Label  string  `json:"label"`
+				Amount float64 `json:"amount"`
+				Unit   string  `json:"unit"`
+			} `json:"price_lines"`
+		} `json:"pricing"`
+	}, 0)
+	for _, model := range resp.Data.Models {
+		if model.Provider == "anthropic" {
+			anthropic = append(anthropic, model)
+		}
+	}
+	require.NotEmpty(t, anthropic)
+	require.Equal(t, "claude-opus-4-8", anthropic[0].ModelName)
+	for idx := 1; idx < len(anthropic); idx++ {
+		require.GreaterOrEqual(t, anthropic[idx-1].ReleasedAt, anthropic[idx].ReleasedAt)
+	}
+}
+
+func TestSettingHandler_GetPublicModelCatalog_CollapsesParameterVariants(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+
+	h.GetPublicModelCatalog(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Models []struct {
+				ModelName   string `json:"model_name"`
+				DisplayName string `json:"display_name"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+
+	byModel := make(map[string]string, len(resp.Data.Models))
+	for _, model := range resp.Data.Models {
+		byModel[model.ModelName] = model.DisplayName
+	}
+
+	require.Equal(t, "Claude Opus 4.7", byModel["claude-opus-4-7"])
+	require.Equal(t, "Claude Opus 4.6", byModel["claude-opus-4-6"])
+	require.NotContains(t, byModel, "claude-opus-4-7-max")
+	require.NotContains(t, byModel, "claude-opus-4-6-thinking")
 }
 
 func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPricing(t *testing.T) {
@@ -427,4 +501,60 @@ func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPrici
 	require.Equal(t, "4K image", image.PriceLines[2].Label)
 	require.InDelta(t, 3.4, image.PriceLines[2].Amount, 0.001)
 	require.Equal(t, "image", image.PriceLines[2].Unit)
+}
+
+func TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+
+	h.GetPublicModelCatalog(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Models []struct {
+				ModelName        string `json:"model_name"`
+				ContextWindow    int    `json:"context_window"`
+				ContextSourceURL string `json:"context_source_url"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+
+	byModel := make(map[string]struct {
+		ContextWindow    int
+		ContextSourceURL string
+	}, len(resp.Data.Models))
+	for _, model := range resp.Data.Models {
+		byModel[model.ModelName] = struct {
+			ContextWindow    int
+			ContextSourceURL string
+		}{ContextWindow: model.ContextWindow, ContextSourceURL: model.ContextSourceURL}
+		if model.ContextWindow > 0 {
+			require.NotEmpty(t, model.ContextSourceURL, "context_window for %s must be backed by an official provider source", model.ModelName)
+		}
+	}
+
+	require.Equal(t, 1_000_000, byModel["claude-opus-4-8"].ContextWindow)
+	require.Equal(t, 200_000, byModel["claude-sonnet-4-5"].ContextWindow)
+	require.Equal(t, 1_050_000, byModel["gpt-5.5"].ContextWindow)
+	require.Equal(t, 400_000, byModel["gpt-5.4-mini"].ContextWindow)
+	require.Equal(t, 1_048_576, byModel["gemini-3.5-flash"].ContextWindow)
+	require.Equal(t, 131_072, byModel["gemini-3.1-flash-image"].ContextWindow)
+	require.Equal(t, 1_000_000, byModel["qwen3.6-plus"].ContextWindow)
+	require.Equal(t, 1_000_000, byModel["glm-5.2"].ContextWindow)
+	require.Equal(t, 200_000, byModel["glm-4.7"].ContextWindow)
+	require.Equal(t, 1_000_000, byModel["DeepSeek-V4-Pro"].ContextWindow)
+	require.Equal(t, 0, byModel["deepseek-v3.2"].ContextWindow)
+	require.Empty(t, byModel["deepseek-v3.2"].ContextSourceURL)
+	require.Equal(t, 1_000_000, byModel["MiniMax-M3"].ContextWindow)
+	require.Equal(t, 204_800, byModel["MiniMax-M2.7"].ContextWindow)
+	require.Equal(t, 262_144, byModel["Kimi-k2.6"].ContextWindow)
 }
