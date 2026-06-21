@@ -65,3 +65,10 @@ describe('AppSidebar admin personal dashboard navigation', () => {
     expect(componentSource).toContain('finalizeNav(buildAdminPersonalNavItems())')
   })
 })
+
+describe('AppSidebar model marketplace navigation', () => {
+  it('exposes the authenticated model marketplace route to regular user navigation', () => {
+    expect(componentSource).toContain("path: '/dashboard/models'")
+    expect(componentSource).toContain("t('nav.modelMarketplace')")
+  })
+})

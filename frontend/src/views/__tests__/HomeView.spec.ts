@@ -102,6 +102,7 @@ const messages: Record<string, string> = {
   'home.providers.more': '更多',
   'home.providers.supported': '已支持',
   'home.providers.soon': '即将支持',
+  'nav.modelMarketplace': '模型广场',
 }
 
 const modelPricingFixture = {
@@ -270,6 +271,7 @@ describe('HomeView landing page', () => {
 
     const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
     expect(headerNav.text()).toContain('能力')
+    expect(text).toContain('模型广场')
     expect(headerNav.text()).toContain('价格')
     expect(headerNav.find('a[href="#pricing"]').exists()).toBe(true)
 
