@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -235,4 +236,169 @@ func TestSettingHandler_GetPublicModelPricing_OmitsMissingCuratedModels(t *testi
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Provider)
 	require.Len(t, resp.Data.Providers[0].Models, 1)
 	require.Equal(t, "claude-opus-4-8", resp.Data.Providers[0].Models[0].Model)
+}
+
+func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+
+	h.GetPublicModelCatalog(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			UpdatedAt string `json:"updated_at"`
+			Providers []struct {
+				Key        string `json:"key"`
+				Name       string `json:"name"`
+				ModelCount int    `json:"model_count"`
+			} `json:"providers"`
+			Models []struct {
+				Provider     string   `json:"provider"`
+				ProviderName string   `json:"provider_name"`
+				ModelName    string   `json:"model_name"`
+				DisplayName  string   `json:"display_name"`
+				Modalities   []string `json:"modalities"`
+				PriceStatus  string   `json:"price_status"`
+				SourceURL    string   `json:"source_url"`
+				Pricing      struct {
+					Currency            string  `json:"currency"`
+					Unit                string  `json:"unit"`
+					InputPerMillion     float64 `json:"input_per_million"`
+					OutputPerMillion    float64 `json:"output_per_million"`
+					CacheReadPerMillion float64 `json:"cache_read_per_million"`
+					Note                string  `json:"note"`
+					PriceLines          []struct {
+						Label  string  `json:"label"`
+						Amount float64 `json:"amount"`
+						Unit   string  `json:"unit"`
+					} `json:"price_lines"`
+				} `json:"pricing"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, "2026-06-21", resp.Data.UpdatedAt)
+	require.Len(t, resp.Data.Models, 43)
+	require.Len(t, resp.Data.Providers, 8)
+	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
+	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
+	require.Equal(t, 10, resp.Data.Providers[0].ModelCount)
+
+	for _, model := range resp.Data.Models {
+		name := strings.ToLower(model.ModelName)
+		provider := strings.ToLower(model.Provider)
+		require.NotContains(t, provider, "agnes")
+		require.NotContains(t, provider, "doubao")
+		require.NotContains(t, name, "agnes")
+		require.NotContains(t, name, "doubao")
+		require.NotEmpty(t, model.ProviderName)
+		require.NotEmpty(t, model.DisplayName)
+		require.NotEmpty(t, model.Modalities)
+	}
+}
+
+func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPricing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}), "test-version")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+
+	h.GetPublicModelCatalog(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Models []struct {
+				ModelName   string `json:"model_name"`
+				PriceStatus string `json:"price_status"`
+				SourceURL   string `json:"source_url"`
+				Pricing     struct {
+					InputPerMillion     *float64 `json:"input_per_million"`
+					OutputPerMillion    *float64 `json:"output_per_million"`
+					CacheReadPerMillion *float64 `json:"cache_read_per_million"`
+					Note                string   `json:"note"`
+					PriceLines          []struct {
+						Label  string  `json:"label"`
+						Amount float64 `json:"amount"`
+						Unit   string  `json:"unit"`
+					} `json:"price_lines"`
+				} `json:"pricing"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+
+	byModel := map[string]struct {
+		PriceStatus string
+		SourceURL   string
+		Input       *float64
+		Output      *float64
+		CacheRead   *float64
+		Note        string
+		PriceLines  []struct {
+			Label  string  `json:"label"`
+			Amount float64 `json:"amount"`
+			Unit   string  `json:"unit"`
+		}
+	}{}
+	for _, model := range resp.Data.Models {
+		byModel[model.ModelName] = struct {
+			PriceStatus string
+			SourceURL   string
+			Input       *float64
+			Output      *float64
+			CacheRead   *float64
+			Note        string
+			PriceLines  []struct {
+				Label  string  `json:"label"`
+				Amount float64 `json:"amount"`
+				Unit   string  `json:"unit"`
+			}
+		}{
+			PriceStatus: model.PriceStatus,
+			SourceURL:   model.SourceURL,
+			Input:       model.Pricing.InputPerMillion,
+			Output:      model.Pricing.OutputPerMillion,
+			CacheRead:   model.Pricing.CacheReadPerMillion,
+			Note:        model.Pricing.Note,
+			PriceLines:  model.Pricing.PriceLines,
+		}
+	}
+
+	opus := byModel["claude-opus-4-8"]
+	require.Equal(t, "confirmed", opus.PriceStatus)
+	require.Contains(t, opus.SourceURL, "docs.anthropic.com")
+	require.NotNil(t, opus.Input)
+	require.NotNil(t, opus.Output)
+	require.NotNil(t, opus.CacheRead)
+	require.InDelta(t, 5, *opus.Input, 0.001)
+	require.InDelta(t, 25, *opus.Output, 0.001)
+	require.InDelta(t, 0.5, *opus.CacheRead, 0.001)
+
+	qwen := byModel["qwen3.6-plus"]
+	require.Equal(t, "unverified", qwen.PriceStatus)
+	require.Empty(t, qwen.SourceURL)
+	require.Nil(t, qwen.Input)
+	require.Nil(t, qwen.Output)
+	require.Equal(t, "Pending confirmation", qwen.Note)
+
+	image := byModel["gpt-image-2"]
+	require.Equal(t, "confirmed", image.PriceStatus)
+	require.Len(t, image.PriceLines, 3)
+	require.Equal(t, "1K image", image.PriceLines[0].Label)
+	require.InDelta(t, 0.21, image.PriceLines[0].Amount, 0.001)
 }
