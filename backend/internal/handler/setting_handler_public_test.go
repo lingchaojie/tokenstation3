@@ -289,11 +289,11 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Equal(t, "2026-06-21", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 41)
+	require.Len(t, resp.Data.Models, 31)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
-	require.Equal(t, 8, resp.Data.Providers[0].ModelCount)
+	require.Equal(t, 7, resp.Data.Providers[0].ModelCount)
 
 	for _, provider := range resp.Data.Providers {
 		key := strings.ToLower(provider.Key)
@@ -391,8 +391,24 @@ func TestSettingHandler_GetPublicModelCatalog_CollapsesParameterVariants(t *test
 
 	require.Equal(t, "Claude Opus 4.7", byModel["claude-opus-4-7"])
 	require.Equal(t, "Claude Opus 4.6", byModel["claude-opus-4-6"])
+	require.Equal(t, "Claude Sonnet 4.5", byModel["claude-sonnet-4-5"])
+	require.Equal(t, "GPT-Image-2", byModel["gpt-image-2"])
+	require.Equal(t, "Gemini 3.1 Flash Image", byModel["gemini-3.1-flash-image"])
+	require.Equal(t, "Gemini 3 Pro Image", byModel["gemini-3-pro-image"])
+	require.Equal(t, "Gemini 2.5 Flash Image", byModel["gemini-2.5-flash-image"])
 	require.NotContains(t, byModel, "claude-opus-4-7-max")
 	require.NotContains(t, byModel, "claude-opus-4-6-thinking")
+	require.NotContains(t, byModel, "claude-sonnet-4-5-20250929")
+	require.NotContains(t, byModel, "gpt-image-2-count")
+	require.NotContains(t, byModel, "gpt-image-2-hd-count")
+	require.NotContains(t, byModel, "gpt-image-2-4k-count")
+	require.NotContains(t, byModel, "gemini-3.1-flash-image-count")
+	require.NotContains(t, byModel, "gemini-3.1-flash-image-hd-count")
+	require.NotContains(t, byModel, "gemini-3.1-flash-image-4k-count")
+	require.NotContains(t, byModel, "gemini-3-pro-image-count")
+	require.NotContains(t, byModel, "gemini-3-pro-image-hd-count")
+	require.NotContains(t, byModel, "gemini-3-pro-image-4k-count")
+	require.NotContains(t, byModel, "gemini-2.5-flash-image-count")
 }
 
 func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPricing(t *testing.T) {
@@ -548,6 +564,7 @@ func TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(t *test
 	require.Equal(t, 400_000, byModel["gpt-5.4-mini"].ContextWindow)
 	require.Equal(t, 1_048_576, byModel["gemini-3.5-flash"].ContextWindow)
 	require.Equal(t, 131_072, byModel["gemini-3.1-flash-image"].ContextWindow)
+	require.Equal(t, 65_536, byModel["gemini-3-pro-image"].ContextWindow)
 	require.Equal(t, 1_000_000, byModel["qwen3.6-plus"].ContextWindow)
 	require.Equal(t, 1_000_000, byModel["glm-5.2"].ContextWindow)
 	require.Equal(t, 200_000, byModel["glm-4.7"].ContextWindow)

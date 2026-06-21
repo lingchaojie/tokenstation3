@@ -9,7 +9,12 @@ The model catalog is the user-facing model marketplace. It should present models
 - Examples:
   - `claude-opus-4-7-max` is represented by `claude-opus-4-7`.
   - `claude-opus-4-6-thinking` is represented by `claude-opus-4-6`.
-- Variant-specific support, such as max routing, thinking mode, special request parameters, or other backend-only capabilities, belongs in backend capability mapping rather than the public catalog card list.
+  - `claude-sonnet-4-5-20250929` is represented by `claude-sonnet-4-5`.
+  - `gpt-image-2-count`, `gpt-image-2-hd-count`, and `gpt-image-2-4k-count` are represented by `gpt-image-2`.
+  - `gemini-3.1-flash-image-count`, `gemini-3.1-flash-image-hd-count`, and `gemini-3.1-flash-image-4k-count` are represented by `gemini-3.1-flash-image`.
+  - `gemini-3-pro-image-count`, `gemini-3-pro-image-hd-count`, and `gemini-3-pro-image-4k-count` are represented by `gemini-3-pro-image`.
+  - `gemini-2.5-flash-image-count` is represented by `gemini-2.5-flash-image`.
+- Variant-specific support, such as max routing, thinking mode, versioned routing, image size/count routes, special request parameters, or other backend-only capabilities, belongs in backend capability mapping rather than the public catalog card list.
 
 ## Data Quality
 
