@@ -22,6 +22,7 @@ const i18nMessages = vi.hoisted(() => ({
   'modelCatalog.searchLabel': 'Search models',
   'modelCatalog.searchPlaceholder': 'Search by model, provider, feature',
   'modelCatalog.providerLabel': 'Provider',
+  'modelCatalog.allProviders': 'Every provider',
   'modelCatalog.modalityLabel': 'Modality',
   'modelCatalog.allModalities': 'All modalities',
   'modelCatalog.modality.text': 'Text',
@@ -156,6 +157,8 @@ describe('ModelCatalog', () => {
 
     const wrapper = mountCatalog()
     await flushPromises()
+
+    expect(wrapper.get('[data-testid="model-catalog-provider"]').text()).toContain('Every provider (3)')
 
     await wrapper.get('[data-testid="model-catalog-search"]').setValue('image')
     expect(wrapper.text()).toContain('GPT-Image-2')

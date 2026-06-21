@@ -82,7 +82,7 @@
     <div v-else-if="errorMessage" class="linx-panel border-red-200 p-5 dark:border-red-500/30" role="alert">
       <p class="text-sm font-semibold text-linear-ink">{{ errorMessage }}</p>
       <button class="btn btn-secondary mt-4" type="button" data-testid="model-catalog-retry" @click="loadCatalog">
-        <Icon name="refresh-cw" size="sm" class="mr-2" />
+        <Icon name="refresh" size="sm" class="mr-2" />
         {{ t('common.retry') }}
       </button>
     </div>
@@ -197,7 +197,11 @@ const provider = ref('all')
 const modality = ref('all')
 const sortKey = ref<ModelCatalogSortKey>('default')
 
-const providerOptions = computed(() => buildModelCatalogProviderOptions(models.value))
+const providerOptions = computed(() =>
+  buildModelCatalogProviderOptions(models.value).map((option) =>
+    option.value === 'all' ? { ...option, label: t('modelCatalog.allProviders') } : option,
+  ),
+)
 
 const modalityOptions = computed(() => {
   const values = Array.from(new Set(models.value.flatMap((model) => model.modalities))).sort()
@@ -207,12 +211,12 @@ const modalityOptions = computed(() => {
   ]
 })
 
-const sortOptions: Array<{ value: ModelCatalogSortKey; label: string }> = [
+const sortOptions = computed<Array<{ value: ModelCatalogSortKey; label: string }>>(() => [
   { value: 'default', label: t('modelCatalog.sort.default') },
   { value: 'newest', label: t('modelCatalog.sort.newest') },
   { value: 'provider', label: t('modelCatalog.sort.provider') },
   { value: 'status', label: t('modelCatalog.sort.status') },
-]
+])
 
 const visibleModels = computed(() => {
   const filtered = filterModelCatalog(models.value, {
