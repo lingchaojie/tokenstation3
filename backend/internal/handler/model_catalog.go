@@ -122,12 +122,15 @@ var publicModelCatalogModels = []dto.PublicModelCatalogModel{
 	catalogModel("kimi", "Kimi", "Kimi-k2.6", "Kimi K2.6", textModalities(), "Kimi model for upgraded long-context reasoning and agent work.", 200000, textFeatures("long context"), usd(0.097, 2.38), "confirmed", sourceKimi),
 }
 
-func GetPublicModelCatalogModels() []dto.PublicModelCatalogModel {
+func publicModelCatalogModelsSnapshot() []dto.PublicModelCatalogModel {
 	models := make([]dto.PublicModelCatalogModel, 0, len(publicModelCatalogModels))
 	for _, model := range publicModelCatalogModels {
 		if shouldExcludePublicCatalogModel(model) {
 			continue
 		}
+		model.Modalities = append([]string(nil), model.Modalities...)
+		model.Features = append([]string(nil), model.Features...)
+		model.Pricing.PriceLines = append([]dto.PublicModelCatalogPriceLine(nil), model.Pricing.PriceLines...)
 		models = append(models, model)
 	}
 	return models
@@ -164,8 +167,8 @@ func sortPublicModelCatalog(models []dto.PublicModelCatalogModel) {
 		providerRank[provider.Key] = idx
 	}
 	sort.SliceStable(models, func(i, j int) bool {
-		leftRank := providerRank[models[i].Provider]
-		rightRank := providerRank[models[j].Provider]
+		leftRank := publicModelCatalogProviderRank(providerRank, models[i].Provider)
+		rightRank := publicModelCatalogProviderRank(providerRank, models[j].Provider)
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
@@ -173,10 +176,18 @@ func sortPublicModelCatalog(models []dto.PublicModelCatalogModel) {
 	})
 }
 
+func publicModelCatalogProviderRank(providerRank map[string]int, provider string) int {
+	rank, ok := providerRank[provider]
+	if !ok {
+		return len(publicModelCatalogProviderMeta)
+	}
+	return rank
+}
+
 // GetPublicModelCatalog returns the public model marketplace catalog.
 // GET /api/v1/settings/model-catalog
 func (h *SettingHandler) GetPublicModelCatalog(c *gin.Context) {
-	models := GetPublicModelCatalogModels()
+	models := publicModelCatalogModelsSnapshot()
 	sortPublicModelCatalog(models)
 	response.Success(c, dto.PublicModelCatalogResponse{UpdatedAt: publicModelCatalogUpdatedAt, Providers: publicModelCatalogProviders(models), Models: models})
 }
