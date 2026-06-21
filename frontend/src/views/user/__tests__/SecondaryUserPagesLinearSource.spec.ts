@@ -13,6 +13,7 @@ const affiliateSource = readFileSync(resolve(userDir, 'AffiliateView.vue'), 'utf
 const availableChannelsSource = readFileSync(resolve(userDir, 'AvailableChannelsView.vue'), 'utf8')
 const channelStatusSource = readFileSync(resolve(userDir, 'ChannelStatusView.vue'), 'utf8')
 const customPageSource = readFileSync(resolve(userDir, 'CustomPageView.vue'), 'utf8')
+const modelCatalogSource = readFileSync(resolve(userDir, 'ModelCatalogView.vue'), 'utf8')
 const monitorCardSource = readFileSync(resolve(componentsDir, 'user/monitor/MonitorCard.vue'), 'utf8')
 const monitorHeroSource = readFileSync(resolve(componentsDir, 'user/monitor/MonitorHero.vue'), 'utf8')
 const channelsTableSource = readFileSync(resolve(componentsDir, 'channels/AvailableChannelsTable.vue'), 'utf8')
@@ -37,6 +38,7 @@ describe('Secondary user pages Linear contract', () => {
     expect(availableChannelsSource).toContain('linear-available-channels-page')
     expect(channelStatusSource).toContain('linear-channel-status-page')
     expect(customPageSource).toContain('linear-custom-page')
+    expect(modelCatalogSource).toContain('linear-model-catalog-page')
   })
 
   it('uses Linear panels in monitor and channel components', () => {
