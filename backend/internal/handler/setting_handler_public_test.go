@@ -293,13 +293,28 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
 	require.Equal(t, 10, resp.Data.Providers[0].ModelCount)
 
-	for _, model := range resp.Data.Models {
-		name := strings.ToLower(model.ModelName)
-		provider := strings.ToLower(model.Provider)
-		require.NotContains(t, provider, "agnes")
-		require.NotContains(t, provider, "doubao")
+	for _, provider := range resp.Data.Providers {
+		key := strings.ToLower(provider.Key)
+		name := strings.ToLower(provider.Name)
+		require.NotContains(t, key, "agnes")
+		require.NotContains(t, key, "doubao")
 		require.NotContains(t, name, "agnes")
 		require.NotContains(t, name, "doubao")
+	}
+
+	for _, model := range resp.Data.Models {
+		provider := strings.ToLower(model.Provider)
+		providerName := strings.ToLower(model.ProviderName)
+		modelName := strings.ToLower(model.ModelName)
+		displayName := strings.ToLower(model.DisplayName)
+		require.NotContains(t, provider, "agnes")
+		require.NotContains(t, provider, "doubao")
+		require.NotContains(t, providerName, "agnes")
+		require.NotContains(t, providerName, "doubao")
+		require.NotContains(t, modelName, "agnes")
+		require.NotContains(t, modelName, "doubao")
+		require.NotContains(t, displayName, "agnes")
+		require.NotContains(t, displayName, "doubao")
 		require.NotEmpty(t, model.ProviderName)
 		require.NotEmpty(t, model.DisplayName)
 		require.NotEmpty(t, model.Modalities)
@@ -379,9 +394,10 @@ func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPrici
 		}
 	}
 
-	opus := byModel["claude-opus-4-8"]
+	opus, ok := byModel["claude-opus-4-8"]
+	require.True(t, ok, "expected claude-opus-4-8 in public model catalog")
 	require.Equal(t, "confirmed", opus.PriceStatus)
-	require.Contains(t, opus.SourceURL, "docs.anthropic.com")
+	require.Equal(t, "https://docs.anthropic.com/en/docs/about-claude/pricing", opus.SourceURL)
 	require.NotNil(t, opus.Input)
 	require.NotNil(t, opus.Output)
 	require.NotNil(t, opus.CacheRead)
@@ -389,16 +405,26 @@ func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPrici
 	require.InDelta(t, 25, *opus.Output, 0.001)
 	require.InDelta(t, 0.5, *opus.CacheRead, 0.001)
 
-	qwen := byModel["qwen3.6-plus"]
+	qwen, ok := byModel["qwen3.6-plus"]
+	require.True(t, ok, "expected qwen3.6-plus in public model catalog")
 	require.Equal(t, "unverified", qwen.PriceStatus)
 	require.Empty(t, qwen.SourceURL)
 	require.Nil(t, qwen.Input)
 	require.Nil(t, qwen.Output)
+	require.Nil(t, qwen.CacheRead)
 	require.Equal(t, "Pending confirmation", qwen.Note)
 
-	image := byModel["gpt-image-2"]
+	image, ok := byModel["gpt-image-2"]
+	require.True(t, ok, "expected gpt-image-2 in public model catalog")
 	require.Equal(t, "confirmed", image.PriceStatus)
 	require.Len(t, image.PriceLines, 3)
 	require.Equal(t, "1K image", image.PriceLines[0].Label)
 	require.InDelta(t, 0.21, image.PriceLines[0].Amount, 0.001)
+	require.Equal(t, "image", image.PriceLines[0].Unit)
+	require.Equal(t, "2K image", image.PriceLines[1].Label)
+	require.InDelta(t, 0.85, image.PriceLines[1].Amount, 0.001)
+	require.Equal(t, "image", image.PriceLines[1].Unit)
+	require.Equal(t, "4K image", image.PriceLines[2].Label)
+	require.InDelta(t, 3.4, image.PriceLines[2].Amount, 0.001)
+	require.Equal(t, "image", image.PriceLines[2].Unit)
 }
