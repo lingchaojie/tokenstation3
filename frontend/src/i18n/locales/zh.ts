@@ -932,6 +932,10 @@ export default {
     cacheTtlOverridden1h: '按 1h 计费',
     totalRequests: '总请求数',
     totalTokens: '总 Token',
+    cacheTotal: '缓存',
+    cacheBreakdown: '缓存 Token 明细',
+    cacheCreationTokensLabel: '缓存创建',
+    cacheReadTokensLabel: '缓存读取',
     totalCost: '总消费',
     standardCost: '标准',
     actualCost: '实际',
@@ -3265,6 +3269,7 @@ export default {
       groupCountTotal: '共 {count} 个分组',
       columns: {
         name: '名称',
+        id: '账号ID',
         platformType: '平台/类型',
         platform: '平台',
         type: '类型',
