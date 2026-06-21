@@ -33,7 +33,7 @@ const i18nMessages = vi.hoisted(() => ({
   'modelCatalog.sort.status': 'Price status',
   'modelCatalog.loading': 'Loading model catalog',
   'modelCatalog.loadError': 'Failed to load model catalog',
-  'modelCatalog.retry': 'Retry',
+  'common.retry': 'Retry',
   'modelCatalog.emptyTitle': 'No models found',
   'modelCatalog.emptyDescription': 'Try changing search or filters.',
   'modelCatalog.context': 'Context',
@@ -174,6 +174,7 @@ describe('ModelCatalog', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Failed to load model catalog')
+    expect(wrapper.get('[data-testid="model-catalog-retry"]').text()).toContain('Retry')
 
     await wrapper.get('[data-testid="model-catalog-retry"]').trigger('click')
     await flushPromises()

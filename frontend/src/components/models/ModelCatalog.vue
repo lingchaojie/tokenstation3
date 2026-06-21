@@ -83,7 +83,7 @@
       <p class="text-sm font-semibold text-linear-ink">{{ errorMessage }}</p>
       <button class="btn btn-secondary mt-4" type="button" data-testid="model-catalog-retry" @click="loadCatalog">
         <Icon name="refresh-cw" size="sm" class="mr-2" />
-        {{ t('modelCatalog.retry') }}
+        {{ t('common.retry') }}
       </button>
     </div>
 
