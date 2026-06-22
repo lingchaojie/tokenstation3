@@ -1327,7 +1327,7 @@ git commit -m "feat: expose web chat api"
 - Create: `frontend/src/stores/chat.ts`
 - Test: `frontend/src/components/chat/__tests__/chatStore.spec.ts`
 
-- [ ] **Step 1: Write API types**
+- [x] **Step 1: Write API types**
 
 Create `frontend/src/api/chat.ts` with exact response shapes:
 
@@ -1411,7 +1411,7 @@ export async function streamChatMessage(input: StreamChatMessageInput): Promise<
 }
 ```
 
-- [ ] **Step 2: Write store tests**
+- [x] **Step 2: Write store tests**
 
 Create a store test:
 
@@ -1447,7 +1447,7 @@ it('detects unsupported attachments for selected model', () => {
 })
 ```
 
-- [ ] **Step 3: Implement Pinia store**
+- [x] **Step 3: Implement Pinia store**
 
 State:
 
@@ -1487,7 +1487,7 @@ Actions:
 
 Stream parser reads `data: <json>` lines and appends `choices[0].delta.content`.
 
-- [ ] **Step 4: Run frontend store tests**
+- [x] **Step 4: Run frontend store tests**
 
 Run:
 
@@ -1498,7 +1498,7 @@ pnpm test:run src/components/chat/__tests__/chatStore.spec.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/api/chat.ts frontend/src/stores/chat.ts frontend/src/components/chat/__tests__/chatStore.spec.ts
