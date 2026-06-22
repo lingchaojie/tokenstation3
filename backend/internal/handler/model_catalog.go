@@ -185,6 +185,12 @@ func publicModelCatalogModelsSnapshot() []dto.PublicModelCatalogModel {
 	return models
 }
 
+func PublicModelCatalogModelsForWebChat() []dto.PublicModelCatalogModel {
+	models := publicModelCatalogModelsSnapshot()
+	sortPublicModelCatalog(models)
+	return models
+}
+
 func shouldExcludePublicCatalogModel(model dto.PublicModelCatalogModel) bool {
 	provider := strings.ToLower(strings.TrimSpace(model.Provider))
 	providerName := strings.ToLower(strings.TrimSpace(model.ProviderName))
