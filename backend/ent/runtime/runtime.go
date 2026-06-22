@@ -42,6 +42,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/webchatartifact"
+	"github.com/Wei-Shaw/sub2api/ent/webchatattachment"
+	"github.com/Wei-Shaw/sub2api/ent/webchatconversation"
+	"github.com/Wei-Shaw/sub2api/ent/webchatmessage"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
@@ -2177,6 +2181,168 @@ func init() {
 	usersubscriptionDescAssignedAt := usersubscriptionFields[21].Descriptor()
 	// usersubscription.DefaultAssignedAt holds the default value on creation for the assigned_at field.
 	usersubscription.DefaultAssignedAt = usersubscriptionDescAssignedAt.Default.(func() time.Time)
+	webchatartifactFields := schema.WebChatArtifact{}.Fields()
+	_ = webchatartifactFields
+	// webchatartifactDescFilename is the schema descriptor for filename field.
+	webchatartifactDescFilename := webchatartifactFields[3].Descriptor()
+	// webchatartifact.FilenameValidator is a validator for the "filename" field. It is called by the builders before save.
+	webchatartifact.FilenameValidator = webchatartifactDescFilename.Validators[0].(func(string) error)
+	// webchatartifactDescContentType is the schema descriptor for content_type field.
+	webchatartifactDescContentType := webchatartifactFields[4].Descriptor()
+	// webchatartifact.ContentTypeValidator is a validator for the "content_type" field. It is called by the builders before save.
+	webchatartifact.ContentTypeValidator = webchatartifactDescContentType.Validators[0].(func(string) error)
+	// webchatartifactDescStorageKey is the schema descriptor for storage_key field.
+	webchatartifactDescStorageKey := webchatartifactFields[6].Descriptor()
+	// webchatartifact.StorageKeyValidator is a validator for the "storage_key" field. It is called by the builders before save.
+	webchatartifact.StorageKeyValidator = webchatartifactDescStorageKey.Validators[0].(func(string) error)
+	// webchatartifactDescSha256 is the schema descriptor for sha256 field.
+	webchatartifactDescSha256 := webchatartifactFields[7].Descriptor()
+	// webchatartifact.Sha256Validator is a validator for the "sha256" field. It is called by the builders before save.
+	webchatartifact.Sha256Validator = webchatartifactDescSha256.Validators[0].(func(string) error)
+	// webchatartifactDescSource is the schema descriptor for source field.
+	webchatartifactDescSource := webchatartifactFields[8].Descriptor()
+	// webchatartifact.SourceValidator is a validator for the "source" field. It is called by the builders before save.
+	webchatartifact.SourceValidator = webchatartifactDescSource.Validators[0].(func(string) error)
+	// webchatartifactDescCreatedAt is the schema descriptor for created_at field.
+	webchatartifactDescCreatedAt := webchatartifactFields[9].Descriptor()
+	// webchatartifact.DefaultCreatedAt holds the default value on creation for the created_at field.
+	webchatartifact.DefaultCreatedAt = webchatartifactDescCreatedAt.Default.(func() time.Time)
+	webchatattachmentFields := schema.WebChatAttachment{}.Fields()
+	_ = webchatattachmentFields
+	// webchatattachmentDescKind is the schema descriptor for kind field.
+	webchatattachmentDescKind := webchatattachmentFields[3].Descriptor()
+	// webchatattachment.KindValidator is a validator for the "kind" field. It is called by the builders before save.
+	webchatattachment.KindValidator = webchatattachmentDescKind.Validators[0].(func(string) error)
+	// webchatattachmentDescFilename is the schema descriptor for filename field.
+	webchatattachmentDescFilename := webchatattachmentFields[4].Descriptor()
+	// webchatattachment.FilenameValidator is a validator for the "filename" field. It is called by the builders before save.
+	webchatattachment.FilenameValidator = webchatattachmentDescFilename.Validators[0].(func(string) error)
+	// webchatattachmentDescContentType is the schema descriptor for content_type field.
+	webchatattachmentDescContentType := webchatattachmentFields[5].Descriptor()
+	// webchatattachment.ContentTypeValidator is a validator for the "content_type" field. It is called by the builders before save.
+	webchatattachment.ContentTypeValidator = webchatattachmentDescContentType.Validators[0].(func(string) error)
+	// webchatattachmentDescStorageKey is the schema descriptor for storage_key field.
+	webchatattachmentDescStorageKey := webchatattachmentFields[7].Descriptor()
+	// webchatattachment.StorageKeyValidator is a validator for the "storage_key" field. It is called by the builders before save.
+	webchatattachment.StorageKeyValidator = webchatattachmentDescStorageKey.Validators[0].(func(string) error)
+	// webchatattachmentDescSha256 is the schema descriptor for sha256 field.
+	webchatattachmentDescSha256 := webchatattachmentFields[8].Descriptor()
+	// webchatattachment.Sha256Validator is a validator for the "sha256" field. It is called by the builders before save.
+	webchatattachment.Sha256Validator = webchatattachmentDescSha256.Validators[0].(func(string) error)
+	// webchatattachmentDescStatus is the schema descriptor for status field.
+	webchatattachmentDescStatus := webchatattachmentFields[10].Descriptor()
+	// webchatattachment.DefaultStatus holds the default value on creation for the status field.
+	webchatattachment.DefaultStatus = webchatattachmentDescStatus.Default.(string)
+	// webchatattachment.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	webchatattachment.StatusValidator = webchatattachmentDescStatus.Validators[0].(func(string) error)
+	// webchatattachmentDescCreatedAt is the schema descriptor for created_at field.
+	webchatattachmentDescCreatedAt := webchatattachmentFields[11].Descriptor()
+	// webchatattachment.DefaultCreatedAt holds the default value on creation for the created_at field.
+	webchatattachment.DefaultCreatedAt = webchatattachmentDescCreatedAt.Default.(func() time.Time)
+	webchatconversationMixin := schema.WebChatConversation{}.Mixin()
+	webchatconversationMixinFields0 := webchatconversationMixin[0].Fields()
+	_ = webchatconversationMixinFields0
+	webchatconversationFields := schema.WebChatConversation{}.Fields()
+	_ = webchatconversationFields
+	// webchatconversationDescCreatedAt is the schema descriptor for created_at field.
+	webchatconversationDescCreatedAt := webchatconversationMixinFields0[0].Descriptor()
+	// webchatconversation.DefaultCreatedAt holds the default value on creation for the created_at field.
+	webchatconversation.DefaultCreatedAt = webchatconversationDescCreatedAt.Default.(func() time.Time)
+	// webchatconversationDescUpdatedAt is the schema descriptor for updated_at field.
+	webchatconversationDescUpdatedAt := webchatconversationMixinFields0[1].Descriptor()
+	// webchatconversation.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	webchatconversation.DefaultUpdatedAt = webchatconversationDescUpdatedAt.Default.(func() time.Time)
+	// webchatconversation.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	webchatconversation.UpdateDefaultUpdatedAt = webchatconversationDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// webchatconversationDescTitle is the schema descriptor for title field.
+	webchatconversationDescTitle := webchatconversationFields[1].Descriptor()
+	// webchatconversation.DefaultTitle holds the default value on creation for the title field.
+	webchatconversation.DefaultTitle = webchatconversationDescTitle.Default.(string)
+	// webchatconversation.TitleValidator is a validator for the "title" field. It is called by the builders before save.
+	webchatconversation.TitleValidator = webchatconversationDescTitle.Validators[0].(func(string) error)
+	// webchatconversationDescDefaultModel is the schema descriptor for default_model field.
+	webchatconversationDescDefaultModel := webchatconversationFields[2].Descriptor()
+	// webchatconversation.DefaultDefaultModel holds the default value on creation for the default_model field.
+	webchatconversation.DefaultDefaultModel = webchatconversationDescDefaultModel.Default.(string)
+	// webchatconversation.DefaultModelValidator is a validator for the "default_model" field. It is called by the builders before save.
+	webchatconversation.DefaultModelValidator = webchatconversationDescDefaultModel.Validators[0].(func(string) error)
+	// webchatconversationDescDefaultProvider is the schema descriptor for default_provider field.
+	webchatconversationDescDefaultProvider := webchatconversationFields[3].Descriptor()
+	// webchatconversation.DefaultDefaultProvider holds the default value on creation for the default_provider field.
+	webchatconversation.DefaultDefaultProvider = webchatconversationDescDefaultProvider.Default.(string)
+	// webchatconversation.DefaultProviderValidator is a validator for the "default_provider" field. It is called by the builders before save.
+	webchatconversation.DefaultProviderValidator = webchatconversationDescDefaultProvider.Validators[0].(func(string) error)
+	// webchatconversationDescLastModel is the schema descriptor for last_model field.
+	webchatconversationDescLastModel := webchatconversationFields[4].Descriptor()
+	// webchatconversation.DefaultLastModel holds the default value on creation for the last_model field.
+	webchatconversation.DefaultLastModel = webchatconversationDescLastModel.Default.(string)
+	// webchatconversation.LastModelValidator is a validator for the "last_model" field. It is called by the builders before save.
+	webchatconversation.LastModelValidator = webchatconversationDescLastModel.Validators[0].(func(string) error)
+	// webchatconversationDescLastProvider is the schema descriptor for last_provider field.
+	webchatconversationDescLastProvider := webchatconversationFields[5].Descriptor()
+	// webchatconversation.DefaultLastProvider holds the default value on creation for the last_provider field.
+	webchatconversation.DefaultLastProvider = webchatconversationDescLastProvider.Default.(string)
+	// webchatconversation.LastProviderValidator is a validator for the "last_provider" field. It is called by the builders before save.
+	webchatconversation.LastProviderValidator = webchatconversationDescLastProvider.Validators[0].(func(string) error)
+	// webchatconversationDescStatus is the schema descriptor for status field.
+	webchatconversationDescStatus := webchatconversationFields[6].Descriptor()
+	// webchatconversation.DefaultStatus holds the default value on creation for the status field.
+	webchatconversation.DefaultStatus = webchatconversationDescStatus.Default.(string)
+	// webchatconversation.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	webchatconversation.StatusValidator = webchatconversationDescStatus.Validators[0].(func(string) error)
+	// webchatconversationDescMessageCount is the schema descriptor for message_count field.
+	webchatconversationDescMessageCount := webchatconversationFields[7].Descriptor()
+	// webchatconversation.DefaultMessageCount holds the default value on creation for the message_count field.
+	webchatconversation.DefaultMessageCount = webchatconversationDescMessageCount.Default.(int)
+	webchatmessageMixin := schema.WebChatMessage{}.Mixin()
+	webchatmessageMixinFields0 := webchatmessageMixin[0].Fields()
+	_ = webchatmessageMixinFields0
+	webchatmessageFields := schema.WebChatMessage{}.Fields()
+	_ = webchatmessageFields
+	// webchatmessageDescCreatedAt is the schema descriptor for created_at field.
+	webchatmessageDescCreatedAt := webchatmessageMixinFields0[0].Descriptor()
+	// webchatmessage.DefaultCreatedAt holds the default value on creation for the created_at field.
+	webchatmessage.DefaultCreatedAt = webchatmessageDescCreatedAt.Default.(func() time.Time)
+	// webchatmessageDescUpdatedAt is the schema descriptor for updated_at field.
+	webchatmessageDescUpdatedAt := webchatmessageMixinFields0[1].Descriptor()
+	// webchatmessage.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	webchatmessage.DefaultUpdatedAt = webchatmessageDescUpdatedAt.Default.(func() time.Time)
+	// webchatmessage.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	webchatmessage.UpdateDefaultUpdatedAt = webchatmessageDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// webchatmessageDescRole is the schema descriptor for role field.
+	webchatmessageDescRole := webchatmessageFields[2].Descriptor()
+	// webchatmessage.RoleValidator is a validator for the "role" field. It is called by the builders before save.
+	webchatmessage.RoleValidator = webchatmessageDescRole.Validators[0].(func(string) error)
+	// webchatmessageDescModel is the schema descriptor for model field.
+	webchatmessageDescModel := webchatmessageFields[3].Descriptor()
+	// webchatmessage.DefaultModel holds the default value on creation for the model field.
+	webchatmessage.DefaultModel = webchatmessageDescModel.Default.(string)
+	// webchatmessage.ModelValidator is a validator for the "model" field. It is called by the builders before save.
+	webchatmessage.ModelValidator = webchatmessageDescModel.Validators[0].(func(string) error)
+	// webchatmessageDescProvider is the schema descriptor for provider field.
+	webchatmessageDescProvider := webchatmessageFields[4].Descriptor()
+	// webchatmessage.DefaultProvider holds the default value on creation for the provider field.
+	webchatmessage.DefaultProvider = webchatmessageDescProvider.Default.(string)
+	// webchatmessage.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	webchatmessage.ProviderValidator = webchatmessageDescProvider.Validators[0].(func(string) error)
+	// webchatmessageDescContentText is the schema descriptor for content_text field.
+	webchatmessageDescContentText := webchatmessageFields[5].Descriptor()
+	// webchatmessage.DefaultContentText holds the default value on creation for the content_text field.
+	webchatmessage.DefaultContentText = webchatmessageDescContentText.Default.(string)
+	// webchatmessageDescContentJSON is the schema descriptor for content_json field.
+	webchatmessageDescContentJSON := webchatmessageFields[6].Descriptor()
+	// webchatmessage.DefaultContentJSON holds the default value on creation for the content_json field.
+	webchatmessage.DefaultContentJSON = webchatmessageDescContentJSON.Default.([]map[string]interface{})
+	// webchatmessageDescStatus is the schema descriptor for status field.
+	webchatmessageDescStatus := webchatmessageFields[7].Descriptor()
+	// webchatmessage.DefaultStatus holds the default value on creation for the status field.
+	webchatmessage.DefaultStatus = webchatmessageDescStatus.Default.(string)
+	// webchatmessage.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	webchatmessage.StatusValidator = webchatmessageDescStatus.Validators[0].(func(string) error)
+	// webchatmessageDescErrorCode is the schema descriptor for error_code field.
+	webchatmessageDescErrorCode := webchatmessageFields[8].Descriptor()
+	// webchatmessage.ErrorCodeValidator is a validator for the "error_code" field. It is called by the builders before save.
+	webchatmessage.ErrorCodeValidator = webchatmessageDescErrorCode.Validators[0].(func(string) error)
 }
 
 const (

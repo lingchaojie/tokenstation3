@@ -86,6 +86,14 @@ type Tx struct {
 	UserPlatformQuota *UserPlatformQuotaClient
 	// UserSubscription is the client for interacting with the UserSubscription builders.
 	UserSubscription *UserSubscriptionClient
+	// WebChatArtifact is the client for interacting with the WebChatArtifact builders.
+	WebChatArtifact *WebChatArtifactClient
+	// WebChatAttachment is the client for interacting with the WebChatAttachment builders.
+	WebChatAttachment *WebChatAttachmentClient
+	// WebChatConversation is the client for interacting with the WebChatConversation builders.
+	WebChatConversation *WebChatConversationClient
+	// WebChatMessage is the client for interacting with the WebChatMessage builders.
+	WebChatMessage *WebChatMessageClient
 
 	// lazily loaded.
 	client     *Client
@@ -253,6 +261,10 @@ func (tx *Tx) init() {
 	tx.UserAttributeValue = NewUserAttributeValueClient(tx.config)
 	tx.UserPlatformQuota = NewUserPlatformQuotaClient(tx.config)
 	tx.UserSubscription = NewUserSubscriptionClient(tx.config)
+	tx.WebChatArtifact = NewWebChatArtifactClient(tx.config)
+	tx.WebChatAttachment = NewWebChatAttachmentClient(tx.config)
+	tx.WebChatConversation = NewWebChatConversationClient(tx.config)
+	tx.WebChatMessage = NewWebChatMessageClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.
