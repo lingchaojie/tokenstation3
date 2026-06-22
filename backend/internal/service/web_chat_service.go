@@ -475,15 +475,6 @@ func (s *WebChatService) resolveWebChatSendCapability(provider, model string) (W
 	return caps, nil
 }
 
-func webChatMessageListContains(messages []WebChatMessage, id int64) bool {
-	for _, message := range messages {
-		if message.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
 func webChatFindMessage(messages []WebChatMessage, id int64) (WebChatMessage, bool) {
 	for _, message := range messages {
 		if message.ID == id {

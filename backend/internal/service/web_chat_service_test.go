@@ -122,7 +122,7 @@ func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
 
 func TestWebChatSend_RequiresUserSnapshotOrResolver(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
-	svc.WebChatService.userResolver = nil
+	svc.userResolver = nil
 
 	_, err := svc.SendMessage(nil, WebChatSendInput{
 		UserID:         42,
@@ -140,7 +140,7 @@ func TestWebChatSend_RequiresUserSnapshotOrResolver(t *testing.T) {
 func TestWebChatSend_UsesInjectedUserResolver(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	resolvedUser := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
-	svc.WebChatService.userResolver = webChatUserResolverStub{user: resolvedUser}
+	svc.userResolver = webChatUserResolverStub{user: resolvedUser}
 
 	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
@@ -158,7 +158,7 @@ func TestWebChatSend_UsesInjectedUserResolver(t *testing.T) {
 
 func TestWebChatSend_RejectsMissingCapabilityResolver(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
-	svc.WebChatService.capabilityResolver = nil
+	svc.capabilityResolver = nil
 
 	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
@@ -516,12 +516,12 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 	double.repo = repo
 	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
 	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	double.WebChatService.capabilityResolver = webChatCapabilityResolverStub{}
-	double.WebChatService.apiKeyService = &webChatAPIKeyServiceStub{double: double}
-	double.WebChatService.subscriptionService = &webChatSubscriptionServiceStub{double: double}
-	double.WebChatService.billingCacheService = &webChatBillingCacheServiceStub{double: double}
-	double.WebChatService.gatewayService = &webChatGatewayServiceStub{double: double}
-	double.WebChatService.usageLogRepository = &webChatUsageLogRepoStub{double: double}
+	double.capabilityResolver = webChatCapabilityResolverStub{}
+	double.apiKeyService = &webChatAPIKeyServiceStub{double: double}
+	double.subscriptionService = &webChatSubscriptionServiceStub{double: double}
+	double.billingCacheService = &webChatBillingCacheServiceStub{double: double}
+	double.gatewayService = &webChatGatewayServiceStub{double: double}
+	double.usageLogRepository = &webChatUsageLogRepoStub{double: double}
 	return double
 }
 

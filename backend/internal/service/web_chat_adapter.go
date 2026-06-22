@@ -153,7 +153,7 @@ func buildWebChatImageDataURL(ctx context.Context, storage WebChatStorage, attac
 	if err != nil {
 		return "", err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	if meta.SizeBytes > webChatMaxUploadBytes {
 		return "", ErrWebChatUploadRejected
 	}

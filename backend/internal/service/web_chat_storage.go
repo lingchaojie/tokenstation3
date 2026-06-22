@@ -221,12 +221,12 @@ func sanitizeWebChatDisplayFilename(raw string) string {
 	for _, r := range name {
 		if unicode.IsControl(r) || r == '/' || r == '\\' {
 			if !lastUnderscore {
-				b.WriteByte('_')
+				_ = b.WriteByte('_')
 				lastUnderscore = true
 			}
 			continue
 		}
-		b.WriteRune(r)
+		_, _ = b.WriteRune(r)
 		lastUnderscore = false
 	}
 	name = strings.TrimSpace(b.String())

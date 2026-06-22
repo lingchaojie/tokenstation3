@@ -16,7 +16,7 @@ func TestBuildWebChatCompletionsPayload_IncludesTextImageAndFilePreview(t *testi
 		ContentText: "Explain this image and notes",
 		Attachments: []WebChatAttachment{
 			{Kind: WebChatAttachmentKindImage, ContentType: "image/png", StorageKey: "u/1/image.png"},
-			{Kind: WebChatAttachmentKindFile, ContentType: "text/plain", TextPreview: stringPtr("notes")},
+			{Kind: WebChatAttachmentKindFile, ContentType: "text/plain", TextPreview: webChatStringPtr("notes")},
 		},
 	}}
 
@@ -153,7 +153,7 @@ func TestBuildWebChatCompletionsPayload_SanitizesFilePreviewFilename(t *testing.
 			Kind:        WebChatAttachmentKindFile,
 			Filename:    "bad\nname.txt",
 			ContentType: "text/plain",
-			TextPreview: stringPtr("hello"),
+			TextPreview: webChatStringPtr("hello"),
 		}},
 	}}
 
@@ -203,7 +203,7 @@ func (s *fakeWebChatStorage) requireOpened(keys ...string) {
 	require.Equal(s.t, keys, s.openedKeys)
 }
 
-func stringPtr(v string) *string {
+func webChatStringPtr(v string) *string {
 	return &v
 }
 

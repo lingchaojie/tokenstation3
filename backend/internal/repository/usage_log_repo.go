@@ -3120,7 +3120,7 @@ func (r *usageLogRepository) visibleAPIKeyIDs(ctx context.Context, apiKeyIDs []i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	visible := make([]int64, 0, len(apiKeyIDs))
 	for rows.Next() {

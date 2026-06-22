@@ -243,7 +243,7 @@ func (h *WebChatHandler) UploadAttachment(c *gin.Context) {
 		response.BadRequest(c, "Invalid upload: "+err.Error())
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	attachment, err := h.service.UploadAttachment(c.Request.Context(), subject.UserID, file, header)
 	if err != nil {
@@ -267,7 +267,7 @@ func (h *WebChatHandler) DownloadAttachment(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	webChatStreamDownload(c, rc, meta)
 }
 
@@ -285,7 +285,7 @@ func (h *WebChatHandler) DownloadArtifact(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	webChatStreamDownload(c, rc, meta)
 }
 

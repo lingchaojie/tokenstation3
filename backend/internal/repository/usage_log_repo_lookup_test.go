@@ -16,7 +16,7 @@ import (
 func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := newUsageLogRepositoryWithSQL(nil, db)
 	createdAt := time.Now().UTC()

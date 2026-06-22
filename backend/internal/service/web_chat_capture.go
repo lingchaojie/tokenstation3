@@ -77,7 +77,7 @@ func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string 
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
 				continue
 			}
-			b.WriteString(chunk.Choices[0].Delta.Content)
+			_, _ = b.WriteString(chunk.Choices[0].Delta.Content)
 		}
 		return b.String()
 	}
@@ -121,7 +121,7 @@ func chatCompletionContentText(content any) string {
 				continue
 			}
 			if text, _ := partMap["text"].(string); text != "" {
-				b.WriteString(text)
+				_, _ = b.WriteString(text)
 			}
 		}
 		return b.String()

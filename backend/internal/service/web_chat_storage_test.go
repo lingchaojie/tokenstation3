@@ -33,7 +33,7 @@ func TestLocalWebChatStorage_StoresFileUnderDataDir(t *testing.T) {
 
 	rc, meta, err := storage.Open(context.Background(), saved.StorageKey)
 	require.NoError(t, err)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	require.Equal(t, "hello world", string(body))
