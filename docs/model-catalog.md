@@ -27,3 +27,4 @@ The model catalog is the user-facing model marketplace. It should present models
 
 - The public `/models` page and authenticated `/dashboard/models` page share the same user-facing catalog semantics.
 - Users should not need to understand route-level variants before choosing a model.
+- Web Chat reuses this catalog and applies a narrower provider/platform routing subset. See [Web Chat](web-chat.md) for the authenticated chat surface and billing behavior.

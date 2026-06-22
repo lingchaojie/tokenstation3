@@ -32,6 +32,7 @@ Sub2API is an AI API gateway platform designed to distribute and manage API quot
 
 - **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
 - **API Key Distribution** - Generate and manage API Keys for users
+- **Web Chat** - Authenticated browser chat with supported marketplace models, uploads, and gateway billing ([Documentation](docs/web-chat.md))
 - **Precise Billing** - Token-level usage tracking and cost calculation
 - **Smart Scheduling** - Intelligent account selection with sticky sessions
 - **Concurrency Control** - Per-user and per-account concurrency limits
