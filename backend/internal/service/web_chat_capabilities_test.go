@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -68,4 +69,65 @@ func TestWebChatCapabilities_SkipsUnsupportedCatalogProviders(t *testing.T) {
 	require.Equal(t, "openai", caps[0].Provider)
 	require.Equal(t, PlatformOpenAI, caps[0].Platform)
 	require.Equal(t, APIKeyTypeOpenAI, caps[0].KeyType)
+}
+
+func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *testing.T) {
+	svc := NewWebChatService(nil, nil)
+
+	caps, err := svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4-20250514")
+
+	require.NoError(t, err)
+	require.Equal(t, "anthropic", caps.Provider)
+	require.Equal(t, PlatformAnthropic, caps.Platform)
+	require.Equal(t, APIKeyTypeAnthropic, caps.KeyType)
+	require.Equal(t, "claude-sonnet-4-20250514", caps.Model)
+	require.True(t, caps.SupportsText)
+
+	caps, err = svc.resolveWebChatSendCapability("openai", "gpt-5.5")
+	require.NoError(t, err)
+	require.Equal(t, PlatformOpenAI, caps.Platform)
+	require.Equal(t, "gpt-5.5", caps.Model)
+}
+
+func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t *testing.T) {
+	resolver := NewWebChatCatalogCapabilityResolver([]WebChatCatalogModel{
+		{Provider: "glm", ModelName: "glm-5.2", Modalities: []string{"text"}},
+		{Provider: "anthropic", ModelName: "claude-sonnet-4-20250514", Modalities: []string{"text"}},
+	})
+
+	_, err := resolver.ResolveWebChatCapability("glm", "glm-5.2")
+	require.ErrorIs(t, err, ErrWebChatInvalidModel)
+
+	_, err = resolver.ResolveWebChatCapability("anthropic", "missing-model")
+	require.ErrorIs(t, err, ErrWebChatInvalidModel)
+
+	svc := NewWebChatService(nil, nil)
+	_, err = svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4")
+	require.ErrorIs(t, err, ErrWebChatInvalidModel)
+}
+
+func TestWebChatCapabilities_DefaultCatalogDerivedFromPublicRoutableModels(t *testing.T) {
+	publicModels := PublicModelCatalogModelsForWebChat()
+	want := make(map[string]PublicModelCatalogModel)
+	for _, model := range publicModels {
+		provider := strings.ToLower(strings.TrimSpace(model.Provider))
+		if _, ok := webChatProviderRoutes[provider]; !ok {
+			continue
+		}
+		want[webChatCapabilityKey(provider, model.ModelName)] = model
+	}
+
+	got := DefaultWebChatCatalogModels()
+
+	require.NotEmpty(t, want)
+	require.Len(t, got, len(want))
+	for _, model := range got {
+		provider := strings.ToLower(strings.TrimSpace(model.Provider))
+		publicModel, ok := want[webChatCapabilityKey(provider, model.ModelName)]
+		require.Truef(t, ok, "web chat catalog model %s/%s is not in public catalog", model.Provider, model.ModelName)
+		require.Equal(t, publicModel.DisplayName, model.DisplayName)
+		require.Equal(t, publicModel.Modalities, model.Modalities)
+		require.Equal(t, publicModel.Features, model.Features)
+		require.Equal(t, publicModel.PriceStatus, model.PriceStatus)
+	}
 }

@@ -1,0 +1,681 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+func TestWebChatResponseCapture_CapturesBoundedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	capture := NewWebChatResponseCapture(c.Writer, 5)
+	n, err := capture.Write([]byte("hello world"))
+
+	require.NoError(t, err)
+	require.Equal(t, len("hello world"), n)
+	require.Equal(t, "hello world", rec.Body.String())
+	require.Equal(t, []byte("hello"), capture.Body())
+}
+
+func TestWebChatResponseCapture_CapturesWriteStringBoundedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	capture := NewWebChatResponseCapture(c.Writer, 6)
+	n, err := capture.WriteString("streamed text")
+
+	require.NoError(t, err)
+	require.Equal(t, len("streamed text"), n)
+	require.Equal(t, "streamed text", rec.Body.String())
+	require.Equal(t, []byte("stream"), capture.Body())
+}
+
+func TestWebChatResponseCapture_ExtractAssistantTextFromChatCompletions(t *testing.T) {
+	streamed := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
+		"data: [DONE]\n\n")
+	buffered := []byte(`{"choices":[{"message":{"content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}}]}`)
+
+	require.Equal(t, "hello", ExtractAssistantTextFromChatCompletions(streamed, true))
+	require.Equal(t, "hi there", ExtractAssistantTextFromChatCompletions(buffered, false))
+}
+
+func TestWebChatResponseCapture_ExtractAssistantTextFromLongStreamLine(t *testing.T) {
+	longText := strings.Repeat("x", 70<<10)
+	body := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + longText + "\"}}]}\n\n")
+
+	require.Equal(t, longText, ExtractAssistantTextFromChatCompletions(body, true))
+}
+
+func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.gatewayForwardResult = &ForwardResult{
+		RequestID: "upstream_req",
+		Model:     "claude-sonnet-4",
+		Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 20},
+		Duration:  100 * time.Millisecond,
+	}
+
+	result, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		Stream:         true,
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(42), svc.ensureWebChatKeyUserID)
+	require.Same(t, user, svc.ensureWebChatKeyUser)
+	require.Same(t, user, svc.billingUser)
+	require.Same(t, svc.hiddenKey, svc.recordUsageInput.APIKey)
+	require.Equal(t, "/api/v1/chat/conversations/7/messages", svc.recordUsageInput.InboundEndpoint)
+	require.NotNil(t, svc.recordUsageInput.Subscription)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	require.Equal(t, "client:webchat-message-102", svc.usageLookupRequestID)
+	require.Equal(t, svc.hiddenKey.ID, svc.usageLookupAPIKeyID)
+	require.Equal(t, "webchat-message-102", svc.recordUsageClientRequestID)
+	require.NotNil(t, svc.finalUpdate.UsageLogID)
+	require.Equal(t, int64(88), *svc.finalUpdate.UsageLogID)
+	requireOrderedEvents(t, svc.events, "resolve_subscription", "validate_subscription", "billing_eligibility", "forward", "record_usage")
+}
+
+func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}}
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "text-only",
+		Provider:       "anthropic",
+		AttachmentIDs:  []int64{99},
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.False(t, svc.recordUsageCalled)
+	require.NotContains(t, svc.events, "resolve_subscription")
+	require.NotContains(t, svc.events, "billing_eligibility")
+	require.NotContains(t, svc.events, "forward")
+}
+
+func TestWebChatSend_RequiresUserSnapshotOrResolver(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.WebChatService.userResolver = nil
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, ErrUserNotFound)
+	require.Empty(t, svc.events)
+}
+
+func TestWebChatSend_UsesInjectedUserResolver(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	resolvedUser := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.WebChatService.userResolver = webChatUserResolverStub{user: resolvedUser}
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Same(t, resolvedUser, svc.ensureWebChatKeyUser)
+	require.Same(t, resolvedUser, svc.billingUser)
+}
+
+func TestWebChatSend_RejectsMissingCapabilityResolver(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.WebChatService.capabilityResolver = nil
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, ErrWebChatInvalidModel)
+	require.Empty(t, svc.events)
+}
+
+func TestWebChatSend_RequiresGinContextBeforePersistence(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+	})
+
+	require.ErrorIs(t, err, ErrWebChatContextRequired)
+	require.Empty(t, svc.createdMessages)
+	require.Empty(t, svc.events)
+}
+
+func TestWebChatSend_DoesNotForwardAssistantPlaceholder(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{{
+		ID:             1,
+		ConversationID: 7,
+		UserID:         42,
+		Role:           WebChatRoleUser,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		ContentText:    "history",
+		Status:         WebChatMessageStatusCompleted,
+	}}
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "current",
+		Stream:         true,
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	messages := forwardedChatCompletionMessages(t, svc.forwardedBody)
+	require.Len(t, messages, 2)
+	require.Equal(t, WebChatRoleUser, messages[0].Role)
+	require.Equal(t, "history", messages[0].Content)
+	require.Equal(t, WebChatRoleUser, messages[1].Role)
+	require.Equal(t, "current", messages[1].Content)
+}
+
+func TestWebChatSend_UsesCreateMessageAttachmentsWithoutReattaching(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.attachOnCreate = true
+	svc.repo.attachUploadedErr = errors.New("reattach called")
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "describe this",
+		AttachmentIDs:  []int64{99},
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.False(t, svc.repo.attachUploadedCalled)
+}
+
+func TestWebChatSend_DoesNotForwardWhenSelectionNotAcquired(t *testing.T) {
+	tests := []struct {
+		name     string
+		waitPlan *AccountWaitPlan
+	}{
+		{name: "with wait plan", waitPlan: &AccountWaitPlan{AccountID: 77, MaxConcurrency: 1}},
+		{name: "without wait plan"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.selection = &AccountSelectionResult{
+				Account:  &Account{ID: 77, Platform: PlatformAnthropic},
+				WaitPlan: tt.waitPlan,
+			}
+
+			_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+				UserID:         42,
+				User:           &User{ID: 42, AllowedGroups: []int64{11}},
+				ConversationID: 7,
+				Model:          "claude-sonnet-4",
+				Provider:       "anthropic",
+				Text:           "hello",
+				GinContext:     newTestGinContext(context.Background()),
+			})
+
+			require.ErrorIs(t, err, ErrNoAvailableAccounts)
+			require.NotContains(t, svc.events, "forward")
+			require.NotContains(t, svc.events, "record_usage")
+			require.False(t, svc.recordUsageCalled)
+		})
+	}
+}
+
+func TestWebChatSend_ReleasesAcquiredSelectionWhenAccountMissing(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.selection = &AccountSelectionResult{
+		Acquired: true,
+		ReleaseFunc: func() {
+			svc.releaseCount++
+		},
+	}
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Equal(t, 1, svc.releaseCount)
+	require.NotContains(t, svc.events, "forward")
+	require.NotContains(t, svc.events, "record_usage")
+}
+
+func TestWebChatSend_ValidatesHistoricalContextBeforeBilling(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{{
+		ID:             1,
+		ConversationID: 7,
+		UserID:         42,
+		Role:           WebChatRoleUser,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		ContentText:    "previous image",
+		Status:         WebChatMessageStatusCompleted,
+		Attachments: []WebChatAttachment{{
+			ID:          99,
+			UserID:      42,
+			Kind:        WebChatAttachmentKindImage,
+			Filename:    "image.png",
+			ContentType: "image/png",
+			StorageKey:  "image.png",
+			Status:      WebChatAttachmentStatusUploaded,
+		}},
+	}}
+
+	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "text-only",
+		Provider:       "anthropic",
+		Text:           "continue",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.NotContains(t, svc.events, "ensure_key")
+	require.NotContains(t, svc.events, "resolve_subscription")
+	require.NotContains(t, svc.events, "billing_eligibility")
+	require.NotContains(t, svc.events, "forward")
+	require.Empty(t, svc.createdMessages)
+}
+
+type webChatServiceTestDouble struct {
+	*WebChatService
+
+	ensureWebChatKeyUserID      int64
+	ensureWebChatKeyUser        *User
+	billingUser                 *User
+	hiddenKey                   *APIKey
+	recordUsageInput            *RecordUsageInput
+	recordUsageCalled           bool
+	gatewayForwardResult        *ForwardResult
+	finalizedAssistantMessageID int64
+	finalUpdate                 UpdateWebChatMessageInput
+	nextMessageID               int64
+	createdMessages             []CreateWebChatMessageInput
+	updatedMessages             []UpdateWebChatMessageInput
+	usageLookupRequestID        string
+	usageLookupAPIKeyID         int64
+	recordUsageClientRequestID  string
+	forwardedBody               []byte
+	selection                   *AccountSelectionResult
+	releaseCount                int
+	repo                        *webChatRepoStub
+	events                      []string
+}
+
+func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	double := &webChatServiceTestDouble{nextMessageID: 100}
+	repo := &webChatRepoStub{double: double}
+	storage := noopWebChatStorage{}
+	double.repo = repo
+	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
+	double.WebChatService = NewWebChatService(repo, storage)
+	double.WebChatService.capabilityResolver = webChatCapabilityResolverStub{}
+	double.WebChatService.apiKeyService = &webChatAPIKeyServiceStub{double: double}
+	double.WebChatService.subscriptionService = &webChatSubscriptionServiceStub{double: double}
+	double.WebChatService.billingCacheService = &webChatBillingCacheServiceStub{double: double}
+	double.WebChatService.gatewayService = &webChatGatewayServiceStub{double: double}
+	double.WebChatService.usageLogRepository = &webChatUsageLogRepoStub{double: double}
+	return double
+}
+
+type webChatRepoStub struct {
+	double               *webChatServiceTestDouble
+	statefulMessages     bool
+	messages             []WebChatMessage
+	attachOnCreate       bool
+	attachUploadedCalled bool
+	attachUploadedErr    error
+}
+
+func (r *webChatRepoStub) CreateConversation(context.Context, CreateWebChatConversationInput) (*WebChatConversation, error) {
+	panic("unexpected CreateConversation")
+}
+
+func (r *webChatRepoStub) ListConversations(context.Context, int64, pagination.PaginationParams) ([]WebChatConversation, *pagination.PaginationResult, error) {
+	panic("unexpected ListConversations")
+}
+
+func (r *webChatRepoStub) GetConversationForUser(_ context.Context, userID, conversationID int64) (*WebChatConversation, error) {
+	return &WebChatConversation{ID: conversationID, UserID: userID, Status: WebChatConversationStatusActive}, nil
+}
+
+func (r *webChatRepoStub) UpdateConversation(context.Context, int64, int64, UpdateWebChatConversationInput) (*WebChatConversation, error) {
+	panic("unexpected UpdateConversation")
+}
+
+func (r *webChatRepoStub) SoftDeleteConversation(context.Context, int64, int64) error {
+	panic("unexpected SoftDeleteConversation")
+}
+
+func (r *webChatRepoStub) CreateMessage(_ context.Context, in CreateWebChatMessageInput) (*WebChatMessage, error) {
+	r.double.nextMessageID++
+	id := r.double.nextMessageID
+	r.double.createdMessages = append(r.double.createdMessages, in)
+	message := WebChatMessage{
+		ID:             id,
+		ConversationID: in.ConversationID,
+		UserID:         in.UserID,
+		Role:           in.Role,
+		Model:          in.Model,
+		Provider:       in.Provider,
+		ContentText:    in.ContentText,
+		Status:         in.Status,
+	}
+	if r.attachOnCreate && len(in.AttachmentIDs) > 0 {
+		message.Attachments = webChatTestAttachments(in.ConversationID, id, in.AttachmentIDs)
+	}
+	if r.statefulMessages {
+		r.messages = append(r.messages, message)
+	}
+	return &message, nil
+}
+
+func (r *webChatRepoStub) ListMessages(_ context.Context, userID, conversationID int64) ([]WebChatMessage, error) {
+	if r.statefulMessages {
+		return append([]WebChatMessage(nil), r.messages...), nil
+	}
+	return []WebChatMessage{{
+		ID:             1,
+		ConversationID: conversationID,
+		UserID:         userID,
+		Role:           WebChatRoleUser,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		ContentText:    "hello",
+		Status:         WebChatMessageStatusCompleted,
+	}}, nil
+}
+
+func (r *webChatRepoStub) UpdateMessage(_ context.Context, _ int64, messageID int64, in UpdateWebChatMessageInput) (*WebChatMessage, error) {
+	r.double.updatedMessages = append(r.double.updatedMessages, in)
+	if in.Status != nil && *in.Status == WebChatMessageStatusCompleted {
+		r.double.finalizedAssistantMessageID = messageID
+		r.double.finalUpdate = in
+	}
+	return &WebChatMessage{ID: messageID}, nil
+}
+
+func (r *webChatRepoStub) CreateAttachment(context.Context, CreateWebChatAttachmentInput) (*WebChatAttachment, error) {
+	panic("unexpected CreateAttachment")
+}
+
+func (r *webChatRepoStub) AttachUploadedFilesToMessage(_ context.Context, _ int64, conversationID, messageID int64, attachmentIDs []int64) ([]WebChatAttachment, error) {
+	r.attachUploadedCalled = true
+	if r.attachUploadedErr != nil {
+		return nil, r.attachUploadedErr
+	}
+	return webChatTestAttachments(conversationID, messageID, attachmentIDs), nil
+}
+
+func (r *webChatRepoStub) GetAttachmentForUser(context.Context, int64, int64) (*WebChatAttachment, error) {
+	return &WebChatAttachment{
+		ID:          99,
+		UserID:      42,
+		Kind:        WebChatAttachmentKindImage,
+		Filename:    "image.png",
+		ContentType: "image/png",
+		StorageKey:  "image.png",
+		Status:      WebChatAttachmentStatusUploaded,
+	}, nil
+}
+
+func (r *webChatRepoStub) CreateArtifact(context.Context, CreateWebChatArtifactInput) (*WebChatArtifact, error) {
+	panic("unexpected CreateArtifact")
+}
+
+func (r *webChatRepoStub) GetArtifactForUser(context.Context, int64, int64) (*WebChatArtifact, error) {
+	panic("unexpected GetArtifactForUser")
+}
+
+type webChatAPIKeyServiceStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (s *webChatAPIKeyServiceStub) GetAvailableGroups(context.Context, int64) ([]Group, error) {
+	return []Group{{ID: 11, Platform: PlatformAnthropic, Status: StatusActive}}, nil
+}
+
+func (s *webChatAPIKeyServiceStub) EnsureWebChatKey(_ context.Context, user *User, group *Group) (*APIKey, error) {
+	s.double.events = append(s.double.events, "ensure_key")
+	s.double.ensureWebChatKeyUserID = user.ID
+	s.double.ensureWebChatKeyUser = user
+	groupID := group.ID
+	s.double.hiddenKey = &APIKey{ID: 55, UserID: user.ID, Key: "wc_hidden", GroupID: &groupID, Group: group, User: user, Status: StatusActive}
+	return s.double.hiddenKey, nil
+}
+
+func (s *webChatAPIKeyServiceStub) UpdateQuotaUsed(context.Context, int64, float64) error {
+	return nil
+}
+
+func (s *webChatAPIKeyServiceStub) UpdateRateLimitUsage(context.Context, int64, float64) error {
+	return nil
+}
+
+type webChatSubscriptionServiceStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (s *webChatSubscriptionServiceStub) ResolveActiveSubscriptionForRoutedGroup(context.Context, int64, int64) (*UserSubscription, error) {
+	s.double.events = append(s.double.events, "resolve_subscription")
+	return &UserSubscription{ID: 66, UserID: 42, GroupID: 11, Status: SubscriptionStatusActive, ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (s *webChatSubscriptionServiceStub) ValidateAndCheckLimits(*UserSubscription, *Group) (bool, error) {
+	s.double.events = append(s.double.events, "validate_subscription")
+	return false, nil
+}
+
+type webChatBillingCacheServiceStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (s *webChatBillingCacheServiceStub) CheckBillingEligibility(_ context.Context, user *User, _ *APIKey, _ *Group, _ *UserSubscription, _ string) error {
+	s.double.events = append(s.double.events, "billing_eligibility")
+	s.double.billingUser = user
+	return nil
+}
+
+type webChatGatewayServiceStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (s *webChatGatewayServiceStub) SelectAccountWithLoadAwareness(context.Context, *int64, string, string, map[int64]struct{}, string, int64) (*AccountSelectionResult, error) {
+	return s.double.selection, nil
+}
+
+func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, _ *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
+	s.double.events = append(s.double.events, "forward")
+	s.double.forwardedBody = append([]byte(nil), body...)
+	if s.double.gatewayForwardResult == nil {
+		s.double.gatewayForwardResult = &ForwardResult{RequestID: "upstream_req", Model: "claude-sonnet-4"}
+	}
+	return s.double.gatewayForwardResult, nil
+}
+
+func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordUsageInput) error {
+	s.double.events = append(s.double.events, "record_usage")
+	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
+	s.double.recordUsageCalled = true
+	s.double.recordUsageInput = in
+	return nil
+}
+
+type webChatUsageLogRepoStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (r *webChatUsageLogRepoStub) GetByRequestIDAndAPIKeyID(_ context.Context, requestID string, apiKeyID int64) (*UsageLog, error) {
+	r.double.events = append(r.double.events, "usage_lookup")
+	r.double.usageLookupRequestID = requestID
+	r.double.usageLookupAPIKeyID = apiKeyID
+	return &UsageLog{ID: 88, RequestID: requestID, APIKeyID: apiKeyID}, nil
+}
+
+type webChatCapabilityResolverStub struct{}
+
+func (webChatCapabilityResolverStub) ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error) {
+	switch model {
+	case "claude-sonnet-4":
+		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true, SupportsImageInput: true, SupportsFileContext: true}, nil
+	case "text-only":
+		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true}, nil
+	default:
+		return WebChatModelCapability{}, ErrWebChatInvalidModel
+	}
+}
+
+type webChatUserResolverStub struct {
+	user *User
+}
+
+func (s webChatUserResolverStub) GetByID(context.Context, int64) (*User, error) {
+	if s.user == nil {
+		return nil, ErrUserNotFound
+	}
+	return s.user, nil
+}
+
+func requireOrderedEvents(t *testing.T, events []string, expected ...string) {
+	t.Helper()
+	last := -1
+	for _, want := range expected {
+		index := -1
+		for i, event := range events {
+			if event == want {
+				index = i
+				break
+			}
+		}
+		require.NotEqual(t, -1, index, "missing event %q in %v", want, events)
+		require.Greater(t, index, last, "event %q out of order in %v", want, events)
+		last = index
+	}
+}
+
+func webChatTestAttachments(conversationID, messageID int64, attachmentIDs []int64) []WebChatAttachment {
+	attachments := make([]WebChatAttachment, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		attachments = append(attachments, WebChatAttachment{
+			ID:             id,
+			MessageID:      &messageID,
+			ConversationID: &conversationID,
+			UserID:         42,
+			Kind:           WebChatAttachmentKindImage,
+			Filename:       "image.png",
+			ContentType:    "image/png",
+			StorageKey:     "image.png",
+			Status:         WebChatAttachmentStatusUploaded,
+		})
+	}
+	return attachments
+}
+
+func forwardedChatCompletionMessages(t *testing.T, body []byte) []struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+} {
+	t.Helper()
+	var payload struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	return payload.Messages
+}
+
+type noopWebChatStorage struct{}
+
+func (noopWebChatStorage) Save(context.Context, WebChatStorageSaveInput) (*WebChatStoredFile, error) {
+	panic("unexpected Save")
+}
+
+func (noopWebChatStorage) Open(context.Context, string) (io.ReadCloser, WebChatStoredFileMeta, error) {
+	return io.NopCloser(strings.NewReader("image")), WebChatStoredFileMeta{SizeBytes: 5}, nil
+}
+
+func (noopWebChatStorage) Delete(context.Context, string) error {
+	return nil
+}
+
+func newTestGinContext(ctx context.Context) *gin.Context {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
+	c.Request = req
+	return c
+}

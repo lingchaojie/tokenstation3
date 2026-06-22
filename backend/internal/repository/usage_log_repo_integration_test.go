@@ -151,6 +151,35 @@ func (s *UsageLogRepoSuite) TestCreate() {
 	s.Require().NotZero(log.ID)
 }
 
+func (s *UsageLogRepoSuite) TestGetByRequestIDAndAPIKeyID() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "lookup@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-lookup", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-lookup"})
+	requestID := "client:webchat-message-" + uuid.NewString()
+
+	log := &service.UsageLog{
+		UserID:       user.ID,
+		APIKeyID:     apiKey.ID,
+		AccountID:    account.ID,
+		RequestID:    requestID,
+		Model:        "claude-sonnet-4",
+		InputTokens:  10,
+		OutputTokens: 20,
+		TotalCost:    0.5,
+		ActualCost:   0.4,
+	}
+	_, err := s.repo.Create(s.ctx, log)
+	s.Require().NoError(err)
+
+	got, err := s.repo.GetByRequestIDAndAPIKeyID(s.ctx, " "+requestID+" ", apiKey.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(log.ID, got.ID)
+	s.Require().Equal(requestID, got.RequestID)
+
+	_, err = s.repo.GetByRequestIDAndAPIKeyID(s.ctx, requestID, apiKey.ID+1)
+	s.Require().ErrorIs(err, service.ErrUsageLogNotFound)
+}
+
 func TestUsageLogRepositoryCreate_BatchPathConcurrent(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

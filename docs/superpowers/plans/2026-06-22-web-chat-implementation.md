@@ -999,7 +999,7 @@ git commit -m "feat: add web chat provider adapter"
 - Test: `backend/internal/service/web_chat_service_test.go`
 - Test: `backend/internal/repository/usage_log_repo_integration_test.go`
 
-- [ ] **Step 1: Add deterministic usage log lookup**
+- [x] **Step 1: Add deterministic usage log lookup**
 
 Add to `UsageLogRepository`:
 
@@ -1023,7 +1023,7 @@ func (r *usageLogRepository) GetByRequestIDAndAPIKeyID(ctx context.Context, requ
 
 Use the repository's existing not-found error style if `ErrUsageLogNotFound` has a different name.
 
-- [ ] **Step 2: Write dispatch tests**
+- [x] **Step 2: Write dispatch tests**
 
 Create tests that use stubs for gateway forwarding and billing:
 
@@ -1067,7 +1067,7 @@ func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Implement response capture**
+- [x] **Step 3: Implement response capture**
 
 Create a writer wrapper:
 
@@ -1108,7 +1108,7 @@ func ExtractArtifactsFromChatCompletions(body []byte, streamed bool) []WebChatAr
 
 For streamed bodies, parse `data: <json>` lines, ignore `[DONE]`, append `choices[0].delta.content`. For buffered bodies, append `choices[0].message.content` or text content parts.
 
-- [ ] **Step 4: Implement dispatch flow**
+- [x] **Step 4: Implement dispatch flow**
 
 In `web_chat_dispatch.go`, implement a method used by `WebChatService.SendMessage`:
 
@@ -1151,7 +1151,7 @@ ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamMod
 
 10. Lookup usage log with `GetByRequestIDAndAPIKeyID(ctx, usageRequestID, hiddenKey.ID)` and update assistant `usage_log_id` when found.
 
-- [ ] **Step 5: Run dispatch tests**
+- [x] **Step 5: Run dispatch tests**
 
 Run:
 
@@ -1163,7 +1163,7 @@ go test ./internal/repository -run TestUsageLogRepository_GetByRequestIDAndAPIKe
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/internal/service/web_chat_capture.go backend/internal/service/web_chat_dispatch.go backend/internal/service/web_chat_service_test.go backend/internal/service/account_usage_service.go backend/internal/repository/usage_log_repo.go backend/internal/repository/usage_log_repo_integration_test.go

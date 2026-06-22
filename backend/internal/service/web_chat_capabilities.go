@@ -33,6 +33,10 @@ type WebChatCatalogModel struct {
 	PriceStatus string
 }
 
+type WebChatCatalogCapabilityResolver struct {
+	byProviderModel map[string]WebChatModelCapability
+}
+
 var webChatProviderRoutes = map[string]struct {
 	Platform string
 	KeyType  string
@@ -41,6 +45,51 @@ var webChatProviderRoutes = map[string]struct {
 	"openai":    {Platform: PlatformOpenAI, KeyType: APIKeyTypeOpenAI},
 	"qwen":      {Platform: PlatformOpenAI, KeyType: APIKeyTypeOpenAI},
 	"gemini":    {Platform: PlatformGemini, KeyType: ""},
+}
+
+func DefaultWebChatCatalogModels() []WebChatCatalogModel {
+	publicModels := PublicModelCatalogModelsForWebChat()
+	models := make([]WebChatCatalogModel, 0, len(publicModels))
+	for _, model := range publicModels {
+		provider := strings.ToLower(strings.TrimSpace(model.Provider))
+		if _, ok := webChatProviderRoutes[provider]; !ok {
+			continue
+		}
+		models = append(models, WebChatCatalogModel{
+			Provider:    provider,
+			ModelName:   model.ModelName,
+			DisplayName: model.DisplayName,
+			Modalities:  append([]string(nil), model.Modalities...),
+			Features:    append([]string(nil), model.Features...),
+			PriceStatus: model.PriceStatus,
+		})
+	}
+	return models
+}
+
+func NewWebChatCatalogCapabilityResolver(models []WebChatCatalogModel) *WebChatCatalogCapabilityResolver {
+	resolver := &WebChatCatalogCapabilityResolver{byProviderModel: make(map[string]WebChatModelCapability)}
+	for _, capability := range WebChatModelCapabilitiesFromCatalog(models) {
+		provider := strings.ToLower(strings.TrimSpace(capability.Provider))
+		model := strings.TrimSpace(capability.Model)
+		if provider == "" || model == "" {
+			continue
+		}
+		resolver.byProviderModel[webChatCapabilityKey(provider, model)] = capability
+	}
+	return resolver
+}
+
+func (r *WebChatCatalogCapabilityResolver) ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error) {
+	if r == nil {
+		return WebChatModelCapability{}, ErrWebChatInvalidModel
+	}
+	key := webChatCapabilityKey(strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(model))
+	capability, ok := r.byProviderModel[key]
+	if !ok {
+		return WebChatModelCapability{}, ErrWebChatInvalidModel
+	}
+	return capability, nil
 }
 
 func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatModelCapability, bool) {
@@ -98,4 +147,8 @@ func containsFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func webChatCapabilityKey(provider, model string) string {
+	return provider + "\x00" + model
 }
