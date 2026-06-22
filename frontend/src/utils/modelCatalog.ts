@@ -98,3 +98,17 @@ export function buildModelCatalogProviderOptions(models: PublicModelCatalogModel
       .sort((a, b) => providerRank(a.value) - providerRank(b.value) || a.label.localeCompare(b.label)),
   ]
 }
+
+export function providerIconModel(providerKey: string): string {
+  const iconModels: Record<string, string> = {
+    anthropic: 'claude',
+    openai: 'gpt-5',
+    gemini: 'gemini',
+    qwen: 'qwen',
+    glm: 'glm',
+    deepseek: 'deepseek',
+    minimax: 'minimax',
+    kimi: 'kimi',
+  }
+  return iconModels[providerKey] ?? providerKey
+}

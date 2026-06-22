@@ -2,16 +2,45 @@
   <header class="border-b border-linear-hairline bg-linear-canvas px-4 py-3" data-testid="chat-model-selector">
     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <div class="grid gap-2 sm:grid-cols-[minmax(9rem,12rem)_minmax(12rem,22rem)]">
-        <label class="block">
+        <div ref="providerMenuRef" class="relative">
           <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Provider</span>
-          <select
-            v-model="selectedProvider"
-            class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong"
+          <button
+            type="button"
+            class="flex h-9 w-full items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-left text-sm text-linear-ink outline-none transition-colors hover:border-linear-hairline-strong focus:border-linear-hairline-strong"
+            aria-label="Provider"
+            aria-haspopup="listbox"
+            :aria-expanded="providerMenuOpen"
+            data-testid="chat-provider-trigger"
+            @click="providerMenuOpen = !providerMenuOpen"
+            @keydown.down.prevent="providerMenuOpen = true"
+            @keydown.esc.prevent="providerMenuOpen = false"
+          >
+            <ModelIcon :model="providerIconModel(selectedProvider)" size="16px" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate">{{ selectedProvider }}</span>
+            <Icon name="chevronDown" size="sm" class="shrink-0 text-linear-ink-tertiary" />
+          </button>
+          <div
+            v-if="providerMenuOpen"
+            class="absolute left-0 top-full z-30 mt-1 w-full overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-0 py-1 shadow-lg"
+            role="listbox"
             aria-label="Provider"
           >
-            <option v-for="provider in providers" :key="provider" :value="provider">{{ provider }}</option>
-          </select>
-        </label>
+            <button
+              v-for="provider in providers"
+              :key="provider"
+              type="button"
+              class="flex h-9 w-full items-center gap-2 px-3 text-left text-sm text-linear-ink transition-colors hover:bg-linear-surface-1"
+              :aria-selected="provider === selectedProvider"
+              data-testid="chat-provider-option"
+              role="option"
+              @click="selectProvider(provider)"
+            >
+              <ModelIcon :model="providerIconModel(provider)" size="16px" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ provider }}</span>
+              <Icon v-if="provider === selectedProvider" name="check" size="sm" class="text-linear-accent" />
+            </button>
+          </div>
+        </div>
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Model</span>
           <select
@@ -52,13 +81,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import type { WebChatModel } from '@/api/chat'
+import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
+const providerMenuOpen = ref(false)
+const providerMenuRef = ref<HTMLElement | null>(null)
 
 const providers = computed(() => Array.from(new Set(chatStore.models.map((model) => model.provider))).sort())
 
@@ -73,6 +106,11 @@ const selectedProvider = computed({
     }
   },
 })
+
+function selectProvider(provider: string): void {
+  selectedProvider.value = provider
+  providerMenuOpen.value = false
+}
 
 const modelOptions = computed(() =>
   chatStore.models.filter((model) => model.provider === selectedProvider.value)
@@ -103,4 +141,20 @@ const capabilities = computed(() => {
 function modelKey(model: WebChatModel): string {
   return `${model.provider}:${model.model}`
 }
+
+function handleDocumentClick(event: MouseEvent): void {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (!providerMenuRef.value?.contains(target)) {
+    providerMenuOpen.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentClick)
+})
 </script>

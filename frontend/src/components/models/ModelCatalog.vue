@@ -190,6 +190,7 @@ import {
   filterModelCatalog,
   formatContextWindow,
   formatModelCatalogAmount,
+  providerIconModel,
   sortModelCatalog,
   type ModelCatalogSortKey,
 } from '@/utils/modelCatalog'
@@ -245,20 +246,6 @@ function modalityLabel(value: string): string {
   const key = `modelCatalog.modality.${value}`
   const label = t(key)
   return label === key ? value : label
-}
-
-function providerIconModel(providerKey: string): string {
-  const iconModels: Record<string, string> = {
-    anthropic: 'claude',
-    openai: 'gpt-5',
-    gemini: 'gemini',
-    qwen: 'qwen',
-    glm: 'glm',
-    deepseek: 'deepseek',
-    minimax: 'minimax',
-    kimi: 'kimi',
-  }
-  return iconModels[providerKey] ?? providerKey
 }
 
 function pricingRows(model: PublicModelCatalogModel): Array<{ key: string; label: string; value: string }> {
