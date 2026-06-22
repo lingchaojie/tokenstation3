@@ -165,7 +165,7 @@ func buildWebChatImageDataURL(ctx context.Context, storage WebChatStorage, attac
 	if len(data) > webChatMaxUploadBytes {
 		return "", ErrWebChatUploadRejected
 	}
-	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.ContentType)
+	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.ContentType, nil)
 	if err != nil || kind != WebChatAttachmentKindImage {
 		return "", ErrWebChatUploadRejected
 	}

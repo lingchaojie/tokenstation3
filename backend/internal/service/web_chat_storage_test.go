@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,7 @@ func TestWebChatService_UploadAttachmentStoresImageKind(t *testing.T) {
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	attachment, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	attachment, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "photo.png",
 		ContentType: "image/png",
@@ -95,7 +96,7 @@ func TestWebChatService_UploadAttachmentStoresTextPreview(t *testing.T) {
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	attachment, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	attachment, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "notes.md",
 		ContentType: "text/markdown; charset=utf-8",
@@ -113,7 +114,7 @@ func TestWebChatService_UploadAttachmentRejectsUnsupportedMIME(t *testing.T) {
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	_, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	_, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "script.sh",
 		ContentType: "application/x-sh",
@@ -128,7 +129,7 @@ func TestWebChatService_UploadAttachmentRejectsTooLargeFile(t *testing.T) {
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	_, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	_, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "large.txt",
 		ContentType: "text/plain",
@@ -144,7 +145,7 @@ func TestWebChatService_UploadAttachmentCleansUpStoredFileWhenRepoFails(t *testi
 	storage := NewLocalWebChatStorage(root)
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	_, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	_, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "orphan.txt",
 		ContentType: "text/plain",
@@ -164,7 +165,7 @@ func TestWebChatService_UploadAttachmentCleansUpStoredFileWhenRepoCancelsContext
 	storage := NewLocalWebChatStorage(root)
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	_, err := svc.UploadAttachment(ctx, UploadWebChatAttachmentInput{
+	_, err := svc.uploadAttachmentFromReader(ctx, UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "orphan.txt",
 		ContentType: "text/plain",
@@ -180,7 +181,7 @@ func TestWebChatService_UploadAttachmentSanitizesDisplayFilename(t *testing.T) {
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 	longName := "..\\bad\n" + strings.Repeat("a", 300) + ".txt"
 
-	attachment, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	attachment, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    longName,
 		ContentType: "text/plain",
@@ -199,7 +200,7 @@ func TestWebChatService_UploadAttachmentNormalizesMIMECase(t *testing.T) {
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
-	attachment, err := svc.UploadAttachment(context.Background(), UploadWebChatAttachmentInput{
+	attachment, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
 		Filename:    "photo.png",
 		ContentType: "IMAGE/PNG; charset=binary",
@@ -208,6 +209,58 @@ func TestWebChatService_UploadAttachmentNormalizesMIMECase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "image/png", attachment.ContentType)
 	require.Equal(t, WebChatAttachmentKindImage, attachment.Kind)
+}
+
+func TestWebChatService_UploadAttachmentSniffsMissingContentTypeText(t *testing.T) {
+	repo := &webChatUploadRepoStub{}
+	storage := NewLocalWebChatStorage(t.TempDir())
+	svc := &WebChatService{attachmentRepo: repo, storage: storage}
+	file := webChatMultipartFile{Reader: strings.NewReader("plain notes")}
+	header := &multipart.FileHeader{Filename: "notes.txt"}
+
+	attachment, err := svc.UploadAttachment(context.Background(), 42, file, header)
+
+	require.NoError(t, err)
+	require.Equal(t, "text/plain", attachment.ContentType)
+	require.Equal(t, WebChatAttachmentKindFile, attachment.Kind)
+	require.NotNil(t, attachment.TextPreview)
+	require.Equal(t, "plain notes", *attachment.TextPreview)
+}
+
+func TestWebChatService_UploadAttachmentSniffsMissingContentTypeImage(t *testing.T) {
+	repo := &webChatUploadRepoStub{}
+	storage := NewLocalWebChatStorage(t.TempDir())
+	svc := &WebChatService{attachmentRepo: repo, storage: storage}
+	png := string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0})
+	file := webChatMultipartFile{Reader: strings.NewReader(png)}
+	header := &multipart.FileHeader{Filename: "photo.png"}
+
+	attachment, err := svc.UploadAttachment(context.Background(), 42, file, header)
+
+	require.NoError(t, err)
+	require.Equal(t, "image/png", attachment.ContentType)
+	require.Equal(t, WebChatAttachmentKindImage, attachment.Kind)
+}
+
+func TestWebChatService_UploadAttachmentRejectsMissingContentTypeBinary(t *testing.T) {
+	repo := &webChatUploadRepoStub{}
+	storage := NewLocalWebChatStorage(t.TempDir())
+	svc := &WebChatService{attachmentRepo: repo, storage: storage}
+	file := webChatMultipartFile{Reader: strings.NewReader(string([]byte{0x00, 0x01, 0x02, 0x03, 0x04}))}
+	header := &multipart.FileHeader{Filename: "payload.bin"}
+
+	_, err := svc.UploadAttachment(context.Background(), 42, file, header)
+
+	require.ErrorIs(t, err, ErrWebChatUploadRejected)
+	require.Empty(t, repo.created)
+}
+
+type webChatMultipartFile struct {
+	*strings.Reader
+}
+
+func (webChatMultipartFile) Close() error {
+	return nil
 }
 
 type webChatUploadRepoStub struct {

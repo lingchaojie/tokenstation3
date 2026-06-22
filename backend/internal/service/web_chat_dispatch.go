@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -123,6 +124,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	usageRequestID := "client:" + usageClientID
 	inboundEndpoint := fmt.Sprintf("/api/v1/chat/conversations/%d/messages", input.ConversationID)
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
+	usageRecorded := false
 
 	switch input.Capabilities.Platform {
 	case PlatformOpenAI:
@@ -130,7 +132,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if err != nil {
 			return nil, err
 		}
-		if err := s.openAIGatewayService.RecordUsage(usageCtx, &OpenAIRecordUsageInput{
+		recordUsageErr := s.openAIGatewayService.RecordUsage(usageCtx, &OpenAIRecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -142,15 +144,18 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			IPAddress:          ip.GetClientIP(c),
 			APIKeyService:      s.apiKeyService,
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		}); err != nil {
-			return nil, err
+		})
+		if recordUsageErr != nil {
+			log.Printf("[WARN] web chat: record OpenAI usage failed after upstream response: %v", recordUsageErr)
+		} else {
+			usageRecorded = true
 		}
 	case PlatformAnthropic:
 		result, account, err := s.forwardWebChatGateway(usageCtx, c, group, body, parsed, input)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
+		recordUsageErr := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -163,15 +168,18 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			APIKeyService:      s.apiKeyService,
 			QuotaPlatform:      QuotaPlatform(ctx, hiddenKey),
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		}); err != nil {
-			return nil, err
+		})
+		if recordUsageErr != nil {
+			log.Printf("[WARN] web chat: record gateway usage failed after upstream response: %v", recordUsageErr)
+		} else {
+			usageRecorded = true
 		}
 	case PlatformGemini:
 		result, account, err := s.forwardWebChatGemini(usageCtx, c, group, body, parsed, input)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
+		recordUsageErr := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -184,20 +192,23 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			APIKeyService:      s.apiKeyService,
 			QuotaPlatform:      QuotaPlatform(ctx, hiddenKey),
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		}); err != nil {
-			return nil, err
+		})
+		if recordUsageErr != nil {
+			log.Printf("[WARN] web chat: record Gemini usage failed after upstream response: %v", recordUsageErr)
+		} else {
+			usageRecorded = true
 		}
 	default:
 		return nil, ErrWebChatInvalidModel
 	}
 
 	var usageLogID *int64
-	if s.usageLogRepository != nil && hiddenKey.ID > 0 {
-		log, err := s.usageLogRepository.GetByRequestIDAndAPIKeyID(usageCtx, usageRequestID, hiddenKey.ID)
-		if err == nil && log != nil {
-			usageLogID = &log.ID
+	if usageRecorded && s.usageLogRepository != nil && hiddenKey.ID > 0 {
+		usageLog, err := s.usageLogRepository.GetByRequestIDAndAPIKeyID(usageCtx, usageRequestID, hiddenKey.ID)
+		if err == nil && usageLog != nil {
+			usageLogID = &usageLog.ID
 		} else if err != nil && !errors.Is(err, ErrUsageLogNotFound) {
-			return nil, err
+			log.Printf("[WARN] web chat: lookup usage log failed after upstream response: %v", err)
 		}
 	}
 	return &webChatDispatchResult{ResponseBody: capture.Body(), UsageLogID: usageLogID}, nil

@@ -72,7 +72,7 @@ func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
 		Duration:  100 * time.Millisecond,
 	}
 
-	result, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           user,
 		ConversationID: 7,
@@ -103,7 +103,7 @@ func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}}
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(nil, WebChatSendInput{
 		UserID:         42,
 		User:           user,
 		ConversationID: 7,
@@ -124,7 +124,7 @@ func TestWebChatSend_RequiresUserSnapshotOrResolver(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	svc.WebChatService.userResolver = nil
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(nil, WebChatSendInput{
 		UserID:         42,
 		ConversationID: 7,
 		Model:          "claude-sonnet-4",
@@ -142,7 +142,7 @@ func TestWebChatSend_UsesInjectedUserResolver(t *testing.T) {
 	resolvedUser := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
 	svc.WebChatService.userResolver = webChatUserResolverStub{user: resolvedUser}
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		ConversationID: 7,
 		Model:          "claude-sonnet-4",
@@ -160,7 +160,7 @@ func TestWebChatSend_RejectsMissingCapabilityResolver(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	svc.WebChatService.capabilityResolver = nil
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -177,7 +177,7 @@ func TestWebChatSend_RejectsMissingCapabilityResolver(t *testing.T) {
 func TestWebChatSend_RequiresGinContextBeforePersistence(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(nil, WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -205,7 +205,7 @@ func TestWebChatSend_DoesNotForwardAssistantPlaceholder(t *testing.T) {
 		Status:         WebChatMessageStatusCompleted,
 	}}
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -230,7 +230,7 @@ func TestWebChatSend_UsesCreateMessageAttachmentsWithoutReattaching(t *testing.T
 	svc.repo.attachOnCreate = true
 	svc.repo.attachUploadedErr = errors.New("reattach called")
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -262,7 +262,7 @@ func TestWebChatSend_DoesNotForwardWhenSelectionNotAcquired(t *testing.T) {
 				WaitPlan: tt.waitPlan,
 			}
 
-			_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+			_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 				UserID:         42,
 				User:           &User{ID: 42, AllowedGroups: []int64{11}},
 				ConversationID: 7,
@@ -289,7 +289,7 @@ func TestWebChatSend_ReleasesAcquiredSelectionWhenAccountMissing(t *testing.T) {
 		},
 	}
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -328,7 +328,7 @@ func TestWebChatSend_ValidatesHistoricalContextBeforeBilling(t *testing.T) {
 		}},
 	}}
 
-	_, err := svc.SendMessage(context.Background(), WebChatSendInput{
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
@@ -346,6 +346,137 @@ func TestWebChatSend_ValidatesHistoricalContextBeforeBilling(t *testing.T) {
 	require.Empty(t, svc.createdMessages)
 }
 
+func TestWebChatCancelMessageRejectsNonCancelableMessages(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{
+		{ID: 11, ConversationID: 7, UserID: 42, Role: WebChatRoleUser, Status: WebChatMessageStatusCompleted},
+		{ID: 12, ConversationID: 7, UserID: 42, Role: WebChatRoleAssistant, Status: WebChatMessageStatusCompleted},
+	}
+
+	err := svc.CancelMessage(context.Background(), 42, 7, 11)
+	require.ErrorIs(t, err, ErrWebChatMessageNotCancelable)
+
+	err = svc.CancelMessage(context.Background(), 42, 7, 12)
+	require.ErrorIs(t, err, ErrWebChatMessageNotCancelable)
+	require.Empty(t, svc.updatedMessages)
+}
+
+func TestWebChatCancelMessageCancelsActiveAssistantDispatch(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{{
+		ID:             12,
+		ConversationID: 7,
+		UserID:         42,
+		Role:           WebChatRoleAssistant,
+		Status:         WebChatMessageStatusStreaming,
+	}}
+	var canceled bool
+	svc.registerWebChatAssistantCancel(42, 7, 12, func() { canceled = true })
+
+	err := svc.CancelMessage(context.Background(), 42, 7, 12)
+
+	require.NoError(t, err)
+	require.True(t, canceled)
+	require.Len(t, svc.updatedMessages, 1)
+	require.NotNil(t, svc.updatedMessages[0].Status)
+	require.Equal(t, WebChatMessageStatusCanceled, *svc.updatedMessages[0].Status)
+	require.Equal(t, []string{WebChatMessageStatusPending, WebChatMessageStatusStreaming}, svc.updatedMessages[0].ExpectedStatuses)
+	require.NotNil(t, svc.updatedMessages[0].ExpectedRole)
+	require.Equal(t, WebChatRoleAssistant, *svc.updatedMessages[0].ExpectedRole)
+}
+
+func TestWebChatSend_RecordUsageFailureAfterForwardStillCompletesMessage(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.recordUsageErr = errors.New("usage write failed")
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.NotZero(t, result.AssistantMessageID)
+	require.True(t, svc.recordUsageCalled)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	require.NotNil(t, svc.finalUpdate.Status)
+	require.Equal(t, WebChatMessageStatusCompleted, *svc.finalUpdate.Status)
+	require.Empty(t, svc.usageLookupRequestID)
+	require.NotContains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusFailed)
+}
+
+func TestWebChatSend_UsageLookupFailureAfterForwardStillCompletesMessage(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.usageLookupErr = errors.New("lookup failed")
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.NotZero(t, result.AssistantMessageID)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	require.NotNil(t, svc.finalUpdate.Status)
+	require.Equal(t, WebChatMessageStatusCompleted, *svc.finalUpdate.Status)
+	require.Nil(t, svc.finalUpdate.UsageLogID)
+	require.NotContains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusFailed)
+}
+
+func TestWebChatSend_DoesNotOverwriteCanceledAssistantWhenDispatchCancels(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	svc.forwardErr = context.Canceled
+	svc.cancelAssistantOnForward = true
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.NotZero(t, result.AssistantMessageID)
+	require.NotContains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusFailed)
+	require.Contains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusCanceled)
+}
+
+func TestWebChatUpdateConversationRejectsInvalidStatus(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	status := WebChatConversationStatusDeleted
+
+	_, err := svc.UpdateConversation(context.Background(), 42, 7, UpdateWebChatConversationInput{Status: &status})
+
+	require.ErrorIs(t, err, ErrWebChatInvalidConversationStatus)
+}
+
+func TestWebChatUpdateConversationAllowsArchivedStatus(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	status := WebChatConversationStatusArchived
+
+	conversation, err := svc.UpdateConversation(context.Background(), 42, 7, UpdateWebChatConversationInput{Status: &status})
+
+	require.NoError(t, err)
+	require.Equal(t, WebChatConversationStatusArchived, conversation.Status)
+	require.NotNil(t, svc.repo.lastConversationUpdate.Status)
+	require.Equal(t, WebChatConversationStatusArchived, *svc.repo.lastConversationUpdate.Status)
+}
+
 type webChatServiceTestDouble struct {
 	*WebChatService
 
@@ -355,7 +486,10 @@ type webChatServiceTestDouble struct {
 	hiddenKey                   *APIKey
 	recordUsageInput            *RecordUsageInput
 	recordUsageCalled           bool
+	recordUsageErr              error
 	gatewayForwardResult        *ForwardResult
+	forwardErr                  error
+	cancelAssistantOnForward    bool
 	finalizedAssistantMessageID int64
 	finalUpdate                 UpdateWebChatMessageInput
 	nextMessageID               int64
@@ -363,6 +497,7 @@ type webChatServiceTestDouble struct {
 	updatedMessages             []UpdateWebChatMessageInput
 	usageLookupRequestID        string
 	usageLookupAPIKeyID         int64
+	usageLookupErr              error
 	recordUsageClientRequestID  string
 	forwardedBody               []byte
 	selection                   *AccountSelectionResult
@@ -380,7 +515,7 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 	storage := noopWebChatStorage{}
 	double.repo = repo
 	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
-	double.WebChatService = NewWebChatService(repo, storage)
+	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	double.WebChatService.capabilityResolver = webChatCapabilityResolverStub{}
 	double.WebChatService.apiKeyService = &webChatAPIKeyServiceStub{double: double}
 	double.WebChatService.subscriptionService = &webChatSubscriptionServiceStub{double: double}
@@ -391,12 +526,13 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 }
 
 type webChatRepoStub struct {
-	double               *webChatServiceTestDouble
-	statefulMessages     bool
-	messages             []WebChatMessage
-	attachOnCreate       bool
-	attachUploadedCalled bool
-	attachUploadedErr    error
+	double                 *webChatServiceTestDouble
+	statefulMessages       bool
+	messages               []WebChatMessage
+	attachOnCreate         bool
+	attachUploadedCalled   bool
+	attachUploadedErr      error
+	lastConversationUpdate UpdateWebChatConversationInput
 }
 
 func (r *webChatRepoStub) CreateConversation(context.Context, CreateWebChatConversationInput) (*WebChatConversation, error) {
@@ -411,8 +547,13 @@ func (r *webChatRepoStub) GetConversationForUser(_ context.Context, userID, conv
 	return &WebChatConversation{ID: conversationID, UserID: userID, Status: WebChatConversationStatusActive}, nil
 }
 
-func (r *webChatRepoStub) UpdateConversation(context.Context, int64, int64, UpdateWebChatConversationInput) (*WebChatConversation, error) {
-	panic("unexpected UpdateConversation")
+func (r *webChatRepoStub) UpdateConversation(_ context.Context, userID, conversationID int64, in UpdateWebChatConversationInput) (*WebChatConversation, error) {
+	r.lastConversationUpdate = in
+	status := WebChatConversationStatusActive
+	if in.Status != nil {
+		status = *in.Status
+	}
+	return &WebChatConversation{ID: conversationID, UserID: userID, Status: status}, nil
 }
 
 func (r *webChatRepoStub) SoftDeleteConversation(context.Context, int64, int64) error {
@@ -460,6 +601,35 @@ func (r *webChatRepoStub) ListMessages(_ context.Context, userID, conversationID
 
 func (r *webChatRepoStub) UpdateMessage(_ context.Context, _ int64, messageID int64, in UpdateWebChatMessageInput) (*WebChatMessage, error) {
 	r.double.updatedMessages = append(r.double.updatedMessages, in)
+	for i := range r.messages {
+		if r.messages[i].ID != messageID {
+			continue
+		}
+		if in.ExpectedConversationID != nil && r.messages[i].ConversationID != *in.ExpectedConversationID {
+			return nil, ErrWebChatMessageNotFound
+		}
+		if in.ExpectedRole != nil && r.messages[i].Role != *in.ExpectedRole {
+			return nil, ErrWebChatMessageNotFound
+		}
+		if len(in.ExpectedStatuses) > 0 {
+			found := false
+			for _, status := range in.ExpectedStatuses {
+				if r.messages[i].Status == status {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, ErrWebChatMessageNotFound
+			}
+		}
+		if in.Status != nil {
+			r.messages[i].Status = *in.Status
+		}
+		if in.ContentText != nil {
+			r.messages[i].ContentText = *in.ContentText
+		}
+	}
 	if in.Status != nil && *in.Status == WebChatMessageStatusCompleted {
 		r.double.finalizedAssistantMessageID = messageID
 		r.double.finalUpdate = in
@@ -559,6 +729,12 @@ func (s *webChatGatewayServiceStub) SelectAccountWithLoadAwareness(context.Conte
 func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, _ *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
 	s.double.events = append(s.double.events, "forward")
 	s.double.forwardedBody = append([]byte(nil), body...)
+	if s.double.cancelAssistantOnForward {
+		_ = s.double.CancelMessage(context.Background(), 42, 7, s.double.nextMessageID)
+	}
+	if s.double.forwardErr != nil {
+		return nil, s.double.forwardErr
+	}
 	if s.double.gatewayForwardResult == nil {
 		s.double.gatewayForwardResult = &ForwardResult{RequestID: "upstream_req", Model: "claude-sonnet-4"}
 	}
@@ -570,7 +746,7 @@ func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordU
 	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
 	s.double.recordUsageCalled = true
 	s.double.recordUsageInput = in
-	return nil
+	return s.double.recordUsageErr
 }
 
 type webChatUsageLogRepoStub struct {
@@ -581,6 +757,9 @@ func (r *webChatUsageLogRepoStub) GetByRequestIDAndAPIKeyID(_ context.Context, r
 	r.double.events = append(r.double.events, "usage_lookup")
 	r.double.usageLookupRequestID = requestID
 	r.double.usageLookupAPIKeyID = apiKeyID
+	if r.double.usageLookupErr != nil {
+		return nil, r.double.usageLookupErr
+	}
 	return &UsageLog{ID: 88, RequestID: requestID, APIKeyID: apiKeyID}, nil
 }
 
@@ -623,6 +802,16 @@ func requireOrderedEvents(t *testing.T, events []string, expected ...string) {
 		require.Greater(t, index, last, "event %q out of order in %v", want, events)
 		last = index
 	}
+}
+
+func webChatUpdatedStatuses(updates []UpdateWebChatMessageInput) []string {
+	statuses := make([]string, 0, len(updates))
+	for _, update := range updates {
+		if update.Status != nil {
+			statuses = append(statuses, *update.Status)
+		}
+	}
+	return statuses
 }
 
 func webChatTestAttachments(conversationID, messageID int64, attachmentIDs []int64) []WebChatAttachment {

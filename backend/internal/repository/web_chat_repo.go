@@ -6,6 +6,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	dbwebchatartifact "github.com/Wei-Shaw/sub2api/ent/webchatartifact"
 	dbwebchatattachment "github.com/Wei-Shaw/sub2api/ent/webchatattachment"
 	dbwebchatconversation "github.com/Wei-Shaw/sub2api/ent/webchatconversation"
@@ -242,8 +243,21 @@ func (r *webChatRepository) UpdateMessage(ctx context.Context, userID, messageID
 		return nil, err
 	}
 
+	predicates := []predicate.WebChatMessage{
+		dbwebchatmessage.IDEQ(messageID),
+		dbwebchatmessage.UserIDEQ(userID),
+	}
+	if in.ExpectedConversationID != nil {
+		predicates = append(predicates, dbwebchatmessage.ConversationIDEQ(*in.ExpectedConversationID))
+	}
+	if in.ExpectedRole != nil {
+		predicates = append(predicates, dbwebchatmessage.RoleEQ(*in.ExpectedRole))
+	}
+	if len(in.ExpectedStatuses) > 0 {
+		predicates = append(predicates, dbwebchatmessage.StatusIn(in.ExpectedStatuses...))
+	}
 	builder := client.WebChatMessage.Update().
-		Where(dbwebchatmessage.IDEQ(messageID), dbwebchatmessage.UserIDEQ(userID)).
+		Where(predicates...).
 		SetUpdatedAt(time.Now().UTC())
 	if in.Model != nil {
 		builder.SetModel(*in.Model)

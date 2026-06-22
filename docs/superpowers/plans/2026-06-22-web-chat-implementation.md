@@ -1182,7 +1182,7 @@ git commit -m "feat: dispatch web chat through gateway billing"
 - Modify: `backend/cmd/server/wire_gen.go`
 - Test: `backend/internal/handler/web_chat_handler_test.go`
 
-- [ ] **Step 1: Write handler tests**
+- [x] **Step 1: Write handler tests**
 
 Create `web_chat_handler_test.go`:
 
@@ -1214,7 +1214,7 @@ func TestWebChatCreateConversationUsesCurrentUser(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement service methods**
+- [x] **Step 2: Implement service methods**
 
 `WebChatService` constructor dependencies:
 
@@ -1250,7 +1250,7 @@ SendMessage(c *gin.Context, in WebChatSendInput) (*WebChatSendResult, error)
 CancelMessage(ctx context.Context, userID, conversationID, messageID int64) error
 ```
 
-- [ ] **Step 3: Implement handler**
+- [x] **Step 3: Implement handler**
 
 Handler responsibilities:
 
@@ -1268,7 +1268,7 @@ c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]st
 c.Header("Content-Length", strconv.FormatInt(meta.SizeBytes, 10))
 ```
 
-- [ ] **Step 4: Register routes**
+- [x] **Step 4: Register routes**
 
 In `RegisterUserRoutes`, add:
 
@@ -1289,7 +1289,7 @@ chat := authenticated.Group("/chat")
 }
 ```
 
-- [ ] **Step 5: Wire dependencies**
+- [x] **Step 5: Wire dependencies**
 
 Modify provider sets and run:
 
@@ -1300,7 +1300,7 @@ go generate ./cmd/server
 
 Expected: `backend/cmd/server/wire_gen.go` updates without manual edits.
 
-- [ ] **Step 6: Run backend route tests and compile**
+- [x] **Step 6: Run backend route tests and compile**
 
 Run:
 
@@ -1313,7 +1313,7 @@ go test ./cmd/server -run Test -count=1
 
 Expected: PASS or "no test files" for packages without tests, with exit status 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/internal/service/web_chat_service.go backend/internal/handler/web_chat_handler.go backend/internal/server/routes/user.go backend/internal/service/wire.go backend/internal/handler/handler.go backend/internal/handler/wire.go backend/cmd/server/wire_gen.go backend/internal/handler/web_chat_handler_test.go

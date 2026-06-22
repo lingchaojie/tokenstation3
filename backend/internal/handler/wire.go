@@ -89,6 +89,10 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 	return h
 }
 
+func ProvideWebChatHandler(webChatService *service.WebChatService) *WebChatHandler {
+	return NewWebChatHandler(webChatService)
+}
+
 // ProvideAdminSettingHandler creates admin.SettingHandler with notification template APIs.
 func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, notificationEmailService *service.NotificationEmailService) *admin.SettingHandler {
 	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, paymentConfigService, paymentService, userAttributeService)
@@ -114,6 +118,7 @@ func ProvideHandlers(
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
+	webChatHandler *WebChatHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -134,6 +139,7 @@ func ProvideHandlers(
 		Payment:          paymentHandler,
 		PaymentWebhook:   paymentWebhookHandler,
 		AvailableChannel: availableChannelHandler,
+		WebChat:          webChatHandler,
 	}
 }
 
@@ -155,6 +161,7 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
+	ProvideWebChatHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,

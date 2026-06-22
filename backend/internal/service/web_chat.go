@@ -50,6 +50,11 @@ type WebChatConversation struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
+type WebChatConversationDetail struct {
+	Conversation WebChatConversation `json:"conversation"`
+	Messages     []WebChatMessage    `json:"messages"`
+}
+
 type WebChatMessage struct {
 	ID             int64               `json:"id"`
 	ConversationID int64               `json:"conversation_id"`
@@ -99,6 +104,12 @@ type WebChatArtifact struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+type WebChatDownloadMeta struct {
+	Filename    string
+	ContentType string
+	SizeBytes   int64
+}
+
 type CreateWebChatConversationInput struct {
 	UserID          int64  `json:"user_id"`
 	Title           string `json:"title"`
@@ -129,14 +140,17 @@ type CreateWebChatMessageInput struct {
 }
 
 type UpdateWebChatMessageInput struct {
-	Model        *string           `json:"model,omitempty"`
-	Provider     *string           `json:"provider,omitempty"`
-	ContentText  *string           `json:"content_text,omitempty"`
-	ContentJSON  *[]map[string]any `json:"content_json,omitempty"`
-	Status       *string           `json:"status,omitempty"`
-	ErrorCode    *string           `json:"error_code,omitempty"`
-	ErrorMessage *string           `json:"error_message,omitempty"`
-	UsageLogID   *int64            `json:"usage_log_id,omitempty"`
+	Model                  *string           `json:"model,omitempty"`
+	Provider               *string           `json:"provider,omitempty"`
+	ContentText            *string           `json:"content_text,omitempty"`
+	ContentJSON            *[]map[string]any `json:"content_json,omitempty"`
+	Status                 *string           `json:"status,omitempty"`
+	ErrorCode              *string           `json:"error_code,omitempty"`
+	ErrorMessage           *string           `json:"error_message,omitempty"`
+	UsageLogID             *int64            `json:"usage_log_id,omitempty"`
+	ExpectedConversationID *int64            `json:"-"`
+	ExpectedRole           *string           `json:"-"`
+	ExpectedStatuses       []string          `json:"-"`
 }
 
 type CreateWebChatAttachmentInput struct {

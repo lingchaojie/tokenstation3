@@ -72,7 +72,7 @@ func TestWebChatCapabilities_SkipsUnsupportedCatalogProviders(t *testing.T) {
 }
 
 func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *testing.T) {
-	svc := NewWebChatService(nil, nil)
+	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	caps, err := svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4-20250514")
 
@@ -101,7 +101,7 @@ func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t
 	_, err = resolver.ResolveWebChatCapability("anthropic", "missing-model")
 	require.ErrorIs(t, err, ErrWebChatInvalidModel)
 
-	svc := NewWebChatService(nil, nil)
+	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	_, err = svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4")
 	require.ErrorIs(t, err, ErrWebChatInvalidModel)
 }
