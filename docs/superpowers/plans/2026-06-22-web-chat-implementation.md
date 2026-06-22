@@ -284,7 +284,7 @@ go test ./ent/...
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/migrations/160_web_chat.sql backend/ent
@@ -1518,7 +1518,7 @@ git commit -m "feat: add web chat frontend state"
 - Test: `frontend/src/components/chat/__tests__/ChatView.spec.ts`
 - Test: `frontend/src/views/user/__tests__/ChatViewSource.spec.ts`
 
-- [ ] **Step 1: Write component smoke tests**
+- [x] **Step 1: Write component smoke tests**
 
 Create tests:
 
@@ -1545,7 +1545,7 @@ it('disables send while streaming', async () => {
 })
 ```
 
-- [ ] **Step 2: Implement layout**
+- [x] **Step 2: Implement layout**
 
 `ChatView.vue` loads models and conversations on mount and renders `ChatShell`.
 
@@ -1568,7 +1568,7 @@ it('disables send while streaming', async () => {
 
 Keep radii at `rounded-lg` or smaller. Avoid nested cards. Use full-height panes with hairline borders.
 
-- [ ] **Step 3: Implement expected controls**
+- [x] **Step 3: Implement expected controls**
 
 `ConversationRail`:
 
@@ -1600,7 +1600,7 @@ Keep radii at `rounded-lg` or smaller. Avoid nested cards. Use full-height panes
 - stop icon button while streaming
 - disabled state for empty text plus no attachments, streaming, or capability warning
 
-- [ ] **Step 4: Run component tests**
+- [x] **Step 4: Run component tests**
 
 Run:
 
@@ -1611,7 +1611,7 @@ pnpm test:run src/components/chat/__tests__/ChatView.spec.ts src/views/user/__te
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/views/user/ChatView.vue frontend/src/components/chat frontend/src/views/user/__tests__/ChatViewSource.spec.ts
