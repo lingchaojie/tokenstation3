@@ -66,6 +66,7 @@ func IsAllowedQuotaPlatform(s string) bool {
 const (
 	APIKeyTypeAnthropic = PlatformAnthropic
 	APIKeyTypeOpenAI    = PlatformOpenAI
+	APIKeyTypeWebChat   = "web_chat"
 	APIKeyTypeUnknown   = "unknown"
 	// APIKeyTypeUnified is a response-only pseudo-type reported for provider-agnostic
 	// keys (group_binding_mode = auto). It is never stored in the key_type column and

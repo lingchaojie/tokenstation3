@@ -211,6 +211,25 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 	return apiKeyEntityToService(m), nil
 }
 
+func (r *apiKeyRepository) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*service.APIKey, error) {
+	m, err := r.activeQuery().
+		Where(
+			apikey.UserIDEQ(userID),
+			apikey.GroupIDEQ(groupID),
+			apikey.KeyTypeEQ(service.APIKeyTypeWebChat),
+		).
+		WithUser().
+		WithGroup().
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		return nil, err
+	}
+	return apiKeyEntityToService(m), nil
+}
+
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {
 	// 使用原子操作：将软删除检查与更新合并到同一语句，避免竞态条件。
 	// 之前的实现先检查 Exist 再 UpdateOneID，若在两步之间发生软删除，
@@ -396,7 +415,10 @@ func (r *apiKeyRepository) deleteWithAudit(ctx context.Context, exec *dbent.Clie
 }
 
 func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+	q := r.activeQuery().Where(
+		apikey.UserIDEQ(userID),
+		apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+	)
 
 	// Apply filters
 	if filters.Search != "" {
@@ -442,13 +464,47 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
 }
 
+func (r *apiKeyRepository) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
+	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keysQuery := q.
+		WithGroup().
+		Offset(params.Offset()).
+		Limit(params.Limit())
+	for _, order := range apiKeyListOrder(params) {
+		keysQuery = keysQuery.Order(order)
+	}
+
+	keys, err := keysQuery.All(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	outKeys := make([]service.APIKey, 0, len(keys))
+	for i := range keys {
+		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
+	}
+
+	return outKeys, paginationResultFromTotal(int64(total), params), nil
+}
+
 func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
 	if len(apiKeyIDs) == 0 {
 		return []int64{}, nil
 	}
 
 	ids, err := r.client.APIKey.Query().
-		Where(apikey.UserIDEQ(userID), apikey.IDIn(apiKeyIDs...), apikey.DeletedAtIsNil()).
+		Where(
+			apikey.UserIDEQ(userID),
+			apikey.IDIn(apiKeyIDs...),
+			apikey.DeletedAtIsNil(),
+			apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+		).
 		IDs(ctx)
 	if err != nil {
 		return nil, err
@@ -457,7 +513,10 @@ func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, ap
 }
 
 func (r *apiKeyRepository) CountByUserID(ctx context.Context, userID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.UserIDEQ(userID)).Count(ctx)
+	count, err := r.activeQuery().Where(
+		apikey.UserIDEQ(userID),
+		apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+	).Count(ctx)
 	return int64(count), err
 }
 
@@ -467,7 +526,10 @@ func (r *apiKeyRepository) ExistsByKey(ctx context.Context, key string) (bool, e
 }
 
 func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.GroupIDEQ(groupID))
+	q := r.activeQuery().Where(
+		apikey.GroupIDEQ(groupID),
+		apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+	)
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -524,7 +586,7 @@ func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector
 
 // SearchAPIKeys searches API keys by user ID and/or keyword (name)
 func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]service.APIKey, error) {
-	q := r.activeQuery()
+	q := r.activeQuery().Where(apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)))
 	if userID > 0 {
 		q = q.Where(apikey.UserIDEQ(userID))
 	}
@@ -567,7 +629,12 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64, keyTypeUpdate service.APIKeyGroupKeyTypeUpdate) (int64, error) {
 	client := clientFromContext(ctx, r.client)
 	update := client.APIKey.Update().
-		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
+		Where(
+			apikey.UserIDEQ(userID),
+			apikey.GroupIDEQ(oldGroupID),
+			apikey.DeletedAtIsNil(),
+			apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+		).
 		SetGroupID(newGroupID)
 	if keyTypeUpdate.ClearKeyType {
 		update.ClearKeyType()
@@ -612,7 +679,10 @@ func (r *apiKeyRepository) UpdateGroupIDAndKeyTypeByUserAndEffectiveKeyType(ctx 
 
 // CountByGroupID 获取分组的 API Key 数量
 func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.GroupIDEQ(groupID)).Count(ctx)
+	count, err := r.activeQuery().Where(
+		apikey.GroupIDEQ(groupID),
+		apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+	).Count(ctx)
 	return int64(count), err
 }
 

@@ -49,6 +49,10 @@ func (s *cleanupRepoStub) CreateTask(ctx context.Context, task *service.UsageCle
 	return nil
 }
 
+func (s *cleanupRepoStub) IsVisibleAPIKeyID(ctx context.Context, apiKeyID int64) (bool, error) {
+	return true, nil
+}
+
 func (s *cleanupRepoStub) ListTasks(ctx context.Context, params pagination.PaginationParams) ([]service.UsageCleanupTask, *pagination.PaginationResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,7 +108,126 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters serv
 
 var _ service.UsageCleanupRepository = (*cleanupRepoStub)(nil)
 
+type cleanupAPIKeyRepoStub struct {
+	byID map[int64]*service.APIKey
+}
+
+func (s *cleanupAPIKeyRepoStub) Create(ctx context.Context, key *service.APIKey) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
+	key, ok := s.byID[id]
+	if !ok {
+		return nil, service.ErrAPIKeyNotFound
+	}
+	clone := *key
+	return &clone, nil
+}
+
+func (s *cleanupAPIKeyRepoStub) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
+	return "", 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) GetByKey(ctx context.Context, key string) (*service.APIKey, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*service.APIKey, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) Update(ctx context.Context, key *service.APIKey) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) Delete(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) DeleteWithAudit(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) CountByUserID(ctx context.Context, userID int64) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ExistsByKey(ctx context.Context, key string) (bool, error) {
+	return false, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]service.APIKey, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ClearGroupIDByGroupID(ctx context.Context, groupID int64) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) UpdateGroupIDByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ListKeysByUserID(ctx context.Context, userID int64) ([]string, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ListKeysByGroupID(ctx context.Context, groupID int64) ([]string, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) (float64, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) UpdateLastUsed(ctx context.Context, id int64, usedAt time.Time) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) IncrementRateLimitUsage(ctx context.Context, id int64, cost float64) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) ResetRateLimitWindows(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+
+func (s *cleanupAPIKeyRepoStub) GetRateLimitData(ctx context.Context, id int64) (*service.APIKeyRateLimitData, error) {
+	return nil, errors.New("not implemented")
+}
+
+var _ service.APIKeyRepository = (*cleanupAPIKeyRepoStub)(nil)
+
 func setupCleanupRouter(cleanupService *service.UsageCleanupService, userID int64) *gin.Engine {
+	return setupCleanupRouterWithAPIKeyService(cleanupService, nil, userID)
+}
+
+func setupCleanupRouterWithAPIKeyService(cleanupService *service.UsageCleanupService, apiKeyService *service.APIKeyService, userID int64) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	if userID > 0 {
@@ -114,7 +237,7 @@ func setupCleanupRouter(cleanupService *service.UsageCleanupService, userID int6
 		})
 	}
 
-	handler := NewUsageHandler(nil, nil, nil, cleanupService)
+	handler := NewUsageHandler(nil, apiKeyService, nil, cleanupService)
 	router.POST("/api/v1/admin/usage/cleanup-tasks", handler.CreateCleanupTask)
 	router.GET("/api/v1/admin/usage/cleanup-tasks", handler.ListCleanupTasks)
 	router.POST("/api/v1/admin/usage/cleanup-tasks/:id/cancel", handler.CancelCleanupTask)
@@ -349,6 +472,43 @@ func TestUsageHandlerCreateCleanupTaskSuccess(t *testing.T) {
 	end := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC).Add(24*time.Hour - time.Nanosecond)
 	require.True(t, created.Filters.StartTime.Equal(start))
 	require.True(t, created.Filters.EndTime.Equal(end))
+}
+
+func TestUsageHandlerCreateCleanupTaskRejectsWebChatAPIKey(t *testing.T) {
+	repo := &cleanupRepoStub{}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}
+	cleanupService := service.NewUsageCleanupService(repo, nil, nil, cfg)
+	hiddenKeyID := int64(123)
+	apiKeyService := service.NewAPIKeyService(&cleanupAPIKeyRepoStub{byID: map[int64]*service.APIKey{
+		hiddenKeyID: {
+			ID:      hiddenKeyID,
+			UserID:  77,
+			Key:     "wc_cleanup_hidden",
+			Name:    "Web Chat",
+			KeyType: service.APIKeyTypeWebChat,
+			Status:  service.StatusActive,
+		},
+	}}, nil, nil, nil, nil, nil, nil)
+	router := setupCleanupRouterWithAPIKeyService(cleanupService, apiKeyService, 99)
+
+	payload := map[string]any{
+		"start_date": "2024-01-01",
+		"end_date":   "2024-01-02",
+		"timezone":   "UTC",
+		"api_key_id": hiddenKeyID,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/usage/cleanup-tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Empty(t, repo.created)
 }
 
 func TestUsageHandlerListCleanupTasksUnavailable(t *testing.T) {

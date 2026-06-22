@@ -1437,6 +1437,15 @@ func (r *usageLogRepository) ListByUser(ctx context.Context, userID int64, param
 }
 
 func (r *usageLogRepository) ListByAPIKey(ctx context.Context, apiKeyID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !visible {
+			return []service.UsageLog{}, paginationResultFromTotal(0, params), nil
+		}
+	}
 	return r.listUsageLogsWithPagination(ctx, "WHERE api_key_id = $1", []any{apiKeyID}, params)
 }
 
@@ -1559,12 +1568,13 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 			COUNT(CASE WHEN status = $1 THEN 1 END) as active_api_keys
 		FROM api_keys
 		WHERE deleted_at IS NULL
+		  AND (key_type IS NULL OR key_type <> $2)
 	`
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		apiKeyStatsQuery,
-		[]any{service.StatusActive},
+		[]any{service.StatusActive, service.APIKeyTypeWebChat},
 		&stats.TotalAPIKeys,
 		&stats.ActiveAPIKeys,
 	); err != nil {
@@ -1828,6 +1838,16 @@ func (r *usageLogRepository) GetUserStatsAggregated(ctx context.Context, userID 
 
 // GetAPIKeyStatsAggregated returns aggregated usage statistics for an API key using database-level aggregation
 func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return &usagestats.UsageStats{}, nil
+		}
+	}
+
 	query := `
 		SELECT
 			COUNT(*) as total_requests,
@@ -2044,6 +2064,16 @@ func resolveUsageStatsTimezone() string {
 }
 
 func (r *usageLogRepository) ListByAPIKeyAndTimeRange(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !visible {
+			return []service.UsageLog{}, nil, nil
+		}
+	}
+
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
 	logs, err := r.queryUsageLogs(ctx, query, apiKeyID, startTime, endTime)
 	return logs, nil, err
@@ -2258,12 +2288,15 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 
 	query := fmt.Sprintf(`
 		WITH top_keys AS (
-			SELECT api_key_id
-			FROM usage_logs
-			WHERE created_at >= $1 AND created_at < $2
-			GROUP BY api_key_id
+			SELECT u.api_key_id
+			FROM usage_logs u
+			JOIN api_keys k ON u.api_key_id = k.id
+			WHERE u.created_at >= $1 AND u.created_at < $2
+			  AND k.deleted_at IS NULL
+			  AND (k.key_type IS NULL OR k.key_type <> $3)
+			GROUP BY u.api_key_id
 			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
-			LIMIT $3
+			LIMIT $4
 		)
 		SELECT
 			TO_CHAR(u.created_at, '%s') as date,
@@ -2272,14 +2305,16 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 			COUNT(*) as requests,
 			COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
 		FROM usage_logs u
-		LEFT JOIN api_keys k ON u.api_key_id = k.id
+		JOIN api_keys k ON u.api_key_id = k.id
 		WHERE u.api_key_id IN (SELECT api_key_id FROM top_keys)
-		  AND u.created_at >= $4 AND u.created_at < $5
+		  AND u.created_at >= $5 AND u.created_at < $6
+		  AND k.deleted_at IS NULL
+		  AND (k.key_type IS NULL OR k.key_type <> $7)
 		GROUP BY date, u.api_key_id, k.name
 		ORDER BY date ASC, tokens DESC
 	`, dateFormat)
 
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, service.APIKeyTypeWebChat, limit, startTime, endTime, service.APIKeyTypeWebChat)
 	if err != nil {
 		return nil, err
 	}
@@ -2460,8 +2495,8 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
-		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL",
-		[]any{userID},
+		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL AND (key_type IS NULL OR key_type <> $2)",
+		[]any{userID, service.APIKeyTypeWebChat},
 		&stats.TotalAPIKeys,
 	); err != nil {
 		return nil, err
@@ -2469,8 +2504,8 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
-		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND status = $2 AND deleted_at IS NULL",
-		[]any{userID, service.StatusActive},
+		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND status = $2 AND deleted_at IS NULL AND (key_type IS NULL OR key_type <> $3)",
+		[]any{userID, service.StatusActive, service.APIKeyTypeWebChat},
 		&stats.ActiveAPIKeys,
 	); err != nil {
 		return nil, err
@@ -2623,6 +2658,14 @@ func (r *usageLogRepository) getPerformanceStatsByAPIKey(ctx context.Context, ap
 func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKeyID int64) (*UserDashboardStats, error) {
 	stats := &UserDashboardStats{}
 	today := timezone.Today()
+
+	visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return stats, nil
+	}
 
 	// API Key 维度不需要统计 key 数量，设为 1
 	stats.TotalAPIKeys = 1
@@ -2787,6 +2830,16 @@ type UsageLogFilters = usagestats.UsageLogFilters
 
 // ListWithFilters lists usage logs with optional filters (for admin)
 func (r *usageLogRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	if filters.APIKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, filters.APIKeyID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !visible {
+			return []service.UsageLog{}, paginationResultFromTotal(0, params), nil
+		}
+	}
+
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -2974,7 +3027,15 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 		endTime = time.Now()
 	}
 
-	for _, id := range normalizedAPIKeyIDs {
+	visibleAPIKeyIDs, err := r.visibleAPIKeyIDs(ctx, normalizedAPIKeyIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(visibleAPIKeyIDs) == 0 {
+		return result, nil
+	}
+
+	for _, id := range visibleAPIKeyIDs {
 		result[id] = &BatchAPIKeyUsageStats{APIKeyID: id}
 	}
 
@@ -2989,7 +3050,7 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 		GROUP BY api_key_id
 	`
 	today := timezone.Today()
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(normalizedAPIKeyIDs), startTime, endTime, today)
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(visibleAPIKeyIDs), startTime, endTime, today)
 	if err != nil {
 		return nil, err
 	}
@@ -3016,8 +3077,56 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 	return result, nil
 }
 
+func (r *usageLogRepository) visibleAPIKeyIDs(ctx context.Context, apiKeyIDs []int64) ([]int64, error) {
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id
+		FROM api_keys
+		WHERE id = ANY($1)
+		  AND deleted_at IS NULL
+		  AND (key_type IS NULL OR key_type <> $2)
+	`, pq.Array(apiKeyIDs), service.APIKeyTypeWebChat)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	visible := make([]int64, 0, len(apiKeyIDs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		visible = append(visible, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return visible, nil
+}
+
+func (r *usageLogRepository) isVisibleAPIKeyID(ctx context.Context, apiKeyID int64) (bool, error) {
+	if apiKeyID <= 0 {
+		return false, nil
+	}
+	ids, err := r.visibleAPIKeyIDs(ctx, []int64{apiKeyID})
+	if err != nil {
+		return false, err
+	}
+	return len(ids) > 0, nil
+}
+
 // GetUsageTrendWithFilters returns usage trend data with optional filters
 func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []TrendDataPoint, err error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []TrendDataPoint{}, nil
+		}
+	}
+
 	if shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
@@ -3173,6 +3282,16 @@ func (r *usageLogRepository) GetModelStatsWithFiltersBySource(ctx context.Contex
 }
 
 func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8, source string) (results []ModelStat, err error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []ModelStat{}, nil
+		}
+	}
+
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	// 当仅按 account_id 聚合时，实际费用使用账号倍率（total_cost * account_rate_multiplier）。
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
@@ -3243,6 +3362,16 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 
 // GetGroupStatsWithFilters returns group usage statistics with optional filters
 func (r *usageLogRepository) GetGroupStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8) (results []usagestats.GroupStat, err error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []usagestats.GroupStat{}, nil
+		}
+	}
+
 	query := `
 		SELECT
 			COALESCE(ul.group_id, 0) as group_id,
@@ -3316,6 +3445,16 @@ func (r *usageLogRepository) GetGroupStatsWithFilters(ctx context.Context, start
 
 // GetUserBreakdownStats returns per-user usage breakdown within a specific dimension.
 func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTime, endTime time.Time, dim usagestats.UserBreakdownDimension, limit int) (results []usagestats.UserBreakdownItem, err error) {
+	if dim.APIKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, dim.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []usagestats.UserBreakdownItem{}, nil
+		}
+	}
+
 	query := `
 		SELECT
 			COALESCE(ul.user_id, 0) as user_id,
@@ -3504,6 +3643,16 @@ func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endT
 
 // GetStatsWithFilters gets usage statistics with optional filters
 func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
+	if filters.APIKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, filters.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return &UsageStats{}, nil
+		}
+	}
+
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -3655,6 +3804,16 @@ type AccountUsageStatsResponse = usagestats.AccountUsageStatsResponse
 type EndpointStat = usagestats.EndpointStat
 
 func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []EndpointStat, err error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []EndpointStat{}, nil
+		}
+	}
+
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
 		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
@@ -3722,6 +3881,16 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 }
 
 func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []EndpointStat, err error) {
+	if apiKeyID > 0 {
+		visible, err := r.isVisibleAPIKeyID(ctx, apiKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return []EndpointStat{}, nil
+		}
+	}
+
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
 		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
@@ -4192,7 +4361,12 @@ func (r *usageLogRepository) loadAPIKeys(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return out, nil
 	}
-	models, err := r.client.APIKey.Query().Where(dbapikey.IDIn(ids...)).All(ctx)
+	models, err := r.client.APIKey.Query().
+		Where(
+			dbapikey.IDIn(ids...),
+			dbapikey.Or(dbapikey.KeyTypeIsNil(), dbapikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+		).
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}

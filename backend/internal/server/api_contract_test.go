@@ -2281,6 +2281,20 @@ func (r *stubApiKeyRepo) GetByKeyForAuth(ctx context.Context, key string) (*serv
 	return r.GetByKey(ctx, key)
 }
 
+func (r *stubApiKeyRepo) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*service.APIKey, error) {
+	for _, key := range r.byID {
+		if key.UserID != userID || key.KeyType != service.APIKeyTypeWebChat {
+			continue
+		}
+		if key.GroupID == nil || *key.GroupID != groupID {
+			continue
+		}
+		clone := *key
+		return &clone, nil
+	}
+	return nil, service.ErrAPIKeyNotFound
+}
+
 func (r *stubApiKeyRepo) Update(ctx context.Context, key *service.APIKey) error {
 	if key == nil {
 		return errors.New("nil key")
@@ -2347,6 +2361,10 @@ func (r *stubApiKeyRepo) ListByUserID(ctx context.Context, userID int64, params 
 		PageSize: pageSize,
 		Pages:    pages,
 	}, nil
+}
+
+func (r *stubApiKeyRepo) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return r.ListByUserID(ctx, userID, params, service.APIKeyListFilters{})
 }
 
 func (r *stubApiKeyRepo) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {

@@ -1144,12 +1144,12 @@ func (s *adminServiceImpl) listUserAPIKeysForDeletion(ctx context.Context, userI
 	const pageSize = 1000
 	keys := make([]APIKey, 0)
 	for page := 1; ; page++ {
-		batch, result, err := s.apiKeyRepo.ListByUserID(ctx, userID, pagination.PaginationParams{
+		batch, result, err := s.apiKeyRepo.ListByUserIDIncludingHidden(ctx, userID, pagination.PaginationParams{
 			Page:      page,
 			PageSize:  pageSize,
 			SortBy:    "id",
 			SortOrder: pagination.SortOrderAsc,
-		}, APIKeyListFilters{})
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list user api keys: %w", err)
 		}
@@ -2585,6 +2585,9 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 	if err != nil {
 		return nil, err
 	}
+	if isWebChatAPIKey(apiKey) {
+		return nil, ErrAPIKeyNotFound
+	}
 
 	if groupID == nil {
 		// nil 表示不修改，直接返回
@@ -2697,6 +2700,9 @@ func (s *adminServiceImpl) AdminResetAPIKeyRateLimitUsage(ctx context.Context, k
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, keyID)
 	if err != nil {
 		return nil, err
+	}
+	if isWebChatAPIKey(apiKey) {
+		return nil, ErrAPIKeyNotFound
 	}
 	apiKey.Usage5h = 0
 	apiKey.Usage1d = 0

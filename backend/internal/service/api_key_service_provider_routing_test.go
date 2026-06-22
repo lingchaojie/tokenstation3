@@ -77,6 +77,10 @@ func (s *apiKeyProviderRoutingCreateRepoStub) ExistsByKey(context.Context, strin
 	return s.exists, nil
 }
 
+func (s *apiKeyRepoStubForGroupUpdate) GetWebChatKeyByUserAndGroup(context.Context, int64, int64) (*APIKey, error) {
+	panic("unexpected")
+}
+
 func TestAPIKeyService_ResolveProviderGroup_UsesUserProviderRoute(t *testing.T) {
 	userID := int64(42)
 	routeGroupID := int64(20)

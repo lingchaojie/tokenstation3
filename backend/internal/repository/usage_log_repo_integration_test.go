@@ -64,6 +64,70 @@ func (s *UsageLogRepoSuite) createUsageLog(user *service.User, apiKey *service.A
 	return log
 }
 
+func (s *UsageLogRepoSuite) createWebChatAPIKey(user *service.User, group *service.Group, key string) *service.APIKey {
+	s.T().Helper()
+	if key == "" {
+		key = "wc-" + uuid.New().String()
+	}
+	groupID := group.ID
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              key,
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &groupID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
+	return webChat
+}
+
+func (s *UsageLogRepoSuite) createUsageLogWithGroup(user *service.User, apiKey *service.APIKey, account *service.Account, group *service.Group, model string, inputTokens, outputTokens int, cost float64, createdAt time.Time) *service.UsageLog {
+	s.T().Helper()
+	groupID := group.ID
+	log := &service.UsageLog{
+		UserID:       user.ID,
+		APIKeyID:     apiKey.ID,
+		AccountID:    account.ID,
+		GroupID:      &groupID,
+		RequestID:    uuid.New().String(),
+		Model:        model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalCost:    cost,
+		ActualCost:   cost,
+		CreatedAt:    createdAt,
+	}
+	_, err := s.repo.Create(s.ctx, log)
+	s.Require().NoError(err)
+	return log
+}
+
+func (s *UsageLogRepoSuite) createEndpointUsageLog(user *service.User, apiKey *service.APIKey, account *service.Account, group *service.Group, inboundEndpoint, upstreamEndpoint string, inputTokens, outputTokens int, cost float64, createdAt time.Time) *service.UsageLog {
+	s.T().Helper()
+	groupID := group.ID
+	log := &service.UsageLog{
+		UserID:           user.ID,
+		APIKeyID:         apiKey.ID,
+		AccountID:        account.ID,
+		GroupID:          &groupID,
+		RequestID:        uuid.New().String(),
+		Model:            "claude-3",
+		InboundEndpoint:  &inboundEndpoint,
+		UpstreamEndpoint: &upstreamEndpoint,
+		InputTokens:      inputTokens,
+		OutputTokens:     outputTokens,
+		TotalCost:        cost,
+		ActualCost:       cost,
+		CreatedAt:        createdAt,
+	}
+	_, err := s.repo.Create(s.ctx, log)
+	s.Require().NoError(err)
+	return log
+}
+
 // --- Create / GetByID ---
 
 func (s *UsageLogRepoSuite) TestCreate() {
@@ -587,15 +651,23 @@ func (s *UsageLogRepoSuite) TestListByUser() {
 func (s *UsageLogRepoSuite) TestListByAPIKey() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "listbyapikey@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-listbyapikey", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-listbyapikey-webchat", Status: service.StatusActive})
+	webChat := s.createWebChatAPIKey(user, group, "wc-listbyapikey")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-listbyapikey"})
 
 	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, time.Now())
 	s.createUsageLog(user, apiKey, account, 15, 25, 0.6, time.Now())
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, time.Now())
 
 	logs, page, err := s.repo.ListByAPIKey(s.ctx, apiKey.ID, pagination.PaginationParams{Page: 1, PageSize: 10})
 	s.Require().NoError(err, "ListByAPIKey")
 	s.Require().Len(logs, 2)
 	s.Require().Equal(int64(2), page.Total)
+
+	logs, page, err = s.repo.ListByAPIKey(s.ctx, webChat.ID, pagination.PaginationParams{Page: 1, PageSize: 10})
+	s.Require().NoError(err, "ListByAPIKey hidden web chat")
+	s.Require().Empty(logs)
+	s.Require().Equal(int64(0), page.Total)
 }
 
 // --- ListByAccount ---
@@ -633,6 +705,33 @@ func (s *UsageLogRepoSuite) TestGetUserStats() {
 	s.Require().Equal(int64(45), stats.OutputTokens)
 }
 
+// --- GetAPIKeyStatsAggregated ---
+
+func (s *UsageLogRepoSuite) TestGetAPIKeyStatsAggregated() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "keystatsagg-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-keystatsagg-webchat", Status: service.StatusActive})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-keystatsagg", Name: "k", GroupID: &group.ID})
+	webChat := s.createWebChatAPIKey(user, group, "wc-keystatsagg")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-keystatsagg"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, base)
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, base.Add(30*time.Minute))
+	startTime := base.Add(-1 * time.Hour)
+	endTime := base.Add(2 * time.Hour)
+
+	stats, err := s.repo.GetAPIKeyStatsAggregated(s.ctx, apiKey.ID, startTime, endTime)
+	s.Require().NoError(err, "GetAPIKeyStatsAggregated visible key")
+	s.Require().Equal(int64(1), stats.TotalRequests)
+	s.Require().Equal(int64(30), stats.TotalTokens)
+
+	stats, err = s.repo.GetAPIKeyStatsAggregated(s.ctx, webChat.ID, startTime, endTime)
+	s.Require().NoError(err, "GetAPIKeyStatsAggregated hidden web chat")
+	s.Require().Zero(stats.TotalRequests)
+	s.Require().Zero(stats.TotalTokens)
+	s.Require().Zero(stats.TotalActualCost)
+}
+
 // --- ListWithFilters ---
 
 func (s *UsageLogRepoSuite) TestListWithFilters() {
@@ -647,6 +746,91 @@ func (s *UsageLogRepoSuite) TestListWithFilters() {
 	s.Require().NoError(err, "ListWithFilters")
 	s.Require().Len(logs, 1)
 	s.Require().Equal(int64(1), page.Total)
+}
+
+// --- GetStatsWithFilters ---
+
+func (s *UsageLogRepoSuite) TestGetStatsWithFilters() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "statsfilters-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-statsfilters-webchat", Status: service.StatusActive})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-statsfilters", Name: "k", GroupID: &group.ID})
+	webChat := s.createWebChatAPIKey(user, group, "wc-statsfilters")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-statsfilters"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, base)
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, base.Add(30*time.Minute))
+	startTime := base.Add(-1 * time.Hour)
+	endTime := base.Add(2 * time.Hour)
+
+	stats, err := s.repo.GetStatsWithFilters(s.ctx, usagestats.UsageLogFilters{
+		UserID:    user.ID,
+		StartTime: &startTime,
+		EndTime:   &endTime,
+	})
+	s.Require().NoError(err, "GetStatsWithFilters user includes web chat usage")
+	s.Require().Equal(int64(2), stats.TotalRequests)
+	s.Require().Equal(int64(330), stats.TotalTokens)
+	s.Require().InDelta(10.4, stats.TotalActualCost, 0.0001)
+
+	stats, err = s.repo.GetStatsWithFilters(s.ctx, usagestats.UsageLogFilters{
+		APIKeyID:  webChat.ID,
+		StartTime: &startTime,
+		EndTime:   &endTime,
+	})
+	s.Require().NoError(err, "GetStatsWithFilters hidden web chat apiKey")
+	s.Require().Zero(stats.TotalRequests)
+	s.Require().Zero(stats.TotalTokens)
+	s.Require().Zero(stats.TotalActualCost)
+}
+
+// --- Endpoint stats filters ---
+
+func (s *UsageLogRepoSuite) TestGetEndpointStatsWithFilters_WebChatAPIKeyFilter() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "endpointstats-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-endpointstats-webchat", Status: service.StatusActive})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-endpointstats", Name: "k", GroupID: &group.ID})
+	webChat := s.createWebChatAPIKey(user, group, "wc-endpointstats")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-endpointstats"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	inboundEndpoint := "/v1/chat/completions"
+	upstreamEndpoint := "/v1/responses"
+	s.createEndpointUsageLog(user, apiKey, account, group, inboundEndpoint, upstreamEndpoint, 10, 20, 0.5, base)
+	s.createEndpointUsageLog(user, webChat, account, group, inboundEndpoint, upstreamEndpoint, 100, 200, 9.9, base.Add(30*time.Minute))
+	startTime := base.Add(-1 * time.Hour)
+	endTime := base.Add(2 * time.Hour)
+
+	endpoints, err := s.repo.GetEndpointStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "GetEndpointStatsWithFilters user includes web chat usage")
+	s.Require().Len(endpoints, 1)
+	s.Require().Equal(inboundEndpoint, endpoints[0].Endpoint)
+	s.Require().Equal(int64(2), endpoints[0].Requests)
+	s.Require().Equal(int64(330), endpoints[0].TotalTokens)
+
+	endpoints, err = s.repo.GetEndpointStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "GetEndpointStatsWithFilters hidden web chat apiKey")
+	s.Require().Empty(endpoints)
+
+	upstreamEndpoints, err := s.repo.GetUpstreamEndpointStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "GetUpstreamEndpointStatsWithFilters user includes web chat usage")
+	s.Require().Len(upstreamEndpoints, 1)
+	s.Require().Equal(upstreamEndpoint, upstreamEndpoints[0].Endpoint)
+	s.Require().Equal(int64(2), upstreamEndpoints[0].Requests)
+
+	upstreamEndpoints, err = s.repo.GetUpstreamEndpointStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "GetUpstreamEndpointStatsWithFilters hidden web chat apiKey")
+	s.Require().Empty(upstreamEndpoints)
+
+	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "getEndpointPathStatsWithFilters user includes web chat usage")
+	s.Require().Len(endpointPaths, 1)
+	s.Require().Equal(inboundEndpoint+" -> "+upstreamEndpoint, endpointPaths[0].Endpoint)
+	s.Require().Equal(int64(2), endpointPaths[0].Requests)
+
+	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "getEndpointPathStatsWithFilters hidden web chat apiKey")
+	s.Require().Empty(endpointPaths)
 }
 
 // --- GetDashboardStats ---
@@ -671,6 +855,17 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-ul"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: userToday.ID, Key: "sk-ul-1", Name: "ul1"})
 	mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: userOld.ID, Key: "sk-ul-2", Name: "ul2", Status: service.StatusDisabled})
+	webChat := &service.APIKey{
+		UserID:           userToday.ID,
+		Key:              "wc-dashboard-hidden",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 
 	resetAt := now.Add(10 * time.Minute)
 	accNormal := mustCreateAccount(s.T(), s.client, &service.Account{Name: "a-normal", Schedulable: true})
@@ -846,6 +1041,18 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 func (s *UsageLogRepoSuite) TestGetUserDashboardStats() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "userdash@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-userdash", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-userdash-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-userdash",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-userdash"})
 
 	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, time.Now())
@@ -853,6 +1060,7 @@ func (s *UsageLogRepoSuite) TestGetUserDashboardStats() {
 	stats, err := s.repo.GetUserDashboardStats(s.ctx, user.ID)
 	s.Require().NoError(err, "GetUserDashboardStats")
 	s.Require().Equal(int64(1), stats.TotalAPIKeys)
+	s.Require().Equal(int64(1), stats.ActiveAPIKeys)
 	s.Require().Equal(int64(1), stats.TotalRequests)
 }
 
@@ -1092,14 +1300,30 @@ func (s *UsageLogRepoSuite) TestGetBatchApiKeyUsageStats() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "batchkey@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-batchkey1", Name: "k1"})
 	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-batchkey2", Name: "k2"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-batchkey-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-batchkey",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-batchkey"})
 
 	s.createUsageLog(user, apiKey1, account, 10, 20, 0.5, time.Now())
 	s.createUsageLog(user, apiKey2, account, 15, 25, 0.6, time.Now())
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, time.Now())
 
-	stats, err := s.repo.GetBatchAPIKeyUsageStats(s.ctx, []int64{apiKey1.ID, apiKey2.ID}, time.Time{}, time.Time{})
+	stats, err := s.repo.GetBatchAPIKeyUsageStats(s.ctx, []int64{apiKey1.ID, apiKey2.ID, webChat.ID}, time.Time{}, time.Time{})
 	s.Require().NoError(err, "GetBatchAPIKeyUsageStats")
 	s.Require().Len(stats, 2)
+	s.Require().Contains(stats, apiKey1.ID)
+	s.Require().Contains(stats, apiKey2.ID)
+	s.Require().NotContains(stats, webChat.ID)
 }
 
 func (s *UsageLogRepoSuite) TestGetBatchApiKeyUsageStats_Empty() {
@@ -1157,18 +1381,25 @@ func (s *UsageLogRepoSuite) TestListByUserAndTimeRange() {
 func (s *UsageLogRepoSuite) TestListByAPIKeyAndTimeRange() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "keytimerange@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-keytimerange", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-keytimerange-webchat", Status: service.StatusActive})
+	webChat := s.createWebChatAPIKey(user, group, "wc-keytimerange")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-keytimerange"})
 
 	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, base)
 	s.createUsageLog(user, apiKey, account, 15, 25, 0.6, base.Add(30*time.Minute))
 	s.createUsageLog(user, apiKey, account, 20, 30, 0.7, base.Add(-24*time.Hour)) // outside range
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, base)
 
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(2 * time.Hour)
 	logs, _, err := s.repo.ListByAPIKeyAndTimeRange(s.ctx, apiKey.ID, startTime, endTime)
 	s.Require().NoError(err, "ListByAPIKeyAndTimeRange")
 	s.Require().Len(logs, 2)
+
+	logs, _, err = s.repo.ListByAPIKeyAndTimeRange(s.ctx, webChat.ID, startTime, endTime)
+	s.Require().NoError(err, "ListByAPIKeyAndTimeRange hidden web chat")
+	s.Require().Empty(logs)
 }
 
 // --- ListByAccountAndTimeRange ---
@@ -1359,11 +1590,24 @@ func (s *UsageLogRepoSuite) TestGetUserModelStats() {
 func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "trendfilters@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-trendfilters", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-trendfilters-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-trendfilters",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-trendfilters"})
 
 	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, base)
 	s.createUsageLog(user, apiKey, account, 15, 25, 0.6, base.Add(24*time.Hour))
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, base)
 
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
@@ -1372,6 +1616,10 @@ func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters() {
 	trend, err := s.repo.GetUsageTrendWithFilters(s.ctx, startTime, endTime, "day", user.ID, 0, 0, 0, "", nil, nil, nil)
 	s.Require().NoError(err, "GetUsageTrendWithFilters user filter")
 	s.Require().Len(trend, 2)
+	s.Require().Equal(int64(2), trend[0].Requests)
+	s.Require().Equal(int64(330), trend[0].TotalTokens)
+	s.Require().InDelta(10.4, trend[0].ActualCost, 0.0001)
+	s.Require().Equal(int64(1), trend[1].Requests)
 
 	// Test with apiKey filter
 	trend, err = s.repo.GetUsageTrendWithFilters(s.ctx, startTime, endTime, "day", 0, apiKey.ID, 0, 0, "", nil, nil, nil)
@@ -1382,6 +1630,10 @@ func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters() {
 	trend, err = s.repo.GetUsageTrendWithFilters(s.ctx, startTime, endTime, "day", user.ID, apiKey.ID, 0, 0, "", nil, nil, nil)
 	s.Require().NoError(err, "GetUsageTrendWithFilters both filters")
 	s.Require().Len(trend, 2)
+
+	trend, err = s.repo.GetUsageTrendWithFilters(s.ctx, startTime, endTime, "day", 0, webChat.ID, 0, 0, "", nil, nil, nil)
+	s.Require().NoError(err, "GetUsageTrendWithFilters hidden web chat apiKey filter")
+	s.Require().Empty(trend)
 }
 
 func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters_HourlyGranularity() {
@@ -1406,7 +1658,20 @@ func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters_HourlyGranularity() {
 func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "modelfilters@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-modelfilters", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-modelfilters-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-modelfilters",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-modelfilters"})
+	hiddenAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-modelfilters-hidden"})
 
 	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 
@@ -1438,23 +1703,134 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 	_, err = s.repo.Create(s.ctx, log2)
 	s.Require().NoError(err)
 
+	logHidden := &service.UsageLog{
+		UserID:       user.ID,
+		APIKeyID:     webChat.ID,
+		AccountID:    hiddenAccount.ID,
+		Model:        "claude-hidden",
+		InputTokens:  500,
+		OutputTokens: 1000,
+		TotalCost:    9.9,
+		ActualCost:   9.9,
+		CreatedAt:    base,
+	}
+	_, err = s.repo.Create(s.ctx, logHidden)
+	s.Require().NoError(err)
+
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(2 * time.Hour)
 
 	// Test with user filter
 	stats, err := s.repo.GetModelStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, nil, nil, nil)
 	s.Require().NoError(err, "GetModelStatsWithFilters user filter")
-	s.Require().Len(stats, 2)
+	s.Require().Len(stats, 3)
+	models := make(map[string]ModelStat, len(stats))
+	for _, stat := range stats {
+		models[stat.Model] = stat
+	}
+	s.Require().Contains(models, "claude-hidden")
+	s.Require().Equal(int64(1500), models["claude-hidden"].TotalTokens)
 
 	// Test with apiKey filter
 	stats, err = s.repo.GetModelStatsWithFilters(s.ctx, startTime, endTime, 0, apiKey.ID, 0, 0, nil, nil, nil)
 	s.Require().NoError(err, "GetModelStatsWithFilters apiKey filter")
 	s.Require().Len(stats, 2)
 
+	stats, err = s.repo.GetModelStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, nil, nil, nil)
+	s.Require().NoError(err, "GetModelStatsWithFilters hidden web chat apiKey filter")
+	s.Require().Empty(stats)
+
 	// Test with account filter
 	stats, err = s.repo.GetModelStatsWithFilters(s.ctx, startTime, endTime, 0, 0, account.ID, 0, nil, nil, nil)
 	s.Require().NoError(err, "GetModelStatsWithFilters account filter")
 	s.Require().Len(stats, 2)
+}
+
+// --- GetGroupStatsWithFilters ---
+
+func (s *UsageLogRepoSuite) TestGetGroupStatsWithFilters() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "groupstatsfilters-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-groupstatsfilters-webchat", Status: service.StatusActive})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-groupstatsfilters", Name: "k", GroupID: &group.ID})
+	webChat := s.createWebChatAPIKey(user, group, "wc-groupstatsfilters")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-groupstatsfilters"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLogWithGroup(user, apiKey, account, group, "claude-visible", 10, 20, 0.5, base)
+	s.createUsageLogWithGroup(user, webChat, account, group, "claude-hidden", 100, 200, 9.9, base.Add(30*time.Minute))
+	startTime := base.Add(-1 * time.Hour)
+	endTime := base.Add(2 * time.Hour)
+
+	stats, err := s.repo.GetGroupStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, nil, nil, nil)
+	s.Require().NoError(err, "GetGroupStatsWithFilters user includes web chat usage")
+	s.Require().Len(stats, 1)
+	s.Require().Equal(group.ID, stats[0].GroupID)
+	s.Require().Equal(int64(2), stats[0].Requests)
+	s.Require().Equal(int64(330), stats[0].TotalTokens)
+	s.Require().InDelta(10.4, stats[0].ActualCost, 0.0001)
+
+	stats, err = s.repo.GetGroupStatsWithFilters(s.ctx, startTime, endTime, 0, 0, 0, group.ID, nil, nil, nil)
+	s.Require().NoError(err, "GetGroupStatsWithFilters group includes web chat usage")
+	s.Require().Len(stats, 1)
+	s.Require().Equal(int64(2), stats[0].Requests)
+
+	stats, err = s.repo.GetGroupStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, nil, nil, nil)
+	s.Require().NoError(err, "GetGroupStatsWithFilters hidden web chat apiKey")
+	s.Require().Empty(stats)
+}
+
+// --- GetUserBreakdownStats ---
+
+func (s *UsageLogRepoSuite) TestGetUserBreakdownStats() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "userbreakdown-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-userbreakdown-webchat", Status: service.StatusActive})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-userbreakdown", Name: "k", GroupID: &group.ID})
+	webChat := s.createWebChatAPIKey(user, group, "wc-userbreakdown")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-userbreakdown"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLogWithGroup(user, apiKey, account, group, "claude-visible", 10, 20, 0.5, base)
+	s.createUsageLogWithGroup(user, webChat, account, group, "claude-hidden", 100, 200, 9.9, base.Add(30*time.Minute))
+	startTime := base.Add(-1 * time.Hour)
+	endTime := base.Add(2 * time.Hour)
+
+	breakdown, err := s.repo.GetUserBreakdownStats(s.ctx, startTime, endTime, usagestats.UserBreakdownDimension{GroupID: group.ID}, 10)
+	s.Require().NoError(err, "GetUserBreakdownStats group includes web chat usage")
+	s.Require().Len(breakdown, 1)
+	s.Require().Equal(user.ID, breakdown[0].UserID)
+	s.Require().Equal(user.Email, breakdown[0].Email)
+	s.Require().Equal(int64(2), breakdown[0].Requests)
+	s.Require().Equal(int64(330), breakdown[0].TotalTokens)
+	s.Require().InDelta(10.4, breakdown[0].ActualCost, 0.0001)
+
+	breakdown, err = s.repo.GetUserBreakdownStats(s.ctx, startTime, endTime, usagestats.UserBreakdownDimension{APIKeyID: webChat.ID}, 10)
+	s.Require().NoError(err, "GetUserBreakdownStats hidden web chat apiKey")
+	s.Require().Empty(breakdown)
+}
+
+func (s *UsageLogRepoSuite) TestGetAPIKeyDashboardStats_WebChatKeyHidden() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "keydash-webchat@test.com"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-keydash-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-keydash",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-keydash-webchat"})
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, time.Now())
+
+	stats, err := s.repo.GetAPIKeyDashboardStats(s.ctx, webChat.ID)
+	s.Require().NoError(err, "GetAPIKeyDashboardStats hidden web chat apiKey")
+	s.Require().Zero(stats.TotalAPIKeys)
+	s.Require().Zero(stats.ActiveAPIKeys)
+	s.Require().Zero(stats.TotalRequests)
+	s.Require().Zero(stats.TotalTokens)
 }
 
 // --- GetAccountUsageStats ---
@@ -1549,12 +1925,25 @@ func (s *UsageLogRepoSuite) TestGetAPIKeyUsageTrend() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "keytrend@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-keytrend1", Name: "k1"})
 	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-keytrend2", Name: "k2"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-keytrend-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-keytrend",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-keytrends"})
 
 	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 	s.createUsageLog(user, apiKey1, account, 100, 200, 1.0, base)
 	s.createUsageLog(user, apiKey2, account, 50, 100, 0.5, base)
 	s.createUsageLog(user, apiKey1, account, 100, 200, 1.0, base.Add(24*time.Hour))
+	s.createUsageLog(user, webChat, account, 1000, 2000, 10.0, base)
 
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
@@ -1562,6 +1951,10 @@ func (s *UsageLogRepoSuite) TestGetAPIKeyUsageTrend() {
 	trend, err := s.repo.GetAPIKeyUsageTrend(s.ctx, startTime, endTime, "day", 10)
 	s.Require().NoError(err, "GetAPIKeyUsageTrend")
 	s.Require().GreaterOrEqual(len(trend), 2)
+	for _, point := range trend {
+		s.Require().NotEqual(webChat.ID, point.APIKeyID)
+		s.Require().NotEqual("Web Chat", point.KeyName)
+	}
 }
 
 func (s *UsageLogRepoSuite) TestGetAPIKeyUsageTrend_HourlyGranularity() {
@@ -1586,15 +1979,50 @@ func (s *UsageLogRepoSuite) TestGetAPIKeyUsageTrend_HourlyGranularity() {
 func (s *UsageLogRepoSuite) TestListWithFilters_ApiKeyFilter() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "filterskey@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-filterskey", Name: "k"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-filterskey-webchat", Status: service.StatusActive})
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-filterskey",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	apiKeyRepo := NewAPIKeyRepository(s.client, integrationDB)
+	s.Require().NoError(apiKeyRepo.Create(s.ctx, webChat), "create hidden web chat api key")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-filterskey"})
 
 	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, time.Now())
+	s.createUsageLog(user, webChat, account, 100, 200, 9.9, time.Now())
 
 	filters := usagestats.UsageLogFilters{APIKeyID: apiKey.ID}
 	logs, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, filters)
 	s.Require().NoError(err, "ListWithFilters apiKey")
 	s.Require().Len(logs, 1)
 	s.Require().Equal(int64(1), page.Total)
+
+	filters = usagestats.UsageLogFilters{UserID: user.ID}
+	logs, page, err = s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, filters)
+	s.Require().NoError(err, "ListWithFilters user includes web chat usage")
+	s.Require().Len(logs, 2)
+	s.Require().Equal(int64(2), page.Total)
+	var foundWebChatUsage bool
+	for i := range logs {
+		if logs[i].APIKeyID == webChat.ID {
+			foundWebChatUsage = true
+			s.Require().Nil(logs[i].APIKey)
+			continue
+		}
+		s.Require().NotNil(logs[i].APIKey)
+	}
+	s.Require().True(foundWebChatUsage)
+
+	filters = usagestats.UsageLogFilters{APIKeyID: webChat.ID}
+	logs, page, err = s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, filters)
+	s.Require().NoError(err, "ListWithFilters hidden web chat apiKey")
+	s.Require().Empty(logs)
+	s.Require().Equal(int64(0), page.Total)
 }
 
 func (s *UsageLogRepoSuite) TestListWithFilters_TimeRange() {

@@ -58,6 +58,7 @@ type UsageCleanupTask struct {
 // UsageCleanupRepository 定义清理任务持久层接口
 type UsageCleanupRepository interface {
 	CreateTask(ctx context.Context, task *UsageCleanupTask) error
+	IsVisibleAPIKeyID(ctx context.Context, apiKeyID int64) (bool, error)
 	ListTasks(ctx context.Context, params pagination.PaginationParams) ([]UsageCleanupTask, *pagination.PaginationResult, error)
 	// ClaimNextPendingTask 抢占下一条可执行任务：
 	// - 优先 pending

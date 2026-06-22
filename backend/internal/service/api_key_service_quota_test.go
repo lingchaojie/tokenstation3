@@ -95,6 +95,9 @@ func (s *quotaBaseAPIKeyRepoStub) GetByKey(context.Context, string) (*APIKey, er
 func (s *quotaBaseAPIKeyRepoStub) GetByKeyForAuth(context.Context, string) (*APIKey, error) {
 	panic("unexpected GetByKeyForAuth call")
 }
+func (s *quotaBaseAPIKeyRepoStub) GetWebChatKeyByUserAndGroup(context.Context, int64, int64) (*APIKey, error) {
+	panic("unexpected GetWebChatKeyByUserAndGroup call")
+}
 func (s *quotaBaseAPIKeyRepoStub) Update(context.Context, *APIKey) error {
 	panic("unexpected Update call")
 }
@@ -106,6 +109,9 @@ func (s *quotaBaseAPIKeyRepoStub) DeleteWithAudit(context.Context, int64) error 
 }
 func (s *quotaBaseAPIKeyRepoStub) ListByUserID(context.Context, int64, pagination.PaginationParams, APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
 	panic("unexpected ListByUserID call")
+}
+func (s *quotaBaseAPIKeyRepoStub) ListByUserIDIncludingHidden(context.Context, int64, pagination.PaginationParams) ([]APIKey, *pagination.PaginationResult, error) {
+	panic("unexpected ListByUserIDIncludingHidden call")
 }
 func (s *quotaBaseAPIKeyRepoStub) VerifyOwnership(context.Context, int64, []int64) ([]int64, error) {
 	panic("unexpected VerifyOwnership call")

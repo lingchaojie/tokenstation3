@@ -10,6 +10,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	dbapikey "github.com/Wei-Shaw/sub2api/ent/apikey"
 	dbusagecleanuptask "github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -36,6 +37,39 @@ func (r *usageCleanupRepository) CreateTask(ctx context.Context, task *service.U
 		return r.createTaskWithEnt(ctx, task)
 	}
 	return r.createTaskWithSQL(ctx, task)
+}
+
+func (r *usageCleanupRepository) IsVisibleAPIKeyID(ctx context.Context, apiKeyID int64) (bool, error) {
+	if apiKeyID <= 0 {
+		return false, nil
+	}
+	if r.sql != nil {
+		var exists bool
+		query := `
+			SELECT EXISTS (
+				SELECT 1
+				FROM api_keys
+				WHERE id = $1
+					AND deleted_at IS NULL
+					AND (key_type IS NULL OR key_type <> $2)
+			)
+		`
+		if err := scanSingleRow(ctx, r.sql, query, []any{apiKeyID, service.APIKeyTypeWebChat}, &exists); err != nil {
+			return false, err
+		}
+		return exists, nil
+	}
+	if r.client != nil {
+		client := clientFromContext(ctx, r.client)
+		return client.APIKey.Query().
+			Where(
+				dbapikey.IDEQ(apiKeyID),
+				dbapikey.DeletedAtIsNil(),
+				dbapikey.Or(dbapikey.KeyTypeIsNil(), dbapikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
+			).
+			Exist(ctx)
+	}
+	return false, fmt.Errorf("usage cleanup repository not ready")
 }
 
 func (r *usageCleanupRepository) ListTasks(ctx context.Context, params pagination.PaginationParams) ([]service.UsageCleanupTask, *pagination.PaginationResult, error) {
@@ -340,9 +374,9 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 		idx++
 	}
 	if filters.APIKeyID != nil {
-		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", idx))
-		args = append(args, *filters.APIKeyID)
-		idx++
+		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d AND NOT EXISTS (SELECT 1 FROM api_keys ak WHERE ak.id = usage_logs.api_key_id AND ak.key_type = $%d)", idx, idx+1))
+		args = append(args, *filters.APIKeyID, service.APIKeyTypeWebChat)
+		idx += 2
 	}
 	if filters.AccountID != nil {
 		conditions = append(conditions, fmt.Sprintf("account_id = $%d", idx))

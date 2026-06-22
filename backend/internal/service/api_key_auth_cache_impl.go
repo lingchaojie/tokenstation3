@@ -124,6 +124,9 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 	if err != nil {
 		return nil, false
 	}
+	if isWebChatAuthCacheEntry(entry) {
+		return entry, true
+	}
 	s.setAuthCacheL1(cacheKey, entry)
 	return entry, true
 }
@@ -175,6 +178,9 @@ func (s *APIKeyService) loadAuthCacheEntry(ctx context.Context, key, cacheKey st
 		}
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
+	if isWebChatAPIKey(apiKey) {
+		return &APIKeyAuthCacheEntry{NotFound: true}, nil
+	}
 	apiKey.Key = key
 	snapshot := s.snapshotFromAPIKey(ctx, apiKey)
 	if snapshot == nil {
@@ -198,7 +204,14 @@ func (s *APIKeyService) applyAuthCacheEntry(key string, entry *APIKeyAuthCacheEn
 	if entry.Snapshot.Version != apiKeyAuthSnapshotVersion {
 		return nil, false, nil
 	}
+	if entry.Snapshot.KeyType == APIKeyTypeWebChat {
+		return nil, true, ErrAPIKeyNotFound
+	}
 	return s.snapshotToAPIKey(key, entry.Snapshot), true, nil
+}
+
+func isWebChatAuthCacheEntry(entry *APIKeyAuthCacheEntry) bool {
+	return entry != nil && entry.Snapshot != nil && entry.Snapshot.KeyType == APIKeyTypeWebChat
 }
 
 func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) *APIKeyAuthSnapshot {

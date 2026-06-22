@@ -50,6 +50,54 @@ func TestUsageLogFromService_PrefersRequestTypeForLegacyFields(t *testing.T) {
 	require.True(t, adminDTO.OpenAIWSMode)
 }
 
+func TestUsageLogFromService_HidesWebChatAPIKey(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		ID:       10,
+		APIKeyID: 20,
+		APIKey: &service.APIKey{
+			ID:      20,
+			UserID:  30,
+			Key:     "wc_secret",
+			Name:    "Web Chat",
+			KeyType: service.APIKeyTypeWebChat,
+		},
+	}
+
+	out := UsageLogFromService(log)
+	require.Equal(t, int64(20), out.APIKeyID)
+	require.Nil(t, out.APIKey)
+
+	body, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "wc_secret")
+}
+
+func TestUsageLogFromServiceAdmin_HidesWebChatAPIKey(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		ID:       11,
+		APIKeyID: 21,
+		APIKey: &service.APIKey{
+			ID:      21,
+			UserID:  31,
+			Key:     "wc_secret",
+			Name:    "Web Chat",
+			KeyType: service.APIKeyTypeWebChat,
+		},
+	}
+
+	out := UsageLogFromServiceAdmin(log)
+	require.Equal(t, int64(21), out.APIKeyID)
+	require.Nil(t, out.APIKey)
+
+	body, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "wc_secret")
+}
+
 func TestUsageCleanupTaskFromService_RequestTypeMapping(t *testing.T) {
 	t.Parallel()
 

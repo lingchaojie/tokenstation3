@@ -17,9 +17,10 @@ import (
 )
 
 type authRepoStub struct {
-	getByKeyForAuth   func(ctx context.Context, key string) (*APIKey, error)
-	listKeysByUserID  func(ctx context.Context, userID int64) ([]string, error)
-	listKeysByGroupID func(ctx context.Context, groupID int64) ([]string, error)
+	getByKeyForAuth             func(ctx context.Context, key string) (*APIKey, error)
+	getWebChatKeyByUserAndGroup func(ctx context.Context, userID, groupID int64) (*APIKey, error)
+	listKeysByUserID            func(ctx context.Context, userID int64) ([]string, error)
+	listKeysByGroupID           func(ctx context.Context, groupID int64) ([]string, error)
 }
 
 func (s *authRepoStub) Create(ctx context.Context, key *APIKey) error {
@@ -45,6 +46,13 @@ func (s *authRepoStub) GetByKeyForAuth(ctx context.Context, key string) (*APIKey
 	return s.getByKeyForAuth(ctx, key)
 }
 
+func (s *authRepoStub) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*APIKey, error) {
+	if s.getWebChatKeyByUserAndGroup == nil {
+		panic("unexpected GetWebChatKeyByUserAndGroup call")
+	}
+	return s.getWebChatKeyByUserAndGroup(ctx, userID, groupID)
+}
+
 func (s *authRepoStub) Update(ctx context.Context, key *APIKey) error {
 	panic("unexpected Update call")
 }
@@ -59,6 +67,10 @@ func (s *authRepoStub) DeleteWithAudit(ctx context.Context, id int64) error {
 
 func (s *authRepoStub) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
 	panic("unexpected ListByUserID call")
+}
+
+func (s *authRepoStub) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]APIKey, *pagination.PaginationResult, error) {
+	panic("unexpected ListByUserIDIncludingHidden call")
 }
 
 func (s *authRepoStub) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
