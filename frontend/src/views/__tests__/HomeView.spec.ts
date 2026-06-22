@@ -103,6 +103,7 @@ const messages: Record<string, string> = {
   'home.providers.supported': '已支持',
   'home.providers.soon': '即将支持',
   'nav.modelMarketplace': '模型广场',
+  'chat.openWebChat': '开始网页对话',
 }
 
 const modelPricingFixture = {
@@ -149,7 +150,16 @@ function mountHome() {
       stubs: {
         RouterLink: {
           props: ['to'],
-          template: '<a :href="typeof to === \'string\' ? to : to.path"><slot /></a>',
+          methods: {
+            hrefFor(to: string | { path: string; query?: Record<string, string> }) {
+              if (typeof to === 'string') return to
+              const query = to.query
+                ? Object.entries(to.query).map(([key, value]) => `${key}=${value}`).join('&')
+                : ''
+              return query ? `${to.path}?${query}` : to.path
+            },
+          },
+          template: '<a :href="hrefFor(to)"><slot /></a>',
         },
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
         Icon: { template: '<svg data-testid="icon" />' },
@@ -469,6 +479,31 @@ describe('HomeView landing page', () => {
     expect(headerCta.attributes('aria-label')).toBe('立即开始')
     expect(headerCta.classes()).toContain('h-10')
     expect(headerCtaLabel.text()).toBe('立即开始')
+  })
+
+  it('routes visitors to web chat through login and shows the near-hero chat product entry', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const chatCta = wrapper.get('header a[href="/login?redirect=/chat"]')
+    expect(chatCta.text()).toContain('开始网页对话')
+
+    const chatEntry = wrapper.get('[data-testid="homepage-chat-entry"]')
+    expect(chatEntry.text()).toContain('开始网页对话')
+    expect(chatEntry.find('textarea').exists()).toBe(true)
+    expect(chatEntry.text()).toContain('New chat')
+  })
+
+  it('routes authenticated users directly to web chat from the homepage header', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = false
+    authState.user = { email: 'user@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const chatCta = wrapper.get('header a[href="/chat"]')
+    expect(chatCta.text()).toContain('开始网页对话')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {

@@ -72,3 +72,11 @@ describe('AppSidebar model marketplace navigation', () => {
     expect(componentSource).toContain("t('nav.modelMarketplace')")
   })
 })
+
+describe('AppSidebar web chat navigation', () => {
+  it('exposes the authenticated chat route before the model marketplace route', () => {
+    expect(componentSource).toContain("path: '/chat'")
+    expect(componentSource).toContain("t('nav.chat')")
+    expect(componentSource.indexOf("path: '/chat'")).toBeLessThan(componentSource.indexOf("path: '/dashboard/models'"))
+  })
+})

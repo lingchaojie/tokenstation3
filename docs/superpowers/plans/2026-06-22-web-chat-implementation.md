@@ -1630,7 +1630,7 @@ git commit -m "feat: build web chat interface"
 - Modify: `frontend/src/i18n/locales/zh.ts`
 - Modify: `frontend/src/i18n/locales/en.ts`
 
-- [ ] **Step 1: Add route guard test**
+- [x] **Step 1: Add route guard test**
 
 In `guards.spec.ts`, add:
 
@@ -1650,7 +1650,7 @@ it('已认证普通用户可以访问 /chat', () => {
 })
 ```
 
-- [ ] **Step 2: Add route**
+- [x] **Step 2: Add route**
 
 In `router/index.ts`, add after `/dashboard/models`:
 
@@ -1669,7 +1669,7 @@ In `router/index.ts`, add after `/dashboard/models`:
 },
 ```
 
-- [ ] **Step 3: Add sidebar item**
+- [x] **Step 3: Add sidebar item**
 
 In `AppSidebar.vue`, add `ChatIcon` using the existing chat path or `Icon.vue` path style. Insert the item before Models:
 
@@ -1693,7 +1693,7 @@ describe('AppSidebar web chat navigation', () => {
 })
 ```
 
-- [ ] **Step 4: Add homepage chat entry**
+- [x] **Step 4: Add homepage chat entry**
 
 In `HomeView.vue`, add header nav link `to="/chat"` for authenticated users and `to="/login?redirect=/chat"` for visitors. Add a near-hero product entry that visually resembles a chat composer and conversation rail, using actual UI markup rather than explanatory text blocks.
 
@@ -1708,7 +1708,7 @@ CTA text:
 - zh: `开始网页对话`
 - en: `Open web chat`
 
-- [ ] **Step 5: Add icons and translations**
+- [x] **Step 5: Add icons and translations**
 
 In `Icon.vue`, add paths:
 
@@ -1743,7 +1743,7 @@ chat: {
 
 Add English equivalents in `en.ts`.
 
-- [ ] **Step 6: Run frontend tests**
+- [x] **Step 6: Run frontend tests**
 
 Run:
 
@@ -1754,7 +1754,7 @@ pnpm test:run src/components/layout/__tests__/AppSidebar.spec.ts src/router/__te
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/router/index.ts frontend/src/components/layout/AppSidebar.vue frontend/src/components/layout/__tests__/AppSidebar.spec.ts frontend/src/router/__tests__/guards.spec.ts frontend/src/views/HomeView.vue frontend/src/components/icons/Icon.vue frontend/src/i18n/locales/zh.ts frontend/src/i18n/locales/en.ts

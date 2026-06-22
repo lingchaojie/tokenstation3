@@ -440,6 +440,7 @@ export default {
   // Navigation
   nav: {
     dashboard: '仪表盘',
+    chat: '对话',
     modelMarketplace: '模型广场',
     announcements: '公告',
     apiKeys: 'API 密钥',
@@ -482,6 +483,22 @@ export default {
     channelMonitor: '渠道监控',
     channelStatus: '渠道状态',
     riskControl: '风控中心',
+  },
+
+  chat: {
+    title: '网页对话',
+    description: '直接在网页中和可用模型对话',
+    openWebChat: '开始网页对话',
+    newChat: '新对话',
+    searchConversations: '搜索对话',
+    composerPlaceholder: '输入消息',
+    send: '发送',
+    stop: '停止',
+    attachImage: '上传图片',
+    attachFile: '上传文件',
+    modelSelector: '选择模型',
+    unsupportedImage: '当前模型不支持图片输入',
+    unsupportedFile: '当前模型不支持文件上下文',
   },
 
   // Auth

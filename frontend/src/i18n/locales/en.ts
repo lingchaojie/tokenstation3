@@ -440,6 +440,7 @@ export default {
   // Navigation
   nav: {
     dashboard: 'Dashboard',
+    chat: 'Chat',
     modelMarketplace: 'Models',
     announcements: 'Announcements',
     apiKeys: 'API Keys',
@@ -482,6 +483,22 @@ export default {
     channelMonitor: 'Channel Monitor',
     channelStatus: 'Channel Status',
     riskControl: 'Risk Control',
+  },
+
+  chat: {
+    title: 'Web Chat',
+    description: 'Chat with available models directly in the browser',
+    openWebChat: 'Open web chat',
+    newChat: 'New chat',
+    searchConversations: 'Search conversations',
+    composerPlaceholder: 'Type a message',
+    send: 'Send',
+    stop: 'Stop',
+    attachImage: 'Upload image',
+    attachFile: 'Upload file',
+    modelSelector: 'Choose model',
+    unsupportedImage: 'The current model does not support image input',
+    unsupportedFile: 'The current model does not support file context',
   },
 
   // Auth

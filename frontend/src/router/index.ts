@@ -217,6 +217,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/chat',
+    name: 'WebChat',
+    component: () => import('@/views/user/ChatView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Chat',
+      titleKey: 'chat.title',
+      descriptionKey: 'chat.description',
+    },
+  },
+  {
     path: '/keys',
     name: 'Keys',
     component: () => import('@/views/user/KeysView.vue'),

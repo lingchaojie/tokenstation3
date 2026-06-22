@@ -199,6 +199,11 @@ describe('路由守卫逻辑', () => {
       const redirect = simulateGuard('/dashboard/models', { requiresAuth: true, requiresAdmin: false }, authState)
       expect(redirect).toBe('/login')
     })
+
+    it('未认证用户访问 /chat 重定向到 /login', () => {
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: false }, authState)
+      expect(redirect).toBe('/login')
+    })
   })
 
   // --- 已认证普通用户 ---
@@ -229,6 +234,11 @@ describe('路由守卫逻辑', () => {
 
     it('普通用户访问 /dashboard/models 允许通过', () => {
       const redirect = simulateGuard('/dashboard/models', { requiresAuth: true, requiresAdmin: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('已认证普通用户可以访问 /chat', () => {
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: false }, authState)
       expect(redirect).toBeNull()
     })
 

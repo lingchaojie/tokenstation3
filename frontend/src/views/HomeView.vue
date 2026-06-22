@@ -51,6 +51,7 @@
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+            <router-link :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChat') }}</router-link>
             <router-link to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
             <a
@@ -123,6 +124,74 @@
               {{ docUrl ? copy.docsCta : copy.learnCta }}
             </a>
           </div>
+        </div>
+
+        <div
+          data-testid="homepage-chat-entry"
+          class="mx-auto mt-12 grid w-full max-w-5xl overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-1 text-left lg:grid-cols-[220px_minmax(0,1fr)]"
+        >
+          <aside class="border-b border-linear-hairline bg-linear-canvas p-3 lg:border-b-0 lg:border-r">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-semibold uppercase tracking-[0.16em] text-linear-ink-tertiary">{{ t('chat.title') }}</span>
+              <router-link
+                :to="chatPath"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink-muted transition-colors hover:bg-linear-surface-2 hover:text-linear-ink"
+                :aria-label="t('chat.openWebChat')"
+              >
+                <Icon name="chat" size="sm" />
+                <span class="sr-only">New chat</span>
+              </router-link>
+            </div>
+            <div class="mt-4 space-y-2">
+              <div class="rounded-lg bg-linear-surface-2 px-3 py-2">
+                <p class="truncate text-sm font-medium text-linear-ink">{{ t('chat.newChat') }}</p>
+                <p class="mt-1 text-xs text-linear-ink-tertiary">GPT-5.4</p>
+              </div>
+              <div class="rounded-lg border border-linear-hairline px-3 py-2">
+                <p class="truncate text-sm text-linear-ink-muted">Claude Code handoff</p>
+                <p class="mt-1 text-xs text-linear-ink-tertiary">Sonnet</p>
+              </div>
+            </div>
+          </aside>
+
+          <section class="flex min-h-[280px] flex-col bg-linear-canvas">
+            <div class="flex items-center justify-between gap-3 border-b border-linear-hairline px-4 py-3">
+              <div>
+                <p class="text-sm font-semibold text-linear-ink">GPT-5.4</p>
+                <p class="text-xs text-linear-ink-tertiary">{{ t('chat.modelSelector') }}</p>
+              </div>
+              <router-link
+                :to="chatPath"
+                class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+              >
+                {{ t('chat.openWebChat') }}
+              </router-link>
+            </div>
+            <div class="min-h-0 flex-1 space-y-3 px-4 py-4">
+              <div class="max-w-[80%] rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 py-2 text-sm leading-6 text-linear-ink-muted">
+                Compare the available image-capable models.
+              </div>
+              <div class="ml-auto max-w-[80%] rounded-lg bg-primary-500 px-3 py-2 text-sm leading-6 text-white">
+                {{ t('chat.attachImage') }} + pricing context
+              </div>
+            </div>
+            <div class="border-t border-linear-hairline p-3">
+              <div class="flex items-end gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 p-2">
+                <textarea
+                  class="min-h-[46px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-linear-ink outline-none placeholder:text-linear-ink-tertiary"
+                  :placeholder="t('chat.composerPlaceholder')"
+                  readonly
+                />
+                <router-link
+                  :to="chatPath"
+                  class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-white transition-colors hover:bg-primary-400"
+                  :aria-label="t('chat.send')"
+                >
+                  <Icon name="send" size="sm" />
+                </router-link>
+              </div>
+            </div>
+          </section>
         </div>
 
         <!-- Product console -->
@@ -749,6 +818,7 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const isAdmin = computed(() => authStore.isAdmin)
 const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
+const chatPath = computed(() => (isAuthenticated.value ? '/chat' : { path: '/login', query: { redirect: '/chat' } }))
 const userInitial = computed(() => {
   const user = authStore.user
   if (!user || !user.email) return ''
