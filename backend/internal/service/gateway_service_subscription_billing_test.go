@@ -85,6 +85,36 @@ func TestBuildUsageBillingCommand_SubscriptionAppliesRateMultiplier(t *testing.T
 	}
 }
 
+func TestBuildUsageBillingCommand_KiroOAuthUpdatesAccountQuota(t *testing.T) {
+	t.Parallel()
+
+	p := &postUsageBillingParams{
+		Cost:   &CostBreakdown{TotalCost: 2, ActualCost: 3},
+		User:   &User{ID: 1},
+		APIKey: &APIKey{ID: 2},
+		Account: &Account{
+			ID:       3,
+			Platform: PlatformKiro,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"quota_limit": 100.0,
+			},
+		},
+		AccountRateMultiplier: 1.5,
+	}
+
+	cmd := buildUsageBillingCommand("req-kiro-quota", nil, p)
+	if cmd == nil {
+		t.Fatal("buildUsageBillingCommand returned nil")
+	}
+	if cmd.AccountPlatform != PlatformKiro {
+		t.Fatalf("AccountPlatform = %q, want %q", cmd.AccountPlatform, PlatformKiro)
+	}
+	if cmd.AccountQuotaCost != 3 {
+		t.Fatalf("AccountQuotaCost = %v, want 3", cmd.AccountQuotaCost)
+	}
+}
+
 func TestBuildUsageBillingCommand_SelectsLedgerFromActualSubscriptionQuota(t *testing.T) {
 	t.Parallel()
 

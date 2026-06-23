@@ -166,7 +166,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 	}
 
-	if cmd.AccountQuotaCost > 0 && (strings.EqualFold(cmd.AccountType, service.AccountTypeAPIKey) || strings.EqualFold(cmd.AccountType, service.AccountTypeBedrock)) {
+	if cmd.AccountQuotaCost > 0 && shouldApplyUsageBillingAccountQuota(cmd) {
 		quotaState, err := incrementUsageBillingAccountQuota(ctx, tx, cmd.AccountID, cmd.AccountQuotaCost)
 		if err != nil {
 			return err
@@ -175,6 +175,16 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	return nil
+}
+
+func shouldApplyUsageBillingAccountQuota(cmd *service.UsageBillingCommand) bool {
+	if cmd == nil {
+		return false
+	}
+	if strings.EqualFold(cmd.AccountType, service.AccountTypeAPIKey) || strings.EqualFold(cmd.AccountType, service.AccountTypeBedrock) {
+		return true
+	}
+	return strings.EqualFold(cmd.AccountPlatform, service.PlatformKiro) && strings.EqualFold(cmd.AccountType, service.AccountTypeOAuth)
 }
 
 func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64, sevenDayLimitUSD *float64) (bool, error) {

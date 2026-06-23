@@ -177,11 +177,11 @@
       </div>
     </template>
 
-    <!-- Kilo API Key accounts: upstream balance + local usage stats -->
-    <template v-else-if="account.platform === 'kilo'">
+    <!-- Kiro OAuth accounts: upstream request quota + local usage stats -->
+    <template v-else-if="account.platform === 'kiro'">
       <div v-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
-          <div class="h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
           <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
         </div>
       </div>
@@ -189,8 +189,11 @@
         {{ error }}
       </div>
       <div v-else-if="usageInfo" class="space-y-1">
-        <div v-if="kiloBalanceDisplay" class="text-[10px] font-medium text-cyan-700 dark:text-cyan-300">
-          Kilo {{ kiloBalanceDisplay }}
+        <div v-if="kiroUsageDisplay" class="text-[10px] font-medium text-teal-700 dark:text-teal-300">
+          Kiro {{ kiroUsageDisplay }}
+        </div>
+        <div v-if="kiroResetDisplay" class="text-[9px] text-gray-500 dark:text-gray-400">
+          {{ kiroResetDisplay }}
         </div>
         <div v-if="usageInfo.error" class="max-w-[200px] truncate text-xs text-amber-600 dark:text-amber-400" :title="usageInfo.error">
           {{ usageInfo.error }}
@@ -205,7 +208,7 @@
         />
         <button
           type="button"
-          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-cyan-700 transition-colors hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-cyan-300 dark:hover:bg-cyan-900/30"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-teal-700 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-teal-300 dark:hover:bg-teal-900/30"
           :disabled="activeQueryLoading"
           @click="loadActiveUsage"
         >
@@ -612,7 +615,7 @@ let visibilityObserver: IntersectionObserver | null = null
 const showUsageWindows = computed(() => {
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
-  if (props.account.platform === 'kilo') return true
+  if (props.account.platform === 'kiro') return true
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -629,8 +632,8 @@ const shouldFetchUsage = computed(() => {
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
   }
-  if (props.account.platform === 'kilo') {
-    return props.account.type === 'apikey'
+  if (props.account.platform === 'kiro') {
+    return props.account.type === 'oauth'
   }
   return false
 })
@@ -655,11 +658,25 @@ const hasOpenAIUsageFallback = computed(() => {
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
-const kiloBalanceDisplay = computed(() => {
-  const balance = usageInfo.value?.kilo_balance
-  if (!balance) return ''
-  const amount = Number.isFinite(balance.balance) ? balance.balance.toFixed(2) : String(balance.balance)
-  return balance.currency ? `${balance.currency} ${amount}` : amount
+const kiroUsageDisplay = computed(() => {
+  const usage = usageInfo.value?.kiro_usage
+  if (!usage) return ''
+  const used = formatCompactNumber(usage.current_usage)
+  const limit = usage.usage_limit > 0 ? formatCompactNumber(usage.usage_limit) : 'unlimited'
+  const utilization = Number.isFinite(usage.utilization) ? ` (${usage.utilization.toFixed(0)}%)` : ''
+  return `${used}/${limit} req${utilization}`
+})
+
+const kiroResetDisplay = computed(() => {
+  const usage = usageInfo.value?.kiro_usage
+  if (!usage) return ''
+  if (usage.days_until_reset != null && Number.isFinite(usage.days_until_reset)) {
+    return `${usage.days_until_reset}d reset`
+  }
+  if (usage.next_date_reset) {
+    return usage.next_date_reset
+  }
+  return ''
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

@@ -82,10 +82,10 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		{"openai image generations", EndpointImagesGenerations, "/v1/images/generations", service.PlatformOpenAI, EndpointImagesGenerations},
 		{"openai image edits", EndpointImagesEdits, "/openai/v1/images/edits", service.PlatformOpenAI, EndpointImagesEdits},
 
-		// Kilo — OpenAI-compatible ingress, but upstream is always Chat Completions.
-		{"kilo from messages", EndpointMessages, "/v1/messages", service.PlatformKilo, EndpointChatCompletions},
-		{"kilo from responses", EndpointResponses, "/v1/responses", service.PlatformKilo, EndpointChatCompletions},
-		{"kilo from completions", EndpointChatCompletions, "/v1/chat/completions", service.PlatformKilo, EndpointChatCompletions},
+		// Kiro — OpenAI-compatible ingress, AWS CodeWhisperer upstream.
+		{"kiro from messages", EndpointMessages, "/v1/messages", service.PlatformKiro, EndpointChatCompletions},
+		{"kiro from responses", EndpointResponses, "/v1/responses", service.PlatformKiro, EndpointChatCompletions},
+		{"kiro from completions", EndpointChatCompletions, "/v1/chat/completions", service.PlatformKiro, EndpointChatCompletions},
 
 		// Antigravity — uses inbound to pick Claude vs Gemini upstream.
 		{"antigravity claude", EndpointMessages, "/antigravity/v1/messages", service.PlatformAntigravity, EndpointMessages},

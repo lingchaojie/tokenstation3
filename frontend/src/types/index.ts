@@ -488,7 +488,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kilo'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro'
 
 // 'unified' marks a provider-agnostic key (group_binding_mode = 'auto') that the
 // backend routes to the Anthropic or OpenAI default group based on the request.
@@ -701,7 +701,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kilo'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -973,9 +973,15 @@ export interface AccountUsageInfo {
     amount?: number
     minimum_balance?: number
   }> | null
-  kilo_balance?: {
-    balance: number
-    currency?: string
+  kiro_usage?: {
+    resource_type?: string
+    current_usage: number
+    usage_limit: number
+    utilization: number
+    days_until_reset?: number
+    next_date_reset?: string
+    subscription?: string
+    user_email?: string
   } | null
   // Antigravity 403 forbidden 状态
   is_forbidden?: boolean
