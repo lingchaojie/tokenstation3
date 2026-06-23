@@ -17,10 +17,11 @@ vi.mock('vue-router', async () => {
 })
 
 import ChatView from '@/views/user/ChatView.vue'
+import ChatShell from '@/components/chat/ChatShell.vue'
 import Composer from '@/components/chat/Composer.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
-import { chatAPI, type WebChatModel } from '@/api/chat'
+import { chatAPI, type WebChatConversation, type WebChatMessage, type WebChatModel } from '@/api/chat'
 import { useChatStore } from '@/stores/chat'
 
 const chatModel: WebChatModel = {
@@ -90,6 +91,33 @@ const AppLayoutStub = {
   template: '<div data-testid="app-layout"><slot /></div>',
 }
 
+const historicalConversation: WebChatConversation = {
+  id: 8,
+  title: 'Historical image chat',
+  default_model: 'gpt-image-2',
+  default_provider: 'openai',
+  last_model: 'gpt-image-2',
+  last_provider: 'openai',
+  status: 'active',
+  message_count: 2,
+  created_at: '2026-06-22T00:00:00Z',
+  updated_at: '2026-06-22T00:00:01Z',
+}
+
+const historicalMessage: WebChatMessage = {
+  id: 101,
+  conversation_id: 8,
+  user_id: 1,
+  role: 'assistant',
+  model: 'gpt-image-2',
+  provider: 'openai',
+  content_text: 'Done.',
+  content_json: [],
+  status: 'completed',
+  created_at: '2026-06-22T00:00:01Z',
+  updated_at: '2026-06-22T00:00:01Z',
+}
+
 describe('ChatView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -130,7 +158,7 @@ describe('ChatView', () => {
       model: 'claude-opus-4-8',
     }
 
-    mount(ChatView, {
+    const wrapper = mount(ChatView, {
       global: {
         stubs: {
           AppLayout: AppLayoutStub,
@@ -145,6 +173,7 @@ describe('ChatView', () => {
       provider: 'anthropic',
       model: 'claude-opus-4-8',
     })
+    expect(wrapper.findComponent(ChatShell).props('initialMobilePanel')).toBe('chat')
   })
 })
 
@@ -162,6 +191,65 @@ describe('Composer', () => {
 
     expect(wrapper.get('[data-testid="chat-send"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="chat-stop"]').exists()).toBe(true)
+  })
+})
+
+describe('ChatShell', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('lets mobile users open a historical conversation and return to the conversation list', async () => {
+    vi.spyOn(chatAPI, 'getConversation').mockResolvedValue({
+      conversation: historicalConversation,
+      messages: [historicalMessage],
+    })
+    const store = useChatStore()
+    store.models = [imageModel]
+    store.selectedModel = imageModel
+    store.conversations = [historicalConversation]
+
+    const wrapper = mount(ChatShell, {
+      global: {
+        stubs: {
+          Icon: true,
+          ModelIcon: true,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="chat-conversation-open-8"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="chat-mobile-back"]').text()).toContain('Chats')
+    expect(wrapper.get('[data-testid="chat-conversation-rail"]').classes()).toContain('hidden')
+
+    await wrapper.get('[data-testid="chat-mobile-back"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="chat-conversation-rail"]').classes()).not.toContain('hidden')
+  })
+
+  it('can start on the mobile chat panel when opened from a model link', () => {
+    const store = useChatStore()
+    store.models = [imageModel]
+    store.selectedModel = imageModel
+    store.conversations = [historicalConversation]
+
+    const wrapper = mount(ChatShell, {
+      props: {
+        initialMobilePanel: 'chat',
+      },
+      global: {
+        stubs: {
+          Icon: true,
+          ModelIcon: true,
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="chat-conversation-rail"]').classes()).toContain('hidden')
+    expect(wrapper.get('[data-testid="chat-main-panel"]').classes()).not.toContain('hidden')
   })
 })
 

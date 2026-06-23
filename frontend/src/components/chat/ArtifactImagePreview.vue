@@ -1,12 +1,12 @@
 <template>
-  <figure class="min-w-0">
-    <div class="relative overflow-hidden rounded-lg border border-linear-hairline bg-linear-canvas">
+  <figure class="w-full min-w-0 max-w-full">
+    <div class="relative w-full overflow-hidden rounded-lg border border-linear-hairline bg-linear-canvas">
       <img
         v-if="imageUrl"
         :data-testid="`chat-artifact-image-${artifact.id}`"
         :src="imageUrl"
         :alt="artifact.filename"
-        class="block max-h-96 w-full object-contain"
+        class="block h-auto max-h-[70vh] w-full max-w-full object-contain sm:max-h-96"
       >
       <div
         v-else
