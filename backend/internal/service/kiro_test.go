@@ -219,11 +219,11 @@ func TestForwardResponses_KiroConvertsResponsesInputToCodeWhisperer(t *testing.T
 
 func buildKiroEventStreamMessageForTest(eventType string, payload string) []byte {
 	var headers bytes.Buffer
-	headers.WriteByte(byte(len(":event-type")))
-	headers.WriteString(":event-type")
-	headers.WriteByte(7)
+	_ = headers.WriteByte(byte(len(":event-type")))
+	_, _ = headers.WriteString(":event-type")
+	_ = headers.WriteByte(7)
 	_ = binary.Write(&headers, binary.BigEndian, uint16(len(eventType)))
-	headers.WriteString(eventType)
+	_, _ = headers.WriteString(eventType)
 
 	payloadBytes := []byte(payload)
 	totalLen := uint32(12 + headers.Len() + len(payloadBytes) + 4)
@@ -232,8 +232,8 @@ func buildKiroEventStreamMessageForTest(eventType string, payload string) []byte
 	_ = binary.Write(&msg, binary.BigEndian, uint32(headers.Len()))
 	prelude := msg.Bytes()
 	_ = binary.Write(&msg, binary.BigEndian, crc32.ChecksumIEEE(prelude))
-	msg.Write(headers.Bytes())
-	msg.Write(payloadBytes)
+	_, _ = msg.Write(headers.Bytes())
+	_, _ = msg.Write(payloadBytes)
 	_ = binary.Write(&msg, binary.BigEndian, crc32.ChecksumIEEE(msg.Bytes()))
 	return msg.Bytes()
 }
