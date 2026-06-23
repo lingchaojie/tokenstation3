@@ -1055,6 +1055,179 @@
 
       <!-- Kiro OAuth credentials -->
       <div v-if="form.platform === 'kiro'" class="space-y-4">
+        <div class="rounded-lg border border-teal-200 bg-teal-50 p-4 dark:border-teal-700 dark:bg-teal-900/20">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h4 class="font-semibold text-teal-900 dark:text-teal-100">Kiro Browser Login</h4>
+              <p class="mt-1 text-sm text-teal-700 dark:text-teal-300">
+                AWS Builder ID, Google, GitHub
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary text-sm"
+              :disabled="kiroOAuth.loading.value || kiroOAuth.polling.value"
+              @click="handleStartKiroLogin"
+            >
+              <svg
+                v-if="kiroOAuth.loading.value"
+                class="-ml-1 mr-2 h-4 w-4 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  class="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  stroke-width="4"
+                ></circle>
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
+              </svg>
+              <Icon v-else name="link" size="sm" class="mr-2" />
+              {{ kiroOAuth.loading.value ? 'Starting...' : 'Start Login' }}
+            </button>
+          </div>
+
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label
+              v-for="option in kiroLoginMethodOptions"
+              :key="option.value"
+              :class="[
+                'flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm',
+                kiroLoginMethod === option.value
+                  ? 'border-teal-500 bg-white text-teal-900 dark:bg-gray-800 dark:text-teal-100'
+                  : 'border-teal-200 bg-white/60 text-gray-700 dark:border-teal-800 dark:bg-gray-900/40 dark:text-gray-300'
+              ]"
+            >
+              <input
+                v-model="kiroLoginMethod"
+                type="radio"
+                :value="option.value"
+                class="text-teal-600 focus:ring-teal-500"
+              />
+              <span>{{ option.label }}</span>
+            </label>
+          </div>
+
+          <div
+            v-if="kiroOAuth.error.value"
+            class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+          >
+            <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">
+              {{ kiroOAuth.error.value }}
+            </p>
+          </div>
+
+          <div v-if="kiroOAuth.mode.value === 'device_code'" class="mt-4 space-y-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
+              <input
+                :value="kiroOAuth.verificationUriComplete.value || kiroOAuth.verificationUri.value"
+                readonly
+                type="text"
+                class="input bg-white font-mono text-xs dark:bg-gray-800"
+              />
+              <a
+                :href="kiroOAuth.verificationUriComplete.value || kiroOAuth.verificationUri.value"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-secondary text-sm"
+              >
+                <Icon name="externalLink" size="sm" class="mr-2" />
+                Open
+              </a>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 text-sm">
+              <span class="font-medium text-gray-700 dark:text-gray-300">User Code</span>
+              <code class="rounded bg-white px-2 py-1 font-mono text-teal-700 dark:bg-gray-800 dark:text-teal-300">
+                {{ kiroOAuth.userCode.value }}
+              </code>
+              <span
+                v-if="kiroOAuth.polling.value"
+                class="inline-flex items-center gap-2 text-teal-700 dark:text-teal-300"
+              >
+                <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                  ></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                Waiting
+              </span>
+            </div>
+          </div>
+
+          <div v-if="kiroOAuth.mode.value === 'auth_url'" class="mt-4 space-y-3">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
+              <input
+                :value="kiroOAuth.authUrl.value"
+                readonly
+                type="text"
+                class="input bg-white font-mono text-xs dark:bg-gray-800"
+              />
+              <a
+                :href="kiroOAuth.authUrl.value"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-secondary text-sm"
+              >
+                <Icon name="externalLink" size="sm" class="mr-2" />
+                Open
+              </a>
+            </div>
+            <textarea
+              v-model="kiroCallbackInput"
+              rows="2"
+              class="input w-full resize-y font-mono text-sm"
+              placeholder="kiro://kiro.kiroAgent/authenticate-success?code=..."
+              spellcheck="false"
+            ></textarea>
+            <button
+              type="button"
+              class="btn btn-primary text-sm"
+              :disabled="kiroOAuth.loading.value || !kiroCallbackInput.trim()"
+              @click="handleCompleteKiroSocialLogin"
+            >
+              <Icon name="check" size="sm" class="mr-2" />
+              Complete Login
+            </button>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <label class="input-label">Import Kiro Token JSON</label>
+          <textarea
+            v-model="kiroTokenJsonInput"
+            rows="4"
+            class="input w-full resize-y font-mono text-sm"
+            placeholder='{"accessToken":"...","refreshToken":"...","authMethod":"builder-id"}'
+            spellcheck="false"
+          ></textarea>
+          <button
+            type="button"
+            class="btn btn-secondary mt-3 text-sm"
+            :disabled="!kiroTokenJsonInput.trim()"
+            @click="handleImportKiroTokenJSON"
+          >
+            <Icon name="upload" size="sm" class="mr-2" />
+            Import and Create
+          </button>
+        </div>
+
         <div>
           <label class="input-label">Access Token</label>
           <input
@@ -1082,10 +1255,10 @@
           <input
             v-model="kiroProfileArn"
             type="text"
-            required
             class="input font-mono"
-            placeholder="arn:aws:codewhisperer:us-east-1:..."
+            placeholder="optional for AWS Builder ID"
           />
+          <p class="input-hint">Optional. Social Kiro login may return it automatically.</p>
         </div>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
@@ -3315,7 +3488,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import {
@@ -3338,6 +3511,7 @@ import {
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
+import { useKiroOAuth, type KiroLoginMethod } from '@/composables/useKiroOAuth'
 import type {
   Proxy,
   AdminGroup,
@@ -3372,6 +3546,7 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey,
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
+import type { KiroTokenInfo } from '@/api/admin/kiro'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
@@ -3430,6 +3605,7 @@ const oauth = useAccountOAuth() // For Anthropic OAuth
 const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
 const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
+const kiroOAuth = useKiroOAuth() // For Kiro OAuth / Builder ID
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -3493,6 +3669,15 @@ const kiroClientId = ref('')
 const kiroClientSecret = ref('')
 const kiroPreferredEndpoint = ref<'codewhisperer' | 'amazonq'>('codewhisperer')
 const kiroBaseUrl = ref('')
+const kiroLoginMethod = ref<KiroLoginMethod>('builder-id')
+const kiroCallbackInput = ref('')
+const kiroTokenJsonInput = ref('')
+let kiroPollingTimer: ReturnType<typeof setTimeout> | null = null
+const kiroLoginMethodOptions: Array<{ value: KiroLoginMethod; label: string }> = [
+  { value: 'builder-id', label: 'AWS Builder ID' },
+  { value: 'google', label: 'Google' },
+  { value: 'github', label: 'GitHub' }
+]
 
 const syncPreviewCredentials = computed<SyncPreviewCredentials | undefined>(() => {
   if (!apiKeyValue.value) return undefined
@@ -4002,6 +4187,7 @@ watch(
 
     geminiOAuth.resetState()
     antigravityOAuth.resetState()
+    resetKiroOAuthLocalState()
   }
 )
 
@@ -4365,6 +4551,7 @@ const resetForm = () => {
   kiroClientSecret.value = ''
   kiroPreferredEndpoint.value = 'codewhisperer'
   kiroBaseUrl.value = ''
+  resetKiroOAuthLocalState()
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4445,10 +4632,15 @@ const resetForm = () => {
 }
 
 const handleClose = () => {
+  clearKiroPolling()
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
   emit('close')
 }
+
+onUnmounted(() => {
+  clearKiroPolling()
+})
 
 const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
   if (form.platform !== 'openai') {
@@ -4617,6 +4809,106 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
   applyVertexServiceAccountJson(await file.text())
 }
 
+const clearKiroPolling = () => {
+  if (kiroPollingTimer) {
+    clearTimeout(kiroPollingTimer)
+    kiroPollingTimer = null
+  }
+  kiroOAuth.polling.value = false
+}
+
+const resetKiroOAuthLocalState = () => {
+  clearKiroPolling()
+  kiroOAuth.resetState()
+  kiroLoginMethod.value = 'builder-id'
+  kiroCallbackInput.value = ''
+  kiroTokenJsonInput.value = ''
+}
+
+const ensureKiroAccountName = () => {
+  if (form.name.trim()) return true
+  appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+  return false
+}
+
+const buildKiroCredentialsForCreate = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
+  const credentials = kiroOAuth.buildCredentials(tokenInfo)
+  credentials.preferred_endpoint = kiroPreferredEndpoint.value
+  if (kiroBaseUrl.value.trim()) {
+    credentials.base_url = kiroBaseUrl.value.trim()
+  }
+  const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  if (modelMapping) {
+    credentials.model_mapping = modelMapping
+  }
+  return credentials
+}
+
+const createKiroAccountFromToken = async (tokenInfo: KiroTokenInfo) => {
+  if (!ensureKiroAccountName()) return
+  const credentials = buildKiroCredentialsForCreate(tokenInfo)
+  await createAccountAndFinish('kiro', 'oauth', credentials)
+}
+
+const pollKiroDeviceCodeUntilComplete = () => {
+  clearKiroPolling()
+  kiroOAuth.polling.value = true
+
+  const poll = async () => {
+    if (form.platform !== 'kiro' || !kiroOAuth.sessionId.value) {
+      clearKiroPolling()
+      return
+    }
+    try {
+      const tokenInfo = await kiroOAuth.pollDeviceCode(form.proxy_id)
+      if (tokenInfo) {
+        clearKiroPolling()
+        await createKiroAccountFromToken(tokenInfo)
+        return
+      }
+      const nextInterval = Math.max(kiroOAuth.interval.value || 5, 2)
+      kiroPollingTimer = setTimeout(poll, nextInterval * 1000)
+    } catch {
+      clearKiroPolling()
+    }
+  }
+
+  kiroPollingTimer = setTimeout(poll, 1000)
+}
+
+const handleStartKiroLogin = async () => {
+  if (!ensureKiroAccountName()) return
+  clearKiroPolling()
+  kiroCallbackInput.value = ''
+  const started = await kiroOAuth.generateAuthUrl(kiroLoginMethod.value, form.proxy_id)
+  if (started && kiroOAuth.mode.value === 'device_code') {
+    pollKiroDeviceCodeUntilComplete()
+  }
+}
+
+const handleCompleteKiroSocialLogin = async () => {
+  if (!ensureKiroAccountName()) return
+  const tokenInfo = await kiroOAuth.exchangeAuthCode({
+    code: kiroCallbackInput.value,
+    sessionId: kiroOAuth.sessionId.value,
+    state: kiroOAuth.state.value,
+    proxyId: form.proxy_id
+  })
+  if (tokenInfo) {
+    await createKiroAccountFromToken(tokenInfo)
+  }
+}
+
+const handleImportKiroTokenJSON = async () => {
+  if (!ensureKiroAccountName()) return
+  const tokenInfo = kiroOAuth.parseTokenJSON(kiroTokenJsonInput.value)
+  if (!tokenInfo) {
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+  await createKiroAccountFromToken(tokenInfo)
+}
+
 const handleSubmit = async () => {
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
@@ -4643,15 +4935,13 @@ const handleSubmit = async () => {
       appStore.showError('Please enter the Kiro access token')
       return
     }
-    if (!kiroProfileArn.value.trim()) {
-      appStore.showError('Please enter the Kiro profile ARN')
-      return
-    }
 
     const credentials: Record<string, unknown> = {
       access_token: kiroAccessToken.value.trim(),
-      profile_arn: kiroProfileArn.value.trim(),
       preferred_endpoint: kiroPreferredEndpoint.value
+    }
+    if (kiroProfileArn.value.trim()) {
+      credentials.profile_arn = kiroProfileArn.value.trim()
     }
     if (kiroRefreshToken.value.trim()) {
       credentials.refresh_token = kiroRefreshToken.value.trim()
@@ -4661,6 +4951,10 @@ const handleSubmit = async () => {
     }
     if (kiroClientSecret.value.trim()) {
       credentials.client_secret = kiroClientSecret.value.trim()
+    }
+    if (kiroClientId.value.trim() && kiroClientSecret.value.trim()) {
+      credentials.auth_method = 'builder-id'
+      credentials.provider = 'AWS'
     }
     if (kiroBaseUrl.value.trim()) {
       credentials.base_url = kiroBaseUrl.value.trim()
@@ -4874,6 +5168,7 @@ const goBackToBasicInfo = () => {
   openaiOAuth.resetState()
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
+  resetKiroOAuthLocalState()
   oauthFlowRef.value?.reset()
 }
 
