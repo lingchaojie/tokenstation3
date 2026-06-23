@@ -2014,6 +2014,7 @@ export default {
         usage: 'Usage',
         usageAnthropic: 'Usage (Claude)',
         usageOpenAI: 'Usage (OpenAI)',
+        usageKilo: 'Usage (Kilo)',
         usageGemini: 'Usage (Gemini)',
         usageAntigravity: 'Usage (Antigravity)',
         concurrency: 'Concurrency',

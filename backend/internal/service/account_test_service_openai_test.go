@@ -389,6 +389,53 @@ func TestAccountTestService_OpenAIAPIKeyResponsesUnsupportedUsesChatCompletionsP
 	require.NotContains(t, body, "当前测试接口仅支持 Responses API 路径")
 }
 
+func TestAccountTestService_TestAccountConnection_KiloUsesPlusCompatibleChatCompletions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, recorder := newTestContext()
+
+	upstreamBody := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"pong"}}]}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	account := Account{
+		ID:          94,
+		Platform:    PlatformKilo,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"kilocodeToken":          "kilo-token",
+			"kilocodeOrganizationId": "org-1",
+			"base_url":               "https://api.kilo.ai/api/openrouter",
+		},
+	}
+	svc := &AccountTestService{
+		accountRepo:  stubOpenAIAccountRepo{accounts: []Account{account}},
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "anthropic/claude-sonnet-4.6", "hello", AccountTestModeDefault)
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
+	require.Equal(t, "https://api.kilo.ai/api/openrouter/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer kilo-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "org-1", upstream.lastReq.Header.Get("X-Kilocode-OrganizationID"))
+	require.Equal(t, KiloDefaultUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "anthropic/claude-sonnet-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+	require.Equal(t, "hello", gjson.GetBytes(upstream.lastBody, "messages.0.content").String())
+	require.Contains(t, recorder.Body.String(), "pong")
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+}
+
 func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

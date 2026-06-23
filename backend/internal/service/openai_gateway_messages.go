@@ -49,6 +49,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if account.IsKilo() {
+		billingModel = NormalizeKiloBillingModel(upstreamModel)
+		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, &anthropicReq, originalModel, billingModel, upstreamModel, startTime)
+	}
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	anthropicDigestChain := ""

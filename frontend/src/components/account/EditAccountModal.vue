@@ -39,6 +39,8 @@
                 ? 'https://api.openai.com'
                 : account.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
+                  : account.platform === 'kilo'
+                    ? 'https://api.kilo.ai/api/openrouter'
                   : account.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
                     : 'https://api.anthropic.com'
@@ -61,12 +63,25 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
+                  : account.platform === 'kilo'
+                    ? 'kilo-token'
                   : account.platform === 'antigravity'
                     ? 'sk-...'
                     : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+
+        <div v-if="account.platform === 'kilo'">
+          <label class="input-label">Kilo Organization ID</label>
+          <input
+            v-model="editKiloOrganizationId"
+            type="text"
+            class="input font-mono"
+            placeholder="org_..."
+          />
+          <p class="input-hint">Optional. Sent as X-Kilocode-OrganizationID.</p>
         </div>
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
@@ -2441,6 +2456,7 @@ const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
+  if (props.account.platform === 'kilo') return 'Kilo OpenRouter-compatible base URL. Default: https://api.kilo.ai/api/openrouter'
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -2464,6 +2480,7 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const editKiloOrganizationId = ref('')
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -2842,6 +2859,7 @@ const tempUnschedPresets = computed(() => [
 const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
+  if (props.account?.platform === 'kilo') return 'https://api.kilo.ai/api/openrouter'
   return 'https://api.anthropic.com'
 })
 
@@ -3090,6 +3108,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadTempUnschedRules(credentials)
 
   // Initialize API Key fields for apikey type
+  editKiloOrganizationId.value = ''
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     const platformDefaultUrl =
@@ -3097,8 +3116,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : 'https://api.anthropic.com'
+          : newAccount.platform === 'kilo'
+            ? 'https://api.kilo.ai/api/openrouter'
+            : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+    editKiloOrganizationId.value =
+      (credentials.kilocodeOrganizationId as string) ||
+      (credentials.organization_id as string) ||
+      ''
 
     // Load model mappings and detect mode
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
@@ -3699,12 +3724,31 @@ const handleSubmit = async () => {
       // 若后端尚未升级（无 credentials_status），回退读旧结构 currentCredentials.api_key。
       // 两者都无才报错。
       const hasExistingApiKey =
-        props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
+        props.account.platform === 'kilo'
+          ? Boolean(
+            props.account.credentials_status?.has_kilocodeToken ||
+            props.account.credentials_status?.has_api_key ||
+            currentCredentials.kilocodeToken ||
+            currentCredentials.api_key
+          )
+          : (props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key))
       if (editApiKey.value.trim()) {
         newCredentials.api_key = editApiKey.value.trim()
+        if (props.account.platform === 'kilo') {
+          newCredentials.kilocodeToken = editApiKey.value.trim()
+        }
       } else if (!hasExistingApiKey) {
         appStore.showError(t('admin.accounts.apiKeyIsRequired'))
         return
+      }
+
+      if (props.account.platform === 'kilo') {
+        const orgID = editKiloOrganizationId.value.trim()
+        if (orgID) {
+          newCredentials.kilocodeOrganizationId = orgID
+        } else {
+          delete newCredentials.kilocodeOrganizationId
+        }
       }
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）

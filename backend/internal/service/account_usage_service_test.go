@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -154,6 +155,66 @@ func TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(
 	case got := <-repo.rateLimitCh:
 		t.Fatalf("不应将已耗尽的 codex extra 持久化为运行时限流状态: %v", got)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestAccountUsageService_GetKiloUsageFetchesBalance(t *testing.T) {
+	t.Parallel()
+
+	reqCh := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/profile/balance" {
+			http.NotFound(w, r)
+			return
+		}
+		reqCh <- r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"balance":12.34,"currency":"USD"}`))
+	}))
+	defer upstream.Close()
+
+	repo := stubOpenAIAccountRepo{accounts: []Account{{
+		ID:       77,
+		Platform: PlatformKilo,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"kilocodeToken":          "kilo-token",
+			"kilocodeOrganizationId": "org-1",
+			"api_base_url":           upstream.URL,
+		},
+	}}}
+	svc := &AccountUsageService{
+		accountRepo: repo,
+		cache:       NewUsageCache(),
+	}
+
+	usage, err := svc.GetUsage(context.Background(), 77, true)
+	if err != nil {
+		t.Fatalf("GetUsage() error = %v", err)
+	}
+	if usage.KiloBalance == nil {
+		t.Fatal("expected Kilo balance")
+	}
+	if usage.KiloBalance.Balance != 12.34 {
+		t.Fatalf("balance = %v, want 12.34", usage.KiloBalance.Balance)
+	}
+	if usage.KiloBalance.Currency != "USD" {
+		t.Fatalf("currency = %q, want USD", usage.KiloBalance.Currency)
+	}
+
+	select {
+	case headers := <-reqCh:
+		if got := headers.Get("Authorization"); got != "Bearer kilo-token" {
+			t.Fatalf("Authorization = %q, want Bearer kilo-token", got)
+		}
+		if got := headers.Get("X-Kilocode-OrganizationID"); got != "org-1" {
+			t.Fatalf("X-Kilocode-OrganizationID = %q, want org-1", got)
+		}
+		if got := headers.Get("User-Agent"); got != KiloDefaultUserAgent {
+			t.Fatalf("User-Agent = %q, want %q", got, KiloDefaultUserAgent)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Kilo balance request")
 	}
 }
 

@@ -81,6 +81,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if account.IsKilo() {
+		billingModel = NormalizeKiloBillingModel(upstreamModel)
+	}
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 
@@ -122,10 +125,16 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 
 	// 5. Build upstream request
 	apiKey := account.GetOpenAIApiKey()
+	if account.IsKilo() {
+		apiKey = account.GetKiloToken()
+	}
 	if apiKey == "" {
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpenAIBaseURL()
+	if account.IsKilo() {
+		baseURL = account.GetKiloBaseURL()
+	}
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
@@ -134,6 +143,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, fmt.Errorf("invalid base_url: %w", err)
 	}
 	targetURL := buildOpenAIChatCompletionsURL(validatedURL)
+	if account.IsKilo() {
+		targetURL = buildKiloChatCompletionsURL(validatedURL)
+	}
 
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
@@ -144,6 +156,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if account.IsKilo() {
+		applyKiloHeaders(upstreamReq.Header, account)
+	}
 	if clientStream {
 		upstreamReq.Header.Set("Accept", "text/event-stream")
 	} else {
@@ -160,6 +175,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 	}
 	customUA := account.GetOpenAIUserAgent()
+	if account.IsKilo() {
+		customUA = account.GetKiloUserAgent()
+	}
 	if customUA != "" {
 		upstreamReq.Header.Set("user-agent", customUA)
 	}
