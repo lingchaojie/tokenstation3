@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -137,6 +138,8 @@ func TestForwardAsAnthropic_KiroUsesCodeWhispererEndpointAndHeaders(t *testing.T
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "kiro-access",
+			"refresh_token":      "kiro-refresh",
+			"auth_method":        "kiro-cli",
 			"profile_arn":        "arn:aws:codewhisperer:us-east-1:123456789012:profile/test",
 			"base_url":           "https://codewhisperer.test.local",
 			"preferred_endpoint": "codewhisperer",
@@ -156,10 +159,16 @@ func TestForwardAsAnthropic_KiroUsesCodeWhispererEndpointAndHeaders(t *testing.T
 	require.Equal(t, KiroContentType, upstream.lastReq.Header.Get("Content-Type"))
 	require.Equal(t, KiroAcceptStream, upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, KiroCodeWhispererTarget, upstream.lastReq.Header.Get("X-Amz-Target"))
-	require.Equal(t, KiroUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, KiroFullUserAgent, upstream.lastReq.Header.Get("X-Amz-User-Agent"))
+	require.Equal(t, "aws-sdk-rust/1.3.14 ua/2.1 api/codewhispererruntime/0.1.14474 os/linux lang/rust/1.92.0 md/appVersion-2.0.0 app/AmazonQ-For-CLI", upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "aws-sdk-rust/1.3.14 ua/2.1 api/codewhispererruntime/0.1.14474 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI", upstream.lastReq.Header.Get("X-Amz-User-Agent"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("Amz-Sdk-Invocation-Id"))
+	require.Equal(t, "attempt=1; max=1", upstream.lastReq.Header.Get("Amz-Sdk-Request"))
+	require.Equal(t, 0, upstream.plainCallCount)
+	require.Equal(t, 1, upstream.tlsCallCount)
+	require.Nil(t, upstream.lastTLSProfile)
+	require.Equal(t, "vibe", gjson.GetBytes(upstream.lastBody, "conversationState.agentTaskType").String())
 	require.Equal(t, "claude-sonnet-4.5", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
-	require.Equal(t, "AI_EDITOR", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.origin").String())
+	require.Equal(t, "CLI", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.origin").String())
 	require.Equal(t, "hello", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/test", gjson.GetBytes(upstream.lastBody, "profileArn").String())
 	require.JSONEq(t, `{"id":"","type":"message","role":"assistant","model":"kiro-claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`, rec.Body.String())
@@ -197,6 +206,8 @@ func TestForwardResponses_KiroConvertsResponsesInputToCodeWhisperer(t *testing.T
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "kiro-access",
+			"refresh_token":      "kiro-refresh",
+			"auth_method":        "kiro-cli",
 			"profile_arn":        "arn:aws:codewhisperer:us-east-1:123456789012:profile/test",
 			"base_url":           "https://codewhisperer.test.local",
 			"preferred_endpoint": "codewhisperer",
@@ -215,6 +226,99 @@ func TestForwardResponses_KiroConvertsResponsesInputToCodeWhisperer(t *testing.T
 	require.Equal(t, "kiro-claude-sonnet-4-5", result.Model)
 	require.Equal(t, "kiro-claude-sonnet-4-5", result.BillingModel)
 	require.Equal(t, "claude-sonnet-4.5", result.UpstreamModel)
+}
+
+func TestApplyKiroRuntimeHeadersUsesKiroIDEFingerprintForNonCLIAuth(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse", nil)
+	account := &Account{
+		ID:       305,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "kiro-access",
+			"refresh_token": "stable-refresh",
+			"client_id":     "stable-client",
+			"auth_method":   "social",
+		},
+	}
+
+	applyKiroRuntimeHeaders(req, account, "kiro-access")
+
+	require.Equal(t, "Bearer kiro-access", req.Header.Get("Authorization"))
+	require.Contains(t, req.Header.Get("X-Amz-User-Agent"), "aws-sdk-js/1.0.0 KiroIDE-")
+	require.Contains(t, req.Header.Get("User-Agent"), "api/codewhispererruntime#1.0.0")
+	require.Contains(t, req.Header.Get("User-Agent"), " KiroIDE-")
+	require.NotEmpty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
+	require.Equal(t, "attempt=1; max=1", req.Header.Get("Amz-Sdk-Request"))
+}
+
+func TestKiroRequestOriginMatchesPlusCLIResolution(t *testing.T) {
+	t.Parallel()
+
+	cliAccount := &Account{
+		Platform:    PlatformKiro,
+		Credentials: map[string]any{"auth_method": "kiro-cli"},
+	}
+	require.Equal(t, "CLI", kiroRequestOriginForAccount(cliAccount, "AI_EDITOR"))
+	require.Equal(t, "CLI", kiroRequestOriginForAccount(cliAccount, "CLI"))
+
+	socialAccount := &Account{
+		Platform:    PlatformKiro,
+		Credentials: map[string]any{"auth_method": "social"},
+	}
+	require.Equal(t, "AI_EDITOR", kiroRequestOriginForAccount(socialAccount, "AI_EDITOR"))
+	require.Equal(t, "CLI", kiroRequestOriginForAccount(socialAccount, "AMAZON_Q"))
+}
+
+func TestBuildKiroUsageLimitsURLMatchesPlusProfileAndAuthMethod(t *testing.T) {
+	t.Parallel()
+
+	profileARN := "arn:aws:codewhisperer:ap-southeast-1:123456789012:profile/ABCDEF"
+	account := &Account{
+		ID:       306,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "kiro-access",
+			"refresh_token": "kiro-refresh",
+			"profile_arn":   profileARN,
+			"auth_method":   "kiro-cli",
+		},
+	}
+
+	targetURL, err := buildKiroUsageLimitsURL(account)
+	require.NoError(t, err)
+	parsed, err := url.Parse(targetURL)
+	require.NoError(t, err)
+	require.Equal(t, "https://codewhisperer.ap-southeast-1.amazonaws.com/getUsageLimits", parsed.Scheme+"://"+parsed.Host+parsed.Path)
+	require.Equal(t, profileARN, parsed.Query().Get("profileArn"))
+	require.Equal(t, "KIRO_CLI", parsed.Query().Get("origin"))
+	require.Equal(t, "AGENTIC_REQUEST", parsed.Query().Get("resourceType"))
+	require.Empty(t, parsed.Query().Get("isEmailRequired"))
+}
+
+func TestParseKiroUsageLimitsPayloadPrefersPrecisionFields(t *testing.T) {
+	t.Parallel()
+
+	info, err := parseKiroUsageLimitsPayload([]byte(`{
+		"daysUntilReset": 3,
+		"usageBreakdownList": [
+			{
+				"resourceType": "AGENTIC_REQUEST",
+				"usageLimit": 100,
+				"currentUsage": 10,
+				"usageLimitWithPrecision": 100.5,
+				"currentUsageWithPrecision": 12.25
+			}
+		]
+	}`))
+
+	require.NoError(t, err)
+	require.Equal(t, 100.5, info.UsageLimit)
+	require.Equal(t, 12.25, info.CurrentUsage)
+	require.InDelta(t, 12.189, info.Utilization, 0.001)
 }
 
 func buildKiroEventStreamMessageForTest(eventType string, payload string) []byte {

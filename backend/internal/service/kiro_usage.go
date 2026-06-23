@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -118,20 +119,16 @@ func fetchKiroUsageLimits(ctx context.Context, account *Account) (*KiroUsageLimi
 	if token == "" {
 		return nil, fmt.Errorf("missing Kiro access_token")
 	}
-	baseURL := strings.TrimRight(account.GetKiroBaseURL(), "/")
-	if baseURL == "" {
-		baseURL = KiroDefaultCodeWhispererBase
+	targetURL, err := buildKiroUsageLimitsURL(account)
+	if err != nil {
+		return nil, err
 	}
-	baseURL = strings.TrimSuffix(baseURL, KiroCodeWhispererEndpointPath)
-	targetURL := baseURL + "/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", KiroUserAgent)
-	req.Header.Set("X-Amz-User-Agent", KiroFullUserAgent)
+	applyKiroRuntimeHeaders(req, account, token)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -162,6 +159,34 @@ func fetchKiroUsageLimits(ctx context.Context, account *Account) (*KiroUsageLimi
 	return parseKiroUsageLimitsPayload(body)
 }
 
+func buildKiroUsageLimitsURL(account *Account) (string, error) {
+	if account == nil {
+		return "", fmt.Errorf("missing Kiro account")
+	}
+	baseURL := strings.TrimRight(account.GetKiroBaseURL(), "/")
+	if baseURL == "" {
+		baseURL = kiroCodeWhispererBaseForProfileARN(account.GetKiroProfileARN())
+	}
+	baseURL = strings.TrimSuffix(baseURL, KiroCodeWhispererEndpointPath)
+	parsed, err := url.Parse(baseURL + "/getUsageLimits")
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid Kiro usage endpoint: %s", baseURL)
+	}
+	q := parsed.Query()
+	q.Set("origin", kiroOriginForAuthMethod(account.GetKiroAuthMethod()))
+	q.Set("resourceType", "AGENTIC_REQUEST")
+	if profileARN := strings.TrimSpace(account.GetKiroProfileARN()); profileARN != "" {
+		q.Set("profileArn", profileARN)
+	} else {
+		q.Set("isEmailRequired", "true")
+	}
+	parsed.RawQuery = q.Encode()
+	return parsed.String(), nil
+}
+
 func parseKiroUsageLimitsPayload(body []byte) (*KiroUsageLimitsInfo, error) {
 	var payload struct {
 		DaysUntilReset int    `json:"daysUntilReset"`
@@ -175,9 +200,11 @@ func parseKiroUsageLimitsPayload(body []byte) (*KiroUsageLimitsInfo, error) {
 			Name         string `json:"name"`
 		} `json:"subscriptionInfo"`
 		UsageBreakdownList []struct {
-			ResourceType string  `json:"resourceType"`
-			UsageLimit   float64 `json:"usageLimit"`
-			CurrentUsage float64 `json:"currentUsage"`
+			ResourceType              string   `json:"resourceType"`
+			UsageLimit                float64  `json:"usageLimit"`
+			CurrentUsage              float64  `json:"currentUsage"`
+			UsageLimitWithPrecision   *float64 `json:"usageLimitWithPrecision"`
+			CurrentUsageWithPrecision *float64 `json:"currentUsageWithPrecision"`
 		} `json:"usageBreakdownList"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -191,11 +218,19 @@ func parseKiroUsageLimitsPayload(body []byte) (*KiroUsageLimitsInfo, error) {
 	}
 	for _, item := range payload.UsageBreakdownList {
 		if info.ResourceType == "" || item.ResourceType == "AGENTIC_REQUEST" {
+			currentUsage := item.CurrentUsage
+			if item.CurrentUsageWithPrecision != nil {
+				currentUsage = *item.CurrentUsageWithPrecision
+			}
+			usageLimit := item.UsageLimit
+			if item.UsageLimitWithPrecision != nil {
+				usageLimit = *item.UsageLimitWithPrecision
+			}
 			info.ResourceType = item.ResourceType
-			info.CurrentUsage = item.CurrentUsage
-			info.UsageLimit = item.UsageLimit
-			if item.UsageLimit > 0 {
-				info.Utilization = item.CurrentUsage / item.UsageLimit * 100
+			info.CurrentUsage = currentUsage
+			info.UsageLimit = usageLimit
+			if usageLimit > 0 {
+				info.Utilization = currentUsage / usageLimit * 100
 			}
 		}
 		if item.ResourceType == "AGENTIC_REQUEST" {
