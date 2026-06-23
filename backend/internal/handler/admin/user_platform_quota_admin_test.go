@@ -119,6 +119,34 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	}
 }
 
+func TestUpdateUserPlatformQuotas_AllAllowedPlatforms(t *testing.T) {
+	repo := &upsertCapturingQuotaRepo{}
+	cache := &billingCacheStub{}
+	h := buildTestHandler(repo, cache)
+
+	quotas := make([]map[string]any, 0, len(service.AllowedQuotaPlatforms))
+	for _, platform := range service.AllowedQuotaPlatforms {
+		quotas = append(quotas, map[string]any{"platform": platform})
+	}
+	payload, err := json.Marshal(map[string]any{"quotas": quotas})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	c, w := putReq(t, string(payload))
+	h.UpdateUserPlatformQuotas(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for all allowed platforms, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.upsertCalls) != 1 {
+		t.Fatalf("UpsertForUser should be called once, got %d", len(repo.upsertCalls))
+	}
+	if got := len(repo.upsertCalls[0].records); got != len(service.AllowedQuotaPlatforms) {
+		t.Fatalf("expected %d upsert records, got %d", len(service.AllowedQuotaPlatforms), got)
+	}
+}
+
 func TestUpdateUserPlatformQuotas_RejectsDuplicatePlatform(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
 	body := `{"quotas":[
@@ -154,9 +182,17 @@ func TestUpdateUserPlatformQuotas_RejectsNegativeLimit(t *testing.T) {
 
 func TestUpdateUserPlatformQuotas_RejectsTooManyEntries(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
-	body := `{"quotas":[
-		{"platform":"anthropic"},{"platform":"openai"},{"platform":"gemini"},{"platform":"antigravity"},{"platform":"anthropic"}
-	]}`
+	quotas := make([]map[string]any, 0, len(service.AllowedQuotaPlatforms)+1)
+	for _, platform := range service.AllowedQuotaPlatforms {
+		quotas = append(quotas, map[string]any{"platform": platform})
+	}
+	quotas = append(quotas, map[string]any{"platform": service.AllowedQuotaPlatforms[0]})
+	payload, err := json.Marshal(map[string]any{"quotas": quotas})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	body := string(payload)
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code != http.StatusBadRequest {
