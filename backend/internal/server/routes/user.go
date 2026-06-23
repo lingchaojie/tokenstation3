@@ -78,21 +78,6 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
-		chat := authenticated.Group("/chat")
-		{
-			chat.GET("/models", h.WebChat.ListModels)
-			chat.GET("/conversations", h.WebChat.ListConversations)
-			chat.POST("/conversations", h.WebChat.CreateConversation)
-			chat.GET("/conversations/:id", h.WebChat.GetConversation)
-			chat.PATCH("/conversations/:id", h.WebChat.UpdateConversation)
-			chat.DELETE("/conversations/:id", h.WebChat.DeleteConversation)
-			chat.POST("/conversations/:id/messages", h.WebChat.SendMessage)
-			chat.POST("/conversations/:id/messages/:message_id/cancel", h.WebChat.CancelMessage)
-			chat.POST("/attachments", h.WebChat.UploadAttachment)
-			chat.GET("/attachments/:id/download", h.WebChat.DownloadAttachment)
-			chat.GET("/artifacts/:id/download", h.WebChat.DownloadArtifact)
-		}
-
 		// 使用记录
 		usage := authenticated.Group("/usage")
 		{

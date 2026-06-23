@@ -127,7 +127,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	usageClientID := fmt.Sprintf("webchat-message-%d", input.AssistantMessageID)
 	usageCtx := context.WithValue(ctx, ctxkey.ClientRequestID, usageClientID)
 	usageRequestID := "client:" + usageClientID
-	inboundEndpoint := fmt.Sprintf("/api/v1/chat/conversations/%d/messages", input.ConversationID)
+	inboundEndpoint := fmt.Sprintf("/api/v1/admin/chat/conversations/%d/messages", input.ConversationID)
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
 	usageRecorded := false
 

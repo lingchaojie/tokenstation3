@@ -18,13 +18,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWebChatRoutesRequireAuthenticatedUser(t *testing.T) {
+func TestWebChatRoutesAreNotRegisteredForRegularUsers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeWebChatService{}
-	router := newWebChatRoutesTestRouter(fake, 0)
+	router := newWebChatUserRoutesTestRouter(fake, 42)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/chat/conversations", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.False(t, fake.listCalled)
+}
+
+func TestWebChatAdminRoutesRequireAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeWebChatService{}
+	router := newWebChatAdminRoutesTestRouter(fake, 0)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/chat/conversations", nil)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)
@@ -42,12 +55,12 @@ func TestWebChatCreateConversationUsesCurrentUser(t *testing.T) {
 			DefaultProvider: "anthropic",
 		},
 	}
-	router := newWebChatRoutesTestRouter(fake, 42)
+	router := newWebChatAdminRoutesTestRouter(fake, 42)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/chat/conversations",
+		"/api/v1/admin/chat/conversations",
 		strings.NewReader(`{"model":"claude-sonnet-4-20250514","provider":"anthropic","title":"work"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -66,12 +79,12 @@ func TestWebChatCreateConversationUsesCurrentUser(t *testing.T) {
 func TestWebChatSendMessageBindsThinkingSettings(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeWebChatService{}
-	router := newWebChatRoutesTestRouter(fake, 42)
+	router := newWebChatAdminRoutesTestRouter(fake, 42)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/chat/conversations/7/messages",
+		"/api/v1/admin/chat/conversations/7/messages",
 		strings.NewReader(`{"model":"gpt-5.4","provider":"openai","content":"hello","stream":true,"thinking":{"enabled":true,"effort":"high"}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -90,12 +103,12 @@ func TestWebChatSendMessageBindsThinkingSettings(t *testing.T) {
 func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeWebChatService{}
-	router := newWebChatRoutesTestRouter(fake, 42)
+	router := newWebChatAdminRoutesTestRouter(fake, 42)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/chat/conversations/7/messages",
+		"/api/v1/admin/chat/conversations/7/messages",
 		strings.NewReader(`{"model":"gpt-image-2","provider":"openai","content":"draw","stream":true,"image_generation":{"enabled":true,"size":"1536x1024","aspect_ratio":"3:2","quality":"high","output_format":"webp","background":"transparent"}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -115,7 +128,7 @@ func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	require.Equal(t, "transparent", fake.sendInput.ImageGeneration.Background)
 }
 
-func newWebChatRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
+func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	routes.RegisterUserRoutes(v1, &handler.Handlers{
@@ -135,6 +148,36 @@ func newWebChatRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Eng
 		}
 		c.Next()
 	}), nil)
+	return router
+}
+
+func newWebChatAdminRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
+	router := gin.New()
+	admin := router.Group("/api/v1/admin")
+	admin.Use(func(c *gin.Context) {
+		if userID > 0 {
+			c.Set(string(servermiddleware.ContextKeyUser), servermiddleware.AuthSubject{UserID: userID})
+			c.Next()
+			return
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Authorization required"})
+		c.Abort()
+	})
+	chat := admin.Group("/chat")
+	webChat := handler.NewWebChatHandler(fake)
+	{
+		chat.GET("/models", webChat.ListModels)
+		chat.GET("/conversations", webChat.ListConversations)
+		chat.POST("/conversations", webChat.CreateConversation)
+		chat.GET("/conversations/:id", webChat.GetConversation)
+		chat.PATCH("/conversations/:id", webChat.UpdateConversation)
+		chat.DELETE("/conversations/:id", webChat.DeleteConversation)
+		chat.POST("/conversations/:id/messages", webChat.SendMessage)
+		chat.POST("/conversations/:id/messages/:message_id/cancel", webChat.CancelMessage)
+		chat.POST("/attachments", webChat.UploadAttachment)
+		chat.GET("/attachments/:id/download", webChat.DownloadAttachment)
+		chat.GET("/artifacts/:id/download", webChat.DownloadArtifact)
+	}
 	return router
 }
 

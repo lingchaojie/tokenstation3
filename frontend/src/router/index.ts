@@ -45,7 +45,8 @@ const routes: RouteRecordRaw[] = [
     name: 'PublicModels',
     component: () => import('@/views/public/ModelsView.vue'),
     meta: {
-      requiresAuth: false,
+      requiresAuth: true,
+      requiresAdmin: true,
       title: 'Models',
       titleKey: 'modelCatalog.title'
     }
@@ -210,7 +211,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/user/ModelCatalogView.vue'),
     meta: {
       requiresAuth: true,
-      requiresAdmin: false,
+      requiresAdmin: true,
       title: 'Model Marketplace',
       titleKey: 'modelCatalog.title',
       descriptionKey: 'modelCatalog.description'
@@ -222,7 +223,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/user/ChatView.vue'),
     meta: {
       requiresAuth: true,
-      requiresAdmin: false,
+      requiresAdmin: true,
       title: 'Chat',
       titleKey: 'chat.title',
       descriptionKey: 'chat.description',

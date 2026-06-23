@@ -88,7 +88,7 @@ func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
 	require.Same(t, user, svc.ensureWebChatKeyUser)
 	require.Same(t, user, svc.billingUser)
 	require.Same(t, svc.hiddenKey, svc.recordUsageInput.APIKey)
-	require.Equal(t, "/api/v1/chat/conversations/7/messages", svc.recordUsageInput.InboundEndpoint)
+	require.Equal(t, "/api/v1/admin/chat/conversations/7/messages", svc.recordUsageInput.InboundEndpoint)
 	require.NotNil(t, svc.recordUsageInput.Subscription)
 	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
 	require.Equal(t, "client:webchat-message-102", svc.usageLookupRequestID)
@@ -864,7 +864,7 @@ func (noopWebChatStorage) Delete(context.Context, string) error {
 func newTestGinContext(ctx context.Context) *gin.Context {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/admin/chat/conversations/7/messages", nil)
 	c.Request = req
 	return c
 }

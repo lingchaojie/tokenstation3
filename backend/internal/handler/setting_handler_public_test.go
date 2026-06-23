@@ -245,7 +245,7 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings/model-catalog", nil)
 
 	h.GetPublicModelCatalog(c)
 
@@ -367,7 +367,7 @@ func TestSettingHandler_GetPublicModelCatalog_CollapsesParameterVariants(t *test
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings/model-catalog", nil)
 
 	h.GetPublicModelCatalog(c)
 
@@ -418,7 +418,7 @@ func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPrici
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings/model-catalog", nil)
 
 	h.GetPublicModelCatalog(c)
 
@@ -526,7 +526,7 @@ func TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(t *test
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings/model-catalog", nil)
 
 	h.GetPublicModelCatalog(c)
 

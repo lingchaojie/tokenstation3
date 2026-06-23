@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import HomeView from '../HomeView.vue'
 
-const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelCatalogMock, getPublicPlansMock } = vi.hoisted(() => ({
+const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelCatalogMock, getPublicModelPricingMock, getPublicPlansMock } = vi.hoisted(() => ({
   appState: {
     cachedPublicSettings: null as null | {
       site_name?: string
@@ -26,6 +26,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicMo
   fetchPublicSettingsMock: vi.fn(),
   checkAuthMock: vi.fn(),
   getPublicModelCatalogMock: vi.fn(),
+  getPublicModelPricingMock: vi.fn(),
   getPublicPlansMock: vi.fn(),
 }))
 
@@ -67,6 +68,7 @@ vi.mock('@/stores', () => ({
 
 vi.mock('@/api/settings', () => ({
   getPublicModelCatalog: getPublicModelCatalogMock,
+  getPublicModelPricing: getPublicModelPricingMock,
 }))
 
 vi.mock('@/api/payment', () => ({
@@ -120,6 +122,33 @@ const messages: Record<string, string> = {
   'modelCatalog.pricing.input': '输入',
   'modelCatalog.pricing.output': '输出',
   'modelCatalog.pricing.cacheRead': '缓存读取',
+}
+
+const modelPricingFixture = {
+  providers: [
+    {
+      provider: 'Anthropic',
+      accent_color: '#d97745',
+      models: [
+        { name: 'Claude Opus 4.8', model: 'claude-opus-4-8', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Opus 4.7', model: 'claude-opus-4-7', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Opus 4.6', model: 'claude-opus-4-6', input_per_million: 15, output_per_million: 75, cache_read_per_million: 1.5 },
+        { name: 'Claude Sonnet 4.6', model: 'claude-sonnet-4-6', input_per_million: 3, output_per_million: 15, cache_read_per_million: 0.3 },
+        { name: 'Claude Sonnet 4.5', model: 'claude-sonnet-4-5', input_per_million: 3, output_per_million: 15, cache_read_per_million: 0.3 },
+      ],
+    },
+    {
+      provider: 'OpenAI',
+      accent_color: '#27a644',
+      models: [
+        { name: 'GPT-5.5', model: 'gpt-5.5', input_per_million: 5, output_per_million: 30, cache_read_per_million: 0.5 },
+        { name: 'GPT-5.4', model: 'gpt-5.4', input_per_million: 2.5, output_per_million: 15, cache_read_per_million: 0.25 },
+        { name: 'GPT-5.4 Mini', model: 'gpt-5.4-mini', input_per_million: 0.75, output_per_million: 4.5, cache_read_per_million: 0.075 },
+        { name: 'GPT-5.3 Codex', model: 'gpt-5.3-codex', input_per_million: 1.25, output_per_million: 10, cache_read_per_million: 0.125 },
+        { name: 'GPT-4o', model: 'gpt-4o', input_per_million: 2.5, output_per_million: 10, cache_read_per_million: 1.25 },
+      ],
+    },
+  ],
 }
 
 const modelCatalogFixture = {
@@ -302,9 +331,11 @@ describe('HomeView landing page', () => {
     fetchPublicSettingsMock.mockReset()
     checkAuthMock.mockReset()
     getPublicModelCatalogMock.mockReset()
+    getPublicModelPricingMock.mockReset()
     getPublicPlansMock.mockReset()
     fetchPublicSettingsMock.mockResolvedValue({})
     getPublicModelCatalogMock.mockResolvedValue(modelCatalogFixture)
+    getPublicModelPricingMock.mockResolvedValue(modelPricingFixture)
     getPublicPlansMock.mockResolvedValue([])
     document.documentElement.classList.remove('dark')
     localStorage.clear()
@@ -384,28 +415,32 @@ describe('HomeView landing page', () => {
     expect(text).toContain('轻量 Claude Code 会话')
     expect(text).toContain('OpenAI 兼容接口调试')
     expect(text).toContain('高频 Claude Code / OpenAI 生产流量')
-    expect(text).toContain('真实模型目录，直接发起对话')
-    expect(text).toContain('公开模型目录 · 价格与能力')
+    expect(text).toContain('价格透明，上游模型价格直传')
+    expect(text).toContain('按每百万 Token 计价')
     expect(text).toContain('Anthropic')
     expect(text).toContain('OpenAI')
     expect(text).toContain('Claude Opus 4.8')
     expect(text).toContain('Claude Sonnet 4.6')
     expect(text).toContain('GPT-5.5')
     expect(text).toContain('GPT-5.4 Mini')
-    expect(text).toContain('GPT-Image-2')
-    expect(text).toContain('Alibaba Cloud')
-    expect(text).toContain('Qwen3.6 Plus')
-    expect(text).toContain('$25')
+    expect(text).toContain('GPT-5.3 Codex')
+    expect(text).toContain('$75.00')
     expect(text).toContain('$0.075')
+    expect(text).not.toContain('GPT-Image-2')
+    expect(text).not.toContain('Alibaba Cloud')
+    expect(text).not.toContain('Qwen3.6 Plus')
     expect(text).not.toContain('Claude Mythos 5')
-    expect(text).not.toContain('Claude Sonnet 4.5')
     expect(text).not.toContain('GPT-4o')
+    expect(getPublicModelPricingMock).toHaveBeenCalledTimes(1)
+    expect(getPublicModelCatalogMock).not.toHaveBeenCalled()
 
     const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
     expect(headerNav.text()).toContain('能力')
-    expect(text).toContain('模型广场')
+    expect(headerNav.text()).not.toContain('模型广场')
+    expect(headerNav.text()).not.toContain('对话')
     expect(headerNav.text()).toContain('价格')
     expect(headerNav.find('a[href="#pricing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
 
     const routeGrid = wrapper.get('[data-testid="homepage-route-grid"]')
     expect(routeGrid.text()).toContain('Anthropic Messages')
@@ -444,23 +479,20 @@ describe('HomeView landing page', () => {
     const modelPricingSection = wrapper.get('section#model-pricing')
     expect(subscriptionSection.text()).toContain('LINX2.AI 订阅方案')
     expect(subscriptionSection.find('[data-testid="homepage-model-catalog-grid"]').exists()).toBe(false)
-    expect(modelPricingSection.text()).toContain('真实模型目录，直接发起对话')
+    expect(modelPricingSection.text()).toContain('价格透明，上游模型价格直传')
     expect(modelPricingSection.text()).toContain('Claude Opus 4.8')
     expect(modelPricingSection.text()).not.toContain('Claude Mythos 5')
     expect(subscriptionSection.element.compareDocumentPosition(modelPricingSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
-    const modelCards = wrapper.findAll('[data-testid="homepage-model-catalog-card"]')
-    expect(modelCards).toHaveLength(6)
-    expect(modelCards[0].text()).toContain('Claude Opus 4.8')
-    expect(modelCards[4].text()).toContain('立即对话')
-    expect(modelCards[4].find('a[href="/chat?provider=openai&model=gpt-image-2"]').exists()).toBe(true)
-    const toggle = wrapper.get('[data-testid="homepage-model-catalog-toggle"]')
-    expect(toggle.text()).toContain('展开更多模型')
-    await toggle.trigger('click')
+    const modelRows = wrapper.findAll('[data-testid="homepage-model-pricing-row"]')
+    expect(modelRows).toHaveLength(8)
+    const toggles = wrapper.findAll('[data-testid="homepage-model-pricing-toggle"]')
+    expect(toggles).toHaveLength(2)
+    expect(toggles[0].text()).toContain('展开更多模型')
+    await toggles[0].trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('[data-testid="homepage-model-catalog-card"]')).toHaveLength(modelCatalogFixture.models.length)
-    expect(wrapper.text()).toContain('DeepSeek V3.2')
-    expect(toggle.text()).toContain('收起模型')
+    expect(wrapper.findAll('[data-testid="homepage-model-pricing-row"]')).toHaveLength(9)
+    expect(wrapper.text()).toContain('Claude Sonnet 4.5')
     expect(wrapper.text()).not.toContain('Claude Mythos 5')
 
     const header = wrapper.get('header')
@@ -606,14 +638,45 @@ describe('HomeView landing page', () => {
     expect(headerCtaLabel.text()).toBe('立即开始')
   })
 
-  it('routes visitors to web chat through login and shows the near-hero chat product entry', async () => {
+  it('hides model-branch chat and marketplace entries from visitors', async () => {
     const wrapper = mountHome()
     await flushPromises()
 
-    const chatCta = wrapper.findAll('header a').find((link) => link.attributes('href') === '/login?redirect=%2Fchat')
-    expect(chatCta).toBeTruthy()
-    expect(chatCta?.text()).toContain('对话')
-    expect(chatCta?.text()).not.toContain('开始网页对话')
+    const header = wrapper.get('[data-testid="homepage-header-actions"]')
+    expect(header.text()).not.toContain('对话')
+    expect(header.text()).not.toContain('模型广场')
+    expect(wrapper.find('header a[href="/login?redirect=%2Fchat"]').exists()).toBe(false)
+    expect(wrapper.find('header a[href="/models"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
+  })
+
+  it('hides model-branch chat and marketplace entries from regular users', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = false
+    authState.user = { email: 'user@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const header = wrapper.get('[data-testid="homepage-header-actions"]')
+    expect(header.text()).not.toContain('对话')
+    expect(header.text()).not.toContain('模型广场')
+    expect(wrapper.find('header a[href="/chat"]').exists()).toBe(false)
+    expect(wrapper.find('header a[href="/models"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
+  })
+
+  it('shows model-branch chat and marketplace entries to admins', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = true
+    authState.user = { email: 'admin@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const chatCta = wrapper.get('header a[href="/chat"]')
+    expect(chatCta.text()).toContain('对话')
+    expect(wrapper.get('header a[href="/models"]').text()).toContain('模型广场')
 
     const chatEntry = wrapper.get('[data-testid="homepage-chat-entry"]')
     expect(chatEntry.find('[data-testid="homepage-chat-demo-rail"]').exists()).toBe(true)
@@ -627,17 +690,33 @@ describe('HomeView landing page', () => {
     expect(chatEntry.text()).toContain('新对话')
   })
 
-  it('routes authenticated users directly to web chat from the homepage header', async () => {
+  it('renders the new homepage model catalog preview for admins only', async () => {
     authState.isAuthenticated = true
-    authState.isAdmin = false
-    authState.user = { email: 'user@example.com' }
+    authState.isAdmin = true
+    authState.user = { email: 'admin@example.com' }
 
     const wrapper = mountHome()
     await flushPromises()
 
-    const chatCta = wrapper.get('header a[href="/chat"]')
-    expect(chatCta.text()).toContain('对话')
-    expect(chatCta.text()).not.toContain('开始网页对话')
+    expect(getPublicModelCatalogMock).toHaveBeenCalledTimes(1)
+    expect(getPublicModelPricingMock).not.toHaveBeenCalled()
+    const modelPricingSection = wrapper.get('section#model-pricing')
+    expect(modelPricingSection.text()).toContain('真实模型目录，直接发起对话')
+    expect(modelPricingSection.text()).toContain('公开模型目录 · 价格与能力')
+    expect(modelPricingSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
+
+    const modelCards = wrapper.findAll('[data-testid="homepage-model-catalog-card"]')
+    expect(modelCards).toHaveLength(6)
+    expect(modelCards[0].text()).toContain('Claude Opus 4.8')
+    expect(modelCards[4].text()).toContain('立即对话')
+    expect(modelCards[4].find('a[href="/chat?provider=openai&model=gpt-image-2"]').exists()).toBe(true)
+    const toggle = wrapper.get('[data-testid="homepage-model-catalog-toggle"]')
+    expect(toggle.text()).toContain('展开更多模型')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="homepage-model-catalog-card"]')).toHaveLength(modelCatalogFixture.models.length)
+    expect(wrapper.text()).toContain('DeepSeek V3.2')
+    expect(toggle.text()).toContain('收起模型')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {

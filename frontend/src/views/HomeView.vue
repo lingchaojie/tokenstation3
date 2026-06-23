@@ -51,8 +51,8 @@
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
-            <router-link :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
-            <router-link to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
+            <router-link v-if="isAdmin" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
+            <router-link v-if="isAdmin" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
             <a
               v-if="docUrl"
@@ -127,6 +127,7 @@
         </div>
 
         <div
+          v-if="isAdmin"
           data-testid="homepage-chat-entry"
           class="mx-auto mt-12 grid w-full max-w-6xl overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-1 text-left lg:grid-cols-[280px_minmax(0,1fr)]"
         >
@@ -498,19 +499,19 @@
         <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
           <div class="mb-8 grid gap-6 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
             <div>
-              <p class="linx-section-kicker">{{ copy.modelPricingKicker }}</p>
-              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.modelPricingTitle }}</h2>
+              <p class="linx-section-kicker">{{ isAdmin ? copy.modelCatalogKicker : copy.modelPricingKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ isAdmin ? copy.modelCatalogTitle : copy.modelPricingTitle }}</h2>
             </div>
             <div class="text-left lg:max-w-2xl">
-              <p class="text-base leading-7 text-linear-ink-subtle">{{ copy.modelPricingDescription }}</p>
+              <p class="text-base leading-7 text-linear-ink-subtle">{{ isAdmin ? copy.modelCatalogDescription : copy.modelPricingDescription }}</p>
               <span class="font-mono-brand mt-4 inline-flex rounded-full border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-xs font-medium text-primary-300">
-                {{ copy.modelPricingUnit }}
+                {{ isAdmin ? copy.modelCatalogUnit : copy.modelPricingUnit }}
               </span>
             </div>
           </div>
 
           <div
-            v-if="visibleHomeCatalogModels.length > 0"
+            v-if="isAdmin && visibleHomeCatalogModels.length > 0"
             data-testid="homepage-model-catalog-grid"
             class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
           >
@@ -584,12 +585,66 @@
             </article>
           </div>
 
+          <div
+            v-else-if="!isAdmin"
+            data-testid="homepage-model-pricing-table"
+            class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left"
+          >
+            <div class="grid gap-px bg-linear-hairline lg:grid-cols-2">
+              <section
+                v-for="group in modelPricingGroups"
+                :key="group.provider"
+                class="bg-linear-surface-1 p-5"
+              >
+                <div class="mb-4 flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: group.accent_color }"></span>
+                    <h4 class="text-base font-semibold tracking-[-0.025em] text-linear-ink">{{ group.provider }}</h4>
+                  </div>
+                  <span class="text-xs font-medium text-linear-ink-tertiary">{{ copy.modelPricingProviderLabel }}</span>
+                </div>
+
+                <div class="overflow-hidden rounded-xl border border-linear-hairline bg-linear-canvas">
+                  <div class="hidden grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] border-b border-linear-hairline bg-linear-surface-2 px-4 py-3 text-[11px] font-medium uppercase tracking-[0.14em] text-linear-ink-tertiary sm:grid">
+                    <span>{{ copy.modelPricingModel }}</span>
+                    <span>{{ copy.modelPricingInput }}</span>
+                    <span>{{ copy.modelPricingOutput }}</span>
+                    <span>{{ copy.modelPricingCacheRead }}</span>
+                  </div>
+                  <div
+                    v-for="model in visibleModelsFor(group)"
+                    :key="model.model"
+                    data-testid="homepage-model-pricing-row"
+                    class="grid gap-3 border-b border-linear-hairline px-4 py-4 last:border-b-0 sm:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr] sm:items-center"
+                  >
+                    <div>
+                      <p class="font-medium tracking-[-0.02em] text-linear-ink">{{ model.name }}</p>
+                      <p class="mt-1 text-xs text-linear-ink-tertiary">{{ model.model }}</p>
+                    </div>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingInput }} </span>{{ formatModelPrice(model.input_per_million) }}</p>
+                    <p class="font-mono-brand text-sm font-semibold text-primary-300"><span class="font-sans sm:hidden">{{ copy.modelPricingOutput }} </span>{{ formatModelPrice(model.output_per_million) }}</p>
+                    <p class="text-sm text-linear-ink-muted"><span class="sm:hidden">{{ copy.modelPricingCacheRead }} </span>{{ formatModelPrice(model.cache_read_per_million) }}</p>
+                  </div>
+                </div>
+                <button
+                  v-if="hasHiddenModels(group)"
+                  type="button"
+                  data-testid="homepage-model-pricing-toggle"
+                  class="mt-4 inline-flex items-center justify-center rounded-lg border border-linear-hairline px-3 py-2 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+                  @click="toggleModelProvider(group.provider)"
+                >
+                  {{ expandedModelProviders[group.provider] ? copy.modelPricingShowLess : copy.modelPricingShowMore }}
+                </button>
+              </section>
+            </div>
+          </div>
+
           <div v-else class="linx-panel p-8 text-center text-sm text-linear-ink-subtle">
             {{ t('modelCatalog.loading') }}
           </div>
 
           <button
-            v-if="hasHiddenHomeCatalogModels"
+            v-if="isAdmin && hasHiddenHomeCatalogModels"
             type="button"
             data-testid="homepage-model-catalog-toggle"
             class="mx-auto mt-6 inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-5 py-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
@@ -654,7 +709,7 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
@@ -662,7 +717,12 @@ import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { getMonthlyPlanCards, getMonthlyPlanDisplayFromPlan, monthlyPlanKeyFromName } from '@/utils/monthlyPlans'
-import { getPublicModelCatalog, type PublicModelCatalogModel } from '@/api/settings'
+import {
+  getPublicModelCatalog,
+  getPublicModelPricing,
+  type PublicModelCatalogModel,
+  type PublicModelPricingProvider,
+} from '@/api/settings'
 import { paymentAPI } from '@/api/payment'
 import type { SubscriptionPlan } from '@/types/payment'
 import { formatContextWindow, formatModelCatalogAmount, providerIconModel } from '@/utils/modelCatalog'
@@ -709,9 +769,12 @@ const routeCards = [
 ]
 
 const homeModelPreviewCount = 6
+const visibleModelCount = 4
 const modelCatalogModels = ref<PublicModelCatalogModel[]>([])
+const modelPricingGroups = ref<PublicModelPricingProvider[]>([])
 const publicSubscriptionPlans = ref<SubscriptionPlan[]>([])
 const homeModelCatalogExpanded = ref(false)
+const expandedModelProviders = ref<Record<string, boolean>>({})
 
 const visibleHomeCatalogModels = computed(() =>
   homeModelCatalogExpanded.value
@@ -723,6 +786,32 @@ const hasHiddenHomeCatalogModels = computed(() => modelCatalogModels.value.lengt
 
 function toggleHomeModelCatalog() {
   homeModelCatalogExpanded.value = !homeModelCatalogExpanded.value
+}
+
+function formatModelPrice(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '—'
+  const decimals = value < 1 ? 3 : 2
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`
+}
+
+function visibleModelsFor(group: PublicModelPricingProvider) {
+  return expandedModelProviders.value[group.provider]
+    ? group.models
+    : group.models.slice(0, visibleModelCount)
+}
+
+function hasHiddenModels(group: PublicModelPricingProvider): boolean {
+  return group.models.length > visibleModelCount
+}
+
+function toggleModelProvider(provider: string) {
+  expandedModelProviders.value = {
+    ...expandedModelProviders.value,
+    [provider]: !expandedModelProviders.value[provider],
+  }
 }
 
 function modalityLabel(value: string): string {
@@ -794,6 +883,24 @@ async function loadModelCatalog() {
   }
 }
 
+async function loadModelPricing() {
+  try {
+    const data = await getPublicModelPricing()
+    modelPricingGroups.value = data.providers || []
+  } catch (error) {
+    console.error('Failed to load public model pricing:', error)
+    modelPricingGroups.value = []
+  }
+}
+
+function loadHomeModelData() {
+  if (isAdmin.value) {
+    loadModelCatalog()
+    return
+  }
+  loadModelPricing()
+}
+
 async function loadPublicSubscriptionPlans() {
   try {
     publicSubscriptionPlans.value = await paymentAPI.getPublicPlans()
@@ -847,10 +954,19 @@ const copies = {
     pricingKicker: 'LINX2.AI 订阅方案',
     pricingTitle: '按月订阅，每 7 天刷新可用额度。',
     pricingDescription: '四档方案覆盖试用、日常开发、主力项目与高强度并行工作；每档都可使用 Claude Code 与 OpenAI 兼容网关。',
-    modelPricingKicker: '模型广场',
-    modelPricingTitle: '真实模型目录，直接发起对话',
-    modelPricingDescription: '首页预览直接使用模型广场公开目录，展示服务商、模态、能力和官方公开价格；点击立即对话会带着选定模型进入网页对话。',
-    modelPricingUnit: '公开模型目录 · 价格与能力',
+    modelPricingKicker: '价格透明',
+    modelPricingTitle: '价格透明，上游模型价格直传',
+    modelPricingDescription: 'Anthropic 与 OpenAI 上游模型价格直传，按每百万 Token 展示输入、输出与缓存读取单价；实际扣费以控制台账单和渠道配置为准。',
+    modelPricingUnit: '按每百万 Token 计价',
+    modelPricingProviderLabel: '官方原价透传',
+    modelPricingModel: '模型',
+    modelPricingInput: '输入',
+    modelPricingOutput: '输出',
+    modelPricingCacheRead: '缓存读取',
+    modelCatalogKicker: '模型广场',
+    modelCatalogTitle: '真实模型目录，直接发起对话',
+    modelCatalogDescription: '首页预览直接使用模型广场公开目录，展示服务商、模态、能力和官方公开价格；点击立即对话会带着选定模型进入网页对话。',
+    modelCatalogUnit: '公开模型目录 · 价格与能力',
     modelPricingShowMore: '展开更多模型',
     modelPricingShowLess: '收起模型',
     pricingCta: '选择方案',
@@ -912,10 +1028,19 @@ const copies = {
     pricingKicker: 'LINX2.AI subscription plans',
     pricingTitle: 'Monthly plans with quota refreshed every seven days.',
     pricingDescription: 'Four tiers cover trials, daily development, primary projects, and high-intensity parallel work. Every tier supports Claude Code and OpenAI-compatible gateway access.',
-    modelPricingKicker: 'Model marketplace',
-    modelPricingTitle: 'Real model catalog, ready for chat',
-    modelPricingDescription: 'The homepage preview uses the same public catalog as the model marketplace, showing providers, modalities, capabilities, and public upstream pricing. Chat now opens web chat with that model selected.',
-    modelPricingUnit: 'Public model catalog · pricing and capabilities',
+    modelPricingKicker: 'Transparent pricing',
+    modelPricingTitle: 'Transparent pricing with upstream model prices passed through',
+    modelPricingDescription: 'Anthropic and OpenAI upstream model prices are passed through and shown per million tokens for input, output, and cache reads. Console billing and channel configuration remain authoritative.',
+    modelPricingUnit: 'Per million tokens',
+    modelPricingProviderLabel: 'Official pass-through',
+    modelPricingModel: 'Model',
+    modelPricingInput: 'Input',
+    modelPricingOutput: 'Output',
+    modelPricingCacheRead: 'Cache read',
+    modelCatalogKicker: 'Model marketplace',
+    modelCatalogTitle: 'Real model catalog, ready for chat',
+    modelCatalogDescription: 'The homepage preview uses the same public catalog as the model marketplace, showing providers, modalities, capabilities, and public upstream pricing. Chat now opens web chat with that model selected.',
+    modelCatalogUnit: 'Public model catalog · pricing and capabilities',
     modelPricingShowMore: 'Show more models',
     modelPricingShowLess: 'Show fewer models',
     pricingCta: 'Choose plan',
@@ -1025,8 +1150,12 @@ onMounted(() => {
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
-  loadModelCatalog()
+  loadHomeModelData()
   loadPublicSubscriptionPlans()
+})
+
+watch(isAdmin, () => {
+  loadHomeModelData()
 })
 </script>
 

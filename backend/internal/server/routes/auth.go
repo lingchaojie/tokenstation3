@@ -215,7 +215,6 @@ func RegisterAuthRoutes(
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/model-pricing", h.Setting.GetPublicModelPricing)
-		settings.GET("/model-catalog", h.Setting.GetPublicModelCatalog)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
