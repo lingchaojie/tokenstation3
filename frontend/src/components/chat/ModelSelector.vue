@@ -280,7 +280,6 @@ const capabilities = computed(() => {
   return [
     { label: 'Image', enabled: model.supports_image_input },
     { label: 'Files', enabled: model.supports_file_context },
-    { label: 'Artifacts', enabled: model.supports_artifact_output },
     { label: 'Thinking', enabled: model.supports_thinking },
     { label: 'Generate', enabled: model.supports_image_generation },
   ]

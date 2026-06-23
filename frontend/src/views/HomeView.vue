@@ -199,7 +199,6 @@
                   <div class="flex flex-wrap gap-2">
                     <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Text</span>
                     <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Image generation</span>
-                    <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Artifacts</span>
                   </div>
                   <div class="flex flex-wrap items-center gap-2">
                     <button type="button" class="inline-flex h-9 items-center gap-2 rounded-lg border border-primary-500 bg-primary-500/10 px-3 text-sm font-medium text-primary-700 dark:text-primary-300">

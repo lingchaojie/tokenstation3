@@ -63,14 +63,11 @@
             />
           </div>
 
-          <div v-if="fileArtifacts(message).length" class="mt-3 flex flex-wrap gap-2">
-            <AttachmentChip
+          <div v-if="fileArtifacts(message).length" class="mt-3 grid gap-2">
+            <ArtifactFileCard
               v-for="artifact in fileArtifacts(message)"
               :key="artifact.id"
-              kind="file"
-              :filename="artifact.filename"
-              :size-bytes="artifact.size_bytes"
-              :downloadable="true"
+              :artifact="artifact"
               @download="downloadArtifact(artifact.id)"
             />
           </div>
@@ -95,6 +92,7 @@
 import { computed } from 'vue'
 
 import { chatAPI, type WebChatArtifact, type WebChatMessage } from '@/api/chat'
+import ArtifactFileCard from '@/components/chat/ArtifactFileCard.vue'
 import ArtifactImagePreview from '@/components/chat/ArtifactImagePreview.vue'
 import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import Icon from '@/components/icons/Icon.vue'

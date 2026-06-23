@@ -239,4 +239,14 @@ describe('ModelSelector', () => {
     expect(store.imageGenerationOutputFormat).toBe('webp')
     expect(store.imageGenerationBackground).toBe('transparent')
   })
+
+  it('does not render an Artifacts capability control in the model header', () => {
+    const store = useChatStore()
+    store.models = [chatModel]
+    store.selectedModel = chatModel
+
+    const wrapper = mount(ModelSelector)
+
+    expect(wrapper.text()).not.toContain('Artifacts')
+  })
 })

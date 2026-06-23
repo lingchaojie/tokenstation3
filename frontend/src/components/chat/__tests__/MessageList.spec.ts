@@ -71,6 +71,7 @@ describe('MessageList', () => {
       configurable: true,
       value: vi.fn(),
     })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
   })
 
   afterEach(() => {
@@ -106,5 +107,35 @@ describe('MessageList', () => {
     expect(wrapper.find('[data-testid="chat-artifact-image-45"]').exists()).toBe(false)
     expect(chatAPI.downloadArtifact).toHaveBeenCalledWith(44)
     expect(window.URL.createObjectURL).toHaveBeenCalledWith(imageBlob)
+  })
+
+  it('renders non-image artifacts as in-message downloadable file cards', async () => {
+    const textBlob = new Blob(['notes'], { type: 'text/plain' })
+    vi.spyOn(chatAPI, 'downloadArtifact').mockResolvedValue({
+      blob: textBlob,
+      filename: fileArtifact.filename,
+      contentType: fileArtifact.content_type,
+    })
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [assistantMessage([fileArtifact])],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    const fileCard = wrapper.get('[data-testid="chat-artifact-file-45"]')
+    expect(fileCard.text()).toContain('notes.txt')
+    expect(fileCard.text()).toContain('12 B')
+
+    await wrapper.get('[data-testid="chat-artifact-file-download-45"]').trigger('click')
+
+    expect(chatAPI.downloadArtifact).toHaveBeenCalledWith(45)
   })
 })
