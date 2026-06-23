@@ -1,0 +1,110 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import MessageList from '@/components/chat/MessageList.vue'
+import { chatAPI, type WebChatArtifact, type WebChatConversation, type WebChatMessage } from '@/api/chat'
+import { useChatStore } from '@/stores/chat'
+
+const conversation: WebChatConversation = {
+  id: 8,
+  title: 'Image',
+  default_model: 'gpt-image-2',
+  default_provider: 'openai',
+  last_model: 'gpt-image-2',
+  last_provider: 'openai',
+  status: 'active',
+  message_count: 1,
+  created_at: '2026-06-22T00:00:00Z',
+  updated_at: '2026-06-22T00:00:01Z',
+}
+
+const imageArtifact: WebChatArtifact = {
+  id: 44,
+  message_id: 101,
+  conversation_id: 8,
+  user_id: 1,
+  filename: 'generated-image-1.png',
+  content_type: 'image/png',
+  size_bytes: 12,
+  storage_key: 'generated/generated-image-1.png',
+  sha256: 'image-sha256',
+  source: 'image_output',
+  created_at: '2026-06-22T00:00:01Z',
+}
+
+const fileArtifact: WebChatArtifact = {
+  ...imageArtifact,
+  id: 45,
+  filename: 'notes.txt',
+  content_type: 'text/plain',
+  storage_key: 'generated/notes.txt',
+  sha256: 'file-sha256',
+  source: 'generated_file',
+}
+
+function assistantMessage(artifacts: WebChatArtifact[]): WebChatMessage {
+  return {
+    id: 101,
+    conversation_id: 8,
+    user_id: 1,
+    role: 'assistant',
+    model: 'gpt-image-2',
+    provider: 'openai',
+    content_text: 'Done.',
+    content_json: [],
+    status: 'completed',
+    artifacts,
+    created_at: '2026-06-22T00:00:01Z',
+    updated_at: '2026-06-22T00:00:01Z',
+  }
+}
+
+describe('MessageList', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    Object.defineProperty(window.URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:generated-image-preview'),
+    })
+    Object.defineProperty(window.URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders image artifacts inline using authenticated blob downloads', async () => {
+    const imageBlob = new Blob(['image-bytes'], { type: 'image/png' })
+    vi.spyOn(chatAPI, 'downloadArtifact').mockResolvedValue({
+      blob: imageBlob,
+      filename: imageArtifact.filename,
+      contentType: imageArtifact.content_type,
+    })
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [assistantMessage([imageArtifact, fileArtifact])],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const preview = wrapper.get('[data-testid="chat-artifact-image-44"]')
+    expect(preview.attributes('src')).toBe('blob:generated-image-preview')
+    expect(preview.attributes('alt')).toBe('generated-image-1.png')
+    expect(wrapper.find('[data-testid="chat-artifact-image-45"]').exists()).toBe(false)
+    expect(chatAPI.downloadArtifact).toHaveBeenCalledWith(44)
+    expect(window.URL.createObjectURL).toHaveBeenCalledWith(imageBlob)
+  })
+})

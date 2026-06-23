@@ -55,9 +55,17 @@
             />
           </div>
 
-          <div v-if="message.artifacts?.length" class="mt-3 flex flex-wrap gap-2">
+          <div v-if="imageArtifacts(message).length" class="mt-3 grid gap-3 sm:grid-cols-2">
+            <ArtifactImagePreview
+              v-for="artifact in imageArtifacts(message)"
+              :key="artifact.id"
+              :artifact="artifact"
+            />
+          </div>
+
+          <div v-if="fileArtifacts(message).length" class="mt-3 flex flex-wrap gap-2">
             <AttachmentChip
-              v-for="artifact in message.artifacts"
+              v-for="artifact in fileArtifacts(message)"
               :key="artifact.id"
               kind="file"
               :filename="artifact.filename"
@@ -86,7 +94,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import { chatAPI, type WebChatMessage } from '@/api/chat'
+import { chatAPI, type WebChatArtifact, type WebChatMessage } from '@/api/chat'
+import ArtifactImagePreview from '@/components/chat/ArtifactImagePreview.vue'
 import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
@@ -96,6 +105,20 @@ const messages = computed(() => chatStore.currentMessages)
 
 function assistantLabel(message: WebChatMessage): string {
   return message.model || 'Assistant'
+}
+
+function isImageArtifact(artifact: WebChatArtifact): boolean {
+  const contentType = artifact.content_type.toLowerCase()
+  if (contentType.startsWith('image/')) return true
+  return /\.(png|jpe?g|webp|gif|avif)$/i.test(artifact.filename)
+}
+
+function imageArtifacts(message: WebChatMessage): WebChatArtifact[] {
+  return message.artifacts?.filter(isImageArtifact) ?? []
+}
+
+function fileArtifacts(message: WebChatMessage): WebChatArtifact[] {
+  return message.artifacts?.filter((artifact) => !isImageArtifact(artifact)) ?? []
 }
 
 async function retryMessage(messageId: number): Promise<void> {
