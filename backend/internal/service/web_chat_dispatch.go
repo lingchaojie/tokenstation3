@@ -55,6 +55,8 @@ type webChatDispatchInput struct {
 	Capabilities       WebChatModelCapability
 	Messages           []WebChatMessage
 	Stream             bool
+	Thinking           WebChatThinkingConfig
+	ImageGeneration    WebChatImageGenerationConfig
 }
 
 type webChatDispatchResult struct {
@@ -105,7 +107,10 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		return nil, err
 	}
 
-	body, err := BuildWebChatCompletionsPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream)
+	body, err := BuildWebChatCompletionsPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, WebChatCompletionsPayloadOptions{
+		Thinking:        input.Thinking,
+		ImageGeneration: input.ImageGeneration,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,11 @@ import {
   chatAPI,
   sendChatMessageStream,
   type WebChatAttachment,
+  type WebChatImageGenerationAspectRatio,
+  type WebChatImageGenerationBackground,
+  type WebChatImageGenerationOutputFormat,
+  type WebChatImageGenerationQuality,
+  type WebChatImageGenerationSize,
   type WebChatModel,
 } from '@/api/chat'
 
@@ -19,7 +24,36 @@ const textOnlyModel: WebChatModel = {
   supports_image_input: false,
   supports_file_context: false,
   supports_artifact_output: false,
+  supports_thinking: false,
+  thinking_efforts: [],
+  supports_image_generation: false,
+  image_generation_sizes: [],
+  image_generation_aspect_ratios: [],
+  image_generation_qualities: [],
+  image_generation_output_formats: [],
+  image_generation_backgrounds: [],
   price_status: 'confirmed',
+}
+
+const thinkingModel: WebChatModel = {
+  ...textOnlyModel,
+  model: 'gpt-reasoning',
+  display_name: 'GPT Reasoning',
+  supports_thinking: true,
+  thinking_efforts: ['low', 'medium', 'high', 'xhigh'],
+}
+
+const imageModel: WebChatModel = {
+  ...textOnlyModel,
+  model: 'gpt-image-2',
+  display_name: 'GPT Image 2',
+  supports_artifact_output: true,
+  supports_image_generation: true,
+  image_generation_sizes: ['1024x1024', '1536x1024'] as WebChatImageGenerationSize[],
+  image_generation_aspect_ratios: ['1:1', '3:2'] as WebChatImageGenerationAspectRatio[],
+  image_generation_qualities: ['medium', 'high'] as WebChatImageGenerationQuality[],
+  image_generation_output_formats: ['png', 'webp'] as WebChatImageGenerationOutputFormat[],
+  image_generation_backgrounds: ['opaque', 'transparent'] as WebChatImageGenerationBackground[],
 }
 
 const imageAttachment: WebChatAttachment = {
@@ -171,6 +205,104 @@ describe('useChatStore', () => {
         Authorization: 'Bearer new-token',
       }),
     })
+  })
+
+  it('includes editable thinking settings when sending a supported model message', async () => {
+    const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+      response: new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    const store = useChatStore()
+    store.selectedModel = thinkingModel
+    store.thinkingEnabled = true
+    store.thinkingEffort = 'high'
+    store.currentConversation = {
+      conversation: {
+        id: 7,
+        title: 'Reasoning',
+        default_model: thinkingModel.model,
+        default_provider: thinkingModel.provider,
+        last_model: thinkingModel.model,
+        last_provider: thinkingModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    await store.sendMessage('Think this through')
+
+    expect(streamSpy).toHaveBeenCalledWith(7, expect.objectContaining({
+      model: 'gpt-reasoning',
+      provider: 'openai',
+      content: 'Think this through',
+      thinking: {
+        enabled: true,
+        effort: 'high',
+      },
+    }), expect.any(AbortSignal))
+  })
+
+  it('includes editable image generation settings when sending a supported model message', async () => {
+    const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+      response: new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    const store = useChatStore()
+    store.selectedModel = imageModel
+    store.imageGenerationEnabled = true
+    store.imageGenerationSize = '1536x1024'
+    store.imageGenerationAspectRatio = '3:2'
+    store.imageGenerationQuality = 'high'
+    store.imageGenerationOutputFormat = 'webp'
+    store.imageGenerationBackground = 'transparent'
+    store.currentConversation = {
+      conversation: {
+        id: 8,
+        title: 'Image',
+        default_model: imageModel.model,
+        default_provider: imageModel.provider,
+        last_model: imageModel.model,
+        last_provider: imageModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    await store.sendMessage('Generate a wide hero image')
+
+    expect(streamSpy).toHaveBeenCalledWith(8, expect.objectContaining({
+      model: 'gpt-image-2',
+      provider: 'openai',
+      content: 'Generate a wide hero image',
+      image_generation: {
+        enabled: true,
+        size: '1536x1024',
+        aspect_ratio: '3:2',
+        quality: 'high',
+        output_format: 'webp',
+        background: 'transparent',
+      },
+    }), expect.any(AbortSignal))
   })
 
   it('downloads attachments as authenticated blobs with response metadata', async () => {

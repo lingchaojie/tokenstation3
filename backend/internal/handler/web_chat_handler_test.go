@@ -63,6 +63,58 @@ func TestWebChatCreateConversationUsesCurrentUser(t *testing.T) {
 	}, fake.createInput)
 }
 
+func TestWebChatSendMessageBindsThinkingSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeWebChatService{}
+	router := newWebChatRoutesTestRouter(fake, 42)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/chat/conversations/7/messages",
+		strings.NewReader(`{"model":"gpt-5.4","provider":"openai","content":"hello","stream":true,"thinking":{"enabled":true,"effort":"high"}}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, fake.sendCalled)
+	require.Equal(t, int64(42), fake.sendInput.UserID)
+	require.Equal(t, int64(7), fake.sendInput.ConversationID)
+	require.Equal(t, "gpt-5.4", fake.sendInput.Model)
+	require.Equal(t, "openai", fake.sendInput.Provider)
+	require.True(t, fake.sendInput.Thinking.Enabled)
+	require.Equal(t, "high", fake.sendInput.Thinking.Effort)
+}
+
+func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeWebChatService{}
+	router := newWebChatRoutesTestRouter(fake, 42)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/chat/conversations/7/messages",
+		strings.NewReader(`{"model":"gpt-image-2","provider":"openai","content":"draw","stream":true,"image_generation":{"enabled":true,"size":"1536x1024","aspect_ratio":"3:2","quality":"high","output_format":"webp","background":"transparent"}}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, fake.sendCalled)
+	require.Equal(t, int64(42), fake.sendInput.UserID)
+	require.Equal(t, int64(7), fake.sendInput.ConversationID)
+	require.Equal(t, "gpt-image-2", fake.sendInput.Model)
+	require.Equal(t, "openai", fake.sendInput.Provider)
+	require.True(t, fake.sendInput.ImageGeneration.Enabled)
+	require.Equal(t, "1536x1024", fake.sendInput.ImageGeneration.Size)
+	require.Equal(t, "3:2", fake.sendInput.ImageGeneration.AspectRatio)
+	require.Equal(t, "high", fake.sendInput.ImageGeneration.Quality)
+	require.Equal(t, "webp", fake.sendInput.ImageGeneration.OutputFormat)
+	require.Equal(t, "transparent", fake.sendInput.ImageGeneration.Background)
+}
+
 func newWebChatRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
 	router := gin.New()
 	v1 := router.Group("/api/v1")
@@ -93,6 +145,9 @@ type fakeWebChatService struct {
 	createUserID       int64
 	createInput        service.CreateWebChatConversationInput
 	createConversation *service.WebChatConversation
+
+	sendCalled bool
+	sendInput  service.WebChatSendInput
 }
 
 func (s *fakeWebChatService) ListConversations(context.Context, int64, pagination.PaginationParams) ([]service.WebChatConversation, *pagination.PaginationResult, error) {
@@ -135,8 +190,10 @@ func (s *fakeWebChatService) ListModels(context.Context, int64) ([]service.WebCh
 	panic("unexpected ListModels call")
 }
 
-func (s *fakeWebChatService) SendMessage(*gin.Context, service.WebChatSendInput) (*service.WebChatSendResult, error) {
-	panic("unexpected SendMessage call")
+func (s *fakeWebChatService) SendMessage(_ *gin.Context, in service.WebChatSendInput) (*service.WebChatSendResult, error) {
+	s.sendCalled = true
+	s.sendInput = in
+	return &service.WebChatSendResult{UserMessageID: 100, AssistantMessageID: 101}, nil
 }
 
 func (s *fakeWebChatService) CancelMessage(context.Context, int64, int64, int64) error {

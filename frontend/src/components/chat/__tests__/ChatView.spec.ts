@@ -19,6 +19,14 @@ const chatModel: WebChatModel = {
   supports_image_input: true,
   supports_file_context: true,
   supports_artifact_output: true,
+  supports_thinking: true,
+  thinking_efforts: ['low', 'medium', 'high', 'xhigh'],
+  supports_image_generation: false,
+  image_generation_sizes: [],
+  image_generation_aspect_ratios: [],
+  image_generation_qualities: [],
+  image_generation_output_formats: [],
+  image_generation_backgrounds: [],
   price_status: 'confirmed',
 }
 
@@ -32,6 +40,35 @@ const anthropicModel: WebChatModel = {
   supports_image_input: true,
   supports_file_context: true,
   supports_artifact_output: true,
+  supports_thinking: true,
+  thinking_efforts: ['medium', 'high', 'xhigh'],
+  supports_image_generation: false,
+  image_generation_sizes: [],
+  image_generation_aspect_ratios: [],
+  image_generation_qualities: [],
+  image_generation_output_formats: [],
+  image_generation_backgrounds: [],
+  price_status: 'confirmed',
+}
+
+const imageModel: WebChatModel = {
+  provider: 'openai',
+  platform: 'openai',
+  key_type: 'openai',
+  model: 'gpt-image-2',
+  display_name: 'GPT Image 2',
+  supports_text: true,
+  supports_image_input: false,
+  supports_file_context: true,
+  supports_artifact_output: true,
+  supports_thinking: false,
+  thinking_efforts: [],
+  supports_image_generation: true,
+  image_generation_sizes: ['1024x1024', '1536x1024'],
+  image_generation_aspect_ratios: ['1:1', '3:2'],
+  image_generation_qualities: ['medium', 'high'],
+  image_generation_output_formats: ['png', 'webp'],
+  image_generation_backgrounds: ['opaque', 'transparent'],
   price_status: 'confirmed',
 }
 
@@ -115,5 +152,52 @@ describe('ModelSelector', () => {
       provider: 'anthropic',
       model: 'claude-opus-4-8',
     })
+  })
+
+  it('lets users change thinking mode and effort from the model selector', async () => {
+    const store = useChatStore()
+    store.models = [chatModel]
+    store.selectedModel = chatModel
+
+    const wrapper = mount(ModelSelector)
+
+    const toggle = wrapper.get('[data-testid="chat-thinking-toggle"]')
+    expect(toggle.attributes('aria-pressed')).toBe('false')
+
+    await toggle.trigger('click')
+    expect(store.thinkingEnabled).toBe(true)
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+
+    await wrapper.get('[data-testid="chat-thinking-effort"]').setValue('high')
+    expect(store.thinkingEffort).toBe('high')
+  })
+
+  it('lets users change image generation parameters from the model selector', async () => {
+    const store = useChatStore()
+    store.models = [imageModel]
+    store.selectedModel = imageModel
+
+    const wrapper = mount(ModelSelector)
+
+    const toggle = wrapper.get('[data-testid="chat-image-generation-toggle"]')
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+
+    await toggle.trigger('click')
+    expect(store.imageGenerationEnabled).toBe(false)
+    expect(toggle.attributes('aria-pressed')).toBe('false')
+
+    await toggle.trigger('click')
+    await wrapper.get('[data-testid="chat-image-generation-size"]').setValue('1536x1024')
+    await wrapper.get('[data-testid="chat-image-generation-aspect-ratio"]').setValue('3:2')
+    await wrapper.get('[data-testid="chat-image-generation-quality"]').setValue('high')
+    await wrapper.get('[data-testid="chat-image-generation-output-format"]').setValue('webp')
+    await wrapper.get('[data-testid="chat-image-generation-background"]').setValue('transparent')
+
+    expect(store.imageGenerationEnabled).toBe(true)
+    expect(store.imageGenerationSize).toBe('1536x1024')
+    expect(store.imageGenerationAspectRatio).toBe('3:2')
+    expect(store.imageGenerationQuality).toBe('high')
+    expect(store.imageGenerationOutputFormat).toBe('webp')
+    expect(store.imageGenerationBackground).toBe('transparent')
   })
 })

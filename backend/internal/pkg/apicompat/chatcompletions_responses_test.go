@@ -161,6 +161,31 @@ func TestChatCompletionsToResponses_ToolStrict(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsToResponses_ImageGenerationTool(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model:    "gpt-image-2",
+		Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"Draw a skyline"`)}},
+		Tools: []ChatTool{{
+			Type:         "image_generation",
+			Size:         "1536x1024",
+			Quality:      "high",
+			OutputFormat: "webp",
+			Background:   "transparent",
+		}},
+		ToolChoice: json.RawMessage(`{"type":"image_generation"}`),
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "image_generation", resp.Tools[0].Type)
+	assert.Equal(t, "1536x1024", resp.Tools[0].Size)
+	assert.Equal(t, "high", resp.Tools[0].Quality)
+	assert.Equal(t, "webp", resp.Tools[0].OutputFormat)
+	assert.Equal(t, "transparent", resp.Tools[0].Background)
+	assert.JSONEq(t, `{"type":"image_generation"}`, string(resp.ToolChoice))
+}
+
 func TestChatCompletionsToResponses_LegacyFunctionDefaultsStrictFalse(t *testing.T) {
 	req := &ChatCompletionsRequest{
 		Model:    "gpt-4o",

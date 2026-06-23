@@ -110,6 +110,20 @@ type WebChatDownloadMeta struct {
 	SizeBytes   int64
 }
 
+type WebChatThinkingConfig struct {
+	Enabled bool   `json:"enabled"`
+	Effort  string `json:"effort,omitempty"`
+}
+
+type WebChatImageGenerationConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Size         string `json:"size,omitempty"`
+	AspectRatio  string `json:"aspect_ratio,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
+	Background   string `json:"background,omitempty"`
+}
+
 type CreateWebChatConversationInput struct {
 	UserID          int64  `json:"user_id"`
 	Title           string `json:"title"`

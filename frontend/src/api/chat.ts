@@ -8,6 +8,26 @@ export type WebChatMessageStatus = 'pending' | 'streaming' | 'completed' | 'fail
 export type WebChatAttachmentKind = 'image' | 'file'
 export type WebChatAttachmentStatus = 'uploaded' | 'processed' | 'unsupported' | 'deleted'
 export type WebChatArtifactSource = 'model_output' | 'image_output' | 'generated_file'
+export type WebChatThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh'
+export type WebChatImageGenerationSize = '1024x1024' | '1536x1024' | '1024x1536' | '1K' | '2K' | '4K'
+export type WebChatImageGenerationAspectRatio = '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
+export type WebChatImageGenerationQuality = 'medium' | 'high'
+export type WebChatImageGenerationOutputFormat = 'png' | 'jpeg' | 'webp'
+export type WebChatImageGenerationBackground = 'opaque' | 'transparent'
+
+export interface WebChatThinkingConfig {
+  enabled: boolean
+  effort?: WebChatThinkingEffort
+}
+
+export interface WebChatImageGenerationConfig {
+  enabled: boolean
+  size?: WebChatImageGenerationSize
+  aspect_ratio?: WebChatImageGenerationAspectRatio
+  quality?: WebChatImageGenerationQuality
+  output_format?: WebChatImageGenerationOutputFormat
+  background?: WebChatImageGenerationBackground
+}
 
 export interface WebChatModel {
   provider: string
@@ -19,6 +39,14 @@ export interface WebChatModel {
   supports_image_input: boolean
   supports_file_context: boolean
   supports_artifact_output: boolean
+  supports_thinking: boolean
+  thinking_efforts?: WebChatThinkingEffort[]
+  supports_image_generation: boolean
+  image_generation_sizes?: WebChatImageGenerationSize[]
+  image_generation_aspect_ratios?: WebChatImageGenerationAspectRatio[]
+  image_generation_qualities?: WebChatImageGenerationQuality[]
+  image_generation_output_formats?: WebChatImageGenerationOutputFormat[]
+  image_generation_backgrounds?: WebChatImageGenerationBackground[]
   price_status: WebChatPriceStatus
 }
 
@@ -109,6 +137,8 @@ export interface SendWebChatMessageRequest {
   content: string
   attachment_ids?: number[]
   stream?: boolean
+  thinking?: WebChatThinkingConfig
+  image_generation?: WebChatImageGenerationConfig
 }
 
 export interface WebChatStreamSendResult {

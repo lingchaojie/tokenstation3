@@ -34,7 +34,9 @@ type AnthropicRequest struct {
 
 // AnthropicOutputConfig controls output generation parameters.
 type AnthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	Effort           string `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	ImageSize        string `json:"image_size,omitempty"`
+	ImageAspectRatio string `json:"image_aspect_ratio,omitempty"`
 }
 
 // AnthropicThinking configures extended thinking in the Anthropic API.
@@ -253,6 +255,14 @@ type ResponsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+
+	// image_generation tool options.
+	Model        string `json:"model,omitempty"`
+	Size         string `json:"size,omitempty"`
+	AspectRatio  string `json:"aspect_ratio,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	Background   string `json:"background,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 }
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
@@ -477,8 +487,16 @@ type ChatImageURL struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function"
+	Type     string        `json:"type"` // "function" | "image_generation"
 	Function *ChatFunction `json:"function,omitempty"`
+
+	// image_generation tool options for OpenAI-compatible Chat Completions clients.
+	Model        string `json:"model,omitempty"`
+	Size         string `json:"size,omitempty"`
+	AspectRatio  string `json:"aspect_ratio,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	Background   string `json:"background,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 }
 
 // ChatFunction describes a function tool definition.

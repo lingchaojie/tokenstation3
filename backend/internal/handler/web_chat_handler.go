@@ -54,11 +54,13 @@ type webChatUpdateConversationRequest struct {
 }
 
 type webChatSendMessageRequest struct {
-	Model         string  `json:"model"`
-	Provider      string  `json:"provider"`
-	Content       string  `json:"content"`
-	AttachmentIDs []int64 `json:"attachment_ids"`
-	Stream        bool    `json:"stream"`
+	Model           string                               `json:"model"`
+	Provider        string                               `json:"provider"`
+	Content         string                               `json:"content"`
+	AttachmentIDs   []int64                              `json:"attachment_ids"`
+	Stream          bool                                 `json:"stream"`
+	Thinking        service.WebChatThinkingConfig        `json:"thinking"`
+	ImageGeneration service.WebChatImageGenerationConfig `json:"image_generation"`
 }
 
 func (h *WebChatHandler) ListModels(c *gin.Context) {
@@ -205,7 +207,19 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 		Text:           req.Content,
 		AttachmentIDs:  req.AttachmentIDs,
 		Stream:         req.Stream,
-		GinContext:     c,
+		Thinking: service.WebChatThinkingConfig{
+			Enabled: req.Thinking.Enabled,
+			Effort:  strings.TrimSpace(req.Thinking.Effort),
+		},
+		ImageGeneration: service.WebChatImageGenerationConfig{
+			Enabled:      req.ImageGeneration.Enabled,
+			Size:         strings.TrimSpace(req.ImageGeneration.Size),
+			AspectRatio:  strings.TrimSpace(req.ImageGeneration.AspectRatio),
+			Quality:      strings.TrimSpace(req.ImageGeneration.Quality),
+			OutputFormat: strings.TrimSpace(req.ImageGeneration.OutputFormat),
+			Background:   strings.TrimSpace(req.ImageGeneration.Background),
+		},
+		GinContext: c,
 	})
 	if err != nil && !c.Writer.Written() {
 		response.ErrorFrom(c, err)

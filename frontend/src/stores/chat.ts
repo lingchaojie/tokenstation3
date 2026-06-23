@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import {
   chatAPI,
@@ -6,9 +6,15 @@ import {
   type WebChatAttachment,
   type WebChatConversation,
   type WebChatConversationDetail,
+  type WebChatImageGenerationAspectRatio,
+  type WebChatImageGenerationBackground,
+  type WebChatImageGenerationOutputFormat,
+  type WebChatImageGenerationQuality,
+  type WebChatImageGenerationSize,
   type WebChatMessage,
   type WebChatMessageStatus,
   type WebChatModel,
+  type WebChatThinkingEffort,
 } from '@/api/chat'
 
 interface StartAssistantStreamInput {
@@ -22,6 +28,9 @@ interface StartAssistantStreamInput {
 }
 
 const TEMP_ID_START = -1
+const DEFAULT_THINKING_EFFORTS: WebChatThinkingEffort[] = ['low', 'medium', 'high', 'xhigh']
+const DEFAULT_IMAGE_GENERATION_SIZES: WebChatImageGenerationSize[] = ['1024x1024']
+const DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS: WebChatImageGenerationAspectRatio[] = ['1:1']
 
 function nowISO(): string {
   return new Date().toISOString()
@@ -135,6 +144,14 @@ export const useChatStore = defineStore('chat', () => {
   const conversations = ref<WebChatConversation[]>([])
   const currentConversation = ref<WebChatConversationDetail | null>(null)
   const selectedModel = ref<WebChatModel | null>(null)
+  const thinkingEnabled = ref(false)
+  const thinkingEffort = ref<WebChatThinkingEffort>('medium')
+  const imageGenerationEnabled = ref(true)
+  const imageGenerationSize = ref<WebChatImageGenerationSize>('1024x1024')
+  const imageGenerationAspectRatio = ref<WebChatImageGenerationAspectRatio>('1:1')
+  const imageGenerationQuality = ref<WebChatImageGenerationQuality>('medium')
+  const imageGenerationOutputFormat = ref<WebChatImageGenerationOutputFormat>('png')
+  const imageGenerationBackground = ref<WebChatImageGenerationBackground>('opaque')
   const pendingAttachments = ref<WebChatAttachment[]>([])
   const streaming = ref(false)
   const abortController = ref<AbortController | null>(null)
@@ -145,6 +162,68 @@ export const useChatStore = defineStore('chat', () => {
   let nextTempId = TEMP_ID_START
 
   const currentMessages = computed(() => currentConversation.value?.messages ?? [])
+  const selectedModelSupportsThinking = computed(() => Boolean(selectedModel.value?.supports_thinking))
+  const selectedModelSupportsImageGeneration = computed(() => Boolean(selectedModel.value?.supports_image_generation))
+  const thinkingEffortOptions = computed<WebChatThinkingEffort[]>(() => {
+    const efforts = selectedModel.value?.thinking_efforts ?? []
+    return efforts.length > 0 ? efforts : DEFAULT_THINKING_EFFORTS
+  })
+  const imageGenerationSizeOptions = computed<WebChatImageGenerationSize[]>(() => {
+    const options = selectedModel.value?.image_generation_sizes ?? []
+    return options.length > 0 ? options : DEFAULT_IMAGE_GENERATION_SIZES
+  })
+  const imageGenerationAspectRatioOptions = computed<WebChatImageGenerationAspectRatio[]>(() => {
+    const options = selectedModel.value?.image_generation_aspect_ratios ?? []
+    return options.length > 0 ? options : DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS
+  })
+  const imageGenerationQualityOptions = computed<WebChatImageGenerationQuality[]>(() => {
+    const options = selectedModel.value?.image_generation_qualities ?? []
+    return options.length > 0 ? options : []
+  })
+  const imageGenerationOutputFormatOptions = computed<WebChatImageGenerationOutputFormat[]>(() => {
+    const options = selectedModel.value?.image_generation_output_formats ?? []
+    return options.length > 0 ? options : []
+  })
+  const imageGenerationBackgroundOptions = computed<WebChatImageGenerationBackground[]>(() => {
+    const options = selectedModel.value?.image_generation_backgrounds ?? []
+    return options.length > 0 ? options : []
+  })
+  const activeThinkingEffort = computed<WebChatThinkingEffort>(() => {
+    if (thinkingEffortOptions.value.includes(thinkingEffort.value)) {
+      return thinkingEffort.value
+    }
+    return thinkingEffortOptions.value.includes('medium') ? 'medium' : thinkingEffortOptions.value[0] ?? 'medium'
+  })
+  const activeImageGenerationSize = computed<WebChatImageGenerationSize>(() => {
+    if (imageGenerationSizeOptions.value.includes(imageGenerationSize.value)) {
+      return imageGenerationSize.value
+    }
+    return imageGenerationSizeOptions.value[0] ?? '1024x1024'
+  })
+  const activeImageGenerationAspectRatio = computed<WebChatImageGenerationAspectRatio>(() => {
+    if (imageGenerationAspectRatioOptions.value.includes(imageGenerationAspectRatio.value)) {
+      return imageGenerationAspectRatio.value
+    }
+    return imageGenerationAspectRatioOptions.value[0] ?? '1:1'
+  })
+  const activeImageGenerationQuality = computed<WebChatImageGenerationQuality | undefined>(() => {
+    if (imageGenerationQualityOptions.value.includes(imageGenerationQuality.value)) {
+      return imageGenerationQuality.value
+    }
+    return imageGenerationQualityOptions.value[0]
+  })
+  const activeImageGenerationOutputFormat = computed<WebChatImageGenerationOutputFormat | undefined>(() => {
+    if (imageGenerationOutputFormatOptions.value.includes(imageGenerationOutputFormat.value)) {
+      return imageGenerationOutputFormat.value
+    }
+    return imageGenerationOutputFormatOptions.value[0]
+  })
+  const activeImageGenerationBackground = computed<WebChatImageGenerationBackground | undefined>(() => {
+    if (imageGenerationBackgroundOptions.value.includes(imageGenerationBackground.value)) {
+      return imageGenerationBackground.value
+    }
+    return imageGenerationBackgroundOptions.value[0]
+  })
 
   const capabilityWarning = computed(() => {
     const model = selectedModel.value
@@ -183,6 +262,40 @@ export const useChatStore = defineStore('chat', () => {
       selectedModel.value = match
     }
   }
+
+  function reconcileThinkingSettings(): void {
+    if (!selectedModelSupportsThinking.value) {
+      thinkingEnabled.value = false
+      return
+    }
+    if (!thinkingEffortOptions.value.includes(thinkingEffort.value)) {
+      thinkingEffort.value = activeThinkingEffort.value
+    }
+  }
+
+  function reconcileImageGenerationSettings(): void {
+    if (!selectedModelSupportsImageGeneration.value) {
+      imageGenerationEnabled.value = false
+      return
+    }
+    imageGenerationEnabled.value = true
+    imageGenerationSize.value = activeImageGenerationSize.value
+    imageGenerationAspectRatio.value = activeImageGenerationAspectRatio.value
+    if (activeImageGenerationQuality.value) {
+      imageGenerationQuality.value = activeImageGenerationQuality.value
+    }
+    if (activeImageGenerationOutputFormat.value) {
+      imageGenerationOutputFormat.value = activeImageGenerationOutputFormat.value
+    }
+    if (activeImageGenerationBackground.value) {
+      imageGenerationBackground.value = activeImageGenerationBackground.value
+    }
+  }
+
+  watch(selectedModel, () => {
+    reconcileThinkingSettings()
+    reconcileImageGenerationSettings()
+  }, { immediate: true, flush: 'sync' })
 
   async function loadModels(): Promise<WebChatModel[]> {
     try {
@@ -390,6 +503,29 @@ export const useChatStore = defineStore('chat', () => {
       attachment_ids: attachments.map((attachment) => attachment.id),
       stream: true,
     }
+    if (selectedModelSupportsThinking.value && thinkingEnabled.value) {
+      request.thinking = {
+        enabled: true,
+        effort: activeThinkingEffort.value,
+      }
+    }
+    if (selectedModelSupportsImageGeneration.value && imageGenerationEnabled.value) {
+      const imageGeneration: NonNullable<SendWebChatMessageRequest['image_generation']> = {
+        enabled: true,
+        size: activeImageGenerationSize.value,
+        aspect_ratio: activeImageGenerationAspectRatio.value,
+      }
+      if (activeImageGenerationQuality.value) {
+        imageGeneration.quality = activeImageGenerationQuality.value
+      }
+      if (activeImageGenerationOutputFormat.value) {
+        imageGeneration.output_format = activeImageGenerationOutputFormat.value
+      }
+      if (activeImageGenerationBackground.value) {
+        imageGeneration.background = activeImageGenerationBackground.value
+      }
+      request.image_generation = imageGeneration
+    }
 
     const controller = new AbortController()
     abortController.value = controller
@@ -442,11 +578,27 @@ export const useChatStore = defineStore('chat', () => {
     conversations,
     currentConversation,
     selectedModel,
+    thinkingEnabled,
+    thinkingEffort,
+    imageGenerationEnabled,
+    imageGenerationSize,
+    imageGenerationAspectRatio,
+    imageGenerationQuality,
+    imageGenerationOutputFormat,
+    imageGenerationBackground,
     pendingAttachments,
     streaming,
     abortController,
     error,
     currentMessages,
+    selectedModelSupportsThinking,
+    thinkingEffortOptions,
+    selectedModelSupportsImageGeneration,
+    imageGenerationSizeOptions,
+    imageGenerationAspectRatioOptions,
+    imageGenerationQualityOptions,
+    imageGenerationOutputFormatOptions,
+    imageGenerationBackgroundOptions,
     capabilityWarning,
     loadModels,
     loadConversations,

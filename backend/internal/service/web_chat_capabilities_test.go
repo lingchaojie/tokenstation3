@@ -46,7 +46,51 @@ func TestWebChatCapabilities_DerivesCapabilitiesFromCatalogModel(t *testing.T) {
 	require.True(t, caps.SupportsImageInput)
 	require.True(t, caps.SupportsFileContext)
 	require.False(t, caps.SupportsArtifactOutput)
+	require.True(t, caps.SupportsThinking)
+	require.Equal(t, []string{"low", "medium", "high", "xhigh"}, caps.ThinkingEfforts)
 	require.Equal(t, "confirmed", caps.PriceStatus)
+}
+
+func TestWebChatCapabilities_DerivesOpenAIImageGenerationOptionsFromCatalogModel(t *testing.T) {
+	caps, ok := WebChatModelCapabilityFromCatalogModel(WebChatCatalogModel{
+		Provider:    "openai",
+		ModelName:   "gpt-image-2",
+		DisplayName: "GPT Image 2",
+		Modalities:  []string{"image"},
+		Features:    []string{"Image Generation", "multi-resolution"},
+		PriceStatus: "confirmed",
+	})
+
+	require.True(t, ok)
+	require.Equal(t, PlatformOpenAI, caps.Platform)
+	require.True(t, caps.SupportsImageGeneration)
+	require.True(t, caps.SupportsArtifactOutput)
+	require.Equal(t, []string{"1024x1024", "1536x1024", "1024x1536"}, caps.ImageGenerationSizes)
+	require.Equal(t, []string{"1:1", "3:2", "2:3"}, caps.ImageGenerationAspectRatios)
+	require.Equal(t, []string{"medium", "high"}, caps.ImageGenerationQualities)
+	require.Equal(t, []string{"png", "jpeg", "webp"}, caps.ImageGenerationOutputFormats)
+	require.Equal(t, []string{"opaque", "transparent"}, caps.ImageGenerationBackgrounds)
+}
+
+func TestWebChatCapabilities_DerivesGeminiImageGenerationOptionsFromCatalogModel(t *testing.T) {
+	caps, ok := WebChatModelCapabilityFromCatalogModel(WebChatCatalogModel{
+		Provider:    "gemini",
+		ModelName:   "gemini-3.1-flash-image",
+		DisplayName: "Gemini 3.1 Flash Image",
+		Modalities:  []string{"image"},
+		Features:    []string{"Image Generation", "multi-resolution"},
+		PriceStatus: "confirmed",
+	})
+
+	require.True(t, ok)
+	require.Equal(t, PlatformGemini, caps.Platform)
+	require.True(t, caps.SupportsImageGeneration)
+	require.True(t, caps.SupportsArtifactOutput)
+	require.Equal(t, []string{"1K", "2K", "4K"}, caps.ImageGenerationSizes)
+	require.Equal(t, []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}, caps.ImageGenerationAspectRatios)
+	require.Empty(t, caps.ImageGenerationQualities)
+	require.Empty(t, caps.ImageGenerationOutputFormats)
+	require.Empty(t, caps.ImageGenerationBackgrounds)
 }
 
 func TestWebChatCapabilities_SkipsUnsupportedCatalogProviders(t *testing.T) {

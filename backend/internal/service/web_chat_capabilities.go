@@ -6,16 +6,24 @@ import (
 )
 
 type WebChatModelCapability struct {
-	Provider               string `json:"provider"`
-	Platform               string `json:"platform"`
-	KeyType                string `json:"key_type"`
-	Model                  string `json:"model"`
-	DisplayName            string `json:"display_name"`
-	SupportsText           bool   `json:"supports_text"`
-	SupportsImageInput     bool   `json:"supports_image_input"`
-	SupportsFileContext    bool   `json:"supports_file_context"`
-	SupportsArtifactOutput bool   `json:"supports_artifact_output"`
-	PriceStatus            string `json:"price_status"`
+	Provider                     string   `json:"provider"`
+	Platform                     string   `json:"platform"`
+	KeyType                      string   `json:"key_type"`
+	Model                        string   `json:"model"`
+	DisplayName                  string   `json:"display_name"`
+	SupportsText                 bool     `json:"supports_text"`
+	SupportsImageInput           bool     `json:"supports_image_input"`
+	SupportsFileContext          bool     `json:"supports_file_context"`
+	SupportsArtifactOutput       bool     `json:"supports_artifact_output"`
+	SupportsThinking             bool     `json:"supports_thinking"`
+	ThinkingEfforts              []string `json:"thinking_efforts,omitempty"`
+	SupportsImageGeneration      bool     `json:"supports_image_generation"`
+	ImageGenerationSizes         []string `json:"image_generation_sizes,omitempty"`
+	ImageGenerationAspectRatios  []string `json:"image_generation_aspect_ratios,omitempty"`
+	ImageGenerationQualities     []string `json:"image_generation_qualities,omitempty"`
+	ImageGenerationOutputFormats []string `json:"image_generation_output_formats,omitempty"`
+	ImageGenerationBackgrounds   []string `json:"image_generation_backgrounds,omitempty"`
+	PriceStatus                  string   `json:"price_status"`
 }
 
 type WebChatContextSummary struct {
@@ -99,19 +107,30 @@ func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatM
 		return WebChatModelCapability{}, false
 	}
 	hasImageModality := containsFold(model.Modalities, "image")
+	hasTextModality := len(model.Modalities) == 0 || containsFold(model.Modalities, "text")
 	supportsImageInput := hasImageModality || containsFold(model.Features, "vision input")
+	supportsThinking := hasTextModality && webChatProviderSupportsThinking(provider)
+	supportsImageGeneration := hasImageModality || containsFold(model.Features, "image generation")
 
 	return WebChatModelCapability{
-		Provider:               provider,
-		Platform:               route.Platform,
-		KeyType:                route.KeyType,
-		Model:                  model.ModelName,
-		DisplayName:            model.DisplayName,
-		SupportsText:           true,
-		SupportsImageInput:     supportsImageInput,
-		SupportsFileContext:    true,
-		SupportsArtifactOutput: hasImageModality || containsFold(model.Features, "image generation"),
-		PriceStatus:            model.PriceStatus,
+		Provider:                     provider,
+		Platform:                     route.Platform,
+		KeyType:                      route.KeyType,
+		Model:                        model.ModelName,
+		DisplayName:                  model.DisplayName,
+		SupportsText:                 true,
+		SupportsImageInput:           supportsImageInput,
+		SupportsFileContext:          true,
+		SupportsArtifactOutput:       supportsImageGeneration,
+		SupportsThinking:             supportsThinking,
+		ThinkingEfforts:              webChatThinkingEffortsForProvider(provider, supportsThinking),
+		SupportsImageGeneration:      supportsImageGeneration,
+		ImageGenerationSizes:         webChatImageGenerationSizesForProvider(provider, supportsImageGeneration),
+		ImageGenerationAspectRatios:  webChatImageGenerationAspectRatiosForProvider(provider, supportsImageGeneration),
+		ImageGenerationQualities:     webChatImageGenerationQualitiesForProvider(provider, supportsImageGeneration),
+		ImageGenerationOutputFormats: webChatImageGenerationOutputFormatsForProvider(provider, supportsImageGeneration),
+		ImageGenerationBackgrounds:   webChatImageGenerationBackgroundsForProvider(provider, supportsImageGeneration),
+		PriceStatus:                  model.PriceStatus,
 	}, true
 }
 
@@ -147,6 +166,93 @@ func containsFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func webChatProviderSupportsThinking(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "openai", "qwen", "gemini":
+		return true
+	default:
+		return false
+	}
+}
+
+func webChatThinkingEffortsForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return []string{"medium", "high", "xhigh"}
+	case "gemini":
+		return []string{"low", "medium", "high"}
+	default:
+		return []string{"low", "medium", "high", "xhigh"}
+	}
+}
+
+func webChatImageGenerationSizesForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "gemini":
+		return []string{"1K", "2K", "4K"}
+	case "openai":
+		return []string{"1024x1024", "1536x1024", "1024x1536"}
+	default:
+		return nil
+	}
+}
+
+func webChatImageGenerationAspectRatiosForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "gemini":
+		return []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+	case "openai":
+		return []string{"1:1", "3:2", "2:3"}
+	default:
+		return nil
+	}
+}
+
+func webChatImageGenerationQualitiesForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return []string{"medium", "high"}
+	default:
+		return nil
+	}
+}
+
+func webChatImageGenerationOutputFormatsForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return []string{"png", "jpeg", "webp"}
+	default:
+		return nil
+	}
+}
+
+func webChatImageGenerationBackgroundsForProvider(provider string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return []string{"opaque", "transparent"}
+	default:
+		return nil
+	}
 }
 
 func webChatCapabilityKey(provider, model string) string {

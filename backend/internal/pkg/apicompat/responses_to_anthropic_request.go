@@ -54,7 +54,7 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	// reasoning.effort → output_config.effort + thinking
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		effort := mapResponsesEffortToAnthropic(req.Reasoning.Effort)
-		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
+		out.ensureOutputConfig().Effort = effort
 		// Enable thinking for non-low efforts
 		if effort != "low" {
 			out.Thinking = &AnthropicThinking{
@@ -63,8 +63,30 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 			}
 		}
 	}
+	if size, aspectRatio := responsesImageGenerationConfig(req.Tools); size != "" || aspectRatio != "" {
+		outputConfig := out.ensureOutputConfig()
+		outputConfig.ImageSize = size
+		outputConfig.ImageAspectRatio = aspectRatio
+	}
 
 	return out, nil
+}
+
+func (r *AnthropicRequest) ensureOutputConfig() *AnthropicOutputConfig {
+	if r.OutputConfig == nil {
+		r.OutputConfig = &AnthropicOutputConfig{}
+	}
+	return r.OutputConfig
+}
+
+func responsesImageGenerationConfig(tools []ResponsesTool) (string, string) {
+	for _, tool := range tools {
+		if strings.TrimSpace(tool.Type) != "image_generation" {
+			continue
+		}
+		return strings.TrimSpace(tool.Size), strings.TrimSpace(tool.AspectRatio)
+	}
+	return "", ""
 }
 
 // defaultThinkingBudget returns a sensible thinking budget based on effort level.

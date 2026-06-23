@@ -94,15 +94,17 @@ func NewWebChatService(
 }
 
 type WebChatSendInput struct {
-	UserID         int64
-	User           *User
-	ConversationID int64
-	Model          string
-	Provider       string
-	Text           string
-	Stream         bool
-	AttachmentIDs  []int64
-	GinContext     *gin.Context
+	UserID          int64
+	User            *User
+	ConversationID  int64
+	Model           string
+	Provider        string
+	Text            string
+	Stream          bool
+	Thinking        WebChatThinkingConfig
+	ImageGeneration WebChatImageGenerationConfig
+	AttachmentIDs   []int64
+	GinContext      *gin.Context
 }
 
 type WebChatSendResult struct {
@@ -391,6 +393,8 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		Capabilities:       caps,
 		Messages:           messages,
 		Stream:             in.Stream,
+		Thinking:           in.Thinking,
+		ImageGeneration:    in.ImageGeneration,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) && s.webChatAssistantIsCanceled(context.WithoutCancel(ctx), user.ID, in.ConversationID, assistantMessage.ID) {

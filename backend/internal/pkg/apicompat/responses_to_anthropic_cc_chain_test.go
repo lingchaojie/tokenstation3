@@ -100,3 +100,22 @@ func TestCCChain_WellFormedMultiRound(t *testing.T) {
 	}
 	require.True(t, sawA && sawB, "both well-formed calls should be preserved")
 }
+
+func TestCCChain_ImageGenerationToolPreservesOutputConfig(t *testing.T) {
+	respReq, err := ChatCompletionsToResponses(&ChatCompletionsRequest{
+		Model:    "gemini-3.1-flash-image",
+		Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"draw a landscape"`)}},
+		Tools: []ChatTool{{
+			Type:        "image_generation",
+			Size:        "2K",
+			AspectRatio: "16:9",
+		}},
+	})
+	require.NoError(t, err)
+
+	anthReq, err := ResponsesToAnthropicRequest(respReq)
+	require.NoError(t, err)
+	require.NotNil(t, anthReq.OutputConfig)
+	require.Equal(t, "2K", anthReq.OutputConfig.ImageSize)
+	require.Equal(t, "16:9", anthReq.OutputConfig.ImageAspectRatio)
+}

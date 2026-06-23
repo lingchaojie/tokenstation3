@@ -10,10 +10,13 @@ import (
 )
 
 type webChatCCRequest struct {
-	Model         string              `json:"model"`
-	Stream        bool                `json:"stream"`
-	StreamOptions *webChatStreamUsage `json:"stream_options,omitempty"`
-	Messages      []webChatCCMessage  `json:"messages"`
+	Model           string              `json:"model"`
+	Stream          bool                `json:"stream"`
+	StreamOptions   *webChatStreamUsage `json:"stream_options,omitempty"`
+	Messages        []webChatCCMessage  `json:"messages"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	Tools           []webChatCCTool     `json:"tools,omitempty"`
+	ToolChoice      any                 `json:"tool_choice,omitempty"`
 }
 
 type webChatStreamUsage struct {
@@ -35,10 +38,26 @@ type webChatCCImageURLPart struct {
 	URL string `json:"url"`
 }
 
-func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage, caps WebChatModelCapability, messages []WebChatMessage, stream bool) ([]byte, error) {
+type webChatCCTool struct {
+	Type         string `json:"type"`
+	Model        string `json:"model,omitempty"`
+	Size         string `json:"size,omitempty"`
+	AspectRatio  string `json:"aspect_ratio,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
+	Background   string `json:"background,omitempty"`
+}
+
+type WebChatCompletionsPayloadOptions struct {
+	Thinking        WebChatThinkingConfig
+	ImageGeneration WebChatImageGenerationConfig
+}
+
+func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage, caps WebChatModelCapability, messages []WebChatMessage, stream bool, options ...WebChatCompletionsPayloadOptions) ([]byte, error) {
 	if err := validateWebChatAdapterContext(caps, messages); err != nil {
 		return nil, err
 	}
+	payloadOptions := firstWebChatPayloadOptions(options)
 
 	request := webChatCCRequest{
 		Model:    caps.Model,
@@ -47,6 +66,15 @@ func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage,
 	}
 	if stream {
 		request.StreamOptions = &webChatStreamUsage{IncludeUsage: true}
+	}
+	if effort, ok := normalizeWebChatThinkingEffort(caps, payloadOptions.Thinking); ok {
+		request.ReasoningEffort = effort
+	}
+	if tool, ok := buildWebChatImageGenerationTool(caps, payloadOptions.ImageGeneration); ok {
+		request.Tools = []webChatCCTool{tool}
+		if caps.Platform == PlatformOpenAI {
+			request.ToolChoice = map[string]string{"type": "image_generation"}
+		}
 	}
 
 	for _, message := range messages {
@@ -79,6 +107,88 @@ func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage,
 		return nil, fmt.Errorf("marshal web chat completions payload: %w", err)
 	}
 	return payload, nil
+}
+
+func firstWebChatPayloadOptions(values []WebChatCompletionsPayloadOptions) WebChatCompletionsPayloadOptions {
+	if len(values) == 0 {
+		return WebChatCompletionsPayloadOptions{}
+	}
+	return values[0]
+}
+
+func normalizeWebChatThinkingEffort(caps WebChatModelCapability, config WebChatThinkingConfig) (string, bool) {
+	if !config.Enabled || !caps.SupportsThinking {
+		return "", false
+	}
+	effort := strings.ToLower(strings.TrimSpace(config.Effort))
+	switch effort {
+	case "":
+		effort = "medium"
+	case "max":
+		effort = "xhigh"
+	case "x-high", "x_high":
+		effort = "xhigh"
+	}
+
+	allowed := caps.ThinkingEfforts
+	if len(allowed) == 0 {
+		allowed = []string{"low", "medium", "high", "xhigh"}
+	}
+	for _, allowedEffort := range allowed {
+		if effort == strings.ToLower(strings.TrimSpace(allowedEffort)) {
+			return effort, true
+		}
+	}
+	return "", false
+}
+
+func buildWebChatImageGenerationTool(caps WebChatModelCapability, config WebChatImageGenerationConfig) (webChatCCTool, bool) {
+	if !config.Enabled || !caps.SupportsImageGeneration {
+		return webChatCCTool{}, false
+	}
+	tool := webChatCCTool{Type: "image_generation"}
+	if value := normalizeWebChatAllowedOption(config.Size, caps.ImageGenerationSizes, true); value != "" {
+		tool.Size = value
+	}
+	if caps.Platform == PlatformGemini {
+		if value := normalizeWebChatAllowedOption(config.AspectRatio, caps.ImageGenerationAspectRatios, true); value != "" {
+			tool.AspectRatio = value
+		}
+	}
+	if value := normalizeWebChatAllowedOption(config.Quality, caps.ImageGenerationQualities, true); value != "" {
+		tool.Quality = value
+	}
+	if value := normalizeWebChatAllowedOption(config.OutputFormat, caps.ImageGenerationOutputFormats, true); value != "" {
+		tool.OutputFormat = value
+	}
+	if value := normalizeWebChatAllowedOption(config.Background, caps.ImageGenerationBackgrounds, true); value != "" {
+		tool.Background = value
+	}
+	return tool, true
+}
+
+func normalizeWebChatAllowedOption(value string, allowed []string, defaultFirst bool) string {
+	value = strings.TrimSpace(value)
+	if len(allowed) == 0 {
+		return ""
+	}
+	for _, option := range allowed {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
+		}
+		if value != "" && strings.EqualFold(value, option) {
+			return option
+		}
+	}
+	if defaultFirst {
+		for _, option := range allowed {
+			if option = strings.TrimSpace(option); option != "" {
+				return option
+			}
+		}
+	}
+	return ""
 }
 
 func validateWebChatAdapterContext(caps WebChatModelCapability, messages []WebChatMessage) error {

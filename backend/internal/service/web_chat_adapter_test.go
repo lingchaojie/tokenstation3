@@ -41,6 +41,76 @@ func TestBuildWebChatCompletionsPayload_IncludesTextImageAndFilePreview(t *testi
 	storage.requireOpened("u/1/image.png")
 }
 
+func TestBuildWebChatCompletionsPayload_IncludesThinkingEffortWhenEnabled(t *testing.T) {
+	messages := []WebChatMessage{{
+		Role:        WebChatRoleUser,
+		ContentText: "Think through the tradeoffs",
+	}}
+
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), WebChatModelCapability{
+		Model:            "gpt-5.4",
+		SupportsText:     true,
+		SupportsThinking: true,
+		ThinkingEfforts:  []string{"medium", "high", "xhigh"},
+	}, messages, true, WebChatCompletionsPayloadOptions{
+		Thinking: WebChatThinkingConfig{Enabled: true, Effort: "high"},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"model":"gpt-5.4",
+		"stream":true,
+		"stream_options":{"include_usage":true},
+		"reasoning_effort":"high",
+		"messages":[{"role":"user","content":"Think through the tradeoffs"}]
+	}`, string(payload))
+}
+
+func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t *testing.T) {
+	messages := []WebChatMessage{{
+		Role:        WebChatRoleUser,
+		ContentText: "Generate a wide hero image",
+	}}
+
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), WebChatModelCapability{
+		Provider:                     "openai",
+		Platform:                     PlatformOpenAI,
+		Model:                        "gpt-image-2",
+		SupportsText:                 true,
+		SupportsImageGeneration:      true,
+		ImageGenerationSizes:         []string{"1024x1024", "1536x1024"},
+		ImageGenerationAspectRatios:  []string{"1:1", "3:2"},
+		ImageGenerationQualities:     []string{"medium", "high"},
+		ImageGenerationOutputFormats: []string{"png", "webp"},
+		ImageGenerationBackgrounds:   []string{"opaque", "transparent"},
+	}, messages, true, WebChatCompletionsPayloadOptions{
+		ImageGeneration: WebChatImageGenerationConfig{
+			Enabled:      true,
+			Size:         "1536x1024",
+			AspectRatio:  "3:2",
+			Quality:      "high",
+			OutputFormat: "webp",
+			Background:   "transparent",
+		},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"model":"gpt-image-2",
+		"stream":true,
+		"stream_options":{"include_usage":true},
+		"tool_choice":{"type":"image_generation"},
+		"tools":[{
+			"type":"image_generation",
+			"size":"1536x1024",
+			"quality":"high",
+			"output_format":"webp",
+			"background":"transparent"
+		}],
+		"messages":[{"role":"user","content":"Generate a wide hero image"}]
+	}`, string(payload))
+}
+
 type fakeWebChatStorage struct {
 	t            *testing.T
 	files        map[string][]byte
