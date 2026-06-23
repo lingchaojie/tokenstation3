@@ -122,9 +122,7 @@ func fetchKiroUsageLimits(ctx context.Context, account *Account) (*KiroUsageLimi
 	if baseURL == "" {
 		baseURL = KiroDefaultCodeWhispererBase
 	}
-	if strings.HasSuffix(baseURL, KiroCodeWhispererEndpointPath) {
-		baseURL = strings.TrimSuffix(baseURL, KiroCodeWhispererEndpointPath)
-	}
+	baseURL = strings.TrimSuffix(baseURL, KiroCodeWhispererEndpointPath)
 	targetURL := baseURL + "/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {

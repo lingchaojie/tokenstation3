@@ -63,7 +63,7 @@ func (s *OpenAIGatewayService) refreshKiroAccessToken(ctx context.Context, accou
 		return err
 	}
 	if resp == nil || strings.TrimSpace(resp.AccessToken) == "" {
-		return fmt.Errorf("Kiro token refresh response missing accessToken")
+		return fmt.Errorf("kiro token refresh response missing accessToken")
 	}
 	creds := cloneCredentials(account.Credentials)
 	creds["access_token"] = strings.TrimSpace(resp.AccessToken)
@@ -137,7 +137,7 @@ func postKiroTokenRefresh(ctx context.Context, account *Account, targetURL strin
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Kiro token refresh failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, fmt.Errorf("kiro token refresh failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	var out kiroTokenRefreshResponse
 	if err := json.Unmarshal(respBody, &out); err != nil {

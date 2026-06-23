@@ -192,7 +192,7 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroOAuthExc
 		return nil, err
 	}
 	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
-		return nil, fmt.Errorf("Kiro OAuth response missing tokens")
+		return nil, fmt.Errorf("kiro OAuth response missing tokens")
 	}
 	if tokenResp.ExpiresIn <= 0 {
 		tokenResp.ExpiresIn = 3600
@@ -247,7 +247,7 @@ func (s *KiroOAuthService) PollDeviceCode(ctx context.Context, input KiroOAuthPo
 		return &KiroOAuthPollResult{Status: "pending", Interval: session.Interval}, nil
 	}
 	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
-		return nil, fmt.Errorf("Kiro device token response missing tokens")
+		return nil, fmt.Errorf("kiro device token response missing tokens")
 	}
 	if tokenResp.ExpiresIn <= 0 {
 		tokenResp.ExpiresIn = 3600
@@ -318,14 +318,14 @@ func (s *KiroOAuthService) startBuilderIDDeviceFlow(ctx context.Context, proxyUR
 		return nil, err
 	}
 	if strings.TrimSpace(clientResp.ClientID) == "" || strings.TrimSpace(clientResp.ClientSecret) == "" {
-		return nil, fmt.Errorf("Kiro client registration response missing client credentials")
+		return nil, fmt.Errorf("kiro client registration response missing client credentials")
 	}
 	deviceResp, err := s.requestBuilderIDDeviceAuthorization(ctx, proxyURL, clientResp)
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(deviceResp.DeviceCode) == "" || strings.TrimSpace(deviceResp.UserCode) == "" {
-		return nil, fmt.Errorf("Kiro device authorization response missing device code")
+		return nil, fmt.Errorf("kiro device authorization response missing device code")
 	}
 	if deviceResp.Interval <= 0 {
 		deviceResp.Interval = kiroOAuthDefaultDeviceInterval
@@ -516,7 +516,7 @@ func postKiroOAuthJSON(ctx context.Context, targetURL string, payload any, proxy
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Kiro OAuth request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return fmt.Errorf("kiro OAuth request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if out == nil {
 		return nil
@@ -569,7 +569,7 @@ func postKiroOAuthJSONAllowPending(ctx context.Context, targetURL string, payloa
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Kiro device token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("kiro device token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if out != nil {
 		if err := json.Unmarshal(respBody, out); err != nil {
