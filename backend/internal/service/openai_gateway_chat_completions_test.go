@@ -137,6 +137,49 @@ func TestForwardAsChatCompletions_UnknownModelDoesNotUseDefaultMappedModel(t *te
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestForwardAsChatCompletions_OAuthImageOnlyModelIsNormalized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-2","messages":[{"role":"user","content":"draw a fox"}],"stream":true,"tool_choice":{"type":"image_generation"},"tools":[{"type":"image_generation","size":"1536x1024","quality":"high","output_format":"webp","background":"transparent"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_chat_image_only_model"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop after capture"}}`)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, openAIImagesResponsesMainModel, gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "gpt-image-2", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").model`).String())
+	require.Equal(t, "1536x1024", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").size`).String())
+	require.Equal(t, "high", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").quality`).String())
+	require.Equal(t, "webp", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").output_format`).String())
+	require.Equal(t, "transparent", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").background`).String())
+	require.Equal(t, "image_generation", gjson.GetBytes(upstream.lastBody, "tool_choice.type").String())
+}
+
 func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
