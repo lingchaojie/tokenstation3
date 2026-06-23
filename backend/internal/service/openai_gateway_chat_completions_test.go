@@ -178,6 +178,55 @@ func TestForwardAsChatCompletions_OAuthImageOnlyModelIsNormalized(t *testing.T) 
 	require.Equal(t, "webp", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").output_format`).String())
 	require.Equal(t, "transparent", gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation").background`).String())
 	require.Equal(t, "image_generation", gjson.GetBytes(upstream.lastBody, "tool_choice.type").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), codexImageGenerationBridgeMarker)
+}
+
+func TestForwardAsChatCompletions_OAuthImageGenerationStreamCountsImageOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-2","messages":[{"role":"user","content":"draw a fox"}],"stream":true,"tool_choice":{"type":"image_generation"},"tools":[{"type":"image_generation","size":"1024x1024","quality":"high","output_format":"webp"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_img","model":"gpt-5.4-mini","status":"in_progress"}}`,
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw=","revised_prompt":"draw a fox","output_format":"webp","size":"1024x1024","quality":"high"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_img","model":"gpt-5.4-mini","status":"completed","usage":{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"image_tokens":4}},"output":[]}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_image_result"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, []string{"1024x1024"}, result.ImageOutputSizes)
+	require.Len(t, result.imageResults, 1)
+	require.Equal(t, "ZmluYWw=", result.imageResults[0].Result)
+	require.Equal(t, "webp", result.imageResults[0].OutputFormat)
 }
 
 func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(t *testing.T) {

@@ -435,6 +435,7 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		}
 		return nil, err
 	}
+	s.saveWebChatArtifactCandidates(ctx, user.ID, in.ConversationID, assistantMessage.ID, dispatchResult.ArtifactCandidates)
 	return &WebChatSendResult{UserMessageID: userMessage.ID, AssistantMessageID: assistantMessage.ID}, nil
 }
 

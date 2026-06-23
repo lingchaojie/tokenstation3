@@ -552,6 +552,13 @@ export const useChatStore = defineStore('chat', () => {
       pendingAttachments.value = []
       await readSSEStream(streamResult.response, appendAssistantDelta)
       finishAssistantStream()
+      if (selectedModel.value?.supports_artifact_output) {
+        try {
+          await openConversation(conversation.id)
+        } catch {
+          // Keep the completed streamed message visible even if the post-stream artifact refresh fails.
+        }
+      }
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted) {
         finishAssistantStream('canceled')

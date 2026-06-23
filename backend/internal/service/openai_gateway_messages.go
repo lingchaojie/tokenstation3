@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -447,7 +448,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, _, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
 	if err != nil {
 		return nil, err
 	}
@@ -541,11 +542,13 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
-) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
+) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, []openAIResponsesImageResult, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
+	imageResults := make([]openAIResponsesImageResult, 0, 1)
+	imageResultSeen := make(map[string]struct{})
 	if resp == nil || resp.Body == nil {
-		return nil, usage, acc, errors.New("upstream response body is nil")
+		return nil, usage, acc, imageResults, errors.New("upstream response body is nil")
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -623,6 +626,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			if !ok {
 				if frame, ok := parser.Finish(); ok {
 					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+					collectOpenAIResponsesImageResultsFromEventPayload([]byte(payload), &imageResults, imageResultSeen)
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
 						acc.ProcessEvent(&event)
@@ -636,11 +640,11 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 							if event.Response.Usage != nil {
 								usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 							}
-							return event.Response, usage, acc, nil
+							return event.Response, usage, acc, imageResults, nil
 						}
 					}
 				}
-				return nil, usage, acc, nil
+				return nil, usage, acc, imageResults, nil
 			}
 			resetTimeout()
 			if ev.err != nil {
@@ -650,17 +654,18 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 						zap.String("request_id", requestID),
 					)
 				}
-				return nil, usage, acc, ev.err
+				return nil, usage, acc, imageResults, ev.err
 			}
 
 			if isOpenAICompatDoneSentinelLine(ev.line) {
-				return nil, usage, acc, nil
+				return nil, usage, acc, imageResults, nil
 			}
 			frame, ok := parser.AddLine(ev.line)
 			if !ok {
 				continue
 			}
 			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+			collectOpenAIResponsesImageResultsFromEventPayload([]byte(payload), &imageResults, imageResultSeen)
 
 			var event apicompat.ResponsesStreamEvent
 			if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -683,7 +688,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 				}
-				return event.Response, usage, acc, nil
+				return event.Response, usage, acc, imageResults, nil
 			}
 
 		case <-timeoutCh:
@@ -692,7 +697,28 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.String("request_id", requestID),
 				zap.Duration("interval", streamInterval),
 			)
-			return nil, usage, acc, fmt.Errorf("stream data interval timeout")
+			return nil, usage, acc, imageResults, fmt.Errorf("stream data interval timeout")
+		}
+	}
+}
+
+func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}) {
+	if len(payload) == 0 || results == nil || !gjson.ValidBytes(payload) {
+		return
+	}
+	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
+	case "response.output_item.done":
+		result, itemID, ok, err := extractOpenAIImageFromResponsesOutputItemDone(payload)
+		if err == nil && ok {
+			appendOpenAIResponsesImageResultDedup(results, seen, itemID, result)
+		}
+	case "response.completed":
+		completedResults, _, _, _, err := extractOpenAIImagesFromResponsesCompleted(payload)
+		if err != nil {
+			return
+		}
+		for _, result := range completedResults {
+			appendOpenAIResponsesImageResultDedup(results, seen, "", result)
 		}
 	}
 }

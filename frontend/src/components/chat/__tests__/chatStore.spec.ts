@@ -264,6 +264,21 @@ describe('useChatStore', () => {
       userMessageId: 100,
       assistantMessageId: 101,
     })
+    vi.spyOn(chatAPI, 'getConversation').mockResolvedValue({
+      conversation: {
+        id: 8,
+        title: 'Image',
+        default_model: imageModel.model,
+        default_provider: imageModel.provider,
+        last_model: imageModel.model,
+        last_provider: imageModel.provider,
+        status: 'active',
+        message_count: 2,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:01Z',
+      },
+      messages: [],
+    })
     const store = useChatStore()
     store.selectedModel = imageModel
     store.imageGenerationEnabled = true
@@ -303,6 +318,100 @@ describe('useChatStore', () => {
         background: 'transparent',
       },
     }), expect.any(AbortSignal))
+  })
+
+  it('refreshes artifact-capable conversations after streaming completes', async () => {
+    vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+      response: new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    const getConversationSpy = vi.spyOn(chatAPI, 'getConversation').mockResolvedValue({
+      conversation: {
+        id: 8,
+        title: 'Image',
+        default_model: imageModel.model,
+        default_provider: imageModel.provider,
+        last_model: imageModel.model,
+        last_provider: imageModel.provider,
+        status: 'active',
+        message_count: 2,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:01Z',
+      },
+      messages: [
+        {
+          id: 100,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'user',
+          model: imageModel.model,
+          provider: imageModel.provider,
+          content_text: 'Generate image',
+          content_json: [],
+          status: 'completed',
+          created_at: '2026-06-22T00:00:00Z',
+          updated_at: '2026-06-22T00:00:00Z',
+        },
+        {
+          id: 101,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'assistant',
+          model: imageModel.model,
+          provider: imageModel.provider,
+          content_text: 'Done.',
+          content_json: [],
+          status: 'completed',
+          artifacts: [{
+            id: 44,
+            message_id: 101,
+            conversation_id: 8,
+            user_id: 1,
+            filename: 'generated-image-1.webp',
+            content_type: 'image/webp',
+            size_bytes: 5,
+            storage_key: 'generated/generated-image-1.webp',
+            sha256: 'sha256',
+            source: 'image_output',
+            created_at: '2026-06-22T00:00:01Z',
+          }],
+          created_at: '2026-06-22T00:00:01Z',
+          updated_at: '2026-06-22T00:00:01Z',
+        },
+      ],
+    })
+    const store = useChatStore()
+    store.selectedModel = imageModel
+    store.currentConversation = {
+      conversation: {
+        id: 8,
+        title: 'Image',
+        default_model: imageModel.model,
+        default_provider: imageModel.provider,
+        last_model: imageModel.model,
+        last_provider: imageModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    await store.sendMessage('Generate image')
+
+    expect(getConversationSpy).toHaveBeenCalledWith(8)
+    expect(store.currentMessages[1].artifacts?.[0]).toMatchObject({
+      id: 44,
+      filename: 'generated-image-1.webp',
+    })
   })
 
   it('downloads attachments as authenticated blobs with response metadata', async () => {

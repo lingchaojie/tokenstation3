@@ -60,8 +60,9 @@ type webChatDispatchInput struct {
 }
 
 type webChatDispatchResult struct {
-	ResponseBody []byte
-	UsageLogID   *int64
+	ResponseBody       []byte
+	UsageLogID         *int64
+	ArtifactCandidates []WebChatArtifactCandidate
 }
 
 func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDispatchInput) (*webChatDispatchResult, error) {
@@ -130,12 +131,16 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	inboundEndpoint := fmt.Sprintf("/api/v1/admin/chat/conversations/%d/messages", input.ConversationID)
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
 	usageRecorded := false
+	artifactCandidates := make([]WebChatArtifactCandidate, 0, 1)
 
 	switch input.Capabilities.Platform {
 	case PlatformOpenAI:
 		result, account, err := s.forwardWebChatOpenAI(usageCtx, c, group, body, input)
 		if err != nil {
 			return nil, err
+		}
+		if result != nil {
+			artifactCandidates = append(artifactCandidates, webChatArtifactCandidatesFromOpenAIImageResults(result.imageResults)...)
 		}
 		recordUsageErr := s.openAIGatewayService.RecordUsage(usageCtx, &OpenAIRecordUsageInput{
 			Result:             result,
@@ -216,7 +221,8 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			log.Printf("[WARN] web chat: lookup usage log failed after upstream response: %v", err)
 		}
 	}
-	return &webChatDispatchResult{ResponseBody: capture.Body(), UsageLogID: usageLogID}, nil
+	artifactCandidates = append(artifactCandidates, ExtractArtifactsFromChatCompletions(capture.Body(), input.Stream)...)
+	return &webChatDispatchResult{ResponseBody: capture.Body(), UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, nil
 }
 
 func (s *WebChatService) webChatAvailableGroup(ctx context.Context, userID int64, platform string) (*Group, error) {

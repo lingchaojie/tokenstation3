@@ -62,6 +62,57 @@ func TestWebChatResponseCapture_ExtractAssistantTextFromLongStreamLine(t *testin
 	require.Equal(t, longText, ExtractAssistantTextFromChatCompletions(body, true))
 }
 
+func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive, AllowImageGeneration: true}}
+	svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID:     "openai_req",
+		Model:         "gpt-image-2",
+		UpstreamModel: openAIImagesResponsesMainModel,
+		Stream:        true,
+		ImageCount:    1,
+		imageResults: []openAIResponsesImageResult{{
+			Result:        "aGVsbG8=",
+			RevisedPrompt: "draw a small icon",
+			OutputFormat:  "webp",
+			Size:          "1024x1024",
+		}},
+	}
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "gpt-image-2",
+		Provider:       "openai",
+		Text:           "draw a small icon",
+		Stream:         true,
+		ImageGeneration: WebChatImageGenerationConfig{
+			Enabled:      true,
+			Size:         "1024x1024",
+			OutputFormat: "webp",
+		},
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	require.Len(t, svc.savedFiles, 1)
+	require.Equal(t, "generated-image-1.webp", svc.savedFiles[0].Filename)
+	require.Equal(t, "image/webp", svc.savedFiles[0].ContentType)
+	require.Equal(t, []byte("hello"), svc.savedFiles[0].Body)
+	require.Len(t, svc.createdArtifacts, 1)
+	require.Equal(t, result.AssistantMessageID, svc.createdArtifacts[0].MessageID)
+	require.Equal(t, int64(7), svc.createdArtifacts[0].ConversationID)
+	require.Equal(t, int64(42), svc.createdArtifacts[0].UserID)
+	require.Equal(t, "generated-image-1.webp", svc.createdArtifacts[0].Filename)
+	require.Equal(t, "image/webp", svc.createdArtifacts[0].ContentType)
+	require.Equal(t, WebChatArtifactSourceImageOutput, svc.createdArtifacts[0].Source)
+	requireOrderedEvents(t, svc.events, "forward_openai", "record_openai_usage", "usage_lookup")
+}
+
 func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
@@ -488,22 +539,34 @@ type webChatServiceTestDouble struct {
 	recordUsageCalled           bool
 	recordUsageErr              error
 	gatewayForwardResult        *ForwardResult
+	openAIForwardResult         *OpenAIForwardResult
 	forwardErr                  error
 	cancelAssistantOnForward    bool
 	finalizedAssistantMessageID int64
 	finalUpdate                 UpdateWebChatMessageInput
 	nextMessageID               int64
 	createdMessages             []CreateWebChatMessageInput
+	createdArtifacts            []CreateWebChatArtifactInput
 	updatedMessages             []UpdateWebChatMessageInput
+	savedFiles                  []webChatSavedTestFile
 	usageLookupRequestID        string
 	usageLookupAPIKeyID         int64
 	usageLookupErr              error
 	recordUsageClientRequestID  string
+	openAIRecordUsageInput      *OpenAIRecordUsageInput
 	forwardedBody               []byte
 	selection                   *AccountSelectionResult
+	openAISelection             *AccountSelectionResult
+	availableGroups             []Group
 	releaseCount                int
 	repo                        *webChatRepoStub
 	events                      []string
+}
+
+type webChatSavedTestFile struct {
+	Filename    string
+	ContentType string
+	Body        []byte
 }
 
 func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
@@ -512,15 +575,17 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 
 	double := &webChatServiceTestDouble{nextMessageID: 100}
 	repo := &webChatRepoStub{double: double}
-	storage := noopWebChatStorage{}
+	storage := webChatStorageStub{double: double}
 	double.repo = repo
 	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
+	double.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI}, Acquired: true}
 	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	double.capabilityResolver = webChatCapabilityResolverStub{}
 	double.apiKeyService = &webChatAPIKeyServiceStub{double: double}
 	double.subscriptionService = &webChatSubscriptionServiceStub{double: double}
 	double.billingCacheService = &webChatBillingCacheServiceStub{double: double}
 	double.gatewayService = &webChatGatewayServiceStub{double: double}
+	double.openAIGatewayService = &webChatOpenAIGatewayServiceStub{double: double}
 	double.usageLogRepository = &webChatUsageLogRepoStub{double: double}
 	return double
 }
@@ -661,8 +726,20 @@ func (r *webChatRepoStub) GetAttachmentForUser(context.Context, int64, int64) (*
 	}, nil
 }
 
-func (r *webChatRepoStub) CreateArtifact(context.Context, CreateWebChatArtifactInput) (*WebChatArtifact, error) {
-	panic("unexpected CreateArtifact")
+func (r *webChatRepoStub) CreateArtifact(_ context.Context, in CreateWebChatArtifactInput) (*WebChatArtifact, error) {
+	r.double.createdArtifacts = append(r.double.createdArtifacts, in)
+	return &WebChatArtifact{
+		ID:             int64(len(r.double.createdArtifacts)),
+		MessageID:      in.MessageID,
+		ConversationID: in.ConversationID,
+		UserID:         in.UserID,
+		Filename:       in.Filename,
+		ContentType:    in.ContentType,
+		SizeBytes:      in.SizeBytes,
+		StorageKey:     in.StorageKey,
+		SHA256:         in.SHA256,
+		Source:         in.Source,
+	}, nil
 }
 
 func (r *webChatRepoStub) GetArtifactForUser(context.Context, int64, int64) (*WebChatArtifact, error) {
@@ -674,6 +751,9 @@ type webChatAPIKeyServiceStub struct {
 }
 
 func (s *webChatAPIKeyServiceStub) GetAvailableGroups(context.Context, int64) ([]Group, error) {
+	if len(s.double.availableGroups) > 0 {
+		return append([]Group(nil), s.double.availableGroups...), nil
+	}
 	return []Group{{ID: 11, Platform: PlatformAnthropic, Status: StatusActive}}, nil
 }
 
@@ -749,6 +829,36 @@ func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordU
 	return s.double.recordUsageErr
 }
 
+type webChatOpenAIGatewayServiceStub struct {
+	double *webChatServiceTestDouble
+}
+
+func (s *webChatOpenAIGatewayServiceStub) SelectAccountWithLoadAwareness(context.Context, *int64, string, string, map[int64]struct{}) (*AccountSelectionResult, error) {
+	return s.double.openAISelection, nil
+}
+
+func (s *webChatOpenAIGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, c *gin.Context, _ *Account, body []byte, _ string, _ string) (*OpenAIForwardResult, error) {
+	s.double.events = append(s.double.events, "forward_openai")
+	s.double.forwardedBody = append([]byte(nil), body...)
+	if _, err := c.Writer.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"Done.\"}}]}\n\n"); err != nil {
+		return nil, err
+	}
+	if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err != nil {
+		return nil, err
+	}
+	if s.double.openAIForwardResult == nil {
+		s.double.openAIForwardResult = &OpenAIForwardResult{RequestID: "openai_req", Model: "gpt-image-2"}
+	}
+	return s.double.openAIForwardResult, nil
+}
+
+func (s *webChatOpenAIGatewayServiceStub) RecordUsage(ctx context.Context, in *OpenAIRecordUsageInput) error {
+	s.double.events = append(s.double.events, "record_openai_usage")
+	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
+	s.double.openAIRecordUsageInput = in
+	return s.double.recordUsageErr
+}
+
 type webChatUsageLogRepoStub struct {
 	double *webChatServiceTestDouble
 }
@@ -769,6 +879,17 @@ func (webChatCapabilityResolverStub) ResolveWebChatCapability(provider, model st
 	switch model {
 	case "claude-sonnet-4":
 		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true, SupportsImageInput: true, SupportsFileContext: true}, nil
+	case "gpt-image-2":
+		return WebChatModelCapability{
+			Provider:                     provider,
+			Platform:                     PlatformOpenAI,
+			Model:                        model,
+			SupportsText:                 true,
+			SupportsImageGeneration:      true,
+			SupportsArtifactOutput:       true,
+			ImageGenerationSizes:         []string{"1024x1024"},
+			ImageGenerationOutputFormats: []string{"webp"},
+		}, nil
 	case "text-only":
 		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true}, nil
 	default:
@@ -847,17 +968,34 @@ func forwardedChatCompletionMessages(t *testing.T, body []byte) []struct {
 	return payload.Messages
 }
 
-type noopWebChatStorage struct{}
-
-func (noopWebChatStorage) Save(context.Context, WebChatStorageSaveInput) (*WebChatStoredFile, error) {
-	panic("unexpected Save")
+type webChatStorageStub struct {
+	double *webChatServiceTestDouble
 }
 
-func (noopWebChatStorage) Open(context.Context, string) (io.ReadCloser, WebChatStoredFileMeta, error) {
+func (s webChatStorageStub) Save(_ context.Context, in WebChatStorageSaveInput) (*WebChatStoredFile, error) {
+	body, err := io.ReadAll(in.Reader)
+	if err != nil {
+		return nil, err
+	}
+	s.double.savedFiles = append(s.double.savedFiles, webChatSavedTestFile{
+		Filename:    in.Filename,
+		ContentType: in.ContentType,
+		Body:        append([]byte(nil), body...),
+	})
+	return &WebChatStoredFile{
+		StorageKey:  "generated/" + in.Filename,
+		Filename:    in.Filename,
+		ContentType: in.ContentType,
+		SizeBytes:   int64(len(body)),
+		SHA256:      "sha256",
+	}, nil
+}
+
+func (webChatStorageStub) Open(context.Context, string) (io.ReadCloser, WebChatStoredFileMeta, error) {
 	return io.NopCloser(strings.NewReader("image")), WebChatStoredFileMeta{SizeBytes: 5}, nil
 }
 
-func (noopWebChatStorage) Delete(context.Context, string) error {
+func (webChatStorageStub) Delete(context.Context, string) error {
 	return nil
 }
 
