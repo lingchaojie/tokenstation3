@@ -3468,10 +3468,60 @@ func convertClaudeGenerationConfig(req map[string]any) map[string]any {
 	if stopSeq, ok := req["stop_sequences"].([]any); ok && len(stopSeq) > 0 {
 		out["stopSequences"] = stopSeq
 	}
+	if level := geminiThinkingLevelFromClaudeOutputConfig(req["output_config"]); level != "" {
+		out["thinkingConfig"] = map[string]any{"thinkingLevel": level}
+	}
+	if imageConfig := geminiImageConfigFromClaudeOutputConfig(req["output_config"]); len(imageConfig) > 0 {
+		out["responseModalities"] = []string{"TEXT", "IMAGE"}
+		out["imageConfig"] = imageConfig
+	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func geminiThinkingLevelFromClaudeOutputConfig(raw any) string {
+	outputConfig, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	effort, ok := outputConfig["effort"].(string)
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high", "max", "xhigh", "x-high", "x_high":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func geminiImageConfigFromClaudeOutputConfig(raw any) map[string]any {
+	outputConfig, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	imageConfig := make(map[string]any)
+	if aspectRatio, ok := outputConfig["image_aspect_ratio"].(string); ok {
+		if aspectRatio = strings.TrimSpace(aspectRatio); aspectRatio != "" {
+			imageConfig["aspectRatio"] = aspectRatio
+		}
+	}
+	if imageSize, ok := outputConfig["image_size"].(string); ok {
+		if imageSize = strings.TrimSpace(imageSize); imageSize != "" {
+			imageConfig["imageSize"] = imageSize
+		}
+	}
+	if len(imageConfig) == 0 {
+		return nil
+	}
+	return imageConfig
 }
 
 func (s *GeminiMessagesCompatService) extractImageInputSize(body []byte) string {

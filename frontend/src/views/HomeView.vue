@@ -44,13 +44,15 @@
               <LinxWordmark v-if="usesDefaultBrand" />
               <span v-else>{{ siteName }}</span>
             </span>
-            <span class="block text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary">{{ siteSubtitle }}</span>
+            <span class="hidden max-w-[16rem] truncate text-[10px] font-medium uppercase tracking-[0.22em] text-linear-ink-tertiary sm:block">{{ siteSubtitle }}</span>
           </span>
         </router-link>
 
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+            <router-link v-if="isAdmin" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
+            <router-link v-if="isAdmin" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
             <a
               v-if="docUrl"
@@ -75,7 +77,7 @@
           <router-link
             :to="isAuthenticated ? dashboardPath : '/login'"
             :aria-label="isAuthenticated ? t('home.goToDashboard') : t('home.getStarted')"
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+            class="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
           >
             <span
               v-if="isAuthenticated && userInitial"
@@ -122,6 +124,165 @@
               {{ docUrl ? copy.docsCta : copy.learnCta }}
             </a>
           </div>
+        </div>
+
+        <div
+          v-if="isAdmin"
+          data-testid="homepage-chat-entry"
+          class="mx-auto mt-12 grid w-full max-w-6xl overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-1 text-left lg:grid-cols-[280px_minmax(0,1fr)]"
+        >
+          <aside data-testid="homepage-chat-demo-rail" class="flex min-h-0 flex-col border-b border-linear-hairline bg-linear-surface-0 lg:border-b-0 lg:border-r">
+            <div class="flex items-center gap-2 border-b border-linear-hairline px-3 py-3">
+              <router-link
+                :to="chatPath"
+                class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+                :aria-label="t('chat.openWebChat')"
+              >
+                <Icon name="plus" size="sm" />
+                <span class="sr-only">{{ t('chat.newChat') }}</span>
+              </router-link>
+              <div class="relative min-w-0 flex-1">
+                <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary" />
+                <input
+                  class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-canvas pl-9 pr-3 text-sm text-linear-ink outline-none placeholder:text-linear-ink-tertiary"
+                  type="search"
+                  :placeholder="t('chat.searchConversations')"
+                  readonly
+                />
+              </div>
+            </div>
+
+            <div class="min-h-0 flex-1 px-2 py-3">
+              <p class="px-2 text-xs font-medium text-linear-ink-tertiary">Recent conversations</p>
+              <div class="mt-2 space-y-1">
+                <div class="rounded-lg bg-linear-surface-2 px-2.5 py-2">
+                  <span class="block truncate text-sm font-medium text-linear-ink">{{ t('chat.newChat') }}</span>
+                  <span class="mt-0.5 block truncate text-xs text-linear-ink-tertiary">GPT-Image-2</span>
+                </div>
+                <div class="rounded-lg px-2.5 py-2 transition-colors hover:bg-linear-surface-1">
+                  <span class="block truncate text-sm font-medium text-linear-ink-muted">Image brief iteration</span>
+                  <span class="mt-0.5 block truncate text-xs text-linear-ink-tertiary">gpt-image-2</span>
+                </div>
+                <div class="rounded-lg px-2.5 py-2 transition-colors hover:bg-linear-surface-1">
+                  <span class="block truncate text-sm font-medium text-linear-ink-muted">Claude Code handoff</span>
+                  <span class="mt-0.5 block truncate text-xs text-linear-ink-tertiary">claude-sonnet-4-6</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <section class="flex min-h-[420px] min-w-0 flex-col bg-linear-canvas">
+            <header data-testid="homepage-chat-demo-model-selector" class="border-b border-linear-hairline bg-linear-canvas px-4 py-3">
+              <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div class="grid gap-2 sm:grid-cols-[minmax(9rem,12rem)_minmax(12rem,22rem)]">
+                  <div>
+                    <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Provider</span>
+                    <div class="flex h-9 w-full items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-left text-sm text-linear-ink">
+                      <ModelIcon :model="providerIconModel('openai')" size="16px" aria-hidden="true" />
+                      <span class="min-w-0 flex-1 truncate">OpenAI</span>
+                      <Icon name="chevronDown" size="sm" class="shrink-0 text-linear-ink-tertiary" />
+                    </div>
+                  </div>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Model</span>
+                    <select
+                      class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none"
+                      aria-label="Model"
+                      disabled
+                    >
+                      <option>GPT-Image-2</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="flex flex-col gap-2 lg:items-end">
+                  <div class="flex flex-wrap gap-2">
+                    <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Text</span>
+                    <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Image generation</span>
+                    <span class="inline-flex items-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted">Artifacts</span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex h-9 items-center gap-2 rounded-lg border border-primary-500 bg-primary-500/10 px-3 text-sm font-medium text-primary-700 dark:text-primary-300">
+                      <Icon name="brain" size="sm" />
+                      <span>Thinking</span>
+                    </button>
+                    <select class="h-9 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none" aria-label="Thinking effort" disabled>
+                      <option>High</option>
+                    </select>
+                    <button type="button" class="inline-flex h-9 items-center gap-2 rounded-lg border border-primary-500 bg-primary-500/10 px-3 text-sm font-medium text-primary-700 dark:text-primary-300">
+                      <Icon name="image" size="sm" />
+                      <span>Generate</span>
+                    </button>
+                    <select class="h-9 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none" aria-label="Image generation size" disabled>
+                      <option>1536x1024</option>
+                    </select>
+                    <select class="h-9 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none" aria-label="Image generation aspect ratio" disabled>
+                      <option>3:2</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </header>
+
+            <div data-testid="homepage-chat-demo-message-list" class="min-h-0 flex-1 overflow-hidden bg-linear-canvas px-4 py-5">
+              <div class="mx-auto flex max-w-3xl flex-col gap-5">
+                <article class="flex justify-end">
+                  <div class="max-w-[min(100%,42rem)] rounded-lg border border-primary-500/30 bg-primary-500 px-4 py-3 text-white">
+                    <div class="mb-2 flex items-center justify-between gap-3 text-xs text-white/75">
+                      <span>You</span>
+                    </div>
+                    <p class="whitespace-pre-wrap break-words text-sm leading-6">Generate a product hero image in 3:2, keep the UI crisp and production-like.</p>
+                  </div>
+                </article>
+                <article class="flex justify-start">
+                  <div class="max-w-[min(100%,42rem)] rounded-lg border border-linear-hairline bg-linear-surface-1 px-4 py-3 text-linear-ink">
+                    <div class="mb-2 flex items-center justify-between gap-3 text-xs text-linear-ink-tertiary">
+                      <span>GPT-Image-2</span>
+                      <span>streaming</span>
+                    </div>
+                    <p class="whitespace-pre-wrap break-words text-sm leading-6">I’ll use high quality, transparent background disabled, and return the generated artifact in the chat.</p>
+                    <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-linear-hairline bg-linear-canvas px-2.5 py-1.5 text-xs text-linear-ink-muted">
+                      <Icon name="image" size="xs" />
+                      <span>hero-image.png</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <footer data-testid="homepage-chat-demo-composer" class="border-t border-linear-hairline bg-linear-canvas px-4 py-3">
+              <div class="mx-auto max-w-3xl">
+                <div class="mb-2 inline-flex items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1.5 text-xs text-linear-ink-muted">
+                  <Icon name="paperclip" size="xs" />
+                  <span>brand-reference.png</span>
+                </div>
+                <div class="rounded-lg border border-linear-hairline bg-linear-surface-1 p-2">
+                  <textarea
+                    class="max-h-44 min-h-[56px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-linear-ink outline-none placeholder:text-linear-ink-tertiary"
+                    :placeholder="t('chat.composerPlaceholder')"
+                    readonly
+                  />
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-1.5">
+                      <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted" type="button" :aria-label="t('chat.attachImage')">
+                        <Icon name="upload" size="sm" />
+                      </button>
+                      <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted" type="button" aria-label="Upload file">
+                        <Icon name="document" size="sm" />
+                      </button>
+                    </div>
+                    <router-link
+                      :to="chatPath"
+                      class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-500 text-white transition-colors hover:bg-primary-400"
+                      :aria-label="t('chat.send')"
+                    >
+                      <Icon name="arrowUp" size="sm" />
+                    </router-link>
+                  </div>
+                </div>
+              </div>
+            </footer>
+          </section>
         </div>
 
         <!-- Product console -->
@@ -338,18 +499,97 @@
         <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
           <div class="mb-8 grid gap-6 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
             <div>
-              <p class="linx-section-kicker">{{ copy.modelPricingKicker }}</p>
-              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ copy.modelPricingTitle }}</h2>
+              <p class="linx-section-kicker">{{ isAdmin ? copy.modelCatalogKicker : copy.modelPricingKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ isAdmin ? copy.modelCatalogTitle : copy.modelPricingTitle }}</h2>
             </div>
             <div class="text-left lg:max-w-2xl">
-              <p class="text-base leading-7 text-linear-ink-subtle">{{ copy.modelPricingDescription }}</p>
+              <p class="text-base leading-7 text-linear-ink-subtle">{{ isAdmin ? copy.modelCatalogDescription : copy.modelPricingDescription }}</p>
               <span class="font-mono-brand mt-4 inline-flex rounded-full border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-xs font-medium text-primary-300">
-                {{ copy.modelPricingUnit }}
+                {{ isAdmin ? copy.modelCatalogUnit : copy.modelPricingUnit }}
               </span>
             </div>
           </div>
 
-          <div data-testid="homepage-model-pricing-table" class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left">
+          <div
+            v-if="isAdmin && visibleHomeCatalogModels.length > 0"
+            data-testid="homepage-model-catalog-grid"
+            class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
+          >
+            <article
+              v-for="model in visibleHomeCatalogModels"
+              :key="`${model.provider}:${model.model_name}`"
+              data-testid="homepage-model-catalog-card"
+              class="linx-panel flex min-w-0 flex-col p-5 text-left transition-colors hover:border-primary-500/35 hover:bg-linear-surface-2"
+              :data-provider="model.provider"
+              :data-model="model.model_name"
+            >
+              <div class="flex items-start gap-3">
+                <span
+                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink"
+                  aria-hidden="true"
+                >
+                  <ModelIcon :model="model.model_name" size="21px" />
+                </span>
+                <div class="min-w-0">
+                  <p class="truncate text-xs font-medium text-linear-ink-muted">{{ model.provider_name }}</p>
+                  <h3 class="mt-3 text-lg font-semibold text-linear-ink">{{ model.display_name }}</h3>
+                  <p class="mt-1 break-words font-mono text-xs text-linear-ink-tertiary">{{ model.model_name }}</p>
+                </div>
+              </div>
+
+              <p class="mt-3 text-sm leading-6 text-linear-ink-subtle">{{ model.description }}</p>
+
+              <div class="mt-4 flex flex-wrap gap-2">
+                <span
+                  v-for="item in model.modalities"
+                  :key="item"
+                  class="rounded-full border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted"
+                >
+                  {{ modalityLabel(item) }}
+                </span>
+                <span
+                  v-for="feature in model.features"
+                  :key="feature"
+                  class="rounded-full border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs text-linear-ink-tertiary"
+                >
+                  {{ feature }}
+                </span>
+                <span
+                  v-if="formatContextWindow(model.context_window)"
+                  class="rounded-full border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs text-linear-ink-tertiary"
+                >
+                  {{ t('modelCatalog.context') }} {{ formatContextWindow(model.context_window) }}
+                </span>
+              </div>
+
+              <div class="mt-5 divide-y divide-linear-hairline overflow-hidden rounded-lg border border-linear-hairline">
+                <div
+                  v-for="row in pricingRows(model)"
+                  :key="row.key"
+                  class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-2 text-sm"
+                >
+                  <span class="min-w-0 text-linear-ink-muted">{{ row.label }}</span>
+                  <span class="font-mono text-linear-ink">{{ row.value }}</span>
+                </div>
+              </div>
+
+              <router-link
+                :to="chatRouteForModel(model)"
+                class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+                :data-provider="model.provider"
+                :data-model="model.model_name"
+              >
+                <Icon name="chat" size="sm" class="mr-2" />
+                {{ t('modelCatalog.chatNow') }}
+              </router-link>
+            </article>
+          </div>
+
+          <div
+            v-else-if="!isAdmin"
+            data-testid="homepage-model-pricing-table"
+            class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left"
+          >
             <div class="grid gap-px bg-linear-hairline lg:grid-cols-2">
               <section
                 v-for="group in modelPricingGroups"
@@ -390,7 +630,7 @@
                   v-if="hasHiddenModels(group)"
                   type="button"
                   data-testid="homepage-model-pricing-toggle"
-                  class="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-linear-hairline bg-linear-canvas px-4 py-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+                  class="mt-4 inline-flex items-center justify-center rounded-lg border border-linear-hairline px-3 py-2 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
                   @click="toggleModelProvider(group.provider)"
                 >
                   {{ expandedModelProviders[group.provider] ? copy.modelPricingShowLess : copy.modelPricingShowMore }}
@@ -398,6 +638,20 @@
               </section>
             </div>
           </div>
+
+          <div v-else class="linx-panel p-8 text-center text-sm text-linear-ink-subtle">
+            {{ t('modelCatalog.loading') }}
+          </div>
+
+          <button
+            v-if="isAdmin && hasHiddenHomeCatalogModels"
+            type="button"
+            data-testid="homepage-model-catalog-toggle"
+            class="mx-auto mt-6 inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-5 py-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+            @click="toggleHomeModelCatalog"
+          >
+            {{ homeModelCatalogExpanded ? copy.modelPricingShowLess : copy.modelPricingShowMore }}
+          </button>
         </div>
       </section>
 
@@ -455,16 +709,23 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { getMonthlyPlanCards, getMonthlyPlanDisplayFromPlan, monthlyPlanKeyFromName } from '@/utils/monthlyPlans'
-import { getPublicModelPricing, type PublicModelPricingProvider } from '@/api/settings'
+import {
+  getPublicModelCatalog,
+  getPublicModelPricing,
+  type PublicModelCatalogModel,
+  type PublicModelPricingProvider,
+} from '@/api/settings'
 import { paymentAPI } from '@/api/payment'
 import type { SubscriptionPlan } from '@/types/payment'
+import { formatContextWindow, formatModelCatalogAmount, providerIconModel } from '@/utils/modelCatalog'
 
 const { t, locale } = useI18n()
 
@@ -507,10 +768,25 @@ const routeCards = [
   { label: 'OpenAI Images', description: 'Image generation and edits', badge: 'OpenAI' },
 ]
 
+const homeModelPreviewCount = 6
 const visibleModelCount = 4
+const modelCatalogModels = ref<PublicModelCatalogModel[]>([])
 const modelPricingGroups = ref<PublicModelPricingProvider[]>([])
 const publicSubscriptionPlans = ref<SubscriptionPlan[]>([])
+const homeModelCatalogExpanded = ref(false)
 const expandedModelProviders = ref<Record<string, boolean>>({})
+
+const visibleHomeCatalogModels = computed(() =>
+  homeModelCatalogExpanded.value
+    ? modelCatalogModels.value
+    : modelCatalogModels.value.slice(0, homeModelPreviewCount)
+)
+
+const hasHiddenHomeCatalogModels = computed(() => modelCatalogModels.value.length > homeModelPreviewCount)
+
+function toggleHomeModelCatalog() {
+  homeModelCatalogExpanded.value = !homeModelCatalogExpanded.value
+}
 
 function formatModelPrice(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '—'
@@ -538,6 +814,75 @@ function toggleModelProvider(provider: string) {
   }
 }
 
+function modalityLabel(value: string): string {
+  const key = `modelCatalog.modality.${value}`
+  const label = t(key)
+  return label === key ? value : label
+}
+
+function pricingRows(model: PublicModelCatalogModel): Array<{ key: string; label: string; value: string }> {
+  if (model.price_status !== 'confirmed') {
+    return [
+      {
+        key: 'pending',
+        label: model.pricing.note || t('modelCatalog.pending'),
+        value: t('modelCatalog.pending'),
+      },
+    ]
+  }
+
+  const rows: Array<{ key: string; label: string; value: string }> = []
+  if (model.pricing.input_per_million !== undefined) {
+    rows.push({
+      key: 'input',
+      label: `${t('modelCatalog.pricing.input')} / ${model.pricing.unit}`,
+      value: formatModelCatalogAmount(model.pricing.input_per_million),
+    })
+  }
+  if (model.pricing.output_per_million !== undefined) {
+    rows.push({
+      key: 'output',
+      label: `${t('modelCatalog.pricing.output')} / ${model.pricing.unit}`,
+      value: formatModelCatalogAmount(model.pricing.output_per_million),
+    })
+  }
+  if (model.pricing.cache_read_per_million !== undefined) {
+    rows.push({
+      key: 'cache-read',
+      label: `${t('modelCatalog.pricing.cacheRead')} / ${model.pricing.unit}`,
+      value: formatModelCatalogAmount(model.pricing.cache_read_per_million),
+    })
+  }
+  for (const line of model.pricing.price_lines ?? []) {
+    rows.push({
+      key: `line:${line.label}`,
+      label: line.label,
+      value: `${formatModelCatalogAmount(line.amount)} / ${line.unit}`,
+    })
+  }
+  return rows
+}
+
+function chatRouteForModel(model: PublicModelCatalogModel) {
+  return {
+    path: '/chat',
+    query: {
+      provider: model.provider,
+      model: model.model_name,
+    },
+  }
+}
+
+async function loadModelCatalog() {
+  try {
+    const data = await getPublicModelCatalog()
+    modelCatalogModels.value = data.models || []
+  } catch (error) {
+    console.error('Failed to load public model catalog:', error)
+    modelCatalogModels.value = []
+  }
+}
+
 async function loadModelPricing() {
   try {
     const data = await getPublicModelPricing()
@@ -546,6 +891,14 @@ async function loadModelPricing() {
     console.error('Failed to load public model pricing:', error)
     modelPricingGroups.value = []
   }
+}
+
+function loadHomeModelData() {
+  if (isAdmin.value) {
+    loadModelCatalog()
+    return
+  }
+  loadModelPricing()
 }
 
 async function loadPublicSubscriptionPlans() {
@@ -610,6 +963,10 @@ const copies = {
     modelPricingInput: '输入',
     modelPricingOutput: '输出',
     modelPricingCacheRead: '缓存读取',
+    modelCatalogKicker: '模型广场',
+    modelCatalogTitle: '真实模型目录，直接发起对话',
+    modelCatalogDescription: '首页预览直接使用模型广场公开目录，展示服务商、模态、能力和官方公开价格；点击立即对话会带着选定模型进入网页对话。',
+    modelCatalogUnit: '公开模型目录 · 价格与能力',
     modelPricingShowMore: '展开更多模型',
     modelPricingShowLess: '收起模型',
     pricingCta: '选择方案',
@@ -680,6 +1037,10 @@ const copies = {
     modelPricingInput: 'Input',
     modelPricingOutput: 'Output',
     modelPricingCacheRead: 'Cache read',
+    modelCatalogKicker: 'Model marketplace',
+    modelCatalogTitle: 'Real model catalog, ready for chat',
+    modelCatalogDescription: 'The homepage preview uses the same public catalog as the model marketplace, showing providers, modalities, capabilities, and public upstream pricing. Chat now opens web chat with that model selected.',
+    modelCatalogUnit: 'Public model catalog · pricing and capabilities',
     modelPricingShowMore: 'Show more models',
     modelPricingShowLess: 'Show fewer models',
     pricingCta: 'Choose plan',
@@ -748,6 +1109,7 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const isAdmin = computed(() => authStore.isAdmin)
 const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
+const chatPath = computed(() => (isAuthenticated.value ? '/chat' : { path: '/login', query: { redirect: '/chat' } }))
 const userInitial = computed(() => {
   const user = authStore.user
   if (!user || !user.email) return ''
@@ -788,8 +1150,12 @@ onMounted(() => {
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
-  loadModelPricing()
+  loadHomeModelData()
   loadPublicSubscriptionPlans()
+})
+
+watch(isAdmin, () => {
+  loadHomeModelData()
 })
 </script>
 

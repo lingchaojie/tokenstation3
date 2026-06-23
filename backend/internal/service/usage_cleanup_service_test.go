@@ -47,6 +47,9 @@ type cleanupRepoStub struct {
 	markFailed    []cleanupMarkCall
 	statusByID    map[int64]string
 	statusErr     error
+	visibleKeys   map[int64]bool
+	visibleKeyErr error
+	visibleChecks []int64
 	progressCalls []cleanupMarkCall
 	updateErr     error
 	cancelCalls   []int64
@@ -114,6 +117,19 @@ func (s *cleanupRepoStub) CreateTask(ctx context.Context, task *UsageCleanupTask
 	clone := *task
 	s.created = append(s.created, &clone)
 	return nil
+}
+
+func (s *cleanupRepoStub) IsVisibleAPIKeyID(ctx context.Context, apiKeyID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.visibleChecks = append(s.visibleChecks, apiKeyID)
+	if s.visibleKeyErr != nil {
+		return false, s.visibleKeyErr
+	}
+	if s.visibleKeys == nil {
+		return true, nil
+	}
+	return s.visibleKeys[apiKeyID], nil
 }
 
 func (s *cleanupRepoStub) ListTasks(ctx context.Context, params pagination.PaginationParams) ([]UsageCleanupTask, *pagination.PaginationResult, error) {
@@ -261,6 +277,70 @@ func TestUsageCleanupServiceCreateTaskSanitizeFilters(t *testing.T) {
 	require.Equal(t, "gpt-4", *task.Filters.Model)
 	require.Nil(t, task.Filters.BillingType)
 	require.Equal(t, int64(9), task.CreatedBy)
+}
+
+func TestUsageCleanupService_CreateTaskVisibleAPIKey(t *testing.T) {
+	repo := &cleanupRepoStub{visibleKeys: map[int64]bool{10: true}}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	apiKeyID := int64(10)
+	filters := UsageCleanupFilters{StartTime: start, EndTime: end, APIKeyID: &apiKeyID}
+
+	task, err := svc.CreateTask(context.Background(), filters, 9)
+	require.NoError(t, err)
+	require.NotNil(t, task)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Equal(t, []int64{apiKeyID}, repo.visibleChecks)
+	require.Len(t, repo.created, 1)
+	require.NotNil(t, repo.created[0].Filters.APIKeyID)
+	require.Equal(t, apiKeyID, *repo.created[0].Filters.APIKeyID)
+}
+
+func TestUsageCleanupService_CreateTaskRejectsNonVisibleAPIKey(t *testing.T) {
+	repo := &cleanupRepoStub{visibleKeys: map[int64]bool{}}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	apiKeyID := int64(10)
+	filters := UsageCleanupFilters{StartTime: start, EndTime: end, APIKeyID: &apiKeyID}
+
+	_, err := svc.CreateTask(context.Background(), filters, 9)
+	require.Error(t, err)
+	require.Equal(t, http.StatusNotFound, infraerrors.Code(err))
+	require.Equal(t, "API_KEY_NOT_FOUND", infraerrors.Reason(err))
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Equal(t, []int64{apiKeyID}, repo.visibleChecks)
+	require.Empty(t, repo.created)
+}
+
+func TestUsageCleanupService_CreateTaskRejectsWebChatAPIKey(t *testing.T) {
+	repo := &cleanupRepoStub{visibleKeys: map[int64]bool{42: false}}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}
+	svc := NewUsageCleanupService(repo, nil, nil, cfg)
+
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	apiKeyID := int64(42)
+	filters := UsageCleanupFilters{StartTime: start, EndTime: end, APIKeyID: &apiKeyID}
+
+	_, err := svc.CreateTask(context.Background(), filters, 9)
+	require.Error(t, err)
+	require.Equal(t, http.StatusNotFound, infraerrors.Code(err))
+	require.Equal(t, "API_KEY_NOT_FOUND", infraerrors.Reason(err))
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Equal(t, []int64{apiKeyID}, repo.visibleChecks)
+	require.Empty(t, repo.created)
 }
 
 func TestSanitizeUsageCleanupFiltersRequestTypePriority(t *testing.T) {

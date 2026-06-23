@@ -94,6 +94,9 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		}
 		return EndpointResponses
 
+	case service.PlatformKilo:
+		return EndpointChatCompletions
+
 	case service.PlatformAnthropic:
 		return EndpointMessages
 

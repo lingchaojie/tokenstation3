@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import HomeView from '../HomeView.vue'
 
-const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelPricingMock, getPublicPlansMock } = vi.hoisted(() => ({
+const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelCatalogMock, getPublicModelPricingMock, getPublicPlansMock } = vi.hoisted(() => ({
   appState: {
     cachedPublicSettings: null as null | {
       site_name?: string
@@ -25,6 +25,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicMo
   },
   fetchPublicSettingsMock: vi.fn(),
   checkAuthMock: vi.fn(),
+  getPublicModelCatalogMock: vi.fn(),
   getPublicModelPricingMock: vi.fn(),
   getPublicPlansMock: vi.fn(),
 }))
@@ -66,6 +67,7 @@ vi.mock('@/stores', () => ({
 }))
 
 vi.mock('@/api/settings', () => ({
+  getPublicModelCatalog: getPublicModelCatalogMock,
   getPublicModelPricing: getPublicModelPricingMock,
 }))
 
@@ -102,6 +104,24 @@ const messages: Record<string, string> = {
   'home.providers.more': '更多',
   'home.providers.supported': '已支持',
   'home.providers.soon': '即将支持',
+  'nav.modelMarketplace': '模型广场',
+  'chat.openWebChat': '开始网页对话',
+  'chat.openWebChatShort': '对话',
+  'chat.title': '网页对话',
+  'chat.newChat': '新对话',
+  'chat.searchConversations': '搜索对话',
+  'chat.modelSelector': '选择模型',
+  'chat.composerPlaceholder': '输入消息',
+  'chat.send': '发送',
+  'chat.attachImage': '上传图片',
+  'modelCatalog.chatNow': '立即对话',
+  'modelCatalog.context': '上下文',
+  'modelCatalog.pending': '待确认',
+  'modelCatalog.modality.text': '文本',
+  'modelCatalog.modality.image': '图像',
+  'modelCatalog.pricing.input': '输入',
+  'modelCatalog.pricing.output': '输出',
+  'modelCatalog.pricing.cacheRead': '缓存读取',
 }
 
 const modelPricingFixture = {
@@ -131,6 +151,136 @@ const modelPricingFixture = {
   ],
 }
 
+const modelCatalogFixture = {
+  updated_at: '2026-06-21',
+  providers: [
+    { key: 'anthropic', name: 'Anthropic', accent_color: '#d97745', model_count: 2 },
+    { key: 'openai', name: 'OpenAI', accent_color: '#27a644', model_count: 3 },
+    { key: 'qwen', name: 'Alibaba Cloud', accent_color: '#7c6df2', model_count: 1 },
+    { key: 'deepseek', name: 'DeepSeek', accent_color: '#4b6bfb', model_count: 1 },
+  ],
+  models: [
+    {
+      provider: 'anthropic',
+      provider_name: 'Anthropic',
+      model_name: 'claude-opus-4-8',
+      display_name: 'Claude Opus 4.8',
+      modalities: ['text'],
+      description: 'Highest-capability Claude model for complex reasoning.',
+      context_window: 1000000,
+      features: ['tool use', 'prompt caching'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 5, output_per_million: 25, cache_read_per_million: 0.5 },
+      price_status: 'confirmed',
+      released_at: '2026-06-21',
+      release_status: 'unverified',
+      source_url: 'https://docs.anthropic.com/en/docs/about-claude/pricing',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'anthropic',
+      provider_name: 'Anthropic',
+      model_name: 'claude-sonnet-4-6',
+      display_name: 'Claude Sonnet 4.6',
+      modalities: ['text'],
+      description: 'Balanced Claude Sonnet model for coding.',
+      context_window: 1000000,
+      features: ['tool use'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 3, output_per_million: 15, cache_read_per_million: 0.3 },
+      price_status: 'confirmed',
+      released_at: '2026-06-21',
+      release_status: 'unverified',
+      source_url: 'https://docs.anthropic.com/en/docs/about-claude/pricing',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'openai',
+      provider_name: 'OpenAI',
+      model_name: 'gpt-5.5',
+      display_name: 'GPT-5.5',
+      modalities: ['text'],
+      description: 'OpenAI frontier text model.',
+      context_window: 1050000,
+      features: ['tool use', 'prompt caching'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 5, output_per_million: 30, cache_read_per_million: 0.5 },
+      price_status: 'confirmed',
+      released_at: '2026-06-21',
+      release_status: 'unverified',
+      source_url: 'https://openai.com/api/pricing/',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'openai',
+      provider_name: 'OpenAI',
+      model_name: 'gpt-5.4-mini',
+      display_name: 'GPT-5.4 Mini',
+      modalities: ['text'],
+      description: 'Lower-cost OpenAI model for fast production text.',
+      context_window: 400000,
+      features: ['tool use'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 0.75, output_per_million: 4.5, cache_read_per_million: 0.075 },
+      price_status: 'confirmed',
+      released_at: '2026-06-20',
+      release_status: 'unverified',
+      source_url: 'https://openai.com/api/pricing/',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'openai',
+      provider_name: 'OpenAI',
+      model_name: 'gpt-image-2',
+      display_name: 'GPT-Image-2',
+      modalities: ['image'],
+      description: 'OpenAI image generation model.',
+      context_window: 0,
+      features: ['image generation', 'multi-resolution'],
+      pricing: {
+        currency: 'USD',
+        unit: '1M tokens',
+        input_per_million: 2.5,
+        output_per_million: 5,
+        price_lines: [{ label: '1K image', amount: 0.21, unit: 'image' }],
+      },
+      price_status: 'confirmed',
+      released_at: '2026-06-15',
+      release_status: 'unverified',
+      source_url: 'https://openai.com/api/pricing/',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'qwen',
+      provider_name: 'Alibaba Cloud',
+      model_name: 'qwen3.6-plus',
+      display_name: 'Qwen3.6 Plus',
+      modalities: ['text'],
+      description: 'Qwen Plus model listed by the reference catalog.',
+      context_window: 1000000,
+      features: ['agentic coding'],
+      pricing: { currency: 'USD', unit: '1M tokens', note: 'Pending confirmation' },
+      price_status: 'unverified',
+      released_at: '2026-06-21',
+      release_status: 'unverified',
+      source_url: '',
+      updated_at: '2026-06-21',
+    },
+    {
+      provider: 'deepseek',
+      provider_name: 'DeepSeek',
+      model_name: 'deepseek-v3.2',
+      display_name: 'DeepSeek V3.2',
+      modalities: ['text'],
+      description: 'DeepSeek model retained from the reference catalog.',
+      context_window: 1000000,
+      features: ['thinking', 'context caching'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 0.14, output_per_million: 0.28, cache_read_per_million: 0.0028 },
+      price_status: 'confirmed',
+      released_at: '2026-06-18',
+      release_status: 'unverified',
+      source_url: 'https://api-docs.deepseek.com/quick_start/pricing',
+      updated_at: '2026-06-21',
+    },
+  ],
+}
+
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
@@ -148,10 +298,20 @@ function mountHome() {
       stubs: {
         RouterLink: {
           props: ['to'],
-          template: '<a :href="typeof to === \'string\' ? to : to.path"><slot /></a>',
+          methods: {
+            hrefFor(to: string | { path: string; query?: Record<string, string> }) {
+              if (typeof to === 'string') return to
+              const query = to.query
+                ? Object.entries(to.query).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&')
+                : ''
+              return query ? `${to.path}?${query}` : to.path
+            },
+          },
+          template: '<a :href="hrefFor(to)"><slot /></a>',
         },
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
         Icon: { template: '<svg data-testid="icon" />' },
+        ModelIcon: { template: '<span data-testid="model-icon" />' },
       },
     },
   })
@@ -170,9 +330,11 @@ describe('HomeView landing page', () => {
     authState.user = null
     fetchPublicSettingsMock.mockReset()
     checkAuthMock.mockReset()
+    getPublicModelCatalogMock.mockReset()
     getPublicModelPricingMock.mockReset()
     getPublicPlansMock.mockReset()
     fetchPublicSettingsMock.mockResolvedValue({})
+    getPublicModelCatalogMock.mockResolvedValue(modelCatalogFixture)
     getPublicModelPricingMock.mockResolvedValue(modelPricingFixture)
     getPublicPlansMock.mockResolvedValue([])
     document.documentElement.classList.remove('dark')
@@ -264,14 +426,21 @@ describe('HomeView landing page', () => {
     expect(text).toContain('GPT-5.3 Codex')
     expect(text).toContain('$75.00')
     expect(text).toContain('$0.075')
+    expect(text).not.toContain('GPT-Image-2')
+    expect(text).not.toContain('Alibaba Cloud')
+    expect(text).not.toContain('Qwen3.6 Plus')
     expect(text).not.toContain('Claude Mythos 5')
-    expect(text).not.toContain('Claude Sonnet 4.5')
     expect(text).not.toContain('GPT-4o')
+    expect(getPublicModelPricingMock).toHaveBeenCalledTimes(1)
+    expect(getPublicModelCatalogMock).not.toHaveBeenCalled()
 
     const headerNav = wrapper.get('[data-testid="homepage-header-actions"]')
     expect(headerNav.text()).toContain('能力')
+    expect(headerNav.text()).not.toContain('模型广场')
+    expect(headerNav.text()).not.toContain('对话')
     expect(headerNav.text()).toContain('价格')
     expect(headerNav.find('a[href="#pricing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
 
     const routeGrid = wrapper.get('[data-testid="homepage-route-grid"]')
     expect(routeGrid.text()).toContain('Anthropic Messages')
@@ -309,7 +478,7 @@ describe('HomeView landing page', () => {
     const subscriptionSection = wrapper.get('section#pricing')
     const modelPricingSection = wrapper.get('section#model-pricing')
     expect(subscriptionSection.text()).toContain('LINX2.AI 订阅方案')
-    expect(subscriptionSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
+    expect(subscriptionSection.find('[data-testid="homepage-model-catalog-grid"]').exists()).toBe(false)
     expect(modelPricingSection.text()).toContain('价格透明，上游模型价格直传')
     expect(modelPricingSection.text()).toContain('Claude Opus 4.8')
     expect(modelPricingSection.text()).not.toContain('Claude Mythos 5')
@@ -467,6 +636,87 @@ describe('HomeView landing page', () => {
     expect(headerCta.attributes('aria-label')).toBe('立即开始')
     expect(headerCta.classes()).toContain('h-10')
     expect(headerCtaLabel.text()).toBe('立即开始')
+  })
+
+  it('hides model-branch chat and marketplace entries from visitors', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const header = wrapper.get('[data-testid="homepage-header-actions"]')
+    expect(header.text()).not.toContain('对话')
+    expect(header.text()).not.toContain('模型广场')
+    expect(wrapper.find('header a[href="/login?redirect=%2Fchat"]').exists()).toBe(false)
+    expect(wrapper.find('header a[href="/models"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
+  })
+
+  it('hides model-branch chat and marketplace entries from regular users', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = false
+    authState.user = { email: 'user@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const header = wrapper.get('[data-testid="homepage-header-actions"]')
+    expect(header.text()).not.toContain('对话')
+    expect(header.text()).not.toContain('模型广场')
+    expect(wrapper.find('header a[href="/chat"]').exists()).toBe(false)
+    expect(wrapper.find('header a[href="/models"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
+  })
+
+  it('shows model-branch chat and marketplace entries to admins', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = true
+    authState.user = { email: 'admin@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const chatCta = wrapper.get('header a[href="/chat"]')
+    expect(chatCta.text()).toContain('对话')
+    expect(wrapper.get('header a[href="/models"]').text()).toContain('模型广场')
+
+    const chatEntry = wrapper.get('[data-testid="homepage-chat-entry"]')
+    expect(chatEntry.find('[data-testid="homepage-chat-demo-rail"]').exists()).toBe(true)
+    expect(chatEntry.find('[data-testid="homepage-chat-demo-model-selector"]').exists()).toBe(true)
+    expect(chatEntry.find('[data-testid="homepage-chat-demo-message-list"]').exists()).toBe(true)
+    expect(chatEntry.find('[data-testid="homepage-chat-demo-composer"]').exists()).toBe(true)
+    expect(chatEntry.text()).toContain('GPT-Image-2')
+    expect(chatEntry.text()).toContain('Thinking')
+    expect(chatEntry.text()).toContain('Generate')
+    expect(chatEntry.find('textarea').exists()).toBe(true)
+    expect(chatEntry.text()).toContain('新对话')
+  })
+
+  it('renders the new homepage model catalog preview for admins only', async () => {
+    authState.isAuthenticated = true
+    authState.isAdmin = true
+    authState.user = { email: 'admin@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    expect(getPublicModelCatalogMock).toHaveBeenCalledTimes(1)
+    expect(getPublicModelPricingMock).not.toHaveBeenCalled()
+    const modelPricingSection = wrapper.get('section#model-pricing')
+    expect(modelPricingSection.text()).toContain('真实模型目录，直接发起对话')
+    expect(modelPricingSection.text()).toContain('公开模型目录 · 价格与能力')
+    expect(modelPricingSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
+
+    const modelCards = wrapper.findAll('[data-testid="homepage-model-catalog-card"]')
+    expect(modelCards).toHaveLength(6)
+    expect(modelCards[0].text()).toContain('Claude Opus 4.8')
+    expect(modelCards[4].text()).toContain('立即对话')
+    expect(modelCards[4].find('a[href="/chat?provider=openai&model=gpt-image-2"]').exists()).toBe(true)
+    const toggle = wrapper.get('[data-testid="homepage-model-catalog-toggle"]')
+    expect(toggle.text()).toContain('展开更多模型')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="homepage-model-catalog-card"]')).toHaveLength(modelCatalogFixture.models.length)
+    expect(wrapper.text()).toContain('DeepSeek V3.2')
+    expect(toggle.text()).toContain('收起模型')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {

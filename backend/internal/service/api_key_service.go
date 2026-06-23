@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"strconv"
@@ -71,12 +72,15 @@ type APIKeyRepository interface {
 	GetByKey(ctx context.Context, key string) (*APIKey, error)
 	// GetByKeyForAuth 认证专用查询，返回最小字段集
 	GetByKeyForAuth(ctx context.Context, key string) (*APIKey, error)
+	GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*APIKey, error)
 	Update(ctx context.Context, key *APIKey) error
 	Delete(ctx context.Context, id int64) error
 	// DeleteWithAudit 在同一事务内先写 deleted_api_key_audits 审计、再软删除该 key。
 	DeleteWithAudit(ctx context.Context, id int64) error
 
 	ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error)
+	// ListByUserIDIncludingHidden is for internal cleanup/audit paths and includes hidden key types.
+	ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]APIKey, *pagination.PaginationResult, error)
 	VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error)
 	CountByUserID(ctx context.Context, userID int64) (int64, error)
 	ExistsByKey(ctx context.Context, key string) (bool, error)
@@ -298,6 +302,14 @@ func (s *APIKeyService) GenerateKey() (string, error) {
 
 	key := prefix + hex.EncodeToString(bytes)
 	return key, nil
+}
+
+func generateAPIKey() string {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(bytes)
 }
 
 // ValidateCustomKey 验证自定义API Key格式
@@ -529,6 +541,10 @@ func (s *APIKeyService) prepareAPIKeyForAuth(ctx context.Context, apiKey *APIKey
 	return nil
 }
 
+func isWebChatAPIKey(apiKey *APIKey) bool {
+	return apiKey != nil && apiKey.KeyType == APIKeyTypeWebChat
+}
+
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	// 验证用户存在
@@ -659,6 +675,57 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 	return apiKey, nil
 }
 
+func (s *APIKeyService) EnsureWebChatKey(ctx context.Context, user *User, group *Group) (*APIKey, error) {
+	if user == nil || user.ID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if group == nil || group.ID <= 0 {
+		return nil, ErrDefaultAPIKeyGroupMissing
+	}
+	if !group.IsActive() {
+		return nil, ErrDefaultAPIKeyGroupInvalid
+	}
+	if !s.canUserBindGroup(ctx, user, group) {
+		return nil, ErrGroupNotAllowed
+	}
+	existing, err := s.apiKeyRepo.GetWebChatKeyByUserAndGroup(ctx, user.ID, group.ID)
+	if err == nil && existing != nil {
+		existing.User = user
+		existing.Group = group
+		return existing, nil
+	}
+	if err != nil && !errors.Is(err, ErrAPIKeyNotFound) {
+		return nil, fmt.Errorf("get web chat api key: %w", err)
+	}
+	key := &APIKey{
+		UserID:           user.ID,
+		Key:              "wc_" + generateAPIKey(),
+		Name:             "Web Chat",
+		KeyType:          APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: APIKeyGroupBindingModeStatic,
+		Status:           StatusActive,
+		Quota:            0,
+		RateLimit5h:      0,
+		RateLimit1d:      0,
+		RateLimit7d:      0,
+		User:             user,
+		Group:            group,
+	}
+	if err := s.apiKeyRepo.Create(ctx, key); err != nil {
+		if errors.Is(err, ErrAPIKeyExists) {
+			existing, getErr := s.apiKeyRepo.GetWebChatKeyByUserAndGroup(ctx, user.ID, group.ID)
+			if getErr == nil && existing != nil {
+				existing.User = user
+				existing.Group = group
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("create web chat api key: %w", err)
+	}
+	return key, nil
+}
+
 // List 获取用户的API Key列表
 func (s *APIKeyService) List(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
 	keys, pagination, err := s.apiKeyRepo.ListByUserID(ctx, userID, params, filters)
@@ -685,6 +752,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
+	}
+	if isWebChatAPIKey(apiKey) {
+		return nil, fmt.Errorf("get api key: %w", ErrAPIKeyNotFound)
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
@@ -743,6 +813,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
+	if isWebChatAPIKey(apiKey) {
+		return nil, fmt.Errorf("get api key: %w", ErrAPIKeyNotFound)
+	}
 	apiKey.Key = key
 	if err := s.prepareAPIKeyForAuth(ctx, apiKey); err != nil {
 		return nil, err
@@ -755,6 +828,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
+	}
+	if isWebChatAPIKey(apiKey) {
+		return nil, fmt.Errorf("get api key: %w", ErrAPIKeyNotFound)
 	}
 
 	// 验证所有权
@@ -878,13 +954,16 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 // Delete 删除API Key
 func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) error {
-	key, ownerID, err := s.apiKeyRepo.GetKeyAndOwnerID(ctx, id)
+	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get api key: %w", err)
 	}
+	if isWebChatAPIKey(apiKey) {
+		return fmt.Errorf("get api key: %w", ErrAPIKeyNotFound)
+	}
 
 	// 验证当前用户是否为该 API Key 的所有者
-	if ownerID != userID {
+	if apiKey.UserID != userID {
 		return ErrInsufficientPerms
 	}
 
@@ -897,7 +976,7 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) erro
 	if s.cache != nil {
 		_ = s.cache.DeleteCreateAttemptCount(ctx, userID)
 	}
-	s.InvalidateAuthCacheByKey(ctx, key)
+	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
 	s.lastUsedTouchL1.Delete(id)
 
 	return nil

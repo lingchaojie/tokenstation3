@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -513,6 +514,21 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		RequestType: requestType,
 		Stream:      stream,
 		BillingType: req.BillingType,
+	}
+
+	if filters.APIKeyID != nil {
+		if h.apiKeyService == nil {
+			response.Error(c, http.StatusServiceUnavailable, "API key service unavailable")
+			return
+		}
+		if _, err := h.apiKeyService.GetByID(c.Request.Context(), *filters.APIKeyID); err != nil {
+			if errors.Is(err, service.ErrAPIKeyNotFound) {
+				response.NotFound(c, "API key not found")
+				return
+			}
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	var userID any

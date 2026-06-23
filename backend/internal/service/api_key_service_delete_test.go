@@ -24,18 +24,23 @@ import (
 //   - deleteErr: 模拟 Delete 返回的错误
 //   - deletedIDs: 记录被调用删除的 API Key ID，用于断言验证
 type apiKeyRepoStub struct {
-	apiKey             *APIKey // GetKeyAndOwnerID 的返回值
-	getByIDErr         error   // GetKeyAndOwnerID 的错误返回值
-	deleteErr          error   // Delete 的错误返回值
-	deletedIDs         []int64 // 记录已删除的 API Key ID 列表
-	allowListByUserID  bool
-	listByUserIDKeys   []APIKey
-	listByUserIDErr    error
-	listByUserIDCalls  []int64
-	listByUserIDParams []pagination.PaginationParams
-	updateLastUsed     func(ctx context.Context, id int64, usedAt time.Time) error
-	touchedIDs         []int64
-	touchedUsedAts     []time.Time
+	apiKey                            *APIKey // GetKeyAndOwnerID 的返回值
+	getByIDErr                        error   // GetKeyAndOwnerID 的错误返回值
+	deleteErr                         error   // Delete 的错误返回值
+	deletedIDs                        []int64 // 记录已删除的 API Key ID 列表
+	allowListByUserID                 bool
+	listByUserIDKeys                  []APIKey
+	listByUserIDErr                   error
+	listByUserIDCalls                 []int64
+	listByUserIDParams                []pagination.PaginationParams
+	allowListByUserIDIncludingHidden  bool
+	listByUserIDIncludingHiddenKeys   []APIKey
+	listByUserIDIncludingHiddenErr    error
+	listByUserIDIncludingHiddenCalls  []int64
+	listByUserIDIncludingHiddenParams []pagination.PaginationParams
+	updateLastUsed                    func(ctx context.Context, id int64, usedAt time.Time) error
+	touchedIDs                        []int64
+	touchedUsedAts                    []time.Time
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -73,6 +78,10 @@ func (s *apiKeyRepoStub) GetByKeyForAuth(ctx context.Context, key string) (*APIK
 	panic("unexpected GetByKeyForAuth call")
 }
 
+func (s *apiKeyRepoStub) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*APIKey, error) {
+	panic("unexpected GetWebChatKeyByUserAndGroup call")
+}
+
 func (s *apiKeyRepoStub) Update(ctx context.Context, key *APIKey) error {
 	panic("unexpected Update call")
 }
@@ -102,6 +111,24 @@ func (s *apiKeyRepoStub) ListByUserID(ctx context.Context, userID int64, params 
 		return nil, nil, s.listByUserIDErr
 	}
 	keys := append([]APIKey(nil), s.listByUserIDKeys...)
+	return keys, &pagination.PaginationResult{
+		Total:    int64(len(keys)),
+		Page:     params.Page,
+		PageSize: params.PageSize,
+		Pages:    1,
+	}, nil
+}
+
+func (s *apiKeyRepoStub) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]APIKey, *pagination.PaginationResult, error) {
+	if !s.allowListByUserIDIncludingHidden {
+		panic("unexpected ListByUserIDIncludingHidden call")
+	}
+	s.listByUserIDIncludingHiddenCalls = append(s.listByUserIDIncludingHiddenCalls, userID)
+	s.listByUserIDIncludingHiddenParams = append(s.listByUserIDIncludingHiddenParams, params)
+	if s.listByUserIDIncludingHiddenErr != nil {
+		return nil, nil, s.listByUserIDIncludingHiddenErr
+	}
+	keys := append([]APIKey(nil), s.listByUserIDIncludingHiddenKeys...)
 	return keys, &pagination.PaginationResult{
 		Total:    int64(len(keys)),
 		Page:     params.Page,

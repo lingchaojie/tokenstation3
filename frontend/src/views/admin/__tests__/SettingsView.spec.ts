@@ -420,6 +420,7 @@ const baseSettingsResponse = {
   default_platform_quotas: {
     anthropic:   { daily: null, weekly: null, monthly: null },
     openai:      { daily: null, weekly: 12.5, monthly: null },
+    kilo:        { daily: null, weekly: null, monthly: null },
     gemini:      { daily: null, weekly: null, monthly: 200 },
     antigravity: { daily: null, weekly: null, monthly: null },
   },
@@ -1135,7 +1136,7 @@ describe("admin SettingsView platform quota matrix", () => {
     getProviders.mockResolvedValue({ data: [] });
   });
 
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 4 平台行", async () => {
+  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 5 平台行", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1146,11 +1147,12 @@ describe("admin SettingsView platform quota matrix", () => {
     // 表格行的平台字段：font-mono 渲染纯英文 platform key
     expect(html).toContain("anthropic");
     expect(html).toContain("openai");
+    expect(html).toContain("kilo");
     expect(html).toContain("gemini");
     expect(html).toContain("antigravity");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 4 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1166,7 +1168,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "gemini", "antigravity"];
+    const platforms = ["anthropic", "openai", "kilo", "gemini", "antigravity"];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1180,13 +1182,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 4 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // gemini / antigravity 缺失 → 应被归一化为全 null
+        // kilo / gemini / antigravity 缺失 → 应被归一化为全 null
       },
     });
 
@@ -1203,6 +1205,7 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["anthropic"]?.["daily"]).toBe(5);
     expect(quotas["openai"]?.["weekly"]).toBe(12.5);
     // 缺失平台应补全为 null
+    expect(quotas["kilo"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
@@ -1214,6 +1217,7 @@ describe("admin SettingsView platform quota matrix", () => {
       default_platform_quotas: {
         anthropic: { daily: 10, weekly: null, monthly: null },
         openai:    { daily: null, weekly: null, monthly: null },
+        kilo:      { daily: null, weekly: null, monthly: null },
         gemini:    { daily: null, weekly: null, monthly: null },
         antigravity: { daily: null, weekly: null, monthly: null },
       },

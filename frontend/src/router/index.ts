@@ -41,6 +41,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/models',
+    name: 'PublicModels',
+    component: () => import('@/views/public/ModelsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Models',
+      titleKey: 'modelCatalog.title'
+    }
+  },
+  {
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),
@@ -193,6 +204,30 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'dashboard.title',
       descriptionKey: 'dashboard.welcomeMessage'
     }
+  },
+  {
+    path: '/dashboard/models',
+    name: 'ModelMarketplace',
+    component: () => import('@/views/user/ModelCatalogView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Model Marketplace',
+      titleKey: 'modelCatalog.title',
+      descriptionKey: 'modelCatalog.description'
+    }
+  },
+  {
+    path: '/chat',
+    name: 'WebChat',
+    component: () => import('@/views/user/ChatView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Chat',
+      titleKey: 'chat.title',
+      descriptionKey: 'chat.description',
+    },
   },
   {
     path: '/keys',

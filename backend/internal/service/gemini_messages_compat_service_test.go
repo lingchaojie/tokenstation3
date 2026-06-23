@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type geminiCompatHTTPUpstreamStub struct {
@@ -168,6 +169,48 @@ func TestGeminiForwardAsChatCompletions_StreamsOpenAIChunksFromGeminiSSE(t *test
 	require.Contains(t, out, `"content":"lo"`)
 	require.Contains(t, out, `"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}`)
 	require.Contains(t, out, "data: [DONE]")
+}
+
+func TestGeminiForwardAsChatCompletions_MapsImageGenerationConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	httpStub := &geminiCompatHTTPUpstreamStub{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}`)),
+		},
+	}
+	svc := &GeminiMessagesCompatService{
+		httpUpstream: httpStub,
+		cfg:          &config.Config{},
+	}
+	account := &Account{
+		ID:       103,
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "gemini-api-key",
+		},
+		Concurrency: 1,
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gemini-3.1-flash-image","messages":[{"role":"user","content":"draw"}],"tools":[{"type":"image_generation","size":"2K","aspect_ratio":"16:9"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "gemini-3.1-flash-image", result.Model)
+
+	require.NotNil(t, httpStub.lastReq)
+	sentBody, err := io.ReadAll(httpStub.lastReq.Body)
+	require.NoError(t, err)
+	require.Equal(t, "IMAGE", gjson.GetBytes(sentBody, "generationConfig.responseModalities.1").String())
+	require.Equal(t, "16:9", gjson.GetBytes(sentBody, "generationConfig.imageConfig.aspectRatio").String())
+	require.Equal(t, "2K", gjson.GetBytes(sentBody, "generationConfig.imageConfig.imageSize").String())
 }
 
 // TestConvertClaudeToolsToGeminiTools_CustomType 测试custom类型工具转换
@@ -532,6 +575,27 @@ func TestConvertClaudeMessagesToGeminiGenerateContent_AddsThoughtSignatureForToo
 	}
 }
 
+func TestConvertClaudeMessagesToGeminiGenerateContent_MapsOutputEffortToThinkingLevel(t *testing.T) {
+	claudeReq := map[string]any{
+		"model":         "gemini-3.5-flash",
+		"max_tokens":    1024,
+		"thinking":      map[string]any{"type": "adaptive"},
+		"output_config": map[string]any{"effort": "high"},
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hello",
+			},
+		},
+	}
+	body, _ := json.Marshal(claudeReq)
+
+	out, err := convertClaudeMessagesToGeminiGenerateContent(body)
+
+	require.NoError(t, err)
+	require.Equal(t, "high", gjson.GetBytes(out, "generationConfig.thinkingConfig.thinkingLevel").String())
+}
+
 func TestEnsureGeminiFunctionCallThoughtSignatures_InsertsWhenMissing(t *testing.T) {
 	geminiReq := map[string]any{
 		"contents": []any{
@@ -716,6 +780,7 @@ func TestExtractGeminiUsage(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatalf("期望返回非 nil，实际返回 nil")
+				return
 			}
 			if got.InputTokens != tt.wantUsage.InputTokens {
 				t.Errorf("InputTokens: 期望 %d，实际 %d", tt.wantUsage.InputTokens, got.InputTokens)

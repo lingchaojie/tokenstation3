@@ -49,6 +49,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/webchatartifact"
+	"github.com/Wei-Shaw/sub2api/ent/webchatattachment"
+	"github.com/Wei-Shaw/sub2api/ent/webchatconversation"
+	"github.com/Wei-Shaw/sub2api/ent/webchatmessage"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
@@ -97,6 +101,10 @@ const (
 	TypeUserAttributeValue            = "UserAttributeValue"
 	TypeUserPlatformQuota             = "UserPlatformQuota"
 	TypeUserSubscription              = "UserSubscription"
+	TypeWebChatArtifact               = "WebChatArtifact"
+	TypeWebChatAttachment             = "WebChatAttachment"
+	TypeWebChatConversation           = "WebChatConversation"
+	TypeWebChatMessage                = "WebChatMessage"
 )
 
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
@@ -49245,4 +49253,4178 @@ func (m *UserSubscriptionMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown UserSubscription edge %s", name)
+}
+
+// WebChatArtifactMutation represents an operation that mutates the WebChatArtifact nodes in the graph.
+type WebChatArtifactMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *int64
+	message_id         *int64
+	addmessage_id      *int64
+	conversation_id    *int64
+	addconversation_id *int64
+	user_id            *int64
+	adduser_id         *int64
+	filename           *string
+	content_type       *string
+	size_bytes         *int64
+	addsize_bytes      *int64
+	storage_key        *string
+	sha256             *string
+	source             *string
+	created_at         *time.Time
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*WebChatArtifact, error)
+	predicates         []predicate.WebChatArtifact
+}
+
+var _ ent.Mutation = (*WebChatArtifactMutation)(nil)
+
+// webchatartifactOption allows management of the mutation configuration using functional options.
+type webchatartifactOption func(*WebChatArtifactMutation)
+
+// newWebChatArtifactMutation creates new mutation for the WebChatArtifact entity.
+func newWebChatArtifactMutation(c config, op Op, opts ...webchatartifactOption) *WebChatArtifactMutation {
+	m := &WebChatArtifactMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeWebChatArtifact,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withWebChatArtifactID sets the ID field of the mutation.
+func withWebChatArtifactID(id int64) webchatartifactOption {
+	return func(m *WebChatArtifactMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *WebChatArtifact
+		)
+		m.oldValue = func(ctx context.Context) (*WebChatArtifact, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().WebChatArtifact.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withWebChatArtifact sets the old WebChatArtifact of the mutation.
+func withWebChatArtifact(node *WebChatArtifact) webchatartifactOption {
+	return func(m *WebChatArtifactMutation) {
+		m.oldValue = func(context.Context) (*WebChatArtifact, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m WebChatArtifactMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m WebChatArtifactMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *WebChatArtifactMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *WebChatArtifactMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().WebChatArtifact.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetMessageID sets the "message_id" field.
+func (m *WebChatArtifactMutation) SetMessageID(i int64) {
+	m.message_id = &i
+	m.addmessage_id = nil
+}
+
+// MessageID returns the value of the "message_id" field in the mutation.
+func (m *WebChatArtifactMutation) MessageID() (r int64, exists bool) {
+	v := m.message_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMessageID returns the old "message_id" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldMessageID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMessageID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMessageID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMessageID: %w", err)
+	}
+	return oldValue.MessageID, nil
+}
+
+// AddMessageID adds i to the "message_id" field.
+func (m *WebChatArtifactMutation) AddMessageID(i int64) {
+	if m.addmessage_id != nil {
+		*m.addmessage_id += i
+	} else {
+		m.addmessage_id = &i
+	}
+}
+
+// AddedMessageID returns the value that was added to the "message_id" field in this mutation.
+func (m *WebChatArtifactMutation) AddedMessageID() (r int64, exists bool) {
+	v := m.addmessage_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMessageID resets all changes to the "message_id" field.
+func (m *WebChatArtifactMutation) ResetMessageID() {
+	m.message_id = nil
+	m.addmessage_id = nil
+}
+
+// SetConversationID sets the "conversation_id" field.
+func (m *WebChatArtifactMutation) SetConversationID(i int64) {
+	m.conversation_id = &i
+	m.addconversation_id = nil
+}
+
+// ConversationID returns the value of the "conversation_id" field in the mutation.
+func (m *WebChatArtifactMutation) ConversationID() (r int64, exists bool) {
+	v := m.conversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConversationID returns the old "conversation_id" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldConversationID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConversationID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConversationID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConversationID: %w", err)
+	}
+	return oldValue.ConversationID, nil
+}
+
+// AddConversationID adds i to the "conversation_id" field.
+func (m *WebChatArtifactMutation) AddConversationID(i int64) {
+	if m.addconversation_id != nil {
+		*m.addconversation_id += i
+	} else {
+		m.addconversation_id = &i
+	}
+}
+
+// AddedConversationID returns the value that was added to the "conversation_id" field in this mutation.
+func (m *WebChatArtifactMutation) AddedConversationID() (r int64, exists bool) {
+	v := m.addconversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConversationID resets all changes to the "conversation_id" field.
+func (m *WebChatArtifactMutation) ResetConversationID() {
+	m.conversation_id = nil
+	m.addconversation_id = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *WebChatArtifactMutation) SetUserID(i int64) {
+	m.user_id = &i
+	m.adduser_id = nil
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *WebChatArtifactMutation) UserID() (r int64, exists bool) {
+	v := m.user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// AddUserID adds i to the "user_id" field.
+func (m *WebChatArtifactMutation) AddUserID(i int64) {
+	if m.adduser_id != nil {
+		*m.adduser_id += i
+	} else {
+		m.adduser_id = &i
+	}
+}
+
+// AddedUserID returns the value that was added to the "user_id" field in this mutation.
+func (m *WebChatArtifactMutation) AddedUserID() (r int64, exists bool) {
+	v := m.adduser_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *WebChatArtifactMutation) ResetUserID() {
+	m.user_id = nil
+	m.adduser_id = nil
+}
+
+// SetFilename sets the "filename" field.
+func (m *WebChatArtifactMutation) SetFilename(s string) {
+	m.filename = &s
+}
+
+// Filename returns the value of the "filename" field in the mutation.
+func (m *WebChatArtifactMutation) Filename() (r string, exists bool) {
+	v := m.filename
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilename returns the old "filename" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldFilename(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilename is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilename requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilename: %w", err)
+	}
+	return oldValue.Filename, nil
+}
+
+// ResetFilename resets all changes to the "filename" field.
+func (m *WebChatArtifactMutation) ResetFilename() {
+	m.filename = nil
+}
+
+// SetContentType sets the "content_type" field.
+func (m *WebChatArtifactMutation) SetContentType(s string) {
+	m.content_type = &s
+}
+
+// ContentType returns the value of the "content_type" field in the mutation.
+func (m *WebChatArtifactMutation) ContentType() (r string, exists bool) {
+	v := m.content_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContentType returns the old "content_type" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldContentType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContentType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContentType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContentType: %w", err)
+	}
+	return oldValue.ContentType, nil
+}
+
+// ResetContentType resets all changes to the "content_type" field.
+func (m *WebChatArtifactMutation) ResetContentType() {
+	m.content_type = nil
+}
+
+// SetSizeBytes sets the "size_bytes" field.
+func (m *WebChatArtifactMutation) SetSizeBytes(i int64) {
+	m.size_bytes = &i
+	m.addsize_bytes = nil
+}
+
+// SizeBytes returns the value of the "size_bytes" field in the mutation.
+func (m *WebChatArtifactMutation) SizeBytes() (r int64, exists bool) {
+	v := m.size_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSizeBytes returns the old "size_bytes" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldSizeBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSizeBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSizeBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSizeBytes: %w", err)
+	}
+	return oldValue.SizeBytes, nil
+}
+
+// AddSizeBytes adds i to the "size_bytes" field.
+func (m *WebChatArtifactMutation) AddSizeBytes(i int64) {
+	if m.addsize_bytes != nil {
+		*m.addsize_bytes += i
+	} else {
+		m.addsize_bytes = &i
+	}
+}
+
+// AddedSizeBytes returns the value that was added to the "size_bytes" field in this mutation.
+func (m *WebChatArtifactMutation) AddedSizeBytes() (r int64, exists bool) {
+	v := m.addsize_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSizeBytes resets all changes to the "size_bytes" field.
+func (m *WebChatArtifactMutation) ResetSizeBytes() {
+	m.size_bytes = nil
+	m.addsize_bytes = nil
+}
+
+// SetStorageKey sets the "storage_key" field.
+func (m *WebChatArtifactMutation) SetStorageKey(s string) {
+	m.storage_key = &s
+}
+
+// StorageKey returns the value of the "storage_key" field in the mutation.
+func (m *WebChatArtifactMutation) StorageKey() (r string, exists bool) {
+	v := m.storage_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStorageKey returns the old "storage_key" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldStorageKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStorageKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStorageKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStorageKey: %w", err)
+	}
+	return oldValue.StorageKey, nil
+}
+
+// ResetStorageKey resets all changes to the "storage_key" field.
+func (m *WebChatArtifactMutation) ResetStorageKey() {
+	m.storage_key = nil
+}
+
+// SetSha256 sets the "sha256" field.
+func (m *WebChatArtifactMutation) SetSha256(s string) {
+	m.sha256 = &s
+}
+
+// Sha256 returns the value of the "sha256" field in the mutation.
+func (m *WebChatArtifactMutation) Sha256() (r string, exists bool) {
+	v := m.sha256
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSha256 returns the old "sha256" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldSha256(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSha256 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSha256 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSha256: %w", err)
+	}
+	return oldValue.Sha256, nil
+}
+
+// ResetSha256 resets all changes to the "sha256" field.
+func (m *WebChatArtifactMutation) ResetSha256() {
+	m.sha256 = nil
+}
+
+// SetSource sets the "source" field.
+func (m *WebChatArtifactMutation) SetSource(s string) {
+	m.source = &s
+}
+
+// Source returns the value of the "source" field in the mutation.
+func (m *WebChatArtifactMutation) Source() (r string, exists bool) {
+	v := m.source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSource returns the old "source" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSource: %w", err)
+	}
+	return oldValue.Source, nil
+}
+
+// ResetSource resets all changes to the "source" field.
+func (m *WebChatArtifactMutation) ResetSource() {
+	m.source = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *WebChatArtifactMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *WebChatArtifactMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the WebChatArtifact entity.
+// If the WebChatArtifact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatArtifactMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *WebChatArtifactMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the WebChatArtifactMutation builder.
+func (m *WebChatArtifactMutation) Where(ps ...predicate.WebChatArtifact) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the WebChatArtifactMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *WebChatArtifactMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.WebChatArtifact, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *WebChatArtifactMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *WebChatArtifactMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (WebChatArtifact).
+func (m *WebChatArtifactMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *WebChatArtifactMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.message_id != nil {
+		fields = append(fields, webchatartifact.FieldMessageID)
+	}
+	if m.conversation_id != nil {
+		fields = append(fields, webchatartifact.FieldConversationID)
+	}
+	if m.user_id != nil {
+		fields = append(fields, webchatartifact.FieldUserID)
+	}
+	if m.filename != nil {
+		fields = append(fields, webchatartifact.FieldFilename)
+	}
+	if m.content_type != nil {
+		fields = append(fields, webchatartifact.FieldContentType)
+	}
+	if m.size_bytes != nil {
+		fields = append(fields, webchatartifact.FieldSizeBytes)
+	}
+	if m.storage_key != nil {
+		fields = append(fields, webchatartifact.FieldStorageKey)
+	}
+	if m.sha256 != nil {
+		fields = append(fields, webchatartifact.FieldSha256)
+	}
+	if m.source != nil {
+		fields = append(fields, webchatartifact.FieldSource)
+	}
+	if m.created_at != nil {
+		fields = append(fields, webchatartifact.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *WebChatArtifactMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		return m.MessageID()
+	case webchatartifact.FieldConversationID:
+		return m.ConversationID()
+	case webchatartifact.FieldUserID:
+		return m.UserID()
+	case webchatartifact.FieldFilename:
+		return m.Filename()
+	case webchatartifact.FieldContentType:
+		return m.ContentType()
+	case webchatartifact.FieldSizeBytes:
+		return m.SizeBytes()
+	case webchatartifact.FieldStorageKey:
+		return m.StorageKey()
+	case webchatartifact.FieldSha256:
+		return m.Sha256()
+	case webchatartifact.FieldSource:
+		return m.Source()
+	case webchatartifact.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *WebChatArtifactMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		return m.OldMessageID(ctx)
+	case webchatartifact.FieldConversationID:
+		return m.OldConversationID(ctx)
+	case webchatartifact.FieldUserID:
+		return m.OldUserID(ctx)
+	case webchatartifact.FieldFilename:
+		return m.OldFilename(ctx)
+	case webchatartifact.FieldContentType:
+		return m.OldContentType(ctx)
+	case webchatartifact.FieldSizeBytes:
+		return m.OldSizeBytes(ctx)
+	case webchatartifact.FieldStorageKey:
+		return m.OldStorageKey(ctx)
+	case webchatartifact.FieldSha256:
+		return m.OldSha256(ctx)
+	case webchatartifact.FieldSource:
+		return m.OldSource(ctx)
+	case webchatartifact.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown WebChatArtifact field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatArtifactMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMessageID(v)
+		return nil
+	case webchatartifact.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConversationID(v)
+		return nil
+	case webchatartifact.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case webchatartifact.FieldFilename:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilename(v)
+		return nil
+	case webchatartifact.FieldContentType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContentType(v)
+		return nil
+	case webchatartifact.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSizeBytes(v)
+		return nil
+	case webchatartifact.FieldStorageKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStorageKey(v)
+		return nil
+	case webchatartifact.FieldSha256:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSha256(v)
+		return nil
+	case webchatartifact.FieldSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSource(v)
+		return nil
+	case webchatartifact.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatArtifact field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *WebChatArtifactMutation) AddedFields() []string {
+	var fields []string
+	if m.addmessage_id != nil {
+		fields = append(fields, webchatartifact.FieldMessageID)
+	}
+	if m.addconversation_id != nil {
+		fields = append(fields, webchatartifact.FieldConversationID)
+	}
+	if m.adduser_id != nil {
+		fields = append(fields, webchatartifact.FieldUserID)
+	}
+	if m.addsize_bytes != nil {
+		fields = append(fields, webchatartifact.FieldSizeBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *WebChatArtifactMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		return m.AddedMessageID()
+	case webchatartifact.FieldConversationID:
+		return m.AddedConversationID()
+	case webchatartifact.FieldUserID:
+		return m.AddedUserID()
+	case webchatartifact.FieldSizeBytes:
+		return m.AddedSizeBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatArtifactMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMessageID(v)
+		return nil
+	case webchatartifact.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConversationID(v)
+		return nil
+	case webchatartifact.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUserID(v)
+		return nil
+	case webchatartifact.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSizeBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatArtifact numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *WebChatArtifactMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *WebChatArtifactMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *WebChatArtifactMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown WebChatArtifact nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *WebChatArtifactMutation) ResetField(name string) error {
+	switch name {
+	case webchatartifact.FieldMessageID:
+		m.ResetMessageID()
+		return nil
+	case webchatartifact.FieldConversationID:
+		m.ResetConversationID()
+		return nil
+	case webchatartifact.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case webchatartifact.FieldFilename:
+		m.ResetFilename()
+		return nil
+	case webchatartifact.FieldContentType:
+		m.ResetContentType()
+		return nil
+	case webchatartifact.FieldSizeBytes:
+		m.ResetSizeBytes()
+		return nil
+	case webchatartifact.FieldStorageKey:
+		m.ResetStorageKey()
+		return nil
+	case webchatartifact.FieldSha256:
+		m.ResetSha256()
+		return nil
+	case webchatartifact.FieldSource:
+		m.ResetSource()
+		return nil
+	case webchatartifact.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatArtifact field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *WebChatArtifactMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *WebChatArtifactMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *WebChatArtifactMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *WebChatArtifactMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *WebChatArtifactMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *WebChatArtifactMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *WebChatArtifactMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown WebChatArtifact unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *WebChatArtifactMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown WebChatArtifact edge %s", name)
+}
+
+// WebChatAttachmentMutation represents an operation that mutates the WebChatAttachment nodes in the graph.
+type WebChatAttachmentMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *int64
+	message_id         *int64
+	addmessage_id      *int64
+	conversation_id    *int64
+	addconversation_id *int64
+	user_id            *int64
+	adduser_id         *int64
+	kind               *string
+	filename           *string
+	content_type       *string
+	size_bytes         *int64
+	addsize_bytes      *int64
+	storage_key        *string
+	sha256             *string
+	text_preview       *string
+	status             *string
+	created_at         *time.Time
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*WebChatAttachment, error)
+	predicates         []predicate.WebChatAttachment
+}
+
+var _ ent.Mutation = (*WebChatAttachmentMutation)(nil)
+
+// webchatattachmentOption allows management of the mutation configuration using functional options.
+type webchatattachmentOption func(*WebChatAttachmentMutation)
+
+// newWebChatAttachmentMutation creates new mutation for the WebChatAttachment entity.
+func newWebChatAttachmentMutation(c config, op Op, opts ...webchatattachmentOption) *WebChatAttachmentMutation {
+	m := &WebChatAttachmentMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeWebChatAttachment,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withWebChatAttachmentID sets the ID field of the mutation.
+func withWebChatAttachmentID(id int64) webchatattachmentOption {
+	return func(m *WebChatAttachmentMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *WebChatAttachment
+		)
+		m.oldValue = func(ctx context.Context) (*WebChatAttachment, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().WebChatAttachment.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withWebChatAttachment sets the old WebChatAttachment of the mutation.
+func withWebChatAttachment(node *WebChatAttachment) webchatattachmentOption {
+	return func(m *WebChatAttachmentMutation) {
+		m.oldValue = func(context.Context) (*WebChatAttachment, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m WebChatAttachmentMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m WebChatAttachmentMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *WebChatAttachmentMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *WebChatAttachmentMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().WebChatAttachment.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetMessageID sets the "message_id" field.
+func (m *WebChatAttachmentMutation) SetMessageID(i int64) {
+	m.message_id = &i
+	m.addmessage_id = nil
+}
+
+// MessageID returns the value of the "message_id" field in the mutation.
+func (m *WebChatAttachmentMutation) MessageID() (r int64, exists bool) {
+	v := m.message_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMessageID returns the old "message_id" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldMessageID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMessageID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMessageID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMessageID: %w", err)
+	}
+	return oldValue.MessageID, nil
+}
+
+// AddMessageID adds i to the "message_id" field.
+func (m *WebChatAttachmentMutation) AddMessageID(i int64) {
+	if m.addmessage_id != nil {
+		*m.addmessage_id += i
+	} else {
+		m.addmessage_id = &i
+	}
+}
+
+// AddedMessageID returns the value that was added to the "message_id" field in this mutation.
+func (m *WebChatAttachmentMutation) AddedMessageID() (r int64, exists bool) {
+	v := m.addmessage_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearMessageID clears the value of the "message_id" field.
+func (m *WebChatAttachmentMutation) ClearMessageID() {
+	m.message_id = nil
+	m.addmessage_id = nil
+	m.clearedFields[webchatattachment.FieldMessageID] = struct{}{}
+}
+
+// MessageIDCleared returns if the "message_id" field was cleared in this mutation.
+func (m *WebChatAttachmentMutation) MessageIDCleared() bool {
+	_, ok := m.clearedFields[webchatattachment.FieldMessageID]
+	return ok
+}
+
+// ResetMessageID resets all changes to the "message_id" field.
+func (m *WebChatAttachmentMutation) ResetMessageID() {
+	m.message_id = nil
+	m.addmessage_id = nil
+	delete(m.clearedFields, webchatattachment.FieldMessageID)
+}
+
+// SetConversationID sets the "conversation_id" field.
+func (m *WebChatAttachmentMutation) SetConversationID(i int64) {
+	m.conversation_id = &i
+	m.addconversation_id = nil
+}
+
+// ConversationID returns the value of the "conversation_id" field in the mutation.
+func (m *WebChatAttachmentMutation) ConversationID() (r int64, exists bool) {
+	v := m.conversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConversationID returns the old "conversation_id" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldConversationID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConversationID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConversationID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConversationID: %w", err)
+	}
+	return oldValue.ConversationID, nil
+}
+
+// AddConversationID adds i to the "conversation_id" field.
+func (m *WebChatAttachmentMutation) AddConversationID(i int64) {
+	if m.addconversation_id != nil {
+		*m.addconversation_id += i
+	} else {
+		m.addconversation_id = &i
+	}
+}
+
+// AddedConversationID returns the value that was added to the "conversation_id" field in this mutation.
+func (m *WebChatAttachmentMutation) AddedConversationID() (r int64, exists bool) {
+	v := m.addconversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearConversationID clears the value of the "conversation_id" field.
+func (m *WebChatAttachmentMutation) ClearConversationID() {
+	m.conversation_id = nil
+	m.addconversation_id = nil
+	m.clearedFields[webchatattachment.FieldConversationID] = struct{}{}
+}
+
+// ConversationIDCleared returns if the "conversation_id" field was cleared in this mutation.
+func (m *WebChatAttachmentMutation) ConversationIDCleared() bool {
+	_, ok := m.clearedFields[webchatattachment.FieldConversationID]
+	return ok
+}
+
+// ResetConversationID resets all changes to the "conversation_id" field.
+func (m *WebChatAttachmentMutation) ResetConversationID() {
+	m.conversation_id = nil
+	m.addconversation_id = nil
+	delete(m.clearedFields, webchatattachment.FieldConversationID)
+}
+
+// SetUserID sets the "user_id" field.
+func (m *WebChatAttachmentMutation) SetUserID(i int64) {
+	m.user_id = &i
+	m.adduser_id = nil
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *WebChatAttachmentMutation) UserID() (r int64, exists bool) {
+	v := m.user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// AddUserID adds i to the "user_id" field.
+func (m *WebChatAttachmentMutation) AddUserID(i int64) {
+	if m.adduser_id != nil {
+		*m.adduser_id += i
+	} else {
+		m.adduser_id = &i
+	}
+}
+
+// AddedUserID returns the value that was added to the "user_id" field in this mutation.
+func (m *WebChatAttachmentMutation) AddedUserID() (r int64, exists bool) {
+	v := m.adduser_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *WebChatAttachmentMutation) ResetUserID() {
+	m.user_id = nil
+	m.adduser_id = nil
+}
+
+// SetKind sets the "kind" field.
+func (m *WebChatAttachmentMutation) SetKind(s string) {
+	m.kind = &s
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *WebChatAttachmentMutation) Kind() (r string, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *WebChatAttachmentMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetFilename sets the "filename" field.
+func (m *WebChatAttachmentMutation) SetFilename(s string) {
+	m.filename = &s
+}
+
+// Filename returns the value of the "filename" field in the mutation.
+func (m *WebChatAttachmentMutation) Filename() (r string, exists bool) {
+	v := m.filename
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilename returns the old "filename" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldFilename(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilename is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilename requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilename: %w", err)
+	}
+	return oldValue.Filename, nil
+}
+
+// ResetFilename resets all changes to the "filename" field.
+func (m *WebChatAttachmentMutation) ResetFilename() {
+	m.filename = nil
+}
+
+// SetContentType sets the "content_type" field.
+func (m *WebChatAttachmentMutation) SetContentType(s string) {
+	m.content_type = &s
+}
+
+// ContentType returns the value of the "content_type" field in the mutation.
+func (m *WebChatAttachmentMutation) ContentType() (r string, exists bool) {
+	v := m.content_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContentType returns the old "content_type" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldContentType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContentType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContentType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContentType: %w", err)
+	}
+	return oldValue.ContentType, nil
+}
+
+// ResetContentType resets all changes to the "content_type" field.
+func (m *WebChatAttachmentMutation) ResetContentType() {
+	m.content_type = nil
+}
+
+// SetSizeBytes sets the "size_bytes" field.
+func (m *WebChatAttachmentMutation) SetSizeBytes(i int64) {
+	m.size_bytes = &i
+	m.addsize_bytes = nil
+}
+
+// SizeBytes returns the value of the "size_bytes" field in the mutation.
+func (m *WebChatAttachmentMutation) SizeBytes() (r int64, exists bool) {
+	v := m.size_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSizeBytes returns the old "size_bytes" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldSizeBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSizeBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSizeBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSizeBytes: %w", err)
+	}
+	return oldValue.SizeBytes, nil
+}
+
+// AddSizeBytes adds i to the "size_bytes" field.
+func (m *WebChatAttachmentMutation) AddSizeBytes(i int64) {
+	if m.addsize_bytes != nil {
+		*m.addsize_bytes += i
+	} else {
+		m.addsize_bytes = &i
+	}
+}
+
+// AddedSizeBytes returns the value that was added to the "size_bytes" field in this mutation.
+func (m *WebChatAttachmentMutation) AddedSizeBytes() (r int64, exists bool) {
+	v := m.addsize_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSizeBytes resets all changes to the "size_bytes" field.
+func (m *WebChatAttachmentMutation) ResetSizeBytes() {
+	m.size_bytes = nil
+	m.addsize_bytes = nil
+}
+
+// SetStorageKey sets the "storage_key" field.
+func (m *WebChatAttachmentMutation) SetStorageKey(s string) {
+	m.storage_key = &s
+}
+
+// StorageKey returns the value of the "storage_key" field in the mutation.
+func (m *WebChatAttachmentMutation) StorageKey() (r string, exists bool) {
+	v := m.storage_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStorageKey returns the old "storage_key" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldStorageKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStorageKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStorageKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStorageKey: %w", err)
+	}
+	return oldValue.StorageKey, nil
+}
+
+// ResetStorageKey resets all changes to the "storage_key" field.
+func (m *WebChatAttachmentMutation) ResetStorageKey() {
+	m.storage_key = nil
+}
+
+// SetSha256 sets the "sha256" field.
+func (m *WebChatAttachmentMutation) SetSha256(s string) {
+	m.sha256 = &s
+}
+
+// Sha256 returns the value of the "sha256" field in the mutation.
+func (m *WebChatAttachmentMutation) Sha256() (r string, exists bool) {
+	v := m.sha256
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSha256 returns the old "sha256" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldSha256(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSha256 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSha256 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSha256: %w", err)
+	}
+	return oldValue.Sha256, nil
+}
+
+// ResetSha256 resets all changes to the "sha256" field.
+func (m *WebChatAttachmentMutation) ResetSha256() {
+	m.sha256 = nil
+}
+
+// SetTextPreview sets the "text_preview" field.
+func (m *WebChatAttachmentMutation) SetTextPreview(s string) {
+	m.text_preview = &s
+}
+
+// TextPreview returns the value of the "text_preview" field in the mutation.
+func (m *WebChatAttachmentMutation) TextPreview() (r string, exists bool) {
+	v := m.text_preview
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTextPreview returns the old "text_preview" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldTextPreview(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTextPreview is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTextPreview requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTextPreview: %w", err)
+	}
+	return oldValue.TextPreview, nil
+}
+
+// ClearTextPreview clears the value of the "text_preview" field.
+func (m *WebChatAttachmentMutation) ClearTextPreview() {
+	m.text_preview = nil
+	m.clearedFields[webchatattachment.FieldTextPreview] = struct{}{}
+}
+
+// TextPreviewCleared returns if the "text_preview" field was cleared in this mutation.
+func (m *WebChatAttachmentMutation) TextPreviewCleared() bool {
+	_, ok := m.clearedFields[webchatattachment.FieldTextPreview]
+	return ok
+}
+
+// ResetTextPreview resets all changes to the "text_preview" field.
+func (m *WebChatAttachmentMutation) ResetTextPreview() {
+	m.text_preview = nil
+	delete(m.clearedFields, webchatattachment.FieldTextPreview)
+}
+
+// SetStatus sets the "status" field.
+func (m *WebChatAttachmentMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *WebChatAttachmentMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *WebChatAttachmentMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *WebChatAttachmentMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *WebChatAttachmentMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the WebChatAttachment entity.
+// If the WebChatAttachment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatAttachmentMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *WebChatAttachmentMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the WebChatAttachmentMutation builder.
+func (m *WebChatAttachmentMutation) Where(ps ...predicate.WebChatAttachment) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the WebChatAttachmentMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *WebChatAttachmentMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.WebChatAttachment, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *WebChatAttachmentMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *WebChatAttachmentMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (WebChatAttachment).
+func (m *WebChatAttachmentMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *WebChatAttachmentMutation) Fields() []string {
+	fields := make([]string, 0, 12)
+	if m.message_id != nil {
+		fields = append(fields, webchatattachment.FieldMessageID)
+	}
+	if m.conversation_id != nil {
+		fields = append(fields, webchatattachment.FieldConversationID)
+	}
+	if m.user_id != nil {
+		fields = append(fields, webchatattachment.FieldUserID)
+	}
+	if m.kind != nil {
+		fields = append(fields, webchatattachment.FieldKind)
+	}
+	if m.filename != nil {
+		fields = append(fields, webchatattachment.FieldFilename)
+	}
+	if m.content_type != nil {
+		fields = append(fields, webchatattachment.FieldContentType)
+	}
+	if m.size_bytes != nil {
+		fields = append(fields, webchatattachment.FieldSizeBytes)
+	}
+	if m.storage_key != nil {
+		fields = append(fields, webchatattachment.FieldStorageKey)
+	}
+	if m.sha256 != nil {
+		fields = append(fields, webchatattachment.FieldSha256)
+	}
+	if m.text_preview != nil {
+		fields = append(fields, webchatattachment.FieldTextPreview)
+	}
+	if m.status != nil {
+		fields = append(fields, webchatattachment.FieldStatus)
+	}
+	if m.created_at != nil {
+		fields = append(fields, webchatattachment.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *WebChatAttachmentMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		return m.MessageID()
+	case webchatattachment.FieldConversationID:
+		return m.ConversationID()
+	case webchatattachment.FieldUserID:
+		return m.UserID()
+	case webchatattachment.FieldKind:
+		return m.Kind()
+	case webchatattachment.FieldFilename:
+		return m.Filename()
+	case webchatattachment.FieldContentType:
+		return m.ContentType()
+	case webchatattachment.FieldSizeBytes:
+		return m.SizeBytes()
+	case webchatattachment.FieldStorageKey:
+		return m.StorageKey()
+	case webchatattachment.FieldSha256:
+		return m.Sha256()
+	case webchatattachment.FieldTextPreview:
+		return m.TextPreview()
+	case webchatattachment.FieldStatus:
+		return m.Status()
+	case webchatattachment.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *WebChatAttachmentMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		return m.OldMessageID(ctx)
+	case webchatattachment.FieldConversationID:
+		return m.OldConversationID(ctx)
+	case webchatattachment.FieldUserID:
+		return m.OldUserID(ctx)
+	case webchatattachment.FieldKind:
+		return m.OldKind(ctx)
+	case webchatattachment.FieldFilename:
+		return m.OldFilename(ctx)
+	case webchatattachment.FieldContentType:
+		return m.OldContentType(ctx)
+	case webchatattachment.FieldSizeBytes:
+		return m.OldSizeBytes(ctx)
+	case webchatattachment.FieldStorageKey:
+		return m.OldStorageKey(ctx)
+	case webchatattachment.FieldSha256:
+		return m.OldSha256(ctx)
+	case webchatattachment.FieldTextPreview:
+		return m.OldTextPreview(ctx)
+	case webchatattachment.FieldStatus:
+		return m.OldStatus(ctx)
+	case webchatattachment.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown WebChatAttachment field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatAttachmentMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMessageID(v)
+		return nil
+	case webchatattachment.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConversationID(v)
+		return nil
+	case webchatattachment.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case webchatattachment.FieldKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case webchatattachment.FieldFilename:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilename(v)
+		return nil
+	case webchatattachment.FieldContentType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContentType(v)
+		return nil
+	case webchatattachment.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSizeBytes(v)
+		return nil
+	case webchatattachment.FieldStorageKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStorageKey(v)
+		return nil
+	case webchatattachment.FieldSha256:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSha256(v)
+		return nil
+	case webchatattachment.FieldTextPreview:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTextPreview(v)
+		return nil
+	case webchatattachment.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case webchatattachment.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatAttachment field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *WebChatAttachmentMutation) AddedFields() []string {
+	var fields []string
+	if m.addmessage_id != nil {
+		fields = append(fields, webchatattachment.FieldMessageID)
+	}
+	if m.addconversation_id != nil {
+		fields = append(fields, webchatattachment.FieldConversationID)
+	}
+	if m.adduser_id != nil {
+		fields = append(fields, webchatattachment.FieldUserID)
+	}
+	if m.addsize_bytes != nil {
+		fields = append(fields, webchatattachment.FieldSizeBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *WebChatAttachmentMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		return m.AddedMessageID()
+	case webchatattachment.FieldConversationID:
+		return m.AddedConversationID()
+	case webchatattachment.FieldUserID:
+		return m.AddedUserID()
+	case webchatattachment.FieldSizeBytes:
+		return m.AddedSizeBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatAttachmentMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMessageID(v)
+		return nil
+	case webchatattachment.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConversationID(v)
+		return nil
+	case webchatattachment.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUserID(v)
+		return nil
+	case webchatattachment.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSizeBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatAttachment numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *WebChatAttachmentMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(webchatattachment.FieldMessageID) {
+		fields = append(fields, webchatattachment.FieldMessageID)
+	}
+	if m.FieldCleared(webchatattachment.FieldConversationID) {
+		fields = append(fields, webchatattachment.FieldConversationID)
+	}
+	if m.FieldCleared(webchatattachment.FieldTextPreview) {
+		fields = append(fields, webchatattachment.FieldTextPreview)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *WebChatAttachmentMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *WebChatAttachmentMutation) ClearField(name string) error {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		m.ClearMessageID()
+		return nil
+	case webchatattachment.FieldConversationID:
+		m.ClearConversationID()
+		return nil
+	case webchatattachment.FieldTextPreview:
+		m.ClearTextPreview()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatAttachment nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *WebChatAttachmentMutation) ResetField(name string) error {
+	switch name {
+	case webchatattachment.FieldMessageID:
+		m.ResetMessageID()
+		return nil
+	case webchatattachment.FieldConversationID:
+		m.ResetConversationID()
+		return nil
+	case webchatattachment.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case webchatattachment.FieldKind:
+		m.ResetKind()
+		return nil
+	case webchatattachment.FieldFilename:
+		m.ResetFilename()
+		return nil
+	case webchatattachment.FieldContentType:
+		m.ResetContentType()
+		return nil
+	case webchatattachment.FieldSizeBytes:
+		m.ResetSizeBytes()
+		return nil
+	case webchatattachment.FieldStorageKey:
+		m.ResetStorageKey()
+		return nil
+	case webchatattachment.FieldSha256:
+		m.ResetSha256()
+		return nil
+	case webchatattachment.FieldTextPreview:
+		m.ResetTextPreview()
+		return nil
+	case webchatattachment.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case webchatattachment.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatAttachment field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *WebChatAttachmentMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *WebChatAttachmentMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *WebChatAttachmentMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *WebChatAttachmentMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *WebChatAttachmentMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *WebChatAttachmentMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *WebChatAttachmentMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown WebChatAttachment unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *WebChatAttachmentMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown WebChatAttachment edge %s", name)
+}
+
+// WebChatConversationMutation represents an operation that mutates the WebChatConversation nodes in the graph.
+type WebChatConversationMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *int64
+	created_at       *time.Time
+	updated_at       *time.Time
+	user_id          *int64
+	adduser_id       *int64
+	title            *string
+	default_model    *string
+	default_provider *string
+	last_model       *string
+	last_provider    *string
+	status           *string
+	message_count    *int
+	addmessage_count *int
+	last_message_at  *time.Time
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*WebChatConversation, error)
+	predicates       []predicate.WebChatConversation
+}
+
+var _ ent.Mutation = (*WebChatConversationMutation)(nil)
+
+// webchatconversationOption allows management of the mutation configuration using functional options.
+type webchatconversationOption func(*WebChatConversationMutation)
+
+// newWebChatConversationMutation creates new mutation for the WebChatConversation entity.
+func newWebChatConversationMutation(c config, op Op, opts ...webchatconversationOption) *WebChatConversationMutation {
+	m := &WebChatConversationMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeWebChatConversation,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withWebChatConversationID sets the ID field of the mutation.
+func withWebChatConversationID(id int64) webchatconversationOption {
+	return func(m *WebChatConversationMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *WebChatConversation
+		)
+		m.oldValue = func(ctx context.Context) (*WebChatConversation, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().WebChatConversation.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withWebChatConversation sets the old WebChatConversation of the mutation.
+func withWebChatConversation(node *WebChatConversation) webchatconversationOption {
+	return func(m *WebChatConversationMutation) {
+		m.oldValue = func(context.Context) (*WebChatConversation, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m WebChatConversationMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m WebChatConversationMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *WebChatConversationMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *WebChatConversationMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().WebChatConversation.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *WebChatConversationMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *WebChatConversationMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *WebChatConversationMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *WebChatConversationMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *WebChatConversationMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *WebChatConversationMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *WebChatConversationMutation) SetUserID(i int64) {
+	m.user_id = &i
+	m.adduser_id = nil
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *WebChatConversationMutation) UserID() (r int64, exists bool) {
+	v := m.user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// AddUserID adds i to the "user_id" field.
+func (m *WebChatConversationMutation) AddUserID(i int64) {
+	if m.adduser_id != nil {
+		*m.adduser_id += i
+	} else {
+		m.adduser_id = &i
+	}
+}
+
+// AddedUserID returns the value that was added to the "user_id" field in this mutation.
+func (m *WebChatConversationMutation) AddedUserID() (r int64, exists bool) {
+	v := m.adduser_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *WebChatConversationMutation) ResetUserID() {
+	m.user_id = nil
+	m.adduser_id = nil
+}
+
+// SetTitle sets the "title" field.
+func (m *WebChatConversationMutation) SetTitle(s string) {
+	m.title = &s
+}
+
+// Title returns the value of the "title" field in the mutation.
+func (m *WebChatConversationMutation) Title() (r string, exists bool) {
+	v := m.title
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTitle returns the old "title" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldTitle(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTitle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTitle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTitle: %w", err)
+	}
+	return oldValue.Title, nil
+}
+
+// ResetTitle resets all changes to the "title" field.
+func (m *WebChatConversationMutation) ResetTitle() {
+	m.title = nil
+}
+
+// SetDefaultModel sets the "default_model" field.
+func (m *WebChatConversationMutation) SetDefaultModel(s string) {
+	m.default_model = &s
+}
+
+// DefaultModel returns the value of the "default_model" field in the mutation.
+func (m *WebChatConversationMutation) DefaultModel() (r string, exists bool) {
+	v := m.default_model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDefaultModel returns the old "default_model" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldDefaultModel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDefaultModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDefaultModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDefaultModel: %w", err)
+	}
+	return oldValue.DefaultModel, nil
+}
+
+// ResetDefaultModel resets all changes to the "default_model" field.
+func (m *WebChatConversationMutation) ResetDefaultModel() {
+	m.default_model = nil
+}
+
+// SetDefaultProvider sets the "default_provider" field.
+func (m *WebChatConversationMutation) SetDefaultProvider(s string) {
+	m.default_provider = &s
+}
+
+// DefaultProvider returns the value of the "default_provider" field in the mutation.
+func (m *WebChatConversationMutation) DefaultProvider() (r string, exists bool) {
+	v := m.default_provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDefaultProvider returns the old "default_provider" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldDefaultProvider(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDefaultProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDefaultProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDefaultProvider: %w", err)
+	}
+	return oldValue.DefaultProvider, nil
+}
+
+// ResetDefaultProvider resets all changes to the "default_provider" field.
+func (m *WebChatConversationMutation) ResetDefaultProvider() {
+	m.default_provider = nil
+}
+
+// SetLastModel sets the "last_model" field.
+func (m *WebChatConversationMutation) SetLastModel(s string) {
+	m.last_model = &s
+}
+
+// LastModel returns the value of the "last_model" field in the mutation.
+func (m *WebChatConversationMutation) LastModel() (r string, exists bool) {
+	v := m.last_model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastModel returns the old "last_model" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldLastModel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastModel: %w", err)
+	}
+	return oldValue.LastModel, nil
+}
+
+// ResetLastModel resets all changes to the "last_model" field.
+func (m *WebChatConversationMutation) ResetLastModel() {
+	m.last_model = nil
+}
+
+// SetLastProvider sets the "last_provider" field.
+func (m *WebChatConversationMutation) SetLastProvider(s string) {
+	m.last_provider = &s
+}
+
+// LastProvider returns the value of the "last_provider" field in the mutation.
+func (m *WebChatConversationMutation) LastProvider() (r string, exists bool) {
+	v := m.last_provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastProvider returns the old "last_provider" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldLastProvider(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastProvider: %w", err)
+	}
+	return oldValue.LastProvider, nil
+}
+
+// ResetLastProvider resets all changes to the "last_provider" field.
+func (m *WebChatConversationMutation) ResetLastProvider() {
+	m.last_provider = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *WebChatConversationMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *WebChatConversationMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *WebChatConversationMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetMessageCount sets the "message_count" field.
+func (m *WebChatConversationMutation) SetMessageCount(i int) {
+	m.message_count = &i
+	m.addmessage_count = nil
+}
+
+// MessageCount returns the value of the "message_count" field in the mutation.
+func (m *WebChatConversationMutation) MessageCount() (r int, exists bool) {
+	v := m.message_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMessageCount returns the old "message_count" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldMessageCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMessageCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMessageCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMessageCount: %w", err)
+	}
+	return oldValue.MessageCount, nil
+}
+
+// AddMessageCount adds i to the "message_count" field.
+func (m *WebChatConversationMutation) AddMessageCount(i int) {
+	if m.addmessage_count != nil {
+		*m.addmessage_count += i
+	} else {
+		m.addmessage_count = &i
+	}
+}
+
+// AddedMessageCount returns the value that was added to the "message_count" field in this mutation.
+func (m *WebChatConversationMutation) AddedMessageCount() (r int, exists bool) {
+	v := m.addmessage_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMessageCount resets all changes to the "message_count" field.
+func (m *WebChatConversationMutation) ResetMessageCount() {
+	m.message_count = nil
+	m.addmessage_count = nil
+}
+
+// SetLastMessageAt sets the "last_message_at" field.
+func (m *WebChatConversationMutation) SetLastMessageAt(t time.Time) {
+	m.last_message_at = &t
+}
+
+// LastMessageAt returns the value of the "last_message_at" field in the mutation.
+func (m *WebChatConversationMutation) LastMessageAt() (r time.Time, exists bool) {
+	v := m.last_message_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastMessageAt returns the old "last_message_at" field's value of the WebChatConversation entity.
+// If the WebChatConversation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatConversationMutation) OldLastMessageAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastMessageAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastMessageAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastMessageAt: %w", err)
+	}
+	return oldValue.LastMessageAt, nil
+}
+
+// ClearLastMessageAt clears the value of the "last_message_at" field.
+func (m *WebChatConversationMutation) ClearLastMessageAt() {
+	m.last_message_at = nil
+	m.clearedFields[webchatconversation.FieldLastMessageAt] = struct{}{}
+}
+
+// LastMessageAtCleared returns if the "last_message_at" field was cleared in this mutation.
+func (m *WebChatConversationMutation) LastMessageAtCleared() bool {
+	_, ok := m.clearedFields[webchatconversation.FieldLastMessageAt]
+	return ok
+}
+
+// ResetLastMessageAt resets all changes to the "last_message_at" field.
+func (m *WebChatConversationMutation) ResetLastMessageAt() {
+	m.last_message_at = nil
+	delete(m.clearedFields, webchatconversation.FieldLastMessageAt)
+}
+
+// Where appends a list predicates to the WebChatConversationMutation builder.
+func (m *WebChatConversationMutation) Where(ps ...predicate.WebChatConversation) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the WebChatConversationMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *WebChatConversationMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.WebChatConversation, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *WebChatConversationMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *WebChatConversationMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (WebChatConversation).
+func (m *WebChatConversationMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *WebChatConversationMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.created_at != nil {
+		fields = append(fields, webchatconversation.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, webchatconversation.FieldUpdatedAt)
+	}
+	if m.user_id != nil {
+		fields = append(fields, webchatconversation.FieldUserID)
+	}
+	if m.title != nil {
+		fields = append(fields, webchatconversation.FieldTitle)
+	}
+	if m.default_model != nil {
+		fields = append(fields, webchatconversation.FieldDefaultModel)
+	}
+	if m.default_provider != nil {
+		fields = append(fields, webchatconversation.FieldDefaultProvider)
+	}
+	if m.last_model != nil {
+		fields = append(fields, webchatconversation.FieldLastModel)
+	}
+	if m.last_provider != nil {
+		fields = append(fields, webchatconversation.FieldLastProvider)
+	}
+	if m.status != nil {
+		fields = append(fields, webchatconversation.FieldStatus)
+	}
+	if m.message_count != nil {
+		fields = append(fields, webchatconversation.FieldMessageCount)
+	}
+	if m.last_message_at != nil {
+		fields = append(fields, webchatconversation.FieldLastMessageAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *WebChatConversationMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case webchatconversation.FieldCreatedAt:
+		return m.CreatedAt()
+	case webchatconversation.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case webchatconversation.FieldUserID:
+		return m.UserID()
+	case webchatconversation.FieldTitle:
+		return m.Title()
+	case webchatconversation.FieldDefaultModel:
+		return m.DefaultModel()
+	case webchatconversation.FieldDefaultProvider:
+		return m.DefaultProvider()
+	case webchatconversation.FieldLastModel:
+		return m.LastModel()
+	case webchatconversation.FieldLastProvider:
+		return m.LastProvider()
+	case webchatconversation.FieldStatus:
+		return m.Status()
+	case webchatconversation.FieldMessageCount:
+		return m.MessageCount()
+	case webchatconversation.FieldLastMessageAt:
+		return m.LastMessageAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *WebChatConversationMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case webchatconversation.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case webchatconversation.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case webchatconversation.FieldUserID:
+		return m.OldUserID(ctx)
+	case webchatconversation.FieldTitle:
+		return m.OldTitle(ctx)
+	case webchatconversation.FieldDefaultModel:
+		return m.OldDefaultModel(ctx)
+	case webchatconversation.FieldDefaultProvider:
+		return m.OldDefaultProvider(ctx)
+	case webchatconversation.FieldLastModel:
+		return m.OldLastModel(ctx)
+	case webchatconversation.FieldLastProvider:
+		return m.OldLastProvider(ctx)
+	case webchatconversation.FieldStatus:
+		return m.OldStatus(ctx)
+	case webchatconversation.FieldMessageCount:
+		return m.OldMessageCount(ctx)
+	case webchatconversation.FieldLastMessageAt:
+		return m.OldLastMessageAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown WebChatConversation field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatConversationMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case webchatconversation.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case webchatconversation.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case webchatconversation.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case webchatconversation.FieldTitle:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTitle(v)
+		return nil
+	case webchatconversation.FieldDefaultModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDefaultModel(v)
+		return nil
+	case webchatconversation.FieldDefaultProvider:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDefaultProvider(v)
+		return nil
+	case webchatconversation.FieldLastModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastModel(v)
+		return nil
+	case webchatconversation.FieldLastProvider:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastProvider(v)
+		return nil
+	case webchatconversation.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case webchatconversation.FieldMessageCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMessageCount(v)
+		return nil
+	case webchatconversation.FieldLastMessageAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastMessageAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatConversation field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *WebChatConversationMutation) AddedFields() []string {
+	var fields []string
+	if m.adduser_id != nil {
+		fields = append(fields, webchatconversation.FieldUserID)
+	}
+	if m.addmessage_count != nil {
+		fields = append(fields, webchatconversation.FieldMessageCount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *WebChatConversationMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case webchatconversation.FieldUserID:
+		return m.AddedUserID()
+	case webchatconversation.FieldMessageCount:
+		return m.AddedMessageCount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatConversationMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case webchatconversation.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUserID(v)
+		return nil
+	case webchatconversation.FieldMessageCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMessageCount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatConversation numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *WebChatConversationMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(webchatconversation.FieldLastMessageAt) {
+		fields = append(fields, webchatconversation.FieldLastMessageAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *WebChatConversationMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *WebChatConversationMutation) ClearField(name string) error {
+	switch name {
+	case webchatconversation.FieldLastMessageAt:
+		m.ClearLastMessageAt()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatConversation nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *WebChatConversationMutation) ResetField(name string) error {
+	switch name {
+	case webchatconversation.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case webchatconversation.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case webchatconversation.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case webchatconversation.FieldTitle:
+		m.ResetTitle()
+		return nil
+	case webchatconversation.FieldDefaultModel:
+		m.ResetDefaultModel()
+		return nil
+	case webchatconversation.FieldDefaultProvider:
+		m.ResetDefaultProvider()
+		return nil
+	case webchatconversation.FieldLastModel:
+		m.ResetLastModel()
+		return nil
+	case webchatconversation.FieldLastProvider:
+		m.ResetLastProvider()
+		return nil
+	case webchatconversation.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case webchatconversation.FieldMessageCount:
+		m.ResetMessageCount()
+		return nil
+	case webchatconversation.FieldLastMessageAt:
+		m.ResetLastMessageAt()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatConversation field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *WebChatConversationMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *WebChatConversationMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *WebChatConversationMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *WebChatConversationMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *WebChatConversationMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *WebChatConversationMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *WebChatConversationMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown WebChatConversation unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *WebChatConversationMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown WebChatConversation edge %s", name)
+}
+
+// WebChatMessageMutation represents an operation that mutates the WebChatMessage nodes in the graph.
+type WebChatMessageMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *int64
+	created_at         *time.Time
+	updated_at         *time.Time
+	conversation_id    *int64
+	addconversation_id *int64
+	user_id            *int64
+	adduser_id         *int64
+	role               *string
+	model              *string
+	provider           *string
+	content_text       *string
+	content_json       *[]map[string]interface{}
+	appendcontent_json []map[string]interface{}
+	status             *string
+	error_code         *string
+	error_message      *string
+	usage_log_id       *int64
+	addusage_log_id    *int64
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*WebChatMessage, error)
+	predicates         []predicate.WebChatMessage
+}
+
+var _ ent.Mutation = (*WebChatMessageMutation)(nil)
+
+// webchatmessageOption allows management of the mutation configuration using functional options.
+type webchatmessageOption func(*WebChatMessageMutation)
+
+// newWebChatMessageMutation creates new mutation for the WebChatMessage entity.
+func newWebChatMessageMutation(c config, op Op, opts ...webchatmessageOption) *WebChatMessageMutation {
+	m := &WebChatMessageMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeWebChatMessage,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withWebChatMessageID sets the ID field of the mutation.
+func withWebChatMessageID(id int64) webchatmessageOption {
+	return func(m *WebChatMessageMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *WebChatMessage
+		)
+		m.oldValue = func(ctx context.Context) (*WebChatMessage, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().WebChatMessage.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withWebChatMessage sets the old WebChatMessage of the mutation.
+func withWebChatMessage(node *WebChatMessage) webchatmessageOption {
+	return func(m *WebChatMessageMutation) {
+		m.oldValue = func(context.Context) (*WebChatMessage, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m WebChatMessageMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m WebChatMessageMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *WebChatMessageMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *WebChatMessageMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().WebChatMessage.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *WebChatMessageMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *WebChatMessageMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *WebChatMessageMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *WebChatMessageMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *WebChatMessageMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *WebChatMessageMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetConversationID sets the "conversation_id" field.
+func (m *WebChatMessageMutation) SetConversationID(i int64) {
+	m.conversation_id = &i
+	m.addconversation_id = nil
+}
+
+// ConversationID returns the value of the "conversation_id" field in the mutation.
+func (m *WebChatMessageMutation) ConversationID() (r int64, exists bool) {
+	v := m.conversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConversationID returns the old "conversation_id" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldConversationID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConversationID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConversationID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConversationID: %w", err)
+	}
+	return oldValue.ConversationID, nil
+}
+
+// AddConversationID adds i to the "conversation_id" field.
+func (m *WebChatMessageMutation) AddConversationID(i int64) {
+	if m.addconversation_id != nil {
+		*m.addconversation_id += i
+	} else {
+		m.addconversation_id = &i
+	}
+}
+
+// AddedConversationID returns the value that was added to the "conversation_id" field in this mutation.
+func (m *WebChatMessageMutation) AddedConversationID() (r int64, exists bool) {
+	v := m.addconversation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConversationID resets all changes to the "conversation_id" field.
+func (m *WebChatMessageMutation) ResetConversationID() {
+	m.conversation_id = nil
+	m.addconversation_id = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *WebChatMessageMutation) SetUserID(i int64) {
+	m.user_id = &i
+	m.adduser_id = nil
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *WebChatMessageMutation) UserID() (r int64, exists bool) {
+	v := m.user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// AddUserID adds i to the "user_id" field.
+func (m *WebChatMessageMutation) AddUserID(i int64) {
+	if m.adduser_id != nil {
+		*m.adduser_id += i
+	} else {
+		m.adduser_id = &i
+	}
+}
+
+// AddedUserID returns the value that was added to the "user_id" field in this mutation.
+func (m *WebChatMessageMutation) AddedUserID() (r int64, exists bool) {
+	v := m.adduser_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *WebChatMessageMutation) ResetUserID() {
+	m.user_id = nil
+	m.adduser_id = nil
+}
+
+// SetRole sets the "role" field.
+func (m *WebChatMessageMutation) SetRole(s string) {
+	m.role = &s
+}
+
+// Role returns the value of the "role" field in the mutation.
+func (m *WebChatMessageMutation) Role() (r string, exists bool) {
+	v := m.role
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRole returns the old "role" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldRole(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRole is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRole requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRole: %w", err)
+	}
+	return oldValue.Role, nil
+}
+
+// ResetRole resets all changes to the "role" field.
+func (m *WebChatMessageMutation) ResetRole() {
+	m.role = nil
+}
+
+// SetModel sets the "model" field.
+func (m *WebChatMessageMutation) SetModel(s string) {
+	m.model = &s
+}
+
+// Model returns the value of the "model" field in the mutation.
+func (m *WebChatMessageMutation) Model() (r string, exists bool) {
+	v := m.model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModel returns the old "model" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldModel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModel: %w", err)
+	}
+	return oldValue.Model, nil
+}
+
+// ResetModel resets all changes to the "model" field.
+func (m *WebChatMessageMutation) ResetModel() {
+	m.model = nil
+}
+
+// SetProvider sets the "provider" field.
+func (m *WebChatMessageMutation) SetProvider(s string) {
+	m.provider = &s
+}
+
+// Provider returns the value of the "provider" field in the mutation.
+func (m *WebChatMessageMutation) Provider() (r string, exists bool) {
+	v := m.provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProvider returns the old "provider" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldProvider(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProvider: %w", err)
+	}
+	return oldValue.Provider, nil
+}
+
+// ResetProvider resets all changes to the "provider" field.
+func (m *WebChatMessageMutation) ResetProvider() {
+	m.provider = nil
+}
+
+// SetContentText sets the "content_text" field.
+func (m *WebChatMessageMutation) SetContentText(s string) {
+	m.content_text = &s
+}
+
+// ContentText returns the value of the "content_text" field in the mutation.
+func (m *WebChatMessageMutation) ContentText() (r string, exists bool) {
+	v := m.content_text
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContentText returns the old "content_text" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldContentText(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContentText is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContentText requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContentText: %w", err)
+	}
+	return oldValue.ContentText, nil
+}
+
+// ResetContentText resets all changes to the "content_text" field.
+func (m *WebChatMessageMutation) ResetContentText() {
+	m.content_text = nil
+}
+
+// SetContentJSON sets the "content_json" field.
+func (m *WebChatMessageMutation) SetContentJSON(value []map[string]interface{}) {
+	m.content_json = &value
+	m.appendcontent_json = nil
+}
+
+// ContentJSON returns the value of the "content_json" field in the mutation.
+func (m *WebChatMessageMutation) ContentJSON() (r []map[string]interface{}, exists bool) {
+	v := m.content_json
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContentJSON returns the old "content_json" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldContentJSON(ctx context.Context) (v []map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContentJSON is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContentJSON requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContentJSON: %w", err)
+	}
+	return oldValue.ContentJSON, nil
+}
+
+// AppendContentJSON adds value to the "content_json" field.
+func (m *WebChatMessageMutation) AppendContentJSON(value []map[string]interface{}) {
+	m.appendcontent_json = append(m.appendcontent_json, value...)
+}
+
+// AppendedContentJSON returns the list of values that were appended to the "content_json" field in this mutation.
+func (m *WebChatMessageMutation) AppendedContentJSON() ([]map[string]interface{}, bool) {
+	if len(m.appendcontent_json) == 0 {
+		return nil, false
+	}
+	return m.appendcontent_json, true
+}
+
+// ResetContentJSON resets all changes to the "content_json" field.
+func (m *WebChatMessageMutation) ResetContentJSON() {
+	m.content_json = nil
+	m.appendcontent_json = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *WebChatMessageMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *WebChatMessageMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *WebChatMessageMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetErrorCode sets the "error_code" field.
+func (m *WebChatMessageMutation) SetErrorCode(s string) {
+	m.error_code = &s
+}
+
+// ErrorCode returns the value of the "error_code" field in the mutation.
+func (m *WebChatMessageMutation) ErrorCode() (r string, exists bool) {
+	v := m.error_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorCode returns the old "error_code" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldErrorCode(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorCode: %w", err)
+	}
+	return oldValue.ErrorCode, nil
+}
+
+// ClearErrorCode clears the value of the "error_code" field.
+func (m *WebChatMessageMutation) ClearErrorCode() {
+	m.error_code = nil
+	m.clearedFields[webchatmessage.FieldErrorCode] = struct{}{}
+}
+
+// ErrorCodeCleared returns if the "error_code" field was cleared in this mutation.
+func (m *WebChatMessageMutation) ErrorCodeCleared() bool {
+	_, ok := m.clearedFields[webchatmessage.FieldErrorCode]
+	return ok
+}
+
+// ResetErrorCode resets all changes to the "error_code" field.
+func (m *WebChatMessageMutation) ResetErrorCode() {
+	m.error_code = nil
+	delete(m.clearedFields, webchatmessage.FieldErrorCode)
+}
+
+// SetErrorMessage sets the "error_message" field.
+func (m *WebChatMessageMutation) SetErrorMessage(s string) {
+	m.error_message = &s
+}
+
+// ErrorMessage returns the value of the "error_message" field in the mutation.
+func (m *WebChatMessageMutation) ErrorMessage() (r string, exists bool) {
+	v := m.error_message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorMessage returns the old "error_message" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldErrorMessage(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorMessage: %w", err)
+	}
+	return oldValue.ErrorMessage, nil
+}
+
+// ClearErrorMessage clears the value of the "error_message" field.
+func (m *WebChatMessageMutation) ClearErrorMessage() {
+	m.error_message = nil
+	m.clearedFields[webchatmessage.FieldErrorMessage] = struct{}{}
+}
+
+// ErrorMessageCleared returns if the "error_message" field was cleared in this mutation.
+func (m *WebChatMessageMutation) ErrorMessageCleared() bool {
+	_, ok := m.clearedFields[webchatmessage.FieldErrorMessage]
+	return ok
+}
+
+// ResetErrorMessage resets all changes to the "error_message" field.
+func (m *WebChatMessageMutation) ResetErrorMessage() {
+	m.error_message = nil
+	delete(m.clearedFields, webchatmessage.FieldErrorMessage)
+}
+
+// SetUsageLogID sets the "usage_log_id" field.
+func (m *WebChatMessageMutation) SetUsageLogID(i int64) {
+	m.usage_log_id = &i
+	m.addusage_log_id = nil
+}
+
+// UsageLogID returns the value of the "usage_log_id" field in the mutation.
+func (m *WebChatMessageMutation) UsageLogID() (r int64, exists bool) {
+	v := m.usage_log_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUsageLogID returns the old "usage_log_id" field's value of the WebChatMessage entity.
+// If the WebChatMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WebChatMessageMutation) OldUsageLogID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUsageLogID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUsageLogID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUsageLogID: %w", err)
+	}
+	return oldValue.UsageLogID, nil
+}
+
+// AddUsageLogID adds i to the "usage_log_id" field.
+func (m *WebChatMessageMutation) AddUsageLogID(i int64) {
+	if m.addusage_log_id != nil {
+		*m.addusage_log_id += i
+	} else {
+		m.addusage_log_id = &i
+	}
+}
+
+// AddedUsageLogID returns the value that was added to the "usage_log_id" field in this mutation.
+func (m *WebChatMessageMutation) AddedUsageLogID() (r int64, exists bool) {
+	v := m.addusage_log_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearUsageLogID clears the value of the "usage_log_id" field.
+func (m *WebChatMessageMutation) ClearUsageLogID() {
+	m.usage_log_id = nil
+	m.addusage_log_id = nil
+	m.clearedFields[webchatmessage.FieldUsageLogID] = struct{}{}
+}
+
+// UsageLogIDCleared returns if the "usage_log_id" field was cleared in this mutation.
+func (m *WebChatMessageMutation) UsageLogIDCleared() bool {
+	_, ok := m.clearedFields[webchatmessage.FieldUsageLogID]
+	return ok
+}
+
+// ResetUsageLogID resets all changes to the "usage_log_id" field.
+func (m *WebChatMessageMutation) ResetUsageLogID() {
+	m.usage_log_id = nil
+	m.addusage_log_id = nil
+	delete(m.clearedFields, webchatmessage.FieldUsageLogID)
+}
+
+// Where appends a list predicates to the WebChatMessageMutation builder.
+func (m *WebChatMessageMutation) Where(ps ...predicate.WebChatMessage) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the WebChatMessageMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *WebChatMessageMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.WebChatMessage, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *WebChatMessageMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *WebChatMessageMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (WebChatMessage).
+func (m *WebChatMessageMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *WebChatMessageMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.created_at != nil {
+		fields = append(fields, webchatmessage.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, webchatmessage.FieldUpdatedAt)
+	}
+	if m.conversation_id != nil {
+		fields = append(fields, webchatmessage.FieldConversationID)
+	}
+	if m.user_id != nil {
+		fields = append(fields, webchatmessage.FieldUserID)
+	}
+	if m.role != nil {
+		fields = append(fields, webchatmessage.FieldRole)
+	}
+	if m.model != nil {
+		fields = append(fields, webchatmessage.FieldModel)
+	}
+	if m.provider != nil {
+		fields = append(fields, webchatmessage.FieldProvider)
+	}
+	if m.content_text != nil {
+		fields = append(fields, webchatmessage.FieldContentText)
+	}
+	if m.content_json != nil {
+		fields = append(fields, webchatmessage.FieldContentJSON)
+	}
+	if m.status != nil {
+		fields = append(fields, webchatmessage.FieldStatus)
+	}
+	if m.error_code != nil {
+		fields = append(fields, webchatmessage.FieldErrorCode)
+	}
+	if m.error_message != nil {
+		fields = append(fields, webchatmessage.FieldErrorMessage)
+	}
+	if m.usage_log_id != nil {
+		fields = append(fields, webchatmessage.FieldUsageLogID)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *WebChatMessageMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case webchatmessage.FieldCreatedAt:
+		return m.CreatedAt()
+	case webchatmessage.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case webchatmessage.FieldConversationID:
+		return m.ConversationID()
+	case webchatmessage.FieldUserID:
+		return m.UserID()
+	case webchatmessage.FieldRole:
+		return m.Role()
+	case webchatmessage.FieldModel:
+		return m.Model()
+	case webchatmessage.FieldProvider:
+		return m.Provider()
+	case webchatmessage.FieldContentText:
+		return m.ContentText()
+	case webchatmessage.FieldContentJSON:
+		return m.ContentJSON()
+	case webchatmessage.FieldStatus:
+		return m.Status()
+	case webchatmessage.FieldErrorCode:
+		return m.ErrorCode()
+	case webchatmessage.FieldErrorMessage:
+		return m.ErrorMessage()
+	case webchatmessage.FieldUsageLogID:
+		return m.UsageLogID()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *WebChatMessageMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case webchatmessage.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case webchatmessage.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case webchatmessage.FieldConversationID:
+		return m.OldConversationID(ctx)
+	case webchatmessage.FieldUserID:
+		return m.OldUserID(ctx)
+	case webchatmessage.FieldRole:
+		return m.OldRole(ctx)
+	case webchatmessage.FieldModel:
+		return m.OldModel(ctx)
+	case webchatmessage.FieldProvider:
+		return m.OldProvider(ctx)
+	case webchatmessage.FieldContentText:
+		return m.OldContentText(ctx)
+	case webchatmessage.FieldContentJSON:
+		return m.OldContentJSON(ctx)
+	case webchatmessage.FieldStatus:
+		return m.OldStatus(ctx)
+	case webchatmessage.FieldErrorCode:
+		return m.OldErrorCode(ctx)
+	case webchatmessage.FieldErrorMessage:
+		return m.OldErrorMessage(ctx)
+	case webchatmessage.FieldUsageLogID:
+		return m.OldUsageLogID(ctx)
+	}
+	return nil, fmt.Errorf("unknown WebChatMessage field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatMessageMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case webchatmessage.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case webchatmessage.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case webchatmessage.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConversationID(v)
+		return nil
+	case webchatmessage.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case webchatmessage.FieldRole:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRole(v)
+		return nil
+	case webchatmessage.FieldModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModel(v)
+		return nil
+	case webchatmessage.FieldProvider:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProvider(v)
+		return nil
+	case webchatmessage.FieldContentText:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContentText(v)
+		return nil
+	case webchatmessage.FieldContentJSON:
+		v, ok := value.([]map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContentJSON(v)
+		return nil
+	case webchatmessage.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case webchatmessage.FieldErrorCode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorCode(v)
+		return nil
+	case webchatmessage.FieldErrorMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorMessage(v)
+		return nil
+	case webchatmessage.FieldUsageLogID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUsageLogID(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatMessage field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *WebChatMessageMutation) AddedFields() []string {
+	var fields []string
+	if m.addconversation_id != nil {
+		fields = append(fields, webchatmessage.FieldConversationID)
+	}
+	if m.adduser_id != nil {
+		fields = append(fields, webchatmessage.FieldUserID)
+	}
+	if m.addusage_log_id != nil {
+		fields = append(fields, webchatmessage.FieldUsageLogID)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *WebChatMessageMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case webchatmessage.FieldConversationID:
+		return m.AddedConversationID()
+	case webchatmessage.FieldUserID:
+		return m.AddedUserID()
+	case webchatmessage.FieldUsageLogID:
+		return m.AddedUsageLogID()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *WebChatMessageMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case webchatmessage.FieldConversationID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConversationID(v)
+		return nil
+	case webchatmessage.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUserID(v)
+		return nil
+	case webchatmessage.FieldUsageLogID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUsageLogID(v)
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatMessage numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *WebChatMessageMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(webchatmessage.FieldErrorCode) {
+		fields = append(fields, webchatmessage.FieldErrorCode)
+	}
+	if m.FieldCleared(webchatmessage.FieldErrorMessage) {
+		fields = append(fields, webchatmessage.FieldErrorMessage)
+	}
+	if m.FieldCleared(webchatmessage.FieldUsageLogID) {
+		fields = append(fields, webchatmessage.FieldUsageLogID)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *WebChatMessageMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *WebChatMessageMutation) ClearField(name string) error {
+	switch name {
+	case webchatmessage.FieldErrorCode:
+		m.ClearErrorCode()
+		return nil
+	case webchatmessage.FieldErrorMessage:
+		m.ClearErrorMessage()
+		return nil
+	case webchatmessage.FieldUsageLogID:
+		m.ClearUsageLogID()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatMessage nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *WebChatMessageMutation) ResetField(name string) error {
+	switch name {
+	case webchatmessage.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case webchatmessage.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case webchatmessage.FieldConversationID:
+		m.ResetConversationID()
+		return nil
+	case webchatmessage.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case webchatmessage.FieldRole:
+		m.ResetRole()
+		return nil
+	case webchatmessage.FieldModel:
+		m.ResetModel()
+		return nil
+	case webchatmessage.FieldProvider:
+		m.ResetProvider()
+		return nil
+	case webchatmessage.FieldContentText:
+		m.ResetContentText()
+		return nil
+	case webchatmessage.FieldContentJSON:
+		m.ResetContentJSON()
+		return nil
+	case webchatmessage.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case webchatmessage.FieldErrorCode:
+		m.ResetErrorCode()
+		return nil
+	case webchatmessage.FieldErrorMessage:
+		m.ResetErrorMessage()
+		return nil
+	case webchatmessage.FieldUsageLogID:
+		m.ResetUsageLogID()
+		return nil
+	}
+	return fmt.Errorf("unknown WebChatMessage field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *WebChatMessageMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *WebChatMessageMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *WebChatMessageMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *WebChatMessageMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *WebChatMessageMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *WebChatMessageMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *WebChatMessageMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown WebChatMessage unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *WebChatMessageMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown WebChatMessage edge %s", name)
 }

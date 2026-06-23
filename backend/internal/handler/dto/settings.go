@@ -356,6 +356,53 @@ type PublicModelPricingModel struct {
 	CacheReadPerMillion float64 `json:"cache_read_per_million"`
 }
 
+type PublicModelCatalogResponse struct {
+	UpdatedAt string                       `json:"updated_at"`
+	Providers []PublicModelCatalogProvider `json:"providers"`
+	Models    []PublicModelCatalogModel    `json:"models"`
+}
+
+type PublicModelCatalogProvider struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	AccentColor string `json:"accent_color"`
+	ModelCount  int    `json:"model_count"`
+}
+
+type PublicModelCatalogModel struct {
+	Provider         string                    `json:"provider"`
+	ProviderName     string                    `json:"provider_name"`
+	ModelName        string                    `json:"model_name"`
+	DisplayName      string                    `json:"display_name"`
+	Modalities       []string                  `json:"modalities"`
+	Description      string                    `json:"description"`
+	ContextWindow    int                       `json:"context_window,omitempty"`
+	ContextSourceURL string                    `json:"context_source_url,omitempty"`
+	Features         []string                  `json:"features"`
+	Pricing          PublicModelCatalogPricing `json:"pricing"`
+	PriceStatus      string                    `json:"price_status"`
+	ReleasedAt       string                    `json:"released_at"`
+	ReleaseStatus    string                    `json:"release_status"`
+	SourceURL        string                    `json:"source_url,omitempty"`
+	UpdatedAt        string                    `json:"updated_at"`
+}
+
+type PublicModelCatalogPricing struct {
+	Currency            string                        `json:"currency"`
+	Unit                string                        `json:"unit"`
+	InputPerMillion     *float64                      `json:"input_per_million,omitempty"`
+	OutputPerMillion    *float64                      `json:"output_per_million,omitempty"`
+	CacheReadPerMillion *float64                      `json:"cache_read_per_million,omitempty"`
+	PriceLines          []PublicModelCatalogPriceLine `json:"price_lines,omitempty"`
+	Note                string                        `json:"note,omitempty"`
+}
+
+type PublicModelCatalogPriceLine struct {
+	Label  string  `json:"label"`
+	Amount float64 `json:"amount"`
+	Unit   string  `json:"unit"`
+}
+
 // OverloadCooldownSettings 529过载冷却配置 DTO
 type OverloadCooldownSettings struct {
 	Enabled         bool `json:"enabled"`

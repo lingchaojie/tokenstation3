@@ -67,3 +67,13 @@ func TestAuthRoutesRateLimitFailCloseWhenRedisUnavailable(t *testing.T) {
 		require.Contains(t, w.Body.String(), "rate limit exceeded", "path=%s", path)
 	}
 }
+
+func TestAuthRoutesDoNotExposeModelCatalog(t *testing.T) {
+	router := newAuthRoutesTestRouter(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}

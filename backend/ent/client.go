@@ -51,6 +51,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/webchatartifact"
+	"github.com/Wei-Shaw/sub2api/ent/webchatattachment"
+	"github.com/Wei-Shaw/sub2api/ent/webchatconversation"
+	"github.com/Wei-Shaw/sub2api/ent/webchatmessage"
 
 	stdsql "database/sql"
 )
@@ -132,6 +136,14 @@ type Client struct {
 	UserPlatformQuota *UserPlatformQuotaClient
 	// UserSubscription is the client for interacting with the UserSubscription builders.
 	UserSubscription *UserSubscriptionClient
+	// WebChatArtifact is the client for interacting with the WebChatArtifact builders.
+	WebChatArtifact *WebChatArtifactClient
+	// WebChatAttachment is the client for interacting with the WebChatAttachment builders.
+	WebChatAttachment *WebChatAttachmentClient
+	// WebChatConversation is the client for interacting with the WebChatConversation builders.
+	WebChatConversation *WebChatConversationClient
+	// WebChatMessage is the client for interacting with the WebChatMessage builders.
+	WebChatMessage *WebChatMessageClient
 }
 
 // NewClient creates a new client configured with the given options.
@@ -179,6 +191,10 @@ func (c *Client) init() {
 	c.UserAttributeValue = NewUserAttributeValueClient(c.config)
 	c.UserPlatformQuota = NewUserPlatformQuotaClient(c.config)
 	c.UserSubscription = NewUserSubscriptionClient(c.config)
+	c.WebChatArtifact = NewWebChatArtifactClient(c.config)
+	c.WebChatAttachment = NewWebChatAttachmentClient(c.config)
+	c.WebChatConversation = NewWebChatConversationClient(c.config)
+	c.WebChatMessage = NewWebChatMessageClient(c.config)
 }
 
 type (
@@ -307,6 +323,10 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		UserAttributeValue:            NewUserAttributeValueClient(cfg),
 		UserPlatformQuota:             NewUserPlatformQuotaClient(cfg),
 		UserSubscription:              NewUserSubscriptionClient(cfg),
+		WebChatArtifact:               NewWebChatArtifactClient(cfg),
+		WebChatAttachment:             NewWebChatAttachmentClient(cfg),
+		WebChatConversation:           NewWebChatConversationClient(cfg),
+		WebChatMessage:                NewWebChatMessageClient(cfg),
 	}, nil
 }
 
@@ -362,6 +382,10 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		UserAttributeValue:            NewUserAttributeValueClient(cfg),
 		UserPlatformQuota:             NewUserPlatformQuotaClient(cfg),
 		UserSubscription:              NewUserSubscriptionClient(cfg),
+		WebChatArtifact:               NewWebChatArtifactClient(cfg),
+		WebChatAttachment:             NewWebChatAttachmentClient(cfg),
+		WebChatConversation:           NewWebChatConversationClient(cfg),
+		WebChatMessage:                NewWebChatMessageClient(cfg),
 	}, nil
 }
 
@@ -401,6 +425,8 @@ func (c *Client) Use(hooks ...Hook) {
 		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
 		c.User, c.UserAPIKeyRoute, c.UserAllowedGroup, c.UserAttributeDefinition,
 		c.UserAttributeValue, c.UserPlatformQuota, c.UserSubscription,
+		c.WebChatArtifact, c.WebChatAttachment, c.WebChatConversation,
+		c.WebChatMessage,
 	} {
 		n.Use(hooks...)
 	}
@@ -420,6 +446,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
 		c.User, c.UserAPIKeyRoute, c.UserAllowedGroup, c.UserAttributeDefinition,
 		c.UserAttributeValue, c.UserPlatformQuota, c.UserSubscription,
+		c.WebChatArtifact, c.WebChatAttachment, c.WebChatConversation,
+		c.WebChatMessage,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -500,6 +528,14 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.UserPlatformQuota.mutate(ctx, m)
 	case *UserSubscriptionMutation:
 		return c.UserSubscription.mutate(ctx, m)
+	case *WebChatArtifactMutation:
+		return c.WebChatArtifact.mutate(ctx, m)
+	case *WebChatAttachmentMutation:
+		return c.WebChatAttachment.mutate(ctx, m)
+	case *WebChatConversationMutation:
+		return c.WebChatConversation.mutate(ctx, m)
+	case *WebChatMessageMutation:
+		return c.WebChatMessage.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
 	}
@@ -6411,6 +6447,538 @@ func (c *UserSubscriptionClient) mutate(ctx context.Context, m *UserSubscription
 	}
 }
 
+// WebChatArtifactClient is a client for the WebChatArtifact schema.
+type WebChatArtifactClient struct {
+	config
+}
+
+// NewWebChatArtifactClient returns a client for the WebChatArtifact from the given config.
+func NewWebChatArtifactClient(c config) *WebChatArtifactClient {
+	return &WebChatArtifactClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `webchatartifact.Hooks(f(g(h())))`.
+func (c *WebChatArtifactClient) Use(hooks ...Hook) {
+	c.hooks.WebChatArtifact = append(c.hooks.WebChatArtifact, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `webchatartifact.Intercept(f(g(h())))`.
+func (c *WebChatArtifactClient) Intercept(interceptors ...Interceptor) {
+	c.inters.WebChatArtifact = append(c.inters.WebChatArtifact, interceptors...)
+}
+
+// Create returns a builder for creating a WebChatArtifact entity.
+func (c *WebChatArtifactClient) Create() *WebChatArtifactCreate {
+	mutation := newWebChatArtifactMutation(c.config, OpCreate)
+	return &WebChatArtifactCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of WebChatArtifact entities.
+func (c *WebChatArtifactClient) CreateBulk(builders ...*WebChatArtifactCreate) *WebChatArtifactCreateBulk {
+	return &WebChatArtifactCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *WebChatArtifactClient) MapCreateBulk(slice any, setFunc func(*WebChatArtifactCreate, int)) *WebChatArtifactCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &WebChatArtifactCreateBulk{err: fmt.Errorf("calling to WebChatArtifactClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*WebChatArtifactCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &WebChatArtifactCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for WebChatArtifact.
+func (c *WebChatArtifactClient) Update() *WebChatArtifactUpdate {
+	mutation := newWebChatArtifactMutation(c.config, OpUpdate)
+	return &WebChatArtifactUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *WebChatArtifactClient) UpdateOne(_m *WebChatArtifact) *WebChatArtifactUpdateOne {
+	mutation := newWebChatArtifactMutation(c.config, OpUpdateOne, withWebChatArtifact(_m))
+	return &WebChatArtifactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *WebChatArtifactClient) UpdateOneID(id int64) *WebChatArtifactUpdateOne {
+	mutation := newWebChatArtifactMutation(c.config, OpUpdateOne, withWebChatArtifactID(id))
+	return &WebChatArtifactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for WebChatArtifact.
+func (c *WebChatArtifactClient) Delete() *WebChatArtifactDelete {
+	mutation := newWebChatArtifactMutation(c.config, OpDelete)
+	return &WebChatArtifactDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *WebChatArtifactClient) DeleteOne(_m *WebChatArtifact) *WebChatArtifactDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *WebChatArtifactClient) DeleteOneID(id int64) *WebChatArtifactDeleteOne {
+	builder := c.Delete().Where(webchatartifact.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &WebChatArtifactDeleteOne{builder}
+}
+
+// Query returns a query builder for WebChatArtifact.
+func (c *WebChatArtifactClient) Query() *WebChatArtifactQuery {
+	return &WebChatArtifactQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeWebChatArtifact},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a WebChatArtifact entity by its id.
+func (c *WebChatArtifactClient) Get(ctx context.Context, id int64) (*WebChatArtifact, error) {
+	return c.Query().Where(webchatartifact.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *WebChatArtifactClient) GetX(ctx context.Context, id int64) *WebChatArtifact {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *WebChatArtifactClient) Hooks() []Hook {
+	return c.hooks.WebChatArtifact
+}
+
+// Interceptors returns the client interceptors.
+func (c *WebChatArtifactClient) Interceptors() []Interceptor {
+	return c.inters.WebChatArtifact
+}
+
+func (c *WebChatArtifactClient) mutate(ctx context.Context, m *WebChatArtifactMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&WebChatArtifactCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&WebChatArtifactUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&WebChatArtifactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&WebChatArtifactDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown WebChatArtifact mutation op: %q", m.Op())
+	}
+}
+
+// WebChatAttachmentClient is a client for the WebChatAttachment schema.
+type WebChatAttachmentClient struct {
+	config
+}
+
+// NewWebChatAttachmentClient returns a client for the WebChatAttachment from the given config.
+func NewWebChatAttachmentClient(c config) *WebChatAttachmentClient {
+	return &WebChatAttachmentClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `webchatattachment.Hooks(f(g(h())))`.
+func (c *WebChatAttachmentClient) Use(hooks ...Hook) {
+	c.hooks.WebChatAttachment = append(c.hooks.WebChatAttachment, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `webchatattachment.Intercept(f(g(h())))`.
+func (c *WebChatAttachmentClient) Intercept(interceptors ...Interceptor) {
+	c.inters.WebChatAttachment = append(c.inters.WebChatAttachment, interceptors...)
+}
+
+// Create returns a builder for creating a WebChatAttachment entity.
+func (c *WebChatAttachmentClient) Create() *WebChatAttachmentCreate {
+	mutation := newWebChatAttachmentMutation(c.config, OpCreate)
+	return &WebChatAttachmentCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of WebChatAttachment entities.
+func (c *WebChatAttachmentClient) CreateBulk(builders ...*WebChatAttachmentCreate) *WebChatAttachmentCreateBulk {
+	return &WebChatAttachmentCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *WebChatAttachmentClient) MapCreateBulk(slice any, setFunc func(*WebChatAttachmentCreate, int)) *WebChatAttachmentCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &WebChatAttachmentCreateBulk{err: fmt.Errorf("calling to WebChatAttachmentClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*WebChatAttachmentCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &WebChatAttachmentCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for WebChatAttachment.
+func (c *WebChatAttachmentClient) Update() *WebChatAttachmentUpdate {
+	mutation := newWebChatAttachmentMutation(c.config, OpUpdate)
+	return &WebChatAttachmentUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *WebChatAttachmentClient) UpdateOne(_m *WebChatAttachment) *WebChatAttachmentUpdateOne {
+	mutation := newWebChatAttachmentMutation(c.config, OpUpdateOne, withWebChatAttachment(_m))
+	return &WebChatAttachmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *WebChatAttachmentClient) UpdateOneID(id int64) *WebChatAttachmentUpdateOne {
+	mutation := newWebChatAttachmentMutation(c.config, OpUpdateOne, withWebChatAttachmentID(id))
+	return &WebChatAttachmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for WebChatAttachment.
+func (c *WebChatAttachmentClient) Delete() *WebChatAttachmentDelete {
+	mutation := newWebChatAttachmentMutation(c.config, OpDelete)
+	return &WebChatAttachmentDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *WebChatAttachmentClient) DeleteOne(_m *WebChatAttachment) *WebChatAttachmentDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *WebChatAttachmentClient) DeleteOneID(id int64) *WebChatAttachmentDeleteOne {
+	builder := c.Delete().Where(webchatattachment.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &WebChatAttachmentDeleteOne{builder}
+}
+
+// Query returns a query builder for WebChatAttachment.
+func (c *WebChatAttachmentClient) Query() *WebChatAttachmentQuery {
+	return &WebChatAttachmentQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeWebChatAttachment},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a WebChatAttachment entity by its id.
+func (c *WebChatAttachmentClient) Get(ctx context.Context, id int64) (*WebChatAttachment, error) {
+	return c.Query().Where(webchatattachment.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *WebChatAttachmentClient) GetX(ctx context.Context, id int64) *WebChatAttachment {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *WebChatAttachmentClient) Hooks() []Hook {
+	return c.hooks.WebChatAttachment
+}
+
+// Interceptors returns the client interceptors.
+func (c *WebChatAttachmentClient) Interceptors() []Interceptor {
+	return c.inters.WebChatAttachment
+}
+
+func (c *WebChatAttachmentClient) mutate(ctx context.Context, m *WebChatAttachmentMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&WebChatAttachmentCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&WebChatAttachmentUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&WebChatAttachmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&WebChatAttachmentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown WebChatAttachment mutation op: %q", m.Op())
+	}
+}
+
+// WebChatConversationClient is a client for the WebChatConversation schema.
+type WebChatConversationClient struct {
+	config
+}
+
+// NewWebChatConversationClient returns a client for the WebChatConversation from the given config.
+func NewWebChatConversationClient(c config) *WebChatConversationClient {
+	return &WebChatConversationClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `webchatconversation.Hooks(f(g(h())))`.
+func (c *WebChatConversationClient) Use(hooks ...Hook) {
+	c.hooks.WebChatConversation = append(c.hooks.WebChatConversation, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `webchatconversation.Intercept(f(g(h())))`.
+func (c *WebChatConversationClient) Intercept(interceptors ...Interceptor) {
+	c.inters.WebChatConversation = append(c.inters.WebChatConversation, interceptors...)
+}
+
+// Create returns a builder for creating a WebChatConversation entity.
+func (c *WebChatConversationClient) Create() *WebChatConversationCreate {
+	mutation := newWebChatConversationMutation(c.config, OpCreate)
+	return &WebChatConversationCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of WebChatConversation entities.
+func (c *WebChatConversationClient) CreateBulk(builders ...*WebChatConversationCreate) *WebChatConversationCreateBulk {
+	return &WebChatConversationCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *WebChatConversationClient) MapCreateBulk(slice any, setFunc func(*WebChatConversationCreate, int)) *WebChatConversationCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &WebChatConversationCreateBulk{err: fmt.Errorf("calling to WebChatConversationClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*WebChatConversationCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &WebChatConversationCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for WebChatConversation.
+func (c *WebChatConversationClient) Update() *WebChatConversationUpdate {
+	mutation := newWebChatConversationMutation(c.config, OpUpdate)
+	return &WebChatConversationUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *WebChatConversationClient) UpdateOne(_m *WebChatConversation) *WebChatConversationUpdateOne {
+	mutation := newWebChatConversationMutation(c.config, OpUpdateOne, withWebChatConversation(_m))
+	return &WebChatConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *WebChatConversationClient) UpdateOneID(id int64) *WebChatConversationUpdateOne {
+	mutation := newWebChatConversationMutation(c.config, OpUpdateOne, withWebChatConversationID(id))
+	return &WebChatConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for WebChatConversation.
+func (c *WebChatConversationClient) Delete() *WebChatConversationDelete {
+	mutation := newWebChatConversationMutation(c.config, OpDelete)
+	return &WebChatConversationDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *WebChatConversationClient) DeleteOne(_m *WebChatConversation) *WebChatConversationDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *WebChatConversationClient) DeleteOneID(id int64) *WebChatConversationDeleteOne {
+	builder := c.Delete().Where(webchatconversation.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &WebChatConversationDeleteOne{builder}
+}
+
+// Query returns a query builder for WebChatConversation.
+func (c *WebChatConversationClient) Query() *WebChatConversationQuery {
+	return &WebChatConversationQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeWebChatConversation},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a WebChatConversation entity by its id.
+func (c *WebChatConversationClient) Get(ctx context.Context, id int64) (*WebChatConversation, error) {
+	return c.Query().Where(webchatconversation.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *WebChatConversationClient) GetX(ctx context.Context, id int64) *WebChatConversation {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *WebChatConversationClient) Hooks() []Hook {
+	return c.hooks.WebChatConversation
+}
+
+// Interceptors returns the client interceptors.
+func (c *WebChatConversationClient) Interceptors() []Interceptor {
+	return c.inters.WebChatConversation
+}
+
+func (c *WebChatConversationClient) mutate(ctx context.Context, m *WebChatConversationMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&WebChatConversationCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&WebChatConversationUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&WebChatConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&WebChatConversationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown WebChatConversation mutation op: %q", m.Op())
+	}
+}
+
+// WebChatMessageClient is a client for the WebChatMessage schema.
+type WebChatMessageClient struct {
+	config
+}
+
+// NewWebChatMessageClient returns a client for the WebChatMessage from the given config.
+func NewWebChatMessageClient(c config) *WebChatMessageClient {
+	return &WebChatMessageClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `webchatmessage.Hooks(f(g(h())))`.
+func (c *WebChatMessageClient) Use(hooks ...Hook) {
+	c.hooks.WebChatMessage = append(c.hooks.WebChatMessage, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `webchatmessage.Intercept(f(g(h())))`.
+func (c *WebChatMessageClient) Intercept(interceptors ...Interceptor) {
+	c.inters.WebChatMessage = append(c.inters.WebChatMessage, interceptors...)
+}
+
+// Create returns a builder for creating a WebChatMessage entity.
+func (c *WebChatMessageClient) Create() *WebChatMessageCreate {
+	mutation := newWebChatMessageMutation(c.config, OpCreate)
+	return &WebChatMessageCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of WebChatMessage entities.
+func (c *WebChatMessageClient) CreateBulk(builders ...*WebChatMessageCreate) *WebChatMessageCreateBulk {
+	return &WebChatMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *WebChatMessageClient) MapCreateBulk(slice any, setFunc func(*WebChatMessageCreate, int)) *WebChatMessageCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &WebChatMessageCreateBulk{err: fmt.Errorf("calling to WebChatMessageClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*WebChatMessageCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &WebChatMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for WebChatMessage.
+func (c *WebChatMessageClient) Update() *WebChatMessageUpdate {
+	mutation := newWebChatMessageMutation(c.config, OpUpdate)
+	return &WebChatMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *WebChatMessageClient) UpdateOne(_m *WebChatMessage) *WebChatMessageUpdateOne {
+	mutation := newWebChatMessageMutation(c.config, OpUpdateOne, withWebChatMessage(_m))
+	return &WebChatMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *WebChatMessageClient) UpdateOneID(id int64) *WebChatMessageUpdateOne {
+	mutation := newWebChatMessageMutation(c.config, OpUpdateOne, withWebChatMessageID(id))
+	return &WebChatMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for WebChatMessage.
+func (c *WebChatMessageClient) Delete() *WebChatMessageDelete {
+	mutation := newWebChatMessageMutation(c.config, OpDelete)
+	return &WebChatMessageDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *WebChatMessageClient) DeleteOne(_m *WebChatMessage) *WebChatMessageDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *WebChatMessageClient) DeleteOneID(id int64) *WebChatMessageDeleteOne {
+	builder := c.Delete().Where(webchatmessage.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &WebChatMessageDeleteOne{builder}
+}
+
+// Query returns a query builder for WebChatMessage.
+func (c *WebChatMessageClient) Query() *WebChatMessageQuery {
+	return &WebChatMessageQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeWebChatMessage},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a WebChatMessage entity by its id.
+func (c *WebChatMessageClient) Get(ctx context.Context, id int64) (*WebChatMessage, error) {
+	return c.Query().Where(webchatmessage.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *WebChatMessageClient) GetX(ctx context.Context, id int64) *WebChatMessage {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *WebChatMessageClient) Hooks() []Hook {
+	return c.hooks.WebChatMessage
+}
+
+// Interceptors returns the client interceptors.
+func (c *WebChatMessageClient) Interceptors() []Interceptor {
+	return c.inters.WebChatMessage
+}
+
+func (c *WebChatMessageClient) mutate(ctx context.Context, m *WebChatMessageMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&WebChatMessageCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&WebChatMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&WebChatMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&WebChatMessageDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown WebChatMessage mutation op: %q", m.Op())
+	}
+}
+
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
@@ -6422,7 +6990,8 @@ type (
 		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
 		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAPIKeyRoute,
 		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
-		UserPlatformQuota, UserSubscription []ent.Hook
+		UserPlatformQuota, UserSubscription, WebChatArtifact, WebChatAttachment,
+		WebChatConversation, WebChatMessage []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
@@ -6433,7 +7002,8 @@ type (
 		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
 		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAPIKeyRoute,
 		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
-		UserPlatformQuota, UserSubscription []ent.Interceptor
+		UserPlatformQuota, UserSubscription, WebChatArtifact, WebChatAttachment,
+		WebChatConversation, WebChatMessage []ent.Interceptor
 	}
 )
 

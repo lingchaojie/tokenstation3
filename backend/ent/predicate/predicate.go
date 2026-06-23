@@ -113,3 +113,15 @@ type UserPlatformQuota func(*sql.Selector)
 
 // UserSubscription is the predicate function for usersubscription builders.
 type UserSubscription func(*sql.Selector)
+
+// WebChatArtifact is the predicate function for webchatartifact builders.
+type WebChatArtifact func(*sql.Selector)
+
+// WebChatAttachment is the predicate function for webchatattachment builders.
+type WebChatAttachment func(*sql.Selector)
+
+// WebChatConversation is the predicate function for webchatconversation builders.
+type WebChatConversation func(*sql.Selector)
+
+// WebChatMessage is the predicate function for webchatmessage builders.
+type WebChatMessage func(*sql.Selector)

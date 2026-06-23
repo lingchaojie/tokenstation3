@@ -48,6 +48,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/webchatartifact"
+	"github.com/Wei-Shaw/sub2api/ent/webchatattachment"
+	"github.com/Wei-Shaw/sub2api/ent/webchatconversation"
+	"github.com/Wei-Shaw/sub2api/ent/webchatmessage"
 )
 
 // ent aliases to avoid import conflicts in user's code.
@@ -144,6 +148,10 @@ func checkColumn(t, c string) error {
 			userattributevalue.Table:            userattributevalue.ValidColumn,
 			userplatformquota.Table:             userplatformquota.ValidColumn,
 			usersubscription.Table:              usersubscription.ValidColumn,
+			webchatartifact.Table:               webchatartifact.ValidColumn,
+			webchatattachment.Table:             webchatattachment.ValidColumn,
+			webchatconversation.Table:           webchatconversation.ValidColumn,
+			webchatmessage.Table:                webchatmessage.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

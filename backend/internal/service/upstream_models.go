@@ -133,6 +133,8 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.IsOpenAI():
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
+	case account.IsKilo():
+		return s.buildKiloUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)
 	case account.IsAnthropic():
@@ -273,6 +275,36 @@ func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Contex
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	return req, nil
+}
+
+func (s *AccountTestService) buildKiloUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	if account.Type != AccountTypeAPIKey {
+		return nil, newUpstreamModelSyncUnsupportedError(
+			fmt.Sprintf("Unsupported Kilo account type for upstream model sync: %s", account.Type), nil,
+		)
+	}
+	apiKey := strings.TrimSpace(account.GetKiloToken())
+	if apiKey == "" {
+		return nil, newUpstreamModelSyncConfigError("No Kilo API key is available", nil)
+	}
+
+	baseURL := account.GetKiloBaseURL()
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = KiloDefaultOpenRouterBaseURL
+	}
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Kilo base URL", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildKiloModelsURL(normalizedBaseURL), nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Kilo model list URL", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	applyKiloHeaders(req.Header, account)
 	return req, nil
 }
 

@@ -177,6 +177,58 @@
       </div>
     </template>
 
+    <!-- Kilo API Key accounts: upstream balance + local usage stats -->
+    <template v-else-if="account.platform === 'kilo'">
+      <div v-if="loading" class="space-y-1.5">
+        <div class="flex items-center gap-1">
+          <div class="h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+      <div v-else-if="usageInfo" class="space-y-1">
+        <div v-if="kiloBalanceDisplay" class="text-[10px] font-medium text-cyan-700 dark:text-cyan-300">
+          Kilo {{ kiloBalanceDisplay }}
+        </div>
+        <div v-if="usageInfo.error" class="max-w-[200px] truncate text-xs text-amber-600 dark:text-amber-400" :title="usageInfo.error">
+          {{ usageInfo.error }}
+        </div>
+        <UsageProgressBar
+          v-if="usageInfo.five_hour?.window_stats"
+          label="local"
+          :utilization="usageInfo.five_hour.utilization"
+          :resets-at="usageInfo.five_hour.resets_at"
+          :window-stats="usageInfo.five_hour.window_stats"
+          color="indigo"
+        />
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-cyan-700 transition-colors hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-cyan-300 dark:hover:bg-cyan-900/30"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': activeQueryLoading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+      </div>
+      <div v-else class="text-xs text-gray-400">-</div>
+    </template>
+
     <!-- Antigravity OAuth accounts: fetch usage from API -->
     <template v-else-if="account.platform === 'antigravity' && account.type === 'oauth'">
       <!-- 账户类型徽章 -->
@@ -560,6 +612,7 @@ let visibilityObserver: IntersectionObserver | null = null
 const showUsageWindows = computed(() => {
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
+  if (props.account.platform === 'kilo') return true
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -575,6 +628,9 @@ const shouldFetchUsage = computed(() => {
   }
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'kilo') {
+    return props.account.type === 'apikey'
   }
   return false
 })
@@ -597,6 +653,13 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+const kiloBalanceDisplay = computed(() => {
+  const balance = usageInfo.value?.kilo_balance
+  if (!balance) return ''
+  const amount = Number.isFinite(balance.balance) ? balance.balance.toFixed(2) : String(balance.balance)
+  return balance.currency ? `${balance.currency} ${amount}` : amount
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

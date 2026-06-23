@@ -41,6 +41,7 @@ const (
 	PlatformOpenAI      = domain.PlatformOpenAI
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
+	PlatformKilo        = domain.PlatformKilo
 )
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -49,6 +50,7 @@ const (
 var AllowedQuotaPlatforms = []string{
 	PlatformAnthropic,
 	PlatformOpenAI,
+	PlatformKilo,
 	PlatformGemini,
 	PlatformAntigravity,
 }
@@ -66,6 +68,7 @@ func IsAllowedQuotaPlatform(s string) bool {
 const (
 	APIKeyTypeAnthropic = PlatformAnthropic
 	APIKeyTypeOpenAI    = PlatformOpenAI
+	APIKeyTypeWebChat   = "web_chat"
 	APIKeyTypeUnknown   = "unknown"
 	// APIKeyTypeUnified is a response-only pseudo-type reported for provider-agnostic
 	// keys (group_binding_mode = auto). It is never stored in the key_type column and

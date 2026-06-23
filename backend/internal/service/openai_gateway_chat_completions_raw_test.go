@@ -540,6 +540,56 @@ func TestEnsureOpenAIChatStreamUsage(t *testing.T) {
 	require.True(t, gjson.GetBytes(body, "stream_options.include_usage").Bool())
 }
 
+func TestForwardAsRawChatCompletions_KiloUsesPlusCompatibleEndpointAndHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_kilo_raw"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl_kilo","object":"chat.completion","model":"anthropic/claude-sonnet-4.6","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          202,
+		Name:        "kilo-pass",
+		Platform:    PlatformKilo,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"kilocodeToken":          "kilo-token",
+			"kilocodeOrganizationId": "org-1",
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": "anthropic/claude-sonnet-4.6",
+			},
+		},
+	}
+
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "claude-sonnet-4-5", result.Model)
+	require.Equal(t, "anthropic/claude-sonnet-4.6", result.UpstreamModel)
+	require.Equal(t, "claude-sonnet-4.6", result.BillingModel)
+	require.Equal(t, 7, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://api.kilo.ai/api/openrouter/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer kilo-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "org-1", upstream.lastReq.Header.Get("X-Kilocode-OrganizationID"))
+	require.Equal(t, "cli-proxy-kilo", upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "anthropic/claude-sonnet-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
+}
+
 func TestBufferRawChatCompletions_RejectsOversizedResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

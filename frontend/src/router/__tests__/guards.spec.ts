@@ -189,6 +189,21 @@ describe('路由守卫逻辑', () => {
       const redirect = simulateGuard('/home', { requiresAuth: false }, authState)
       expect(redirect).toBeNull()
     })
+
+    it('未认证用户访问 /models 重定向到 /login', () => {
+      const redirect = simulateGuard('/models', { requiresAuth: true, requiresAdmin: true }, authState)
+      expect(redirect).toBe('/login')
+    })
+
+    it('未认证用户访问 /dashboard/models 重定向到 /login', () => {
+      const redirect = simulateGuard('/dashboard/models', { requiresAuth: true, requiresAdmin: true }, authState)
+      expect(redirect).toBe('/login')
+    })
+
+    it('未认证用户访问 /chat 重定向到 /login', () => {
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: true }, authState)
+      expect(redirect).toBe('/login')
+    })
   })
 
   // --- 已认证普通用户 ---
@@ -215,6 +230,16 @@ describe('路由守卫逻辑', () => {
     it('访问 /dashboard 允许通过', () => {
       const redirect = simulateGuard('/dashboard', {}, authState)
       expect(redirect).toBeNull()
+    })
+
+    it('普通用户访问 /dashboard/models 被拒绝，重定向到 /dashboard', () => {
+      const redirect = simulateGuard('/dashboard/models', { requiresAuth: true, requiresAdmin: true }, authState)
+      expect(redirect).toBe('/dashboard')
+    })
+
+    it('普通用户访问 /chat 被拒绝，重定向到 /dashboard', () => {
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: true }, authState)
+      expect(redirect).toBe('/dashboard')
     })
 
     it('访问管理页面被拒绝，重定向到 /dashboard', () => {
@@ -252,6 +277,12 @@ describe('路由守卫逻辑', () => {
     it('访问用户页面允许通过', () => {
       const redirect = simulateGuard('/dashboard', {}, authState)
       expect(redirect).toBeNull()
+    })
+
+    it('管理员可以访问模型广场和 Web Chat 灰度页面', () => {
+      expect(simulateGuard('/models', { requiresAuth: true, requiresAdmin: true }, authState)).toBeNull()
+      expect(simulateGuard('/dashboard/models', { requiresAuth: true, requiresAdmin: true }, authState)).toBeNull()
+      expect(simulateGuard('/chat', { requiresAuth: true, requiresAdmin: true }, authState)).toBeNull()
     })
   })
 

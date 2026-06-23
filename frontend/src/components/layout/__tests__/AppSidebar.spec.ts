@@ -65,3 +65,20 @@ describe('AppSidebar admin personal dashboard navigation', () => {
     expect(componentSource).toContain('finalizeNav(buildAdminPersonalNavItems())')
   })
 })
+
+describe('AppSidebar model marketplace navigation', () => {
+  it('keeps the model marketplace route inside the admin-only self navigation branch', () => {
+    expect(componentSource).toContain('if (authStore.isAdmin) {')
+    expect(componentSource).toContain("path: '/dashboard/models'")
+    expect(componentSource).toContain("t('nav.modelMarketplace')")
+  })
+})
+
+describe('AppSidebar web chat navigation', () => {
+  it('keeps the chat route before the model marketplace route inside the admin-only branch', () => {
+    expect(componentSource).toContain('if (authStore.isAdmin) {')
+    expect(componentSource).toContain("path: '/chat'")
+    expect(componentSource).toContain("t('nav.chat')")
+    expect(componentSource.indexOf("path: '/chat'")).toBeLessThan(componentSource.indexOf("path: '/dashboard/models'"))
+  })
+})

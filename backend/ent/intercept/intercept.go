@@ -45,6 +45,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/webchatartifact"
+	"github.com/Wei-Shaw/sub2api/ent/webchatattachment"
+	"github.com/Wei-Shaw/sub2api/ent/webchatconversation"
+	"github.com/Wei-Shaw/sub2api/ent/webchatmessage"
 )
 
 // The Query interface represents an operation that queries a graph.
@@ -1075,6 +1079,114 @@ func (f TraverseUserSubscription) Traverse(ctx context.Context, q ent.Query) err
 	return fmt.Errorf("unexpected query type %T. expect *ent.UserSubscriptionQuery", q)
 }
 
+// The WebChatArtifactFunc type is an adapter to allow the use of ordinary function as a Querier.
+type WebChatArtifactFunc func(context.Context, *ent.WebChatArtifactQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f WebChatArtifactFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.WebChatArtifactQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.WebChatArtifactQuery", q)
+}
+
+// The TraverseWebChatArtifact type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseWebChatArtifact func(context.Context, *ent.WebChatArtifactQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseWebChatArtifact) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseWebChatArtifact) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.WebChatArtifactQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.WebChatArtifactQuery", q)
+}
+
+// The WebChatAttachmentFunc type is an adapter to allow the use of ordinary function as a Querier.
+type WebChatAttachmentFunc func(context.Context, *ent.WebChatAttachmentQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f WebChatAttachmentFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.WebChatAttachmentQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.WebChatAttachmentQuery", q)
+}
+
+// The TraverseWebChatAttachment type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseWebChatAttachment func(context.Context, *ent.WebChatAttachmentQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseWebChatAttachment) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseWebChatAttachment) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.WebChatAttachmentQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.WebChatAttachmentQuery", q)
+}
+
+// The WebChatConversationFunc type is an adapter to allow the use of ordinary function as a Querier.
+type WebChatConversationFunc func(context.Context, *ent.WebChatConversationQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f WebChatConversationFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.WebChatConversationQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.WebChatConversationQuery", q)
+}
+
+// The TraverseWebChatConversation type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseWebChatConversation func(context.Context, *ent.WebChatConversationQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseWebChatConversation) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseWebChatConversation) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.WebChatConversationQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.WebChatConversationQuery", q)
+}
+
+// The WebChatMessageFunc type is an adapter to allow the use of ordinary function as a Querier.
+type WebChatMessageFunc func(context.Context, *ent.WebChatMessageQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f WebChatMessageFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.WebChatMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.WebChatMessageQuery", q)
+}
+
+// The TraverseWebChatMessage type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseWebChatMessage func(context.Context, *ent.WebChatMessageQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseWebChatMessage) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseWebChatMessage) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.WebChatMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.WebChatMessageQuery", q)
+}
+
 // NewQuery returns the generic Query interface for the given typed query.
 func NewQuery(q ent.Query) (Query, error) {
 	switch q := q.(type) {
@@ -1150,6 +1262,14 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.UserPlatformQuotaQuery, predicate.UserPlatformQuota, userplatformquota.OrderOption]{typ: ent.TypeUserPlatformQuota, tq: q}, nil
 	case *ent.UserSubscriptionQuery:
 		return &query[*ent.UserSubscriptionQuery, predicate.UserSubscription, usersubscription.OrderOption]{typ: ent.TypeUserSubscription, tq: q}, nil
+	case *ent.WebChatArtifactQuery:
+		return &query[*ent.WebChatArtifactQuery, predicate.WebChatArtifact, webchatartifact.OrderOption]{typ: ent.TypeWebChatArtifact, tq: q}, nil
+	case *ent.WebChatAttachmentQuery:
+		return &query[*ent.WebChatAttachmentQuery, predicate.WebChatAttachment, webchatattachment.OrderOption]{typ: ent.TypeWebChatAttachment, tq: q}, nil
+	case *ent.WebChatConversationQuery:
+		return &query[*ent.WebChatConversationQuery, predicate.WebChatConversation, webchatconversation.OrderOption]{typ: ent.TypeWebChatConversation, tq: q}, nil
+	case *ent.WebChatMessageQuery:
+		return &query[*ent.WebChatMessageQuery, predicate.WebChatMessage, webchatmessage.OrderOption]{typ: ent.TypeWebChatMessage, tq: q}, nil
 	default:
 		return nil, fmt.Errorf("unknown query type %T", q)
 	}

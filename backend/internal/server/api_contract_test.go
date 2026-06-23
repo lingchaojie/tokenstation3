@@ -922,7 +922,7 @@ func TestAPIContracts(t *testing.T) {
 					"default_balance": 1.25,
 					"default_anthropic_group_id": null,
 					"default_openai_group_id": null,
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
+						"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"kilo":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,
@@ -1164,7 +1164,7 @@ func TestAPIContracts(t *testing.T) {
 					"purchase_subscription_url": "",
 					"table_default_page_size": 20,
 					"table_page_size_options": [10, 20, 50],
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
+						"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"kilo":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,
@@ -2281,6 +2281,20 @@ func (r *stubApiKeyRepo) GetByKeyForAuth(ctx context.Context, key string) (*serv
 	return r.GetByKey(ctx, key)
 }
 
+func (r *stubApiKeyRepo) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*service.APIKey, error) {
+	for _, key := range r.byID {
+		if key.UserID != userID || key.KeyType != service.APIKeyTypeWebChat {
+			continue
+		}
+		if key.GroupID == nil || *key.GroupID != groupID {
+			continue
+		}
+		clone := *key
+		return &clone, nil
+	}
+	return nil, service.ErrAPIKeyNotFound
+}
+
 func (r *stubApiKeyRepo) Update(ctx context.Context, key *service.APIKey) error {
 	if key == nil {
 		return errors.New("nil key")
@@ -2347,6 +2361,10 @@ func (r *stubApiKeyRepo) ListByUserID(ctx context.Context, userID int64, params 
 		PageSize: pageSize,
 		Pages:    pages,
 	}, nil
+}
+
+func (r *stubApiKeyRepo) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return r.ListByUserID(ctx, userID, params, service.APIKeyListFilters{})
 }
 
 func (r *stubApiKeyRepo) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
@@ -2468,6 +2486,10 @@ func (r *stubUsageLogRepo) Create(ctx context.Context, log *service.UsageLog) (b
 }
 
 func (r *stubUsageLogRepo) GetByID(ctx context.Context, id int64) (*service.UsageLog, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *stubUsageLogRepo) GetByRequestIDAndAPIKeyID(ctx context.Context, requestID string, apiKeyID int64) (*service.UsageLog, error) {
 	return nil, errors.New("not implemented")
 }
 

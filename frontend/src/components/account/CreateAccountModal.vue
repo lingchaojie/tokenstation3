@@ -111,6 +111,19 @@
           </button>
           <button
             type="button"
+            @click="form.platform = 'kilo'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'kilo'
+                ? 'bg-white text-cyan-600 shadow-sm dark:bg-dark-600 dark:text-cyan-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <Icon name="key" size="sm" />
+            Kilo
+          </button>
+          <button
+            type="button"
             @click="form.platform = 'gemini'"
             :class="[
               'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
@@ -336,6 +349,38 @@
             </div>
           </button>
 
+        </div>
+      </div>
+
+      <!-- Account Type Selection (Kilo) -->
+      <div v-if="form.platform === 'kilo'">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <div class="mt-2 grid grid-cols-1 gap-3" data-tour="account-form-type">
+          <button
+            type="button"
+            @click="accountCategory = 'apikey'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'apikey'
+                ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20'
+                : 'border-gray-200 hover:border-cyan-300 dark:border-dark-600 dark:hover:border-cyan-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'apikey'
+                  ? 'bg-cyan-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="key" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Kilo Pass</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">API token</span>
+            </div>
+          </button>
         </div>
       </div>
 
@@ -1021,7 +1066,9 @@
                 ? 'https://api.openai.com'
                 : form.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : 'https://api.anthropic.com'
+                  : form.platform === 'kilo'
+                    ? 'https://api.kilo.ai/api/openrouter'
+                    : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -1038,10 +1085,23 @@
                 ? 'sk-proj-...'
                 : form.platform === 'gemini'
                   ? 'AIza...'
-                  : 'sk-ant-...'
+                  : form.platform === 'kilo'
+                    ? 'kilo-token'
+                    : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ apiKeyHint }}</p>
+        </div>
+
+        <div v-if="form.platform === 'kilo'">
+          <label class="input-label">Kilo Organization ID</label>
+          <input
+            v-model="kiloOrganizationId"
+            type="text"
+            class="input font-mono"
+            placeholder="org_..."
+          />
+          <p class="input-hint">Optional. Sent as X-Kilocode-OrganizationID.</p>
         </div>
 
         <!-- Gemini API Key tier selection -->
@@ -3242,6 +3302,7 @@ import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -3280,12 +3341,14 @@ const oauthStepTitle = computed(() => {
 const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
+  if (form.platform === 'kilo') return 'Kilo OpenRouter-compatible base URL. Default: https://api.kilo.ai/api/openrouter'
   return t('admin.accounts.baseUrlHint')
 })
 
 const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
+  if (form.platform === 'kilo') return 'Paste the Kilo token from your Kilo Pass account.'
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3354,6 +3417,11 @@ interface TempUnschedRuleForm {
   description: string
 }
 
+type SyncPreviewCredentials = SyncUpstreamPreviewParams & {
+  kilocodeToken?: string
+  kilocodeOrganizationId?: string
+}
+
 // State
 const step = ref(1)
 const submitting = ref(false)
@@ -3361,15 +3429,23 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const kiloOrganizationId = ref('')
 
-const syncPreviewCredentials = computed(() => {
+const syncPreviewCredentials = computed<SyncPreviewCredentials | undefined>(() => {
   if (!apiKeyValue.value) return undefined
-  return {
+  const credentials: SyncPreviewCredentials = {
     platform: form.platform,
     type: form.type,
     base_url: apiKeyBaseUrl.value || undefined,
     api_key: apiKeyValue.value
   }
+  if (form.platform === 'kilo') {
+    credentials.kilocodeToken = apiKeyValue.value
+    if (kiloOrganizationId.value.trim()) {
+      credentials.kilocodeOrganizationId = kiloOrganizationId.value.trim()
+    }
+  }
+  return credentials
 })
 
 const editQuotaLimit = ref<number | null>(null)
@@ -3698,6 +3774,9 @@ const form = reactive({
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
+  if (form.platform === 'kilo') {
+    return false
+  }
   // Antigravity upstream 类型不需要 OAuth 流程
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
@@ -3798,7 +3877,9 @@ watch(
         ? 'https://api.openai.com'
         : newPlatform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : 'https://api.anthropic.com'
+          : newPlatform === 'kilo'
+            ? 'https://api.kilo.ai/api/openrouter'
+            : 'https://api.anthropic.com'
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -3810,6 +3891,9 @@ watch(
       })
       antigravityWhitelistModels.value = []
       accountCategory.value = 'oauth-based'
+      antigravityAccountType.value = 'oauth'
+    } else if (newPlatform === 'kilo') {
+      accountCategory.value = 'apikey'
       antigravityAccountType.value = 'oauth'
     } else {
       allowOverages.value = false
@@ -4213,6 +4297,7 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  kiloOrganizationId.value = ''
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4617,12 +4702,21 @@ const handleSubmit = async () => {
       ? 'https://api.openai.com'
       : form.platform === 'gemini'
         ? 'https://generativelanguage.googleapis.com'
-        : 'https://api.anthropic.com'
+        : form.platform === 'kilo'
+          ? 'https://api.kilo.ai/api/openrouter'
+          : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
     base_url: apiKeyBaseUrl.value.trim() || defaultBaseUrl,
     api_key: apiKeyValue.value.trim()
+  }
+  if (form.platform === 'kilo') {
+    credentials.kilocodeToken = apiKeyValue.value.trim()
+    const orgID = kiloOrganizationId.value.trim()
+    if (orgID) {
+      credentials.kilocodeOrganizationId = orgID
+    }
   }
   if (form.platform === 'gemini') {
     credentials.tier_id = geminiTierAIStudio.value

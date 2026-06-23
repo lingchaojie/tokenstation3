@@ -657,6 +657,13 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 	}
 }
 
+func usageLogAPIKeyFromService(k *service.APIKey) *APIKey {
+	if k == nil || k.KeyType == service.APIKeyTypeWebChat {
+		return nil
+	}
+	return APIKeyFromService(k)
+}
+
 func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 	// 普通用户 DTO：严禁包含管理员字段（例如 account_rate_multiplier、ip_address、account）。
 	requestType := l.EffectiveRequestType()
@@ -711,7 +718,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		BillingMode:           l.BillingMode,
 		CreatedAt:             l.CreatedAt,
 		User:                  UserFromServiceShallow(l.User),
-		APIKey:                APIKeyFromService(l.APIKey),
+		APIKey:                usageLogAPIKeyFromService(l.APIKey),
 		Group:                 GroupFromServiceShallow(l.Group),
 		Subscription:          UserSubscriptionFromServiceWithGroup(l.Subscription, l.Group),
 	}

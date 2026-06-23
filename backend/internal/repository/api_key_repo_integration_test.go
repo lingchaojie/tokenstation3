@@ -292,6 +292,41 @@ func (s *APIKeyRepoSuite) TestListByUserID() {
 	s.Require().Equal(int64(2), page.Total)
 }
 
+func (s *APIKeyRepoSuite) TestListByUserID_ExcludesWebChatKeys() {
+	user := s.mustCreateUser("listbyuser-webchat@test.com")
+	group := s.mustCreateGroup("g-list-webchat")
+	visible := s.mustCreateApiKey(user.ID, "sk-list-visible", "Visible Key", nil)
+	webChat := &service.APIKey{
+		UserID:           user.ID,
+		Key:              "wc-list-hidden",
+		Name:             "Web Chat",
+		KeyType:          service.APIKeyTypeWebChat,
+		GroupID:          &group.ID,
+		GroupBindingMode: service.APIKeyGroupBindingModeStatic,
+		Status:           service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, webChat), "create web chat api key")
+
+	keys, page, err := s.repo.ListByUserID(s.ctx, user.ID, pagination.PaginationParams{Page: 1, PageSize: 10}, service.APIKeyListFilters{})
+	s.Require().NoError(err, "ListByUserID")
+	s.Require().Len(keys, 1)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Equal(visible.ID, keys[0].ID)
+
+	count, err := s.repo.CountByUserID(s.ctx, user.ID)
+	s.Require().NoError(err, "CountByUserID")
+	s.Require().Equal(int64(1), count)
+
+	found, err := s.repo.SearchAPIKeys(s.ctx, user.ID, "Web", 10)
+	s.Require().NoError(err, "SearchAPIKeys")
+	s.Require().Empty(found)
+
+	got, err := s.repo.GetByKeyForAuth(s.ctx, webChat.Key)
+	s.Require().NoError(err, "GetByKeyForAuth")
+	s.Require().Equal(webChat.ID, got.ID)
+	s.Require().Equal(service.APIKeyTypeWebChat, got.KeyType)
+}
+
 func (s *APIKeyRepoSuite) TestListByUserID_Pagination() {
 	user := s.mustCreateUser("paging@test.com")
 	for i := 0; i < 5; i++ {

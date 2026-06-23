@@ -50,6 +50,9 @@ func (f fakeAPIKeyRepo) GetByKey(ctx context.Context, key string) (*service.APIK
 func (f fakeAPIKeyRepo) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
 	return f.GetByKey(ctx, key)
 }
+func (f fakeAPIKeyRepo) GetWebChatKeyByUserAndGroup(ctx context.Context, userID, groupID int64) (*service.APIKey, error) {
+	return nil, errors.New("not implemented")
+}
 func (f fakeAPIKeyRepo) Update(ctx context.Context, key *service.APIKey) error {
 	return errors.New("not implemented")
 }
@@ -60,6 +63,9 @@ func (f fakeAPIKeyRepo) DeleteWithAudit(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }
 func (f fakeAPIKeyRepo) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, _ service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
+	return nil, nil, errors.New("not implemented")
+}
+func (f fakeAPIKeyRepo) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
 	return nil, nil, errors.New("not implemented")
 }
 func (f fakeAPIKeyRepo) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
@@ -283,6 +289,48 @@ func TestApiKeyAuthWithSubscriptionGoogle_QueryApiKeyRejected(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.Error.Code)
 	require.Equal(t, "Query parameter api_key is deprecated. Use Authorization header or key instead.", resp.Error.Message)
 	require.Equal(t, "INVALID_ARGUMENT", resp.Error.Status)
+}
+
+func TestAPIKeyAuthGoogleRejectsWebChatKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	user := &service.User{ID: 7, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{
+		ID:      100,
+		UserID:  user.ID,
+		Key:     "wc-hidden-google",
+		Name:    "Web Chat",
+		KeyType: service.APIKeyTypeWebChat,
+		Status:  service.StatusActive,
+		User:    user,
+	}
+	apiKeyService := newTestAPIKeyService(fakeAPIKeyRepo{
+		getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+			require.Equal(t, apiKey.Key, key)
+			return apiKey, nil
+		},
+	})
+
+	handlerCalled := false
+	r := gin.New()
+	r.Use(APIKeyAuthWithSubscriptionGoogle(apiKeyService, nil, &config.Config{}))
+	r.GET("/v1beta/test", func(c *gin.Context) {
+		handlerCalled = true
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/test", nil)
+	req.Header.Set("x-goog-api-key", apiKey.Key)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.False(t, handlerCalled)
+	var resp googleErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, http.StatusUnauthorized, resp.Error.Code)
+	require.Equal(t, "Invalid API key", resp.Error.Message)
+	require.Equal(t, "UNAUTHENTICATED", resp.Error.Status)
 }
 
 func TestApiKeyAuthWithSubscriptionGoogleSetsGroupContext(t *testing.T) {

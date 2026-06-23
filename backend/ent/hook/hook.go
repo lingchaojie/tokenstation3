@@ -441,6 +441,54 @@ func (f UserSubscriptionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.V
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UserSubscriptionMutation", m)
 }
 
+// The WebChatArtifactFunc type is an adapter to allow the use of ordinary
+// function as WebChatArtifact mutator.
+type WebChatArtifactFunc func(context.Context, *ent.WebChatArtifactMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f WebChatArtifactFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.WebChatArtifactMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.WebChatArtifactMutation", m)
+}
+
+// The WebChatAttachmentFunc type is an adapter to allow the use of ordinary
+// function as WebChatAttachment mutator.
+type WebChatAttachmentFunc func(context.Context, *ent.WebChatAttachmentMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f WebChatAttachmentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.WebChatAttachmentMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.WebChatAttachmentMutation", m)
+}
+
+// The WebChatConversationFunc type is an adapter to allow the use of ordinary
+// function as WebChatConversation mutator.
+type WebChatConversationFunc func(context.Context, *ent.WebChatConversationMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f WebChatConversationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.WebChatConversationMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.WebChatConversationMutation", m)
+}
+
+// The WebChatMessageFunc type is an adapter to allow the use of ordinary
+// function as WebChatMessage mutator.
+type WebChatMessageFunc func(context.Context, *ent.WebChatMessageMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f WebChatMessageFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.WebChatMessageMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.WebChatMessageMutation", m)
+}
+
 // Condition is a hook condition function.
 type Condition func(context.Context, ent.Mutation) bool
 

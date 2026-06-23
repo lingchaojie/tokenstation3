@@ -139,6 +139,10 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task rejected: operator=%d err=%v %s", createdBy, err, describeUsageCleanupFilters(filters))
 		return nil, err
 	}
+	if err := s.validateVisibleAPIKeyFilter(ctx, filters); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task rejected: operator=%d err=%v %s", createdBy, err, describeUsageCleanupFilters(filters))
+		return nil, err
+	}
 
 	task := &UsageCleanupTask{
 		Status:    UsageCleanupStatusPending,
@@ -301,6 +305,20 @@ func (s *UsageCleanupService) validateFilters(filters UsageCleanupFilters) error
 		if delta > time.Duration(maxDays)*24*time.Hour {
 			return infraerrors.BadRequest("USAGE_CLEANUP_RANGE_TOO_LARGE", fmt.Sprintf("date range exceeds %d days", maxDays))
 		}
+	}
+	return nil
+}
+
+func (s *UsageCleanupService) validateVisibleAPIKeyFilter(ctx context.Context, filters UsageCleanupFilters) error {
+	if filters.APIKeyID == nil {
+		return nil
+	}
+	visible, err := s.repo.IsVisibleAPIKeyID(ctx, *filters.APIKeyID)
+	if err != nil {
+		return fmt.Errorf("validate cleanup api key: %w", err)
+	}
+	if !visible {
+		return infraerrors.NotFound("API_KEY_NOT_FOUND", "API key not found")
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -509,6 +510,7 @@ var platformToLiteLLMProvider = map[string]string{
 	service.PlatformOpenAI:      "openai",
 	service.PlatformGemini:      "google",
 	service.PlatformAntigravity: "anthropic",
+	service.PlatformKilo:        "openai",
 }
 
 // SyncPricingModels 返回 LiteLLM 定价目录中指定平台的最新模型列表
@@ -526,6 +528,22 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 		response.ErrorFrom(c, infraerrors.BadRequest("UNSUPPORTED_PLATFORM",
 			fmt.Sprintf("unsupported platform: %s", platform)).
 			WithMetadata(map[string]string{"param": "platform"}))
+		return
+	}
+
+	if platform == service.PlatformKilo {
+		models := make(map[string]struct{})
+		for _, kiloProvider := range []string{"anthropic", "openai", "google"} {
+			for _, model := range h.pricingService.ListModelNamesByProvider(kiloProvider) {
+				models[model] = struct{}{}
+			}
+		}
+		names := make([]string, 0, len(models))
+		for model := range models {
+			names = append(names, model)
+		}
+		sort.Strings(names)
+		response.Success(c, gin.H{"models": names})
 		return
 	}
 

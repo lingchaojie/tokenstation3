@@ -1846,6 +1846,157 @@ var (
 			},
 		},
 	}
+	// WebChatArtifactsColumns holds the columns for the "web_chat_artifacts" table.
+	WebChatArtifactsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "message_id", Type: field.TypeInt64},
+		{Name: "conversation_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "filename", Type: field.TypeString, Size: 255},
+		{Name: "content_type", Type: field.TypeString, Size: 120},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "storage_key", Type: field.TypeString, Size: 500},
+		{Name: "sha256", Type: field.TypeString, Size: 64},
+		{Name: "source", Type: field.TypeString, Size: 30},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// WebChatArtifactsTable holds the schema information for the "web_chat_artifacts" table.
+	WebChatArtifactsTable = &schema.Table{
+		Name:       "web_chat_artifacts",
+		Columns:    WebChatArtifactsColumns,
+		PrimaryKey: []*schema.Column{WebChatArtifactsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idx_web_chat_artifacts_message",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatArtifactsColumns[1]},
+			},
+			{
+				Name:    "idx_web_chat_artifacts_user_created",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatArtifactsColumns[3], WebChatArtifactsColumns[10]},
+			},
+		},
+	}
+	// WebChatAttachmentsColumns holds the columns for the "web_chat_attachments" table.
+	WebChatAttachmentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "conversation_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "kind", Type: field.TypeString, Size: 20},
+		{Name: "filename", Type: field.TypeString, Size: 255},
+		{Name: "content_type", Type: field.TypeString, Size: 120},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "storage_key", Type: field.TypeString, Size: 500},
+		{Name: "sha256", Type: field.TypeString, Size: 64},
+		{Name: "text_preview", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "uploaded"},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// WebChatAttachmentsTable holds the schema information for the "web_chat_attachments" table.
+	WebChatAttachmentsTable = &schema.Table{
+		Name:       "web_chat_attachments",
+		Columns:    WebChatAttachmentsColumns,
+		PrimaryKey: []*schema.Column{WebChatAttachmentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idx_web_chat_attachments_user_created",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatAttachmentsColumns[3], WebChatAttachmentsColumns[12]},
+			},
+			{
+				Name:    "idx_web_chat_attachments_message",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatAttachmentsColumns[1]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "message_id IS NOT NULL",
+				},
+			},
+			{
+				Name:    "idx_web_chat_attachments_conversation",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatAttachmentsColumns[2]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "conversation_id IS NOT NULL",
+				},
+			},
+		},
+	}
+	// WebChatConversationsColumns holds the columns for the "web_chat_conversations" table.
+	WebChatConversationsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "title", Type: field.TypeString, Size: 200, Default: ""},
+		{Name: "default_model", Type: field.TypeString, Size: 100, Default: ""},
+		{Name: "default_provider", Type: field.TypeString, Size: 50, Default: ""},
+		{Name: "last_model", Type: field.TypeString, Size: 100, Default: ""},
+		{Name: "last_provider", Type: field.TypeString, Size: 50, Default: ""},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
+		{Name: "message_count", Type: field.TypeInt, Default: 0},
+		{Name: "last_message_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// WebChatConversationsTable holds the schema information for the "web_chat_conversations" table.
+	WebChatConversationsTable = &schema.Table{
+		Name:       "web_chat_conversations",
+		Columns:    WebChatConversationsColumns,
+		PrimaryKey: []*schema.Column{WebChatConversationsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idx_web_chat_conversations_user_updated",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatConversationsColumns[3], WebChatConversationsColumns[2]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "status <> 'deleted'",
+				},
+			},
+		},
+	}
+	// WebChatMessagesColumns holds the columns for the "web_chat_messages" table.
+	WebChatMessagesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "conversation_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "role", Type: field.TypeString, Size: 20},
+		{Name: "model", Type: field.TypeString, Size: 100, Default: ""},
+		{Name: "provider", Type: field.TypeString, Size: 50, Default: ""},
+		{Name: "content_text", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "content_json", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "completed"},
+		{Name: "error_code", Type: field.TypeString, Nullable: true, Size: 80},
+		{Name: "error_message", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "usage_log_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// WebChatMessagesTable holds the schema information for the "web_chat_messages" table.
+	WebChatMessagesTable = &schema.Table{
+		Name:       "web_chat_messages",
+		Columns:    WebChatMessagesColumns,
+		PrimaryKey: []*schema.Column{WebChatMessagesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "idx_web_chat_messages_conversation_created",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatMessagesColumns[3], WebChatMessagesColumns[1]},
+			},
+			{
+				Name:    "idx_web_chat_messages_user_created",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatMessagesColumns[4], WebChatMessagesColumns[1]},
+			},
+			{
+				Name:    "idx_web_chat_messages_usage_log_id",
+				Unique:  false,
+				Columns: []*schema.Column{WebChatMessagesColumns[13]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "usage_log_id IS NOT NULL",
+				},
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		APIKeysTable,
@@ -1884,6 +2035,10 @@ var (
 		UserAttributeValuesTable,
 		UserPlatformQuotasTable,
 		UserSubscriptionsTable,
+		WebChatArtifactsTable,
+		WebChatAttachmentsTable,
+		WebChatConversationsTable,
+		WebChatMessagesTable,
 	}
 )
 
@@ -2028,5 +2183,17 @@ func init() {
 	UserSubscriptionsTable.ForeignKeys[2].RefTable = UsersTable
 	UserSubscriptionsTable.Annotation = &entsql.Annotation{
 		Table: "user_subscriptions",
+	}
+	WebChatArtifactsTable.Annotation = &entsql.Annotation{
+		Table: "web_chat_artifacts",
+	}
+	WebChatAttachmentsTable.Annotation = &entsql.Annotation{
+		Table: "web_chat_attachments",
+	}
+	WebChatConversationsTable.Annotation = &entsql.Annotation{
+		Table: "web_chat_conversations",
+	}
+	WebChatMessagesTable.Annotation = &entsql.Annotation{
+		Table: "web_chat_messages",
 	}
 }

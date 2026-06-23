@@ -422,6 +422,34 @@ func TestUsageCleanupRepositoryDeleteUsageLogsBatch(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageCleanupRepositoryIsVisibleAPIKeyID_WebChat(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageCleanupRepository{sql: db}
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(42), service.APIKeyTypeWebChat).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	visible, err := repo.IsVisibleAPIKeyID(context.Background(), 42)
+	require.NoError(t, err)
+	require.False(t, visible)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageCleanupRepositoryIsVisibleAPIKeyID_VisibleKey(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageCleanupRepository{sql: db}
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(int64(7), service.APIKeyTypeWebChat).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	visible, err := repo.IsVisibleAPIKeyID(context.Background(), 7)
+	require.NoError(t, err)
+	require.True(t, visible)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageCleanupRepositoryDeleteUsageLogsBatchQueryError(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageCleanupRepository{sql: db}
@@ -462,8 +490,23 @@ func TestBuildUsageCleanupWhere(t *testing.T) {
 		BillingType: &billingType,
 	})
 
-	require.Equal(t, "created_at >= $1 AND created_at <= $2 AND user_id = $3 AND api_key_id = $4 AND account_id = $5 AND group_id = $6 AND model = $7 AND stream = $8 AND billing_type = $9", where)
-	require.Equal(t, []any{start, end, userID, apiKeyID, accountID, groupID, "gpt-4", stream, billingType}, args)
+	require.Equal(t, "created_at >= $1 AND created_at <= $2 AND user_id = $3 AND api_key_id = $4 AND NOT EXISTS (SELECT 1 FROM api_keys ak WHERE ak.id = usage_logs.api_key_id AND ak.key_type = $5) AND account_id = $6 AND group_id = $7 AND model = $8 AND stream = $9 AND billing_type = $10", where)
+	require.Equal(t, []any{start, end, userID, apiKeyID, service.APIKeyTypeWebChat, accountID, groupID, "gpt-4", stream, billingType}, args)
+}
+
+func TestUsageCleanupRepositoryDeleteUsageLogsBatch_WebChatAPIKeyGuard(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	apiKeyID := int64(42)
+
+	where, args := buildUsageCleanupWhere(service.UsageCleanupFilters{
+		StartTime: start,
+		EndTime:   end,
+		APIKeyID:  &apiKeyID,
+	})
+
+	require.Equal(t, "created_at >= $1 AND created_at <= $2 AND api_key_id = $3 AND NOT EXISTS (SELECT 1 FROM api_keys ak WHERE ak.id = usage_logs.api_key_id AND ak.key_type = $4)", where)
+	require.Equal(t, []any{start, end, apiKeyID, service.APIKeyTypeWebChat}, args)
 }
 
 func TestBuildUsageCleanupWhereRequestTypePriority(t *testing.T) {

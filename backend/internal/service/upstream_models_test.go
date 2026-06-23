@@ -105,6 +105,20 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.Equal(t, "https://openai.example.com/v1/models", openAIReq.URL.String())
 	require.Equal(t, "Bearer openai-key", openAIReq.Header.Get("Authorization"))
 
+	kiloReq, err := svc.buildKiloUpstreamModelsRequest(ctx, &Account{
+		Platform: PlatformKilo,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"kilocodeToken":          "kilo-token",
+			"kilocodeOrganizationId": "org-1",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://api.kilo.ai/api/openrouter/models", kiloReq.URL.String())
+	require.Equal(t, "Bearer kilo-token", kiloReq.Header.Get("Authorization"))
+	require.Equal(t, "org-1", kiloReq.Header.Get("X-Kilocode-OrganizationID"))
+	require.Equal(t, "cli-proxy-kilo", kiloReq.Header.Get("User-Agent"))
+
 	geminiReq, err := svc.buildGeminiUpstreamModelsRequest(ctx, &Account{
 		Platform: PlatformGemini,
 		Type:     AccountTypeAPIKey,
@@ -191,6 +205,35 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIResponse(t *testing.T) {
 	require.Equal(t, []string{"gpt-5", "o3"}, models)
 	require.Equal(t, "https://openai.example.com/v1/models", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer openai-key", upstream.lastReq.Header.Get("Authorization"))
+}
+
+func TestFetchUpstreamSupportedModelsParsesKiloResponse(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"anthropic/claude-sonnet-4.6"},{"id":"openai/gpt-5"},{"id":"kilo-auto/frontier"}]}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		cfg:          upstreamModelSyncTestConfig(),
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID:       9,
+		Platform: PlatformKilo,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":         "kilo-token",
+			"organization_id": "org-1",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"anthropic/claude-sonnet-4.6", "kilo-auto/frontier", "openai/gpt-5"}, models)
+	require.Equal(t, "https://api.kilo.ai/api/openrouter/models", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer kilo-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "org-1", upstream.lastReq.Header.Get("X-Kilocode-OrganizationID"))
 }
 
 func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {

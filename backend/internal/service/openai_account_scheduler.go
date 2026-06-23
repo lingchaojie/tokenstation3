@@ -1267,7 +1267,10 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	decision := OpenAIAccountScheduleDecision{}
-	scheduler := s.getOpenAIAccountScheduler(ctx)
+	var scheduler OpenAIAccountScheduler
+	if OpenAICompatiblePlatformFromContext(ctx) == PlatformOpenAI {
+		scheduler = s.getOpenAIAccountScheduler(ctx)
+	}
 	if scheduler == nil {
 		decision.Layer = openAIAccountScheduleLayerLoadBalance
 		if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
