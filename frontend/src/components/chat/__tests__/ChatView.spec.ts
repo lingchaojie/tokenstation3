@@ -2,6 +2,20 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const routeState = vi.hoisted(() => ({
+  query: {} as Record<string, string | string[] | undefined>,
+}))
+
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return {
+    ...actual,
+    useRoute: () => ({
+      query: routeState.query,
+    }),
+  }
+})
+
 import ChatView from '@/views/user/ChatView.vue'
 import Composer from '@/components/chat/Composer.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
@@ -79,6 +93,7 @@ const AppLayoutStub = {
 describe('ChatView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    routeState.query = {}
     vi.restoreAllMocks()
     vi.spyOn(chatAPI, 'listModels').mockResolvedValue([chatModel])
     vi.spyOn(chatAPI, 'listConversations').mockResolvedValue({
@@ -106,6 +121,30 @@ describe('ChatView', () => {
     expect(wrapper.text()).not.toContain('Get started')
     expect(chatAPI.listModels).toHaveBeenCalledOnce()
     expect(chatAPI.listConversations).toHaveBeenCalledOnce()
+  })
+
+  it('selects the requested model from chat route query parameters', async () => {
+    vi.spyOn(chatAPI, 'listModels').mockResolvedValue([chatModel, anthropicModel])
+    routeState.query = {
+      provider: 'anthropic',
+      model: 'claude-opus-4-8',
+    }
+
+    mount(ChatView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const store = useChatStore()
+    expect(store.selectedModel).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-opus-4-8',
+    })
   })
 })
 

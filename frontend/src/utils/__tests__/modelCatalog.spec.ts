@@ -77,7 +77,7 @@ const models: PublicModelCatalogModel[] = [
   },
   {
     provider: 'qwen',
-    provider_name: 'Qwen',
+    provider_name: 'Alibaba Cloud',
     model_name: 'qwen3.6-plus',
     display_name: 'Qwen3.6 Plus',
     modalities: ['text'],
@@ -120,7 +120,7 @@ describe('model catalog utilities', () => {
   })
 
   it('sorts by provider name', () => {
-    expect(sortModelCatalog(models, 'provider').map((model) => model.provider_name)).toEqual(['Anthropic', 'Anthropic', 'OpenAI', 'Qwen'])
+    expect(sortModelCatalog(models, 'provider').map((model) => model.provider_name)).toEqual(['Anthropic', 'Anthropic', 'OpenAI', 'Alibaba Cloud'])
   })
 
   it('sorts default rows by provider then newest release date within provider', () => {
@@ -137,7 +137,7 @@ describe('model catalog utilities', () => {
       { value: 'all', label: 'All providers', count: 4 },
       { value: 'anthropic', label: 'Anthropic', count: 2 },
       { value: 'openai', label: 'OpenAI', count: 1 },
-      { value: 'qwen', label: 'Qwen', count: 1 },
+      { value: 'qwen', label: 'Alibaba Cloud', count: 1 },
     ])
   })
 })

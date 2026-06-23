@@ -43,6 +43,7 @@ const i18nMessages = vi.hoisted(() => ({
   'modelCatalog.pricing.output': 'Output',
   'modelCatalog.pricing.cacheRead': 'Cache read',
   'modelCatalog.pending': 'Pending confirmation',
+  'modelCatalog.chatNow': '立即对话',
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -56,7 +57,7 @@ const catalogFixture = {
   providers: [
     { key: 'anthropic', name: 'Anthropic', accent_color: '#d97745', model_count: 1 },
     { key: 'openai', name: 'OpenAI', accent_color: '#27a644', model_count: 1 },
-    { key: 'qwen', name: 'Qwen', accent_color: '#7c6df2', model_count: 1 },
+    { key: 'qwen', name: 'Alibaba Cloud', accent_color: '#7c6df2', model_count: 1 },
   ],
   models: [
     {
@@ -105,7 +106,7 @@ const catalogFixture = {
     },
     {
       provider: 'qwen',
-      provider_name: 'Qwen',
+      provider_name: 'Alibaba Cloud',
       model_name: 'qwen3.6-plus',
       display_name: 'Qwen3.6 Plus',
       modalities: ['text'],
@@ -128,6 +129,23 @@ function mountCatalog() {
   return mount(ModelCatalog, {
     global: {
       stubs: {
+        RouterLink: {
+          props: ['to'],
+          methods: {
+            hrefFor(to: string | { path: string; query?: Record<string, string> }) {
+              if (typeof to === 'string') return to
+              const params = new URLSearchParams()
+              if (to.query) {
+                Object.entries(to.query).forEach(([key, value]) => {
+                  params.set(key, value)
+                })
+              }
+              const query = params.toString()
+              return query ? `${to.path}?${query}` : to.path
+            },
+          },
+          template: '<a v-bind="$attrs" :href="hrefFor(to)"><slot /></a>',
+        },
         Icon: { template: '<span data-testid="icon" />' },
         ModelIcon: { template: '<span data-testid="model-icon" />' },
       },
@@ -154,6 +172,7 @@ describe('ModelCatalog', () => {
     expect(text).toContain('GPT-Image-2')
     expect(text).toContain('1K image')
     expect(text).toContain('$0.21')
+    expect(text).toContain('Alibaba Cloud')
     expect(text).toContain('Qwen3.6 Plus')
     expect(text).toContain('Pending confirmation')
     expect(text).not.toContain('Released')
@@ -162,6 +181,21 @@ describe('ModelCatalog', () => {
     expect(text).not.toContain('Confirmed prices')
     expect(text).not.toContain('Updated')
     expect(text).not.toContain('Source')
+  })
+
+  it('links each model card to chat with the selected provider and model', async () => {
+    mockedGetPublicModelCatalog.mockResolvedValue(catalogFixture)
+
+    const wrapper = mountCatalog()
+    await flushPromises()
+
+    const chatLinks = wrapper.findAll('[data-testid="model-catalog-chat-link"]')
+    expect(chatLinks).toHaveLength(catalogFixture.models.length)
+
+    const imageChatLink = chatLinks.find((link) => link.attributes('data-model') === 'gpt-image-2')
+    expect(imageChatLink?.text()).toContain('立即对话')
+    expect(imageChatLink?.attributes('href')).toBe('/chat?provider=openai&model=gpt-image-2')
+    expect(imageChatLink?.attributes('data-provider')).toBe('openai')
   })
 
   it('filters by search and provider', async () => {

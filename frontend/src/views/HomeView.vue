@@ -51,7 +51,7 @@
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
-            <router-link :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChat') }}</router-link>
+            <router-link :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
             <router-link to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
             <a

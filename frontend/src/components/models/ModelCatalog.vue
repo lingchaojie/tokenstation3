@@ -172,6 +172,16 @@
           </div>
         </div>
 
+        <router-link
+          :to="chatRouteForModel(model)"
+          class="btn btn-primary mt-5 w-full justify-center"
+          :data-provider="model.provider"
+          :data-model="model.model_name"
+          data-testid="model-catalog-chat-link"
+        >
+          <Icon name="chat" size="sm" class="mr-2" />
+          {{ t('modelCatalog.chatNow') }}
+        </router-link>
       </article>
     </div>
   </section>
@@ -289,6 +299,16 @@ function pricingRows(model: PublicModelCatalogModel): Array<{ key: string; label
     })
   }
   return rows
+}
+
+function chatRouteForModel(model: PublicModelCatalogModel) {
+  return {
+    path: '/chat',
+    query: {
+      provider: model.provider,
+      model: model.model_name,
+    },
+  }
 }
 
 async function loadCatalog() {

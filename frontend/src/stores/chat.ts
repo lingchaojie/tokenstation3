@@ -257,10 +257,16 @@ export const useChatStore = defineStore('chat', () => {
   function setSelectedModelFromConversation(conversation: WebChatConversation): void {
     const provider = conversation.last_provider || conversation.default_provider
     const model = conversation.last_model || conversation.default_model
+    selectModel(provider, model)
+  }
+
+  function selectModel(provider: string, model: string): boolean {
     const match = models.value.find((item) => item.provider === provider && item.model === model)
     if (match) {
       selectedModel.value = match
+      return true
     }
+    return false
   }
 
   function reconcileThinkingSettings(): void {
@@ -602,6 +608,7 @@ export const useChatStore = defineStore('chat', () => {
     capabilityWarning,
     loadModels,
     loadConversations,
+    selectModel,
     openConversation,
     createConversation,
     renameConversation,

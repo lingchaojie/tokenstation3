@@ -104,6 +104,7 @@ const messages: Record<string, string> = {
   'home.providers.soon': '即将支持',
   'nav.modelMarketplace': '模型广场',
   'chat.openWebChat': '开始网页对话',
+  'chat.openWebChatShort': '对话',
 }
 
 const modelPricingFixture = {
@@ -486,7 +487,8 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const chatCta = wrapper.get('header a[href="/login?redirect=/chat"]')
-    expect(chatCta.text()).toContain('开始网页对话')
+    expect(chatCta.text()).toContain('对话')
+    expect(chatCta.text()).not.toContain('开始网页对话')
 
     const chatEntry = wrapper.get('[data-testid="homepage-chat-entry"]')
     expect(chatEntry.text()).toContain('开始网页对话')
@@ -503,7 +505,8 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const chatCta = wrapper.get('header a[href="/chat"]')
-    expect(chatCta.text()).toContain('开始网页对话')
+    expect(chatCta.text()).toContain('对话')
+    expect(chatCta.text()).not.toContain('开始网页对话')
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {
