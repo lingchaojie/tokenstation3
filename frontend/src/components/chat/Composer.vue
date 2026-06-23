@@ -1,5 +1,5 @@
 <template>
-  <footer class="border-t border-linear-hairline bg-linear-canvas px-4 py-3" data-testid="chat-composer">
+  <footer class="shrink-0 border-t border-linear-hairline bg-linear-canvas px-3 py-3 sm:px-4" data-testid="chat-composer">
     <div class="mx-auto max-w-3xl">
       <div v-if="chatStore.pendingAttachments.length > 0" class="mb-2 flex flex-wrap gap-2">
         <AttachmentChip

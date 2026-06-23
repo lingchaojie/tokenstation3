@@ -1,8 +1,31 @@
 <template>
-  <section class="chat-page min-h-[calc(100vh-4rem)] bg-linear-canvas text-linear-ink" data-testid="chat-page">
-    <div class="grid h-[calc(100vh-4rem)] min-h-[640px] grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <ConversationRail />
-      <main class="flex min-w-0 flex-col border-linear-hairline bg-linear-canvas lg:border-l">
+  <section class="chat-page min-h-[calc(100dvh-4rem)] bg-linear-canvas text-linear-ink" data-testid="chat-page">
+    <div class="flex h-[calc(100dvh-4rem)] min-h-0 flex-col overflow-hidden lg:grid lg:h-[calc(100vh-4rem)] lg:min-h-[640px] lg:grid-cols-[280px_minmax(0,1fr)]">
+      <ConversationRail
+        class="min-h-0 flex-1 lg:flex"
+        :class="mobilePanel === 'list' ? 'flex' : 'hidden'"
+        @new-chat="showChatPanel"
+        @open-conversation="showChatPanel"
+      />
+      <main
+        class="min-h-0 min-w-0 flex-1 flex-col border-linear-hairline bg-linear-canvas lg:flex lg:border-l"
+        :class="mobilePanel === 'chat' ? 'flex' : 'hidden'"
+        data-testid="chat-main-panel"
+      >
+        <div class="flex shrink-0 items-center gap-2 border-b border-linear-hairline bg-linear-canvas px-3 py-2 lg:hidden">
+          <button
+            class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:bg-linear-surface-2 hover:text-linear-ink"
+            type="button"
+            data-testid="chat-mobile-back"
+            @click="showConversationList"
+          >
+            <Icon name="chevronLeft" size="sm" />
+            <span>Chats</span>
+          </button>
+          <span class="min-w-0 flex-1 truncate text-sm font-medium text-linear-ink">
+            {{ mobileTitle }}
+          </span>
+        </div>
         <ModelSelector />
         <MessageList class="min-h-0 flex-1" />
         <Composer />
@@ -12,8 +35,41 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+
 import Composer from '@/components/chat/Composer.vue'
 import ConversationRail from '@/components/chat/ConversationRail.vue'
+import Icon from '@/components/icons/Icon.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
+import { useChatStore } from '@/stores/chat'
+
+const chatStore = useChatStore()
+
+const props = withDefaults(defineProps<{
+  initialMobilePanel?: 'list' | 'chat'
+}>(), {
+  initialMobilePanel: 'list',
+})
+
+const mobilePanel = ref<'list' | 'chat'>(props.initialMobilePanel)
+
+const mobileTitle = computed(() => {
+  const conversation = chatStore.currentConversation?.conversation
+  return conversation?.title || conversation?.last_model || chatStore.selectedModel?.display_name || 'Chat'
+})
+
+function showChatPanel(): void {
+  mobilePanel.value = 'chat'
+}
+
+function showConversationList(): void {
+  mobilePanel.value = 'list'
+}
+
+watch(() => props.initialMobilePanel, (panel) => {
+  if (panel === 'chat') {
+    mobilePanel.value = 'chat'
+  }
+})
 </script>

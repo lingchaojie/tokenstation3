@@ -1,11 +1,11 @@
 <template>
   <AppLayout>
-    <ChatShell />
+    <ChatShell :initial-mobile-panel="hasRouteModel ? 'chat' : 'list'" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import ChatShell from '@/components/chat/ChatShell.vue'
@@ -29,6 +29,10 @@ function selectRouteModel(): void {
 
   chatStore.selectModel(provider, model)
 }
+
+const hasRouteModel = computed(() => {
+  return Boolean(queryStringValue(route.query.provider).trim() && queryStringValue(route.query.model).trim())
+})
 
 onMounted(async () => {
   await Promise.all([

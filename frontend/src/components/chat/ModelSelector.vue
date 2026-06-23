@@ -1,7 +1,7 @@
 <template>
-  <header class="border-b border-linear-hairline bg-linear-canvas px-4 py-3" data-testid="chat-model-selector">
+  <header class="shrink-0 border-b border-linear-hairline bg-linear-canvas px-3 py-3 sm:px-4" data-testid="chat-model-selector">
     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-      <div class="grid gap-2 sm:grid-cols-[minmax(9rem,12rem)_minmax(12rem,22rem)]">
+      <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(9rem,12rem)_minmax(12rem,22rem)]">
         <div ref="providerMenuRef" class="relative">
           <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Provider</span>
           <button
@@ -55,7 +55,7 @@
         </label>
       </div>
 
-      <div v-if="chatStore.selectedModel" class="flex flex-col gap-2 lg:items-end">
+      <div v-if="chatStore.selectedModel" class="flex min-w-0 flex-col gap-2 lg:items-end">
         <div class="flex flex-wrap gap-2">
           <span
             v-for="capability in capabilities"
