@@ -375,10 +375,7 @@ func normalizeChatCompletionsResponsesImageRequest(body []byte, upstreamModel st
 	if err := json.Unmarshal(body, &reqBody); err != nil {
 		return nil, "", fmt.Errorf("unmarshal for image generation normalization: %w", err)
 	}
-	modified := false
-	if normalizeOpenAIResponsesImageGenerationTools(reqBody) {
-		modified = true
-	}
+	modified := normalizeOpenAIResponsesImageGenerationTools(reqBody)
 	if normalizeOpenAIResponsesImageOnlyModel(reqBody) {
 		modified = true
 	}
