@@ -111,6 +111,19 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// user_subscriptions: deleted_at for soft delete support (migration 012)
 	requireColumn(t, tx, "user_subscriptions", "deleted_at", "timestamp with time zone", 0, true)
 
+	requireConstraintDefinitionContains(
+		t,
+		tx,
+		"user_platform_quotas",
+		"user_platform_quotas_platform_check",
+		"platform",
+		"'anthropic'",
+		"'openai'",
+		"'gemini'",
+		"'antigravity'",
+		"'kilo'",
+	)
+
 	// orphan_allowed_groups_audit table should exist (migration 013)
 	var orphanAuditRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.orphan_allowed_groups_audit')").Scan(&orphanAuditRegclass))
