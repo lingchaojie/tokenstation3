@@ -11,12 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKiroOAuthService_GenerateSocialAuthURLAndExchangeCode(t *testing.T) {
+func TestKiroOAuthService_GenerateKiroCLILoginURLAndExchangeCode(t *testing.T) {
 	var tokenRequest map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/oauth/token", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "cli-proxy-api/1.0.0", r.Header.Get("User-Agent"))
+		require.Equal(t, "Kiro-CLI", r.Header.Get("User-Agent"))
+		require.Equal(t, "*/*", r.Header.Get("Accept"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&tokenRequest))
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"accessToken":  "kiro-access",
@@ -33,12 +34,12 @@ func TestKiroOAuthService_GenerateSocialAuthURLAndExchangeCode(t *testing.T) {
 	start, err := svc.GenerateAuthURL(context.Background(), KiroOAuthStartInput{Method: "google"})
 	require.NoError(t, err)
 	require.Equal(t, "auth_url", start.Mode)
-	require.Equal(t, "google", start.Method)
+	require.Equal(t, "kiro-cli", start.Method)
 	require.NotEmpty(t, start.SessionID)
 	require.NotEmpty(t, start.State)
-	require.Contains(t, start.AuthURL, upstream.URL+"/login")
-	require.Contains(t, start.AuthURL, "idp=Google")
-	require.Contains(t, start.AuthURL, "redirect_uri=kiro%3A%2F%2Fkiro.kiroAgent%2Fauthenticate-success")
+	require.Contains(t, start.AuthURL, "https://app.kiro.dev/signin")
+	require.Contains(t, start.AuthURL, "redirect_uri=http%3A%2F%2Flocalhost%3A3128")
+	require.Contains(t, start.AuthURL, "redirect_from=kirocli")
 	require.Contains(t, start.AuthURL, "code_challenge_method=S256")
 
 	tokenInfo, err := svc.ExchangeCode(context.Background(), &KiroOAuthExchangeCodeInput{
@@ -50,11 +51,11 @@ func TestKiroOAuthService_GenerateSocialAuthURLAndExchangeCode(t *testing.T) {
 	require.Equal(t, "kiro-access", tokenInfo.AccessToken)
 	require.Equal(t, "kiro-refresh", tokenInfo.RefreshToken)
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/test", tokenInfo.ProfileARN)
-	require.Equal(t, "social", tokenInfo.AuthMethod)
+	require.Equal(t, "kiro-cli", tokenInfo.AuthMethod)
 	require.Equal(t, "Google", tokenInfo.Provider)
 	require.NotEmpty(t, tokenInfo.ExpiresAt)
 	require.Equal(t, "callback-code", tokenRequest["code"])
-	require.Equal(t, KiroSocialRedirectURI, tokenRequest["redirect_uri"])
+	require.Equal(t, "http://localhost:3128/oauth/callback?login_option=google", tokenRequest["redirect_uri"])
 	require.NotEmpty(t, tokenRequest["code_verifier"])
 }
 
@@ -67,6 +68,7 @@ func TestKiroOAuthService_DeviceCodePollCompletesBuilderIDToken(t *testing.T) {
 			var payload map[string]any
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 			require.Equal(t, "Kiro IDE", payload["clientName"])
+			require.Contains(t, payload["scopes"], "codewhisperer:taskassist")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"clientId":     "client-id",
 				"clientSecret": "client-secret",

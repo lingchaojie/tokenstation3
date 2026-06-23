@@ -19,12 +19,17 @@ import (
 )
 
 const (
-	KiroSocialRedirectURI = "kiro://kiro.kiroAgent/authenticate-success"
+	KiroSocialRedirectURI   = "kiro://kiro.kiroAgent/authenticate-success"
+	KiroCLITokenRedirectURI = "http://localhost:3128/oauth/callback?login_option=google"
 
 	kiroOAuthUserAgent             = "cli-proxy-api/1.0.0"
 	kiroBuilderIDMethod            = "builder-id"
+	kiroCLIMethod                  = "kiro-cli"
 	kiroBuilderIDProvider          = "AWS"
+	kiroCLIProvider                = "Google"
 	kiroBuilderIDStartURL          = "https://view.awsapps.com/start"
+	kiroCLISignInEndpoint          = "https://app.kiro.dev/signin"
+	kiroCLIRedirectURI             = "http://localhost:3128"
 	kiroDeviceCodeGrantType        = "urn:ietf:params:oauth:grant-type:device_code"
 	kiroOAuthDefaultDeviceInterval = 5
 )
@@ -153,6 +158,9 @@ func (s *KiroOAuthService) GenerateAuthURL(ctx context.Context, input KiroOAuthS
 	if method == kiroBuilderIDMethod {
 		return s.startBuilderIDDeviceFlow(ctx, proxyURL)
 	}
+	if method == kiroCLIMethod {
+		return s.startKiroCLIFlow(provider, proxyURL)
+	}
 	return s.startSocialFlow(method, provider, proxyURL)
 }
 
@@ -186,6 +194,9 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroOAuthExc
 	if payload["code"] == "" {
 		return nil, fmt.Errorf("authorization code is required")
 	}
+	if session.Method == kiroCLIMethod {
+		return s.exchangeKiroCLICode(ctx, input.SessionID, payload["code"], session, proxyURL)
+	}
 	var tokenResp kiroSocialTokenResponse
 	targetURL := strings.TrimRight(s.authEndpoint, "/") + "/oauth/token"
 	if err := postKiroOAuthJSON(ctx, targetURL, payload, proxyURL, kiroOAuthUserAgent, &tokenResp); err != nil {
@@ -206,6 +217,36 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroOAuthExc
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "social",
 		Provider:     session.Provider,
+		Email:        extractEmailFromJWT(tokenResp.AccessToken),
+	}, nil
+}
+
+func (s *KiroOAuthService) exchangeKiroCLICode(ctx context.Context, sessionID string, code string, session *kiroOAuthSession, proxyURL string) (*KiroOAuthTokenInfo, error) {
+	payload := map[string]string{
+		"code":          code,
+		"code_verifier": session.CodeVerifier,
+		"redirect_uri":  KiroCLITokenRedirectURI,
+	}
+	var tokenResp kiroSocialTokenResponse
+	targetURL := strings.TrimRight(s.authEndpoint, "/") + "/oauth/token"
+	if err := postKiroOAuthJSONWithAccept(ctx, targetURL, payload, proxyURL, "Kiro-CLI", "*/*", &tokenResp); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
+		return nil, fmt.Errorf("kiro CLI OAuth response missing tokens")
+	}
+	if tokenResp.ExpiresIn <= 0 {
+		tokenResp.ExpiresIn = 3600
+	}
+	s.deleteSession(sessionID)
+	return &KiroOAuthTokenInfo{
+		AccessToken:  strings.TrimSpace(tokenResp.AccessToken),
+		RefreshToken: strings.TrimSpace(tokenResp.RefreshToken),
+		ProfileARN:   strings.TrimSpace(tokenResp.ProfileARN),
+		ExpiresIn:    tokenResp.ExpiresIn,
+		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
+		AuthMethod:   kiroCLIMethod,
+		Provider:     kiroCLIProvider,
 		Email:        extractEmailFromJWT(tokenResp.AccessToken),
 	}, nil
 }
@@ -266,6 +307,48 @@ func (s *KiroOAuthService) PollDeviceCode(ctx context.Context, input KiroOAuthPo
 			ClientSecret: session.ClientSecret,
 			Email:        extractEmailFromJWT(tokenResp.AccessToken),
 		},
+	}, nil
+}
+
+func (s *KiroOAuthService) startKiroCLIFlow(provider, proxyURL string) (*KiroOAuthStartResult, error) {
+	state, err := generateKiroCLIState()
+	if err != nil {
+		return nil, fmt.Errorf("生成 state 失败: %w", err)
+	}
+	codeVerifier, err := generateKiroOAuthRandom(32)
+	if err != nil {
+		return nil, fmt.Errorf("生成 code_verifier 失败: %w", err)
+	}
+	sessionID, err := generateKiroOAuthRandom(32)
+	if err != nil {
+		return nil, fmt.Errorf("生成 session_id 失败: %w", err)
+	}
+	authURL, err := url.Parse(kiroCLISignInEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	q := authURL.Query()
+	q.Set("state", state)
+	q.Set("code_challenge", generateKiroOAuthCodeChallenge(codeVerifier))
+	q.Set("code_challenge_method", "S256")
+	q.Set("redirect_uri", kiroCLIRedirectURI)
+	q.Set("redirect_from", "kirocli")
+	authURL.RawQuery = q.Encode()
+
+	s.setSession(sessionID, &kiroOAuthSession{
+		Method:       kiroCLIMethod,
+		Provider:     provider,
+		State:        state,
+		CodeVerifier: codeVerifier,
+		ProxyURL:     proxyURL,
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	return &KiroOAuthStartResult{
+		Mode:      "auth_url",
+		Method:    kiroCLIMethod,
+		AuthURL:   authURL.String(),
+		SessionID: sessionID,
+		State:     state,
 	}, nil
 }
 
@@ -368,6 +451,7 @@ func (s *KiroOAuthService) registerBuilderIDClient(ctx context.Context, proxyURL
 			"codewhisperer:analysis",
 			"codewhisperer:conversations",
 			"codewhisperer:transformations",
+			"codewhisperer:taskassist",
 		},
 		"grantTypes": []string{
 			kiroDeviceCodeGrantType,
@@ -463,13 +547,27 @@ func normalizeKiroOAuthMethod(raw string) (method string, provider string, err e
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "aws", "builder", "builder-id", "aws-builder-id":
 		return kiroBuilderIDMethod, kiroBuilderIDProvider, nil
-	case "google":
-		return "google", "Google", nil
+	case "google", "kiro-cli", "cli", "native":
+		return kiroCLIMethod, kiroCLIProvider, nil
 	case "github":
-		return "github", "Github", nil
+		return "", "", fmt.Errorf("github Kiro OAuth is not supported; use AWS Builder ID or Kiro CLI login")
 	default:
 		return "", "", fmt.Errorf("unsupported Kiro OAuth method: %s", raw)
 	}
+}
+
+func generateKiroCLIState() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const stateLen = 10
+	buf := make([]byte, stateLen)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, stateLen)
+	for i, b := range buf {
+		out[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(out), nil
 }
 
 func generateKiroOAuthRandom(size int) (string, error) {
@@ -486,6 +584,10 @@ func generateKiroOAuthCodeChallenge(codeVerifier string) string {
 }
 
 func postKiroOAuthJSON(ctx context.Context, targetURL string, payload any, proxyURL string, userAgent string, out any) error {
+	return postKiroOAuthJSONWithAccept(ctx, targetURL, payload, proxyURL, userAgent, "application/json", out)
+}
+
+func postKiroOAuthJSONWithAccept(ctx context.Context, targetURL string, payload any, proxyURL string, userAgent string, accept string, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -495,7 +597,10 @@ func postKiroOAuthJSON(ctx context.Context, targetURL string, payload any, proxy
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	if strings.TrimSpace(accept) == "" {
+		accept = "application/json"
+	}
+	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", userAgent)
 
 	client, err := httppool.GetClient(httppool.Options{

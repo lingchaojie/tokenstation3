@@ -1060,7 +1060,7 @@
             <div>
               <h4 class="font-semibold text-teal-900 dark:text-teal-100">Kiro Browser Login</h4>
               <p class="mt-1 text-sm text-teal-700 dark:text-teal-300">
-                AWS Builder ID, Google, GitHub
+                AWS Builder ID or Kiro CLI Google
               </p>
             </div>
             <button
@@ -1094,7 +1094,7 @@
             </button>
           </div>
 
-          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label
               v-for="option in kiroLoginMethodOptions"
               :key="option.value"
@@ -1193,7 +1193,7 @@
               v-model="kiroCallbackInput"
               rows="2"
               class="input w-full resize-y font-mono text-sm"
-              placeholder="kiro://kiro.kiroAgent/authenticate-success?code=..."
+              placeholder="http://localhost:3128/oauth/callback?login_option=google&code=..."
               spellcheck="false"
             ></textarea>
             <button
@@ -3675,8 +3675,7 @@ const kiroTokenJsonInput = ref('')
 let kiroPollingTimer: ReturnType<typeof setTimeout> | null = null
 const kiroLoginMethodOptions: Array<{ value: KiroLoginMethod; label: string }> = [
   { value: 'builder-id', label: 'AWS Builder ID' },
-  { value: 'google', label: 'Google' },
-  { value: 'github', label: 'GitHub' }
+  { value: 'kiro-cli', label: 'Kiro CLI Google' }
 ]
 
 const syncPreviewCredentials = computed<SyncPreviewCredentials | undefined>(() => {
