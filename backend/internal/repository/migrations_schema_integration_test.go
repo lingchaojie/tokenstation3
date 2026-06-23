@@ -121,7 +121,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 		"'openai'",
 		"'gemini'",
 		"'antigravity'",
-		"'kilo'",
+		"'kiro'",
 	)
 
 	// orphan_allowed_groups_audit table should exist (migration 013)

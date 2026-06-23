@@ -2,7 +2,6 @@ package admin
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -510,7 +509,7 @@ var platformToLiteLLMProvider = map[string]string{
 	service.PlatformOpenAI:      "openai",
 	service.PlatformGemini:      "google",
 	service.PlatformAntigravity: "anthropic",
-	service.PlatformKilo:        "openai",
+	service.PlatformKiro:        "anthropic",
 }
 
 // SyncPricingModels 返回 LiteLLM 定价目录中指定平台的最新模型列表
@@ -531,19 +530,19 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 		return
 	}
 
-	if platform == service.PlatformKilo {
-		models := make(map[string]struct{})
-		for _, kiloProvider := range []string{"anthropic", "openai", "google"} {
-			for _, model := range h.pricingService.ListModelNamesByProvider(kiloProvider) {
-				models[model] = struct{}{}
-			}
+	if platform == service.PlatformKiro {
+		models := []string{
+			"kiro-auto",
+			"kiro-claude-sonnet-4-5",
+			"kiro-claude-sonnet-4",
+			"kiro-claude-opus-4-5",
+			"kiro-claude-haiku-4-5",
+			"claude-sonnet-4-5",
+			"claude-sonnet-4",
+			"claude-opus-4-5",
+			"claude-haiku-4-5",
 		}
-		names := make([]string, 0, len(models))
-		for model := range models {
-			names = append(names, model)
-		}
-		sort.Strings(names)
-		response.Success(c, gin.H{"models": names})
+		response.Success(c, gin.H{"models": models})
 		return
 	}
 

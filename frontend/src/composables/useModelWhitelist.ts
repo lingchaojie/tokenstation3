@@ -83,21 +83,20 @@ const antigravityModels = [
   'tab_flash_lite_preview'
 ]
 
-const kiloModels = [
-  'kilo-auto/frontier',
-  'kilo-auto/balanced',
-  'kilo-auto/free',
-  'anthropic/claude-sonnet-4-6',
-  'anthropic/claude-opus-4-6',
-  'anthropic/claude-haiku-4-5',
-  'openai/gpt-5.4',
-  'openai/gpt-5.2',
-  'openai/gpt-5.3-codex',
-  'google/gemini-3.1-pro-high',
-  'google/gemini-3.1-pro-low',
-  'google/gemini-3-flash',
-  'google/gemini-2.5-pro',
-  'google/gemini-2.5-flash'
+const kiroModels = [
+  'kiro-auto',
+  'kiro-claude-sonnet-4-5',
+  'kiro-claude-opus-4-5',
+  'kiro-claude-haiku-4-5',
+  'kiro-claude-sonnet-4',
+  'kiro-claude-sonnet-4-5-agentic',
+  'kiro-claude-opus-4-5-agentic',
+  'kiro-claude-haiku-4-5-agentic',
+  'kiro-claude-sonnet-4-agentic',
+  'claude-sonnet-4-5',
+  'claude-opus-4-5',
+  'claude-haiku-4-5',
+  'claude-sonnet-4'
 ]
 
 // 智谱 GLM
@@ -230,7 +229,7 @@ const allModelsList: string[] = [
   ...openaiModels,
   ...claudeModels,
   ...geminiModels,
-  ...kiloModels,
+  ...kiroModels,
   ...zhipuModels,
   ...qwenModels,
   ...deepseekModels,
@@ -294,14 +293,12 @@ const geminiPresetMappings = [
   { label: '3.1 Image', from: 'gemini-3.1-flash-image', to: 'gemini-3.1-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' }
 ]
 
-const kiloPresetMappings = [
-  { label: 'Auto Frontier', from: 'kilo-auto/frontier', to: 'kilo-auto/frontier', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
-  { label: 'Auto Balanced', from: 'kilo-auto/balanced', to: 'kilo-auto/balanced', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
-  { label: 'Sonnet→Kilo', from: 'claude-sonnet-4-6', to: 'anthropic/claude-sonnet-4-6', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
-  { label: 'Opus→Kilo', from: 'claude-opus-4-6', to: 'anthropic/claude-opus-4-6', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
-  { label: 'Haiku→Kilo', from: 'claude-haiku-4-5', to: 'anthropic/claude-haiku-4-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
-  { label: 'GPT→Kilo', from: 'gpt-5.4', to: 'openai/gpt-5.4', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
-  { label: 'Gemini→Kilo', from: 'gemini-3.1-pro-high', to: 'google/gemini-3.1-pro-high', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' }
+const kiroPresetMappings = [
+  { label: 'Kiro Auto', from: 'claude-*', to: 'kiro-auto', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Sonnet→Kiro', from: 'claude-sonnet-*', to: 'kiro-claude-sonnet-4-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Opus→Kiro', from: 'claude-opus-*', to: 'kiro-claude-opus-4-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Haiku→Kiro', from: 'claude-haiku-*', to: 'kiro-claude-haiku-4-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Agentic Sonnet', from: 'claude-sonnet-4-5', to: 'kiro-claude-sonnet-4-5-agentic', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' }
 ]
 
 // Antigravity 预设映射（支持通配符）
@@ -399,7 +396,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'claude': return claudeModels
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
-    case 'kilo': return kiloModels
+    case 'kiro': return kiroModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
@@ -424,7 +421,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'openai') return openaiPresetMappings
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
-  if (platform === 'kilo') return kiloPresetMappings
+  if (platform === 'kiro') return kiroPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
 }

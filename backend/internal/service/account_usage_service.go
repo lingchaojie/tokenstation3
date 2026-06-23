@@ -104,7 +104,7 @@ type antigravityUsageCache struct {
 	timestamp time.Time
 }
 
-type kiloUsageCache struct {
+type kiroUsageCache struct {
 	usageInfo *UsageInfo
 	timestamp time.Time
 }
@@ -113,7 +113,7 @@ const (
 	apiCacheTTL             = 3 * time.Minute
 	apiErrorCacheTTL        = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
 	antigravityErrorTTL     = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
-	kiloErrorTTL            = 1 * time.Minute        // Kilo 错误缓存 TTL（可恢复错误）
+	kiroErrorTTL            = 1 * time.Minute        // Kiro 错误缓存 TTL（可恢复错误）
 	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL     = 1 * time.Minute
 	openAIProbeCacheTTL     = 10 * time.Minute
@@ -125,10 +125,10 @@ type UsageCache struct {
 	apiCache          sync.Map           // accountID -> *apiUsageCache
 	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
 	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
-	kiloCache         sync.Map           // accountID -> *kiloUsageCache
+	kiroCache         sync.Map           // accountID -> *kiroUsageCache
 	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
 	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
-	kiloFlight        singleflight.Group // 防止同一 Kilo 账号的并发请求击穿缓存
+	kiroFlight        singleflight.Group // 防止同一 Kiro 账号的并发请求击穿缓存
 	openAIProbeCache  sync.Map           // accountID -> time.Time
 }
 
@@ -185,10 +185,16 @@ type AICredit struct {
 	MinimumBalance float64 `json:"minimum_balance,omitempty"`
 }
 
-// KiloBalanceInfo 表示 Kilo 账号余额信息。
-type KiloBalanceInfo struct {
-	Balance  float64 `json:"balance"`
-	Currency string  `json:"currency,omitempty"`
+// KiroUsageLimitsInfo 表示 Kiro/AWS CodeWhisperer 账号级用量信息。
+type KiroUsageLimitsInfo struct {
+	ResourceType   string  `json:"resource_type,omitempty"`
+	CurrentUsage   float64 `json:"current_usage"`
+	UsageLimit     float64 `json:"usage_limit"`
+	Utilization    float64 `json:"utilization"`
+	DaysUntilReset int     `json:"days_until_reset,omitempty"`
+	NextDateReset  string  `json:"next_date_reset,omitempty"`
+	Subscription   string  `json:"subscription,omitempty"`
+	UserEmail      string  `json:"user_email,omitempty"`
 }
 
 // UsageInfo 账号使用量信息
@@ -218,8 +224,8 @@ type UsageInfo struct {
 	// Antigravity AI Credits 余额
 	AICredits []AICredit `json:"ai_credits,omitempty"`
 
-	// Kilo 账号余额
-	KiloBalance *KiloBalanceInfo `json:"kilo_balance,omitempty"`
+	// Kiro 账号上游用量
+	KiroUsage *KiroUsageLimitsInfo `json:"kiro_usage,omitempty"`
 
 	// Antigravity 废弃模型转发规则 (old_model_id -> new_model_id)
 	ModelForwardingRules map[string]string `json:"model_forwarding_rules,omitempty"`
@@ -329,8 +335,8 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 		return usage, err
 	}
 
-	if account.Platform == PlatformKilo {
-		usage, err := s.getKiloUsage(ctx, account, forceProbe)
+	if account.Platform == PlatformKiro {
+		usage, err := s.getKiroUsage(ctx, account, forceProbe)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
 		}

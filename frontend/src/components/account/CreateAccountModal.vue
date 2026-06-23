@@ -111,16 +111,16 @@
           </button>
           <button
             type="button"
-            @click="form.platform = 'kilo'"
+            @click="form.platform = 'kiro'"
             :class="[
               'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
-              form.platform === 'kilo'
-                ? 'bg-white text-cyan-600 shadow-sm dark:bg-dark-600 dark:text-cyan-400'
+              form.platform === 'kiro'
+                ? 'bg-white text-teal-600 shadow-sm dark:bg-dark-600 dark:text-teal-400'
                 : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
             ]"
           >
-            <Icon name="key" size="sm" />
-            Kilo
+            <Icon name="cloud" size="sm" />
+            Kiro
           </button>
           <button
             type="button"
@@ -352,33 +352,33 @@
         </div>
       </div>
 
-      <!-- Account Type Selection (Kilo) -->
-      <div v-if="form.platform === 'kilo'">
+      <!-- Account Type Selection (Kiro) -->
+      <div v-if="form.platform === 'kiro'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
         <div class="mt-2 grid grid-cols-1 gap-3" data-tour="account-form-type">
           <button
             type="button"
-            @click="accountCategory = 'apikey'"
+            @click="accountCategory = 'oauth-based'"
             :class="[
               'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
-              accountCategory === 'apikey'
-                ? 'border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20'
-                : 'border-gray-200 hover:border-cyan-300 dark:border-dark-600 dark:hover:border-cyan-700'
+              accountCategory === 'oauth-based'
+                ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                : 'border-gray-200 hover:border-teal-300 dark:border-dark-600 dark:hover:border-teal-700'
             ]"
           >
             <div
               :class="[
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
-                accountCategory === 'apikey'
-                  ? 'bg-cyan-500 text-white'
+                accountCategory === 'oauth-based'
+                  ? 'bg-teal-500 text-white'
                   : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
               ]"
             >
-              <Icon name="key" size="sm" />
+              <Icon name="cloud" size="sm" />
             </div>
             <div>
-              <span class="block text-sm font-medium text-gray-900 dark:text-white">Kilo Pass</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">API token</span>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Kiro OAuth</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">Access token / refresh token</span>
             </div>
           </button>
         </div>
@@ -1053,6 +1053,82 @@
         </div>
       </div>
 
+      <!-- Kiro OAuth credentials -->
+      <div v-if="form.platform === 'kiro'" class="space-y-4">
+        <div>
+          <label class="input-label">Access Token</label>
+          <input
+            v-model="kiroAccessToken"
+            type="password"
+            required
+            class="input font-mono"
+            autocomplete="new-password"
+            placeholder="eyJ..."
+          />
+        </div>
+        <div>
+          <label class="input-label">Refresh Token</label>
+          <input
+            v-model="kiroRefreshToken"
+            type="password"
+            class="input font-mono"
+            autocomplete="new-password"
+            placeholder="optional refresh token"
+          />
+          <p class="input-hint">Optional but recommended. Used to refresh expired Kiro access tokens.</p>
+        </div>
+        <div>
+          <label class="input-label">Profile ARN</label>
+          <input
+            v-model="kiroProfileArn"
+            type="text"
+            required
+            class="input font-mono"
+            placeholder="arn:aws:codewhisperer:us-east-1:..."
+          />
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">Client ID</label>
+            <input
+              v-model="kiroClientId"
+              type="text"
+              class="input font-mono"
+              placeholder="optional"
+            />
+          </div>
+          <div>
+            <label class="input-label">Client Secret</label>
+            <input
+              v-model="kiroClientSecret"
+              type="password"
+              class="input font-mono"
+              autocomplete="new-password"
+              placeholder="optional"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">Endpoint</label>
+            <select v-model="kiroPreferredEndpoint" class="input">
+              <option value="codewhisperer">CodeWhisperer</option>
+              <option value="amazonq">Amazon Q</option>
+            </select>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
+            <input
+              v-model="kiroBaseUrl"
+              type="text"
+              class="input"
+              placeholder="https://codewhisperer.us-east-1.amazonaws.com"
+            />
+            <p class="input-hint">Optional. Leave empty to use the Kiro-compatible default endpoint.</p>
+          </div>
+        </div>
+      </div>
+
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
       <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
         <div>
@@ -1066,9 +1142,7 @@
                 ? 'https://api.openai.com'
                 : form.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : form.platform === 'kilo'
-                    ? 'https://api.kilo.ai/api/openrouter'
-                    : 'https://api.anthropic.com'
+                  : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -1085,23 +1159,10 @@
                 ? 'sk-proj-...'
                 : form.platform === 'gemini'
                   ? 'AIza...'
-                  : form.platform === 'kilo'
-                    ? 'kilo-token'
-                    : 'sk-ant-...'
+                  : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ apiKeyHint }}</p>
-        </div>
-
-        <div v-if="form.platform === 'kilo'">
-          <label class="input-label">Kilo Organization ID</label>
-          <input
-            v-model="kiloOrganizationId"
-            type="text"
-            class="input font-mono"
-            placeholder="org_..."
-          />
-          <p class="input-hint">Optional. Sent as X-Kilocode-OrganizationID.</p>
         </div>
 
         <!-- Gemini API Key tier selection -->
@@ -1776,7 +1837,7 @@
 
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
+        v-else-if="form.platform === 'kiro' || form.type === 'apikey' || form.type === 'bedrock'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -1828,7 +1889,7 @@
 
       <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+        v-if="(form.platform === 'openai' || form.platform === 'kiro') && accountCategory === 'oauth-based'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -3341,14 +3402,12 @@ const oauthStepTitle = computed(() => {
 const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (form.platform === 'kilo') return 'Kilo OpenRouter-compatible base URL. Default: https://api.kilo.ai/api/openrouter'
   return t('admin.accounts.baseUrlHint')
 })
 
 const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
-  if (form.platform === 'kilo') return 'Paste the Kilo token from your Kilo Pass account.'
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3418,8 +3477,6 @@ interface TempUnschedRuleForm {
 }
 
 type SyncPreviewCredentials = SyncUpstreamPreviewParams & {
-  kilocodeToken?: string
-  kilocodeOrganizationId?: string
 }
 
 // State
@@ -3429,7 +3486,13 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
-const kiloOrganizationId = ref('')
+const kiroAccessToken = ref('')
+const kiroRefreshToken = ref('')
+const kiroProfileArn = ref('')
+const kiroClientId = ref('')
+const kiroClientSecret = ref('')
+const kiroPreferredEndpoint = ref<'codewhisperer' | 'amazonq'>('codewhisperer')
+const kiroBaseUrl = ref('')
 
 const syncPreviewCredentials = computed<SyncPreviewCredentials | undefined>(() => {
   if (!apiKeyValue.value) return undefined
@@ -3438,12 +3501,6 @@ const syncPreviewCredentials = computed<SyncPreviewCredentials | undefined>(() =
     type: form.type,
     base_url: apiKeyBaseUrl.value || undefined,
     api_key: apiKeyValue.value
-  }
-  if (form.platform === 'kilo') {
-    credentials.kilocodeToken = apiKeyValue.value
-    if (kiloOrganizationId.value.trim()) {
-      credentials.kilocodeOrganizationId = kiloOrganizationId.value.trim()
-    }
   }
   return credentials
 })
@@ -3774,7 +3831,7 @@ const form = reactive({
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
-  if (form.platform === 'kilo') {
+  if (form.platform === 'kiro') {
     return false
   }
   // Antigravity upstream 类型不需要 OAuth 流程
@@ -3846,6 +3903,10 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform],
   ([category, method, agType]) => {
+    if (form.platform === 'kiro') {
+      form.type = 'oauth'
+      return
+    }
     // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
       form.type = 'apikey'
@@ -3877,9 +3938,9 @@ watch(
         ? 'https://api.openai.com'
         : newPlatform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : newPlatform === 'kilo'
-            ? 'https://api.kilo.ai/api/openrouter'
-            : 'https://api.anthropic.com'
+	          : newPlatform === 'kiro'
+	            ? 'https://codewhisperer.us-east-1.amazonaws.com'
+	            : 'https://api.anthropic.com'
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -3892,8 +3953,8 @@ watch(
       antigravityWhitelistModels.value = []
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
-    } else if (newPlatform === 'kilo') {
-      accountCategory.value = 'apikey'
+    } else if (newPlatform === 'kiro') {
+      accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
     } else {
       allowOverages.value = false
@@ -4297,7 +4358,13 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
-  kiloOrganizationId.value = ''
+  kiroAccessToken.value = ''
+  kiroRefreshToken.value = ''
+  kiroProfileArn.value = ''
+  kiroClientId.value = ''
+  kiroClientSecret.value = ''
+  kiroPreferredEndpoint.value = 'codewhisperer'
+  kiroBaseUrl.value = ''
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4567,6 +4634,47 @@ const handleSubmit = async () => {
     return
   }
 
+  if (form.platform === 'kiro') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!kiroAccessToken.value.trim()) {
+      appStore.showError('Please enter the Kiro access token')
+      return
+    }
+    if (!kiroProfileArn.value.trim()) {
+      appStore.showError('Please enter the Kiro profile ARN')
+      return
+    }
+
+    const credentials: Record<string, unknown> = {
+      access_token: kiroAccessToken.value.trim(),
+      profile_arn: kiroProfileArn.value.trim(),
+      preferred_endpoint: kiroPreferredEndpoint.value
+    }
+    if (kiroRefreshToken.value.trim()) {
+      credentials.refresh_token = kiroRefreshToken.value.trim()
+    }
+    if (kiroClientId.value.trim()) {
+      credentials.client_id = kiroClientId.value.trim()
+    }
+    if (kiroClientSecret.value.trim()) {
+      credentials.client_secret = kiroClientSecret.value.trim()
+    }
+    if (kiroBaseUrl.value.trim()) {
+      credentials.base_url = kiroBaseUrl.value.trim()
+    }
+
+    const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
+
+    await createAccountAndFinish('kiro', 'oauth', credentials)
+    return
+  }
+
   // For Bedrock type, create directly
   if (form.platform === 'anthropic' && accountCategory.value === 'bedrock') {
     if (!form.name.trim()) {
@@ -4702,21 +4810,12 @@ const handleSubmit = async () => {
       ? 'https://api.openai.com'
       : form.platform === 'gemini'
         ? 'https://generativelanguage.googleapis.com'
-        : form.platform === 'kilo'
-          ? 'https://api.kilo.ai/api/openrouter'
           : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
     base_url: apiKeyBaseUrl.value.trim() || defaultBaseUrl,
     api_key: apiKeyValue.value.trim()
-  }
-  if (form.platform === 'kilo') {
-    credentials.kilocodeToken = apiKeyValue.value.trim()
-    const orgID = kiloOrganizationId.value.trim()
-    if (orgID) {
-      credentials.kilocodeOrganizationId = orgID
-    }
   }
   if (form.platform === 'gemini') {
     credentials.tier_id = geminiTierAIStudio.value
@@ -4822,7 +4921,7 @@ const createAccountAndFinish = async (
   }
   // Inject quota limits for apikey/bedrock accounts
   let finalExtra = extra
-  if (type === 'apikey' || type === 'bedrock') {
+  if (type === 'apikey' || type === 'bedrock' || platform === 'kiro') {
     const quotaExtra: Record<string, unknown> = { ...(extra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
       quotaExtra.quota_limit = editQuotaLimit.value

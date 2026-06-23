@@ -1052,12 +1052,8 @@ func (a *Account) IsOpenAI() bool {
 	return a.Platform == PlatformOpenAI
 }
 
-func (a *Account) IsKilo() bool {
-	return a.Platform == PlatformKilo
-}
-
 func (a *Account) IsOpenAICompatible() bool {
-	return a.IsOpenAI() || a.IsKilo()
+	return a.IsOpenAI() || a.IsKiro()
 }
 
 func (a *Account) IsAnthropic() bool {
@@ -1070,10 +1066,6 @@ func (a *Account) IsOpenAIOAuth() bool {
 
 func (a *Account) IsOpenAIApiKey() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeAPIKey
-}
-
-func (a *Account) IsKiloAPIKey() bool {
-	return a.IsKilo() && a.Type == AccountTypeAPIKey
 }
 
 func (a *Account) GetOpenAIBaseURL() string {
@@ -1117,72 +1109,6 @@ func (a *Account) GetOpenAIApiKey() string {
 	return a.GetCredential("api_key")
 }
 
-func (a *Account) GetKiloToken() string {
-	if !a.IsKiloAPIKey() {
-		return ""
-	}
-	for _, key := range []string{"kilocodeToken", "api_key", "access_token"} {
-		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func (a *Account) GetKiloOrganizationID() string {
-	if !a.IsKilo() {
-		return ""
-	}
-	for _, key := range []string{"kilocodeOrganizationId", "organization_id"} {
-		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func (a *Account) GetKiloBaseURL() string {
-	if !a.IsKilo() {
-		return ""
-	}
-	if a.Type == AccountTypeAPIKey {
-		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
-			return baseURL
-		}
-	}
-	return KiloDefaultOpenRouterBaseURL
-}
-
-func (a *Account) GetKiloAPIBaseURL() string {
-	if !a.IsKilo() {
-		return ""
-	}
-	if baseURL := strings.TrimSpace(a.GetCredential("api_base_url")); baseURL != "" {
-		return baseURL
-	}
-	if baseURL := strings.TrimRight(strings.TrimSpace(a.GetKiloBaseURL()), "/"); baseURL != "" {
-		switch {
-		case strings.HasSuffix(baseURL, "/api/openrouter"):
-			return strings.TrimSuffix(baseURL, "/openrouter")
-		case strings.HasSuffix(baseURL, "/openrouter"):
-			return strings.TrimSuffix(baseURL, "/openrouter")
-		default:
-			return baseURL
-		}
-	}
-	return KiloDefaultAPIBaseURL
-}
-
-func (a *Account) GetKiloUserAgent() string {
-	if !a.IsKilo() {
-		return ""
-	}
-	if userAgent := strings.TrimSpace(a.GetCredential("user_agent")); userAgent != "" {
-		return userAgent
-	}
-	return KiloDefaultUserAgent
-}
-
 func (a *Account) GetOpenAIUserAgent() string {
 	if !a.IsOpenAI() {
 		return ""
@@ -1221,7 +1147,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	if !a.IsOpenAICompatible() {
 		return false
 	}
-	if a.IsKilo() && capability != OpenAIEndpointCapabilityChatCompletions {
+	if a.IsKiro() && capability != OpenAIEndpointCapabilityChatCompletions {
 		return false
 	}
 	switch capability {

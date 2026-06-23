@@ -39,8 +39,6 @@
                 ? 'https://api.openai.com'
                 : account.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : account.platform === 'kilo'
-                    ? 'https://api.kilo.ai/api/openrouter'
                   : account.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
                     : 'https://api.anthropic.com'
@@ -63,25 +61,12 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
-                  : account.platform === 'kilo'
-                    ? 'kilo-token'
                   : account.platform === 'antigravity'
                     ? 'sk-...'
                     : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
-        </div>
-
-        <div v-if="account.platform === 'kilo'">
-          <label class="input-label">Kilo Organization ID</label>
-          <input
-            v-model="editKiloOrganizationId"
-            type="text"
-            class="input font-mono"
-            placeholder="org_..."
-          />
-          <p class="input-hint">Optional. Sent as X-Kilocode-OrganizationID.</p>
         </div>
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
@@ -434,9 +419,93 @@
 
       </div>
 
+      <!-- Kiro OAuth credentials -->
+      <div v-if="account.platform === 'kiro' && account.type === 'oauth'" class="space-y-4">
+        <div>
+          <label class="input-label">Access Token</label>
+          <input
+            v-model="editKiroAccessToken"
+            type="password"
+            class="input font-mono"
+            autocomplete="new-password"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore="true"
+            placeholder="leave empty to keep existing token"
+          />
+          <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+        <div>
+          <label class="input-label">Refresh Token</label>
+          <input
+            v-model="editKiroRefreshToken"
+            type="password"
+            class="input font-mono"
+            autocomplete="new-password"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore="true"
+            placeholder="leave empty to keep existing token"
+          />
+          <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+        <div>
+          <label class="input-label">Profile ARN</label>
+          <input
+            v-model="editKiroProfileArn"
+            type="text"
+            required
+            class="input font-mono"
+            placeholder="arn:aws:codewhisperer:us-east-1:..."
+          />
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">Client ID</label>
+            <input
+              v-model="editKiroClientId"
+              type="text"
+              class="input font-mono"
+              placeholder="optional"
+            />
+          </div>
+          <div>
+            <label class="input-label">Client Secret</label>
+            <input
+              v-model="editKiroClientSecret"
+              type="password"
+              class="input font-mono"
+              autocomplete="new-password"
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore="true"
+              placeholder="leave empty to keep existing secret"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">Endpoint</label>
+            <select v-model="editKiroPreferredEndpoint" class="input">
+              <option value="codewhisperer">CodeWhisperer</option>
+              <option value="amazonq">Amazon Q</option>
+            </select>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
+            <input
+              v-model="editKiroBaseUrl"
+              type="text"
+              class="input"
+              placeholder="https://codewhisperer.us-east-1.amazonaws.com"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="account.platform === 'openai' && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'kiro') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -1610,7 +1679,7 @@
       </div>
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="account?.type === 'apikey' || account?.type === 'bedrock'"
+        v-else-if="account?.platform === 'kiro' || account?.type === 'apikey' || account?.type === 'bedrock'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2456,7 +2525,7 @@ const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (props.account.platform === 'kilo') return 'Kilo OpenRouter-compatible base URL. Default: https://api.kilo.ai/api/openrouter'
+  if (props.account.platform === 'kiro') return 'Kiro CodeWhisperer-compatible base URL. Default: https://codewhisperer.us-east-1.amazonaws.com'
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -2480,7 +2549,13 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
-const editKiloOrganizationId = ref('')
+const editKiroAccessToken = ref('')
+const editKiroRefreshToken = ref('')
+const editKiroProfileArn = ref('')
+const editKiroClientId = ref('')
+const editKiroClientSecret = ref('')
+const editKiroPreferredEndpoint = ref<'codewhisperer' | 'amazonq'>('codewhisperer')
+const editKiroBaseUrl = ref('')
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -2859,7 +2934,7 @@ const tempUnschedPresets = computed(() => [
 const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
-  if (props.account?.platform === 'kilo') return 'https://api.kilo.ai/api/openrouter'
+  if (props.account?.platform === 'kiro') return 'https://codewhisperer.us-east-1.amazonaws.com'
   return 'https://api.anthropic.com'
 })
 
@@ -2958,6 +3033,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
   editVertexLocation.value = 'us-central1'
+  editKiroAccessToken.value = ''
+  editKiroRefreshToken.value = ''
+  editKiroProfileArn.value = ''
+  editKiroClientId.value = ''
+  editKiroClientSecret.value = ''
+  editKiroPreferredEndpoint.value = 'codewhisperer'
+  editKiroBaseUrl.value = ''
 
   // Load mixed scheduling setting (only for antigravity accounts)
   mixedScheduling.value = false
@@ -3040,8 +3122,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
   }
 
-  // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
-  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {
+  // Load quota limit for apikey/bedrock/Kiro accounts (bedrock quota is also loaded in its own branch above)
+  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock' || newAccount.platform === 'kiro') {
     const quotaVal = extra?.quota_limit as number | undefined
     editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
@@ -3108,7 +3190,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadTempUnschedRules(credentials)
 
   // Initialize API Key fields for apikey type
-  editKiloOrganizationId.value = ''
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     const platformDefaultUrl =
@@ -3116,14 +3197,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'kilo'
-            ? 'https://api.kilo.ai/api/openrouter'
             : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
-    editKiloOrganizationId.value =
-      (credentials.kilocodeOrganizationId as string) ||
-      (credentials.organization_id as string) ||
-      ''
 
     // Load model mappings and detect mode
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
@@ -3176,6 +3251,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   } else if (newAccount.type === 'upstream' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editBaseUrl.value = (credentials.base_url as string) || ''
+  } else if (newAccount.platform === 'kiro' && newAccount.type === 'oauth' && newAccount.credentials) {
+    const credentials = newAccount.credentials as Record<string, unknown>
+    editKiroProfileArn.value = (credentials.profile_arn as string) || (credentials.profileArn as string) || ''
+    editKiroClientId.value = (credentials.client_id as string) || (credentials.clientId as string) || ''
+    const endpoint = (credentials.preferred_endpoint as string) || (credentials.preferredEndpoint as string) || 'codewhisperer'
+    editKiroPreferredEndpoint.value = endpoint === 'amazonq' ? 'amazonq' : 'codewhisperer'
+    editKiroBaseUrl.value = (credentials.base_url as string) || ''
+    loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
   } else if ((newAccount.platform === 'gemini' || newAccount.platform === 'anthropic') && newAccount.type === 'service_account' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editVertexProjectId.value = (credentials.project_id as string) || ''
@@ -3190,11 +3273,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
+          : newAccount.platform === 'kiro'
+            ? 'https://codewhisperer.us-east-1.amazonaws.com'
           : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
     // Load model mappings for OpenAI OAuth accounts
-    if (newAccount.platform === 'openai' && newAccount.credentials) {
+    if ((newAccount.platform === 'openai' || newAccount.platform === 'kiro') && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
@@ -3724,31 +3809,12 @@ const handleSubmit = async () => {
       // 若后端尚未升级（无 credentials_status），回退读旧结构 currentCredentials.api_key。
       // 两者都无才报错。
       const hasExistingApiKey =
-        props.account.platform === 'kilo'
-          ? Boolean(
-            props.account.credentials_status?.has_kilocodeToken ||
-            props.account.credentials_status?.has_api_key ||
-            currentCredentials.kilocodeToken ||
-            currentCredentials.api_key
-          )
-          : (props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key))
+        props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
       if (editApiKey.value.trim()) {
         newCredentials.api_key = editApiKey.value.trim()
-        if (props.account.platform === 'kilo') {
-          newCredentials.kilocodeToken = editApiKey.value.trim()
-        }
       } else if (!hasExistingApiKey) {
         appStore.showError(t('admin.accounts.apiKeyIsRequired'))
         return
-      }
-
-      if (props.account.platform === 'kilo') {
-        const orgID = editKiloOrganizationId.value.trim()
-        if (orgID) {
-          newCredentials.kilocodeOrganizationId = orgID
-        } else {
-          delete newCredentials.kilocodeOrganizationId
-        }
       }
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
@@ -3869,8 +3935,8 @@ const handleSubmit = async () => {
         return
       }
 
-      updatePayload.credentials = newCredentials
-    } else if (props.account.type === 'bedrock') {
+	      updatePayload.credentials = newCredentials
+	    } else if (props.account.type === 'bedrock') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -3926,9 +3992,59 @@ const handleSubmit = async () => {
         return
       }
 
+	      updatePayload.credentials = newCredentials
+    } else if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
+      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      const credentialsStatus = props.account.credentials_status
+
+      const hasExistingAccessToken = credentialsStatus
+        ? Boolean(credentialsStatus.has_access_token)
+        : Boolean(currentCredentials.access_token)
+      if (editKiroAccessToken.value.trim()) {
+        newCredentials.access_token = editKiroAccessToken.value.trim()
+      } else if (!hasExistingAccessToken) {
+        appStore.showError('Please enter the Kiro access token')
+        return
+      }
+      if (editKiroRefreshToken.value.trim()) {
+        newCredentials.refresh_token = editKiroRefreshToken.value.trim()
+      }
+      if (!editKiroProfileArn.value.trim()) {
+        appStore.showError('Please enter the Kiro profile ARN')
+        return
+      }
+      newCredentials.profile_arn = editKiroProfileArn.value.trim()
+      newCredentials.preferred_endpoint = editKiroPreferredEndpoint.value
+      if (editKiroClientId.value.trim()) {
+        newCredentials.client_id = editKiroClientId.value.trim()
+      } else {
+        delete newCredentials.client_id
+      }
+      if (editKiroClientSecret.value.trim()) {
+        newCredentials.client_secret = editKiroClientSecret.value.trim()
+      }
+      if (editKiroBaseUrl.value.trim()) {
+        newCredentials.base_url = editKiroBaseUrl.value.trim()
+      } else {
+        delete newCredentials.base_url
+      }
+
+      const modelMapping = buildModelRestrictionMapping()
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
+      }
+
+      applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      if (!applyTempUnschedConfig(newCredentials)) {
+        return
+      }
+
       updatePayload.credentials = newCredentials
-    } else {
-      // For oauth/setup-token types, only update intercept_warmup_requests if changed
+	    } else {
+	      // For oauth/setup-token types, only update intercept_warmup_requests if changed
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -4197,7 +4313,7 @@ const handleSubmit = async () => {
     }
 
     // For apikey/bedrock accounts, handle quota_limit in extra
-    if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
+    if (props.account.type === 'apikey' || props.account.type === 'bedrock' || props.account.platform === 'kiro') {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
         (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
