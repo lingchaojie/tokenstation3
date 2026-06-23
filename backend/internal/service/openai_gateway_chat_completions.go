@@ -153,6 +153,17 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
 	}
+	if normalizedBody, normalizedModel, normalizeErr := normalizeChatCompletionsResponsesImageRequest(responsesBody, upstreamModel); normalizeErr != nil {
+		return nil, normalizeErr
+	} else {
+		responsesBody = normalizedBody
+		if normalizedModel != "" {
+			upstreamModel = normalizedModel
+			if responsesReq != nil {
+				responsesReq.Model = normalizedModel
+			}
+		}
+	}
 
 	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
@@ -351,6 +362,41 @@ func normalizeResponsesRequestServiceTier(req *apicompat.ResponsesRequest) {
 		return
 	}
 	req.ServiceTier = normalizedOpenAIServiceTierValue(req.ServiceTier)
+}
+
+func normalizeChatCompletionsResponsesImageRequest(body []byte, upstreamModel string) ([]byte, string, error) {
+	if !isOpenAIImageGenerationModel(upstreamModel) &&
+		!openAIRequestBodyHasImageGenerationTool(body) &&
+		!openAIRequestBodyImageGenerationToolNeedsNormalization(body) {
+		return body, upstreamModel, nil
+	}
+
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return nil, "", fmt.Errorf("unmarshal for image generation normalization: %w", err)
+	}
+	modified := false
+	if normalizeOpenAIResponsesImageGenerationTools(reqBody) {
+		modified = true
+	}
+	if normalizeOpenAIResponsesImageOnlyModel(reqBody) {
+		modified = true
+	}
+	normalizedModel := strings.TrimSpace(firstNonEmptyString(reqBody["model"]))
+	if normalizedModel == "" {
+		normalizedModel = strings.TrimSpace(upstreamModel)
+	}
+	if err := validateOpenAIResponsesImageModel(reqBody, normalizedModel); err != nil {
+		return nil, "", err
+	}
+	if !modified {
+		return body, normalizedModel, nil
+	}
+	normalizedBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, "", fmt.Errorf("remarshal after image generation normalization: %w", err)
+	}
+	return normalizedBody, normalizedModel, nil
 }
 
 func normalizeResponsesBodyServiceTier(body []byte) ([]byte, string, error) {
