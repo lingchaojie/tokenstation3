@@ -30,6 +30,7 @@ type kiroInferenceConfig struct {
 }
 
 type kiroConversationState struct {
+	AgentTaskType   string               `json:"agentTaskType,omitempty"`
 	ChatTriggerType string               `json:"chatTriggerType"`
 	ConversationID  string               `json:"conversationId"`
 	CurrentMessage  kiroCurrentMessage   `json:"currentMessage"`
@@ -102,7 +103,8 @@ func (s *OpenAIGatewayService) forwardAnthropicViaKiro(
 	upstreamModel string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
-	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroEndpointForAccount(account).Origin)
+	endpoint := kiroEndpointForAccount(account)
+	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroRequestOriginForAccount(account, endpoint.Origin))
 	if err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -150,7 +152,8 @@ func (s *OpenAIGatewayService) forwardAsKiroChatCompletions(
 	anthropicReq.Model = billingModel
 	anthropicReq.Stream = chatReq.Stream
 
-	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroEndpointForAccount(account).Origin)
+	endpoint := kiroEndpointForAccount(account)
+	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroRequestOriginForAccount(account, endpoint.Origin))
 	if err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -201,7 +204,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaKiro(
 	anthropicReq.Model = billingModel
 	anthropicReq.Stream = clientStream
 
-	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroEndpointForAccount(account).Origin)
+	endpoint := kiroEndpointForAccount(account)
+	payload, err := buildKiroPayloadFromAnthropic(anthropicReq, upstreamModel, account.GetKiroProfileARN(), kiroRequestOriginForAccount(account, endpoint.Origin))
 	if err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -243,9 +247,7 @@ func (s *OpenAIGatewayService) sendKiroRequest(ctx context.Context, c *gin.Conte
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 	req.Header.Set("Content-Type", KiroContentType)
 	req.Header.Set("Accept", KiroAcceptStream)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", KiroUserAgent)
-	req.Header.Set("X-Amz-User-Agent", KiroFullUserAgent)
+	applyKiroRuntimeHeaders(req, account, accessToken)
 	req.Header.Set("X-Amz-Target", endpoint.Target)
 	req.Header.Set("X-Amzn-Bedrock-Origin", endpoint.Origin)
 	if c != nil {
@@ -258,7 +260,7 @@ func (s *OpenAIGatewayService) sendKiroRequest(ctx context.Context, c *gin.Conte
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -281,12 +283,10 @@ func (s *OpenAIGatewayService) sendKiroRequest(ctx context.Context, c *gin.Conte
 			req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 			req.Header.Set("Content-Type", KiroContentType)
 			req.Header.Set("Accept", KiroAcceptStream)
-			req.Header.Set("Authorization", "Bearer "+account.GetKiroAccessToken())
-			req.Header.Set("User-Agent", KiroUserAgent)
-			req.Header.Set("X-Amz-User-Agent", KiroFullUserAgent)
+			applyKiroRuntimeHeaders(req, account, account.GetKiroAccessToken())
 			req.Header.Set("X-Amz-Target", endpoint.Target)
 			req.Header.Set("X-Amzn-Bedrock-Origin", endpoint.Origin)
-			return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+			return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
 		}
 	}
 	return resp, nil
@@ -565,6 +565,7 @@ func buildKiroPayloadFromAnthropic(req *apicompat.AnthropicRequest, modelID, pro
 
 	return json.Marshal(kiroPayload{
 		ConversationState: kiroConversationState{
+			AgentTaskType:   "vibe",
 			ChatTriggerType: "MANUAL",
 			ConversationID:  "kiro-" + uuid.NewString(),
 			CurrentMessage:  kiroCurrentMessage{UserInputMessage: current},
