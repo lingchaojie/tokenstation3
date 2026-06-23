@@ -101,7 +101,11 @@ func refreshKiroBuilderIDToken(ctx context.Context, account *Account) (*kiroToke
 func refreshKiroSocialToken(ctx context.Context, account *Account) (*kiroTokenRefreshResponse, error) {
 	endpoint := strings.TrimRight(firstNonEmpty(account.GetCredential("auth_endpoint"), kiroAuthEndpoint), "/")
 	payload := map[string]string{"refreshToken": account.GetKiroRefreshToken()}
-	return postKiroTokenRefresh(ctx, account, endpoint+"/refreshToken", payload, "cli-proxy-api/1.0.0")
+	userAgent := "cli-proxy-api/1.0.0"
+	if strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "kiro-cli") {
+		userAgent = "Kiro-CLI"
+	}
+	return postKiroTokenRefresh(ctx, account, endpoint+"/refreshToken", payload, userAgent)
 }
 
 func postKiroTokenRefresh(ctx context.Context, account *Account, targetURL string, payload map[string]string, userAgent string) (*kiroTokenRefreshResponse, error) {
@@ -114,6 +118,7 @@ func postKiroTokenRefresh(ctx context.Context, account *Account, targetURL strin
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", userAgent)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

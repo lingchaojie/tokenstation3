@@ -7,7 +7,7 @@ import type {
   KiroAuthUrlResponse
 } from '@/api/admin/kiro'
 
-export type KiroLoginMethod = 'builder-id' | 'google' | 'github'
+export type KiroLoginMethod = 'builder-id' | 'kiro-cli'
 
 const normalizeTokenInfo = (raw: Record<string, unknown>): KiroTokenInfo => ({
   access_token: stringValue(raw.access_token) || stringValue(raw.accessToken),
@@ -80,7 +80,7 @@ export function useKiroOAuth() {
 
   const applyStartResponse = (response: KiroAuthUrlResponse) => {
     mode.value = response.mode
-    method.value = response.method === 'builder-id' ? 'builder-id' : response.method
+    method.value = response.method === 'builder-id' ? 'builder-id' : 'kiro-cli'
     authUrl.value = response.auth_url || ''
     sessionId.value = response.session_id
     state.value = response.state || ''

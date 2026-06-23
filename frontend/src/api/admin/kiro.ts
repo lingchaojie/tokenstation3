@@ -5,7 +5,7 @@
 
 import { apiClient } from '../client'
 
-export type KiroOAuthMethod = 'builder-id' | 'aws' | 'google' | 'github'
+export type KiroOAuthMethod = 'builder-id' | 'aws' | 'kiro-cli' | 'google'
 
 export interface KiroAuthUrlRequest {
   method?: KiroOAuthMethod
@@ -14,7 +14,7 @@ export interface KiroAuthUrlRequest {
 
 export interface KiroAuthUrlResponse {
   mode: 'auth_url' | 'device_code'
-  method: 'builder-id' | 'google' | 'github'
+  method: 'builder-id' | 'kiro-cli' | 'google'
   auth_url?: string
   session_id: string
   state?: string
