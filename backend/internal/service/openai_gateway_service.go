@@ -1343,7 +1343,11 @@ func openAICompactSupportTier(account *Account) int {
 // isOpenAIAccountEligibleForRequest centralises the schedulable / OpenAI / model /
 // compact-support checks used during account selection.
 func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
-	if account == nil || account.Platform != OpenAICompatiblePlatformFromContext(ctx) || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+	ctxPlatform := OpenAICompatiblePlatformFromContext(ctx)
+	if account == nil || !openAICompatibleAccountMatchesRequestPlatform(ctxPlatform, account) || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+		return false
+	}
+	if !isKiroBridgeAccountAllowed(account, ctxPlatform, requestedModel) {
 		return false
 	}
 	if requireCompact && !account.IsOpenAI() {
@@ -2153,6 +2157,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64) ([]Account, error) {
 	platform := OpenAICompatiblePlatformFromContext(ctx)
+	platforms := schedulablePlatformsForRequest(platform, false)
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		return accounts, err
@@ -2160,11 +2165,11 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	var accounts []Account
 	var err error
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
+		accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
 	} else if groupID != nil {
-		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
 	} else {
-		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, platform)
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)

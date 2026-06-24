@@ -369,6 +369,6 @@ func ResolveKiroModelID(model string) string {
 	case strings.Contains(model, "sonnet"):
 		return "claude-sonnet-4"
 	default:
-		return "claude-sonnet-4.5"
+		return model
 	}
 }

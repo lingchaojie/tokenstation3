@@ -72,7 +72,7 @@ func TestResolveKiroModelID(t *testing.T) {
 		"anthropic/claude-sonnet-4-5":     "claude-sonnet-4.5",
 		"unknown-but-contains-haiku":      "claude-haiku-4.5",
 		"unknown-but-contains-opus":       "claude-opus-4.5",
-		"unknown":                         "claude-sonnet-4.5",
+		"unknown":                         "unknown",
 	}
 
 	for input, want := range tests {
