@@ -60,6 +60,22 @@ function assistantMessage(artifacts: WebChatArtifact[]): WebChatMessage {
   }
 }
 
+function staleStreamingAssistantMessage(): WebChatMessage {
+  return {
+    id: 102,
+    conversation_id: 8,
+    user_id: 1,
+    role: 'assistant',
+    model: 'gpt-image-2',
+    provider: 'openai',
+    content_text: '',
+    content_json: [],
+    status: 'streaming',
+    created_at: '2026-06-20T00:00:00Z',
+    updated_at: '2026-06-20T00:00:00Z',
+  }
+}
+
 describe('MessageList', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -137,5 +153,24 @@ describe('MessageList', () => {
     await wrapper.get('[data-testid="chat-artifact-file-download-45"]').trigger('click')
 
     expect(chatAPI.downloadArtifact).toHaveBeenCalledWith(45)
+  })
+
+  it('shows stale historical streaming messages as interrupted instead of thinking forever', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [staleStreamingAssistantMessage()],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('interrupted')
+    expect(wrapper.text()).not.toContain('Thinking...')
   })
 })

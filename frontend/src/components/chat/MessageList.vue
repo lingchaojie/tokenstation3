@@ -31,15 +31,18 @@
               v-if="message.status !== 'completed'"
               :class="message.role === 'user' ? 'text-white/75' : 'text-linear-ink-tertiary'"
             >
-              {{ message.status }}
+              {{ messageStatusLabel(message) }}
             </span>
           </div>
 
           <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6">
             {{ message.content_text }}
           </p>
-          <p v-else-if="message.status === 'streaming'" class="text-sm text-linear-ink-subtle">
+          <p v-else-if="isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
             Thinking...
+          </p>
+          <p v-else-if="isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
+            Response interrupted before completion.
           </p>
 
           <div v-if="message.attachments?.length" class="mt-3 flex flex-wrap gap-2">
@@ -100,9 +103,29 @@ import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()
 const messages = computed(() => chatStore.currentMessages)
+const STALE_STREAMING_MS = 10 * 60 * 1000
 
 function assistantLabel(message: WebChatMessage): string {
   return message.model || 'Assistant'
+}
+
+function isStreamingStatus(message: WebChatMessage): boolean {
+  return message.status === 'streaming' || message.status === 'pending'
+}
+
+function isStaleStreaming(message: WebChatMessage): boolean {
+  if (!isStreamingStatus(message)) return false
+  const updatedAt = Date.parse(message.updated_at || message.created_at)
+  if (!Number.isFinite(updatedAt)) return false
+  return Date.now() - updatedAt > STALE_STREAMING_MS
+}
+
+function isLiveStreaming(message: WebChatMessage): boolean {
+  return message.status === 'streaming' && !isStaleStreaming(message)
+}
+
+function messageStatusLabel(message: WebChatMessage): string {
+  return isStaleStreaming(message) ? 'interrupted' : message.status
 }
 
 function isImageArtifact(artifact: WebChatArtifact): boolean {

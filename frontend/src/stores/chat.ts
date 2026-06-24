@@ -27,10 +27,17 @@ interface StartAssistantStreamInput {
   attachments?: WebChatAttachment[]
 }
 
+interface StartAssistantStreamResult {
+  userMessageId: number
+  assistantMessageId: number
+}
+
 const TEMP_ID_START = -1
 const DEFAULT_THINKING_EFFORTS: WebChatThinkingEffort[] = ['low', 'medium', 'high', 'xhigh']
 const DEFAULT_IMAGE_GENERATION_SIZES: WebChatImageGenerationSize[] = ['1024x1024']
 const DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS: WebChatImageGenerationAspectRatio[] = ['1:1']
+const STREAM_RENDER_CHARS_PER_FRAME = 8
+const STREAM_RENDER_SMOOTHING_THRESHOLD = 24
 
 function nowISO(): string {
   return new Date().toISOString()
@@ -93,7 +100,29 @@ function extractStreamDelta(payload: unknown): string {
   return typeof content === 'string' ? content : ''
 }
 
-function processSSELine(line: string, onDelta: (delta: string) => void): void {
+function waitForRenderFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve())
+      return
+    }
+    setTimeout(resolve, 16)
+  })
+}
+
+async function emitStreamDelta(delta: string, onDelta: (delta: string) => void): Promise<void> {
+  if (delta.length <= STREAM_RENDER_SMOOTHING_THRESHOLD) {
+    onDelta(delta)
+    return
+  }
+
+  for (let offset = 0; offset < delta.length; offset += STREAM_RENDER_CHARS_PER_FRAME) {
+    onDelta(delta.slice(offset, offset + STREAM_RENDER_CHARS_PER_FRAME))
+    await waitForRenderFrame()
+  }
+}
+
+async function processSSELine(line: string, onDelta: (delta: string) => void): Promise<void> {
   const trimmed = line.trim()
   if (!trimmed.startsWith('data:')) return
 
@@ -102,7 +131,7 @@ function processSSELine(line: string, onDelta: (delta: string) => void): void {
 
   try {
     const delta = extractStreamDelta(JSON.parse(data))
-    if (delta) onDelta(delta)
+    if (delta) await emitStreamDelta(delta, onDelta)
   } catch {
     // Ignore malformed event payloads; the stream may still continue with valid events.
   }
@@ -126,13 +155,13 @@ async function readSSEStream(response: Response, onDelta: (delta: string) => voi
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() ?? ''
       for (const line of lines) {
-        processSSELine(line, onDelta)
+        await processSSELine(line, onDelta)
       }
     }
 
     buffer += decoder.decode()
     if (buffer) {
-      processSSELine(buffer, onDelta)
+      await processSSELine(buffer, onDelta)
     }
   } finally {
     reader.releaseLock()
@@ -405,7 +434,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function startAssistantStream(input: StartAssistantStreamInput): void {
+  function startAssistantStream(input: StartAssistantStreamInput): StartAssistantStreamResult {
     const userMessageId = input.userMessageId ?? nextTempId--
     const assistantMessageId = input.assistantMessageId ?? nextTempId--
     activeUserMessageId.value = userMessageId
@@ -447,6 +476,33 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     streaming.value = true
+
+    return { userMessageId, assistantMessageId }
+  }
+
+  function reconcileActiveStreamMessageIds(userMessageId: number | null, assistantMessageId: number | null): void {
+    if (!currentConversation.value) return
+
+    const messages = currentConversation.value.messages
+
+    if (activeUserMessageId.value !== null && userMessageId && userMessageId > 0) {
+      const tempUserMessage = messages.find((message) => message.id === activeUserMessageId.value)
+      const existingUserMessage = messages.find((message) => message.id === userMessageId)
+      if (tempUserMessage && (!existingUserMessage || existingUserMessage === tempUserMessage)) {
+        tempUserMessage.id = userMessageId
+      }
+      activeUserMessageId.value = userMessageId
+    }
+
+    if (activeAssistantMessageId.value !== null && assistantMessageId && assistantMessageId > 0) {
+      const tempAssistantMessage = messages.find((message) => message.id === activeAssistantMessageId.value)
+      const existingAssistantMessage = messages.find((message) => message.id === assistantMessageId)
+      if (tempAssistantMessage && (!existingAssistantMessage || existingAssistantMessage === tempAssistantMessage)) {
+        tempAssistantMessage.id = assistantMessageId
+      }
+      activeAssistantMessageId.value = assistantMessageId
+      activeBackendAssistantMessageId.value = assistantMessageId
+    }
   }
 
   function appendAssistantDelta(delta: string): void {
@@ -500,11 +556,12 @@ export const useChatStore = defineStore('chat', () => {
       throw new Error(capabilityWarning.value)
     }
 
+    const model = selectedModel.value
     const conversation = currentConversation.value?.conversation ?? await createConversation(text.slice(0, 80))
     const attachments = [...pendingAttachments.value]
     const request: SendWebChatMessageRequest = {
-      model: selectedModel.value.model,
-      provider: selectedModel.value.provider,
+      model: model.model,
+      provider: model.provider,
       content: text,
       attachment_ids: attachments.map((attachment) => attachment.id),
       stream: true,
@@ -535,24 +592,26 @@ export const useChatStore = defineStore('chat', () => {
 
     const controller = new AbortController()
     abortController.value = controller
-    streaming.value = true
     error.value = null
+    startAssistantStream({
+      conversationId: conversation.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      content: text,
+      model: model.model,
+      provider: model.provider,
+      attachments,
+    })
+    pendingAttachments.value = []
+    let requestAccepted = false
 
     try {
       const streamResult = await chatAPI.sendMessageStream(conversation.id, request, controller.signal)
-      startAssistantStream({
-        conversationId: conversation.id,
-        userMessageId: streamResult.userMessageId,
-        assistantMessageId: streamResult.assistantMessageId,
-        content: text,
-        model: selectedModel.value.model,
-        provider: selectedModel.value.provider,
-        attachments,
-      })
-      pendingAttachments.value = []
+      requestAccepted = true
+      reconcileActiveStreamMessageIds(streamResult.userMessageId, streamResult.assistantMessageId)
       await readSSEStream(streamResult.response, appendAssistantDelta)
       finishAssistantStream()
-      if (selectedModel.value?.supports_artifact_output) {
+      if (model.supports_artifact_output) {
         try {
           await openConversation(conversation.id)
         } catch {
@@ -565,6 +624,9 @@ export const useChatStore = defineStore('chat', () => {
         return
       }
       finishAssistantStream('failed')
+      if (!requestAccepted) {
+        pendingAttachments.value = attachments
+      }
       setError(err)
       throw err
     }

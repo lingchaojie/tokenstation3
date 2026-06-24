@@ -192,6 +192,20 @@ describe('Composer', () => {
     expect(wrapper.get('[data-testid="chat-send"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="chat-stop"]').exists()).toBe(true)
   })
+
+  it('clears the draft immediately after submit so the click has instant feedback', async () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+    vi.spyOn(store, 'sendMessage').mockReturnValue(new Promise(() => {}))
+
+    const wrapper = mount(Composer)
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('Hello without lag')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await Promise.resolve()
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+  })
 })
 
 describe('ChatShell', () => {
@@ -281,12 +295,13 @@ describe('ModelSelector', () => {
     })
   })
 
-  it('lets users change thinking mode and effort from the model selector', async () => {
+  it('lets users change thinking mode and effort from composer options', async () => {
     const store = useChatStore()
     store.models = [chatModel]
     store.selectedModel = chatModel
 
-    const wrapper = mount(ModelSelector)
+    const wrapper = mount(Composer)
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
 
     const toggle = wrapper.get('[data-testid="chat-thinking-toggle"]')
     expect(toggle.attributes('aria-pressed')).toBe('false')
@@ -299,12 +314,13 @@ describe('ModelSelector', () => {
     expect(store.thinkingEffort).toBe('high')
   })
 
-  it('lets users change image generation parameters from the model selector', async () => {
+  it('lets users change image generation parameters from composer options', async () => {
     const store = useChatStore()
     store.models = [imageModel]
     store.selectedModel = imageModel
 
-    const wrapper = mount(ModelSelector)
+    const wrapper = mount(Composer)
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
 
     const toggle = wrapper.get('[data-testid="chat-image-generation-toggle"]')
     expect(toggle.attributes('aria-pressed')).toBe('true')
@@ -336,5 +352,17 @@ describe('ModelSelector', () => {
     const wrapper = mount(ModelSelector)
 
     expect(wrapper.text()).not.toContain('Artifacts')
+  })
+
+  it('keeps image generation parameters out of the top model header', () => {
+    const store = useChatStore()
+    store.models = [imageModel]
+    store.selectedModel = imageModel
+
+    const wrapper = mount(ModelSelector)
+
+    expect(wrapper.find('[data-testid="chat-image-generation-size"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="chat-image-generation-quality"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="chat-image-generation-output-format"]').exists()).toBe(false)
   })
 })

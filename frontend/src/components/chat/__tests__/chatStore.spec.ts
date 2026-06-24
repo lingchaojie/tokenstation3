@@ -5,6 +5,7 @@ import { apiClient } from '@/api/client'
 import {
   chatAPI,
   sendChatMessageStream,
+  type WebChatStreamSendResult,
   type WebChatAttachment,
   type WebChatImageGenerationAspectRatio,
   type WebChatImageGenerationBackground,
@@ -250,6 +251,63 @@ describe('useChatStore', () => {
         effort: 'high',
       },
     }), expect.any(AbortSignal))
+  })
+
+  it('shows optimistic user and assistant messages before the stream request resolves', async () => {
+    let resolveStream!: (value: WebChatStreamSendResult) => void
+    const pendingStream = new Promise<WebChatStreamSendResult>((resolve) => {
+      resolveStream = resolve
+    })
+    vi.spyOn(chatAPI, 'sendMessageStream').mockReturnValue(pendingStream)
+    const store = useChatStore()
+    store.selectedModel = textOnlyModel
+    store.currentConversation = {
+      conversation: {
+        id: 7,
+        title: 'Chat',
+        default_model: textOnlyModel.model,
+        default_provider: textOnlyModel.provider,
+        last_model: textOnlyModel.model,
+        last_provider: textOnlyModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    const sendPromise = store.sendMessage('Hello without lag')
+    await Promise.resolve()
+
+    expect(store.currentMessages).toHaveLength(2)
+    expect(store.currentMessages[0]).toMatchObject({
+      role: 'user',
+      content_text: 'Hello without lag',
+      status: 'completed',
+    })
+    expect(store.currentMessages[1]).toMatchObject({
+      role: 'assistant',
+      status: 'streaming',
+      content_text: '',
+    })
+
+    resolveStream({
+      response: new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    await sendPromise
+
+    expect(store.currentMessages[0].id).toBe(100)
+    expect(store.currentMessages[1].id).toBe(101)
+    expect(store.currentMessages[1].status).toBe('completed')
   })
 
   it('includes editable image generation settings when sending a supported model message', async () => {
