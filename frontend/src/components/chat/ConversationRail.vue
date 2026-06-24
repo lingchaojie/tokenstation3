@@ -1,8 +1,32 @@
 <template>
   <aside class="flex min-h-0 flex-col border-b border-linear-hairline bg-linear-surface-0 lg:border-b-0" data-testid="chat-conversation-rail">
-    <div class="flex items-center gap-2 border-b border-linear-hairline px-3 py-3">
+    <div class="border-b border-linear-hairline px-3 py-4">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-2xl font-semibold text-linear-ink">Workspace</h2>
+        <div class="flex items-center gap-1">
+          <button
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"
+            type="button"
+            title="Refresh"
+            aria-label="Refresh conversations"
+            @click="refreshConversations"
+          >
+            <Icon name="refresh" size="sm" />
+          </button>
+          <button
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"
+            type="button"
+            title="Search"
+            aria-label="Focus search"
+            @click="searchInput?.focus()"
+          >
+            <Icon name="search" size="sm" />
+          </button>
+        </div>
+      </div>
+
       <button
-        class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2"
+        class="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-primary-500/70 bg-linear-canvas px-3 text-sm font-medium text-primary-600 transition-colors hover:bg-primary-500/5 dark:text-primary-300"
         type="button"
         title="New chat"
         aria-label="New chat"
@@ -10,78 +34,114 @@
         @click="startNewChat"
       >
         <Icon name="plus" size="sm" />
-        <span class="sr-only">New chat</span>
+        <span>New chat</span>
       </button>
-      <div class="relative min-w-0 flex-1">
-        <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary" />
-        <input
-          v-model="query"
-          class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-canvas pl-9 pr-3 text-sm text-linear-ink outline-none transition-colors placeholder:text-linear-ink-tertiary focus:border-linear-hairline-strong"
-          type="search"
-          placeholder="Search chats"
-          aria-label="Search chats"
-        />
+
+      <div class="mt-3 flex items-center gap-2">
+        <div class="relative min-w-0 flex-1">
+          <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary" />
+          <input
+            ref="searchInput"
+            v-model="query"
+            class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-canvas pl-9 pr-3 text-sm text-linear-ink outline-none transition-colors placeholder:text-linear-ink-tertiary focus:border-linear-hairline-strong"
+            type="search"
+            placeholder="Search chats"
+            aria-label="Search chats"
+          />
+        </div>
+        <div class="inline-flex shrink-0 rounded-lg border border-linear-hairline bg-linear-canvas p-0.5">
+          <button
+            class="h-7 rounded-md px-2 text-xs font-medium transition-colors"
+            :class="groupedView ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300' : 'text-linear-ink-tertiary hover:text-linear-ink'"
+            type="button"
+            @click="groupedView = true"
+          >
+            Group
+          </button>
+          <button
+            class="h-7 rounded-md px-2 text-xs font-medium transition-colors"
+            :class="!groupedView ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300' : 'text-linear-ink-tertiary hover:text-linear-ink'"
+            type="button"
+            @click="groupedView = false"
+          >
+            Chats
+          </button>
+        </div>
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-2 py-3">
-      <p class="px-2 text-xs font-medium text-linear-ink-tertiary">Recent conversations</p>
-      <div v-if="filteredConversations.length === 0" class="px-2 py-8 text-sm leading-6 text-linear-ink-subtle">
+    <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <p class="text-xs font-medium text-linear-ink-tertiary">Recently used</p>
+      <div v-if="filteredConversations.length === 0" class="px-1 py-8 text-sm leading-6 text-linear-ink-subtle">
         No conversations yet.
       </div>
+
+      <div v-else-if="groupedView" class="mt-3 space-y-3">
+        <section
+          v-for="group in groupedConversations"
+          :key="group.model"
+          :data-testid="`chat-model-group-${modelGroupId(group.model)}`"
+        >
+          <div class="flex items-center gap-2">
+            <ModelIcon :model="providerIconModel(group.provider || group.model)" size="28px" aria-hidden="true" />
+            <button
+              class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-linear-surface-1"
+              type="button"
+              @click="toggleGroup(group.model)"
+            >
+              <span class="min-w-0 truncate text-sm font-medium text-linear-ink">{{ group.label }}</span>
+              <Icon
+                name="chevronDown"
+                size="xs"
+                class="shrink-0 text-linear-ink-tertiary transition-transform"
+                :class="collapsedGroups.has(group.model) ? '-rotate-90' : ''"
+              />
+            </button>
+          </div>
+
+          <div v-if="!collapsedGroups.has(group.model)" class="ml-3 mt-1 border-l border-linear-hairline pl-3">
+            <ConversationRow
+              v-for="conversation in group.conversations"
+              :key="conversation.id"
+              :conversation="conversation"
+              :current="isCurrent(conversation.id)"
+              @open="openConversation(conversation.id)"
+              @rename="renameConversation(conversation.id, conversationTitle(conversation))"
+              @delete="deleteConversation(conversation.id)"
+            />
+          </div>
+        </section>
+      </div>
+
       <div v-else class="mt-2 space-y-1">
-        <div
+        <ConversationRow
           v-for="conversation in filteredConversations"
           :key="conversation.id"
-          class="group flex items-center gap-1 rounded-lg transition-colors"
-          :class="isCurrent(conversation.id) ? 'bg-linear-surface-2' : 'hover:bg-linear-surface-1'"
-        >
-          <button
-            class="min-w-0 flex-1 px-2.5 py-2 text-left"
-            type="button"
-            :data-testid="`chat-conversation-open-${conversation.id}`"
-            @click="openConversation(conversation.id)"
-          >
-            <span class="block truncate text-sm font-medium text-linear-ink">
-              {{ conversationTitle(conversation) }}
-            </span>
-            <span class="mt-0.5 block truncate text-xs text-linear-ink-tertiary">
-              {{ conversation.last_model || conversation.default_model || 'No model' }}
-            </span>
-          </button>
-          <button
-            class="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex"
-            type="button"
-            title="Rename"
-            aria-label="Rename conversation"
-            @click="renameConversation(conversation.id, conversationTitle(conversation))"
-          >
-            <Icon name="edit" size="xs" />
-          </button>
-          <button
-            class="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex"
-            type="button"
-            title="Delete"
-            aria-label="Delete conversation"
-            @click="deleteConversation(conversation.id)"
-          >
-            <Icon name="trash" size="xs" />
-          </button>
-        </div>
+          :conversation="conversation"
+          :current="isCurrent(conversation.id)"
+          @open="openConversation(conversation.id)"
+          @rename="renameConversation(conversation.id, conversationTitle(conversation))"
+          @delete="deleteConversation(conversation.id)"
+        />
       </div>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineComponent, h, ref } from 'vue'
 
 import type { WebChatConversation } from '@/api/chat'
+import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
 const query = ref('')
+const groupedView = ref(true)
+const searchInput = ref<HTMLInputElement | null>(null)
+const collapsedGroups = ref(new Set<string>())
 
 const emit = defineEmits<{
   (event: 'new-chat'): void
@@ -98,12 +158,106 @@ const filteredConversations = computed(() => {
   )
 })
 
+const groupedConversations = computed(() => {
+  const groups = new Map<string, {
+    model: string
+    provider: string
+    label: string
+    conversations: WebChatConversation[]
+  }>()
+
+  for (const conversation of filteredConversations.value) {
+    const model = conversation.last_model || conversation.default_model || 'unknown'
+    const provider = conversation.last_provider || conversation.default_provider || ''
+    const modelConfig = chatStore.models.find((item) => item.model === model && item.provider === provider) ||
+      chatStore.models.find((item) => item.model === model)
+    const existing = groups.get(model)
+    if (existing) {
+      existing.conversations.push(conversation)
+    } else {
+      groups.set(model, {
+        model,
+        provider,
+        label: modelConfig?.display_name || model,
+        conversations: [conversation],
+      })
+    }
+  }
+
+  return Array.from(groups.values())
+})
+
+const ConversationRow = defineComponent({
+  name: 'ConversationRow',
+  props: {
+    conversation: {
+      type: Object as () => WebChatConversation,
+      required: true,
+    },
+    current: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  emits: ['open', 'rename', 'delete'],
+  setup(props, { emit }) {
+    return () => h('div', {
+      class: [
+        'group flex items-center gap-1 rounded-lg transition-colors',
+        props.current ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300' : 'text-linear-ink hover:bg-linear-surface-1',
+      ],
+    }, [
+      h('button', {
+        class: 'min-w-0 flex-1 px-2.5 py-2 text-left',
+        type: 'button',
+        'data-testid': `chat-conversation-open-${props.conversation.id}`,
+        onClick: () => emit('open'),
+      }, [
+        h('span', {
+          class: 'block truncate text-sm font-medium',
+        }, conversationTitle(props.conversation)),
+        h('span', {
+          class: 'mt-0.5 block truncate text-xs text-linear-ink-tertiary',
+        }, props.conversation.last_model || props.conversation.default_model || 'No model'),
+      ]),
+      h('button', {
+        class: 'hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex',
+        type: 'button',
+        title: 'Rename',
+        'aria-label': 'Rename conversation',
+        onClick: () => emit('rename'),
+      }, [h(Icon, { name: 'edit', size: 'xs' })]),
+      h('button', {
+        class: 'hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex',
+        type: 'button',
+        title: 'Delete',
+        'aria-label': 'Delete conversation',
+        onClick: () => emit('delete'),
+      }, [h(Icon, { name: 'trash', size: 'xs' })]),
+    ])
+  },
+})
+
 function conversationTitle(conversation: WebChatConversation): string {
   return conversation.title || 'Untitled chat'
 }
 
+function modelGroupId(model: string): string {
+  return model.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+}
+
 function isCurrent(conversationId: number): boolean {
   return chatStore.currentConversation?.conversation.id === conversationId
+}
+
+function toggleGroup(model: string): void {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(model)) {
+    next.delete(model)
+  } else {
+    next.add(model)
+  }
+  collapsedGroups.value = next
 }
 
 function startNewChat(): void {
@@ -111,6 +265,10 @@ function startNewChat(): void {
   chatStore.pendingAttachments = []
   chatStore.error = null
   emit('new-chat')
+}
+
+async function refreshConversations(): Promise<void> {
+  await chatStore.loadConversations()
 }
 
 async function openConversation(conversationId: number): Promise<void> {
