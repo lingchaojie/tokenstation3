@@ -1,7 +1,7 @@
 <template>
-  <div class="min-h-screen bg-linear-canvas text-linear-ink" data-testid="chat-immersive-view">
+  <AppLayout>
     <ChatShell :initial-mobile-panel="hasRouteModel ? 'chat' : 'list'" />
-  </div>
+  </AppLayout>
 </template>
 
 <script setup lang="ts">
@@ -9,6 +9,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import ChatShell from '@/components/chat/ChatShell.vue'
+import AppLayout from '@/components/layout/AppLayout.vue'
 import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()

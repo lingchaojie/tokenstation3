@@ -32,12 +32,27 @@ interface StartAssistantStreamResult {
   assistantMessageId: number
 }
 
+interface StreamToolCallDelta {
+  id?: string
+  index?: number
+  name?: string
+  input?: string
+  inputMode?: 'append' | 'replace'
+}
+
+interface StreamPayloadDelta {
+  content?: string
+  reasoning?: string
+  toolCalls?: StreamToolCallDelta[]
+}
+
 const TEMP_ID_START = -1
 const DEFAULT_THINKING_EFFORTS: WebChatThinkingEffort[] = ['low', 'medium', 'high', 'xhigh']
 const DEFAULT_IMAGE_GENERATION_SIZES: WebChatImageGenerationSize[] = ['1024x1024']
 const DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS: WebChatImageGenerationAspectRatio[] = ['1:1']
 const STREAM_RENDER_CHARS_PER_FRAME = 8
 const STREAM_RENDER_SMOOTHING_THRESHOLD = 24
+const THINKING_EFFORT_ORDER: WebChatThinkingEffort[] = ['low', 'medium', 'high', 'xhigh']
 
 function nowISO(): string {
   return new Date().toISOString()
@@ -90,14 +105,178 @@ function makeMessage(input: {
   }
 }
 
+function highestThinkingEffort(options: WebChatThinkingEffort[]): WebChatThinkingEffort {
+  for (let index = THINKING_EFFORT_ORDER.length - 1; index >= 0; index -= 1) {
+    const effort = THINKING_EFFORT_ORDER[index]
+    if (options.includes(effort)) return effort
+  }
+  return options[0] ?? 'medium'
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
-function extractStreamDelta(payload: unknown): string {
-  const choice = (payload as { choices?: Array<{ delta?: { content?: unknown } }> }).choices?.[0]
-  const content = choice?.delta?.content
-  return typeof content === 'string' ? content : ''
+function textValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+function jsonTextValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
+function firstTextValue(...values: unknown[]): string {
+  for (const value of values) {
+    const text = textValue(value)
+    if (text) return text
+  }
+  return ''
+}
+
+function extractChatCompletionsDelta(payload: Record<string, unknown>): StreamPayloadDelta {
+  const choice = (payload as { choices?: Array<{ delta?: Record<string, unknown> }> }).choices?.[0]
+  const delta = choice?.delta
+  if (!delta) return {}
+
+  const result: StreamPayloadDelta = {
+    content: textValue(delta.content),
+    reasoning: firstTextValue(
+      delta.reasoning_content,
+      delta.reasoning,
+      delta.reasoning_summary,
+      delta.reasoning_text,
+      delta.thinking,
+    ),
+  }
+
+  const toolCalls: StreamToolCallDelta[] = []
+  const rawToolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : []
+  for (const item of rawToolCalls) {
+    if (!item || typeof item !== 'object') continue
+    const call = item as Record<string, unknown>
+    const fn = call.function && typeof call.function === 'object' ? call.function as Record<string, unknown> : {}
+    const input = firstTextValue(fn.arguments, call.arguments, call.input) || jsonTextValue(call.input)
+    toolCalls.push({
+      id: textValue(call.id),
+      index: typeof call.index === 'number' ? call.index : undefined,
+      name: firstTextValue(fn.name, call.name),
+      input,
+    })
+  }
+
+  const functionCall = delta.function_call
+  if (functionCall && typeof functionCall === 'object') {
+    const call = functionCall as Record<string, unknown>
+    toolCalls.push({
+      name: textValue(call.name),
+      input: textValue(call.arguments),
+    })
+  }
+
+  if (toolCalls.length > 0) {
+    result.toolCalls = toolCalls
+  }
+
+  return result
+}
+
+function extractResponsesDelta(payload: Record<string, unknown>): StreamPayloadDelta {
+  const type = textValue(payload.type)
+  switch (type) {
+    case 'response.output_text.delta':
+      return { content: textValue(payload.delta) }
+    case 'response.reasoning_summary_text.delta':
+    case 'response.reasoning_text.delta':
+      return { reasoning: textValue(payload.delta) }
+    case 'response.output_item.added':
+    case 'response.output_item.done': {
+      const item = payload.item && typeof payload.item === 'object' ? payload.item as Record<string, unknown> : {}
+      const itemType = textValue(item.type)
+      if (itemType !== 'function_call' && itemType !== 'tool_call' && !itemType.endsWith('_call')) return {}
+      const input = firstTextValue(item.arguments, item.query, item.input) || jsonTextValue(item.action)
+      return {
+        toolCalls: [{
+          id: firstTextValue(item.call_id, item.id),
+          name: firstTextValue(item.name, item.type),
+          input,
+          inputMode: input ? 'replace' : undefined,
+        }],
+      }
+    }
+    case 'response.function_call_arguments.delta':
+      return {
+        toolCalls: [{
+          id: firstTextValue(payload.call_id, payload.item_id),
+          input: textValue(payload.delta),
+        }],
+      }
+    default:
+      return {}
+  }
+}
+
+function extractAnthropicDelta(payload: Record<string, unknown>): StreamPayloadDelta {
+  const type = textValue(payload.type)
+  if (type === 'content_block_start') {
+    const block = payload.content_block && typeof payload.content_block === 'object'
+      ? payload.content_block as Record<string, unknown>
+      : {}
+    if (textValue(block.type) !== 'tool_use') return {}
+    return {
+      toolCalls: [{
+        id: textValue(block.id),
+        index: typeof payload.index === 'number' ? payload.index : undefined,
+        name: textValue(block.name),
+        input: jsonTextValue(block.input),
+        inputMode: 'replace',
+      }],
+    }
+  }
+
+  if (type !== 'content_block_delta') return {}
+  const delta = payload.delta && typeof payload.delta === 'object'
+    ? payload.delta as Record<string, unknown>
+    : {}
+  const deltaType = textValue(delta.type)
+  if (deltaType === 'text_delta') {
+    return { content: textValue(delta.text) }
+  }
+  if (deltaType === 'thinking_delta') {
+    return { reasoning: textValue(delta.thinking) }
+  }
+  if (deltaType === 'input_json_delta') {
+    return {
+      toolCalls: [{
+        index: typeof payload.index === 'number' ? payload.index : undefined,
+        input: textValue(delta.partial_json),
+      }],
+    }
+  }
+  return {}
+}
+
+function extractStreamDelta(payload: unknown): StreamPayloadDelta {
+  if (!payload || typeof payload !== 'object') return {}
+  const record = payload as Record<string, unknown>
+  const chatCompletionsDelta = extractChatCompletionsDelta(record)
+  if (chatCompletionsDelta.content || chatCompletionsDelta.reasoning || chatCompletionsDelta.toolCalls?.length) {
+    return chatCompletionsDelta
+  }
+
+  const responsesDelta = extractResponsesDelta(record)
+  if (responsesDelta.content || responsesDelta.reasoning || responsesDelta.toolCalls?.length) {
+    return responsesDelta
+  }
+
+  return extractAnthropicDelta(record)
 }
 
 function waitForRenderFrame(): Promise<void> {
@@ -122,7 +301,7 @@ async function emitStreamDelta(delta: string, onDelta: (delta: string) => void):
   }
 }
 
-async function processSSELine(line: string, onDelta: (delta: string) => void): Promise<void> {
+async function processSSELine(line: string, onDelta: (delta: string) => void, onProcessDelta: (delta: StreamPayloadDelta) => void): Promise<void> {
   const trimmed = line.trim()
   if (!trimmed.startsWith('data:')) return
 
@@ -131,13 +310,19 @@ async function processSSELine(line: string, onDelta: (delta: string) => void): P
 
   try {
     const delta = extractStreamDelta(JSON.parse(data))
-    if (delta) await emitStreamDelta(delta, onDelta)
+    if (delta.reasoning || delta.toolCalls?.length) {
+      onProcessDelta({
+        reasoning: delta.reasoning,
+        toolCalls: delta.toolCalls,
+      })
+    }
+    if (delta.content) await emitStreamDelta(delta.content, onDelta)
   } catch {
     // Ignore malformed event payloads; the stream may still continue with valid events.
   }
 }
 
-async function readSSEStream(response: Response, onDelta: (delta: string) => void): Promise<void> {
+async function readSSEStream(response: Response, onDelta: (delta: string) => void, onProcessDelta: (delta: StreamPayloadDelta) => void): Promise<void> {
   if (!response.body) {
     throw new Error('Chat stream response did not include a readable body')
   }
@@ -155,13 +340,13 @@ async function readSSEStream(response: Response, onDelta: (delta: string) => voi
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() ?? ''
       for (const line of lines) {
-        await processSSELine(line, onDelta)
+        await processSSELine(line, onDelta, onProcessDelta)
       }
     }
 
     buffer += decoder.decode()
     if (buffer) {
-      await processSSELine(buffer, onDelta)
+      await processSSELine(buffer, onDelta, onProcessDelta)
     }
   } finally {
     reader.releaseLock()
@@ -218,10 +403,7 @@ export const useChatStore = defineStore('chat', () => {
     return options.length > 0 ? options : []
   })
   const activeThinkingEffort = computed<WebChatThinkingEffort>(() => {
-    if (thinkingEffortOptions.value.includes(thinkingEffort.value)) {
-      return thinkingEffort.value
-    }
-    return thinkingEffortOptions.value.includes('medium') ? 'medium' : thinkingEffortOptions.value[0] ?? 'medium'
+    return highestThinkingEffort(thinkingEffortOptions.value)
   })
   const activeImageGenerationSize = computed<WebChatImageGenerationSize>(() => {
     if (imageGenerationSizeOptions.value.includes(imageGenerationSize.value)) {
@@ -522,6 +704,77 @@ export const useChatStore = defineStore('chat', () => {
     assistantMessage.updated_at = nowISO()
   }
 
+  function activeAssistantMessage(): WebChatMessage | undefined {
+    if (!currentConversation.value) return undefined
+
+    return [...currentConversation.value.messages]
+      .reverse()
+      .find((message) => {
+        if (activeAssistantMessageId.value !== null) {
+          return message.id === activeAssistantMessageId.value
+        }
+        return message.role === 'assistant' && message.status === 'streaming'
+      })
+  }
+
+  function appendAssistantReasoningDelta(delta: string): void {
+    if (!delta) return
+    const assistantMessage = activeAssistantMessage()
+    if (!assistantMessage) return
+
+    const blocks = assistantMessage.content_json
+    const lastBlock = blocks[blocks.length - 1]
+    if (lastBlock?.type === 'reasoning' && typeof lastBlock.text === 'string') {
+      lastBlock.text += delta
+    } else {
+      blocks.push({
+        type: 'reasoning',
+        text: delta,
+      })
+    }
+    assistantMessage.updated_at = nowISO()
+  }
+
+  function appendAssistantToolCallDelta(delta: StreamToolCallDelta): void {
+    if (!delta.id && !delta.name && !delta.input) return
+    const assistantMessage = activeAssistantMessage()
+    if (!assistantMessage) return
+
+    const blocks = assistantMessage.content_json
+    const existing = delta.id
+      ? blocks.find((block) => block.type === 'tool_call' && block.id === delta.id)
+      : typeof delta.index === 'number'
+        ? blocks.find((block) => block.type === 'tool_call' && block.index === delta.index)
+        : [...blocks].reverse().find((block) => block.type === 'tool_call' && (!delta.name || block.name === delta.name))
+
+    if (existing) {
+      if (delta.id && typeof existing.id !== 'string') existing.id = delta.id
+      if (typeof delta.index === 'number' && typeof existing.index !== 'number') existing.index = delta.index
+      if (delta.name) existing.name = delta.name
+      if (delta.input) {
+        existing.input = delta.inputMode === 'replace' ? delta.input : `${textValue(existing.input)}${delta.input}`
+      }
+    } else {
+      blocks.push({
+        type: 'tool_call',
+        ...(delta.id ? { id: delta.id } : {}),
+        ...(typeof delta.index === 'number' ? { index: delta.index } : {}),
+        ...(delta.name ? { name: delta.name } : {}),
+        ...(delta.input ? { input: delta.input } : {}),
+      })
+    }
+    assistantMessage.updated_at = nowISO()
+  }
+
+  function appendAssistantProcessDelta(delta: StreamPayloadDelta): void {
+    if (delta.reasoning) {
+      appendAssistantReasoningDelta(delta.reasoning)
+    }
+    for (const toolCall of delta.toolCalls ?? []) {
+      appendAssistantToolCallDelta(toolCall)
+    }
+  }
+
   function finishAssistantStream(status: WebChatMessageStatus = 'completed'): void {
     if (currentConversation.value && activeAssistantMessageId.value !== null) {
       const assistantMessage = currentConversation.value.messages.find(
@@ -609,7 +862,7 @@ export const useChatStore = defineStore('chat', () => {
       const streamResult = await chatAPI.sendMessageStream(conversation.id, request, controller.signal)
       requestAccepted = true
       reconcileActiveStreamMessageIds(streamResult.userMessageId, streamResult.assistantMessageId)
-      await readSSEStream(streamResult.response, appendAssistantDelta)
+      await readSSEStream(streamResult.response, appendAssistantDelta, appendAssistantProcessDelta)
       finishAssistantStream()
       if (model.supports_artifact_output) {
         try {
@@ -687,6 +940,7 @@ export const useChatStore = defineStore('chat', () => {
     cancelStream,
     startAssistantStream,
     appendAssistantDelta,
+    appendAssistantProcessDelta,
     finishAssistantStream,
   }
 })

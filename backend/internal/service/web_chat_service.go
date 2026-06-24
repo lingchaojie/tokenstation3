@@ -418,6 +418,7 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 
 	status := WebChatMessageStatusCompleted
 	content := ExtractAssistantTextFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
+	contentJSON := ExtractAssistantProcessFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
 	role := WebChatRoleAssistant
 	update := UpdateWebChatMessageInput{
 		ContentText:            &content,
@@ -425,6 +426,9 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		ExpectedConversationID: &in.ConversationID,
 		ExpectedRole:           &role,
 		ExpectedStatuses:       []string{WebChatMessageStatusPending, WebChatMessageStatusStreaming},
+	}
+	if len(contentJSON) > 0 {
+		update.ContentJSON = &contentJSON
 	}
 	if dispatchResult.UsageLogID != nil {
 		update.UsageLogID = dispatchResult.UsageLogID

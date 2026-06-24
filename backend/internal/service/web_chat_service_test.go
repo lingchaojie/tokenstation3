@@ -62,6 +62,55 @@ func TestWebChatResponseCapture_ExtractAssistantTextFromLongStreamLine(t *testin
 	require.Equal(t, longText, ExtractAssistantTextFromChatCompletions(body, true))
 }
 
+func TestWebChatResponseCapture_ExtractAssistantProcessFromChatCompletionsStream(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning_content":"I should inspect this. "}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]}}]}`,
+		`data: {"choices":[{"delta":{"content":"Done"}}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n"))
+
+	require.Equal(t, []map[string]any{
+		{
+			"type": "reasoning",
+			"text": "I should inspect this. ",
+		},
+		{
+			"type":  "tool_call",
+			"id":    "call_1",
+			"index": 0,
+			"name":  "read_file",
+			"input": `{"path":"README.md"}`,
+		},
+	}, ExtractAssistantProcessFromChatCompletions(body, true))
+}
+
+func TestWebChatResponseCapture_ExtractAssistantProcessFromResponsesStreamReplacesFinalArguments(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"search_docs"}}`,
+		`data: {"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"{\"query\":"}`,
+		`data: {"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"\"chat ui\"}"}`,
+		`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"search_docs","arguments":"{\"query\":\"chat ui\"}"}}`,
+		`data: {"type":"response.reasoning_text.delta","delta":"Use the docs."}`,
+		``,
+	}, "\n\n"))
+
+	require.Equal(t, []map[string]any{
+		{
+			"type":  "tool_call",
+			"id":    "call_1",
+			"name":  "search_docs",
+			"input": `{"query":"chat ui"}`,
+		},
+		{
+			"type": "reasoning",
+			"text": "Use the docs.",
+		},
+	}, ExtractAssistantProcessFromChatCompletions(body, true))
+}
+
 func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}

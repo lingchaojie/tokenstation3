@@ -87,6 +87,10 @@ const imageModel: WebChatModel = {
   price_status: 'confirmed',
 }
 
+const AppLayoutStub = {
+  template: '<div data-testid="app-layout"><slot /></div>',
+}
+
 const historicalConversation: WebChatConversation = {
   id: 8,
   title: 'Historical image chat',
@@ -133,6 +137,7 @@ describe('ChatView', () => {
     const wrapper = mount(ChatView, {
       global: {
         stubs: {
+          AppLayout: AppLayoutStub,
         },
       },
     })
@@ -141,8 +146,8 @@ describe('ChatView', () => {
 
     expect(wrapper.text()).toContain('New chat')
     expect(wrapper.find('textarea').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="chat-immersive-view"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="app-layout"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="app-layout"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-immersive-view"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Get started')
     expect(chatAPI.listModels).toHaveBeenCalledOnce()
     expect(chatAPI.listConversations).toHaveBeenCalledOnce()
@@ -158,6 +163,7 @@ describe('ChatView', () => {
     const wrapper = mount(ChatView, {
       global: {
         stubs: {
+          AppLayout: AppLayoutStub,
         },
       },
     })
@@ -313,7 +319,7 @@ describe('ModelSelector', () => {
     expect(wrapper.find('select[aria-label="Model"]').exists()).toBe(false)
   })
 
-  it('lets users change thinking mode and effort from composer options', async () => {
+  it('exposes deep thinking as one composer option without model effort controls', async () => {
     const store = useChatStore()
     store.models = [chatModel]
     store.selectedModel = chatModel
@@ -322,14 +328,13 @@ describe('ModelSelector', () => {
     await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
 
     const toggle = wrapper.get('[data-testid="chat-thinking-toggle"]')
+    expect(toggle.text()).toContain('深度思考')
     expect(toggle.attributes('aria-pressed')).toBe('false')
+    expect(wrapper.find('[data-testid="chat-thinking-effort"]').exists()).toBe(false)
 
     await toggle.trigger('click')
     expect(store.thinkingEnabled).toBe(true)
     expect(toggle.attributes('aria-pressed')).toBe('true')
-
-    await wrapper.get('[data-testid="chat-thinking-effort"]').setValue('high')
-    expect(store.thinkingEffort).toBe('high')
   })
 
   it('lets users change image generation parameters from composer options', async () => {
@@ -415,7 +420,8 @@ describe('ConversationRail reference layout', () => {
     })
 
     const rail = wrapper.get('[data-testid="chat-conversation-rail"]')
-    expect(rail.text()).toContain('Workspace')
+    expect(rail.text()).toContain('会话')
+    expect(rail.text()).toContain('即刻开启模型会话')
     expect(rail.text()).toContain('GPT Image 2')
     expect(rail.text()).toContain('GPT-5.4')
     expect(wrapper.find('[data-testid="chat-model-group-gpt-image-2"]').exists()).toBe(true)

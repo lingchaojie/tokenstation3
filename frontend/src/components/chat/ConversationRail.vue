@@ -2,7 +2,10 @@
   <aside class="flex min-h-0 flex-col border-b border-linear-hairline bg-linear-surface-0 lg:border-b-0" data-testid="chat-conversation-rail">
     <div class="border-b border-linear-hairline px-3 py-4">
       <div class="flex items-center justify-between gap-2">
-        <h2 class="text-2xl font-semibold text-linear-ink">Workspace</h2>
+        <div class="min-w-0">
+          <h2 class="text-2xl font-semibold text-linear-ink">会话</h2>
+          <p class="mt-1 truncate text-xs text-linear-ink-tertiary">即刻开启模型会话</p>
+        </div>
         <div class="flex items-center gap-1">
           <button
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"

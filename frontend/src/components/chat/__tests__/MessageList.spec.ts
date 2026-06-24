@@ -60,6 +60,28 @@ function assistantMessage(artifacts: WebChatArtifact[]): WebChatMessage {
   }
 }
 
+function processAssistantMessage(status: WebChatMessage['status'] = 'completed'): WebChatMessage {
+  const timestamp = status === 'streaming' ? new Date().toISOString() : '2026-06-22T00:00:01Z'
+  return {
+    ...assistantMessage([]),
+    status,
+    content_text: status === 'completed' ? 'Final answer.' : '',
+    content_json: [
+      {
+        type: 'reasoning',
+        text: 'I need to inspect the current implementation.',
+      },
+      {
+        type: 'tool_call',
+        name: 'read_file',
+        input: '{"path":"frontend/src/stores/chat.ts"}',
+      },
+    ],
+    created_at: timestamp,
+    updated_at: timestamp,
+  }
+}
+
 function staleStreamingAssistantMessage(): WebChatMessage {
   return {
     id: 102,
@@ -153,6 +175,73 @@ describe('MessageList', () => {
     await wrapper.get('[data-testid="chat-artifact-file-download-45"]').trigger('click')
 
     expect(chatAPI.downloadArtifact).toHaveBeenCalledWith(45)
+  })
+
+  it('renders thinking and tool process blocks collapsed after completion', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [processAssistantMessage('completed')],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    const process = wrapper.get('[data-testid="chat-process-block"]')
+    expect(process.text()).toContain('Thinking and tools')
+    expect(process.attributes('open')).toBeUndefined()
+    expect(process.text()).toContain('read_file')
+  })
+
+  it('keeps process blocks expanded while the assistant is streaming', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [processAssistantMessage('streaming')],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="chat-process-block"]').attributes('open')).toBeDefined()
+  })
+
+  it('renders artifacts as separate bubbles outside the assistant text block', async () => {
+    const imageBlob = new Blob(['image-bytes'], { type: 'image/png' })
+    vi.spyOn(chatAPI, 'downloadArtifact').mockResolvedValue({
+      blob: imageBlob,
+      filename: imageArtifact.filename,
+      contentType: imageArtifact.content_type,
+    })
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [assistantMessage([imageArtifact, fileArtifact])],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="chat-artifact-bubble-101"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-assistant-open-message"]').find('[data-testid="chat-artifact-image-44"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-artifact-bubble-101"]').find('[data-testid="chat-artifact-image-44"]').exists()).toBe(true)
   })
 
   it('shows stale historical streaming messages as interrupted instead of thinking forever', () => {

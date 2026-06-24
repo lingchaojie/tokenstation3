@@ -487,8 +487,8 @@ export default {
   },
 
   chat: {
-    title: '网页对话',
-    description: '直接在网页中和可用模型对话',
+    title: '会话',
+    description: '即刻开启模型会话',
     openWebChat: '开始网页对话',
     openWebChatShort: '对话',
     newChat: '新对话',
