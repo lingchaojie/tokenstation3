@@ -46,10 +46,36 @@ func (r openAIImagesFailoverAccountRepo) ListSchedulableUngroupedByPlatform(_ co
 	return r.accountsForPlatform(platform), nil
 }
 
+func (r openAIImagesFailoverAccountRepo) ListSchedulableByGroupIDAndPlatforms(_ context.Context, _ int64, platforms []string) ([]service.Account, error) {
+	return r.accountsForPlatforms(platforms), nil
+}
+
+func (r openAIImagesFailoverAccountRepo) ListSchedulableByPlatforms(_ context.Context, platforms []string) ([]service.Account, error) {
+	return r.accountsForPlatforms(platforms), nil
+}
+
+func (r openAIImagesFailoverAccountRepo) ListSchedulableUngroupedByPlatforms(_ context.Context, platforms []string) ([]service.Account, error) {
+	return r.accountsForPlatforms(platforms), nil
+}
+
 func (r openAIImagesFailoverAccountRepo) accountsForPlatform(platform string) []service.Account {
 	out := make([]service.Account, 0, len(r.accounts))
 	for _, account := range r.accounts {
 		if account.Platform == platform {
+			out = append(out, account)
+		}
+	}
+	return out
+}
+
+func (r openAIImagesFailoverAccountRepo) accountsForPlatforms(platforms []string) []service.Account {
+	platformSet := make(map[string]struct{}, len(platforms))
+	for _, platform := range platforms {
+		platformSet[platform] = struct{}{}
+	}
+	out := make([]service.Account, 0, len(r.accounts))
+	for _, account := range r.accounts {
+		if _, ok := platformSet[account.Platform]; ok {
 			out = append(out, account)
 		}
 	}
