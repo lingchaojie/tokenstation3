@@ -208,7 +208,7 @@ describe('useChatStore', () => {
     })
   })
 
-  it('includes editable thinking settings when sending a supported model message', async () => {
+  it('sends the highest thinking effort when deep thinking is enabled', async () => {
     const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
       response: new Response('data: [DONE]\n\n', {
         status: 200,
@@ -223,7 +223,7 @@ describe('useChatStore', () => {
     const store = useChatStore()
     store.selectedModel = thinkingModel
     store.thinkingEnabled = true
-    store.thinkingEffort = 'high'
+    store.thinkingEffort = 'low'
     store.currentConversation = {
       conversation: {
         id: 7,
@@ -248,9 +248,63 @@ describe('useChatStore', () => {
       content: 'Think this through',
       thinking: {
         enabled: true,
-        effort: 'high',
+        effort: 'xhigh',
       },
     }), expect.any(AbortSignal))
+  })
+
+  it('streams reasoning and tool call events into assistant process blocks', async () => {
+    vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+      response: new Response([
+        'data: {"choices":[{"delta":{"reasoning_content":"I should inspect the repo. "}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"README.md\\"}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"Done"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''), {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    const store = useChatStore()
+    store.selectedModel = thinkingModel
+    store.currentConversation = {
+      conversation: {
+        id: 7,
+        title: 'Reasoning',
+        default_model: thinkingModel.model,
+        default_provider: thinkingModel.provider,
+        last_model: thinkingModel.model,
+        last_provider: thinkingModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    await store.sendMessage('Use a tool')
+
+    expect(store.currentMessages[1].content_text).toBe('Done')
+    expect(store.currentMessages[1].content_json).toEqual([
+      {
+        type: 'reasoning',
+        text: 'I should inspect the repo. ',
+      },
+      {
+        type: 'tool_call',
+        id: 'call_1',
+        index: 0,
+        name: 'read_file',
+        input: '{"path":"README.md"}',
+      },
+    ])
   })
 
   it('shows optimistic user and assistant messages before the stream request resolves', async () => {

@@ -96,27 +96,16 @@
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                 : 'border-linear-hairline bg-linear-surface-1 text-linear-ink-muted hover:border-linear-hairline-strong'"
               :aria-pressed="chatStore.thinkingEnabled ? 'true' : 'false'"
-              aria-label="Thinking"
+              aria-label="Deep thinking"
               data-testid="chat-thinking-toggle"
               @click="toggleThinking"
             >
               <Icon name="brain" size="sm" />
-              <span>Thinking</span>
+              <span>深度思考</span>
             </button>
-            <label class="min-w-0 flex-1">
-              <span class="sr-only">Thinking effort</span>
-              <select
-                v-model="chatStore.thinkingEffort"
-                class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="!chatStore.thinkingEnabled"
-                aria-label="Thinking effort"
-                data-testid="chat-thinking-effort"
-              >
-                <option v-for="effort in chatStore.thinkingEffortOptions" :key="effort" :value="effort">
-                  {{ thinkingEffortLabel(effort) }}
-                </option>
-              </select>
-            </label>
+            <span class="min-w-0 truncate text-xs text-linear-ink-tertiary">
+              {{ chatStore.thinkingEnabled ? '使用该模型最高思考档位' : '关闭' }}
+            </span>
           </div>
 
           <div v-if="chatStore.selectedModelSupportsImageGeneration" class="grid min-w-0 gap-2 sm:col-span-2">
@@ -461,21 +450,6 @@ function toggleThinking(): void {
 function toggleImageGeneration(): void {
   if (!chatStore.selectedModelSupportsImageGeneration) return
   chatStore.imageGenerationEnabled = !chatStore.imageGenerationEnabled
-}
-
-function thinkingEffortLabel(effort: string): string {
-  switch (effort) {
-    case 'low':
-      return 'Low'
-    case 'medium':
-      return 'Medium'
-    case 'high':
-      return 'High'
-    case 'xhigh':
-      return 'Max'
-    default:
-      return effort
-  }
 }
 
 function optionLabel(value: string): string {

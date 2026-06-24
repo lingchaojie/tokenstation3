@@ -487,8 +487,8 @@ export default {
   },
 
   chat: {
-    title: 'Web Chat',
-    description: 'Chat with available models directly in the browser',
+    title: '会话',
+    description: '即刻开启模型会话',
     openWebChat: 'Open web chat',
     openWebChatShort: 'Chat',
     newChat: 'New chat',

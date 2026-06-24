@@ -1,6 +1,6 @@
 <template>
-  <section class="chat-page h-[100dvh] min-h-0 bg-linear-canvas text-linear-ink" data-testid="chat-page">
-    <div class="flex h-full min-h-0 flex-col overflow-hidden lg:grid lg:grid-cols-[292px_minmax(0,1fr)]">
+  <section class="chat-page min-h-[calc(100dvh-8rem)] bg-linear-canvas text-linear-ink" data-testid="chat-page">
+    <div class="flex h-[calc(100dvh-8rem)] min-h-[620px] flex-col overflow-hidden rounded-lg border border-linear-hairline bg-linear-canvas lg:grid lg:grid-cols-[292px_minmax(0,1fr)]">
       <ConversationRail
         class="min-h-0 flex-1 lg:flex"
         :class="mobilePanel === 'list' ? 'flex' : 'hidden'"
