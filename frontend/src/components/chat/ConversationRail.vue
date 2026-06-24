@@ -39,7 +39,8 @@
           <button
             class="min-w-0 flex-1 px-2.5 py-2 text-left"
             type="button"
-            @click="chatStore.openConversation(conversation.id)"
+            :data-testid="`chat-conversation-open-${conversation.id}`"
+            @click="openConversation(conversation.id)"
           >
             <span class="block truncate text-sm font-medium text-linear-ink">
               {{ conversationTitle(conversation) }}
@@ -82,6 +83,11 @@ import { useChatStore } from '@/stores/chat'
 const chatStore = useChatStore()
 const query = ref('')
 
+const emit = defineEmits<{
+  (event: 'new-chat'): void
+  (event: 'open-conversation'): void
+}>()
+
 const filteredConversations = computed(() => {
   const term = query.value.trim().toLowerCase()
   if (!term) return chatStore.conversations
@@ -104,6 +110,12 @@ function startNewChat(): void {
   chatStore.currentConversation = null
   chatStore.pendingAttachments = []
   chatStore.error = null
+  emit('new-chat')
+}
+
+async function openConversation(conversationId: number): Promise<void> {
+  await chatStore.openConversation(conversationId)
+  emit('open-conversation')
 }
 
 async function renameConversation(conversationId: number, currentTitle: string): Promise<void> {

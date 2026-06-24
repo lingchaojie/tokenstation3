@@ -56,6 +56,12 @@ func TestDefaultCSPPolicyAllows51LA(t *testing.T) {
 	}
 }
 
+func TestDefaultCSPPolicyAllowsBlobImages(t *testing.T) {
+	if !cspDirectiveContains(DefaultCSPPolicy, "img-src", "blob:") {
+		t.Fatalf("DefaultCSPPolicy img-src should allow blob: previews: %q", DefaultCSPPolicy)
+	}
+}
+
 func cspDirectiveContains(policy, directive, value string) bool {
 	for _, rawDirective := range strings.Split(policy, ";") {
 		fields := strings.Fields(strings.TrimSpace(rawDirective))

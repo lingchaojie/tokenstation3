@@ -31,15 +31,18 @@
               v-if="message.status !== 'completed'"
               :class="message.role === 'user' ? 'text-white/75' : 'text-linear-ink-tertiary'"
             >
-              {{ message.status }}
+              {{ messageStatusLabel(message) }}
             </span>
           </div>
 
           <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6">
             {{ message.content_text }}
           </p>
-          <p v-else-if="message.status === 'streaming'" class="text-sm text-linear-ink-subtle">
+          <p v-else-if="isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
             Thinking...
+          </p>
+          <p v-else-if="isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
+            Response interrupted before completion.
           </p>
 
           <div v-if="message.attachments?.length" class="mt-3 flex flex-wrap gap-2">
@@ -55,14 +58,19 @@
             />
           </div>
 
-          <div v-if="message.artifacts?.length" class="mt-3 flex flex-wrap gap-2">
-            <AttachmentChip
-              v-for="artifact in message.artifacts"
+          <div v-if="imageArtifacts(message).length" class="mt-3 grid gap-3 sm:grid-cols-2">
+            <ArtifactImagePreview
+              v-for="artifact in imageArtifacts(message)"
               :key="artifact.id"
-              kind="file"
-              :filename="artifact.filename"
-              :size-bytes="artifact.size_bytes"
-              :downloadable="true"
+              :artifact="artifact"
+            />
+          </div>
+
+          <div v-if="fileArtifacts(message).length" class="mt-3 grid gap-2">
+            <ArtifactFileCard
+              v-for="artifact in fileArtifacts(message)"
+              :key="artifact.id"
+              :artifact="artifact"
               @download="downloadArtifact(artifact.id)"
             />
           </div>
@@ -86,16 +94,52 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import { chatAPI, type WebChatMessage } from '@/api/chat'
+import { chatAPI, type WebChatArtifact, type WebChatMessage } from '@/api/chat'
+import ArtifactFileCard from '@/components/chat/ArtifactFileCard.vue'
+import ArtifactImagePreview from '@/components/chat/ArtifactImagePreview.vue'
 import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()
 const messages = computed(() => chatStore.currentMessages)
+const STALE_STREAMING_MS = 10 * 60 * 1000
 
 function assistantLabel(message: WebChatMessage): string {
   return message.model || 'Assistant'
+}
+
+function isStreamingStatus(message: WebChatMessage): boolean {
+  return message.status === 'streaming' || message.status === 'pending'
+}
+
+function isStaleStreaming(message: WebChatMessage): boolean {
+  if (!isStreamingStatus(message)) return false
+  const updatedAt = Date.parse(message.updated_at || message.created_at)
+  if (!Number.isFinite(updatedAt)) return false
+  return Date.now() - updatedAt > STALE_STREAMING_MS
+}
+
+function isLiveStreaming(message: WebChatMessage): boolean {
+  return message.status === 'streaming' && !isStaleStreaming(message)
+}
+
+function messageStatusLabel(message: WebChatMessage): string {
+  return isStaleStreaming(message) ? 'interrupted' : message.status
+}
+
+function isImageArtifact(artifact: WebChatArtifact): boolean {
+  const contentType = artifact.content_type.toLowerCase()
+  if (contentType.startsWith('image/')) return true
+  return /\.(png|jpe?g|webp|gif|avif)$/i.test(artifact.filename)
+}
+
+function imageArtifacts(message: WebChatMessage): WebChatArtifact[] {
+  return message.artifacts?.filter(isImageArtifact) ?? []
+}
+
+function fileArtifacts(message: WebChatMessage): WebChatArtifact[] {
+  return message.artifacts?.filter((artifact) => !isImageArtifact(artifact)) ?? []
 }
 
 async function retryMessage(messageId: number): Promise<void> {
