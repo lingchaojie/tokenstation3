@@ -12,11 +12,12 @@ function read(relativePath: string): string {
 }
 
 describe('Chat page source contract', () => {
-  it('keeps the route view as an authenticated app-layout wrapper', () => {
+  it('renders the chat route as an immersive workspace instead of the app shell', () => {
     const source = read(resolve(userDir, 'ChatView.vue'))
 
-    expect(source).toContain('<AppLayout>')
+    expect(source).toContain('data-testid="chat-immersive-view"')
     expect(source).toContain('<ChatShell')
+    expect(source).not.toContain('<AppLayout>')
     expect(source).not.toContain('Get started')
   })
 
@@ -24,8 +25,8 @@ describe('Chat page source contract', () => {
     const source = read(resolve(chatDir, 'ChatShell.vue'))
 
     expect(source).toContain('chat-page')
-    expect(source).toContain('grid h-[calc(100vh-4rem)] min-h-[640px]')
-    expect(source).toContain('lg:grid-cols-[280px_minmax(0,1fr)]')
+    expect(source).toContain('h-[100dvh]')
+    expect(source).toContain('lg:grid-cols-[292px_minmax(0,1fr)]')
     expect(source).not.toContain('linx-panel-strong')
     expect(source).not.toContain('hero')
   })

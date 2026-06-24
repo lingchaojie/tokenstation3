@@ -10,7 +10,7 @@
       </p>
     </div>
 
-    <div v-else class="mx-auto flex max-w-3xl flex-col gap-5">
+    <div v-else class="mx-auto flex max-w-3xl flex-col gap-8">
       <article
         v-for="message in messages"
         :key="message.id"
@@ -18,21 +18,13 @@
         :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
       >
         <div
-          class="max-w-[min(100%,42rem)] rounded-lg border px-4 py-3"
-          :class="message.role === 'user'
-            ? 'border-primary-500/30 bg-primary-500 text-white'
-            : 'border-linear-hairline bg-linear-surface-1 text-linear-ink'"
+          v-if="message.role === 'user'"
+          class="max-w-[min(100%,22rem)] rounded-lg bg-primary-500 px-4 py-3 text-white shadow-sm"
+          data-testid="chat-user-message"
         >
-          <div class="mb-2 flex items-center justify-between gap-3 text-xs">
-            <span :class="message.role === 'user' ? 'text-white/75' : 'text-linear-ink-tertiary'">
-              {{ message.role === 'user' ? 'You' : assistantLabel(message) }}
-            </span>
-            <span
-              v-if="message.status !== 'completed'"
-              :class="message.role === 'user' ? 'text-white/75' : 'text-linear-ink-tertiary'"
-            >
-              {{ messageStatusLabel(message) }}
-            </span>
+          <div class="mb-1.5 flex items-center justify-between gap-3 text-xs text-white/75">
+            <span>You</span>
+            <span v-if="message.status !== 'completed'">{{ messageStatusLabel(message) }}</span>
           </div>
 
           <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6">
@@ -57,6 +49,28 @@
               @download="downloadAttachment(attachment.id)"
             />
           </div>
+        </div>
+
+        <div v-else class="w-full min-w-0 text-linear-ink" data-testid="chat-assistant-open-message">
+          <div class="mb-3 flex min-w-0 items-center justify-between gap-3">
+            <div class="flex min-w-0 items-center gap-2">
+              <ModelIcon :model="providerIconModel(message.provider || message.model)" size="28px" aria-hidden="true" />
+              <span class="min-w-0 truncate text-sm font-semibold text-linear-ink">{{ assistantLabel(message) }}</span>
+            </div>
+            <span v-if="message.status !== 'completed'" class="shrink-0 text-xs text-linear-ink-tertiary">
+              {{ messageStatusLabel(message) }}
+            </span>
+          </div>
+
+          <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6 text-linear-ink">
+            {{ message.content_text }}
+          </p>
+          <p v-else-if="isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
+            Thinking...
+          </p>
+          <p v-else-if="isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
+            Response interrupted before completion.
+          </p>
 
           <div v-if="imageArtifacts(message).length" class="mt-3 grid gap-3 sm:grid-cols-2">
             <ArtifactImagePreview
@@ -98,8 +112,10 @@ import { chatAPI, type WebChatArtifact, type WebChatMessage } from '@/api/chat'
 import ArtifactFileCard from '@/components/chat/ArtifactFileCard.vue'
 import ArtifactImagePreview from '@/components/chat/ArtifactImagePreview.vue'
 import AttachmentChip from '@/components/chat/AttachmentChip.vue'
+import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
 const messages = computed(() => chatStore.currentMessages)

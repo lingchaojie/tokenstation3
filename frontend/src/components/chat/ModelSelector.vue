@@ -1,146 +1,59 @@
 <template>
-  <header class="shrink-0 border-b border-linear-hairline bg-linear-canvas px-3 py-2 sm:px-4" data-testid="chat-model-selector">
-    <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-      <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(8rem,11rem)_minmax(11rem,20rem)]">
-        <div ref="providerMenuRef" class="relative">
-          <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Provider</span>
-          <button
-            type="button"
-            class="flex h-9 w-full items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-left text-sm text-linear-ink outline-none transition-colors hover:border-linear-hairline-strong focus:border-linear-hairline-strong"
-            aria-label="Provider"
-            aria-haspopup="listbox"
-            :aria-expanded="providerMenuOpen"
-            data-testid="chat-provider-trigger"
-            @click="providerMenuOpen = !providerMenuOpen"
-            @keydown.down.prevent="providerMenuOpen = true"
-            @keydown.esc.prevent="providerMenuOpen = false"
-          >
-            <ModelIcon :model="providerIconModel(selectedProvider)" size="16px" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate">{{ selectedProvider }}</span>
-            <Icon name="chevronDown" size="sm" class="shrink-0 text-linear-ink-tertiary" />
-          </button>
-          <div
-            v-if="providerMenuOpen"
-            class="absolute left-0 top-full z-30 mt-1 w-full overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-0 py-1 shadow-lg"
-            role="listbox"
-            aria-label="Provider"
-          >
-            <button
-              v-for="provider in providers"
-              :key="provider"
-              type="button"
-              class="flex h-9 w-full items-center gap-2 px-3 text-left text-sm text-linear-ink transition-colors hover:bg-linear-surface-1"
-              :aria-selected="provider === selectedProvider"
-              data-testid="chat-provider-option"
-              role="option"
-              @click="selectProvider(provider)"
-            >
-              <ModelIcon :model="providerIconModel(provider)" size="16px" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate">{{ provider }}</span>
-              <Icon v-if="provider === selectedProvider" name="check" size="sm" class="text-linear-accent" />
-            </button>
-          </div>
-        </div>
-        <label class="block">
-          <span class="mb-1 block text-xs font-medium text-linear-ink-tertiary">Model</span>
-          <select
-            v-model="selectedModelKey"
-            class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong"
-            aria-label="Model"
-          >
-            <option v-for="model in modelOptions" :key="modelKey(model)" :value="modelKey(model)">
-              {{ model.display_name || model.model }}
-            </option>
-          </select>
-        </label>
+  <header
+    class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-linear-hairline bg-linear-canvas px-4"
+    data-testid="chat-model-selector"
+  >
+    <div class="min-w-0">
+      <div class="flex min-w-0 items-center gap-2">
+        <h1 class="truncate text-sm font-semibold text-linear-ink">
+          {{ conversationTitle }}
+        </h1>
+        <Icon name="edit" size="xs" class="hidden shrink-0 text-linear-ink-tertiary sm:block" />
       </div>
+      <p class="mt-0.5 truncate text-xs text-linear-ink-tertiary">
+        {{ subtitle }}
+      </p>
+    </div>
 
-      <div
-        v-if="capabilitySummary"
-        class="min-w-0 truncate text-xs text-linear-ink-tertiary md:max-w-xs md:pb-2 md:text-right"
-      >
-        {{ capabilitySummary }}
-      </div>
+    <div
+      v-if="chatStore.selectedModel"
+      class="hidden shrink-0 items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-2.5 py-1.5 text-xs text-linear-ink-muted sm:inline-flex"
+      data-testid="chat-current-model-chip"
+    >
+      <ModelIcon :model="providerIconModel(chatStore.selectedModel.provider)" size="16px" aria-hidden="true" />
+      <span class="max-w-44 truncate">{{ modelLabel }}</span>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 
-import type { WebChatModel } from '@/api/chat'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
-const providerMenuOpen = ref(false)
-const providerMenuRef = ref<HTMLElement | null>(null)
 
-const providers = computed(() => Array.from(new Set(chatStore.models.map((model) => model.provider))).sort())
-
-const selectedProvider = computed({
-  get() {
-    return chatStore.selectedModel?.provider || providers.value[0] || ''
-  },
-  set(provider: string) {
-    const nextModel = chatStore.models.find((model) => model.provider === provider)
-    if (nextModel) {
-      chatStore.selectedModel = nextModel
-    }
-  },
+const conversationTitle = computed(() => {
+  const conversation = chatStore.currentConversation?.conversation
+  return conversation?.title || 'New chat'
 })
 
-function selectProvider(provider: string): void {
-  selectedProvider.value = provider
-  providerMenuOpen.value = false
-}
-
-const modelOptions = computed(() =>
-  chatStore.models.filter((model) => model.provider === selectedProvider.value)
-)
-
-const selectedModelKey = computed({
-  get() {
-    return chatStore.selectedModel ? modelKey(chatStore.selectedModel) : ''
-  },
-  set(key: string) {
-    const nextModel = chatStore.models.find((model) => modelKey(model) === key)
-    if (nextModel) {
-      chatStore.selectedModel = nextModel
-    }
-  },
-})
-
-const capabilitySummary = computed(() => {
+const modelLabel = computed(() => {
   const model = chatStore.selectedModel
-  if (!model) return ''
+  return model?.display_name || model?.model || 'Select model'
+})
+
+const subtitle = computed(() => {
   const capabilities: string[] = []
+  const model = chatStore.selectedModel
+  if (!model) return 'Choose a model in the composer'
   if (model.supports_image_input) capabilities.push('Images')
   if (model.supports_file_context) capabilities.push('Files')
   if (model.supports_thinking) capabilities.push('Thinking')
   if (model.supports_image_generation) capabilities.push('Generate')
-  return capabilities.join(' · ')
-})
-
-function modelKey(model: WebChatModel): string {
-  return `${model.provider}:${model.model}`
-}
-
-function handleDocumentClick(event: MouseEvent): void {
-  const target = event.target
-  if (!(target instanceof Node)) return
-  if (!providerMenuRef.value?.contains(target)) {
-    providerMenuOpen.value = false
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleDocumentClick)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleDocumentClick)
+  return capabilities.length > 0 ? capabilities.join(' · ') : modelLabel.value
 })
 </script>

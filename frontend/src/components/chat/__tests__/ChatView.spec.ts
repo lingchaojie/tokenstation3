@@ -87,10 +87,6 @@ const imageModel: WebChatModel = {
   price_status: 'confirmed',
 }
 
-const AppLayoutStub = {
-  template: '<div data-testid="app-layout"><slot /></div>',
-}
-
 const historicalConversation: WebChatConversation = {
   id: 8,
   title: 'Historical image chat',
@@ -137,7 +133,6 @@ describe('ChatView', () => {
     const wrapper = mount(ChatView, {
       global: {
         stubs: {
-          AppLayout: AppLayoutStub,
         },
       },
     })
@@ -146,6 +141,8 @@ describe('ChatView', () => {
 
     expect(wrapper.text()).toContain('New chat')
     expect(wrapper.find('textarea').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-immersive-view"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="app-layout"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Get started')
     expect(chatAPI.listModels).toHaveBeenCalledOnce()
     expect(chatAPI.listConversations).toHaveBeenCalledOnce()
@@ -161,7 +158,6 @@ describe('ChatView', () => {
     const wrapper = mount(ChatView, {
       global: {
         stubs: {
-          AppLayout: AppLayoutStub,
         },
       },
     })
@@ -205,6 +201,34 @@ describe('Composer', () => {
     await Promise.resolve()
 
     expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('hosts model selection in the composer control row', async () => {
+    const store = useChatStore()
+    store.models = [anthropicModel, chatModel]
+    store.selectedModel = chatModel
+
+    const wrapper = mount(Composer)
+
+    expect(wrapper.get('[data-testid="chat-model-menu-toggle"]').text()).toContain('GPT-5.4')
+    expect(wrapper.find('[data-testid="chat-model-menu"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="chat-model-menu-toggle"]').trigger('click')
+
+    const menu = wrapper.get('[data-testid="chat-model-menu"]')
+    expect(menu.get('[data-testid="chat-provider-trigger"]').findComponent(ModelIcon).props('model')).toBe('gpt-5')
+
+    await menu.get('[data-testid="chat-provider-trigger"]').trigger('click')
+    const options = menu.findAll('[data-testid="chat-provider-option"]')
+    expect(options).toHaveLength(2)
+    expect(options.map((option) => option.findComponent(ModelIcon).props('model'))).toEqual(['claude', 'gpt-5'])
+
+    await options[0].trigger('click')
+
+    expect(store.selectedModel).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-opus-4-8',
+    })
   })
 })
 
@@ -272,27 +296,21 @@ describe('ModelSelector', () => {
     setActivePinia(createPinia())
   })
 
-  it('shows marketplace-style provider logos in the provider selector', async () => {
+  it('renders a compact conversation header instead of top-level model form controls', () => {
     const store = useChatStore()
-    store.models = [anthropicModel, chatModel]
+    store.models = [chatModel]
     store.selectedModel = chatModel
+    store.currentConversation = {
+      conversation: historicalConversation,
+      messages: [],
+    }
 
     const wrapper = mount(ModelSelector)
 
-    expect(wrapper.get('[data-testid="chat-provider-trigger"]').findComponent(ModelIcon).props('model')).toBe('gpt-5')
-
-    await wrapper.get('[data-testid="chat-provider-trigger"]').trigger('click')
-
-    const options = wrapper.findAll('[data-testid="chat-provider-option"]')
-    expect(options).toHaveLength(2)
-    expect(options.map((option) => option.findComponent(ModelIcon).props('model'))).toEqual(['claude', 'gpt-5'])
-
-    await options[0].trigger('click')
-
-    expect(store.selectedModel).toMatchObject({
-      provider: 'anthropic',
-      model: 'claude-opus-4-8',
-    })
+    expect(wrapper.text()).toContain('Historical image chat')
+    expect(wrapper.text()).toContain('GPT-5.4')
+    expect(wrapper.find('[data-testid="chat-provider-trigger"]').exists()).toBe(false)
+    expect(wrapper.find('select[aria-label="Model"]').exists()).toBe(false)
   })
 
   it('lets users change thinking mode and effort from composer options', async () => {
@@ -364,5 +382,43 @@ describe('ModelSelector', () => {
     expect(wrapper.find('[data-testid="chat-image-generation-size"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="chat-image-generation-quality"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="chat-image-generation-output-format"]').exists()).toBe(false)
+  })
+})
+
+describe('ConversationRail reference layout', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('shows a workspace rail with model-grouped conversations', () => {
+    const store = useChatStore()
+    store.models = [imageModel, chatModel]
+    store.selectedModel = imageModel
+    store.conversations = [
+      historicalConversation,
+      {
+        ...historicalConversation,
+        id: 9,
+        title: 'Text chat',
+        default_model: 'gpt-5.4',
+        last_model: 'gpt-5.4',
+      },
+    ]
+
+    const wrapper = mount(ChatShell, {
+      global: {
+        stubs: {
+          Icon: true,
+          ModelIcon: true,
+        },
+      },
+    })
+
+    const rail = wrapper.get('[data-testid="chat-conversation-rail"]')
+    expect(rail.text()).toContain('Workspace')
+    expect(rail.text()).toContain('GPT Image 2')
+    expect(rail.text()).toContain('GPT-5.4')
+    expect(wrapper.find('[data-testid="chat-model-group-gpt-image-2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-model-group-gpt-5.4"]').exists()).toBe(true)
   })
 })
