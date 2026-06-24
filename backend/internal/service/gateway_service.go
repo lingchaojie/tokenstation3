@@ -2500,7 +2500,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	}
 	filtered := make([]Account, 0, len(accounts))
 	for _, acc := range accounts {
-		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+		if acc.Platform == PlatformAntigravity && platform != PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
 			continue
 		}
 		filtered = append(filtered, acc)
