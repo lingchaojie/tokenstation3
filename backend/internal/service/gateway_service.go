@@ -1810,7 +1810,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				}
 				continue
 			}
-			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
+			if !s.isAccountAllowedForPlatform(account, platform, useMixed, requestedModel) {
 				filteredPlatform++
 				continue
 			}
@@ -1865,7 +1865,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						var stickyCacheMissReason string
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed, requestedModel) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
@@ -2048,7 +2048,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				// 注意：不再检查 isAccountInGroup，因为 accountByID 已经从按分组过滤的
 				// accounts 列表构建，账号一定在分组内。而 scheduler snapshot 缓存
 				// 反序列化后 AccountGroups 字段为空，导致 isAccountInGroup 永远返回 false。
-				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed)
+				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed, requestedModel)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)
 				modelSchedulable := s.isAccountSchedulableForModelSelection(ctx, account, requestedModel)
 				quotaOK := s.isAccountSchedulableForQuota(account)
@@ -2165,7 +2165,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if !s.isAccountSchedulableForSelection(acc) {
 			continue
 		}
-		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
+		if !s.isAccountAllowedForPlatform(acc, platform, useMixed, requestedModel) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -2472,10 +2472,10 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		return accounts, useMixed, err
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
-	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
-		var accounts []Account
-		var err error
+	platforms := schedulablePlatformsForRequest(platform, hasForcePlatform)
+	var accounts []Account
+	var err error
+	if len(platforms) > 1 {
 		if groupID != nil {
 			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
 		} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
@@ -2483,42 +2483,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		} else {
 			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 		}
-		if err != nil {
-			slog.Debug("account_scheduling_list_failed",
-				"group_id", derefGroupID(groupID),
-				"platform", platform,
-				"error", err)
-			return nil, useMixed, err
-		}
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
-			filtered = append(filtered, acc)
-		}
-		slog.Debug("account_scheduling_list_mixed",
-			"group_id", derefGroupID(groupID),
-			"platform", platform,
-			"raw_count", len(accounts),
-			"filtered_count", len(filtered))
-		if slog.Default().Enabled(ctx, slog.LevelDebug) {
-			for _, acc := range filtered {
-				slog.Debug("account_scheduling_account_detail",
-					"account_id", acc.ID,
-					"name", acc.Name,
-					"platform", acc.Platform,
-					"type", acc.Type,
-					"status", acc.Status,
-					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
-			}
-		}
-		return filtered, useMixed, nil
-	}
-
-	var accounts []Account
-	var err error
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+	} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	} else if groupID != nil {
 		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
@@ -2533,12 +2498,21 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			"error", err)
 		return nil, useMixed, err
 	}
-	slog.Debug("account_scheduling_list_single",
+	filtered := make([]Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			continue
+		}
+		filtered = append(filtered, acc)
+	}
+	slog.Debug("account_scheduling_list",
 		"group_id", derefGroupID(groupID),
 		"platform", platform,
-		"count", len(accounts))
+		"platforms", platforms,
+		"raw_count", len(accounts),
+		"filtered_count", len(filtered))
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		for _, acc := range accounts {
+		for _, acc := range filtered {
 			slog.Debug("account_scheduling_account_detail",
 				"account_id", acc.ID,
 				"name", acc.Name,
@@ -2548,7 +2522,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 		}
 	}
-	return accounts, useMixed, nil
+	return filtered, useMixed, nil
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
@@ -2562,17 +2536,29 @@ func (s *GatewayService) IsSingleAntigravityAccountGroup(ctx context.Context, gr
 	return len(accounts) == 1
 }
 
-func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool) bool {
+func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
-	if useMixed {
-		if account.Platform == platform {
-			return true
-		}
-		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		return true
 	}
-	return account.Platform == platform
+	if account.Platform == platform {
+		return true
+	}
+	if account.Platform == PlatformAntigravity {
+		return useMixed && account.IsMixedSchedulingEnabled()
+	}
+	if account.Platform == PlatformKiro {
+		if platform == PlatformOpenAI {
+			return isKiroBridgeAccountAllowed(account, platform, requestedModel)
+		}
+		if useMixed && platform == PlatformAnthropic {
+			return isKiroBridgeAccountAllowed(account, platform, requestedModel)
+		}
+	}
+	return false
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
@@ -3548,7 +3534,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+							if s.isAccountAllowedForPlatform(account, nativePlatform, true, requestedModel) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -3600,7 +3586,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				continue
 			}
 			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if !s.isAccountAllowedForPlatform(acc, nativePlatform, true, requestedModel) {
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3669,7 +3655,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+						if s.isAccountAllowedForPlatform(account, nativePlatform, true, requestedModel) {
 							return account, nil
 						}
 					}
@@ -3712,7 +3698,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			continue
 		}
 		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+		if !s.isAccountAllowedForPlatform(acc, nativePlatform, true, requestedModel) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3880,7 +3866,7 @@ func (s *GatewayService) diagnoseSelectionFailure(
 	if !s.isAccountSchedulableForSelection(acc) {
 		return selectionFailureDiagnosis{Category: "unschedulable", Detail: "generic_unschedulable"}
 	}
-	if isPlatformFilteredForSelection(acc, platform, allowMixedScheduling) {
+	if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling, requestedModel) {
 		return selectionFailureDiagnosis{
 			Category: "platform_filtered",
 			Detail:   fmt.Sprintf("account_platform=%s requested_platform=%s", acc.Platform, strings.TrimSpace(platform)),
@@ -3900,22 +3886,6 @@ func (s *GatewayService) diagnoseSelectionFailure(
 		}
 	}
 	return selectionFailureDiagnosis{Category: "eligible"}
-}
-
-func isPlatformFilteredForSelection(acc *Account, platform string, allowMixedScheduling bool) bool {
-	if acc == nil {
-		return true
-	}
-	if allowMixedScheduling {
-		if acc.Platform == PlatformAntigravity {
-			return !acc.IsMixedSchedulingEnabled()
-		}
-		return acc.Platform != platform
-	}
-	if strings.TrimSpace(platform) == "" {
-		return false
-	}
-	return acc.Platform != platform
 }
 
 func appendSelectionFailureSampleID(samples []int64, id int64) []int64 {
@@ -4793,6 +4763,84 @@ func (s *GatewayService) claudeOAuthSystemPromptInjectionSettings(ctx context.Co
 	return s.settingService.GetClaudeOAuthSystemPromptInjectionSettings(ctx)
 }
 
+func (s *GatewayService) openAICompatBridgeService() *OpenAIGatewayService {
+	if s == nil {
+		return nil
+	}
+	return &OpenAIGatewayService{
+		accountRepo:           s.accountRepo,
+		usageLogRepo:          s.usageLogRepo,
+		usageBillingRepo:      s.usageBillingRepo,
+		userRepo:              s.userRepo,
+		userSubRepo:           s.userSubRepo,
+		cache:                 s.cache,
+		cfg:                   s.cfg,
+		codexDetector:         NewOpenAICodexClientRestrictionDetector(s.cfg),
+		schedulerSnapshot:     s.schedulerSnapshot,
+		concurrencyService:    s.concurrencyService,
+		billingService:        s.billingService,
+		rateLimitService:      s.rateLimitService,
+		billingCacheService:   s.billingCacheService,
+		userGroupRateResolver: s.userGroupRateResolver,
+		httpUpstream:          s.httpUpstream,
+		deferredService:       s.deferredService,
+		toolCorrector:         NewCodexToolCorrector(),
+		openaiWSResolver:      NewOpenAIWSProtocolResolver(s.cfg),
+		resolver:              s.resolver,
+		channelService:        s.channelService,
+		balanceNotifyService:  s.balanceNotifyService,
+		settingService:        s.settingService,
+		userPlatformQuotaRepo: s.userPlatformQuotaRepo,
+		upstreamUARepo:        s.upstreamUARepo,
+		responseHeaderFilter:  s.responseHeaderFilter,
+		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
+		openaiAccountStats:    newOpenAIAccountRuntimeStats(),
+	}
+}
+
+func (s *GatewayService) forwardKiroAsAnthropic(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
+	bridge := s.openAICompatBridgeService()
+	if bridge == nil {
+		return nil, fmt.Errorf("kiro anthropic bridge unavailable")
+	}
+	result, err := bridge.ForwardAsAnthropic(ctx, c, account, parsed.Body.Bytes(), "", "")
+	if result == nil {
+		return nil, err
+	}
+	model := result.BillingModel
+	if model == "" {
+		model = result.Model
+	}
+	upstreamModel := result.UpstreamModel
+	if upstreamModel == model {
+		upstreamModel = ""
+	}
+	return &ForwardResult{
+		RequestID: result.RequestID,
+		Usage: ClaudeUsage{
+			InputTokens:              result.Usage.InputTokens,
+			OutputTokens:             result.Usage.OutputTokens,
+			CacheCreationInputTokens: result.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     result.Usage.CacheReadInputTokens,
+			ImageOutputTokens:        result.Usage.ImageOutputTokens,
+		},
+		Model:              model,
+		UpstreamModel:      upstreamModel,
+		Stream:             result.Stream,
+		Duration:           result.Duration,
+		FirstTokenMs:       result.FirstTokenMs,
+		ClientDisconnect:   result.ClientDisconnect,
+		ReasoningEffort:    result.ReasoningEffort,
+		ImageCount:         result.ImageCount,
+		ImageSize:          result.ImageSize,
+		ImageInputSize:     result.ImageInputSize,
+		ImageOutputSize:    result.ImageOutputSize,
+		ImageOutputSizes:   result.ImageOutputSizes,
+		ImageSizeSource:    result.ImageSizeSource,
+		ImageSizeBreakdown: result.ImageSizeBreakdown,
+	}, err
+}
+
 // Forward 转发请求到Claude API
 func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
 	startTime := time.Now()
@@ -4803,6 +4851,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
+	}
+
+	if account != nil && account.IsKiro() {
+		return s.forwardKiroAsAnthropic(ctx, c, account, parsed)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
