@@ -77,3 +77,32 @@ func TestPaymentRoutesPublicPlansIsRegisteredWithoutAuth(t *testing.T) {
 	require.NotEqual(t, http.StatusNotFound, recorder.Code)
 	require.Equal(t, http.StatusOK, recorder.Code)
 }
+
+func TestRegisterPaymentRoutesIncludesIkunPayWebhook(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	v1 := router.Group("/api/v1")
+	RegisterPaymentRoutes(
+		v1,
+		&handler.PaymentHandler{},
+		handler.NewPaymentWebhookHandler(nil, nil),
+		adminhandler.NewPaymentHandler(nil, nil),
+		func(c *gin.Context) { c.Next() },
+		func(c *gin.Context) { c.Next() },
+		nil,
+	)
+
+	registered := map[string]bool{}
+	for _, route := range router.Routes() {
+		if route.Path == "/api/v1/payment/webhook/ikunpay" {
+			registered[route.Method] = true
+		}
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if !registered[method] {
+			t.Fatalf("%s /api/v1/payment/webhook/ikunpay was not registered", method)
+		}
+	}
+}

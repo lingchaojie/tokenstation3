@@ -62,6 +62,13 @@ func TestWriteSuccessResponse(t *testing.T) {
 			wantBody:        "success",
 		},
 		{
+			name:            "ikunpay returns plain text success",
+			providerKey:     payment.TypeIkunPay,
+			wantCode:        http.StatusOK,
+			wantContentType: "text/plain",
+			wantBody:        "success",
+		},
+		{
 			name:            "alipay returns plain text success",
 			providerKey:     "alipay",
 			wantCode:        http.StatusOK,
@@ -184,6 +191,15 @@ func TestExtractOutTradeNo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, extractOutTradeNo(tt.rawBody, tt.providerKey))
 		})
+	}
+}
+
+func TestExtractOutTradeNoIkunPayQueryPayload(t *testing.T) {
+	t.Parallel()
+
+	got := extractOutTradeNo("pid=merchant-1&out_trade_no=order-1&trade_no=upstream-1", payment.TypeIkunPay)
+	if got != "order-1" {
+		t.Fatalf("out_trade_no = %q, want order-1", got)
 	}
 }
 
