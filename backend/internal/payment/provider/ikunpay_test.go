@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -242,6 +243,51 @@ func TestIkunPayCreatePaymentVerifiesResponseWithAdditionalSignedFields(t *testi
 	}
 }
 
+func TestIkunPayCreatePaymentAcceptsStringCodeAndNumericTimestamp(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		fields := map[string]string{
+			"code":      "0",
+			"msg":       "ok",
+			"trade_no":  "upstream-string-code",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://qr.example/string-code",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}
+		signature, err := ikunPaySign(fields, ikunPayTestPlatformPrivateKey(t))
+		if err != nil {
+			t.Fatalf("sign response: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"code":"0","msg":"ok","trade_no":"upstream-string-code","pay_type":"qrcode","pay_info":"https://qr.example/string-code","timestamp":1780000000,"sign_type":"RSA","sign":%q}`, signature)
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	resp, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-string-code",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "String Code Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	if resp.TradeNo != "upstream-string-code" || resp.QRCode != "https://qr.example/string-code" {
+		t.Fatalf("response = %+v, want string-code response mapping", resp)
+	}
+}
+
 func TestIkunPayQueryOrderMapsStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +337,45 @@ func TestIkunPayQueryOrderMapsStatuses(t *testing.T) {
 				t.Fatalf("response = %+v, want status %s", resp, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestIkunPayQueryOrderAcceptsNumericMoneyAndTimestamp(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		fields := map[string]string{
+			"code":         "0",
+			"msg":          "ok",
+			"trade_no":     "upstream-money",
+			"out_trade_no": "order-money",
+			"status":       "1",
+			"money":        "10.00",
+			"timestamp":    "1780000000",
+			"sign_type":    "RSA",
+		}
+		signature, err := ikunPaySign(fields, ikunPayTestPlatformPrivateKey(t))
+		if err != nil {
+			t.Fatalf("sign response: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"code":0,"msg":"ok","trade_no":"upstream-money","out_trade_no":"order-money","status":"1","money":10.00,"timestamp":1780000000,"sign_type":"RSA","sign":%q}`, signature)
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	resp, err := provider.QueryOrder(context.Background(), "order-money")
+	if err != nil {
+		t.Fatalf("QueryOrder: %v", err)
+	}
+	if resp.Status != payment.ProviderStatusPaid || resp.TradeNo != "upstream-money" || resp.Amount != 10 {
+		t.Fatalf("response = %+v, want paid amount 10", resp)
 	}
 }
 

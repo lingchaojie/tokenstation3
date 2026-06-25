@@ -233,10 +233,13 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	if err := i.signParams(params); err != nil {
 		return nil, fmt.Errorf("ikunpay sign create: %w", err)
 	}
-	var resp ikunPayCreateResponse
-	rawResp, err := i.postForm(ctx, "/api/pay/create", params, &resp)
+	rawResp, err := i.postForm(ctx, "/api/pay/create", params)
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay create: %w", err)
+	}
+	resp, err := ikunPayCreateResponseFromMap(rawResp)
+	if err != nil {
+		return nil, fmt.Errorf("ikunpay create response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return nil, fmt.Errorf("ikunpay error: %s", firstNonEmpty(resp.Msg, resp.Message))
@@ -274,18 +277,22 @@ type ikunPayCreateResponse struct {
 	SignType  string `json:"sign_type"`
 }
 
-func (r ikunPayCreateResponse) Signable() map[string]string {
-	return map[string]string{
-		"code":      strconv.Itoa(r.Code),
-		"msg":       r.Msg,
-		"message":   r.Message,
-		"trade_no":  r.TradeNo,
-		"pay_type":  r.PayType,
-		"pay_info":  r.PayInfo,
-		"timestamp": r.Timestamp,
-		"sign_type": r.SignType,
-		"sign":      r.Sign,
+func ikunPayCreateResponseFromMap(params map[string]string) (ikunPayCreateResponse, error) {
+	code, err := parseIkunPayResponseCode(params)
+	if err != nil {
+		return ikunPayCreateResponse{}, err
 	}
+	return ikunPayCreateResponse{
+		Code:      code,
+		Msg:       params["msg"],
+		Message:   params["message"],
+		TradeNo:   params["trade_no"],
+		PayType:   params["pay_type"],
+		PayInfo:   params["pay_info"],
+		Timestamp: params["timestamp"],
+		Sign:      params["sign"],
+		SignType:  params["sign_type"],
+	}, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -314,7 +321,7 @@ func (i *IkunPay) verifyResponseSignature(params map[string]string) error {
 	return ikunPayVerify(params, i.config["platformPublicKey"], signature)
 }
 
-func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]string, out any) (map[string]string, error) {
+func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]string) (map[string]string, error) {
 	form := url.Values{}
 	for key, value := range params {
 		if strings.TrimSpace(value) != "" {
@@ -344,9 +351,6 @@ func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]s
 	rawResp, err := decodeIkunPayResponseMap(body)
 	if err != nil {
 		return nil, err
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return nil, fmt.Errorf("parse JSON: %w: %s", err, summarizeIkunPayBody(body))
 	}
 	return rawResp, nil
 }
@@ -396,10 +400,13 @@ func (i *IkunPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 	if err := i.signParams(params); err != nil {
 		return nil, fmt.Errorf("ikunpay sign query: %w", err)
 	}
-	var resp ikunPayQueryResponse
-	rawResp, err := i.postForm(ctx, "/api/pay/query", params, &resp)
+	rawResp, err := i.postForm(ctx, "/api/pay/query", params)
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay query: %w", err)
+	}
+	resp, err := ikunPayQueryResponseFromMap(rawResp)
+	if err != nil {
+		return nil, fmt.Errorf("ikunpay query response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return nil, fmt.Errorf("ikunpay query error: %s", firstNonEmpty(resp.Msg, resp.Message))
@@ -483,10 +490,13 @@ func (i *IkunPay) refundOnce(ctx context.Context, params map[string]string) (*ik
 	if err := i.signParams(params); err != nil {
 		return nil, fmt.Errorf("ikunpay sign refund: %w", err)
 	}
-	var resp ikunPayRefundResponse
-	rawResp, err := i.postForm(ctx, "/api/pay/refund", params, &resp)
+	rawResp, err := i.postForm(ctx, "/api/pay/refund", params)
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay refund: %w", err)
+	}
+	resp, err := ikunPayRefundResponseFromMap(rawResp)
+	if err != nil {
+		return nil, fmt.Errorf("ikunpay refund response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return &resp, fmt.Errorf("ikunpay refund error: %s", firstNonEmpty(resp.Msg, resp.Message))
@@ -514,10 +524,13 @@ func (i *IkunPay) CancelPayment(ctx context.Context, tradeNo string) error {
 	if err := i.signParams(params); err != nil {
 		return fmt.Errorf("ikunpay sign close: %w", err)
 	}
-	var resp ikunPayBasicResponse
-	rawResp, err := i.postForm(ctx, "/api/pay/close", params, &resp)
+	rawResp, err := i.postForm(ctx, "/api/pay/close", params)
 	if err != nil {
 		return fmt.Errorf("ikunpay close: %w", err)
+	}
+	resp, err := ikunPayBasicResponseFromMap(rawResp)
+	if err != nil {
+		return fmt.Errorf("ikunpay close response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return fmt.Errorf("ikunpay close error: %s", firstNonEmpty(resp.Msg, resp.Message))
@@ -538,19 +551,23 @@ type ikunPayQueryResponse struct {
 	SignType   string `json:"sign_type"`
 }
 
-func (r ikunPayQueryResponse) Signable() map[string]string {
-	return map[string]string{
-		"code":         strconv.Itoa(r.Code),
-		"msg":          r.Msg,
-		"message":      r.Message,
-		"trade_no":     r.TradeNo,
-		"out_trade_no": r.OutTradeNo,
-		"status":       r.Status,
-		"money":        r.Money,
-		"timestamp":    r.Timestamp,
-		"sign_type":    r.SignType,
-		"sign":         r.Sign,
+func ikunPayQueryResponseFromMap(params map[string]string) (ikunPayQueryResponse, error) {
+	code, err := parseIkunPayResponseCode(params)
+	if err != nil {
+		return ikunPayQueryResponse{}, err
 	}
+	return ikunPayQueryResponse{
+		Code:       code,
+		Msg:        params["msg"],
+		Message:    params["message"],
+		TradeNo:    params["trade_no"],
+		OutTradeNo: params["out_trade_no"],
+		Status:     params["status"],
+		Money:      params["money"],
+		Timestamp:  params["timestamp"],
+		Sign:       params["sign"],
+		SignType:   params["sign_type"],
+	}, nil
 }
 
 type ikunPayRefundResponse struct {
@@ -563,16 +580,20 @@ type ikunPayRefundResponse struct {
 	SignType  string `json:"sign_type"`
 }
 
-func (r ikunPayRefundResponse) Signable() map[string]string {
-	return map[string]string{
-		"code":      strconv.Itoa(r.Code),
-		"msg":       r.Msg,
-		"message":   r.Message,
-		"refund_no": r.RefundNo,
-		"timestamp": r.Timestamp,
-		"sign_type": r.SignType,
-		"sign":      r.Sign,
+func ikunPayRefundResponseFromMap(params map[string]string) (ikunPayRefundResponse, error) {
+	code, err := parseIkunPayResponseCode(params)
+	if err != nil {
+		return ikunPayRefundResponse{}, err
 	}
+	return ikunPayRefundResponse{
+		Code:      code,
+		Msg:       params["msg"],
+		Message:   params["message"],
+		RefundNo:  params["refund_no"],
+		Timestamp: params["timestamp"],
+		Sign:      params["sign"],
+		SignType:  params["sign_type"],
+	}, nil
 }
 
 type ikunPayBasicResponse struct {
@@ -585,16 +606,32 @@ type ikunPayBasicResponse struct {
 	SignType  string `json:"sign_type"`
 }
 
-func (r ikunPayBasicResponse) Signable() map[string]string {
-	return map[string]string{
-		"code":      strconv.Itoa(r.Code),
-		"msg":       r.Msg,
-		"message":   r.Message,
-		"refund_no": r.RefundNo,
-		"timestamp": r.Timestamp,
-		"sign_type": r.SignType,
-		"sign":      r.Sign,
+func ikunPayBasicResponseFromMap(params map[string]string) (ikunPayBasicResponse, error) {
+	code, err := parseIkunPayResponseCode(params)
+	if err != nil {
+		return ikunPayBasicResponse{}, err
 	}
+	return ikunPayBasicResponse{
+		Code:      code,
+		Msg:       params["msg"],
+		Message:   params["message"],
+		RefundNo:  params["refund_no"],
+		Timestamp: params["timestamp"],
+		Sign:      params["sign"],
+		SignType:  params["sign_type"],
+	}, nil
+}
+
+func parseIkunPayResponseCode(params map[string]string) (int, error) {
+	code := strings.TrimSpace(params["code"])
+	if code == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(code)
+	if err != nil {
+		return 0, fmt.Errorf("invalid code: %w", err)
+	}
+	return parsed, nil
 }
 
 func (i *IkunPay) baseParams() map[string]string {
