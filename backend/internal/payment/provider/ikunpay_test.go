@@ -140,6 +140,48 @@ func TestIkunPayCreatePaymentPopupMapsJumpToPayURL(t *testing.T) {
 	}
 }
 
+func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"code":      0,
+			"msg":       "ok",
+			"trade_no":  "upstream-unsigned",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://qr.example/unsigned",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-unsigned",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Unsigned Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err == nil {
+		t.Fatal("CreatePayment accepted unsigned response")
+	}
+	if !strings.Contains(err.Error(), "verify create response") && !strings.Contains(err.Error(), "missing signature") {
+		t.Fatalf("error = %v, want verify create response or missing signature", err)
+	}
+}
+
 func TestIkunPayQueryOrderMapsStatuses(t *testing.T) {
 	t.Parallel()
 

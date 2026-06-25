@@ -302,7 +302,7 @@ func (i *IkunPay) signParams(params map[string]string) error {
 func (i *IkunPay) verifyResponseSignature(params map[string]string) error {
 	signature := strings.TrimSpace(params["sign"])
 	if signature == "" {
-		return nil
+		return fmt.Errorf("ikunpay response missing signature")
 	}
 	return ikunPayVerify(params, i.config["platformPublicKey"], signature)
 }
