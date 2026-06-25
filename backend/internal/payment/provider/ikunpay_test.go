@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,25 @@ func TestNewIkunPayDefaultsAPIBaseAndFactoryCreatesProvider(t *testing.T) {
 	}
 	if created.ProviderKey() != payment.TypeIkunPay {
 		t.Fatalf("provider key = %q", created.ProviderKey())
+	}
+}
+
+func TestNewIkunPayCopiesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := newIkunPayTestConfig(t, "https://ikunpay.example/api/pay/create")
+	provider, err := NewIkunPay("inst-1", cfg)
+	if err != nil {
+		t.Fatalf("NewIkunPay: %v", err)
+	}
+	cfg["pid"] = "mutated-merchant"
+	cfg["apiBase"] = "https://mutated.example"
+
+	if got := provider.MerchantIdentityMetadata()["pid"]; got != "merchant-1" {
+		t.Fatalf("pid = %q, want merchant-1", got)
+	}
+	if provider.apiBase != "https://ikunpay.example" {
+		t.Fatalf("apiBase = %q, want original normalized base", provider.apiBase)
 	}
 }
 
@@ -182,6 +202,46 @@ func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
 	}
 }
 
+func TestIkunPayCreatePaymentVerifiesResponseWithAdditionalSignedFields(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		writeIkunPayJSON(t, w, map[string]string{
+			"code":         "0",
+			"msg":          "ok",
+			"trade_no":     "upstream-extra",
+			"api_trade_no": "api-1",
+			"pay_type":     "qrcode",
+			"pay_info":     "https://qr.example/extra",
+			"timestamp":    "1780000000",
+			"sign_type":    "RSA",
+		})
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	resp, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-extra",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Extra Field Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	if resp.TradeNo != "upstream-extra" || resp.QRCode != "https://qr.example/extra" {
+		t.Fatalf("response = %+v, want extra-field signed response mapping", resp)
+	}
+}
+
 func TestIkunPayQueryOrderMapsStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -313,6 +373,82 @@ func TestIkunPayRefundAndCancelPostSignedRequests(t *testing.T) {
 	}
 }
 
+func TestIkunPayRefundRetriesWithOutTradeNoWhenTradeNoNotFound(t *testing.T) {
+	t.Parallel()
+
+	var formsMu sync.Mutex
+	var gotForms []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pay/refund" {
+			t.Fatalf("path = %q, want /api/pay/refund", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+
+		formsMu.Lock()
+		gotForms = append(gotForms, r.PostForm)
+		attempt := len(gotForms)
+		formsMu.Unlock()
+
+		switch attempt {
+		case 1:
+			if got := r.PostForm.Get("trade_no"); got != "upstream-1" {
+				t.Fatalf("first trade_no = %q, want upstream-1", got)
+			}
+			if got := r.PostForm.Get("out_trade_no"); got != "" {
+				t.Fatalf("first out_trade_no = %q, want empty", got)
+			}
+			writeIkunPayJSON(t, w, map[string]string{
+				"code":      "1",
+				"msg":       "订单编号不存在！",
+				"timestamp": "1780000000",
+				"sign_type": "RSA",
+			})
+		case 2:
+			if got := r.PostForm.Get("trade_no"); got != "" {
+				t.Fatalf("second trade_no = %q, want empty", got)
+			}
+			if got := r.PostForm.Get("out_trade_no"); got != "order-1" {
+				t.Fatalf("second out_trade_no = %q, want order-1", got)
+			}
+			writeIkunPayJSON(t, w, map[string]string{
+				"code":      "0",
+				"msg":       "ok",
+				"refund_no": "refund-1",
+				"timestamp": "1780000000",
+				"sign_type": "RSA",
+			})
+		default:
+			t.Fatalf("unexpected refund attempt %d", attempt)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	resp, err := provider.Refund(context.Background(), payment.RefundRequest{
+		TradeNo: "upstream-1",
+		OrderID: "order-1",
+		Amount:  "3.50",
+		Reason:  "requested",
+	})
+	if err != nil {
+		t.Fatalf("Refund: %v", err)
+	}
+	if resp.Status != payment.ProviderStatusSuccess || resp.RefundID != "refund-1" {
+		t.Fatalf("refund response = %+v", resp)
+	}
+
+	formsMu.Lock()
+	defer formsMu.Unlock()
+	if len(gotForms) != 2 {
+		t.Fatalf("refund attempts = %d, want 2", len(gotForms))
+	}
+}
+
 func newTestIkunPay(t *testing.T, apiBase string, paymentMode string) *IkunPay {
 	t.Helper()
 
@@ -350,7 +486,11 @@ func writeIkunPayJSON(t *testing.T, w http.ResponseWriter, fields map[string]str
 	payload := make(map[string]any, len(fields))
 	for key, value := range fields {
 		if key == "code" {
-			payload[key] = 0
+			code, err := strconv.Atoi(value)
+			if err != nil {
+				t.Fatalf("Atoi code: %v", err)
+			}
+			payload[key] = code
 			continue
 		}
 		payload[key] = value

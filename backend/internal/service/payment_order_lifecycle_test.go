@@ -858,6 +858,18 @@ func TestPaymentOrderQueryReferenceUsesOutTradeNoForOfficialProviders(t *testing
 	}))
 }
 
+func TestPaymentOrderQueryReferenceUsesOutTradeNoForIkunPay(t *testing.T) {
+	t.Parallel()
+
+	order := &dbent.PaymentOrder{
+		PaymentType:    payment.TypeAlipay,
+		OutTradeNo:     "sub2_out_trade_no",
+		PaymentTradeNo: "ikunpay-upstream-trade-no",
+	}
+
+	require.Equal(t, "sub2_out_trade_no", paymentOrderQueryReference(order, paymentFulfillmentTestProvider{key: payment.TypeIkunPay}))
+}
+
 func newPaymentOrderSeatCreateOrderService(t *testing.T, client *dbent.Client, groupID, userID int64) *PaymentService {
 	t.Helper()
 	configService := NewPaymentConfigService(client, &paymentConfigSettingRepoStub{values: map[string]string{

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -38,24 +39,29 @@ type IkunPay struct {
 }
 
 func NewIkunPay(instanceID string, config map[string]string) (*IkunPay, error) {
+	configCopy := make(map[string]string, len(config))
+	for key, value := range config {
+		configCopy[key] = value
+	}
 	for _, key := range []string{"pid", "merchantPrivateKey", "platformPublicKey", "notifyUrl", "returnUrl"} {
-		if strings.TrimSpace(config[key]) == "" {
+		if strings.TrimSpace(configCopy[key]) == "" {
 			return nil, fmt.Errorf("ikunpay config missing required key: %s", key)
 		}
 	}
-	if _, err := parseIkunPayPrivateKey(config["merchantPrivateKey"]); err != nil {
+	if _, err := parseIkunPayPrivateKey(configCopy["merchantPrivateKey"]); err != nil {
 		return nil, fmt.Errorf("ikunpay merchantPrivateKey invalid: %w", err)
 	}
-	if _, err := parseIkunPayPublicKey(config["platformPublicKey"]); err != nil {
+	if _, err := parseIkunPayPublicKey(configCopy["platformPublicKey"]); err != nil {
 		return nil, fmt.Errorf("ikunpay platformPublicKey invalid: %w", err)
 	}
-	apiBase := normalizeIkunPayAPIBase(config["apiBase"])
+	apiBase := normalizeIkunPayAPIBase(configCopy["apiBase"])
 	if apiBase == "" {
 		apiBase = ikunpayDefaultAPIBase
 	}
+	configCopy["apiBase"] = apiBase
 	return &IkunPay{
 		instanceID: instanceID,
-		config:     config,
+		config:     configCopy,
 		apiBase:    apiBase,
 		httpClient: &http.Client{Timeout: ikunpayHTTPTimeout},
 	}, nil
@@ -228,13 +234,14 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 		return nil, fmt.Errorf("ikunpay sign create: %w", err)
 	}
 	var resp ikunPayCreateResponse
-	if err := i.postForm(ctx, "/api/pay/create", params, &resp); err != nil {
+	rawResp, err := i.postForm(ctx, "/api/pay/create", params, &resp)
+	if err != nil {
 		return nil, fmt.Errorf("ikunpay create: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return nil, fmt.Errorf("ikunpay error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
-	if err := i.verifyResponseSignature(resp.Signable()); err != nil {
+	if err := i.verifyResponseSignature(rawResp); err != nil {
 		return nil, fmt.Errorf("ikunpay verify create response: %w", err)
 	}
 	result := &payment.CreatePaymentResponse{TradeNo: resp.TradeNo}
@@ -307,7 +314,7 @@ func (i *IkunPay) verifyResponseSignature(params map[string]string) error {
 	return ikunPayVerify(params, i.config["platformPublicKey"], signature)
 }
 
-func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]string, out any) error {
+func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]string, out any) (map[string]string, error) {
 	form := url.Values{}
 	for key, value := range params {
 		if strings.TrimSpace(value) != "" {
@@ -316,28 +323,57 @@ func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]s
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.apiBase+path, strings.NewReader(form.Encode()))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := i.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIkunPayResponseSize))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, summarizeIkunPayBody(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, summarizeIkunPayBody(body))
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
-		return fmt.Errorf("empty response")
+		return nil, fmt.Errorf("empty response")
+	}
+	rawResp, err := decodeIkunPayResponseMap(body)
+	if err != nil {
+		return nil, err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("parse JSON: %w: %s", err, summarizeIkunPayBody(body))
+		return nil, fmt.Errorf("parse JSON: %w: %s", err, summarizeIkunPayBody(body))
 	}
-	return nil
+	return rawResp, nil
+}
+
+func decodeIkunPayResponseMap(body []byte) (map[string]string, error) {
+	var raw map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w: %s", err, summarizeIkunPayBody(body))
+	}
+	out := make(map[string]string, len(raw))
+	for key, value := range raw {
+		switch v := value.(type) {
+		case nil:
+			out[key] = ""
+		case string:
+			out[key] = v
+		case json.Number:
+			out[key] = v.String()
+		case bool:
+			out[key] = strconv.FormatBool(v)
+		default:
+			out[key] = fmt.Sprint(v)
+		}
+	}
+	return out, nil
 }
 
 func summarizeIkunPayBody(body []byte) string {
@@ -361,13 +397,14 @@ func (i *IkunPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 		return nil, fmt.Errorf("ikunpay sign query: %w", err)
 	}
 	var resp ikunPayQueryResponse
-	if err := i.postForm(ctx, "/api/pay/query", params, &resp); err != nil {
+	rawResp, err := i.postForm(ctx, "/api/pay/query", params, &resp)
+	if err != nil {
 		return nil, fmt.Errorf("ikunpay query: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return nil, fmt.Errorf("ikunpay query error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
-	if err := i.verifyResponseSignature(resp.Signable()); err != nil {
+	if err := i.verifyResponseSignature(rawResp); err != nil {
 		return nil, fmt.Errorf("ikunpay verify query response: %w", err)
 	}
 	amount, err := strconv.ParseFloat(strings.TrimSpace(resp.Money), 64)
@@ -419,6 +456,8 @@ func (i *IkunPay) VerifyNotification(ctx context.Context, rawBody string, header
 
 func (i *IkunPay) Refund(ctx context.Context, req payment.RefundRequest) (*payment.RefundResponse, error) {
 	params := i.baseParams()
+	params["money"] = strings.TrimSpace(req.Amount)
+	params["out_refund_no"] = "refund-" + firstNonEmpty(req.OrderID, req.TradeNo)
 	if strings.TrimSpace(req.TradeNo) != "" {
 		params["trade_no"] = strings.TrimSpace(req.TradeNo)
 	} else if strings.TrimSpace(req.OrderID) != "" {
@@ -426,22 +465,44 @@ func (i *IkunPay) Refund(ctx context.Context, req payment.RefundRequest) (*payme
 	} else {
 		return nil, fmt.Errorf("ikunpay refund missing order identifier")
 	}
-	params["money"] = strings.TrimSpace(req.Amount)
-	params["out_refund_no"] = "refund-" + firstNonEmpty(req.OrderID, req.TradeNo)
+	resp, err := i.refundOnce(ctx, params)
+	if err != nil && strings.TrimSpace(req.TradeNo) != "" && strings.TrimSpace(req.OrderID) != "" && resp != nil && ikunPayIsNotFoundMessage(firstNonEmpty(resp.Msg, resp.Message)) {
+		params = i.baseParams()
+		params["out_trade_no"] = strings.TrimSpace(req.OrderID)
+		params["money"] = strings.TrimSpace(req.Amount)
+		params["out_refund_no"] = "refund-" + firstNonEmpty(req.OrderID, req.TradeNo)
+		resp, err = i.refundOnce(ctx, params)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &payment.RefundResponse{RefundID: firstNonEmpty(resp.RefundNo, params["out_refund_no"], params["trade_no"], params["out_trade_no"]), Status: payment.ProviderStatusSuccess}, nil
+}
+
+func (i *IkunPay) refundOnce(ctx context.Context, params map[string]string) (*ikunPayRefundResponse, error) {
 	if err := i.signParams(params); err != nil {
 		return nil, fmt.Errorf("ikunpay sign refund: %w", err)
 	}
 	var resp ikunPayRefundResponse
-	if err := i.postForm(ctx, "/api/pay/refund", params, &resp); err != nil {
+	rawResp, err := i.postForm(ctx, "/api/pay/refund", params, &resp)
+	if err != nil {
 		return nil, fmt.Errorf("ikunpay refund: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
-		return nil, fmt.Errorf("ikunpay refund error: %s", firstNonEmpty(resp.Msg, resp.Message))
+		return &resp, fmt.Errorf("ikunpay refund error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
-	if err := i.verifyResponseSignature(resp.Signable()); err != nil {
+	if err := i.verifyResponseSignature(rawResp); err != nil {
 		return nil, fmt.Errorf("ikunpay verify refund response: %w", err)
 	}
-	return &payment.RefundResponse{RefundID: firstNonEmpty(resp.RefundNo, params["out_refund_no"], params["trade_no"], params["out_trade_no"]), Status: payment.ProviderStatusSuccess}, nil
+	return &resp, nil
+}
+
+func ikunPayIsNotFoundMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "订单编号不存在") ||
+		strings.Contains(message, "order not found") ||
+		strings.Contains(message, "not found") ||
+		strings.Contains(message, "不存在")
 }
 
 func (i *IkunPay) CancelPayment(ctx context.Context, tradeNo string) error {
@@ -454,13 +515,14 @@ func (i *IkunPay) CancelPayment(ctx context.Context, tradeNo string) error {
 		return fmt.Errorf("ikunpay sign close: %w", err)
 	}
 	var resp ikunPayBasicResponse
-	if err := i.postForm(ctx, "/api/pay/close", params, &resp); err != nil {
+	rawResp, err := i.postForm(ctx, "/api/pay/close", params, &resp)
+	if err != nil {
 		return fmt.Errorf("ikunpay close: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return fmt.Errorf("ikunpay close error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
-	return i.verifyResponseSignature(resp.Signable())
+	return i.verifyResponseSignature(rawResp)
 }
 
 type ikunPayQueryResponse struct {
