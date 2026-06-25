@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -893,13 +892,4 @@ func testRSAPublicKeyPEM(t *testing.T, name string) string {
 		t.Fatalf("MarshalPKIXPublicKey: %v", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
-}
-
-func testRSAPublicKeyBare(t *testing.T, name string) string {
-	t.Helper()
-	der, err := x509.MarshalPKIXPublicKey(&testRSAKey(t, name).PublicKey)
-	if err != nil {
-		t.Fatalf("MarshalPKIXPublicKey: %v", err)
-	}
-	return base64.StdEncoding.EncodeToString(der)
 }

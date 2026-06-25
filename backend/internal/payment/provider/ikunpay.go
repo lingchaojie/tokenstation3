@@ -337,7 +337,7 @@ func (i *IkunPay) postForm(ctx context.Context, path string, params map[string]s
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxIkunPayResponseSize))
 	if err != nil {
 		return nil, err
