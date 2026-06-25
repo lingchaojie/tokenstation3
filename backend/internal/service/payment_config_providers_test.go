@@ -52,6 +52,13 @@ func TestValidateProviderRequest(t *testing.T) {
 			wantErr:        false,
 		},
 		{
+			name:           "valid ikunpay provider",
+			providerKey:    payment.TypeIkunPay,
+			providerName:   "IkunPay Provider",
+			supportedTypes: "alipay,wxpay",
+			wantErr:        false,
+		},
+		{
 			name:           "valid alipay provider",
 			providerKey:    "alipay",
 			providerName:   "Alipay Direct",
@@ -150,6 +157,13 @@ func TestIsSensitiveProviderConfigField(t *testing.T) {
 		{"easypay", "pid", false},
 		{"easypay", "apiBase", false},
 
+		// IkunPay
+		{payment.TypeIkunPay, "merchantPrivateKey", true},
+		{payment.TypeIkunPay, "platformPublicKey", true},
+		{payment.TypeIkunPay, "MerchantPrivateKey", true},
+		{payment.TypeIkunPay, "pid", false},
+		{payment.TypeIkunPay, "apiBase", false},
+
 		// Airwallex
 		{payment.TypeAirwallex, "apiKey", true},
 		{payment.TypeAirwallex, "webhookSecret", true},
@@ -171,6 +185,33 @@ func TestIsSensitiveProviderConfigField(t *testing.T) {
 			assert.Equal(t, tc.wantSen, got, "isSensitiveProviderConfigField(%q, %q)", tc.providerKey, tc.field)
 		})
 	}
+}
+
+func TestIkunPayProtectedConfigFields(t *testing.T) {
+	t.Parallel()
+
+	current := map[string]string{
+		"pid":                "merchant-a",
+		"merchantPrivateKey": "private-a",
+		"platformPublicKey":  "public-a",
+		"apiBase":            "https://ikunpay.example",
+		"notifyUrl":          "https://merchant.example/notify",
+		"returnUrl":          "https://merchant.example/return",
+	}
+	next := map[string]string{
+		"pid":                "merchant-b",
+		"merchantPrivateKey": "private-a",
+		"platformPublicKey":  "public-a",
+		"apiBase":            "https://ikunpay.example",
+		"notifyUrl":          "https://merchant.example/notify",
+		"returnUrl":          "https://merchant.example/return",
+	}
+
+	require.True(t, hasPendingOrderProtectedConfigChange(payment.TypeIkunPay, current, next))
+
+	next["pid"] = "merchant-a"
+	next["notifyUrl"] = "https://merchant.example/notify-v2"
+	require.False(t, hasPendingOrderProtectedConfigChange(payment.TypeIkunPay, current, next))
 }
 
 func TestJoinTypes(t *testing.T) {
