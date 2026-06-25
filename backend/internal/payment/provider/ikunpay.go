@@ -440,6 +440,14 @@ func (i *IkunPay) VerifyNotification(ctx context.Context, rawBody string, header
 	if err := ikunPayVerify(params, i.config["platformPublicKey"], params["sign"]); err != nil {
 		return nil, fmt.Errorf("ikunpay verify notification: %w", err)
 	}
+	expectedPID := strings.TrimSpace(i.config["pid"])
+	actualPID := strings.TrimSpace(params["pid"])
+	if actualPID == "" {
+		return nil, fmt.Errorf("ikunpay notification missing pid")
+	}
+	if !strings.EqualFold(expectedPID, actualPID) {
+		return nil, fmt.Errorf("ikunpay pid mismatch: expected %s, got %s", expectedPID, actualPID)
+	}
 	if !strings.EqualFold(strings.TrimSpace(params["trade_status"]), "TRADE_SUCCESS") {
 		return nil, nil
 	}
@@ -628,7 +636,7 @@ func ikunPayBasicResponseFromMap(params map[string]string) (ikunPayBasicResponse
 func parseIkunPayResponseCode(params map[string]string) (int, error) {
 	code := strings.TrimSpace(params["code"])
 	if code == "" {
-		return 0, nil
+		return 0, fmt.Errorf("missing code")
 	}
 	parsed, err := strconv.Atoi(code)
 	if err != nil {

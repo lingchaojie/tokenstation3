@@ -330,6 +330,45 @@ func TestIkunPayCreatePaymentAcceptsStringCodeAndNumericTimestamp(t *testing.T) 
 	}
 }
 
+func TestIkunPayCreatePaymentRejectsMissingCodeResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		fields := map[string]string{
+			"msg":       "ok",
+			"trade_no":  "upstream-missing-code",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://qr.example/missing-code",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}
+		writeIkunPayJSON(t, w, fields)
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-missing-code",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Missing Code Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err == nil {
+		t.Fatal("CreatePayment accepted missing code response")
+	}
+	if !strings.Contains(err.Error(), "missing code") && !strings.Contains(err.Error(), "create response") {
+		t.Fatalf("error = %v, want missing code or create response", err)
+	}
+}
+
 func TestIkunPayQueryOrderMapsStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -489,6 +528,34 @@ func TestIkunPayVerifyNotificationAcceptsSignedTradeSuccessAndRejectsTampering(t
 	values.Set("money", "11.00")
 	if _, err := provider.VerifyNotification(context.Background(), values.Encode(), nil); err == nil {
 		t.Fatal("tampered notification verified successfully")
+	}
+}
+
+func TestIkunPayVerifyNotificationRejectsMismatchedPID(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestIkunPay(t, "https://ikunpay.example", "qrcode")
+	values := url.Values{}
+	values.Set("pid", "merchant-2")
+	values.Set("trade_no", "upstream-1")
+	values.Set("out_trade_no", "order-1")
+	values.Set("type", payment.TypeAlipay)
+	values.Set("trade_status", "TRADE_SUCCESS")
+	values.Set("money", "10.00")
+	values.Set("timestamp", "1780000000")
+	values.Set("sign_type", "RSA")
+	signature, err := ikunPaySign(formValuesToMap(values), ikunPayTestPlatformPrivateKey(t))
+	if err != nil {
+		t.Fatalf("ikunPaySign: %v", err)
+	}
+	values.Set("sign", signature)
+
+	_, err = provider.VerifyNotification(context.Background(), values.Encode(), nil)
+	if err == nil {
+		t.Fatal("VerifyNotification accepted mismatched pid")
+	}
+	if !strings.Contains(err.Error(), "pid mismatch") {
+		t.Fatalf("error = %v, want pid mismatch", err)
 	}
 }
 
