@@ -418,6 +418,7 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		return nil, err
 	}
 
+	persistCtx := context.WithoutCancel(ctx)
 	status := WebChatMessageStatusCompleted
 	content := ExtractAssistantTextFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
 	contentJSON := ExtractAssistantProcessFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
@@ -435,13 +436,13 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 	if dispatchResult.UsageLogID != nil {
 		update.UsageLogID = dispatchResult.UsageLogID
 	}
-	if _, err := s.repo.UpdateMessage(ctx, user.ID, assistantMessage.ID, update); err != nil {
-		if s.webChatAssistantIsCanceled(context.WithoutCancel(ctx), user.ID, in.ConversationID, assistantMessage.ID) {
+	if _, err := s.repo.UpdateMessage(persistCtx, user.ID, assistantMessage.ID, update); err != nil {
+		if s.webChatAssistantIsCanceled(persistCtx, user.ID, in.ConversationID, assistantMessage.ID) {
 			return &WebChatSendResult{UserMessageID: userMessage.ID, AssistantMessageID: assistantMessage.ID}, nil
 		}
 		return nil, err
 	}
-	s.saveWebChatArtifactCandidates(ctx, user.ID, in.ConversationID, assistantMessage.ID, dispatchResult.ArtifactCandidates)
+	s.saveWebChatArtifactCandidates(persistCtx, user.ID, in.ConversationID, assistantMessage.ID, dispatchResult.ArtifactCandidates)
 	return &WebChatSendResult{UserMessageID: userMessage.ID, AssistantMessageID: assistantMessage.ID}, nil
 }
 

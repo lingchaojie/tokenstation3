@@ -133,11 +133,14 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		GroupID: &group.ID,
 	}
 
-	capture := NewWebChatResponseCapture(c.Writer, 4<<20)
-	c.Writer = capture
+	downstreamCapture := NewWebChatResponseCapture(c.Writer, 4<<20)
+	upstreamCapture := newWebChatStreamCapture(4 << 20)
+	c.Writer = downstreamCapture
 
 	usageClientID := fmt.Sprintf("webchat-message-%d", input.AssistantMessageID)
 	usageCtx := context.WithValue(ctx, ctxkey.ClientRequestID, usageClientID)
+	usageCtx = withWebChatStreamCapture(usageCtx, upstreamCapture)
+	postDispatchCtx := context.WithValue(context.WithoutCancel(ctx), ctxkey.ClientRequestID, usageClientID)
 	usageRequestID := "client:" + usageClientID
 	inboundEndpoint := fmt.Sprintf("/api/v1/admin/chat/conversations/%d/messages", input.ConversationID)
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
@@ -161,7 +164,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if result != nil {
 			artifactCandidates = append(artifactCandidates, webChatArtifactCandidatesFromOpenAIImageResults(result.imageResults)...)
 		}
-		recordUsageErr := s.openAIGatewayService.RecordUsage(usageCtx, &OpenAIRecordUsageInput{
+		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, &OpenAIRecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -192,7 +195,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if err != nil {
 			return nil, err
 		}
-		recordUsageErr := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
+		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -216,7 +219,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if err != nil {
 			return nil, err
 		}
-		recordUsageErr := s.gatewayService.RecordUsage(usageCtx, &RecordUsageInput{
+		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -241,15 +244,19 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 
 	var usageLogID *int64
 	if usageRecorded && s.usageLogRepository != nil && hiddenKey.ID > 0 {
-		usageLog, err := s.usageLogRepository.GetByRequestIDAndAPIKeyID(usageCtx, usageRequestID, hiddenKey.ID)
+		usageLog, err := s.usageLogRepository.GetByRequestIDAndAPIKeyID(postDispatchCtx, usageRequestID, hiddenKey.ID)
 		if err == nil && usageLog != nil {
 			usageLogID = &usageLog.ID
 		} else if err != nil && !errors.Is(err, ErrUsageLogNotFound) {
 			log.Printf("[WARN] web chat: lookup usage log failed after upstream response: %v", err)
 		}
 	}
-	artifactCandidates = append(artifactCandidates, ExtractArtifactsFromChatCompletions(capture.Body(), input.Stream)...)
-	return &webChatDispatchResult{ResponseBody: capture.Body(), UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, nil
+	responseBody := upstreamCapture.Body()
+	if len(responseBody) == 0 {
+		responseBody = downstreamCapture.Body()
+	}
+	artifactCandidates = append(artifactCandidates, ExtractArtifactsFromChatCompletions(responseBody, input.Stream)...)
+	return &webChatDispatchResult{ResponseBody: responseBody, UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, nil
 }
 
 func webChatUseResponsesPayload(input webChatDispatchInput) bool {
