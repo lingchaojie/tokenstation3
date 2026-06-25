@@ -617,6 +617,31 @@ func TestWebChatSend_UsageLookupFailureAfterForwardStillCompletesMessage(t *test
 	require.NotContains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusFailed)
 }
 
+func TestWebChatSend_FinalizesAssistantAfterRequestContextCanceled(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.repo.statefulMessages = true
+	ctx, cancel := context.WithCancel(context.Background())
+	svc.cancelRequestOnForward = cancel
+
+	result, err := svc.SendMessage(newTestGinContext(ctx), WebChatSendInput{
+		UserID:         42,
+		User:           &User{ID: 42, AllowedGroups: []int64{11}},
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "hello",
+		GinContext:     newTestGinContext(ctx),
+	})
+
+	require.NoError(t, err)
+	require.NotZero(t, result.AssistantMessageID)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	require.NotNil(t, svc.finalUpdate.Status)
+	require.Equal(t, WebChatMessageStatusCompleted, *svc.finalUpdate.Status)
+	require.NotNil(t, svc.finalUpdate.UsageLogID)
+	require.Equal(t, int64(88), *svc.finalUpdate.UsageLogID)
+}
+
 func TestWebChatSend_DoesNotOverwriteCanceledAssistantWhenDispatchCancels(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	svc.repo.statefulMessages = true
@@ -693,6 +718,7 @@ type webChatServiceTestDouble struct {
 	releaseCount                int
 	repo                        *webChatRepoStub
 	events                      []string
+	cancelRequestOnForward      context.CancelFunc
 }
 
 type webChatSavedTestFile struct {
@@ -796,7 +822,10 @@ func (r *webChatRepoStub) ListMessages(_ context.Context, userID, conversationID
 	}}, nil
 }
 
-func (r *webChatRepoStub) UpdateMessage(_ context.Context, _ int64, messageID int64, in UpdateWebChatMessageInput) (*WebChatMessage, error) {
+func (r *webChatRepoStub) UpdateMessage(ctx context.Context, _ int64, messageID int64, in UpdateWebChatMessageInput) (*WebChatMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.double.updatedMessages = append(r.double.updatedMessages, in)
 	for i := range r.messages {
 		if r.messages[i].ID != messageID {
@@ -950,6 +979,9 @@ func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, 
 	if s.double.gatewayForwardResult == nil {
 		s.double.gatewayForwardResult = &ForwardResult{RequestID: "upstream_req", Model: "claude-sonnet-4"}
 	}
+	if s.double.cancelRequestOnForward != nil {
+		s.double.cancelRequestOnForward()
+	}
 	return s.double.gatewayForwardResult, nil
 }
 
@@ -1025,7 +1057,10 @@ type webChatUsageLogRepoStub struct {
 	double *webChatServiceTestDouble
 }
 
-func (r *webChatUsageLogRepoStub) GetByRequestIDAndAPIKeyID(_ context.Context, requestID string, apiKeyID int64) (*UsageLog, error) {
+func (r *webChatUsageLogRepoStub) GetByRequestIDAndAPIKeyID(ctx context.Context, requestID string, apiKeyID int64) (*UsageLog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.double.events = append(r.double.events, "usage_lookup")
 	r.double.usageLookupRequestID = requestID
 	r.double.usageLookupAPIKeyID = apiKeyID

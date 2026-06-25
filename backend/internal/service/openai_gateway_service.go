@@ -4895,6 +4895,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
+			captureWebChatStreamString(ctx, line+"\n")
 
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected {

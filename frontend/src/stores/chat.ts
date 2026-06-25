@@ -52,6 +52,8 @@ const DEFAULT_IMAGE_GENERATION_SIZES: WebChatImageGenerationSize[] = ['1024x1024
 const DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS: WebChatImageGenerationAspectRatio[] = ['1:1']
 const STREAM_RENDER_CHARS_PER_FRAME = 8
 const STREAM_RENDER_SMOOTHING_THRESHOLD = 24
+const HISTORICAL_STREAMING_STALE_MS = 10 * 60 * 1000
+const HISTORICAL_STREAM_POLL_INTERVAL_MS = 3000
 const THINKING_EFFORT_ORDER: WebChatThinkingEffort[] = ['low', 'medium', 'high', 'xhigh']
 
 function nowISO(): string {
@@ -375,6 +377,7 @@ export const useChatStore = defineStore('chat', () => {
   const activeAssistantMessageId = ref<number | null>(null)
   const activeBackendAssistantMessageId = ref<number | null>(null)
   let nextTempId = TEMP_ID_START
+  let historicalStreamPollTimer: number | null = null
 
   const currentMessages = computed(() => currentConversation.value?.messages ?? [])
   const selectedModelSupportsThinking = computed(() => Boolean(selectedModel.value?.supports_thinking))
@@ -458,6 +461,22 @@ export const useChatStore = defineStore('chat', () => {
     error.value = value instanceof Error ? value.message : String(value)
   }
 
+  function clearHistoricalStreamPoll(): void {
+    if (historicalStreamPollTimer !== null) {
+      window.clearTimeout(historicalStreamPollTimer)
+      historicalStreamPollTimer = null
+    }
+  }
+
+  function clearActiveStreamState(): void {
+    clearHistoricalStreamPoll()
+    streaming.value = false
+    abortController.value = null
+    activeUserMessageId.value = null
+    activeAssistantMessageId.value = null
+    activeBackendAssistantMessageId.value = null
+  }
+
   function upsertConversation(conversation: WebChatConversation): void {
     const index = conversations.value.findIndex((item) => item.id === conversation.id)
     if (index === -1) {
@@ -480,6 +499,64 @@ export const useChatStore = defineStore('chat', () => {
       return true
     }
     return false
+  }
+
+  function isFreshHistoricalStreamingMessage(message: WebChatMessage): boolean {
+    if (message.role !== 'assistant') return false
+    if (message.status !== 'streaming' && message.status !== 'pending') return false
+    const updatedAt = Date.parse(message.updated_at || message.created_at)
+    if (!Number.isFinite(updatedAt)) return false
+    return Date.now() - updatedAt <= HISTORICAL_STREAMING_STALE_MS
+  }
+
+  function latestFreshHistoricalAssistant(messages: WebChatMessage[]): WebChatMessage | undefined {
+    return [...messages].reverse().find(isFreshHistoricalStreamingMessage)
+  }
+
+  function applyConversationDetail(detail: WebChatConversationDetail): void {
+    currentConversation.value = detail
+    upsertConversation(detail.conversation)
+    setSelectedModelFromConversation(detail.conversation)
+  }
+
+  async function refreshHistoricalStream(conversationId: number): Promise<void> {
+    historicalStreamPollTimer = null
+    if (currentConversation.value?.conversation.id !== conversationId || !streaming.value) return
+
+    try {
+      const detail = await chatAPI.getConversation(conversationId)
+      applyConversationDetail(detail)
+      syncHistoricalStreamState(detail, true)
+    } catch {
+      if (currentConversation.value?.conversation.id === conversationId && streaming.value) {
+        scheduleHistoricalStreamPoll(conversationId)
+      }
+    }
+  }
+
+  function scheduleHistoricalStreamPoll(conversationId: number): void {
+    clearHistoricalStreamPoll()
+    historicalStreamPollTimer = window.setTimeout(() => {
+      void refreshHistoricalStream(conversationId)
+    }, HISTORICAL_STREAM_POLL_INTERVAL_MS)
+  }
+
+  function syncHistoricalStreamState(detail: WebChatConversationDetail, poll: boolean): void {
+    const assistant = latestFreshHistoricalAssistant(detail.messages)
+    if (!assistant) {
+      clearActiveStreamState()
+      return
+    }
+
+    clearHistoricalStreamPoll()
+    activeUserMessageId.value = null
+    activeAssistantMessageId.value = assistant.id
+    activeBackendAssistantMessageId.value = assistant.id
+    abortController.value = null
+    streaming.value = true
+    if (poll) {
+      scheduleHistoricalStreamPoll(detail.conversation.id)
+    }
   }
 
   function reconcileThinkingSettings(): void {
@@ -553,9 +630,8 @@ export const useChatStore = defineStore('chat', () => {
     try {
       error.value = null
       const detail = await chatAPI.getConversation(conversationId)
-      currentConversation.value = detail
-      upsertConversation(detail.conversation)
-      setSelectedModelFromConversation(detail.conversation)
+      applyConversationDetail(detail)
+      syncHistoricalStreamState(detail, true)
       return detail
     } catch (err) {
       setError(err)
@@ -626,6 +702,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function startAssistantStream(input: StartAssistantStreamInput): StartAssistantStreamResult {
+    clearHistoricalStreamPoll()
     const userMessageId = input.userMessageId ?? nextTempId--
     const assistantMessageId = input.assistantMessageId ?? nextTempId--
     activeUserMessageId.value = userMessageId
@@ -785,6 +862,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function finishAssistantStream(status: WebChatMessageStatus = 'completed'): void {
+    clearHistoricalStreamPoll()
     if (currentConversation.value && activeAssistantMessageId.value !== null) {
       const assistantMessage = currentConversation.value.messages.find(
         (message) => message.id === activeAssistantMessageId.value
@@ -795,11 +873,7 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
-    streaming.value = false
-    abortController.value = null
-    activeUserMessageId.value = null
-    activeAssistantMessageId.value = null
-    activeBackendAssistantMessageId.value = null
+    clearActiveStreamState()
   }
 
   async function sendMessage(content: string): Promise<void> {

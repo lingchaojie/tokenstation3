@@ -3,8 +3,10 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
@@ -43,6 +45,66 @@ func (w *WebChatResponseCapture) capture(p []byte) {
 		return
 	}
 	_, _ = w.body.Write(p)
+}
+
+type webChatStreamCaptureContextKey struct{}
+
+type webChatStreamCapture struct {
+	mu              sync.Mutex
+	body            bytes.Buffer
+	maxCaptureBytes int
+}
+
+func newWebChatStreamCapture(maxCaptureBytes int) *webChatStreamCapture {
+	return &webChatStreamCapture{maxCaptureBytes: maxCaptureBytes}
+}
+
+func withWebChatStreamCapture(ctx context.Context, capture *webChatStreamCapture) context.Context {
+	if ctx == nil || capture == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, webChatStreamCaptureContextKey{}, capture)
+}
+
+func captureWebChatStreamBytes(ctx context.Context, p []byte) {
+	if ctx == nil {
+		return
+	}
+	capture, _ := ctx.Value(webChatStreamCaptureContextKey{}).(*webChatStreamCapture)
+	if capture == nil {
+		return
+	}
+	capture.Capture(p)
+}
+
+func captureWebChatStreamString(ctx context.Context, s string) {
+	captureWebChatStreamBytes(ctx, []byte(s))
+}
+
+func (c *webChatStreamCapture) Capture(p []byte) {
+	if c == nil || len(p) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.maxCaptureBytes <= 0 || c.body.Len() >= c.maxCaptureBytes {
+		return
+	}
+	remaining := c.maxCaptureBytes - c.body.Len()
+	if len(p) > remaining {
+		_, _ = c.body.Write(p[:remaining])
+		return
+	}
+	_, _ = c.body.Write(p)
+}
+
+func (c *webChatStreamCapture) Body() []byte {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.body.Bytes()...)
 }
 
 type WebChatArtifactCandidate struct {

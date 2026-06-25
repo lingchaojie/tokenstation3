@@ -234,7 +234,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	if clientStream {
-		streamRes, err := s.handleChatCompletionsStreamingResponseFromGemini(c, resp, startTime, originalModel, account.Type == AccountTypeOAuth, includeUsage)
+		streamRes, err := s.handleChatCompletionsStreamingResponseFromGemini(ctx, c, resp, startTime, originalModel, account.Type == AccountTypeOAuth, includeUsage)
 		if err != nil {
 			return nil, err
 		}
@@ -490,6 +490,7 @@ func geminiResponseToChatCompletions(
 }
 
 func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFromGemini(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	startTime time.Time,
@@ -520,14 +521,20 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	clientDisconnected := false
 
 	writeChatChunk := func(chunk apicompat.ChatCompletionsChunk) bool {
 		sse, err := apicompat.ChatChunkToSSE(chunk)
 		if err != nil {
 			return false
 		}
+		captureWebChatStreamString(ctx, sse)
+		if clientDisconnected {
+			return false
+		}
 		if _, err := io.WriteString(c.Writer, sse); err != nil {
-			return true
+			clientDisconnected = true
+			return false
 		}
 		return false
 	}
@@ -542,7 +549,9 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 				}
 			}
 		}
-		flusher.Flush()
+		if !clientDisconnected {
+			flusher.Flush()
+		}
 		return false
 	}
 
@@ -781,8 +790,11 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 		}
 	}
 
-	_, _ = io.WriteString(c.Writer, "data: [DONE]\n\n")
-	flusher.Flush()
+	captureWebChatStreamString(ctx, "data: [DONE]\n\n")
+	if !clientDisconnected {
+		_, _ = io.WriteString(c.Writer, "data: [DONE]\n\n")
+		flusher.Flush()
+	}
 
 	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs}, nil
 }

@@ -96,6 +96,7 @@ describe('useChatStore', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.useRealTimers()
     localStorage.clear()
     sessionStorage.clear()
   })
@@ -154,6 +155,139 @@ describe('useChatStore', () => {
     expect(cancelSpy).not.toHaveBeenCalled()
     expect(store.currentMessages[1].id).toBeLessThan(0)
     expect(store.currentMessages[1].status).toBe('canceled')
+  })
+
+  it('resumes a fresh historical assistant stream so it can be stopped', async () => {
+    vi.spyOn(chatAPI, 'getConversation').mockResolvedValue({
+      conversation: {
+        id: 8,
+        title: 'Chat',
+        default_model: textOnlyModel.model,
+        default_provider: textOnlyModel.provider,
+        last_model: textOnlyModel.model,
+        last_provider: textOnlyModel.provider,
+        status: 'active',
+        message_count: 2,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: new Date().toISOString(),
+      },
+      messages: [
+        {
+          id: 100,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'user',
+          model: textOnlyModel.model,
+          provider: textOnlyModel.provider,
+          content_text: 'Hello',
+          content_json: [],
+          status: 'completed',
+          created_at: '2026-06-22T00:00:00Z',
+          updated_at: '2026-06-22T00:00:00Z',
+        },
+        {
+          id: 101,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'assistant',
+          model: textOnlyModel.model,
+          provider: textOnlyModel.provider,
+          content_text: '',
+          content_json: [],
+          status: 'streaming',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    })
+    const cancelSpy = vi.spyOn(chatAPI, 'cancelMessage').mockResolvedValue()
+    const store = useChatStore()
+
+    await store.openConversation(8)
+    await store.cancelStream()
+
+    expect(store.streaming).toBe(false)
+    expect(cancelSpy).toHaveBeenCalledWith(8, 101)
+    expect(store.currentMessages[1].status).toBe('canceled')
+  })
+
+  it('polls a resumed historical stream until the final assistant message is available', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-25T06:00:00Z'))
+    const streamingDetail = {
+      conversation: {
+        id: 8,
+        title: 'Chat',
+        default_model: textOnlyModel.model,
+        default_provider: textOnlyModel.provider,
+        last_model: textOnlyModel.model,
+        last_provider: textOnlyModel.provider,
+        status: 'active' as const,
+        message_count: 2,
+        created_at: '2026-06-25T05:59:00Z',
+        updated_at: '2026-06-25T05:59:10Z',
+      },
+      messages: [
+        {
+          id: 100,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'user' as const,
+          model: textOnlyModel.model,
+          provider: textOnlyModel.provider,
+          content_text: 'Hello',
+          content_json: [],
+          status: 'completed' as const,
+          created_at: '2026-06-25T05:59:00Z',
+          updated_at: '2026-06-25T05:59:00Z',
+        },
+        {
+          id: 101,
+          conversation_id: 8,
+          user_id: 1,
+          role: 'assistant' as const,
+          model: textOnlyModel.model,
+          provider: textOnlyModel.provider,
+          content_text: '',
+          content_json: [],
+          status: 'streaming' as const,
+          created_at: '2026-06-25T05:59:10Z',
+          updated_at: '2026-06-25T05:59:10Z',
+        },
+      ],
+    }
+    const completedDetail = {
+      ...streamingDetail,
+      conversation: {
+        ...streamingDetail.conversation,
+        updated_at: '2026-06-25T06:00:02Z',
+      },
+      messages: [
+        streamingDetail.messages[0],
+        {
+          ...streamingDetail.messages[1],
+          content_text: 'Done.',
+          status: 'completed' as const,
+          updated_at: '2026-06-25T06:00:02Z',
+        },
+      ],
+    }
+    const getConversationSpy = vi.spyOn(chatAPI, 'getConversation')
+      .mockResolvedValueOnce(streamingDetail)
+      .mockResolvedValueOnce(completedDetail)
+    const store = useChatStore()
+
+    await store.openConversation(8)
+    expect(store.streaming).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(3000)
+
+    expect(getConversationSpy).toHaveBeenCalledTimes(2)
+    expect(store.streaming).toBe(false)
+    expect(store.currentMessages[1]).toMatchObject({
+      status: 'completed',
+      content_text: 'Done.',
+    })
   })
 
   it('rejects successful stream responses without a readable body', async () => {

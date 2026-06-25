@@ -190,7 +190,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+		result, handleErr = s.handleCCStreamingFromAnthropic(ctx, resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
 	} else {
 		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
@@ -351,6 +351,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 // handleCCStreamingFromAnthropic reads Anthropic SSE events, converts each
 // to Responses events, then to Chat Completions chunks, and writes them.
 func (s *GatewayService) handleCCStreamingFromAnthropic(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
 	originalModel string,
@@ -380,6 +381,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	clientDisconnected := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -409,8 +411,13 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		// Reverse tool name mapping: fake → real, per-chunk bytes.Replace.
 		// c 可能持有请求侧注入的 ToolNameRewrite；无则仅做静态前缀还原。
 		out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+		captureWebChatStreamString(ctx, out)
+		if clientDisconnected {
+			return false
+		}
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
-			return true // client disconnected
+			clientDisconnected = true
+			return false
 		}
 		return false
 	}
@@ -441,7 +448,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				}
 			}
 		}
-		c.Writer.Flush()
+		if !clientDisconnected {
+			c.Writer.Flush()
+		}
 		return false
 	}
 
@@ -493,8 +502,11 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	// Write [DONE] marker
-	fmt.Fprint(c.Writer, "data: [DONE]\n\n") //nolint:errcheck
-	c.Writer.Flush()
+	captureWebChatStreamString(ctx, "data: [DONE]\n\n")
+	if !clientDisconnected {
+		fmt.Fprint(c.Writer, "data: [DONE]\n\n") //nolint:errcheck
+		c.Writer.Flush()
+	}
 
 	return resultWithUsage(), nil
 }

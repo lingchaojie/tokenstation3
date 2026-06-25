@@ -320,6 +320,57 @@ func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 }
 
+func TestForwardAsChatCompletions_ClientDisconnectCapturesWebChatOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Writer = &openAIChatFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"hello "}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"world"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-5.4","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello world"}]}],"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16,"input_tokens_details":{"cached_tokens":4}}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_disconnect_capture"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+	capture := newWebChatStreamCapture(4 << 20)
+	ctx := withWebChatStreamCapture(context.Background(), capture)
+
+	result, err := svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.1")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Empty(t, rec.Body.String(), "downstream writer simulated an immediate disconnect")
+	require.Equal(t, "hello world", ExtractAssistantTextFromChatCompletions(capture.Body(), true))
+}
+
 func TestForwardAsChatCompletions_BufferedResponseFailedTriggersFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
