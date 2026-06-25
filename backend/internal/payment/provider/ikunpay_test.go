@@ -534,6 +534,73 @@ func TestIkunPayRefundRetriesWithOutTradeNoWhenTradeNoNotFound(t *testing.T) {
 	}
 }
 
+func TestIkunPayRefundDoesNotFallbackOnUnsignedNotFoundResponse(t *testing.T) {
+	t.Parallel()
+
+	var formsMu sync.Mutex
+	var gotForms []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pay/refund" {
+			t.Fatalf("path = %q, want /api/pay/refund", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+
+		formsMu.Lock()
+		gotForms = append(gotForms, r.PostForm)
+		attempt := len(gotForms)
+		formsMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch attempt {
+		case 1:
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"code":      1,
+				"msg":       "订单编号不存在！",
+				"timestamp": "1780000000",
+				"sign_type": "RSA",
+			}); err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+		case 2:
+			writeIkunPayJSON(t, w, map[string]string{
+				"code":      "0",
+				"msg":       "ok",
+				"refund_no": "refund-1",
+				"timestamp": "1780000000",
+				"sign_type": "RSA",
+			})
+		default:
+			t.Fatalf("unexpected refund attempt %d", attempt)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.Refund(context.Background(), payment.RefundRequest{
+		TradeNo: "upstream-1",
+		OrderID: "order-1",
+		Amount:  "3.50",
+		Reason:  "requested",
+	})
+	if err == nil {
+		t.Fatal("Refund accepted unsigned not-found response")
+	}
+	if !strings.Contains(err.Error(), "missing signature") && !strings.Contains(err.Error(), "verify refund response") {
+		t.Fatalf("error = %v, want missing signature or verify refund response", err)
+	}
+
+	formsMu.Lock()
+	defer formsMu.Unlock()
+	if len(gotForms) != 1 {
+		t.Fatalf("refund attempts = %d, want 1", len(gotForms))
+	}
+}
+
 func newTestIkunPay(t *testing.T, apiBase string, paymentMode string) *IkunPay {
 	t.Helper()
 

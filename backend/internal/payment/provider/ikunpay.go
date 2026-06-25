@@ -494,15 +494,15 @@ func (i *IkunPay) refundOnce(ctx context.Context, params map[string]string) (*ik
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay refund: %w", err)
 	}
+	if err := i.verifyResponseSignature(rawResp); err != nil {
+		return nil, fmt.Errorf("ikunpay verify refund response: %w", err)
+	}
 	resp, err := ikunPayRefundResponseFromMap(rawResp)
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay refund response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return &resp, fmt.Errorf("ikunpay refund error: %s", firstNonEmpty(resp.Msg, resp.Message))
-	}
-	if err := i.verifyResponseSignature(rawResp); err != nil {
-		return nil, fmt.Errorf("ikunpay verify refund response: %w", err)
 	}
 	return &resp, nil
 }
