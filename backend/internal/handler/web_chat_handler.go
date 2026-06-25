@@ -61,6 +61,7 @@ type webChatSendMessageRequest struct {
 	Stream          bool                                 `json:"stream"`
 	Thinking        service.WebChatThinkingConfig        `json:"thinking"`
 	ImageGeneration service.WebChatImageGenerationConfig `json:"image_generation"`
+	WebSearch       *service.WebChatWebSearchConfig      `json:"web_search"`
 }
 
 func (h *WebChatHandler) ListModels(c *gin.Context) {
@@ -199,6 +200,11 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	webSearch := service.WebChatWebSearchConfig{}
+	if req.WebSearch != nil {
+		webSearch = *req.WebSearch
+		webSearch.Configured = true
+	}
 	_, err := h.service.SendMessage(c, service.WebChatSendInput{
 		UserID:         subject.UserID,
 		ConversationID: conversationID,
@@ -219,6 +225,7 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 			OutputFormat: strings.TrimSpace(req.ImageGeneration.OutputFormat),
 			Background:   strings.TrimSpace(req.ImageGeneration.Background),
 		},
+		WebSearch:  webSearch,
 		GinContext: c,
 	})
 	if err != nil && !c.Writer.Written() {

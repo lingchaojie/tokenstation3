@@ -78,10 +78,10 @@ Hidden Web Chat API keys are not shown in the normal API key list. Usage records
 
 ## Upstream Dispatch
 
-Web Chat builds an OpenAI Chat Completions-shaped request internally, then dispatches by platform:
+Web Chat builds the upstream request shape from conversation history, then dispatches by platform:
 
-- Anthropic: selects a load-aware account from the routed group, converts Chat Completions to Responses and then Anthropic Messages, applies OAuth mimicry where required, sends the Anthropic upstream request, and converts the response back to Chat Completions format.
-- OpenAI: selects a load-aware OpenAI account and uses the OpenAI gateway Chat Completions path. API-key accounts can be sent as raw Chat Completions when the account is configured or probed as not supporting Responses.
+- Anthropic: text models that support Web Chat web search are sent through the gateway Responses path, which converts Responses `web_search` into Anthropic's server-side `web_search_20250305` tool and returns Responses-formatted events. Other Anthropic requests keep using the Chat Completions compatibility path.
+- OpenAI: text models that support Web Chat web search are sent directly through the OpenAI Responses path. The browser search toggle controls `tool_choice`: enabled forces the `web_search` tool, disabled leaves the tool available with `auto`. Other OpenAI requests keep using the OpenAI gateway Chat Completions compatibility path.
 - Gemini: selects a load-aware Gemini account and uses the Gemini compatibility service when the selected account is a Gemini account.
 
 Current Web Chat dispatch selects one account for a request. Unlike the normal gateway handlers, it does not yet wrap the request in the full multi-account failover loop.

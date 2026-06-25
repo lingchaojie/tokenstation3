@@ -128,6 +128,30 @@ func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	require.Equal(t, "transparent", fake.sendInput.ImageGeneration.Background)
 }
 
+func TestWebChatSendMessageBindsWebSearchSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeWebChatService{}
+	router := newWebChatAdminRoutesTestRouter(fake, 42)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/chat/conversations/7/messages",
+		strings.NewReader(`{"model":"gpt-5.5","provider":"openai","content":"latest news","stream":true,"web_search":{"enabled":true}}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, fake.sendCalled)
+	require.Equal(t, int64(42), fake.sendInput.UserID)
+	require.Equal(t, int64(7), fake.sendInput.ConversationID)
+	require.Equal(t, "gpt-5.5", fake.sendInput.Model)
+	require.Equal(t, "openai", fake.sendInput.Provider)
+	require.True(t, fake.sendInput.WebSearch.Enabled)
+	require.True(t, fake.sendInput.WebSearch.Configured)
+}
+
 func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
 	router := gin.New()
 	v1 := router.Group("/api/v1")

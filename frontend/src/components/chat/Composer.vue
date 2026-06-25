@@ -88,6 +88,26 @@
           class="absolute bottom-full left-0 z-30 mb-2 grid w-[min(40rem,calc(100vw-2rem))] gap-2 rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-xl sm:grid-cols-2"
           data-testid="chat-options-panel"
         >
+          <div v-if="chatStore.selectedModelSupportsWebSearch" class="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm font-medium outline-none transition-colors"
+              :class="chatStore.webSearchEnabled
+                ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
+                : 'border-linear-hairline bg-linear-surface-1 text-linear-ink-muted hover:border-linear-hairline-strong'"
+              :aria-pressed="chatStore.webSearchEnabled ? 'true' : 'false'"
+              aria-label="Web search"
+              data-testid="chat-web-search-toggle"
+              @click="toggleWebSearch"
+            >
+              <Icon name="globe" size="sm" />
+              <span>联网搜索</span>
+            </button>
+            <span class="min-w-0 truncate text-xs text-linear-ink-tertiary">
+              {{ chatStore.webSearchEnabled ? '强制搜索' : '自动判断' }}
+            </span>
+          </div>
+
           <div v-if="chatStore.selectedModelSupportsThinking" class="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -371,7 +391,11 @@ const selectedModelLabel = computed(() => {
 })
 
 const hasDraft = computed(() => draft.value.trim().length > 0 || chatStore.pendingAttachments.length > 0)
-const hasModelOptions = computed(() => chatStore.selectedModelSupportsThinking || chatStore.selectedModelSupportsImageGeneration)
+const hasModelOptions = computed(() =>
+  chatStore.selectedModelSupportsThinking ||
+  chatStore.selectedModelSupportsWebSearch ||
+  chatStore.selectedModelSupportsImageGeneration
+)
 const sendDisabled = computed(() =>
   chatStore.streaming ||
   uploading.value ||
@@ -445,6 +469,11 @@ function clearAttachments(): void {
 function toggleThinking(): void {
   if (!chatStore.selectedModelSupportsThinking) return
   chatStore.thinkingEnabled = !chatStore.thinkingEnabled
+}
+
+function toggleWebSearch(): void {
+  if (!chatStore.selectedModelSupportsWebSearch) return
+  chatStore.webSearchEnabled = !chatStore.webSearchEnabled
 }
 
 function toggleImageGeneration(): void {

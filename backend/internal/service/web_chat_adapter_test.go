@@ -111,6 +111,50 @@ func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t
 	}`, string(payload))
 }
 
+func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) {
+	messages := []WebChatMessage{{
+		Role:        WebChatRoleUser,
+		ContentText: "What is new in AI today?",
+	}}
+	caps := WebChatModelCapability{
+		Provider:          "openai",
+		Platform:          PlatformOpenAI,
+		Model:             "gpt-5.5",
+		SupportsText:      true,
+		SupportsWebSearch: true,
+	}
+
+	forcedPayload, err := BuildWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), caps, messages, true, WebChatCompletionsPayloadOptions{
+		WebSearch: WebChatWebSearchConfig{Enabled: true},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"model":"gpt-5.5",
+		"stream":true,
+		"include":["reasoning.encrypted_content"],
+		"store":false,
+		"tools":[{"type":"web_search"}],
+		"tool_choice":{"type":"web_search"},
+		"input":[{"role":"user","content":"What is new in AI today?"}]
+	}`, string(forcedPayload))
+
+	autoPayload, err := BuildWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), caps, messages, true, WebChatCompletionsPayloadOptions{
+		WebSearch: WebChatWebSearchConfig{Enabled: false},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"model":"gpt-5.5",
+		"stream":true,
+		"include":["reasoning.encrypted_content"],
+		"store":false,
+		"tools":[{"type":"web_search"}],
+		"tool_choice":"auto",
+		"input":[{"role":"user","content":"What is new in AI today?"}]
+	}`, string(autoPayload))
+}
+
 type fakeWebChatStorage struct {
 	t            *testing.T
 	files        map[string][]byte

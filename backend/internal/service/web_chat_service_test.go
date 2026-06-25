@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestWebChatResponseCapture_CapturesBoundedBody(t *testing.T) {
@@ -50,6 +51,19 @@ func TestWebChatResponseCapture_ExtractAssistantTextFromChatCompletions(t *testi
 		"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
 		"data: [DONE]\n\n")
 	buffered := []byte(`{"choices":[{"message":{"content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}}]}`)
+
+	require.Equal(t, "hello", ExtractAssistantTextFromChatCompletions(streamed, true))
+	require.Equal(t, "hi there", ExtractAssistantTextFromChatCompletions(buffered, false))
+}
+
+func TestWebChatResponseCapture_ExtractAssistantTextFromResponses(t *testing.T) {
+	streamed := []byte(strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hel"}`,
+		`data: {"type":"response.output_text.delta","delta":"lo"}`,
+		`data: {"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}}`,
+		``,
+	}, "\n\n"))
+	buffered := []byte(`{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi "},{"type":"output_text","text":"there"}]}]}`)
 
 	require.Equal(t, "hello", ExtractAssistantTextFromChatCompletions(streamed, true))
 	require.Equal(t, "hi there", ExtractAssistantTextFromChatCompletions(buffered, false))
@@ -160,6 +174,75 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 	require.Equal(t, "image/webp", svc.createdArtifacts[0].ContentType)
 	require.Equal(t, WebChatArtifactSourceImageOutput, svc.createdArtifacts[0].Source)
 	requireOrderedEvents(t, svc.events, "forward_openai", "record_openai_usage", "usage_lookup")
+}
+
+func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID:     "openai_req",
+		Model:         "gpt-5.5",
+		UpstreamModel: "gpt-5.5",
+		Stream:        true,
+	}
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "gpt-5.5",
+		Provider:       "openai",
+		Text:           "search today's AI news",
+		Stream:         true,
+		WebSearch:      WebChatWebSearchConfig{Enabled: true},
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
+	require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tool_choice.type").String())
+	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content").String())
+	require.Equal(t, "Done.", *svc.finalUpdate.ContentText)
+}
+
+func TestWebChatSend_AnthropicWebSearchAutoUsesResponsesAPI(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.gatewayForwardResult = &ForwardResult{
+		RequestID:       "anthropic_req",
+		Model:           "claude-sonnet-4",
+		UpstreamModel:   "claude-sonnet-4",
+		Stream:          true,
+		Usage:           ClaudeUsage{InputTokens: 12, OutputTokens: 4},
+		Duration:        100 * time.Millisecond,
+		ReasoningEffort: nil,
+	}
+
+	result, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "claude-sonnet-4",
+		Provider:       "anthropic",
+		Text:           "search today's AI news",
+		Stream:         true,
+		WebSearch:      WebChatWebSearchConfig{Configured: true},
+		GinContext:     newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, result.AssistantMessageID, svc.finalizedAssistantMessageID)
+	requireOrderedEvents(t, svc.events, "forward_responses", "record_usage", "usage_lookup")
+	require.Equal(t, "/v1/responses", svc.recordUsageInput.UpstreamEndpoint)
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content").String())
+	require.Equal(t, "Done.", *svc.finalUpdate.ContentText)
 }
 
 func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
@@ -870,6 +953,21 @@ func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, 
 	return s.double.gatewayForwardResult, nil
 }
 
+func (s *webChatGatewayServiceStub) ForwardAsResponses(_ context.Context, c *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
+	s.double.events = append(s.double.events, "forward_responses")
+	s.double.forwardedBody = append([]byte(nil), body...)
+	if _, err := c.Writer.WriteString("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done.\"}\n\n"); err != nil {
+		return nil, err
+	}
+	if _, err := c.Writer.WriteString("data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done.\"}]}]}}\n\n"); err != nil {
+		return nil, err
+	}
+	if s.double.gatewayForwardResult == nil {
+		s.double.gatewayForwardResult = &ForwardResult{RequestID: "anthropic_req", Model: "claude-sonnet-4", Stream: true}
+	}
+	return s.double.gatewayForwardResult, nil
+}
+
 func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordUsageInput) error {
 	s.double.events = append(s.double.events, "record_usage")
 	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
@@ -901,6 +999,21 @@ func (s *webChatOpenAIGatewayServiceStub) ForwardAsChatCompletions(_ context.Con
 	return s.double.openAIForwardResult, nil
 }
 
+func (s *webChatOpenAIGatewayServiceStub) Forward(_ context.Context, c *gin.Context, _ *Account, body []byte) (*OpenAIForwardResult, error) {
+	s.double.events = append(s.double.events, "forward_openai_responses")
+	s.double.forwardedBody = append([]byte(nil), body...)
+	if _, err := c.Writer.WriteString("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done.\"}\n\n"); err != nil {
+		return nil, err
+	}
+	if _, err := c.Writer.WriteString("data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done.\"}]}]}}\n\n"); err != nil {
+		return nil, err
+	}
+	if s.double.openAIForwardResult == nil {
+		s.double.openAIForwardResult = &OpenAIForwardResult{RequestID: "openai_req", Model: "gpt-5.5", Stream: true}
+	}
+	return s.double.openAIForwardResult, nil
+}
+
 func (s *webChatOpenAIGatewayServiceStub) RecordUsage(ctx context.Context, in *OpenAIRecordUsageInput) error {
 	s.double.events = append(s.double.events, "record_openai_usage")
 	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
@@ -927,7 +1040,7 @@ type webChatCapabilityResolverStub struct{}
 func (webChatCapabilityResolverStub) ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error) {
 	switch model {
 	case "claude-sonnet-4":
-		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true, SupportsImageInput: true, SupportsFileContext: true}, nil
+		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true, SupportsImageInput: true, SupportsFileContext: true, SupportsWebSearch: true}, nil
 	case "gpt-image-2":
 		return WebChatModelCapability{
 			Provider:                     provider,
@@ -939,6 +1052,8 @@ func (webChatCapabilityResolverStub) ResolveWebChatCapability(provider, model st
 			ImageGenerationSizes:         []string{"1024x1024"},
 			ImageGenerationOutputFormats: []string{"webp"},
 		}, nil
+	case "gpt-5.5":
+		return WebChatModelCapability{Provider: provider, Platform: PlatformOpenAI, Model: model, SupportsText: true, SupportsFileContext: true, SupportsWebSearch: true}, nil
 	case "text-only":
 		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true}, nil
 	default:

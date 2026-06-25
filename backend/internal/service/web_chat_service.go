@@ -103,6 +103,7 @@ type WebChatSendInput struct {
 	Stream          bool
 	Thinking        WebChatThinkingConfig
 	ImageGeneration WebChatImageGenerationConfig
+	WebSearch       WebChatWebSearchConfig
 	AttachmentIDs   []int64
 	GinContext      *gin.Context
 }
@@ -395,6 +396,7 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		Stream:             in.Stream,
 		Thinking:           in.Thinking,
 		ImageGeneration:    in.ImageGeneration,
+		WebSearch:          in.WebSearch,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) && s.webChatAssistantIsCanceled(context.WithoutCancel(ctx), user.ID, in.ConversationID, assistantMessage.ID) {

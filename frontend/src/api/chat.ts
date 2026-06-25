@@ -22,6 +22,10 @@ export interface WebChatThinkingConfig {
   effort?: WebChatThinkingEffort
 }
 
+export interface WebChatWebSearchConfig {
+  enabled: boolean
+}
+
 export interface WebChatImageGenerationConfig {
   enabled: boolean
   size?: WebChatImageGenerationSize
@@ -43,6 +47,7 @@ export interface WebChatModel {
   supports_artifact_output: boolean
   supports_thinking: boolean
   thinking_efforts?: WebChatThinkingEffort[]
+  supports_web_search: boolean
   supports_image_generation: boolean
   image_generation_sizes?: WebChatImageGenerationSize[]
   image_generation_aspect_ratios?: WebChatImageGenerationAspectRatio[]
@@ -140,6 +145,7 @@ export interface SendWebChatMessageRequest {
   attachment_ids?: number[]
   stream?: boolean
   thinking?: WebChatThinkingConfig
+  web_search?: WebChatWebSearchConfig
   image_generation?: WebChatImageGenerationConfig
 }
 

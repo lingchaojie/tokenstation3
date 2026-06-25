@@ -36,6 +36,7 @@ describe('Chat page source contract', () => {
 
     expect(source).toContain('data-testid="chat-send"')
     expect(source).toContain('data-testid="chat-stop"')
+    expect(source).toContain('data-testid="chat-web-search-toggle"')
     expect(source).toContain('@keydown.enter')
   })
 })
