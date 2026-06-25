@@ -203,6 +203,48 @@ func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
 	}
 }
 
+func TestIkunPayCreatePaymentRejectsUnsignedErrorResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"code":      1,
+			"msg":       "unsigned create error",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-unsigned-error",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Unsigned Error Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err == nil {
+		t.Fatal("CreatePayment accepted unsigned error response")
+	}
+	if !strings.Contains(err.Error(), "missing signature") && !strings.Contains(err.Error(), "verify create response") {
+		t.Fatalf("error = %v, want missing signature or verify create response", err)
+	}
+	if strings.Contains(err.Error(), "unsigned create error") {
+		t.Fatalf("error = %v, trusted unsigned provider message", err)
+	}
+}
+
 func TestIkunPayCreatePaymentVerifiesResponseWithAdditionalSignedFields(t *testing.T) {
 	t.Parallel()
 
@@ -379,6 +421,41 @@ func TestIkunPayQueryOrderAcceptsNumericMoneyAndTimestamp(t *testing.T) {
 	}
 }
 
+func TestIkunPayQueryOrderRejectsUnsignedErrorResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"code":      1,
+			"msg":       "unsigned query error",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.QueryOrder(context.Background(), "order-unsigned-query")
+	if err == nil {
+		t.Fatal("QueryOrder accepted unsigned error response")
+	}
+	if !strings.Contains(err.Error(), "missing signature") && !strings.Contains(err.Error(), "verify query response") {
+		t.Fatalf("error = %v, want missing signature or verify query response", err)
+	}
+	if strings.Contains(err.Error(), "unsigned query error") {
+		t.Fatalf("error = %v, trusted unsigned provider message", err)
+	}
+}
+
 func TestIkunPayVerifyNotificationAcceptsSignedTradeSuccessAndRejectsTampering(t *testing.T) {
 	t.Parallel()
 
@@ -455,6 +532,44 @@ func TestIkunPayRefundAndCancelPostSignedRequests(t *testing.T) {
 	}
 	if strings.Join(gotPaths, ",") != "/api/pay/refund,/api/pay/close" {
 		t.Fatalf("paths = %v", gotPaths)
+	}
+}
+
+func TestIkunPayCancelPaymentRejectsUnsignedErrorResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pay/close" {
+			t.Fatalf("path = %q, want /api/pay/close", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"code":      1,
+			"msg":       "unsigned close error",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		}); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	err := provider.CancelPayment(context.Background(), "order-unsigned-close")
+	if err == nil {
+		t.Fatal("CancelPayment accepted unsigned error response")
+	}
+	if !strings.Contains(err.Error(), "missing signature") && !strings.Contains(err.Error(), "verify close response") {
+		t.Fatalf("error = %v, want missing signature or verify close response", err)
+	}
+	if strings.Contains(err.Error(), "unsigned close error") {
+		t.Fatalf("error = %v, trusted unsigned provider message", err)
 	}
 }
 

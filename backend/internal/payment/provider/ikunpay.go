@@ -241,11 +241,11 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay create response: %w", err)
 	}
-	if resp.Code != ikunpayCodeSuccess {
-		return nil, fmt.Errorf("ikunpay error: %s", firstNonEmpty(resp.Msg, resp.Message))
-	}
 	if err := i.verifyResponseSignature(rawResp); err != nil {
 		return nil, fmt.Errorf("ikunpay verify create response: %w", err)
+	}
+	if resp.Code != ikunpayCodeSuccess {
+		return nil, fmt.Errorf("ikunpay error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
 	result := &payment.CreatePaymentResponse{TradeNo: resp.TradeNo}
 	switch strings.ToLower(strings.TrimSpace(resp.PayType)) {
@@ -408,11 +408,11 @@ func (i *IkunPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay query response: %w", err)
 	}
-	if resp.Code != ikunpayCodeSuccess {
-		return nil, fmt.Errorf("ikunpay query error: %s", firstNonEmpty(resp.Msg, resp.Message))
-	}
 	if err := i.verifyResponseSignature(rawResp); err != nil {
 		return nil, fmt.Errorf("ikunpay verify query response: %w", err)
+	}
+	if resp.Code != ikunpayCodeSuccess {
+		return nil, fmt.Errorf("ikunpay query error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
 	amount, err := strconv.ParseFloat(strings.TrimSpace(resp.Money), 64)
 	if err != nil && strings.TrimSpace(resp.Money) != "" {
@@ -532,10 +532,13 @@ func (i *IkunPay) CancelPayment(ctx context.Context, tradeNo string) error {
 	if err != nil {
 		return fmt.Errorf("ikunpay close response: %w", err)
 	}
+	if err := i.verifyResponseSignature(rawResp); err != nil {
+		return fmt.Errorf("ikunpay verify close response: %w", err)
+	}
 	if resp.Code != ikunpayCodeSuccess {
 		return fmt.Errorf("ikunpay close error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
-	return i.verifyResponseSignature(rawResp)
+	return nil
 }
 
 type ikunPayQueryResponse struct {
