@@ -27,6 +27,7 @@ const textOnlyModel: WebChatModel = {
   supports_artifact_output: false,
   supports_thinking: false,
   thinking_efforts: [],
+  supports_web_search: false,
   supports_image_generation: false,
   image_generation_sizes: [],
   image_generation_aspect_ratios: [],
@@ -55,6 +56,13 @@ const imageModel: WebChatModel = {
   image_generation_qualities: ['medium', 'high'] as WebChatImageGenerationQuality[],
   image_generation_output_formats: ['png', 'webp'] as WebChatImageGenerationOutputFormat[],
   image_generation_backgrounds: ['opaque', 'transparent'] as WebChatImageGenerationBackground[],
+}
+
+const webSearchModel: WebChatModel = {
+  ...textOnlyModel,
+  model: 'gpt-5.5',
+  display_name: 'GPT 5.5',
+  supports_web_search: true,
 }
 
 const imageAttachment: WebChatAttachment = {
@@ -250,6 +258,56 @@ describe('useChatStore', () => {
         enabled: true,
         effort: 'xhigh',
       },
+    }), expect.any(AbortSignal))
+  })
+
+  it('sends web search config for supported models in forced and auto modes', async () => {
+    const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+      response: new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: {
+          'X-Web-Chat-User-Message-ID': '100',
+          'X-Web-Chat-Assistant-Message-ID': '101',
+        },
+      }),
+      userMessageId: 100,
+      assistantMessageId: 101,
+    })
+    const store = useChatStore()
+    store.selectedModel = webSearchModel
+    store.currentConversation = {
+      conversation: {
+        id: 7,
+        title: 'Search',
+        default_model: webSearchModel.model,
+        default_provider: webSearchModel.provider,
+        last_model: webSearchModel.model,
+        last_provider: webSearchModel.provider,
+        status: 'active',
+        message_count: 0,
+        created_at: '2026-06-22T00:00:00Z',
+        updated_at: '2026-06-22T00:00:00Z',
+      },
+      messages: [],
+    }
+
+    store.webSearchEnabled = true
+    await store.sendMessage('Search today')
+
+    store.webSearchEnabled = false
+    await store.sendMessage('Decide whether to search')
+
+    expect(streamSpy).toHaveBeenNthCalledWith(1, 7, expect.objectContaining({
+      model: 'gpt-5.5',
+      provider: 'openai',
+      content: 'Search today',
+      web_search: { enabled: true },
+    }), expect.any(AbortSignal))
+    expect(streamSpy).toHaveBeenNthCalledWith(2, 7, expect.objectContaining({
+      model: 'gpt-5.5',
+      provider: 'openai',
+      content: 'Decide whether to search',
+      web_search: { enabled: false },
     }), expect.any(AbortSignal))
   })
 

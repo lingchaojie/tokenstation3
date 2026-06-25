@@ -55,6 +55,7 @@ type WebChatArtifactCandidate struct {
 func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string {
 	if streamed {
 		var b strings.Builder
+		var terminalText string
 		scanner := bufio.NewScanner(bytes.NewReader(body))
 		maxTokenSize := len(body)
 		if maxTokenSize < 64<<10 {
@@ -74,19 +75,38 @@ func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string 
 				continue
 			}
 			var chunk chatCompletionChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+			if err := json.Unmarshal([]byte(data), &chunk); err == nil && len(chunk.Choices) > 0 {
+				_, _ = b.WriteString(chunk.Choices[0].Delta.Content)
 				continue
 			}
-			_, _ = b.WriteString(chunk.Choices[0].Delta.Content)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				continue
+			}
+			switch webChatStringValue(payload["type"]) {
+			case "response.output_text.delta":
+				_, _ = b.WriteString(webChatStringValue(payload["delta"]))
+			case "response.completed":
+				if text := extractWebChatResponsesOutputText(payload); text != "" {
+					terminalText = text
+				}
+			}
 		}
-		return b.String()
+		if b.Len() > 0 {
+			return b.String()
+		}
+		return terminalText
 	}
 
 	var response chatCompletionResponse
-	if err := json.Unmarshal(body, &response); err != nil || len(response.Choices) == 0 {
+	if err := json.Unmarshal(body, &response); err == nil && len(response.Choices) > 0 {
+		return chatCompletionContentText(response.Choices[0].Message.Content)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return ""
 	}
-	return chatCompletionContentText(response.Choices[0].Message.Content)
+	return extractWebChatResponsesOutputText(payload)
 }
 
 type webChatProcessDelta struct {
@@ -523,4 +543,31 @@ func chatCompletionContentText(content any) string {
 	default:
 		return ""
 	}
+}
+
+func extractWebChatResponsesOutputText(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if response := webChatMapValue(payload["response"]); len(response) > 0 {
+		payload = response
+	}
+	var b strings.Builder
+	for _, rawItem := range webChatArrayValue(payload["output"]) {
+		item := webChatMapValue(rawItem)
+		if len(item) == 0 {
+			continue
+		}
+		if role := webChatStringValue(item["role"]); role != "" && role != WebChatRoleAssistant {
+			continue
+		}
+		for _, rawPart := range webChatArrayValue(item["content"]) {
+			part := webChatMapValue(rawPart)
+			switch webChatStringValue(part["type"]) {
+			case "output_text", "text":
+				_, _ = b.WriteString(webChatStringValue(part["text"]))
+			}
+		}
+	}
+	return b.String()
 }

@@ -124,6 +124,11 @@ type WebChatImageGenerationConfig struct {
 	Background   string `json:"background,omitempty"`
 }
 
+type WebChatWebSearchConfig struct {
+	Enabled    bool `json:"enabled"`
+	Configured bool `json:"-"`
+}
+
 type CreateWebChatConversationInput struct {
 	UserID          int64  `json:"user_id"`
 	Title           string `json:"title"`

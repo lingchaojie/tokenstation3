@@ -29,11 +29,13 @@ type webChatBillingEligibilityService interface {
 type webChatGatewayService interface {
 	SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error)
 	ForwardAsChatCompletions(ctx context.Context, c *gin.Context, account *Account, body []byte, parsed *ParsedRequest) (*ForwardResult, error)
+	ForwardAsResponses(ctx context.Context, c *gin.Context, account *Account, body []byte, parsed *ParsedRequest) (*ForwardResult, error)
 	RecordUsage(ctx context.Context, input *RecordUsageInput) error
 }
 
 type webChatOpenAIGatewayService interface {
 	SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error)
+	Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error)
 	ForwardAsChatCompletions(ctx context.Context, c *gin.Context, account *Account, body []byte, promptCacheKey string, defaultMappedModel string) (*OpenAIForwardResult, error)
 	RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error
 }
@@ -57,6 +59,7 @@ type webChatDispatchInput struct {
 	Stream             bool
 	Thinking           WebChatThinkingConfig
 	ImageGeneration    WebChatImageGenerationConfig
+	WebSearch          WebChatWebSearchConfig
 }
 
 type webChatDispatchResult struct {
@@ -108,10 +111,18 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		return nil, err
 	}
 
-	body, err := BuildWebChatCompletionsPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, WebChatCompletionsPayloadOptions{
+	payloadOptions := WebChatCompletionsPayloadOptions{
 		Thinking:        input.Thinking,
 		ImageGeneration: input.ImageGeneration,
-	})
+		WebSearch:       input.WebSearch,
+	}
+	useResponsesPayload := webChatUseResponsesPayload(input)
+	var body []byte
+	if useResponsesPayload {
+		body, err = BuildWebChatResponsesPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, payloadOptions)
+	} else {
+		body, err = BuildWebChatCompletionsPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, payloadOptions)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +146,15 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 
 	switch input.Capabilities.Platform {
 	case PlatformOpenAI:
-		result, account, err := s.forwardWebChatOpenAI(usageCtx, c, group, body, input)
+		upstreamEndpoint := "/v1/chat/completions"
+		var result *OpenAIForwardResult
+		var account *Account
+		if useResponsesPayload {
+			result, account, err = s.forwardWebChatOpenAIResponses(usageCtx, c, group, body, input)
+			upstreamEndpoint = "/v1/responses"
+		} else {
+			result, account, err = s.forwardWebChatOpenAI(usageCtx, c, group, body, input)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +168,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			Account:            account,
 			Subscription:       subscription,
 			InboundEndpoint:    inboundEndpoint,
-			UpstreamEndpoint:   "/v1/chat/completions",
+			UpstreamEndpoint:   upstreamEndpoint,
 			UserAgent:          c.GetHeader("User-Agent"),
 			IPAddress:          ip.GetClientIP(c),
 			APIKeyService:      s.apiKeyService,
@@ -161,7 +180,15 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			usageRecorded = true
 		}
 	case PlatformAnthropic:
-		result, account, err := s.forwardWebChatGateway(usageCtx, c, group, body, parsed, input)
+		upstreamEndpoint := "/v1/chat/completions"
+		var result *ForwardResult
+		var account *Account
+		if useResponsesPayload {
+			result, account, err = s.forwardWebChatGatewayResponses(usageCtx, c, group, body, parsed, input)
+			upstreamEndpoint = "/v1/responses"
+		} else {
+			result, account, err = s.forwardWebChatGateway(usageCtx, c, group, body, parsed, input)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +199,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			Account:            account,
 			Subscription:       subscription,
 			InboundEndpoint:    inboundEndpoint,
-			UpstreamEndpoint:   "/v1/chat/completions",
+			UpstreamEndpoint:   upstreamEndpoint,
 			UserAgent:          c.GetHeader("User-Agent"),
 			IPAddress:          ip.GetClientIP(c),
 			APIKeyService:      s.apiKeyService,
@@ -225,6 +252,21 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	return &webChatDispatchResult{ResponseBody: capture.Body(), UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, nil
 }
 
+func webChatUseResponsesPayload(input webChatDispatchInput) bool {
+	if !input.Capabilities.SupportsWebSearch {
+		return false
+	}
+	if !input.WebSearch.Configured && !input.WebSearch.Enabled {
+		return false
+	}
+	switch input.Capabilities.Platform {
+	case PlatformOpenAI, PlatformAnthropic:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *WebChatService) webChatAvailableGroup(ctx context.Context, userID int64, platform string) (*Group, error) {
 	if s.apiKeyService == nil {
 		return nil, ErrDefaultAPIKeyGroupMissing
@@ -257,6 +299,22 @@ func (s *WebChatService) forwardWebChatGateway(ctx context.Context, c *gin.Conte
 	return result, selection.Account, err
 }
 
+func (s *WebChatService) forwardWebChatGatewayResponses(ctx context.Context, c *gin.Context, group *Group, body []byte, parsed *ParsedRequest, input webChatDispatchInput) (*ForwardResult, *Account, error) {
+	if s.gatewayService == nil {
+		return nil, nil, ErrNoAvailableAccounts
+	}
+	selection, err := s.gatewayService.SelectAccountWithLoadAwareness(ctx, &group.ID, "", input.Model, nil, "", input.User.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer releaseWebChatSelection(selection)
+	if selection == nil || !selection.Acquired || selection.Account == nil {
+		return nil, nil, ErrNoAvailableAccounts
+	}
+	result, err := s.gatewayService.ForwardAsResponses(ctx, c, selection.Account, body, parsed)
+	return result, selection.Account, err
+}
+
 func (s *WebChatService) forwardWebChatOpenAI(ctx context.Context, c *gin.Context, group *Group, body []byte, input webChatDispatchInput) (*OpenAIForwardResult, *Account, error) {
 	if s.openAIGatewayService == nil {
 		return nil, nil, ErrNoAvailableAccounts
@@ -270,6 +328,22 @@ func (s *WebChatService) forwardWebChatOpenAI(ctx context.Context, c *gin.Contex
 		return nil, nil, ErrNoAvailableAccounts
 	}
 	result, err := s.openAIGatewayService.ForwardAsChatCompletions(ctx, c, selection.Account, body, "", group.DefaultMappedModel)
+	return result, selection.Account, err
+}
+
+func (s *WebChatService) forwardWebChatOpenAIResponses(ctx context.Context, c *gin.Context, group *Group, body []byte, input webChatDispatchInput) (*OpenAIForwardResult, *Account, error) {
+	if s.openAIGatewayService == nil {
+		return nil, nil, ErrNoAvailableAccounts
+	}
+	selection, err := s.openAIGatewayService.SelectAccountWithLoadAwareness(ctx, &group.ID, "", input.Model, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer releaseWebChatSelection(selection)
+	if selection == nil || !selection.Acquired || selection.Account == nil {
+		return nil, nil, ErrNoAvailableAccounts
+	}
+	result, err := s.openAIGatewayService.Forward(ctx, c, selection.Account, body)
 	return result, selection.Account, err
 }
 

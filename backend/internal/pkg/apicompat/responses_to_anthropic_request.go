@@ -591,13 +591,19 @@ func convertResponsesToAnthropicToolChoice(raw json.RawMessage) (json.RawMessage
 		}
 	}
 
-	// Try as object with type=function
+	// Try as object with a typed tool choice.
 	var tc struct {
 		Type     string `json:"type"`
 		Name     string `json:"name"`
 		Function struct {
 			Name string `json:"name"`
 		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &tc); err == nil && isResponsesWebSearchToolChoice(tc.Type) {
+		return json.Marshal(map[string]string{
+			"type": "tool",
+			"name": "web_search",
+		})
 	}
 	if err := json.Unmarshal(raw, &tc); err == nil && tc.Type == "function" {
 		name := strings.TrimSpace(tc.Name)
@@ -615,4 +621,9 @@ func convertResponsesToAnthropicToolChoice(raw json.RawMessage) (json.RawMessage
 
 	// Pass through unknown
 	return raw, nil
+}
+
+func isResponsesWebSearchToolChoice(toolType string) bool {
+	toolType = strings.TrimSpace(toolType)
+	return strings.HasPrefix(toolType, "web_search") || toolType == "google_search"
 }

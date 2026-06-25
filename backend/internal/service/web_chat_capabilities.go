@@ -17,6 +17,7 @@ type WebChatModelCapability struct {
 	SupportsArtifactOutput       bool     `json:"supports_artifact_output"`
 	SupportsThinking             bool     `json:"supports_thinking"`
 	ThinkingEfforts              []string `json:"thinking_efforts,omitempty"`
+	SupportsWebSearch            bool     `json:"supports_web_search"`
 	SupportsImageGeneration      bool     `json:"supports_image_generation"`
 	ImageGenerationSizes         []string `json:"image_generation_sizes,omitempty"`
 	ImageGenerationAspectRatios  []string `json:"image_generation_aspect_ratios,omitempty"`
@@ -111,6 +112,7 @@ func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatM
 	supportsImageInput := hasImageModality || containsFold(model.Features, "vision input")
 	supportsThinking := hasTextModality && webChatProviderSupportsThinking(provider)
 	supportsImageGeneration := hasImageModality || containsFold(model.Features, "image generation")
+	supportsWebSearch := hasTextModality && !supportsImageGeneration && webChatProviderSupportsWebSearch(provider)
 
 	return WebChatModelCapability{
 		Provider:                     provider,
@@ -124,6 +126,7 @@ func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatM
 		SupportsArtifactOutput:       supportsImageGeneration,
 		SupportsThinking:             supportsThinking,
 		ThinkingEfforts:              webChatThinkingEffortsForProvider(provider, supportsThinking),
+		SupportsWebSearch:            supportsWebSearch,
 		SupportsImageGeneration:      supportsImageGeneration,
 		ImageGenerationSizes:         webChatImageGenerationSizesForProvider(provider, supportsImageGeneration),
 		ImageGenerationAspectRatios:  webChatImageGenerationAspectRatiosForProvider(provider, supportsImageGeneration),
@@ -171,6 +174,15 @@ func containsFold(values []string, target string) bool {
 func webChatProviderSupportsThinking(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "anthropic", "openai", "qwen", "gemini":
+		return true
+	default:
+		return false
+	}
+}
+
+func webChatProviderSupportsWebSearch(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "anthropic":
 		return true
 	default:
 		return false

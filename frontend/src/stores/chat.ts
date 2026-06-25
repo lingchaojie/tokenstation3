@@ -360,6 +360,7 @@ export const useChatStore = defineStore('chat', () => {
   const selectedModel = ref<WebChatModel | null>(null)
   const thinkingEnabled = ref(false)
   const thinkingEffort = ref<WebChatThinkingEffort>('medium')
+  const webSearchEnabled = ref(false)
   const imageGenerationEnabled = ref(true)
   const imageGenerationSize = ref<WebChatImageGenerationSize>('1024x1024')
   const imageGenerationAspectRatio = ref<WebChatImageGenerationAspectRatio>('1:1')
@@ -377,6 +378,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const currentMessages = computed(() => currentConversation.value?.messages ?? [])
   const selectedModelSupportsThinking = computed(() => Boolean(selectedModel.value?.supports_thinking))
+  const selectedModelSupportsWebSearch = computed(() => Boolean(selectedModel.value?.supports_web_search))
   const selectedModelSupportsImageGeneration = computed(() => Boolean(selectedModel.value?.supports_image_generation))
   const thinkingEffortOptions = computed<WebChatThinkingEffort[]>(() => {
     const efforts = selectedModel.value?.thinking_efforts ?? []
@@ -509,8 +511,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function reconcileWebSearchSettings(): void {
+    if (!selectedModelSupportsWebSearch.value) {
+      webSearchEnabled.value = false
+    }
+  }
+
   watch(selectedModel, () => {
     reconcileThinkingSettings()
+    reconcileWebSearchSettings()
     reconcileImageGenerationSettings()
   }, { immediate: true, flush: 'sync' })
 
@@ -825,6 +834,11 @@ export const useChatStore = defineStore('chat', () => {
         effort: activeThinkingEffort.value,
       }
     }
+    if (selectedModelSupportsWebSearch.value) {
+      request.web_search = {
+        enabled: webSearchEnabled.value,
+      }
+    }
     if (selectedModelSupportsImageGeneration.value && imageGenerationEnabled.value) {
       const imageGeneration: NonNullable<SendWebChatMessageRequest['image_generation']> = {
         enabled: true,
@@ -908,6 +922,7 @@ export const useChatStore = defineStore('chat', () => {
     selectedModel,
     thinkingEnabled,
     thinkingEffort,
+    webSearchEnabled,
     imageGenerationEnabled,
     imageGenerationSize,
     imageGenerationAspectRatio,
@@ -920,6 +935,7 @@ export const useChatStore = defineStore('chat', () => {
     error,
     currentMessages,
     selectedModelSupportsThinking,
+    selectedModelSupportsWebSearch,
     thinkingEffortOptions,
     selectedModelSupportsImageGeneration,
     imageGenerationSizeOptions,

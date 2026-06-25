@@ -47,8 +47,45 @@ func TestWebChatCapabilities_DerivesCapabilitiesFromCatalogModel(t *testing.T) {
 	require.True(t, caps.SupportsFileContext)
 	require.False(t, caps.SupportsArtifactOutput)
 	require.True(t, caps.SupportsThinking)
+	require.False(t, caps.SupportsWebSearch)
 	require.Equal(t, []string{"low", "medium", "high", "xhigh"}, caps.ThinkingEfforts)
 	require.Equal(t, "confirmed", caps.PriceStatus)
+}
+
+func TestWebChatCapabilities_DerivesOpenAIWebSearchForTextModel(t *testing.T) {
+	caps, ok := WebChatModelCapabilityFromCatalogModel(WebChatCatalogModel{
+		Provider:    "openai",
+		ModelName:   "gpt-5.5",
+		DisplayName: "GPT-5.5",
+		Modalities:  []string{"text"},
+		Features:    []string{"reasoning"},
+		PriceStatus: "confirmed",
+	})
+
+	require.True(t, ok)
+	require.Equal(t, PlatformOpenAI, caps.Platform)
+	require.True(t, caps.SupportsText)
+	require.True(t, caps.SupportsThinking)
+	require.True(t, caps.SupportsWebSearch)
+	require.False(t, caps.SupportsImageGeneration)
+}
+
+func TestWebChatCapabilities_DerivesAnthropicWebSearchForTextModel(t *testing.T) {
+	caps, ok := WebChatModelCapabilityFromCatalogModel(WebChatCatalogModel{
+		Provider:    "anthropic",
+		ModelName:   "claude-sonnet-4",
+		DisplayName: "Claude Sonnet 4",
+		Modalities:  []string{"text"},
+		Features:    []string{"reasoning"},
+		PriceStatus: "confirmed",
+	})
+
+	require.True(t, ok)
+	require.Equal(t, PlatformAnthropic, caps.Platform)
+	require.True(t, caps.SupportsText)
+	require.True(t, caps.SupportsThinking)
+	require.True(t, caps.SupportsWebSearch)
+	require.False(t, caps.SupportsImageGeneration)
 }
 
 func TestWebChatCapabilities_DerivesOpenAIImageGenerationOptionsFromCatalogModel(t *testing.T) {
@@ -65,6 +102,7 @@ func TestWebChatCapabilities_DerivesOpenAIImageGenerationOptionsFromCatalogModel
 	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.True(t, caps.SupportsImageGeneration)
 	require.True(t, caps.SupportsArtifactOutput)
+	require.False(t, caps.SupportsWebSearch)
 	require.Equal(t, []string{"1024x1024", "1536x1024", "1024x1536"}, caps.ImageGenerationSizes)
 	require.Equal(t, []string{"1:1", "3:2", "2:3"}, caps.ImageGenerationAspectRatios)
 	require.Equal(t, []string{"medium", "high"}, caps.ImageGenerationQualities)
@@ -131,6 +169,7 @@ func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *test
 	require.NoError(t, err)
 	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.Equal(t, "gpt-5.5", caps.Model)
+	require.True(t, caps.SupportsWebSearch)
 }
 
 func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 )
 
 type webChatCCRequest struct {
@@ -51,6 +53,7 @@ type webChatCCTool struct {
 type WebChatCompletionsPayloadOptions struct {
 	Thinking        WebChatThinkingConfig
 	ImageGeneration WebChatImageGenerationConfig
+	WebSearch       WebChatWebSearchConfig
 }
 
 func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage, caps WebChatModelCapability, messages []WebChatMessage, stream bool, options ...WebChatCompletionsPayloadOptions) ([]byte, error) {
@@ -107,6 +110,48 @@ func BuildWebChatCompletionsPayload(ctx context.Context, storage WebChatStorage,
 		return nil, fmt.Errorf("marshal web chat completions payload: %w", err)
 	}
 	return payload, nil
+}
+
+func BuildWebChatResponsesPayload(ctx context.Context, storage WebChatStorage, caps WebChatModelCapability, messages []WebChatMessage, stream bool, options ...WebChatCompletionsPayloadOptions) ([]byte, error) {
+	chatPayload, err := BuildWebChatCompletionsPayload(ctx, storage, caps, messages, stream, options...)
+	if err != nil {
+		return nil, err
+	}
+
+	var chatRequest apicompat.ChatCompletionsRequest
+	if err := json.Unmarshal(chatPayload, &chatRequest); err != nil {
+		return nil, fmt.Errorf("parse web chat completions payload for responses: %w", err)
+	}
+	responsesRequest, err := apicompat.ChatCompletionsToResponses(&chatRequest)
+	if err != nil {
+		return nil, fmt.Errorf("convert web chat payload to responses: %w", err)
+	}
+	responsesRequest.Stream = stream
+
+	payloadOptions := firstWebChatPayloadOptions(options)
+	if caps.SupportsWebSearch {
+		responsesRequest.Tools = appendWebChatResponsesTool(responsesRequest.Tools, apicompat.ResponsesTool{Type: "web_search"})
+		if payloadOptions.WebSearch.Enabled {
+			responsesRequest.ToolChoice = json.RawMessage(`{"type":"web_search"}`)
+		} else {
+			responsesRequest.ToolChoice = json.RawMessage(`"auto"`)
+		}
+	}
+
+	payload, err := json.Marshal(responsesRequest)
+	if err != nil {
+		return nil, fmt.Errorf("marshal web chat responses payload: %w", err)
+	}
+	return payload, nil
+}
+
+func appendWebChatResponsesTool(tools []apicompat.ResponsesTool, tool apicompat.ResponsesTool) []apicompat.ResponsesTool {
+	for _, existing := range tools {
+		if strings.EqualFold(existing.Type, tool.Type) {
+			return tools
+		}
+	}
+	return append(tools, tool)
 }
 
 func firstWebChatPayloadOptions(values []WebChatCompletionsPayloadOptions) WebChatCompletionsPayloadOptions {

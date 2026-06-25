@@ -1256,6 +1256,27 @@ func TestResponsesToAnthropicRequest_ToolChoiceLegacyFunctionName(t *testing.T) 
 	assert.Equal(t, "get_weather", tc["name"])
 }
 
+func TestResponsesToAnthropicRequest_ToolChoiceWebSearch(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:      "claude-sonnet-4",
+		Input:      json.RawMessage(`[{"role":"user","content":"Search latest AI news"}]`),
+		Tools:      []ResponsesTool{{Type: "web_search"}},
+		ToolChoice: json.RawMessage(`{"type":"web_search"}`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "web_search_20250305", resp.Tools[0].Type)
+	assert.Equal(t, "web_search", resp.Tools[0].Name)
+
+	var tc map[string]string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "tool", tc["type"])
+	assert.Equal(t, "web_search", tc["name"])
+}
+
 // ---------------------------------------------------------------------------
 // Image content block conversion tests
 // ---------------------------------------------------------------------------
