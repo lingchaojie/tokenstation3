@@ -29,6 +29,23 @@ func TestIkunPaySignContentExcludesSignTypeSignAndEmptyValues(t *testing.T) {
 	}
 }
 
+func TestIkunPaySignContentUsesTrimmedKeyWithOriginalValue(t *testing.T) {
+	t.Parallel()
+
+	params := map[string]string{
+		" pid ":       "merchant-1",
+		"money":       "10.00",
+		" sign ":      "ignored",
+		" sign_type ": "RSA",
+	}
+
+	got := ikunPaySignContent(params)
+	want := "money=10.00&pid=merchant-1"
+	if got != want {
+		t.Fatalf("sign content = %q, want %q", got, want)
+	}
+}
+
 func TestIkunPaySignAndVerifyAcceptPEMAndBareBase64Keys(t *testing.T) {
 	t.Parallel()
 

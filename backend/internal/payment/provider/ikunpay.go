@@ -90,18 +90,24 @@ func normalizeIkunPayAPIBase(raw string) string {
 }
 
 func ikunPaySignContent(params map[string]string) string {
-	keys := make([]string, 0, len(params))
+	type signPair struct {
+		key   string
+		value string
+	}
+	pairs := make([]signPair, 0, len(params))
 	for key, value := range params {
 		key = strings.TrimSpace(key)
 		if key == "" || key == "sign" || key == "sign_type" || strings.TrimSpace(value) == "" {
 			continue
 		}
-		keys = append(keys, key)
+		pairs = append(pairs, signPair{key: key, value: value})
 	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		parts = append(parts, key+"="+params[key])
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].key < pairs[j].key
+	})
+	parts := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		parts = append(parts, pair.key+"="+pair.value)
 	}
 	return strings.Join(parts, "&")
 }
