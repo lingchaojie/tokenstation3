@@ -159,6 +159,8 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.paymentVisibleMethods.sourceRequiredError": "{title} 已启用，请先选择支付来源。",
     "admin.settings.payment.configGuide": "查看支付配置说明",
     "admin.settings.payment.findProvider": "查看支持的支付方式",
+    "admin.settings.payment.providerIkunpay": "IkunPay",
+    "payment.methods.ikunpay": "IkunPay",
     "admin.settings.openaiExperimentalScheduler.title": "OpenAI 实验调度策略",
     "admin.settings.openaiExperimentalScheduler.description": "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。",
     "admin.settings.site.uploadImage": "上传图片",
@@ -843,6 +845,176 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(paymentHelpImageUpload).toBeDefined();
     expect(paymentHelpImageUpload?.attributes("data-upload-label")).toBe("上传图片");
     expect(paymentHelpImageUpload?.attributes("data-remove-label")).toBe("移除");
+  });
+
+  it("exposes IkunPay in global payment types and provider key options", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_enabled_types: ["ikunpay"],
+    });
+
+    const PaymentProviderDialogOptionsStub = defineComponent({
+      props: {
+        allKeyOptions: {
+          type: Array,
+          default: () => [],
+        },
+        enabledKeyOptions: {
+          type: Array,
+          default: () => [],
+        },
+        allPaymentTypes: {
+          type: Array,
+          default: () => [],
+        },
+      },
+      setup(props, { expose }) {
+        expose({
+          reset: vi.fn(),
+          loadProvider: vi.fn(),
+        });
+        return () =>
+          h("div", { class: "payment-provider-dialog-options-stub" }, [
+            h(
+              "div",
+              { class: "all-provider-key-options" },
+              (props.allKeyOptions as Array<Record<string, unknown>>).map((option) =>
+                h("span", { class: "provider-key-option" }, String(option.label)),
+              ),
+            ),
+            h(
+              "div",
+              { class: "enabled-provider-key-options" },
+              (props.enabledKeyOptions as Array<Record<string, unknown>>).map((option) =>
+                h("span", { class: "enabled-provider-key-option" }, String(option.label)),
+              ),
+            ),
+            h(
+              "div",
+              { class: "all-payment-type-options" },
+              (props.allPaymentTypes as Array<Record<string, unknown>>).map((option) =>
+                h("span", { class: "payment-type-option" }, String(option.label)),
+              ),
+            ),
+          ]);
+      },
+    });
+
+    const wrapper = mount(SettingsView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          Select: SelectStub,
+          Toggle: ToggleStub,
+          Icon: true,
+          ConfirmDialog: true,
+          PaymentProviderList: true,
+          PaymentProviderDialog: PaymentProviderDialogOptionsStub,
+          GroupBadge: true,
+          GroupOptionItem: true,
+          ProxySelector: true,
+          ImageUpload: ImageUploadStub,
+          BackupSettings: true,
+        },
+      },
+    });
+
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const allProviderLabels = wrapper
+      .findAll(".provider-key-option")
+      .map((node) => node.text());
+    const enabledProviderLabels = wrapper
+      .findAll(".enabled-provider-key-option")
+      .map((node) => node.text());
+    const paymentTypeLabels = wrapper
+      .findAll(".payment-type-option")
+      .map((node) => node.text());
+
+    expect(allProviderLabels).toContain("IkunPay");
+    expect(enabledProviderLabels).toContain("IkunPay");
+    expect(paymentTypeLabels).toContain("IkunPay");
+  });
+
+  it("allows IkunPay to coexist with official visible-method providers", async () => {
+    const existingAlipayProvider = {
+      id: 7,
+      provider_key: "alipay",
+      name: "Official Alipay",
+      config: {},
+      supported_types: ["alipay"],
+      enabled: true,
+      payment_mode: "",
+      refund_enabled: false,
+      allow_user_refund: false,
+      limits: "",
+      sort_order: 0,
+    };
+    getProviders.mockReset();
+    getProviders.mockResolvedValue({ data: [existingAlipayProvider] });
+    createProvider.mockResolvedValue({ data: {} });
+
+    const PaymentProviderDialogSaveStub = defineComponent({
+      emits: ["save"],
+      setup(_, { emit, expose }) {
+        expose({
+          reset: vi.fn(),
+          loadProvider: vi.fn(),
+        });
+        return () =>
+          h(
+            "button",
+            {
+              class: "save-ikunpay-provider",
+              onClick: () =>
+                emit("save", {
+                  provider_key: "ikunpay",
+                  name: "IkunPay",
+                  supported_types: ["alipay", "wxpay"],
+                  enabled: true,
+                  payment_mode: "qrcode",
+                  refund_enabled: false,
+                  allow_user_refund: false,
+                  config: {},
+                  limits: "",
+                }),
+            },
+            "save IkunPay",
+          );
+      },
+    });
+
+    const wrapper = mount(SettingsView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          Select: SelectStub,
+          Toggle: ToggleStub,
+          Icon: true,
+          ConfirmDialog: true,
+          PaymentProviderList: true,
+          PaymentProviderDialog: PaymentProviderDialogSaveStub,
+          GroupBadge: true,
+          GroupOptionItem: true,
+          ProxySelector: true,
+          ImageUpload: ImageUploadStub,
+          BackupSettings: true,
+        },
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get(".save-ikunpay-provider").trigger("click");
+    await flushPromises();
+
+    expect(createProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider_key: "ikunpay",
+        supported_types: ["alipay", "wxpay"],
+        enabled: true,
+      }),
+    );
   });
 });
 
