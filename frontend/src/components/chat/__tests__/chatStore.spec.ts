@@ -395,7 +395,7 @@ describe('useChatStore', () => {
     }), expect.any(AbortSignal))
   })
 
-  it('sends web search config for supported models in forced and auto modes', async () => {
+  it('keeps web search off by default and only sends config when enabled', async () => {
     const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
       response: new Response('data: [DONE]\n\n', {
         status: 200,
@@ -429,7 +429,7 @@ describe('useChatStore', () => {
     await store.sendMessage('Search today')
 
     store.webSearchEnabled = false
-    await store.sendMessage('Decide whether to search')
+    await store.sendMessage('Answer from model context')
 
     expect(streamSpy).toHaveBeenNthCalledWith(1, 7, expect.objectContaining({
       model: 'gpt-5.5',
@@ -440,9 +440,9 @@ describe('useChatStore', () => {
     expect(streamSpy).toHaveBeenNthCalledWith(2, 7, expect.objectContaining({
       model: 'gpt-5.5',
       provider: 'openai',
-      content: 'Decide whether to search',
-      web_search: { enabled: false },
+      content: 'Answer from model context',
     }), expect.any(AbortSignal))
+    expect(streamSpy.mock.calls[1][1]).not.toHaveProperty('web_search')
   })
 
   it('streams reasoning and tool call events into assistant process blocks', async () => {

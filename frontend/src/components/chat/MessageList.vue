@@ -30,10 +30,10 @@
           <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6">
             {{ message.content_text }}
           </p>
-          <p v-else-if="isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
+          <p v-if="!message.content_text && isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
             Thinking...
           </p>
-          <p v-else-if="isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
+          <p v-else-if="!message.content_text && isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
             Response interrupted before completion.
           </p>
 
@@ -102,13 +102,33 @@
             </div>
           </details>
 
-          <p v-if="message.content_text" class="whitespace-pre-wrap break-words text-sm leading-6 text-linear-ink">
-            {{ message.content_text }}
-          </p>
-          <p v-else-if="isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
+          <div
+            v-if="message.content_text"
+            class="chat-markdown-body text-sm leading-6 text-linear-ink"
+            data-testid="chat-assistant-markdown"
+            v-html="renderMarkdownContent(message.content_text)"
+          />
+          <div
+            v-if="sourceLinks(message).length > 0"
+            class="mt-4 flex flex-wrap gap-2"
+            data-testid="chat-source-links"
+          >
+            <a
+              v-for="source in sourceLinks(message)"
+              :key="source.href"
+              :href="source.href"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-linear-hairline bg-linear-surface-1 px-2.5 py-1 text-xs font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
+            >
+              <Icon name="globe" size="xs" class="shrink-0" />
+              <span class="min-w-0 truncate">{{ source.label }}</span>
+            </a>
+          </div>
+          <p v-if="!message.content_text && isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
             Thinking...
           </p>
-          <p v-else-if="isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
+          <p v-else-if="!message.content_text && isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
             Response interrupted before completion.
           </p>
 
@@ -153,6 +173,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 
 import { chatAPI, type WebChatArtifact, type WebChatMessage } from '@/api/chat'
 import ArtifactFileCard from '@/components/chat/ArtifactFileCard.vue'
@@ -166,6 +188,12 @@ import { providerIconModel } from '@/utils/modelCatalog'
 const chatStore = useChatStore()
 const messages = computed(() => chatStore.currentMessages)
 const STALE_STREAMING_MS = 10 * 60 * 1000
+const MAX_SOURCE_LINKS = 8
+
+interface SourceLink {
+  href: string
+  label: string
+}
 
 function assistantLabel(message: WebChatMessage): string {
   return message.model || 'Assistant'
@@ -206,6 +234,72 @@ function fileArtifacts(message: WebChatMessage): WebChatArtifact[] {
 
 function hasArtifacts(message: WebChatMessage): boolean {
   return imageArtifacts(message).length > 0 || fileArtifacts(message).length > 0
+}
+
+function renderMarkdownContent(content: string): string {
+  const html = marked.parse(content, {
+    async: false,
+    breaks: true,
+    gfm: true,
+  }) as string
+  return DOMPurify
+    .sanitize(html)
+    .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
+}
+
+function sourceLinks(message: WebChatMessage): SourceLink[] {
+  if (message.role === 'user' || !message.content_text) return []
+  return extractSourceLinks(message.content_text)
+}
+
+function extractSourceLinks(content: string): SourceLink[] {
+  const links: SourceLink[] = []
+  const seen = new Set<string>()
+  const addLink = (label: string, href: string) => {
+    if (links.length >= MAX_SOURCE_LINKS) return
+    const normalized = normalizeHTTPURL(href)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    links.push({
+      href: normalized,
+      label: sourceLabel(label, normalized),
+    })
+  }
+
+  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi
+  for (const match of content.matchAll(markdownLinkPattern)) {
+    addLink(match[1], match[2])
+  }
+
+  const bareURLPattern = /https?:\/\/[^\s)]+/gi
+  for (const match of content.matchAll(bareURLPattern)) {
+    addLink('', match[0])
+  }
+
+  return links
+}
+
+function normalizeHTTPURL(value: string): string {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+function sourceLabel(label: string, href: string): string {
+  const cleanedLabel = label.trim()
+  try {
+    const host = new URL(href).hostname.replace(/^www\./i, '')
+    if (cleanedLabel && cleanedLabel.length <= 36 && !/^https?:\/\//i.test(cleanedLabel) && cleanedLabel !== host) {
+      return `${cleanedLabel} · ${host}`
+    }
+    return host
+  } catch {
+    return cleanedLabel || href
+  }
 }
 
 function processBlocks(message: WebChatMessage): Array<Record<string, unknown>> {
@@ -276,3 +370,76 @@ function saveBlob(blob: Blob, filename: string): void {
   window.URL.revokeObjectURL(url)
 }
 </script>
+
+<style scoped>
+.chat-markdown-body {
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown-body :deep(p) {
+  margin: 0.5rem 0;
+}
+
+.chat-markdown-body :deep(p:first-child) {
+  margin-top: 0;
+}
+
+.chat-markdown-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.chat-markdown-body :deep(ul),
+.chat-markdown-body :deep(ol) {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.chat-markdown-body :deep(ul) {
+  list-style: disc;
+}
+
+.chat-markdown-body :deep(ol) {
+  list-style: decimal;
+}
+
+.chat-markdown-body :deep(li) {
+  margin: 0.25rem 0;
+}
+
+.chat-markdown-body :deep(a) {
+  color: #ea580c;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown-body :deep(strong) {
+  font-weight: 650;
+}
+
+.chat-markdown-body :deep(code) {
+  border-radius: 0.25rem;
+  background: rgb(var(--linear-surface-1) / 1);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.875em;
+}
+
+.chat-markdown-body :deep(pre) {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: rgb(var(--linear-surface-1) / 1);
+  padding: 0.75rem;
+}
+
+.chat-markdown-body :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.chat-markdown-body :deep(blockquote) {
+  margin: 0.75rem 0;
+  border-left: 3px solid rgb(var(--linear-hairline) / 1);
+  padding-left: 0.75rem;
+  color: rgb(var(--linear-ink-muted) / 1);
+}
+</style>

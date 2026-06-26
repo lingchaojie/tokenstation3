@@ -908,9 +908,9 @@ export const useChatStore = defineStore('chat', () => {
         effort: activeThinkingEffort.value,
       }
     }
-    if (selectedModelSupportsWebSearch.value) {
+    if (selectedModelSupportsWebSearch.value && webSearchEnabled.value) {
       request.web_search = {
-        enabled: webSearchEnabled.value,
+        enabled: true,
       }
     }
     if (selectedModelSupportsImageGeneration.value && imageGenerationEnabled.value) {

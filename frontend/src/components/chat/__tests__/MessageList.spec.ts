@@ -198,6 +198,36 @@ describe('MessageList', () => {
     expect(process.text()).toContain('read_file')
   })
 
+  it('renders assistant markdown and exposes source links as readable anchors', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [{
+        ...assistantMessage([]),
+        content_text: [
+          'Here are the **highlights**:',
+          '',
+          '- [OpenAI post](https://example.com/openai)',
+          '- [DeepMind update](https://deepmind.example/news)',
+        ].join('\n'),
+      }],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    const body = wrapper.get('[data-testid="chat-assistant-markdown"]')
+    expect(body.find('strong').text()).toBe('highlights')
+    expect(body.findAll('li')).toHaveLength(2)
+    expect(body.get('a[href="https://example.com/openai"]').text()).toBe('OpenAI post')
+    expect(wrapper.get('[data-testid="chat-source-links"]').text()).toContain('example.com')
+  })
+
   it('keeps process blocks expanded while the assistant is streaming', () => {
     const store = useChatStore()
     store.currentConversation = {
@@ -214,6 +244,28 @@ describe('MessageList', () => {
     })
 
     expect(wrapper.get('[data-testid="chat-process-block"]').attributes('open')).toBeDefined()
+  })
+
+  it('does not show a thinking placeholder once a streaming assistant has text', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation,
+      messages: [{
+        ...processAssistantMessage('streaming'),
+        content_text: 'Partial answer',
+      }],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('Partial answer')
+    expect(wrapper.text()).not.toContain('Thinking...')
   })
 
   it('renders artifacts as separate bubbles outside the assistant text block', async () => {
