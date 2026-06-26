@@ -7154,6 +7154,7 @@ export default {
       userId: 'User ID',
       orderType: 'Order Type',
       actions: 'Actions',
+      continuePayment: 'Continue Payment',
       requestRefund: 'Request Refund',
     },
     result: {
@@ -7213,6 +7214,7 @@ export default {
       // Structured error codes (reason strings from backend ApplicationError)
       PAYMENT_DISABLED: 'Payment system is disabled.',
       USER_INACTIVE: 'Your account is disabled.',
+      resumeUnavailable: 'This order can no longer be paid. Please create a new order.',
       BALANCE_PAYMENT_DISABLED: 'Balance recharge has been disabled.',
       INVALID_AMOUNT: 'Invalid amount.',
       INVALID_INPUT: 'Invalid request.',

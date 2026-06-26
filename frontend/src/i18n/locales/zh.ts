@@ -7335,6 +7335,7 @@ export default {
       userId: '用户 ID',
       orderType: '订单类型',
       actions: '操作',
+      continuePayment: '继续支付',
       requestRefund: '申请退款',
     },
     result: {
@@ -7394,6 +7395,7 @@ export default {
       // Structured error codes (reason strings from backend ApplicationError)
       PAYMENT_DISABLED: '支付系统已关闭',
       USER_INACTIVE: '账号已被禁用',
+      resumeUnavailable: '该订单已无法继续支付，请重新创建订单。',
       BALANCE_PAYMENT_DISABLED: '余额充值功能已关闭',
       INVALID_AMOUNT: '金额无效',
       INVALID_INPUT: '参数有误',
