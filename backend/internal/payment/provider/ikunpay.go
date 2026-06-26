@@ -230,6 +230,12 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 		"timestamp":    strconv.FormatInt(time.Now().Unix(), 10),
 		"sign_type":    ikunpaySignTypeRSA,
 	}
+	if merchantID := firstNonEmpty(i.config["merchantId"], i.config["merchant_id"]); merchantID != "" {
+		params["merchant_id"] = merchantID
+	}
+	if channelID := i.channelIDForPaymentType(req.PaymentType); channelID != "" {
+		params["channel_id"] = channelID
+	}
 	if err := i.signParams(params); err != nil {
 		return nil, fmt.Errorf("ikunpay sign create: %w", err)
 	}
@@ -241,15 +247,22 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	if err != nil {
 		return nil, fmt.Errorf("ikunpay create response: %w", err)
 	}
-	if err := i.verifyResponseSignature(rawResp); err != nil {
+	if err := i.verifyCreateResponseSignature(rawResp, resp.Code); err != nil {
 		return nil, fmt.Errorf("ikunpay verify create response: %w", err)
 	}
 	if resp.Code != ikunpayCodeSuccess {
 		return nil, fmt.Errorf("ikunpay error: %s", firstNonEmpty(resp.Msg, resp.Message))
 	}
+	payType := strings.ToLower(strings.TrimSpace(resp.PayType))
+	if i.requiresNativeQRCode() && payType != "qrcode" {
+		return nil, fmt.Errorf("ikunpay qrcode mode requires pay_type=qrcode, got %s", firstNonEmpty(resp.PayType, "<empty>"))
+	}
 	result := &payment.CreatePaymentResponse{TradeNo: resp.TradeNo}
-	switch strings.ToLower(strings.TrimSpace(resp.PayType)) {
+	switch payType {
 	case "qrcode":
+		if i.requiresNativeQRCode() && isIkunPayHostedPayInfo(resp.PayInfo) {
+			return nil, fmt.Errorf("ikunpay qrcode mode returned gateway URL instead of native QR")
+		}
 		result.QRCode = strings.TrimSpace(resp.PayInfo)
 	case "jump", "urlscheme":
 		result.PayURL = strings.TrimSpace(resp.PayInfo)
@@ -263,6 +276,52 @@ func (i *IkunPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 		return nil, fmt.Errorf("ikunpay unsupported pay_type: %s", resp.PayType)
 	}
 	return result, nil
+}
+
+func (i *IkunPay) requiresNativeQRCode() bool {
+	if i == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(i.config["paymentMode"]), "qrcode")
+}
+
+func (i *IkunPay) channelIDForPaymentType(paymentType payment.PaymentType) string {
+	if i == nil {
+		return ""
+	}
+	switch paymentType {
+	case payment.TypeAlipay:
+		return firstNonEmpty(
+			i.config["channelIdAlipay"],
+			i.config["channel_id_alipay"],
+			i.config["alipayChannelId"],
+			i.config["channelId"],
+			i.config["channel_id"],
+		)
+	case payment.TypeWxpay:
+		return firstNonEmpty(
+			i.config["channelIdWxpay"],
+			i.config["channel_id_wxpay"],
+			i.config["wxpayChannelId"],
+			i.config["channelId"],
+			i.config["channel_id"],
+		)
+	default:
+		return firstNonEmpty(i.config["channelId"], i.config["channel_id"])
+	}
+}
+
+func isIkunPayHostedPayInfo(payInfo string) bool {
+	payInfo = strings.TrimSpace(payInfo)
+	if payInfo == "" {
+		return false
+	}
+	parsed, err := url.Parse(payInfo)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "ikunpay.com" || strings.HasSuffix(host, ".ikunpay.com")
 }
 
 type ikunPayCreateResponse struct {
@@ -316,6 +375,17 @@ func (i *IkunPay) signParams(params map[string]string) error {
 func (i *IkunPay) verifyResponseSignature(params map[string]string) error {
 	signature := strings.TrimSpace(params["sign"])
 	if signature == "" {
+		return fmt.Errorf("ikunpay response missing signature")
+	}
+	return ikunPayVerify(params, i.config["platformPublicKey"], signature)
+}
+
+func (i *IkunPay) verifyCreateResponseSignature(params map[string]string, code int) error {
+	signature := strings.TrimSpace(params["sign"])
+	if signature == "" {
+		if code == ikunpayCodeSuccess {
+			return nil
+		}
 		return fmt.Errorf("ikunpay response missing signature")
 	}
 	return ikunPayVerify(params, i.config["platformPublicKey"], signature)

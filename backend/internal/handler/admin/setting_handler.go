@@ -1931,27 +1931,31 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	// Skip if no payment fields were provided (prevents accidental wipe).
 	if h.paymentConfigService != nil && hasPaymentFields(req) {
 		paymentReq := service.UpdatePaymentConfigRequest{
-			Enabled:                   req.PaymentEnabled,
-			MinAmount:                 req.PaymentMinAmount,
-			MaxAmount:                 req.PaymentMaxAmount,
-			DailyLimit:                req.PaymentDailyLimit,
-			OrderTimeoutMin:           req.PaymentOrderTimeoutMin,
-			MaxPendingOrders:          req.PaymentMaxPendingOrders,
-			EnabledTypes:              req.PaymentEnabledTypes,
-			BalanceDisabled:           req.PaymentBalanceDisabled,
-			BalanceRechargeMultiplier: req.PaymentBalanceRechargeMultiplier,
-			RechargeFeeRate:           req.PaymentRechargeFeeRate,
-			LoadBalanceStrategy:       req.PaymentLoadBalanceStrat,
-			ProductNamePrefix:         req.PaymentProductNamePrefix,
-			ProductNameSuffix:         req.PaymentProductNameSuffix,
-			HelpImageURL:              req.PaymentHelpImageURL,
-			HelpText:                  req.PaymentHelpText,
-			CancelRateLimitEnabled:    req.PaymentCancelRateLimitEnabled,
-			CancelRateLimitMax:        req.PaymentCancelRateLimitMax,
-			CancelRateLimitWindow:     req.PaymentCancelRateLimitWindow,
-			CancelRateLimitUnit:       req.PaymentCancelRateLimitUnit,
-			CancelRateLimitMode:       req.PaymentCancelRateLimitMode,
-			AlipayForceQRCode:         req.PaymentAlipayForceQRCode,
+			Enabled:                    req.PaymentEnabled,
+			MinAmount:                  req.PaymentMinAmount,
+			MaxAmount:                  req.PaymentMaxAmount,
+			DailyLimit:                 req.PaymentDailyLimit,
+			OrderTimeoutMin:            req.PaymentOrderTimeoutMin,
+			MaxPendingOrders:           req.PaymentMaxPendingOrders,
+			EnabledTypes:               req.PaymentEnabledTypes,
+			BalanceDisabled:            req.PaymentBalanceDisabled,
+			BalanceRechargeMultiplier:  req.PaymentBalanceRechargeMultiplier,
+			RechargeFeeRate:            req.PaymentRechargeFeeRate,
+			LoadBalanceStrategy:        req.PaymentLoadBalanceStrat,
+			ProductNamePrefix:          req.PaymentProductNamePrefix,
+			ProductNameSuffix:          req.PaymentProductNameSuffix,
+			HelpImageURL:               req.PaymentHelpImageURL,
+			HelpText:                   req.PaymentHelpText,
+			CancelRateLimitEnabled:     req.PaymentCancelRateLimitEnabled,
+			CancelRateLimitMax:         req.PaymentCancelRateLimitMax,
+			CancelRateLimitWindow:      req.PaymentCancelRateLimitWindow,
+			CancelRateLimitUnit:        req.PaymentCancelRateLimitUnit,
+			CancelRateLimitMode:        req.PaymentCancelRateLimitMode,
+			AlipayForceQRCode:          req.PaymentAlipayForceQRCode,
+			VisibleMethodAlipaySource:  req.PaymentVisibleMethodAlipaySource,
+			VisibleMethodWxpaySource:   req.PaymentVisibleMethodWxpaySource,
+			VisibleMethodAlipayEnabled: req.PaymentVisibleMethodAlipayEnabled,
+			VisibleMethodWxpayEnabled:  req.PaymentVisibleMethodWxpayEnabled,
 		}
 		if err := h.paymentConfigService.UpdatePaymentConfig(c.Request.Context(), paymentReq); err != nil {
 			response.ErrorFrom(c, err)
@@ -2221,7 +2225,9 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||
 		req.PaymentCancelRateLimitMax != nil || req.PaymentCancelRateLimitWindow != nil ||
 		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil ||
-		req.PaymentAlipayForceQRCode != nil
+		req.PaymentAlipayForceQRCode != nil ||
+		req.PaymentVisibleMethodAlipaySource != nil || req.PaymentVisibleMethodWxpaySource != nil ||
+		req.PaymentVisibleMethodAlipayEnabled != nil || req.PaymentVisibleMethodWxpayEnabled != nil
 }
 
 func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.SystemSettings, after *service.SystemSettings, beforeAuthSourceDefaults *service.AuthSourceDefaultSettings, afterAuthSourceDefaults *service.AuthSourceDefaultSettings, req UpdateSettingsRequest) {

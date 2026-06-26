@@ -149,6 +149,13 @@ function getLogoForType(): string | null {
   return null
 }
 
+function supportsActiveOrderVerification(order: PaymentOrder): boolean {
+  const typeText = `${props.paymentType} ${order.payment_type || ''}`.toLowerCase()
+  return typeText.includes('alipay')
+    || typeText.includes('wxpay')
+    || typeText.includes('ikunpay')
+    || typeText.includes('easypay')
+}
 
 function reopenPopup() {
   if (props.payUrl) {
@@ -206,7 +213,7 @@ async function pollStatus() {
 }
 
 async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder> {
-  if (!isWxpay.value) return order
+  if (!supportsActiveOrderVerification(order)) return order
   const outTradeNo = String(order.out_trade_no || '').trim()
   if (!outTradeNo) return order
   const normalizedStatus = String(order.status || '').trim().toUpperCase()

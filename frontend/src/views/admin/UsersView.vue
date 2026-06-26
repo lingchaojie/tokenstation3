@@ -522,31 +522,16 @@
           </template>
 
           <template #cell-usage="{ row }">
-            <PlatformUsageBreakdown
-              :today="usageStats[row.id]?.today_actual_cost ?? 0"
-              :total="usageStats[row.id]?.total_actual_cost ?? 0"
-              :by-platform="usageStats[row.id]?.by_platform"
-            />
-          </template>
-
-          <template #cell-usage_anthropic="{ row }">
-            <PlatformCostCell :usage="getPlatformUsage(row.id, 'anthropic')" />
-          </template>
-
-          <template #cell-usage_openai="{ row }">
-            <PlatformCostCell :usage="getPlatformUsage(row.id, 'openai')" />
-          </template>
-
-          <template #cell-usage_kiro="{ row }">
-            <PlatformCostCell :usage="getPlatformUsage(row.id, 'kiro')" />
-          </template>
-
-          <template #cell-usage_gemini="{ row }">
-            <PlatformCostCell :usage="getPlatformUsage(row.id, 'gemini')" />
-          </template>
-
-          <template #cell-usage_antigravity="{ row }">
-            <PlatformCostCell :usage="getPlatformUsage(row.id, 'antigravity')" />
+            <div class="text-sm">
+              <div class="flex items-center gap-1.5">
+                <span class="text-gray-500 dark:text-gray-400">{{ t('admin.users.today') }}:</span>
+                <span class="font-medium text-gray-900 dark:text-white">${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}</span>
+              </div>
+              <div class="mt-0.5 flex items-center gap-1.5">
+                <span class="text-gray-500 dark:text-gray-400">{{ t('admin.users.total') }}:</span>
+                <span class="font-medium text-gray-900 dark:text-white">${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}</span>
+              </div>
+            </div>
           </template>
 
           <template #cell-concurrency="{ row }">
@@ -789,8 +774,6 @@ import Select from '@/components/common/Select.vue'
 import { buildApiKeyGroupFilterOptions } from './apiKeyGroupFilterOptions'
 import UserAttributesConfigModal from '@/components/user/UserAttributesConfigModal.vue'
 import UserConcurrencyCell from '@/components/user/UserConcurrencyCell.vue'
-import PlatformUsageBreakdown from '@/components/user/PlatformUsageBreakdown.vue'
-import PlatformCostCell from '@/components/user/PlatformCostCell.vue'
 import UserPlatformQuotaCell from '@/components/user/UserPlatformQuotaCell.vue'
 import UserCreateModal from '@/components/admin/user/UserCreateModal.vue'
 import UserEditModal from '@/components/admin/user/UserEditModal.vue'
@@ -864,11 +847,6 @@ const allColumns = computed<Column[]>(() => [
   { key: 'balance', label: t('admin.users.columns.balance'), sortable: true },
   { key: 'balance_platform_quota', label: t('admin.users.columns.balancePlatformQuota'), sortable: false },
   { key: 'usage', label: t('admin.users.columns.usage'), sortable: false },
-  { key: 'usage_anthropic', label: t('admin.users.columns.usageAnthropic'), sortable: false },
-  { key: 'usage_openai', label: t('admin.users.columns.usageOpenAI'), sortable: false },
-  { key: 'usage_kiro', label: t('admin.users.columns.usageKiro'), sortable: false },
-  { key: 'usage_gemini', label: t('admin.users.columns.usageGemini'), sortable: false },
-  { key: 'usage_antigravity', label: t('admin.users.columns.usageAntigravity'), sortable: false },
   { key: 'concurrency', label: t('admin.users.columns.concurrency'), sortable: true },
   { key: 'status', label: t('admin.users.columns.status'), sortable: true },
   { key: 'last_active_at', label: t('admin.users.columns.lastActive'), sortable: true },
@@ -889,10 +867,16 @@ const hiddenColumns = reactive<Set<string>>(new Set())
 // Default hidden columns (columns hidden by default on first load)
 const DEFAULT_HIDDEN_COLUMNS = [
   'notes', 'groups', 'subscriptions', 'usage', 'concurrency',
-  'usage_anthropic', 'usage_openai', 'usage_kiro', 'usage_gemini', 'usage_antigravity',
   'balance_platform_quota'
 ]
-const REMOVED_COLUMNS = new Set(['last_login_at'])
+const REMOVED_COLUMNS = new Set([
+  'last_login_at',
+  'usage_anthropic',
+  'usage_openai',
+  'usage_kiro',
+  'usage_gemini',
+  'usage_antigravity'
+])
 // 强制可见列：加载时会被强制移出 hiddenColumns，并在列设置 UI 上 disabled。
 // 当前没有列需要强制可见 —— last_active_at 已改为可被用户隐藏。
 const FORCED_VISIBLE_COLUMNS = new Set<string>()
@@ -905,9 +889,7 @@ const HIDDEN_COLUMNS_KEY = 'user-hidden-columns'
 const COLUMN_SETTINGS_VERSION_KEY = 'user-column-settings-version'
 const COLUMN_SETTINGS_VERSION = 5
 const VERSION_NEW_HIDDEN_COLUMNS: Record<number, string[]> = {
-  2: ['usage_anthropic', 'usage_openai', 'usage_gemini', 'usage_antigravity'],
   3: ['balance_platform_quota'],
-  5: ['usage_kiro']
 }
 
 // Load saved column settings
@@ -983,22 +965,9 @@ const toggleColumn = (key: string) => {
 
 // Check if column is visible (not in hidden set)
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
-// usage 主列或任意 usage_<platform> 子列可见时都需要批量拉取用量数据
-// 列 key → 平台名（'usage' 主列汇总所有平台时为 null）
-// 显式数组取代 Object.keys()：保证迭代顺序（决定列头排序按钮渲染顺序）
-// 不会因 JS 引擎差异或 USAGE_COLUMN_PLATFORMS 属性顺序调整而静默变化。
-const USAGE_COLUMN_KEYS: readonly string[] = ['usage', 'usage_anthropic', 'usage_openai', 'usage_kiro', 'usage_gemini', 'usage_antigravity']
-const USAGE_COLUMN_PLATFORMS: Record<string, string | null> = {
-  usage: null,
-  usage_anthropic: 'anthropic',
-  usage_openai: 'openai',
-  usage_kiro: 'kiro',
-  usage_gemini: 'gemini',
-  usage_antigravity: 'antigravity'
-}
-const PLATFORM_USAGE_COLUMNS = USAGE_COLUMN_KEYS.filter((k) => k !== 'usage')
+const USAGE_COLUMN_KEYS: readonly string[] = ['usage']
 const hasVisibleUsageColumn = computed(
-  () => !hiddenColumns.has('usage') || PLATFORM_USAGE_COLUMNS.some((k) => !hiddenColumns.has(k))
+  () => !hiddenColumns.has('usage')
 )
 const hasVisibleGroupsColumn = computed(() => !hiddenColumns.has('groups'))
 const hasVisiblePlatformQuotaColumn = computed(() => !hiddenColumns.has('balance_platform_quota'))
@@ -1189,9 +1158,6 @@ const getAttributeDefinition = (attrId: number): UserAttributeDefinition | undef
 const usageStats = ref<Record<string, BatchUserUsageStats>>({})
 const platformQuotaStats = ref<Record<number, PlatformQuotaItem[]>>({})
 
-const getPlatformUsage = (userId: number, platform: string) =>
-  usageStats.value[userId]?.by_platform?.find((p) => p.platform === platform)
-
 // 用量列前端排序：DataTable 工作在 server-side-sort 模式，所有 sortable
 // 字段都会触发后端查询，而用量列数据是异步批量拉取后再合并到当前页，
 // 因此采用独立的前端排序状态对当前页 users 做本地排序。
@@ -1254,13 +1220,10 @@ const toggleUsageSortMenu = (key: string) => {
 const getUsageValue = (userId: number, key: string, metric: UsageMetric): number => {
   const stats = usageStats.value[userId]
   if (!stats) return 0
-  const platform = USAGE_COLUMN_PLATFORMS[key]
-  if (platform === null) {
+  if (key === 'usage') {
     return metric === 'today' ? stats.today_actual_cost ?? 0 : stats.total_actual_cost ?? 0
   }
-  const p = stats.by_platform?.find((x) => x.platform === platform)
-  if (!p) return 0
-  return metric === 'today' ? p.today_actual_cost ?? 0 : p.total_actual_cost ?? 0
+  return 0
 }
 
 // 在 server-side 排序结果之上叠加用量列的本地排序；无 usageSort 时直接透传原数组。

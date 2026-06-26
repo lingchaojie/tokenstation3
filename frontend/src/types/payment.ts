@@ -203,6 +203,7 @@ export interface CreateOrderResult {
   expires_at: string
   result_type?: CreateOrderResultType
   payment_type?: string
+  provider_key?: string
   out_trade_no?: string
   payment_mode?: string
   resume_token?: string

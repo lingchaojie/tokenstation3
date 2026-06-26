@@ -77,5 +77,29 @@ describe('PROVIDER_CONFIG_FIELDS.ikunpay', () => {
       defaultValue: 'https://ikunpay.com/',
       hintKey: 'admin.settings.payment.field_ikunpayApiBaseHint',
     })
+    expect(findField('ikunpay', 'merchantId')).toMatchObject({
+      sensitive: false,
+      optional: true,
+      clearable: true,
+      hintKey: 'admin.settings.payment.field_ikunpayMerchantIdHint',
+    })
+    expect(findField('ikunpay', 'channelIdAlipay')).toMatchObject({
+      sensitive: false,
+      optional: true,
+      clearable: true,
+      hintKey: 'admin.settings.payment.field_ikunpayChannelIdAlipayHint',
+    })
+    expect(findField('ikunpay', 'channelIdWxpay')).toMatchObject({
+      sensitive: false,
+      optional: true,
+      clearable: true,
+      hintKey: 'admin.settings.payment.field_ikunpayChannelIdWxpayHint',
+    })
+    expect(findField('ikunpay', 'channelId')).toMatchObject({
+      sensitive: false,
+      optional: true,
+      clearable: true,
+      hintKey: 'admin.settings.payment.field_ikunpayChannelIdHint',
+    })
   })
 })

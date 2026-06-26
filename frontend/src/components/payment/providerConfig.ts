@@ -126,6 +126,10 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'merchantPrivateKey', label: '', sensitive: true },
     { key: 'platformPublicKey', label: '', sensitive: true },
     { key: 'apiBase', label: '', sensitive: false, defaultValue: 'https://ikunpay.com/', hintKey: 'admin.settings.payment.field_ikunpayApiBaseHint' },
+    { key: 'merchantId', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_ikunpayMerchantIdHint' },
+    { key: 'channelIdAlipay', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_ikunpayChannelIdAlipayHint' },
+    { key: 'channelIdWxpay', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_ikunpayChannelIdWxpayHint' },
+    { key: 'channelId', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_ikunpayChannelIdHint' },
   ],
   alipay: [
     { key: 'appId', label: 'App ID', sensitive: false },

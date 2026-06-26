@@ -25,15 +25,6 @@ const messages = vi.hoisted(() => ({
   'dashboard.input': 'Input',
   'dashboard.output': 'Output',
   'dashboard.performance': 'Performance',
-  'dashboard.platformBreakdown': 'Per-platform Breakdown',
-  'dashboard.platformCount': '{count} platforms',
-  'dashboard.platformOther': 'Other',
-  'dashboard.platformQuota.daily': 'Daily',
-  'dashboard.platformQuota.disabled': 'Disabled',
-  'dashboard.platformQuota.monthly': 'Monthly',
-  'dashboard.platformQuota.resetsAt': 'Resets {time}',
-  'dashboard.platformQuota.title': 'Quota Usage',
-  'dashboard.platformQuota.weekly': 'Weekly',
   'dashboard.rechargeBalance': 'Recharge balance',
   'dashboard.requests': 'Requests',
   'dashboard.standard': 'Standard',
@@ -257,6 +248,34 @@ describe('UserDashboardStats', () => {
     })
 
     expect(wrapper.text()).toContain('2 active plans')
+  })
+
+  it('does not render per-platform billing breakdown', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats: {
+          ...stats,
+          today_actual_cost: 1.25,
+          total_actual_cost: 10,
+          by_platform: [
+            {
+              platform: 'openai',
+              today_actual_cost: 0.75,
+              total_actual_cost: 6,
+              total_requests: 30,
+              total_tokens: 1200,
+            },
+          ],
+        },
+        balance: 25,
+        isSimple: false,
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).not.toContain('Per-platform Breakdown')
+    expect(text).not.toContain('OpenAI')
+    expect(text).not.toContain('Quota Usage')
   })
 
   it('shows a purchase button instead of subscription cards when no subscription is active', async () => {

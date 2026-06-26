@@ -18,7 +18,7 @@
           ]"
           @click="selectAmount(amt)"
         >
-          {{ amt }}
+          {{ formatRmbAmount(amt) }}
         </button>
       </div>
     </div>
@@ -30,7 +30,7 @@
       </label>
       <div class="relative">
         <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-dark-500">
-          $
+          ¥
         </span>
         <input
           type="text"
@@ -85,6 +85,10 @@ const AMOUNT_PATTERN = /^\d*(\.\d{0,2})?$/
 function selectAmount(amt: number) {
   customText.value = String(amt)
   emit('update:modelValue', amt)
+}
+
+function formatRmbAmount(amt: number): string {
+  return `¥${amt.toLocaleString()}`
 }
 
 function handleInput(e: Event) {

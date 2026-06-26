@@ -27,7 +27,7 @@ const (
 	checkPaidResultAlreadyPaid = "already_paid"
 	checkPaidResultCancelled   = "cancelled"
 
-	pendingWxpayReconcileLimit = 20
+	pendingProviderReconcileLimit = 20
 )
 
 type checkPaidOptions struct {
@@ -297,9 +297,15 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	return o, nil
 }
 
-// ReconcilePendingWxpayOrders actively checks recent pending WeChat orders so
-// missed provider notifications do not wait until order expiry to fulfill.
+// ReconcilePendingWxpayOrders preserves the previous service method name for
+// callers while reconciling every provider that supports reliable order query.
 func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, error) {
+	return s.ReconcilePendingProviderOrders(ctx)
+}
+
+// ReconcilePendingProviderOrders actively checks recent pending orders for
+// providers where missed notifications should not wait until order expiry.
+func (s *PaymentService) ReconcilePendingProviderOrders(ctx context.Context) (int, error) {
 	now := time.Now()
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
@@ -310,13 +316,17 @@ func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, 
 				paymentorder.PaymentTypeHasPrefix(payment.TypeWxpay+"_"),
 				paymentorder.ProviderKeyEQ(payment.TypeWxpay),
 				paymentorder.ProviderKeyHasPrefix(payment.TypeWxpay+"_"),
+				paymentorder.PaymentTypeEQ(payment.TypeIkunPay),
+				paymentorder.PaymentTypeHasPrefix(payment.TypeIkunPay+"_"),
+				paymentorder.ProviderKeyEQ(payment.TypeIkunPay),
+				paymentorder.ProviderKeyHasPrefix(payment.TypeIkunPay+"_"),
 			),
 		).
 		Order(dbent.Asc(paymentorder.FieldCreatedAt)).
-		Limit(pendingWxpayReconcileLimit).
+		Limit(pendingProviderReconcileLimit).
 		All(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("query pending wxpay orders: %w", err)
+		return 0, fmt.Errorf("query pending provider orders: %w", err)
 	}
 
 	recovered := 0

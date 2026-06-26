@@ -120,6 +120,199 @@ func TestIkunPayCreatePaymentPostsSignedFormAndMapsQRCode(t *testing.T) {
 	}
 }
 
+func TestIkunPayCreatePaymentPassesOptionalMerchantAndChannelIDs(t *testing.T) {
+	t.Parallel()
+
+	var gotForm url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		gotForm = r.PostForm
+		if err := ikunPayVerify(formValuesToMap(gotForm), ikunPayTestMerchantPublicKey(t), gotForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		writeIkunPayJSON(t, w, map[string]string{
+			"code":      "0",
+			"msg":       "ok",
+			"trade_no":  "upstream-merchant-channel",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://qr.example/merchant-channel",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		})
+	}))
+	defer server.Close()
+
+	cfg := newIkunPayTestConfig(t, server.URL)
+	cfg["paymentMode"] = "qrcode"
+	cfg["merchantId"] = "2644"
+	cfg["channelId"] = "18"
+	provider, err := NewIkunPay("test-instance", cfg)
+	if err != nil {
+		t.Fatalf("NewIkunPay: %v", err)
+	}
+	if _, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-merchant-channel",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Merchant Channel Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+		ClientIP:    "203.0.113.1",
+	}); err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	if got := gotForm.Get("merchant_id"); got != "2644" {
+		t.Fatalf("merchant_id = %q, want 2644", got)
+	}
+	if got := gotForm.Get("channel_id"); got != "18" {
+		t.Fatalf("channel_id = %q, want 18", got)
+	}
+}
+
+func TestIkunPayCreatePaymentSelectsChannelIDByPaymentType(t *testing.T) {
+	t.Parallel()
+
+	formCh := make(chan url.Values, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		formCopy := make(url.Values, len(r.PostForm))
+		for key, values := range r.PostForm {
+			formCopy[key] = append([]string(nil), values...)
+		}
+		formCh <- formCopy
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		writeIkunPayJSON(t, w, map[string]string{
+			"code":      "0",
+			"msg":       "ok",
+			"trade_no":  "upstream-method-channel",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://qr.example/method-channel",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		})
+	}))
+	defer server.Close()
+
+	cfg := newIkunPayTestConfig(t, server.URL)
+	cfg["paymentMode"] = "qrcode"
+	cfg["channelId"] = "fallback-channel"
+	cfg["channelIdAlipay"] = "3785"
+	cfg["channelIdWxpay"] = "3786"
+	provider, err := NewIkunPay("test-instance", cfg)
+	if err != nil {
+		t.Fatalf("NewIkunPay: %v", err)
+	}
+
+	for _, tc := range []struct {
+		paymentType payment.PaymentType
+		orderID     string
+		wantChannel string
+	}{
+		{paymentType: payment.TypeAlipay, orderID: "order-alipay-channel", wantChannel: "3785"},
+		{paymentType: payment.TypeWxpay, orderID: "order-wxpay-channel", wantChannel: "3786"},
+	} {
+		if _, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+			OrderID:     tc.orderID,
+			Amount:      "10.00",
+			PaymentType: tc.paymentType,
+			Subject:     "Method Channel Product",
+			NotifyURL:   "https://merchant.example/notify",
+			ReturnURL:   "https://merchant.example/return",
+			ClientIP:    "203.0.113.1",
+		}); err != nil {
+			t.Fatalf("CreatePayment(%s): %v", tc.paymentType, err)
+		}
+		gotForm := <-formCh
+		if got := gotForm.Get("channel_id"); got != tc.wantChannel {
+			t.Fatalf("CreatePayment(%s) channel_id = %q, want %q", tc.paymentType, got, tc.wantChannel)
+		}
+	}
+}
+
+func TestIkunPayCreatePaymentQrcodeModeRejectsJumpPayType(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		writeIkunPayJSON(t, w, map[string]string{
+			"code":      "0",
+			"msg":       "ok",
+			"trade_no":  "upstream-jump",
+			"pay_type":  "jump",
+			"pay_info":  "https://ikunpay.com/payment/cashier?trade_no=upstream-jump",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		})
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-jump",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Jump Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err == nil {
+		t.Fatal("CreatePayment accepted jump response in qrcode mode")
+	}
+	if !strings.Contains(err.Error(), "requires pay_type=qrcode") {
+		t.Fatalf("error = %v, want qrcode-mode rejection", err)
+	}
+}
+
+func TestIkunPayCreatePaymentQrcodeModeRejectsHostedGatewayQRCode(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if err := ikunPayVerify(formValuesToMap(r.PostForm), ikunPayTestMerchantPublicKey(t), r.PostForm.Get("sign")); err != nil {
+			t.Fatalf("request signature invalid: %v", err)
+		}
+		writeIkunPayJSON(t, w, map[string]string{
+			"code":      "0",
+			"msg":       "ok",
+			"trade_no":  "upstream-hosted",
+			"pay_type":  "qrcode",
+			"pay_info":  "https://ikunpay.com/payment/cashier?trade_no=upstream-hosted",
+			"timestamp": "1780000000",
+			"sign_type": "RSA",
+		})
+	}))
+	defer server.Close()
+
+	provider := newTestIkunPay(t, server.URL, "qrcode")
+	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "order-hosted",
+		Amount:      "10.00",
+		PaymentType: payment.TypeAlipay,
+		Subject:     "Hosted Product",
+		NotifyURL:   "https://merchant.example/notify",
+		ReturnURL:   "https://merchant.example/return",
+	})
+	if err == nil {
+		t.Fatal("CreatePayment accepted IkunPay-hosted QR in qrcode mode")
+	}
+	if !strings.Contains(err.Error(), "gateway URL") {
+		t.Fatalf("error = %v, want hosted gateway rejection", err)
+	}
+}
+
 func TestIkunPayCreatePaymentPopupMapsJumpToPayURL(t *testing.T) {
 	t.Parallel()
 
@@ -160,7 +353,7 @@ func TestIkunPayCreatePaymentPopupMapsJumpToPayURL(t *testing.T) {
 	}
 }
 
-func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
+func TestIkunPayCreatePaymentAcceptsUnsignedSuccessResponse(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +379,7 @@ func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
 	defer server.Close()
 
 	provider := newTestIkunPay(t, server.URL, "qrcode")
-	_, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+	resp, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
 		OrderID:     "order-unsigned",
 		Amount:      "10.00",
 		PaymentType: payment.TypeAlipay,
@@ -194,11 +387,11 @@ func TestIkunPayCreatePaymentRejectsUnsignedResponse(t *testing.T) {
 		NotifyURL:   "https://merchant.example/notify",
 		ReturnURL:   "https://merchant.example/return",
 	})
-	if err == nil {
-		t.Fatal("CreatePayment accepted unsigned response")
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
 	}
-	if !strings.Contains(err.Error(), "verify create response") && !strings.Contains(err.Error(), "missing signature") {
-		t.Fatalf("error = %v, want verify create response or missing signature", err)
+	if resp.TradeNo != "upstream-unsigned" || resp.QRCode != "https://qr.example/unsigned" {
+		t.Fatalf("response = %+v, want unsigned success mapping", resp)
 	}
 }
 

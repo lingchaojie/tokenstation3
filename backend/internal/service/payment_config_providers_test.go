@@ -195,6 +195,7 @@ func TestIkunPayProtectedConfigFields(t *testing.T) {
 		"merchantPrivateKey": "private-a",
 		"platformPublicKey":  "public-a",
 		"apiBase":            "https://ikunpay.example",
+		"channelIdAlipay":    "3785",
 		"notifyUrl":          "https://merchant.example/notify",
 		"returnUrl":          "https://merchant.example/return",
 	}
@@ -203,6 +204,7 @@ func TestIkunPayProtectedConfigFields(t *testing.T) {
 		"merchantPrivateKey": "private-a",
 		"platformPublicKey":  "public-a",
 		"apiBase":            "https://ikunpay.example",
+		"channelIdAlipay":    "3785",
 		"notifyUrl":          "https://merchant.example/notify",
 		"returnUrl":          "https://merchant.example/return",
 	}
@@ -210,6 +212,10 @@ func TestIkunPayProtectedConfigFields(t *testing.T) {
 	require.True(t, hasPendingOrderProtectedConfigChange(payment.TypeIkunPay, current, next))
 
 	next["pid"] = "merchant-a"
+	next["channelIdAlipay"] = "3786"
+	require.True(t, hasPendingOrderProtectedConfigChange(payment.TypeIkunPay, current, next))
+
+	next["channelIdAlipay"] = "3785"
 	next["notifyUrl"] = "https://merchant.example/notify-v2"
 	require.False(t, hasPendingOrderProtectedConfigChange(payment.TypeIkunPay, current, next))
 }

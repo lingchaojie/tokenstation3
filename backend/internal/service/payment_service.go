@@ -94,6 +94,7 @@ type CreateOrderResponse struct {
 	Status       string                          `json:"status"`
 	ResultType   payment.CreatePaymentResultType `json:"result_type,omitempty"`
 	PaymentType  string                          `json:"payment_type"`
+	ProviderKey  string                          `json:"provider_key,omitempty"`
 	OutTradeNo   string                          `json:"out_trade_no,omitempty"`
 	PayURL       string                          `json:"pay_url,omitempty"`
 	QRCode       string                          `json:"qr_code,omitempty"`

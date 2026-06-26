@@ -270,4 +270,48 @@ describe('admin UsersView', () => {
       expect.any(Object)
     )
   })
+
+  it('does not expose per-platform usage columns even when saved column settings are empty', async () => {
+    localStorage.setItem('user-hidden-columns', JSON.stringify([]))
+    localStorage.setItem('user-column-settings-version', '5')
+
+    const wrapper = mount(UsersView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: {
+            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+          },
+          DataTable: DataTableStub,
+          Pagination: true,
+          ConfirmDialog: true,
+          EmptyState: true,
+          GroupBadge: true,
+          Select: true,
+          UserAttributesConfigModal: true,
+          UserConcurrencyCell: true,
+          UserCreateModal: true,
+          UserEditModal: true,
+          UserApiKeysModal: true,
+          UserAllowedGroupsModal: true,
+          UserBalanceModal: true,
+          UserBalanceHistoryModal: true,
+          UserPlatformQuotaModal: true,
+          GroupReplaceModal: true,
+          Icon: true,
+          Teleport: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const columns = wrapper.get('[data-test="columns"]').text()
+    expect(columns).toContain('usage')
+    expect(columns).not.toContain('usage_anthropic')
+    expect(columns).not.toContain('usage_openai')
+    expect(columns).not.toContain('usage_kiro')
+    expect(columns).not.toContain('usage_gemini')
+    expect(columns).not.toContain('usage_antigravity')
+  })
 })

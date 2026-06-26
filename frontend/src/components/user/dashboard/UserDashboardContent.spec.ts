@@ -66,7 +66,6 @@ vi.mock('@/components/user/dashboard/UserDashboardStats.vue', () => ({
       'stats',
       'balance',
       'isSimple',
-      'platformQuotas',
       'subscriptionBalance',
       'subscriptionPlans',
       'activeSubscriptions',
@@ -158,6 +157,13 @@ describe('UserDashboardContent', () => {
 
     expect(mockGetCheckoutInfo).toHaveBeenCalledTimes(1)
     expect(mockFetchActiveSubscriptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fetch platform quotas in standard mode', async () => {
+    mount(UserDashboardContent)
+    await flushPromises()
+
+    expect(mockGetMyPlatformQuotas).not.toHaveBeenCalled()
   })
 
   it('does not fetch platform quotas, checkout plans, or subscriptions in simple mode', async () => {
