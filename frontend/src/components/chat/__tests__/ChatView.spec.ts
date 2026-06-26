@@ -340,6 +340,20 @@ describe('ModelSelector', () => {
     expect(toggle.attributes('aria-pressed')).toBe('true')
   })
 
+  it('embeds composer options above the textarea instead of rendering them as an overlay', async () => {
+    const store = useChatStore()
+    store.models = [chatModel]
+    store.selectedModel = chatModel
+
+    const wrapper = mount(Composer)
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
+
+    const panel = wrapper.get('[data-testid="chat-options-panel"]')
+    expect(panel.classes()).toContain('mb-2')
+    expect(panel.classes()).not.toContain('absolute')
+    expect(panel.element.nextElementSibling).toBe(wrapper.get('textarea').element)
+  })
+
   it('lets users change image generation parameters from composer options', async () => {
     const store = useChatStore()
     store.models = [imageModel]
