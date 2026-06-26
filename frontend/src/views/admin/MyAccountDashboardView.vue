@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <UserDashboardContent />
+    <UserDashboardContent show-standard-costs />
   </AppLayout>
 </template>
 

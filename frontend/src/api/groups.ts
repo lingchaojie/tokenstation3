@@ -19,8 +19,8 @@ export async function getAvailable(): Promise<Group[]> {
 }
 
 /**
- * Get current user's custom group rate multipliers
- * @returns Map of group_id to custom rate_multiplier
+ * Legacy compatibility endpoint. Regular users no longer receive backend
+ * group rate multipliers, so this resolves to an empty map.
  */
 export async function getUserGroupRates(): Promise<Record<number, number>> {
   const { data } = await apiClient.get<Record<number, number> | null>('/groups/rates')

@@ -135,12 +135,12 @@
           <p class="text-xs font-medium linx-muted">{{ t('dashboard.todayCost') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.today_actual_cost || 0) }}</span>
-            <span class="text-sm font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.today_cost || 0) }}</span>
+            <span v-if="showStandardCosts" class="text-sm font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.today_cost || 0) }}</span>
           </p>
           <p class="text-xs">
             <span class="text-gray-500 dark:text-linear-ink-subtle">{{ t('common.total') }}: </span>
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.total_actual_cost || 0) }}</span>
-            <span class="text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.total_cost || 0) }}</span>
+            <span v-if="showStandardCosts" class="text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.total_cost || 0) }}</span>
           </p>
         </div>
       </div>
@@ -226,15 +226,18 @@ import type { SubscriptionBalanceSummary, UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import { displayMonthlyPlanName } from '@/utils/monthlyPlans'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   stats: UserStatsType
   balance: number
   isSimple: boolean
+  showStandardCosts?: boolean
   subscriptionBalance?: SubscriptionBalanceSummary | null
   subscriptionPlans?: SubscriptionPlan[]
   activeSubscriptions?: UserSubscription[]
   subscriptionBalanceFallbackEnabled?: boolean
-}>()
+}>(), {
+  showStandardCosts: false,
+})
 const { t, locale } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()

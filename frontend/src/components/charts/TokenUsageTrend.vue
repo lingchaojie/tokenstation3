@@ -52,6 +52,7 @@ const { t } = useI18n()
 const props = defineProps<{
   trendData: TrendDataPoint[]
   loading?: boolean
+  showStandardCosts?: boolean
 }>()
 
 const isDarkMode = computed(() => {
@@ -155,7 +156,10 @@ const lineOptions = computed(() => ({
           const dataIndex = tooltipItems[0]?.dataIndex
           if (dataIndex !== undefined && props.trendData[dataIndex]) {
             const data = props.trendData[dataIndex]
-            return `Actual: $${formatCost(data.actual_cost)} | Standard: $${formatCost(data.cost)}`
+            if (props.showStandardCosts) {
+              return `Actual: $${formatCost(data.actual_cost)} | Standard: $${formatCost(data.cost)}`
+            }
+            return `Cost: $${formatCost(data.actual_cost)}`
           }
           return ''
         }

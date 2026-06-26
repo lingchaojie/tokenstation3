@@ -25,7 +25,7 @@
           <div class="text-right">
             <p class="text-sm font-semibold">
               <span class="text-green-600 dark:text-green-400" :title="t('dashboard.actual')">${{ formatCost(log.actual_cost) }}</span>
-              <span class="font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(log.total_cost) }}</span>
+              <span v-if="showStandardCosts" class="font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(log.total_cost) }}</span>
             </p>
             <p class="text-xs text-gray-500 dark:text-linear-ink-subtle">{{ (log.input_tokens + log.output_tokens).toLocaleString() }} tokens</p>
           </div>
@@ -48,10 +48,13 @@ import Icon from '@/components/icons/Icon.vue'
 import { formatDateTime } from '@/utils/format'
 import type { UsageLog } from '@/types'
 
-defineProps<{
+withDefaults(defineProps<{
   data: UsageLog[]
   loading: boolean
-}>()
+  showStandardCosts?: boolean
+}>(), {
+  showStandardCosts: false,
+})
 const { t } = useI18n()
 const formatCost = (c: number) => c.toFixed(4)
 </script>

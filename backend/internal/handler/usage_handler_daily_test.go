@@ -189,7 +189,7 @@ func TestGetMyAPIKeyDailyUsageAggregatesByDayForOwnedKey(t *testing.T) {
 		CacheReadTokens:  6,
 		CacheWriteTokens: 4,
 		TotalTokens:      40,
-		Cost:             0.5,
+		Cost:             0.4,
 		ActualCost:       0.4,
 	}, got.Data.Items[0])
 }

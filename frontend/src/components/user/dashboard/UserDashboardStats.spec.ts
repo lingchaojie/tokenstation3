@@ -228,6 +228,41 @@ describe('UserDashboardStats', () => {
     expect(text).not.toContain('Balance$25.00available')
   })
 
+  it('hides standard cost comparison by default for regular users', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+      },
+    })
+
+    const text = wrapper.text()
+
+    expect(text).toContain('$1.2500')
+    expect(text).toContain('$10.0000')
+    expect(text).not.toContain('$2.0000')
+    expect(text).not.toContain('$15.0000')
+    expect(wrapper.find('[title="Standard"]').exists()).toBe(false)
+  })
+
+  it('keeps standard cost comparison available when explicitly enabled', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+        showStandardCosts: true,
+      },
+    })
+
+    const text = wrapper.text()
+
+    expect(text).toContain('$1.2500 / $2.0000')
+    expect(text).toContain('Total: $10.0000 / $15.0000')
+    expect(wrapper.find('[title="Standard"]').exists()).toBe(true)
+  })
+
   it('shows localized active plan count for multiple subscription plans', () => {
     const wrapper = mount(UserDashboardStats, {
       props: {

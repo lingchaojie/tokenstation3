@@ -724,6 +724,22 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 	}
 }
 
+func normalizeUsageLogBillingForRegularUser(u *UsageLog) {
+	if u == nil {
+		return
+	}
+	if u.TotalCost != 0 {
+		ratio := u.ActualCost / u.TotalCost
+		u.InputCost *= ratio
+		u.OutputCost *= ratio
+		u.CacheCreationCost *= ratio
+		u.CacheReadCost *= ratio
+		u.ImageOutputCost *= ratio
+	}
+	u.TotalCost = u.ActualCost
+	u.RateMultiplier = 1
+}
+
 // UsageLogFromService converts a service UsageLog to DTO for regular users.
 // It excludes Account details and IP address - users should not see these.
 func UsageLogFromService(l *service.UsageLog) *UsageLog {
@@ -731,6 +747,7 @@ func UsageLogFromService(l *service.UsageLog) *UsageLog {
 		return nil
 	}
 	u := usageLogFromServiceUser(l)
+	normalizeUsageLogBillingForRegularUser(&u)
 	return &u
 }
 

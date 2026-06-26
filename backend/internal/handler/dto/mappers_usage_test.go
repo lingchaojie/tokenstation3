@@ -155,6 +155,40 @@ func TestUsageLogFromService_IncludesServiceTierForUserAndAdmin(t *testing.T) {
 	require.InDelta(t, 1.5, *adminDTO.AccountRateMultiplier, 1e-12)
 }
 
+func TestUsageLogFromService_NormalizesBillingForRegularUsers(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		RequestID:         "req_billing",
+		Model:             "gpt-5.4",
+		InputCost:         0.10,
+		OutputCost:        0.20,
+		CacheCreationCost: 0.05,
+		CacheReadCost:     0.15,
+		ImageOutputCost:   0.50,
+		TotalCost:         1.00,
+		ActualCost:        1.50,
+		RateMultiplier:    1.50,
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	require.InDelta(t, 1.50, userDTO.TotalCost, 1e-12)
+	require.InDelta(t, 1.50, userDTO.ActualCost, 1e-12)
+	require.InDelta(t, 1.0, userDTO.RateMultiplier, 1e-12)
+	require.InDelta(t, 0.15, userDTO.InputCost, 1e-12)
+	require.InDelta(t, 0.30, userDTO.OutputCost, 1e-12)
+	require.InDelta(t, 0.075, userDTO.CacheCreationCost, 1e-12)
+	require.InDelta(t, 0.225, userDTO.CacheReadCost, 1e-12)
+	require.InDelta(t, 0.75, userDTO.ImageOutputCost, 1e-12)
+
+	require.InDelta(t, 1.00, adminDTO.TotalCost, 1e-12)
+	require.InDelta(t, 1.50, adminDTO.ActualCost, 1e-12)
+	require.InDelta(t, 1.50, adminDTO.RateMultiplier, 1e-12)
+	require.InDelta(t, 0.10, adminDTO.InputCost, 1e-12)
+}
+
 func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *testing.T) {
 	t.Parallel()
 

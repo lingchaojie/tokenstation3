@@ -6,6 +6,7 @@
         :stats="stats"
         :balance="user?.balance || 0"
         :is-simple="authStore.isSimpleMode"
+        :show-standard-costs="showStandardCosts"
         :subscription-balance="subscriptionStore.subscriptionBalanceSummary"
         :subscription-plans="subscriptionPlans"
         :active-subscriptions="subscriptionStore.activeSubscriptions"
@@ -20,11 +21,12 @@
             :loading="loadingCharts"
             :trend="trendData"
             :models="modelStats"
+            :show-standard-costs="showStandardCosts"
             @dateRangeChange="loadCharts"
             @granularityChange="loadCharts"
             @refresh="refreshAll"
           />
-          <UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" />
+          <UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" :show-standard-costs="showStandardCosts" />
         </div>
         <UserDashboardQuickActions />
       </div>
@@ -49,6 +51,12 @@ import type { SubscriptionPlan } from '@/types/payment'
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const user = computed(() => authStore.user)
+
+withDefaults(defineProps<{
+  showStandardCosts?: boolean
+}>(), {
+  showStandardCosts: false,
+})
 
 const stats = ref<UserStatsType | null>(null)
 const loading = ref(false)

@@ -383,7 +383,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, stats)
+	response.Success(c, usageStatsForRegularUser(stats))
 }
 
 // parseUserTimeRange parses start_date, end_date query parameters for user dashboard
@@ -442,6 +442,52 @@ func apiKeyDailyUsageRange(days int, userTZ string) (time.Time, time.Time) {
 	return startTime, endTime
 }
 
+func usageStatsForRegularUser(stats *service.UsageStats) *service.UsageStats {
+	if stats == nil {
+		return nil
+	}
+	out := *stats
+	out.TotalCost = out.TotalActualCost
+	return &out
+}
+
+func dashboardStatsForRegularUser(stats *usagestats.UserDashboardStats) *usagestats.UserDashboardStats {
+	if stats == nil {
+		return nil
+	}
+	out := *stats
+	out.TotalCost = out.TotalActualCost
+	out.TodayCost = out.TodayActualCost
+	return &out
+}
+
+func trendForRegularUser(trend []usagestats.TrendDataPoint) []usagestats.TrendDataPoint {
+	out := make([]usagestats.TrendDataPoint, len(trend))
+	copy(out, trend)
+	for i := range out {
+		out[i].Cost = out[i].ActualCost
+	}
+	return out
+}
+
+func modelStatsForRegularUser(stats []usagestats.ModelStat) []usagestats.ModelStat {
+	out := make([]usagestats.ModelStat, len(stats))
+	copy(out, stats)
+	for i := range out {
+		out[i].Cost = out[i].ActualCost
+	}
+	return out
+}
+
+func apiKeyDailyUsageForRegularUser(items []usagestats.APIKeyDailyUsagePoint) []usagestats.APIKeyDailyUsagePoint {
+	out := make([]usagestats.APIKeyDailyUsagePoint, len(items))
+	copy(out, items)
+	for i := range out {
+		out[i].Cost = out[i].ActualCost
+	}
+	return out
+}
+
 // DashboardStats handles getting user dashboard statistics
 // GET /api/v1/usage/dashboard/stats
 func (h *UsageHandler) DashboardStats(c *gin.Context) {
@@ -457,7 +503,7 @@ func (h *UsageHandler) DashboardStats(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, stats)
+	response.Success(c, dashboardStatsForRegularUser(stats))
 }
 
 // DashboardTrend handles getting user usage trend data
@@ -479,7 +525,7 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"trend":       trend,
+		"trend":       trendForRegularUser(trend),
 		"start_date":  startTime.Format("2006-01-02"),
 		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
 		"granularity": granularity,
@@ -504,7 +550,7 @@ func (h *UsageHandler) DashboardModels(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"models":     stats,
+		"models":     modelStatsForRegularUser(stats),
 		"start_date": startTime.Format("2006-01-02"),
 		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
 	})
@@ -606,7 +652,7 @@ func (h *UsageHandler) GetMyAPIKeyDailyUsage(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"items":      items,
+		"items":      apiKeyDailyUsageForRegularUser(items),
 		"days":       days,
 		"start_date": startTime.Format("2006-01-02"),
 		"end_date":   endTime.AddDate(0, 0, -1).Format("2006-01-02"),

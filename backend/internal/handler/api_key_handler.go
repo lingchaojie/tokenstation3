@@ -331,20 +331,12 @@ func (h *APIKeyHandler) GetAvailableGroups(c *gin.Context) {
 	response.Success(c, out)
 }
 
-// GetUserGroupRates 获取当前用户的专属分组倍率配置
+// GetUserGroupRates 保留旧接口兼容性，但普通用户不再暴露专属分组倍率配置。
 // GET /api/v1/groups/rates
 func (h *APIKeyHandler) GetUserGroupRates(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
+	if _, ok := middleware2.GetAuthSubjectFromContext(c); !ok {
 		response.Unauthorized(c, "User not authenticated")
 		return
 	}
-
-	rates, err := h.apiKeyService.GetUserGroupRates(c.Request.Context(), subject.UserID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, rates)
+	response.Success(c, map[int64]float64{})
 }
