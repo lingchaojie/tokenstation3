@@ -85,7 +85,7 @@
 
         <div
           v-if="optionsOpen && hasModelOptions"
-          class="absolute bottom-full left-0 z-30 mb-2 grid w-[min(40rem,calc(100vw-2rem))] gap-2 rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-xl sm:grid-cols-2"
+          class="mb-2 grid w-full gap-2 rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-sm sm:grid-cols-2"
           data-testid="chat-options-panel"
         >
           <div v-if="chatStore.selectedModelSupportsWebSearch" class="flex min-w-0 items-center gap-2">
@@ -104,7 +104,7 @@
               <span>联网搜索</span>
             </button>
             <span class="min-w-0 truncate text-xs text-linear-ink-tertiary">
-              {{ chatStore.webSearchEnabled ? '强制搜索' : '自动判断' }}
+              {{ chatStore.webSearchEnabled ? '强制搜索' : '关闭' }}
             </span>
           </div>
 
