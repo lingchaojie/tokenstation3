@@ -18,7 +18,7 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'REFUND_FAILED'
 
-export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
+export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'ikunpay' | 'airwallex'
 
 export type OrderType = 'balance' | 'subscription'
 
@@ -203,6 +203,7 @@ export interface CreateOrderResult {
   expires_at: string
   result_type?: CreateOrderResultType
   payment_type?: string
+  provider_key?: string
   out_trade_no?: string
   payment_mode?: string
   resume_token?: string

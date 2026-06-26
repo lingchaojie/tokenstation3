@@ -383,6 +383,14 @@ func TestGetAvailableMethodLimitsUsesConfiguredVisibleMethodSource(t *testing.T)
 			wantGlobalMin:       20,
 			wantGlobalMax:       300,
 		},
+		{
+			name:                "ikunpay source",
+			sourceSetting:       VisibleMethodSourceIkunPayAlipay,
+			wantAlipaySingleMin: 15,
+			wantAlipaySingleMax: 150,
+			wantGlobalMin:       15,
+			wantGlobalMax:       300,
+		},
 	}
 
 	for _, tt := range tests {
@@ -411,6 +419,17 @@ func TestGetAvailableMethodLimitsUsesConfiguredVisibleMethodSource(t *testing.T)
 				Save(ctx)
 			if err != nil {
 				t.Fatalf("create easypay alipay instance: %v", err)
+			}
+			_, err = client.PaymentProviderInstance.Create().
+				SetProviderKey(payment.TypeIkunPay).
+				SetName("IkunPay Alipay").
+				SetConfig("{}").
+				SetSupportedTypes("alipay").
+				SetLimits(`{"alipay":{"singleMin":15,"singleMax":150}}`).
+				SetEnabled(true).
+				Save(ctx)
+			if err != nil {
+				t.Fatalf("create ikunpay alipay instance: %v", err)
 			}
 			_, err = client.PaymentProviderInstance.Create().
 				SetProviderKey(payment.TypeWxpay).
@@ -514,4 +533,32 @@ func TestGetAvailableMethodLimitsPreservesLegacyCrossProviderBehaviorWhenVisible
 
 	require.Equal(t, 10.0, resp.GlobalMin)
 	require.Equal(t, 400.0, resp.GlobalMax)
+}
+
+func TestGetAvailableMethodLimitsOmitsConfiguredIkunPaySourceWithoutProvider(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeEasyPay).
+		SetName("EasyPay Alipay").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
+		SetLimits(`{"alipay":{"singleMin":20,"singleMax":200}}`).
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentConfigService{
+		entClient: client,
+		settingRepo: &paymentConfigSettingRepoStub{
+			values: map[string]string{
+				SettingPaymentVisibleMethodAlipaySource: VisibleMethodSourceIkunPayAlipay,
+			},
+		},
+	}
+
+	resp, err := svc.GetAvailableMethodLimits(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, resp.Methods, payment.TypeAlipay)
 }

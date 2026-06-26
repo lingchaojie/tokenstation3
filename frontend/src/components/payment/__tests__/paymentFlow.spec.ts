@@ -177,6 +177,22 @@ describe('decidePaymentLaunch', () => {
     expect(decision.paymentState.qrCode).toBe('https://pay.example.com/qr/session')
   })
 
+  it('does not render IkunPay cashier URLs as QR codes in QR mode', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      provider_key: 'ikunpay',
+      payment_mode: 'qrcode',
+      pay_url: 'https://ikunpay.com/payment/cashier?trade_no=2026062600503624905&sitename=&other=1',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+
+    expect(decision.kind).toBe('unhandled')
+    expect(decision.paymentState.qrCode).toBe('')
+    expect(decision.paymentState.payUrl).toBe('https://ikunpay.com/payment/cashier?trade_no=2026062600503624905&sitename=&other=1')
+  })
+
   it('returns wechat oauth launch when backend requires in-app authorization', () => {
     const decision = decidePaymentLaunch(createOrderResult({
       result_type: 'oauth_required',

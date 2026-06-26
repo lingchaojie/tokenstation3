@@ -16,6 +16,19 @@ const { query, getStatsByDateRange, list, showError, showWarning, showSuccess, s
 
 const messages: Record<string, string> = {
   'usage.costDetails': 'Cost Breakdown',
+  'usage.totalCost': 'Total Cost',
+  'usage.actualCost': 'Actual Cost',
+  'usage.standardCost': 'Standard Cost',
+  'usage.inSelectedRange': 'In selected range',
+  'usage.totalRequests': 'Total Requests',
+  'usage.totalTokens': 'Total Tokens',
+  'usage.avgDuration': 'Average Duration',
+  'usage.perRequest': 'Per request',
+  'usage.in': 'In',
+  'usage.out': 'Out',
+  'usage.cacheHit': 'Cache hit',
+  'usage.cacheCreate': 'Cache create',
+  'usage.cacheHitRate': 'Cache hit rate',
   'admin.usage.inputCost': 'Input Cost',
   'admin.usage.outputCost': 'Output Cost',
   'admin.usage.cacheCreationCost': 'Cache Creation Cost',
@@ -138,7 +151,7 @@ describe('user UsageView tooltip', () => {
     }
   })
 
-  it('shows fast service tier and unit prices in user tooltip', async () => {
+  it('shows actual billed cost without rate or standard-cost comparison in user tooltip and summary card', async () => {
     query.mockResolvedValue({
       items: [
         {
@@ -171,6 +184,7 @@ describe('user UsageView tooltip', () => {
       total_requests: 1,
       total_tokens: 100,
       total_cost: 0.1,
+      total_actual_cost: 0.092883,
       avg_duration_ms: 1,
     })
     list.mockResolvedValue({ items: [] })
@@ -212,11 +226,16 @@ describe('user UsageView tooltip', () => {
     await nextTick()
 
     const text = wrapper.text()
+    expect(text).toContain('Total Cost')
+    expect(text).toContain('$0.0929')
+    expect(text).not.toContain('Actual Cost')
+    expect(text).not.toContain('Standard Cost')
     expect(text).toContain('Service tier')
     expect(text).toContain('Fast')
-    expect(text).toContain('Rate')
-    expect(text).toContain('1.00x')
-    expect(text).toContain('Billed')
+    expect(text).not.toContain('Rate')
+    expect(text).not.toContain('1.00x')
+    expect(text).not.toContain('Original')
+    expect(text).not.toContain('Billed')
     expect(text).toContain('$0.092883')
     expect(text).toContain('$5.0000 / 1M tokens')
     expect(text).toContain('$30.0000 / 1M tokens')
@@ -260,7 +279,7 @@ describe('user UsageView tooltip', () => {
     expect(columns.indexOf('billing_type')).toBeLessThan(columns.indexOf('billing_mode'))
   })
 
-  it('exports csv with input and output unit price columns', async () => {
+  it('exports csv without user-hidden rate or standard cost columns', async () => {
     const exportedLogs = [
       {
         request_id: 'req-user-export',
@@ -347,6 +366,15 @@ describe('user UsageView tooltip', () => {
     expect(hasSortedExportQuery).toBe(true)
     expect(clickSpy).toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalled()
+    const csv = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(exportedBlob as Blob)
+    })
+    expect(csv).toContain('Billed Cost')
+    expect(csv).not.toContain('Rate Multiplier')
+    expect(csv).not.toContain('Original Cost')
 
     window.URL.createObjectURL = originalCreateObjectURL
     window.URL.revokeObjectURL = originalRevokeObjectURL

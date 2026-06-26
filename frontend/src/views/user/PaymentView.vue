@@ -75,8 +75,9 @@
                 </button>
               </div>
             </div>
-            <div v-if="enabledMethods.length === 0" class="linx-panel py-16 text-center">
-              <p class="text-gray-500 dark:text-gray-400">{{ t('payment.notAvailable') }}</p>
+            <div v-if="enabledMethods.length === 0" class="linx-panel px-6 py-12 text-center">
+              <p class="text-base font-semibold text-gray-900 dark:text-white">{{ t('payment.noEnabledMethods') }}</p>
+              <p class="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">{{ t('payment.noEnabledMethodsHint') }}</p>
             </div>
             <template v-else>
             <div class="linx-panel p-6">

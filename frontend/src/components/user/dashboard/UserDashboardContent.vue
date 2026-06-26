@@ -6,7 +6,7 @@
         :stats="stats"
         :balance="user?.balance || 0"
         :is-simple="authStore.isSimpleMode"
-        :platform-quotas="platformQuotas"
+        :show-standard-costs="showStandardCosts"
         :subscription-balance="subscriptionStore.subscriptionBalanceSummary"
         :subscription-plans="subscriptionPlans"
         :active-subscriptions="subscriptionStore.activeSubscriptions"
@@ -21,11 +21,12 @@
             :loading="loadingCharts"
             :trend="trendData"
             :models="modelStats"
+            :show-standard-costs="showStandardCosts"
             @dateRangeChange="loadCharts"
             @granularityChange="loadCharts"
             @refresh="refreshAll"
           />
-          <UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" />
+          <UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" :show-standard-costs="showStandardCosts" />
         </div>
         <UserDashboardQuickActions />
       </div>
@@ -35,7 +36,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { getMyPlatformQuotas } from '@/api/user'
 import { paymentAPI } from '@/api/payment'
 import { usageAPI, type UserDashboardStats as UserStatsType } from '@/api/usage'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
@@ -45,12 +45,18 @@ import UserDashboardRecentUsage from '@/components/user/dashboard/UserDashboardR
 import UserDashboardStats from '@/components/user/dashboard/UserDashboardStats.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscriptions'
-import type { ModelStat, PlatformQuotaItem, TrendDataPoint, UsageLog } from '@/types'
+import type { ModelStat, TrendDataPoint, UsageLog } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const user = computed(() => authStore.user)
+
+withDefaults(defineProps<{
+  showStandardCosts?: boolean
+}>(), {
+  showStandardCosts: false,
+})
 
 const stats = ref<UserStatsType | null>(null)
 const loading = ref(false)
@@ -59,7 +65,6 @@ const loadingCharts = ref(false)
 const trendData = ref<TrendDataPoint[]>([])
 const modelStats = ref<ModelStat[]>([])
 const recentUsage = ref<UsageLog[]>([])
-const platformQuotas = ref<PlatformQuotaItem[] | null>(null)
 const subscriptionPlans = ref<SubscriptionPlan[]>([])
 
 const formatLD = (d: Date) => {
@@ -113,17 +118,6 @@ const loadRecent = async () => {
   }
 }
 
-const loadPlatformQuotas = async () => {
-  if (authStore.isSimpleMode) return
-  try {
-    const data = await getMyPlatformQuotas()
-    platformQuotas.value = data.platform_quotas ?? []
-  } catch (error) {
-    console.warn('Failed to load platform quotas:', error)
-    platformQuotas.value = []
-  }
-}
-
 const loadSubscriptionData = async () => {
   if (authStore.isSimpleMode) return
   try {
@@ -139,7 +133,6 @@ const refreshAll = () => {
   loadStats()
   loadCharts()
   loadRecent()
-  loadPlatformQuotas()
   loadSubscriptionData()
 }
 

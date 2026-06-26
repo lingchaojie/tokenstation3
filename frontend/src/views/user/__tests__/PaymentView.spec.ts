@@ -165,6 +165,15 @@ function checkoutInfoWithPlansFixture() {
   }
 }
 
+function checkoutInfoWithoutMethodsFixture() {
+  return {
+    data: {
+      ...checkoutInfoFixture().data,
+      methods: {},
+    },
+  }
+}
+
 function checkoutInfoWithWeeklyPlanFixture() {
   return {
     data: {
@@ -521,6 +530,24 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(text).toContain('dashboard.balanceFallbackToggle.disabledHint')
     expect(text).not.toContain('payment.subscriptionFallbackRequiredHint')
     expect(wrapper.find('[data-testid="payment-subscription-balance-fallback-toggle"]').exists()).toBe(true)
+  })
+
+  it('explains that checkout is unavailable when no payment methods are enabled', async () => {
+    routeState.query = {}
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithoutMethodsFixture())
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: paymentViewStubs,
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.noEnabledMethods')
+    expect(text).toContain('payment.noEnabledMethodsHint')
+    expect(text).not.toContain('payment.createOrder')
   })
 
   it('saves subscription balance fallback preference from the recharge tab', async () => {

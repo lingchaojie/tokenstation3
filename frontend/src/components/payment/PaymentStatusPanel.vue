@@ -222,6 +222,14 @@ function isSuccessStatus(status: string | null | undefined): boolean {
   return status === 'COMPLETED' || status === 'PAID' || status === 'RECHARGING'
 }
 
+function supportsActiveOrderVerification(order: PaymentOrder): boolean {
+  const typeText = `${props.paymentType} ${order.payment_type || ''}`.toLowerCase()
+  return typeText.includes('alipay')
+    || typeText.includes('wxpay')
+    || typeText.includes('ikunpay')
+    || typeText.includes('easypay')
+}
+
 function reopenPopup() {
   if (props.payUrl) {
     const win = window.open(props.payUrl, 'paymentPopup', getPaymentPopupFeatures())
@@ -247,7 +255,7 @@ async function renderQR() {
 }
 
 async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder> {
-  if (!isWxpay.value) return order
+  if (!supportsActiveOrderVerification(order)) return order
   const outTradeNo = String(order.out_trade_no || '').trim()
   if (!outTradeNo) return order
   const normalizedStatus = String(order.status || '').trim().toUpperCase()

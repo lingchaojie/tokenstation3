@@ -25,15 +25,6 @@ const messages = vi.hoisted(() => ({
   'dashboard.input': 'Input',
   'dashboard.output': 'Output',
   'dashboard.performance': 'Performance',
-  'dashboard.platformBreakdown': 'Per-platform Breakdown',
-  'dashboard.platformCount': '{count} platforms',
-  'dashboard.platformOther': 'Other',
-  'dashboard.platformQuota.daily': 'Daily',
-  'dashboard.platformQuota.disabled': 'Disabled',
-  'dashboard.platformQuota.monthly': 'Monthly',
-  'dashboard.platformQuota.resetsAt': 'Resets {time}',
-  'dashboard.platformQuota.title': 'Quota Usage',
-  'dashboard.platformQuota.weekly': 'Weekly',
   'dashboard.rechargeBalance': 'Recharge balance',
   'dashboard.requests': 'Requests',
   'dashboard.standard': 'Standard',
@@ -237,6 +228,41 @@ describe('UserDashboardStats', () => {
     expect(text).not.toContain('Balance$25.00available')
   })
 
+  it('hides standard cost comparison by default for regular users', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+      },
+    })
+
+    const text = wrapper.text()
+
+    expect(text).toContain('$1.2500')
+    expect(text).toContain('$10.0000')
+    expect(text).not.toContain('$2.0000')
+    expect(text).not.toContain('$15.0000')
+    expect(wrapper.find('[title="Standard"]').exists()).toBe(false)
+  })
+
+  it('keeps standard cost comparison available when explicitly enabled', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+        showStandardCosts: true,
+      },
+    })
+
+    const text = wrapper.text()
+
+    expect(text).toContain('$1.2500 / $2.0000')
+    expect(text).toContain('Total: $10.0000 / $15.0000')
+    expect(wrapper.find('[title="Standard"]').exists()).toBe(true)
+  })
+
   it('shows localized active plan count for multiple subscription plans', () => {
     const wrapper = mount(UserDashboardStats, {
       props: {
@@ -257,6 +283,34 @@ describe('UserDashboardStats', () => {
     })
 
     expect(wrapper.text()).toContain('2 active plans')
+  })
+
+  it('does not render per-platform billing breakdown', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats: {
+          ...stats,
+          today_actual_cost: 1.25,
+          total_actual_cost: 10,
+          by_platform: [
+            {
+              platform: 'openai',
+              today_actual_cost: 0.75,
+              total_actual_cost: 6,
+              total_requests: 30,
+              total_tokens: 1200,
+            },
+          ],
+        },
+        balance: 25,
+        isSimple: false,
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).not.toContain('Per-platform Breakdown')
+    expect(text).not.toContain('OpenAI')
+    expect(text).not.toContain('Quota Usage')
   })
 
   it('shows a purchase button instead of subscription cards when no subscription is active', async () => {

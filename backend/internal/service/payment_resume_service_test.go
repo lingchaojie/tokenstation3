@@ -437,8 +437,12 @@ func TestNormalizeVisibleMethodSource(t *testing.T) {
 	}{
 		{name: "alipay official alias", method: payment.TypeAlipay, input: "alipay", want: VisibleMethodSourceOfficialAlipay},
 		{name: "alipay easypay alias", method: payment.TypeAlipay, input: "easypay", want: VisibleMethodSourceEasyPayAlipay},
+		{name: "alipay ikunpay source", method: payment.TypeAlipay, input: VisibleMethodSourceIkunPayAlipay, want: VisibleMethodSourceIkunPayAlipay},
+		{name: "alipay ikunpay alias", method: payment.TypeAlipay, input: payment.TypeIkunPay, want: VisibleMethodSourceIkunPayAlipay},
 		{name: "wxpay official alias", method: payment.TypeWxpay, input: "wxpay", want: VisibleMethodSourceOfficialWechat},
 		{name: "wxpay easypay alias", method: payment.TypeWxpay, input: "easypay", want: VisibleMethodSourceEasyPayWechat},
+		{name: "wxpay ikunpay source", method: payment.TypeWxpay, input: VisibleMethodSourceIkunPayWechat, want: VisibleMethodSourceIkunPayWechat},
+		{name: "wxpay ikunpay alias", method: payment.TypeWxpay, input: payment.TypeIkunPay, want: VisibleMethodSourceIkunPayWechat},
 		{name: "unsupported source", method: payment.TypeWxpay, input: "stripe", want: ""},
 	}
 
@@ -464,8 +468,10 @@ func TestVisibleMethodProviderKeyForSource(t *testing.T) {
 	}{
 		{name: "official alipay", method: payment.TypeAlipay, source: VisibleMethodSourceOfficialAlipay, want: payment.TypeAlipay, ok: true},
 		{name: "easypay alipay", method: payment.TypeAlipay, source: VisibleMethodSourceEasyPayAlipay, want: payment.TypeEasyPay, ok: true},
+		{name: "ikunpay alipay", method: payment.TypeAlipay, source: VisibleMethodSourceIkunPayAlipay, want: payment.TypeIkunPay, ok: true},
 		{name: "official wechat", method: payment.TypeWxpay, source: VisibleMethodSourceOfficialWechat, want: payment.TypeWxpay, ok: true},
 		{name: "easypay wechat", method: payment.TypeWxpay, source: VisibleMethodSourceEasyPayWechat, want: payment.TypeEasyPay, ok: true},
+		{name: "ikunpay wechat", method: payment.TypeWxpay, source: VisibleMethodSourceIkunPayWechat, want: payment.TypeIkunPay, ok: true},
 		{name: "mismatched method and source", method: payment.TypeAlipay, source: VisibleMethodSourceOfficialWechat, want: "", ok: false},
 	}
 
@@ -522,6 +528,8 @@ func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabl
 		officialTypes string
 		easyPayName   string
 		easyPayTypes  string
+		ikunPayName   string
+		ikunPayTypes  string
 		sourceSetting string
 		wantProvider  string
 	}{
@@ -544,6 +552,18 @@ func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabl
 			easyPayTypes:  "alipay",
 			sourceSetting: VisibleMethodSourceEasyPayAlipay,
 			wantProvider:  payment.TypeEasyPay,
+		},
+		{
+			name:          "alipay uses ikunpay source",
+			method:        payment.TypeAlipay,
+			officialName:  "Official Alipay",
+			officialTypes: "alipay",
+			easyPayName:   "EasyPay Alipay",
+			easyPayTypes:  "alipay",
+			ikunPayName:   "IkunPay Alipay",
+			ikunPayTypes:  "alipay",
+			sourceSetting: VisibleMethodSourceIkunPayAlipay,
+			wantProvider:  payment.TypeIkunPay,
 		},
 		{
 			name:          "wxpay uses official source",
@@ -601,6 +621,20 @@ func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabl
 				Save(ctx)
 			if err != nil {
 				t.Fatalf("create easypay provider: %v", err)
+			}
+
+			if tt.ikunPayName != "" {
+				_, err = client.PaymentProviderInstance.Create().
+					SetProviderKey(payment.TypeIkunPay).
+					SetName(tt.ikunPayName).
+					SetConfig("{}").
+					SetSupportedTypes(tt.ikunPayTypes).
+					SetEnabled(true).
+					SetSortOrder(3).
+					Save(ctx)
+				if err != nil {
+					t.Fatalf("create ikunpay provider: %v", err)
+				}
 			}
 
 			inner := &captureLoadBalancer{}

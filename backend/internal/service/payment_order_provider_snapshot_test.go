@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/stretchr/testify/require"
 )
@@ -162,6 +163,40 @@ func TestBuildPaymentOrderProviderSnapshot_IncludesEasyPayMerchantIdentity(t *te
 
 	require.Equal(t, "easypay-merchant-66", snapshot["merchant_id"])
 	require.NotContains(t, snapshot, "pkey")
+}
+
+func TestBuildPaymentOrderProviderSnapshotIncludesIkunPayMerchantIdentity(t *testing.T) {
+	t.Parallel()
+
+	snapshot := buildPaymentOrderProviderSnapshot(&payment.InstanceSelection{
+		InstanceID:  "42",
+		ProviderKey: payment.TypeIkunPay,
+		Config: map[string]string{
+			"pid":                "ikunpay-merchant-42",
+			"merchantPrivateKey": "secret",
+		},
+		PaymentMode: "qrcode",
+	}, CreateOrderRequest{PaymentType: payment.TypeAlipay})
+
+	require.Equal(t, payment.TypeIkunPay, snapshot["provider_key"])
+	require.Equal(t, "ikunpay-merchant-42", snapshot["merchant_id"])
+	require.NotContains(t, snapshot, "merchantPrivateKey")
+}
+
+func TestValidateProviderSnapshotMetadataRejectsIkunPayPIDMismatch(t *testing.T) {
+	t.Parallel()
+
+	order := &dbent.PaymentOrder{
+		ProviderSnapshot: map[string]any{
+			"schema_version": 2,
+			"provider_key":   payment.TypeIkunPay,
+			"merchant_id":    "ikunpay-merchant-42",
+		},
+	}
+
+	err := validateProviderSnapshotMetadata(order, payment.TypeIkunPay, map[string]string{"pid": "other-merchant"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ikunpay pid mismatch")
 }
 
 func TestBuildPaymentOrderProviderSnapshot_IncludesProviderCurrency(t *testing.T) {

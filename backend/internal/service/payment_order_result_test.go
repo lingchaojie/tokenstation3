@@ -50,6 +50,27 @@ func TestBuildCreateOrderResponseDefaultsToOrderCreated(t *testing.T) {
 	}
 }
 
+func TestBuildCreateOrderResponseIncludesProviderKey(t *testing.T) {
+	t.Parallel()
+
+	resp := buildCreateOrderResponse(
+		&dbent.PaymentOrder{
+			ID:        43,
+			Amount:    1,
+			ExpiresAt: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		},
+		CreateOrderRequest{PaymentType: payment.TypeAlipay},
+		1,
+		&payment.InstanceSelection{ProviderKey: payment.TypeIkunPay, PaymentMode: "qrcode"},
+		&payment.CreatePaymentResponse{PayURL: "https://ikunpay.com/payment/cashier?trade_no=1"},
+		payment.CreatePaymentResultOrderCreated,
+	)
+
+	if resp.ProviderKey != payment.TypeIkunPay {
+		t.Fatalf("provider_key = %q, want %q", resp.ProviderKey, payment.TypeIkunPay)
+	}
+}
+
 func TestBuildCreateOrderResponseCopiesJSAPIPayload(t *testing.T) {
 	t.Parallel()
 

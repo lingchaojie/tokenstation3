@@ -66,13 +66,13 @@ vi.mock('@/components/user/dashboard/UserDashboardStats.vue', () => ({
       'stats',
       'balance',
       'isSimple',
-      'platformQuotas',
       'subscriptionBalance',
       'subscriptionPlans',
       'activeSubscriptions',
       'subscriptionBalanceFallbackEnabled',
+      'showStandardCosts',
     ],
-    template: '<section class="stats-stub" data-testid="stats-stub">{{ String(subscriptionBalanceFallbackEnabled) }}</section>',
+    template: '<section class="stats-stub" data-testid="stats-stub" :data-show-standard-costs="String(showStandardCosts)">{{ String(subscriptionBalanceFallbackEnabled) }}</section>',
   },
 }))
 
@@ -152,12 +152,26 @@ describe('UserDashboardContent', () => {
     expect(wrapper.get('[data-testid="stats-stub"]').text()).toBe('false')
   })
 
+  it('does not enable standard cost display by default', async () => {
+    const wrapper = mount(UserDashboardContent)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="stats-stub"]').attributes('data-show-standard-costs')).toBe('false')
+  })
+
   it('fetches checkout plans and active subscriptions in standard mode', async () => {
     mount(UserDashboardContent)
     await flushPromises()
 
     expect(mockGetCheckoutInfo).toHaveBeenCalledTimes(1)
     expect(mockFetchActiveSubscriptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fetch platform quotas in standard mode', async () => {
+    mount(UserDashboardContent)
+    await flushPromises()
+
+    expect(mockGetMyPlatformQuotas).not.toHaveBeenCalled()
   })
 
   it('does not fetch platform quotas, checkout plans, or subscriptions in simple mode', async () => {

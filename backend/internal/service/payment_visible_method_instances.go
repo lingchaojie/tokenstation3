@@ -45,7 +45,7 @@ func enabledVisibleMethodsForProvider(providerKey, supportedTypes string) []stri
 				break
 			}
 		}
-	case payment.TypeEasyPay:
+	case payment.TypeEasyPay, payment.TypeIkunPay:
 		for _, supportedType := range splitTypes(supportedTypes) {
 			addMethod(supportedType)
 		}
@@ -182,19 +182,16 @@ func (s *PaymentConfigService) resolveVisibleMethodProviderKey(
 	method string,
 	matching []*dbent.PaymentProviderInstance,
 ) (string, error) {
-	switch providerKeys := distinctVisibleMethodProviderKeys(matching); len(providerKeys) {
-	case 0:
+	providerKeys := distinctVisibleMethodProviderKeys(matching)
+	if len(providerKeys) == 0 {
 		return "", nil
-	case 1:
-		return strings.TrimSpace(providerKeys[0]), nil
-	default:
-		providerKey, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
-		if err != nil {
-			return "", err
-		}
-		if providerKey == "" {
-			return "", nil
-		}
+	}
+
+	providerKey, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
+	if err != nil {
+		return "", err
+	}
+	if providerKey != "" {
 		selected := selectVisibleMethodInstanceByProviderKey(matching, providerKey)
 		if selected == nil {
 			return "", infraerrors.BadRequest(
@@ -204,6 +201,11 @@ func (s *PaymentConfigService) resolveVisibleMethodProviderKey(
 		}
 		return strings.TrimSpace(selected.ProviderKey), nil
 	}
+
+	if len(providerKeys) == 1 {
+		return strings.TrimSpace(providerKeys[0]), nil
+	}
+	return "", nil
 }
 
 func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(

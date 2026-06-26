@@ -14,6 +14,19 @@ const messages: Record<string, string> = {
   'admin.settings.payment.stripeWebhookHint': 'Configure Stripe webhook.',
   'admin.settings.payment.stripeWebhookApiVersionHint': 'Use Stripe API version {version}.',
   'admin.settings.payment.airwallexWebhookHint': 'Select payment_intent.succeeded and use the latest stable API version.',
+  'admin.settings.payment.field_pid': 'PID',
+  'admin.settings.payment.field_merchantPrivateKey': 'Merchant private key',
+  'admin.settings.payment.field_platformPublicKey': 'Platform public key',
+  'admin.settings.payment.field_apiBase': 'API Base URL',
+  'admin.settings.payment.field_ikunpayApiBaseHint': 'Use the IkunPay gateway base URL.',
+  'admin.settings.payment.field_channelIdAlipay': 'IkunPay Alipay sub-channel ID',
+  'admin.settings.payment.field_channelIdWxpay': 'IkunPay WeChat Pay sub-channel ID',
+  'admin.settings.payment.field_channelId': 'IkunPay fallback sub-channel ID',
+  'admin.settings.payment.field_ikunpayChannelIdAlipayHint': 'Use the IkunPay Alipay payment channel row ID.',
+  'admin.settings.payment.field_ikunpayChannelIdWxpayHint': 'Use the IkunPay WeChat Pay payment channel row ID.',
+  'admin.settings.payment.field_ikunpayChannelIdHint': 'Fallback channel ID.',
+  'admin.settings.payment.modeQRCode': 'QR Code',
+  'admin.settings.payment.modePopup': 'Popup',
 }
 
 vi.mock('vue-i18n', () => ({
@@ -57,11 +70,13 @@ function mountDialog(options: { editing?: ProviderInstance | null } = {}) {
         { value: 'wxpay', label: 'WeChat Pay' },
         { value: 'stripe', label: 'Stripe' },
         { value: 'airwallex', label: 'Airwallex' },
+        { value: 'ikunpay', label: 'IkunPay' },
       ],
       enabledKeyOptions: [
         { value: 'alipay', label: 'Alipay' },
         { value: 'wxpay', label: 'WeChat Pay' },
         { value: 'airwallex', label: 'Airwallex' },
+        { value: 'ikunpay', label: 'IkunPay' },
       ],
       allPaymentTypes: [
         { value: 'alipay', label: 'Alipay' },
@@ -155,5 +170,158 @@ describe('PaymentProviderDialog payment guide', () => {
 
     const payload = wrapper.emitted('save')?.[0]?.[0] as { config: Record<string, string> }
     expect(payload.config.accountId).toBe('')
+  })
+
+  it('creates an IkunPay provider with qrcode mode, callbacks, and Alipay/WeChat support', async () => {
+    const wrapper = mountDialog()
+
+    ;(wrapper.vm as unknown as { reset: (key: string) => void }).reset('ikunpay')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Merchant private key')
+    expect(wrapper.text()).toContain('Platform public key')
+    expect(wrapper.text()).toContain('Use the IkunPay gateway base URL.')
+    expect(wrapper.text()).toContain('/api/v1/payment/webhook/ikunpay')
+    expect(wrapper.text()).toContain('/payment/result')
+    expect(wrapper.text()).toContain('QR Code')
+    expect(wrapper.text()).toContain('Popup')
+
+    const textInputs = wrapper.findAll('input[type="text"]')
+    await textInputs[0].setValue('IkunPay')
+    await textInputs[1].setValue('ikunpay-pid')
+    expect((textInputs[2].element as HTMLInputElement).value).toBe('https://ikunpay.com/')
+    await textInputs[3].setValue('2644')
+    await textInputs[4].setValue('3785')
+    await textInputs[5].setValue('3786')
+    await textInputs[7].setValue('https://pay.example.com')
+    await textInputs[8].setValue('https://app.example.com')
+
+    const keyTextareas = wrapper.findAll('textarea')
+    await keyTextareas[0].setValue('merchant-private-key')
+    await keyTextareas[1].setValue('platform-public-key')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as {
+      provider_key: string
+      payment_mode: string
+      supported_types: string[]
+      config: Record<string, string>
+    }
+    expect(payload.provider_key).toBe('ikunpay')
+    expect(payload.payment_mode).toBe('qrcode')
+    expect(payload.supported_types).toEqual(['alipay', 'wxpay'])
+    expect(payload.config).toMatchObject({
+      pid: 'ikunpay-pid',
+      merchantPrivateKey: 'merchant-private-key',
+      platformPublicKey: 'platform-public-key',
+      apiBase: 'https://ikunpay.com/',
+      merchantId: '2644',
+      channelIdAlipay: '3785',
+      channelIdWxpay: '3786',
+      notifyUrl: 'https://pay.example.com/api/v1/payment/webhook/ikunpay',
+      returnUrl: 'https://app.example.com/payment/result',
+    })
+  })
+
+  it('edits an IkunPay provider with default qrcode mode and existing callback bases', async () => {
+    const provider = providerFactory({
+      provider_key: 'ikunpay',
+      name: 'IkunPay',
+      config: {
+        pid: 'existing-pid',
+        apiBase: 'https://ikunpay.com/',
+        merchantId: '2644',
+        channelIdAlipay: '3785',
+        channelIdWxpay: '3786',
+        notifyUrl: 'https://pay.example.com/api/v1/payment/webhook/ikunpay',
+        returnUrl: 'https://app.example.com/payment/result',
+      },
+      supported_types: ['alipay', 'wxpay'],
+      payment_mode: '',
+    })
+    const wrapper = mountDialog({ editing: provider })
+
+    ;(wrapper.vm as unknown as { loadProvider: (provider: ProviderInstance) => void }).loadProvider(provider)
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Merchant private key')
+    expect(wrapper.text()).toContain('Platform public key')
+    expect(wrapper.text()).toContain('/api/v1/payment/webhook/ikunpay')
+
+    const values = wrapper
+      .findAll('input[type="text"]')
+      .map(input => (input.element as HTMLInputElement).value)
+    expect(values).toContain('existing-pid')
+    expect(values).toContain('https://ikunpay.com/')
+    expect(values).toContain('2644')
+    expect(values).toContain('3785')
+    expect(values).toContain('3786')
+    expect(values).toContain('https://pay.example.com')
+    expect(values).toContain('https://app.example.com')
+
+    await wrapper.find('form').trigger('submit.prevent')
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as {
+      payment_mode: string
+      supported_types: string[]
+      config: Record<string, string>
+    }
+    expect(payload.payment_mode).toBe('qrcode')
+    expect(payload.supported_types).toEqual(['alipay', 'wxpay'])
+    expect(payload.config).toMatchObject({
+      pid: 'existing-pid',
+      apiBase: 'https://ikunpay.com/',
+      merchantId: '2644',
+      channelIdAlipay: '3785',
+      channelIdWxpay: '3786',
+      notifyUrl: 'https://pay.example.com/api/v1/payment/webhook/ikunpay',
+      returnUrl: 'https://app.example.com/payment/result',
+    })
+  })
+
+  it('emits empty IkunPay optional routing fields when the admin clears them', async () => {
+    const provider = providerFactory({
+      provider_key: 'ikunpay',
+      name: 'IkunPay',
+      config: {
+        pid: 'existing-pid',
+        apiBase: 'https://ikunpay.com/',
+        merchantId: '2644',
+        channelIdAlipay: '3785',
+        channelIdWxpay: '3786',
+        channelId: 'legacy-channel',
+        notifyUrl: 'https://pay.example.com/api/v1/payment/webhook/ikunpay',
+        returnUrl: 'https://app.example.com/payment/result',
+      },
+      supported_types: ['alipay', 'wxpay'],
+      payment_mode: 'qrcode',
+    })
+    const wrapper = mountDialog({ editing: provider })
+
+    ;(wrapper.vm as unknown as { loadProvider: (provider: ProviderInstance) => void }).loadProvider(provider)
+    await nextTick()
+
+    const textInputs = wrapper.findAll('input[type="text"]')
+    const merchantIdInput = textInputs.find(input => (input.element as HTMLInputElement).value === '2644')
+    const alipayChannelInput = textInputs.find(input => (input.element as HTMLInputElement).value === '3785')
+    const wxpayChannelInput = textInputs.find(input => (input.element as HTMLInputElement).value === '3786')
+    const fallbackChannelInput = textInputs.find(input => (input.element as HTMLInputElement).value === 'legacy-channel')
+    if (!merchantIdInput || !alipayChannelInput || !wxpayChannelInput || !fallbackChannelInput) {
+      throw new Error('IkunPay optional routing inputs not found')
+    }
+
+    await merchantIdInput.setValue('')
+    await alipayChannelInput.setValue('')
+    await wxpayChannelInput.setValue('')
+    await fallbackChannelInput.setValue('')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as { config: Record<string, string> }
+    expect(payload.config).toMatchObject({
+      merchantId: '',
+      channelIdAlipay: '',
+      channelIdWxpay: '',
+      channelId: '',
+    })
   })
 })

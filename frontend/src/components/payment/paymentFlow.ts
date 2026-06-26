@@ -199,6 +199,7 @@ export function decidePaymentLaunch(
   }
 
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
+  const providerKey = (result.provider_key || '').trim().toLowerCase()
   // When forceQRCode is on for alipay, treat the device as desktop so the mobile-redirect
   // branch is bypassed and we fall through to qr_waiting.
   const effectiveMobile = (context.forceQRCode && visibleMethod === 'alipay')
@@ -210,6 +211,10 @@ export function decidePaymentLaunch(
   const prefersQr = normalizedPaymentMode === 'qrcode'
     || normalizedPaymentMode === 'native'
     || (!prefersRedirect && !!baseState.qrCode)
+
+  if (providerKey === 'ikunpay' && normalizedPaymentMode === 'qrcode' && !baseState.qrCode) {
+    return { kind: 'unhandled', paymentState: baseState, recovery: baseState }
+  }
 
   if (visibleMethod === 'wxpay' && context.isWechatBrowser && baseState.payUrl && !baseState.qrCode) {
     return { kind: 'redirect_waiting', paymentState: baseState, recovery: baseState }

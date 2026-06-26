@@ -290,6 +290,43 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, true, data["openai_advanced_scheduler_enabled"])
 }
 
+func TestSettingHandler_UpdateSettings_PaymentConfigPreservesVisibleMethodRouting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &settingHandlerRepoStub{
+		values: map[string]string{
+			service.SettingKeyPromoCodeEnabled: "true",
+		},
+	}
+	svc := service.NewSettingService(repo, &config.Config{Default: config.DefaultConfig{UserConcurrency: 5}})
+	paymentCfg := service.NewPaymentConfigService(nil, repo, []byte("0123456789abcdef0123456789abcdef"))
+	handler := NewSettingHandler(svc, nil, nil, nil, paymentCfg, nil, nil)
+
+	body := map[string]any{
+		"promo_code_enabled":                    true,
+		"payment_enabled":                       true,
+		"payment_enabled_types":                 []string{"ikunpay"},
+		"payment_visible_method_alipay_source":  "ikunpay_alipay",
+		"payment_visible_method_wxpay_source":   "ikunpay_wxpay",
+		"payment_visible_method_alipay_enabled": true,
+		"payment_visible_method_wxpay_enabled":  true,
+	}
+	rawBody, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", bytes.NewReader(rawBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.UpdateSettings(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, service.VisibleMethodSourceIkunPayAlipay, repo.values[service.SettingPaymentVisibleMethodAlipaySource])
+	require.Equal(t, service.VisibleMethodSourceIkunPayWechat, repo.values[service.SettingPaymentVisibleMethodWxpaySource])
+	require.Equal(t, "true", repo.values[service.SettingPaymentVisibleMethodAlipayEnabled])
+	require.Equal(t, "true", repo.values[service.SettingPaymentVisibleMethodWxpayEnabled])
+}
+
 func TestSettingHandler_UpdateSettings_PreservesLegacyBlankPaymentVisibleMethodSource(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingHandlerRepoStub{

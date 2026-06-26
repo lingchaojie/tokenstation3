@@ -8,7 +8,10 @@ vi.mock('@/components/layout/AppLayout.vue', () => ({
 }))
 
 vi.mock('@/components/user/dashboard/UserDashboardContent.vue', () => ({
-  default: { template: '<section data-testid="user-dashboard-content" />' },
+  default: {
+    props: { showStandardCosts: Boolean },
+    template: '<section data-testid="user-dashboard-content" :data-show-standard-costs="String(showStandardCosts)" />',
+  },
 }))
 
 describe('MyAccountDashboardView', () => {
@@ -18,5 +21,6 @@ describe('MyAccountDashboardView', () => {
     const layout = wrapper.find('[data-testid="app-layout"]')
     expect(layout.exists()).toBe(true)
     expect(layout.find('[data-testid="user-dashboard-content"]').exists()).toBe(true)
+    expect(layout.find('[data-testid="user-dashboard-content"]').attributes('data-show-standard-costs')).toBe('true')
   })
 })

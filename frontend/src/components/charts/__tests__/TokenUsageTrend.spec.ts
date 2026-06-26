@@ -117,4 +117,64 @@ describe('TokenUsageTrend', () => {
     // Hit rate = 500 / (200 + 500 + 300) * 100 = 50%
     expect(hitRateDataset.data[0]).toBe(50)
   })
+
+  it('hides standard cost in tooltip footer by default', () => {
+    const wrapper = mount(TokenUsageTrend, {
+      props: {
+        trendData: [
+          {
+            date: '2026-05-08',
+            requests: 1,
+            input_tokens: 200,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost: 0.02,
+            actual_cost: 0.03,
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+        },
+      },
+    })
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    const footer = setupState.lineOptions.plugins.tooltip.callbacks.footer([{ dataIndex: 0 }])
+
+    expect(footer).toBe('Cost: $0.030')
+    expect(footer).not.toContain('Standard')
+  })
+
+  it('keeps standard cost in tooltip footer when explicitly enabled', () => {
+    const wrapper = mount(TokenUsageTrend, {
+      props: {
+        showStandardCosts: true,
+        trendData: [
+          {
+            date: '2026-05-08',
+            requests: 1,
+            input_tokens: 200,
+            output_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost: 0.02,
+            actual_cost: 0.03,
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+        },
+      },
+    })
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    const footer = setupState.lineOptions.plugins.tooltip.callbacks.footer([{ dataIndex: 0 }])
+
+    expect(footer).toBe('Actual: $0.030 | Standard: $0.020')
+  })
 })
