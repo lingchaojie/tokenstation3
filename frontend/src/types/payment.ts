@@ -84,6 +84,9 @@ export interface PaymentOrder {
   fee_rate: number
   payment_type: string
   out_trade_no: string
+  pay_url?: string
+  qr_code?: string
+  payment_mode?: string
   status: OrderStatus
   order_type: OrderType
   created_at: string

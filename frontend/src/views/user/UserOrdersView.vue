@@ -18,13 +18,13 @@
       <OrderTable :orders="orders" :loading="loading">
         <template #actions="{ row }">
           <div class="flex items-center gap-2">
+            <button v-if="canContinuePayment(row)" @click="handleContinuePayment(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
+              <Icon name="creditCard" size="sm" />
+              <span>{{ t('payment.orders.continuePayment') }}</span>
+            </button>
             <button v-if="row.status === 'PENDING'" @click="handleCancel(row.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               <span>{{ t('payment.orders.cancel') }}</span>
-            </button>
-            <button v-if="canRequestRefund(row)" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
-              <Icon name="dollar" size="sm" />
-              <span>{{ t('payment.orders.requestRefund') }}</span>
             </button>
           </div>
         </template>
@@ -51,32 +51,6 @@
         </div>
       </template>
     </BaseDialog>
-
-    <!-- Refund Dialog -->
-    <BaseDialog :show="!!refundTarget" :title="t('payment.orders.requestRefund')" @close="refundTarget = null">
-      <div v-if="refundTarget" class="space-y-4">
-        <div class="linx-panel p-4">
-          <div class="flex justify-between text-sm">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</span>
-            <span class="font-mono text-gray-900 dark:text-white">#{{ refundTarget.id }}</span>
-          </div>
-          <div class="mt-2 flex justify-between text-sm">
-            <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</span>
-            <span class="text-gray-900 dark:text-white">${{ refundTarget.amount.toFixed(2) }}</span>
-          </div>
-        </div>
-        <div>
-          <label class="input-label">{{ t('payment.refundReason') }}</label>
-          <textarea v-model="refundReason" rows="3" class="input mt-1 w-full" :placeholder="t('payment.refundReasonPlaceholder')" />
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <button class="btn btn-secondary" @click="refundTarget = null">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="actionLoading || !refundReason.trim()" @click="confirmRefund">{{ actionLoading ? t('common.processing') : t('payment.orders.requestRefund') }}</button>
-        </div>
-      </template>
-    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -88,6 +62,11 @@ import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { PaymentOrder } from '@/types/payment'
+import {
+  PAYMENT_RECOVERY_STORAGE_KEY,
+  createPaymentRecoverySnapshot,
+  writePaymentRecoverySnapshot,
+} from '@/components/payment/paymentFlow'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -102,11 +81,8 @@ const appStore = useAppStore()
 const loading = ref(false)
 const actionLoading = ref(false)
 const orders = ref<PaymentOrder[]>([])
-const refundEligibleProviders = ref<Set<string>>(new Set())
 const currentFilter = ref('')
 const cancelTargetId = ref<number | null>(null)
-const refundTarget = ref<PaymentOrder | null>(null)
-const refundReason = ref('')
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
 
 const statusFilters = computed(() => [
@@ -139,6 +115,44 @@ function handlePageSizeChange(size: number) { pagination.page_size = size; pagin
 
 function handleCancel(orderId: number) { cancelTargetId.value = orderId }
 
+function hasPayableResumePayload(order: PaymentOrder): boolean {
+  return Boolean((order.qr_code || '').trim() || (order.pay_url || '').trim())
+}
+
+function canContinuePayment(order: PaymentOrder): boolean {
+  if (order.status !== 'PENDING') return false
+  const expiresAt = Date.parse(order.expires_at)
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false
+  return hasPayableResumePayload(order)
+}
+
+function handleContinuePayment(order: PaymentOrder) {
+  if (!canContinuePayment(order) || typeof window === 'undefined') {
+    appStore.showError(t('payment.errors.resumeUnavailable'))
+    return
+  }
+  const snapshot = createPaymentRecoverySnapshot({
+    orderId: order.id,
+    amount: order.amount,
+    qrCode: order.qr_code || '',
+    expiresAt: order.expires_at,
+    paymentType: order.payment_type,
+    payUrl: order.pay_url || '',
+    outTradeNo: order.out_trade_no || '',
+    clientSecret: '',
+    intentId: '',
+    currency: order.currency || '',
+    countryCode: '',
+    paymentEnv: '',
+    payAmount: order.pay_amount,
+    orderType: order.order_type,
+    paymentMode: (order.payment_mode || '').trim() || (order.qr_code ? 'qrcode' : ''),
+    resumeToken: '',
+  })
+  writePaymentRecoverySnapshot(window.localStorage, snapshot, PAYMENT_RECOVERY_STORAGE_KEY)
+  router.push('/purchase')
+}
+
 async function confirmCancel() {
   if (!cancelTargetId.value) return
   actionLoading.value = true
@@ -154,36 +168,5 @@ async function confirmCancel() {
   }
 }
 
-function openRefundDialog(order: PaymentOrder) { refundTarget.value = order; refundReason.value = '' }
-
-async function confirmRefund() {
-  if (!refundTarget.value || !refundReason.value.trim()) return
-  actionLoading.value = true
-  try {
-    await paymentAPI.requestRefund(refundTarget.value.id, { reason: refundReason.value.trim() })
-    appStore.showSuccess(t('common.success'))
-    refundTarget.value = null
-    refundReason.value = ''
-    await fetchOrders()
-  } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
-  } finally {
-    actionLoading.value = false
-  }
-}
-
-function canRequestRefund(order: PaymentOrder): boolean {
-  if (order.status !== 'COMPLETED') return false
-  if (!order.provider_instance_id) return false
-  return refundEligibleProviders.value.has(order.provider_instance_id)
-}
-
-async function loadRefundEligibility() {
-  try {
-    const res = await paymentAPI.getRefundEligibleProviders()
-    refundEligibleProviders.value = new Set(res.data.provider_instance_ids || [])
-  } catch { /* ignore — default to hiding refund button */ }
-}
-
-onMounted(() => { fetchOrders(); loadRefundEligibility() })
+onMounted(() => { fetchOrders() })
 </script>

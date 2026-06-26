@@ -437,48 +437,6 @@ func (h *PaymentHandler) CancelOrder(c *gin.Context) {
 	response.Success(c, gin.H{"message": msg})
 }
 
-// RefundRequestBody is the request body for requesting a refund.
-type RefundRequestBody struct {
-	Reason string `json:"reason"`
-}
-
-// RequestRefund submits a refund request for a completed order.
-// POST /api/v1/payment/orders/:id/refund-request
-func (h *PaymentHandler) RequestRefund(c *gin.Context) {
-	subject, ok := requireAuth(c)
-	if !ok {
-		return
-	}
-
-	orderID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid order ID")
-		return
-	}
-
-	var req RefundRequestBody
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-
-	if err := h.paymentService.RequestRefund(c.Request.Context(), orderID, subject.UserID, req.Reason); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"message": "refund requested"})
-}
-
-// GetRefundEligibleProviders returns provider instance IDs that allow user refund.
-func (h *PaymentHandler) GetRefundEligibleProviders(c *gin.Context) {
-	ids, err := h.configService.GetUserRefundEligibleInstanceIDs(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"provider_instance_ids": ids})
-}
-
 // VerifyOrderRequest is the request body for verifying a payment order.
 type VerifyOrderRequest struct {
 	OutTradeNo string `json:"out_trade_no" binding:"required"`
@@ -638,6 +596,9 @@ type PaymentOrderResult struct {
 	RefundRequestReason *string    `json:"refund_request_reason,omitempty"`
 	PlanID              *int64     `json:"plan_id,omitempty"`
 	ProviderInstanceID  *string    `json:"provider_instance_id,omitempty"`
+	PayURL              *string    `json:"pay_url,omitempty"`
+	QRCode              *string    `json:"qr_code,omitempty"`
+	PaymentMode         string     `json:"payment_mode,omitempty"`
 }
 
 func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []PaymentOrderResult {
@@ -654,7 +615,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 	if order == nil {
 		return nil
 	}
-	return &PaymentOrderResult{
+	result := &PaymentOrderResult{
 		ID:                  order.ID,
 		UserID:              order.UserID,
 		Amount:              order.Amount,
@@ -677,6 +638,44 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		PlanID:              order.PlanID,
 		ProviderInstanceID:  order.ProviderInstanceID,
 	}
+	if canResumePaymentOrder(order) {
+		result.PayURL = nonEmptyStringPtr(order.PayURL)
+		result.QRCode = nonEmptyStringPtr(order.QrCode)
+		result.PaymentMode = paymentOrderPaymentMode(order)
+	}
+	return result
+}
+
+func canResumePaymentOrder(order *dbent.PaymentOrder) bool {
+	if order == nil || order.Status != service.OrderStatusPending {
+		return false
+	}
+	if !order.ExpiresAt.IsZero() && !order.ExpiresAt.After(time.Now()) {
+		return false
+	}
+	return nonEmptyStringPtr(order.PayURL) != nil || nonEmptyStringPtr(order.QrCode) != nil
+}
+
+func nonEmptyStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func paymentOrderPaymentMode(order *dbent.PaymentOrder) string {
+	if order == nil || order.ProviderSnapshot == nil {
+		return ""
+	}
+	mode, ok := order.ProviderSnapshot["payment_mode"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(mode)
 }
 
 func isWeChatBrowser(c *gin.Context) bool {

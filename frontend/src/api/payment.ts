@@ -83,13 +83,4 @@ export const paymentAPI = {
     return apiClient.post<PaymentOrder>('/payment/public/orders/resolve', { resume_token: resumeToken })
   },
 
-  /** Request a refund for a completed order */
-  requestRefund(id: number, data: { reason: string }) {
-    return apiClient.post(`/payment/orders/${id}/refund-request`, data)
-  },
-
-  /** Get provider instance IDs that allow user refund */
-  getRefundEligibleProviders() {
-    return apiClient.get<{ provider_instance_ids: string[] }>('/payment/orders/refund-eligible-providers')
-  }
 }

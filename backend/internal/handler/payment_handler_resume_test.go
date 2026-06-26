@@ -75,6 +75,65 @@ func TestApplyWeChatPaymentResumeClaimsRejectsPaymentTypeMismatch(t *testing.T) 
 	}
 }
 
+func TestSanitizePaymentOrderForResponseIncludesResumeFieldsForPendingUnexpiredOrder(t *testing.T) {
+	payURL := "https://pay.example.com/cashier/order-123"
+	qrCode := "https://pay.example.com/qrcode/order-123"
+	result := sanitizePaymentOrderForResponse(&dbent.PaymentOrder{
+		ID:          123,
+		UserID:      456,
+		Amount:      10,
+		PayAmount:   10,
+		FeeRate:     0,
+		PaymentType: payment.TypeAlipay,
+		OutTradeNo:  "resume-order-123",
+		Status:      service.OrderStatusPending,
+		OrderType:   payment.OrderTypeBalance,
+		PayURL:      &payURL,
+		QrCode:      &qrCode,
+		ExpiresAt:   time.Now().Add(time.Hour),
+		CreatedAt:   time.Now(),
+	})
+
+	require.NotNil(t, result)
+	require.Equal(t, &payURL, result.PayURL)
+	require.Equal(t, &qrCode, result.QRCode)
+}
+
+func TestSanitizePaymentOrderForResponseOmitsResumeFieldsForNonPayableOrders(t *testing.T) {
+	payURL := "https://pay.example.com/cashier/order-123"
+	qrCode := "https://pay.example.com/qrcode/order-123"
+
+	for _, tc := range []struct {
+		name      string
+		status    string
+		expiresAt time.Time
+	}{
+		{name: "completed", status: service.OrderStatusCompleted, expiresAt: time.Now().Add(time.Hour)},
+		{name: "expired", status: service.OrderStatusPending, expiresAt: time.Now().Add(-time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sanitizePaymentOrderForResponse(&dbent.PaymentOrder{
+				ID:          123,
+				UserID:      456,
+				Amount:      10,
+				PayAmount:   10,
+				PaymentType: payment.TypeAlipay,
+				OutTradeNo:  "resume-order-123",
+				Status:      tc.status,
+				OrderType:   payment.OrderTypeBalance,
+				PayURL:      &payURL,
+				QrCode:      &qrCode,
+				ExpiresAt:   tc.expiresAt,
+				CreatedAt:   time.Now(),
+			})
+
+			require.NotNil(t, result)
+			require.Nil(t, result.PayURL)
+			require.Nil(t, result.QRCode)
+		})
+	}
+}
+
 func TestGetPlansIncludesSevenDayQuota(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
