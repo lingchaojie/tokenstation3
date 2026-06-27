@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -45,28 +46,20 @@ const (
 	topUsersLimit      = 10
 	amountToleranceCNY = 0.01
 
-	orderIDPrefix = "sub2_"
+	orderIDPrefix = "sub2_" // Legacy webhook fallback prefix; new orders do not use it.
 )
 
 const paymentResumeSigningKeyEnv = "PAYMENT_RESUME_SIGNING_KEY"
 
+var outTradeNoSeq atomic.Uint32
+
 // --- Types ---
 
 // generateOutTradeNo creates a unique external order ID for payment providers.
-// Format: sub2_20250409aB3kX9mQ (prefix + date + 8-char random)
+// Format: numeric timestamp + sequence + random suffix, kept under 32 chars.
 func generateOutTradeNo() string {
-	date := time.Now().Format("20060102")
-	rnd := generateRandomString(8)
-	return orderIDPrefix + date + rnd
-}
-
-func generateRandomString(n int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = charset[rand.IntN(len(charset))]
-	}
-	return string(b)
+	seq := outTradeNoSeq.Add(1) % 1000
+	return fmt.Sprintf("%019d%03d%06d", time.Now().UnixNano(), seq, rand.IntN(1_000_000))
 }
 
 type CreateOrderRequest struct {
