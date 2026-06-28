@@ -16,6 +16,7 @@ const allNullQuotas: DefaultPlatformQuotasMap = {
   kiro:      { daily: null, weekly: null, monthly: null },
   gemini:    { daily: null, weekly: null, monthly: null },
   antigravity: { daily: null, weekly: null, monthly: null },
+  grok: { daily: null, weekly: null, monthly: null },
 }
 
 describe("admin settings auth source defaults helpers", () => {
@@ -238,6 +239,7 @@ describe("normalizePlatformQuotasMap", () => {
     expect(result.openai).toEqual({ daily: null, weekly: null, monthly: null });
     expect(result.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(result.antigravity).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(result.grok).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("无参数时返回全 5 平台全 null", () => {

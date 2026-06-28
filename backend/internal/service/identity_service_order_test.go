@@ -2,20 +2,24 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 type identityCacheStub struct {
 	maskedSessionID string
+	fingerprint     *Fingerprint
 }
 
 func (s *identityCacheStub) GetFingerprint(_ context.Context, _ int64) (*Fingerprint, error) {
-	return nil, nil
+	return s.fingerprint, nil
 }
-func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, _ *Fingerprint) error {
+func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, fp *Fingerprint) error {
+	s.fingerprint = fp
 	return nil
 }
 func (s *identityCacheStub) GetMaskedSessionID(_ context.Context, _ int64) (string, error) {
@@ -75,6 +79,62 @@ func TestIdentityService_RewriteUserIDWithMasking_PreservesTopLevelFieldOrder(t 
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"messages"`, `"metadata"`, `"max_tokens"`, `"thinking"`, `"output_config"`, `"stream"`)
 	require.Contains(t, resultStr, cache.maskedSessionID)
 	require.True(t, strings.Contains(resultStr, `"metadata":{"user_id":"`))
+}
+
+func TestIdentityService_GetOrCreateFingerprint_UsesDefaultUAForInitialNonClaudeUA(t *testing.T) {
+	cache := &identityCacheStub{}
+	svc := NewIdentityService(cache)
+
+	headers := http.Header{}
+	headers.Set("User-Agent", "opencode/0.10.0")
+
+	fp, err := svc.GetOrCreateFingerprint(context.Background(), 123, headers)
+	require.NoError(t, err)
+
+	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint.UserAgent, cache.fingerprint.UserAgent)
+}
+
+func TestIdentityService_GetOrCreateFingerprint_ReplacesPollutedNonClaudeUAWithClaudeUA(t *testing.T) {
+	cache := &identityCacheStub{
+		fingerprint: &Fingerprint{
+			ClientID:  "stable-client-id",
+			UserAgent: "opencode/0.10.0",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	svc := NewIdentityService(cache)
+
+	headers := http.Header{}
+	headers.Set("User-Agent", "claude-cli/2.1.170 (external, cli)")
+
+	fp, err := svc.GetOrCreateFingerprint(context.Background(), 123, headers)
+	require.NoError(t, err)
+
+	require.Equal(t, "stable-client-id", fp.ClientID)
+	require.Equal(t, "claude-cli/2.1.170 (external, cli)", fp.UserAgent)
+	require.Equal(t, "claude-cli/2.1.170 (external, cli)", cache.fingerprint.UserAgent)
+}
+
+func TestIdentityService_GetOrCreateFingerprint_CleansPollutedNonClaudeUAOnNextNonClaudeRequest(t *testing.T) {
+	cache := &identityCacheStub{
+		fingerprint: &Fingerprint{
+			ClientID:  "stable-client-id",
+			UserAgent: "opencode/0.10.0",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	svc := NewIdentityService(cache)
+
+	headers := http.Header{}
+	headers.Set("User-Agent", "opencode/0.11.0")
+
+	fp, err := svc.GetOrCreateFingerprint(context.Background(), 123, headers)
+	require.NoError(t, err)
+
+	require.Equal(t, "stable-client-id", fp.ClientID)
+	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint.UserAgent, cache.fingerprint.UserAgent)
 }
 
 func strconvQuote(v string) string {

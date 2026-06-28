@@ -128,7 +128,7 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n()
 const appStore = useAppStore()
 
-const PLATFORMS: PlatformQuotaPlatform[] = ['anthropic', 'openai', 'kiro', 'gemini', 'antigravity']
+const PLATFORMS: PlatformQuotaPlatform[] = ['anthropic', 'openai', 'kiro', 'gemini', 'antigravity', 'grok']
 
 interface QuotaRow {
   platform: PlatformQuotaPlatform

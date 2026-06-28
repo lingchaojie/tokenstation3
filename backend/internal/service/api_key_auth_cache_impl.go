@@ -292,6 +292,11 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                apiKey.Group.ModelsListConfig,
 			RPMLimit:                        apiKey.Group.RPMLimit,
+			KiroCacheEmulationEnabled:       apiKey.Group.EffectiveKiroCacheEmulationEnabled(),
+			KiroAutoStickyEnabled:           apiKey.Group.EffectiveKiroAutoStickyEnabled(),
+			KiroStickySessionTTLSeconds:     apiKey.Group.EffectiveKiroStickySessionTTLSeconds(),
+			KiroCacheEmulationRatio:         apiKey.Group.EffectiveKiroCacheEmulationRatio(),
+			KiroEndpointMode:                apiKey.Group.EffectiveKiroEndpointMode(),
 		}
 	}
 	return snapshot
@@ -368,6 +373,11 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                snapshot.Group.ModelsListConfig,
 			RPMLimit:                        snapshot.Group.RPMLimit,
+			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
+			KiroAutoStickyEnabled:           snapshot.Group.KiroAutoStickyEnabled,
+			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
+			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
+			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
 		}
 	}
 	s.compileAPIKeyIPRules(apiKey)

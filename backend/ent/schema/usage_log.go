@@ -152,6 +152,11 @@ func (UsageLog) Fields() []ent.Field {
 		// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 		field.Bool("cache_ttl_overridden").
 			Default(false),
+		field.Float("kiro_credits").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
+			Comment("Kiro credits consumed by this usage log"),
 
 		// 时间戳（只有 created_at，日志不可修改）
 		field.Time("created_at").

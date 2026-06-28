@@ -94,6 +94,8 @@ const (
 	FieldImageSizeBreakdown = "image_size_breakdown"
 	// FieldCacheTTLOverridden holds the string denoting the cache_ttl_overridden field in the database.
 	FieldCacheTTLOverridden = "cache_ttl_overridden"
+	// FieldKiroCredits holds the string denoting the kiro_credits field in the database.
+	FieldKiroCredits = "kiro_credits"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// EdgeUser holds the string denoting the user edge name in mutations.
@@ -188,6 +190,7 @@ var Columns = []string{
 	FieldImageSizeSource,
 	FieldImageSizeBreakdown,
 	FieldCacheTTLOverridden,
+	FieldKiroCredits,
 	FieldCreatedAt,
 }
 
@@ -467,6 +470,11 @@ func ByImageSizeSource(opts ...sql.OrderTermOption) OrderOption {
 // ByCacheTTLOverridden orders the results by the cache_ttl_overridden field.
 func ByCacheTTLOverridden(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCacheTTLOverridden, opts...).ToFunc()
+}
+
+// ByKiroCredits orders the results by the kiro_credits field.
+func ByKiroCredits(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKiroCredits, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

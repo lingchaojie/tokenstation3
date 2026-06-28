@@ -239,7 +239,7 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 }
 
 func groupFromServiceBase(g *service.Group) Group {
-	return Group{
+	out := Group{
 		ID:                              g.ID,
 		Name:                            g.Name,
 		Description:                     g.Description,
@@ -267,6 +267,19 @@ func groupFromServiceBase(g *service.Group) Group {
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
+	if g.Platform == service.PlatformKiro {
+		cacheEnabled := g.EffectiveKiroCacheEmulationEnabled()
+		autoSticky := g.EffectiveKiroAutoStickyEnabled()
+		stickyTTL := g.EffectiveKiroStickySessionTTLSeconds()
+		cacheRatio := g.EffectiveKiroCacheEmulationRatio()
+		endpointMode := g.EffectiveKiroEndpointMode()
+		out.KiroCacheEmulationEnabled = &cacheEnabled
+		out.KiroAutoStickyEnabled = &autoSticky
+		out.KiroStickySessionTTLSeconds = &stickyTTL
+		out.KiroCacheEmulationRatio = &cacheRatio
+		out.KiroEndpointMode = &endpointMode
+	}
+	return out
 }
 
 func AccountFromServiceShallow(a *service.Account) *Account {

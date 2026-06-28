@@ -87,6 +87,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('kiro')
     expect(html).toContain('gemini')
     expect(html).toContain('antigravity')
+    expect(html).toContain('grok')
   })
 
   it('已有数据正确填充 limit input', async () => {
