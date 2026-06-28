@@ -145,11 +145,11 @@ type Group struct {
 	RPMLimit int `json:"rpm_limit"`
 
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
-	KiroCacheEmulationEnabled   bool    `json:"kiro_cache_emulation_enabled"`
-	KiroAutoStickyEnabled       bool    `json:"kiro_auto_sticky_enabled"`
-	KiroStickySessionTTLSeconds int     `json:"kiro_sticky_session_ttl_seconds"`
-	KiroCacheEmulationRatio     float64 `json:"kiro_cache_emulation_ratio"`
-	KiroEndpointMode            string  `json:"kiro_endpoint_mode"`
+	KiroCacheEmulationEnabled   *bool    `json:"kiro_cache_emulation_enabled,omitempty"`
+	KiroAutoStickyEnabled       *bool    `json:"kiro_auto_sticky_enabled,omitempty"`
+	KiroStickySessionTTLSeconds *int     `json:"kiro_sticky_session_ttl_seconds,omitempty"`
+	KiroCacheEmulationRatio     *float64 `json:"kiro_cache_emulation_ratio,omitempty"`
+	KiroEndpointMode            *string  `json:"kiro_endpoint_mode,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

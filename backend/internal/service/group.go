@@ -88,12 +88,16 @@ type Group struct {
 	RateLimitedAccountCount int64
 }
 
+func isKiroGroup(g *Group) bool {
+	return g != nil && g.Platform == PlatformKiro
+}
+
 func (g *Group) EffectiveKiroCacheEmulationEnabled() bool {
-	return g != nil && g.Platform == PlatformKiro && g.KiroCacheEmulationEnabled && g.EffectiveKiroCacheEmulationRatio() > 0
+	return isKiroGroup(g) && g.KiroCacheEmulationEnabled && g.EffectiveKiroCacheEmulationRatio() > 0
 }
 
 func (g *Group) EffectiveKiroAutoStickyEnabled() bool {
-	return g != nil && g.Platform == PlatformKiro && g.KiroAutoStickyEnabled
+	return isKiroGroup(g) && g.KiroAutoStickyEnabled
 }
 
 const (

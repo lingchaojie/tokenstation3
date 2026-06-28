@@ -754,6 +754,10 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return ""
 	}
 
+	if explicitID := strings.TrimSpace(parsed.ExplicitSessionID); explicitID != "" {
+		return s.hashSessionAnchor("explicit", parsed, explicitID)
+	}
+
 	// 1. 最高优先级：从 metadata.user_id 提取 session_xxx
 	if parsed.MetadataUserID != "" {
 		uid := ParseMetadataUserID(parsed.MetadataUserID)
@@ -770,6 +774,25 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 			"metadata_user_id", parsed.MetadataUserID,
 			"parsed_nil", uid == nil,
 		)
+	}
+
+	if bodySessionID := strings.TrimSpace(parsed.BodySessionID); bodySessionID != "" {
+		return s.hashSessionAnchor("body", parsed, bodySessionID)
+	}
+
+	if isKiroGroup(parsed.Group) {
+		if !parsed.Group.EffectiveKiroAutoStickyEnabled() {
+			return ""
+		}
+		if systemText := extractTextFromSystemRaw(parsed.SystemRaw()); systemText != "" {
+			return s.hashSessionAnchor("kiro_system", parsed, systemText)
+		}
+		if parsed.Body != nil {
+			if firstUserText := extractFirstUserText(parsed.Body.Bytes()); firstUserText != "" {
+				return s.hashSessionAnchor("kiro_first_user", parsed, firstUserText)
+			}
+		}
+		return ""
 	}
 
 	// 2. 提取带 cache_control: {type: "ephemeral"} 的内容
@@ -813,6 +836,24 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 	}
 
 	return ""
+}
+
+func (s *GatewayService) hashSessionAnchor(source string, parsed *ParsedRequest, anchor string) string {
+	anchor = strings.TrimSpace(anchor)
+	if anchor == "" {
+		return ""
+	}
+	var seed strings.Builder
+	_, _ = seed.WriteString(source)
+	_, _ = seed.WriteString("|")
+	if parsed != nil {
+		_, _ = seed.WriteString(sessionContextDiscriminator(parsed.SessionContext))
+	}
+	_, _ = seed.WriteString("|")
+	_, _ = seed.WriteString(anchor)
+	hash := s.hashContent(seed.String())
+	slog.Info("sticky.hash_source", "source", source, "hash", hash)
+	return hash
 }
 
 // BindStickySession sets session -> account binding with standard TTL.
@@ -2200,6 +2241,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if len(candidates) == 0 {
+		if s.tryRecoverKiroCooldownPool(ctx, accounts, requestedModel, excludedIDs, useMixed) {
+			retryCtx := context.WithValue(ctx, kiroCooldownRecoveryAttemptedKey, true)
+			return s.SelectAccountWithLoadAwareness(retryCtx, groupID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+		}
 		return nil, ErrNoAvailableAccounts
 	}
 
@@ -4864,82 +4909,8 @@ func (s *GatewayService) claudeOAuthSystemPromptInjectionSettings(ctx context.Co
 	return s.settingService.GetClaudeOAuthSystemPromptInjectionSettings(ctx)
 }
 
-func (s *GatewayService) openAICompatBridgeService() *OpenAIGatewayService {
-	if s == nil {
-		return nil
-	}
-	return &OpenAIGatewayService{
-		accountRepo:           s.accountRepo,
-		usageLogRepo:          s.usageLogRepo,
-		usageBillingRepo:      s.usageBillingRepo,
-		userRepo:              s.userRepo,
-		userSubRepo:           s.userSubRepo,
-		cache:                 s.cache,
-		cfg:                   s.cfg,
-		codexDetector:         NewOpenAICodexClientRestrictionDetector(s.cfg),
-		schedulerSnapshot:     s.schedulerSnapshot,
-		concurrencyService:    s.concurrencyService,
-		billingService:        s.billingService,
-		rateLimitService:      s.rateLimitService,
-		billingCacheService:   s.billingCacheService,
-		userGroupRateResolver: s.userGroupRateResolver,
-		httpUpstream:          s.httpUpstream,
-		deferredService:       s.deferredService,
-		toolCorrector:         NewCodexToolCorrector(),
-		openaiWSResolver:      NewOpenAIWSProtocolResolver(s.cfg),
-		resolver:              s.resolver,
-		channelService:        s.channelService,
-		balanceNotifyService:  s.balanceNotifyService,
-		settingService:        s.settingService,
-		userPlatformQuotaRepo: s.userPlatformQuotaRepo,
-		upstreamUARepo:        s.upstreamUARepo,
-		responseHeaderFilter:  s.responseHeaderFilter,
-		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
-		openaiAccountStats:    newOpenAIAccountRuntimeStats(),
-	}
-}
-
-func (s *GatewayService) forwardKiroAsAnthropic(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
-	bridge := s.openAICompatBridgeService()
-	if bridge == nil {
-		return nil, fmt.Errorf("kiro anthropic bridge unavailable")
-	}
-	result, err := bridge.ForwardAsAnthropic(ctx, c, account, parsed.Body.Bytes(), "", "")
-	if result == nil {
-		return nil, err
-	}
-	model := result.BillingModel
-	if model == "" {
-		model = result.Model
-	}
-	upstreamModel := result.UpstreamModel
-	if upstreamModel == model {
-		upstreamModel = ""
-	}
-	return &ForwardResult{
-		RequestID: result.RequestID,
-		Usage: ClaudeUsage{
-			InputTokens:              result.Usage.InputTokens,
-			OutputTokens:             result.Usage.OutputTokens,
-			CacheCreationInputTokens: result.Usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     result.Usage.CacheReadInputTokens,
-			ImageOutputTokens:        result.Usage.ImageOutputTokens,
-		},
-		Model:              model,
-		UpstreamModel:      upstreamModel,
-		Stream:             result.Stream,
-		Duration:           result.Duration,
-		FirstTokenMs:       result.FirstTokenMs,
-		ClientDisconnect:   result.ClientDisconnect,
-		ReasoningEffort:    result.ReasoningEffort,
-		ImageCount:         result.ImageCount,
-		ImageSize:          result.ImageSize,
-		ImageInputSize:     result.ImageInputSize,
-		ImageOutputSize:    result.ImageOutputSize,
-		ImageOutputSizes:   result.ImageOutputSizes,
-		ImageSizeSource:    result.ImageSizeSource,
-		ImageSizeBreakdown: result.ImageSizeBreakdown,
-	}, err
+func (s *GatewayService) forwardKiroAsAnthropic(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
+	return s.forwardKiroMessages(ctx, c, account, parsed, startTime)
 }
 
 // Forward 转发请求到Claude API
@@ -4955,7 +4926,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 
 	if account != nil && account.IsKiro() {
-		return s.forwardKiroAsAnthropic(ctx, c, account, parsed)
+		return s.forwardKiroAsAnthropic(ctx, c, account, parsed, startTime)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
@@ -8471,6 +8442,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		usagePatch := s.extractSSEUsagePatch(event)
+		eventChanged = stripInternalSSEUsageFields(event) || eventChanged
 		if anthropicStreamEventIsTerminal(eventName, dataLine) {
 			sawTerminalEvent = true
 		}
@@ -8662,6 +8634,8 @@ type sseUsagePatch struct {
 	hasCacheCreation5m       bool
 	cacheCreation1hTokens    int
 	hasCacheCreation1h       bool
+	kiroCredits              float64
+	hasKiroCredits           bool
 }
 
 func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePatch {
@@ -8701,6 +8675,10 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 				patch.hasCacheCreation1h = true
 			}
 		}
+		if v, ok := parseSSEUsageFloat(usageObj["_sub2api_kiro_credits"]); ok && v > 0 {
+			patch.kiroCredits = v
+			patch.hasKiroCredits = true
+		}
 		return patch
 
 	case "message_delta":
@@ -8736,6 +8714,10 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 				patch.hasCacheCreation1h = true
 			}
 		}
+		if v, ok := parseSSEUsageFloat(usageObj["_sub2api_kiro_credits"]); ok && v > 0 {
+			patch.kiroCredits = v
+			patch.hasKiroCredits = true
+		}
 		return patch
 	}
 
@@ -8765,6 +8747,9 @@ func mergeSSEUsagePatch(usage *ClaudeUsage, patch *sseUsagePatch) {
 	if patch.hasCacheCreation1h {
 		usage.CacheCreation1hTokens = patch.cacheCreation1hTokens
 	}
+	if patch.hasKiroCredits {
+		usage.KiroCredits = patch.kiroCredits
+	}
 }
 
 func parseSSEUsageInt(value any) (int, bool) {
@@ -8792,6 +8777,60 @@ func parseSSEUsageInt(value any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func parseSSEUsageFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f, true
+		}
+	case string:
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func stripInternalSSEUsageFields(event map[string]any) bool {
+	if len(event) == 0 {
+		return false
+	}
+
+	eventType, _ := event["type"].(string)
+	switch eventType {
+	case "message_start":
+		msg, _ := event["message"].(map[string]any)
+		usageObj, _ := msg["usage"].(map[string]any)
+		return stripInternalSSEUsageMap(usageObj)
+	case "message_delta":
+		usageObj, _ := event["usage"].(map[string]any)
+		return stripInternalSSEUsageMap(usageObj)
+	default:
+		return false
+	}
+}
+
+func stripInternalSSEUsageMap(usageObj map[string]any) bool {
+	if len(usageObj) == 0 {
+		return false
+	}
+	if _, ok := usageObj["_sub2api_kiro_credits"]; !ok {
+		return false
+	}
+	delete(usageObj, "_sub2api_kiro_credits")
+	return true
 }
 
 // applyCacheTTLOverride 将所有 cache creation tokens 归入指定的 TTL 类型。
@@ -9052,7 +9091,11 @@ func (p *postUsageBillingParams) shouldUpdateRateLimits() bool {
 }
 
 func (p *postUsageBillingParams) shouldUpdateAccountQuota() bool {
-	return p.Cost.TotalCost > 0 && p.Account.IsAPIKeyOrBedrock() && p.Account.HasAnyQuotaLimit()
+	if p == nil || p.Cost == nil || p.Account == nil {
+		return false
+	}
+	supportsAccountQuota := p.Account.IsAPIKeyOrBedrock() || p.Account.Platform == PlatformKiro
+	return p.Cost.TotalCost > 0 && supportsAccountQuota && p.Account.HasAnyQuotaLimit()
 }
 
 // postUsageBilling is the legacy fallback billing path used when the unified

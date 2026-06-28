@@ -542,12 +542,16 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 	return nil, fmt.Errorf("account type %s does not support usage query", account.Type)
 }
 
-// GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo，不调用外部 API。
-// 仅适用于 Anthropic OAuth / SetupToken 账号。
+// GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo。
+// Anthropic OAuth / SetupToken 账号不调用外部 API；Kiro 直连账号复用 Kiro usage 快照/降级路径。
 func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int64) (*UsageInfo, error) {
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("get account failed: %w", err)
+	}
+
+	if account.Platform == PlatformKiro {
+		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 
 	if !account.IsAnthropicOAuthOrSetupToken() {

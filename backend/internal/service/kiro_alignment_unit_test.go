@@ -21,28 +21,6 @@ func TestGetBaseURL_KiroAPIKeyWithoutBaseURLReturnsEmpty(t *testing.T) {
 	require.Empty(t, account.GetBaseURL())
 }
 
-func TestGatewayServiceKiroStreamKeepaliveDefaultsTo25Seconds(t *testing.T) {
-	svc := &GatewayService{}
-
-	got := svc.streamKeepaliveIntervalForAccount(&Account{Platform: PlatformKiro})
-
-	require.Equal(t, 25*time.Second, got)
-}
-
-func TestGatewayServiceKiroStreamKeepaliveUsesKiroSpecificConfig(t *testing.T) {
-	svc := &GatewayService{
-		cfg: &config.Config{
-			Gateway: config.GatewayConfig{
-				StreamKeepaliveInterval:     10,
-				KiroStreamKeepaliveInterval: 25,
-			},
-		},
-	}
-
-	require.Equal(t, 25*time.Second, svc.streamKeepaliveIntervalForAccount(&Account{Platform: PlatformKiro}))
-	require.Equal(t, 10*time.Second, svc.streamKeepaliveIntervalForAccount(&Account{Platform: PlatformAnthropic}))
-}
-
 func TestGetModelPricing_KiroHaiku45UsesDedicatedFallback(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
 

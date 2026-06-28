@@ -113,6 +113,7 @@ func clearGatewayRequestDerivedState(parsed *ParsedRequest) {
 	parsed.Model = ""
 	parsed.Stream = false
 	parsed.MetadataUserID = ""
+	parsed.BodySessionID = ""
 	parsed.HasSystem = false
 	parsed.ThinkingEnabled = false
 	parsed.OutputEffort = ""
@@ -160,6 +161,22 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 	}
 }
 
+func extractBodySessionID(body string) string {
+	for _, path := range []string{
+		"prompt_cache_key",
+		"conversation_id",
+		"session_id",
+		"sessionId",
+		"metadata.session_id",
+		"thread_id",
+	} {
+		if value := strings.TrimSpace(gjson.Get(body, path).String()); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // parseGatewayRequestCurrentBody 只做标量和 raw range 轻量解析，不恢复 system/messages 对象图。
 func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) error {
 	if parsed == nil || parsed.Body == nil {
@@ -193,6 +210,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 	}
 
 	parsed.MetadataUserID = gjson.Get(jsonStr, "metadata.user_id").String()
+	parsed.BodySessionID = extractBodySessionID(jsonStr)
 
 	thinkingType := gjson.Get(jsonStr, "thinking.type").String()
 	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive"
