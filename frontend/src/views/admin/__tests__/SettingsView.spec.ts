@@ -1322,9 +1322,10 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(html).toContain("kiro");
     expect(html).toContain("gemini");
     expect(html).toContain("antigravity");
+    expect(html).toContain("grok");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 6 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1340,7 +1341,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "kiro", "gemini", "antigravity"];
+    const platforms = ["anthropic", "openai", "kiro", "gemini", "antigravity", "grok"];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1354,13 +1355,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 6 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // kiro / gemini / antigravity 缺失 -> 应被归一化为全 null
+        // kiro / gemini / antigravity / grok 缺失 -> 应被归一化为全 null
       },
     });
 
@@ -1380,6 +1381,7 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["kiro"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["grok"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {
@@ -1392,6 +1394,7 @@ describe("admin SettingsView platform quota matrix", () => {
 	        kiro:      { daily: null, weekly: null, monthly: null },
 	        gemini:    { daily: null, weekly: null, monthly: null },
         antigravity: { daily: null, weekly: null, monthly: null },
+        grok: { daily: null, weekly: null, monthly: null },
       },
     });
 
