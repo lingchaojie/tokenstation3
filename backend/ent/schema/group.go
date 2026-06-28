@@ -164,6 +164,25 @@ func (Group) Fields() []ent.Field {
 		field.Int("rpm_limit").
 			Default(0).
 			Comment("分组 RPM 上限，0 表示不限制；设置后接管该分组用户的限流"),
+
+		// Kiro 转发配置（仅 Kiro 平台生效）
+		field.Bool("kiro_cache_emulation_enabled").
+			Default(false).
+			Comment("是否启用 Kiro prompt cache 计费模拟"),
+		field.Bool("kiro_auto_sticky_enabled").
+			Default(true).
+			Comment("是否启用 Kiro 自动粘性会话"),
+		field.Int("kiro_sticky_session_ttl_seconds").
+			Default(3600).
+			Comment("Kiro 粘性会话绑定 TTL 秒数"),
+		field.Float("kiro_cache_emulation_ratio").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(5,4)"}).
+			Default(1.0).
+			Comment("Kiro cache 模拟比例，范围 0..1"),
+		field.String("kiro_endpoint_mode").
+			MaxLen(8).
+			Default("q").
+			Comment("Kiro 推理 endpoint 模式：q 或 krs"),
 	}
 }
 

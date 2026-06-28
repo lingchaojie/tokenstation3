@@ -103,6 +103,8 @@ type UsageLog struct {
 	ImageSizeBreakdown map[string]int `json:"image_size_breakdown,omitempty"`
 	// CacheTTLOverridden holds the value of the "cache_ttl_overridden" field.
 	CacheTTLOverridden bool `json:"cache_ttl_overridden,omitempty"`
+	// Kiro credits consumed by this usage log
+	KiroCredits *float64 `json:"kiro_credits,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -192,7 +194,7 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
 			values[i] = new(sql.NullBool)
-		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
+		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier, usagelog.FieldKiroCredits:
 			values[i] = new(sql.NullFloat64)
 		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount:
 			values[i] = new(sql.NullInt64)
@@ -480,6 +482,13 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.CacheTTLOverridden = value.Bool
 			}
+		case usagelog.FieldKiroCredits:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_credits", values[i])
+			} else if value.Valid {
+				_m.KiroCredits = new(float64)
+				*_m.KiroCredits = value.Float64
+			}
 		case usagelog.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -700,6 +709,11 @@ func (_m *UsageLog) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("cache_ttl_overridden=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CacheTTLOverridden))
+	builder.WriteString(", ")
+	if v := _m.KiroCredits; v != nil {
+		builder.WriteString("kiro_credits=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

@@ -825,6 +825,33 @@ func (_u *UsageLogUpdate) SetNillableCacheTTLOverridden(v *bool) *UsageLogUpdate
 	return _u
 }
 
+// SetKiroCredits sets the "kiro_credits" field.
+func (_u *UsageLogUpdate) SetKiroCredits(v float64) *UsageLogUpdate {
+	_u.mutation.ResetKiroCredits()
+	_u.mutation.SetKiroCredits(v)
+	return _u
+}
+
+// SetNillableKiroCredits sets the "kiro_credits" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableKiroCredits(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetKiroCredits(*v)
+	}
+	return _u
+}
+
+// AddKiroCredits adds value to the "kiro_credits" field.
+func (_u *UsageLogUpdate) AddKiroCredits(v float64) *UsageLogUpdate {
+	_u.mutation.AddKiroCredits(v)
+	return _u
+}
+
+// ClearKiroCredits clears the value of the "kiro_credits" field.
+func (_u *UsageLogUpdate) ClearKiroCredits() *UsageLogUpdate {
+	_u.mutation.ClearKiroCredits()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *UsageLogUpdate) SetUser(v *User) *UsageLogUpdate {
 	return _u.SetUserID(v.ID)
@@ -1212,6 +1239,15 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.CacheTTLOverridden(); ok {
 		_spec.SetField(usagelog.FieldCacheTTLOverridden, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.KiroCredits(); ok {
+		_spec.SetField(usagelog.FieldKiroCredits, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCredits(); ok {
+		_spec.AddField(usagelog.FieldKiroCredits, field.TypeFloat64, value)
+	}
+	if _u.mutation.KiroCreditsCleared() {
+		_spec.ClearField(usagelog.FieldKiroCredits, field.TypeFloat64)
 	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -2171,6 +2207,33 @@ func (_u *UsageLogUpdateOne) SetNillableCacheTTLOverridden(v *bool) *UsageLogUpd
 	return _u
 }
 
+// SetKiroCredits sets the "kiro_credits" field.
+func (_u *UsageLogUpdateOne) SetKiroCredits(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetKiroCredits()
+	_u.mutation.SetKiroCredits(v)
+	return _u
+}
+
+// SetNillableKiroCredits sets the "kiro_credits" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableKiroCredits(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetKiroCredits(*v)
+	}
+	return _u
+}
+
+// AddKiroCredits adds value to the "kiro_credits" field.
+func (_u *UsageLogUpdateOne) AddKiroCredits(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddKiroCredits(v)
+	return _u
+}
+
+// ClearKiroCredits clears the value of the "kiro_credits" field.
+func (_u *UsageLogUpdateOne) ClearKiroCredits() *UsageLogUpdateOne {
+	_u.mutation.ClearKiroCredits()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *UsageLogUpdateOne) SetUser(v *User) *UsageLogUpdateOne {
 	return _u.SetUserID(v.ID)
@@ -2588,6 +2651,15 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.CacheTTLOverridden(); ok {
 		_spec.SetField(usagelog.FieldCacheTTLOverridden, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.KiroCredits(); ok {
+		_spec.SetField(usagelog.FieldKiroCredits, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCredits(); ok {
+		_spec.AddField(usagelog.FieldKiroCredits, field.TypeFloat64, value)
+	}
+	if _u.mutation.KiroCreditsCleared() {
+		_spec.ClearField(usagelog.FieldKiroCredits, field.TypeFloat64)
 	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{

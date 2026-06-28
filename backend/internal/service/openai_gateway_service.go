@@ -1383,10 +1383,7 @@ func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *A
 	if account == nil || !account.IsOpenAICompatible() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		return false
 	}
-	if !openAICompatibleAccountMatchesRequestPlatform(platform, account) {
-		return false
-	}
-	if !isKiroBridgeAccountAllowed(account, platform, requestedModel) {
+	if account.Platform != platform {
 		return false
 	}
 	if account.IsOpenAI() {
@@ -2274,7 +2271,6 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = normalizeOpenAICompatiblePlatform(platform)
-	platforms := schedulablePlatformsForRequest(platform, false)
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		return accounts, err
@@ -2282,11 +2278,11 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	var accounts []Account
 	var err error
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	} else if groupID != nil {
-		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
 	} else {
-		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, platform)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
@@ -2545,10 +2541,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
-
-	if account.IsKiro() {
-		return s.forwardResponsesViaKiro(ctx, c, account, body)
-	}
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)

@@ -1,706 +1,386 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
 
-	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 )
 
 const (
-	KiroSocialRedirectURI   = "kiro://kiro.kiroAgent/authenticate-success"
-	KiroCLITokenRedirectURI = "http://localhost:3128/oauth/callback?login_option=google"
-
-	kiroOAuthUserAgent             = "cli-proxy-api/1.0.0"
-	kiroBuilderIDMethod            = "builder-id"
-	kiroCLIMethod                  = "kiro-cli"
-	kiroBuilderIDProvider          = "AWS"
-	kiroCLIProvider                = "Google"
-	kiroBuilderIDStartURL          = "https://view.awsapps.com/start"
-	kiroCLISignInEndpoint          = "https://app.kiro.dev/signin"
-	kiroCLIRedirectURI             = "http://localhost:3128"
-	kiroDeviceCodeGrantType        = "urn:ietf:params:oauth:grant-type:device_code"
-	kiroOAuthDefaultDeviceInterval = 5
+	// Kiro desktop social auth uses localhost loopback callbacks from a fixed
+	// allowlist. Use one of the bundled ports from the official client.
+	kiroSocialRedirectURI = "http://localhost:49153"
+	// AWS IAM Identity Center native/public clients require an explicit loopback IP redirect URI.
+	kiroIDCRedirectURI = "http://127.0.0.1:9876/oauth/callback"
 )
 
 type KiroOAuthService struct {
+	sessionStore *kiropkg.SessionStore
 	proxyRepo    ProxyRepository
-	authEndpoint string
-	oidcEndpoint string
-
-	mu       sync.Mutex
-	sessions map[string]*kiroOAuthSession
 }
 
 func NewKiroOAuthService(proxyRepo ProxyRepository) *KiroOAuthService {
 	return &KiroOAuthService{
+		sessionStore: kiropkg.NewSessionStore(),
 		proxyRepo:    proxyRepo,
-		authEndpoint: kiroAuthEndpoint,
-		oidcEndpoint: kiroSSOOIDCEndpoint,
-		sessions:     make(map[string]*kiroOAuthSession),
 	}
 }
 
-type KiroOAuthStartInput struct {
-	Method  string
-	ProxyID *int64
+func (s *KiroOAuthService) Stop() {}
+
+type KiroAuthURLResult struct {
+	AuthURL   string `json:"auth_url"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
 }
 
-type KiroOAuthStartResult struct {
-	Mode                    string `json:"mode"`
-	Method                  string `json:"method"`
-	AuthURL                 string `json:"auth_url,omitempty"`
-	SessionID               string `json:"session_id"`
-	State                   string `json:"state,omitempty"`
-	VerificationURI         string `json:"verification_uri,omitempty"`
-	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
-	UserCode                string `json:"user_code,omitempty"`
-	ExpiresIn               int    `json:"expires_in,omitempty"`
-	Interval                int    `json:"interval,omitempty"`
+type KiroIDCAuthURLResult struct {
+	AuthURL   string `json:"auth_url"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
+	ClientID  string `json:"client_id"`
+	Region    string `json:"region"`
+	StartURL  string `json:"start_url"`
 }
 
-type KiroOAuthExchangeCodeInput struct {
-	SessionID string
-	State     string
-	Code      string
-	ProxyID   *int64
-}
-
-type KiroOAuthPollInput struct {
-	SessionID string
-	ProxyID   *int64
-}
-
-type KiroOAuthPollResult struct {
-	Status    string              `json:"status"`
-	TokenInfo *KiroOAuthTokenInfo `json:"token_info,omitempty"`
-	Interval  int                 `json:"interval,omitempty"`
-}
-
-type KiroOAuthTokenInfo struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ProfileARN   string `json:"profile_arn,omitempty"`
-	ExpiresIn    int    `json:"expires_in,omitempty"`
+type KiroTokenInfo struct {
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ProfileArn   string `json:"profile_arn,omitempty"`
 	ExpiresAt    string `json:"expires_at,omitempty"`
 	AuthMethod   string `json:"auth_method,omitempty"`
 	Provider     string `json:"provider,omitempty"`
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
+	ClientIDHash string `json:"client_id_hash,omitempty"`
 	Email        string `json:"email,omitempty"`
+	StartURL     string `json:"start_url,omitempty"`
+	Region       string `json:"region,omitempty"`
 }
 
-type kiroOAuthSession struct {
-	Method       string
+type KiroGenerateAuthURLInput struct {
+	ProxyID  *int64
+	Provider string
+}
+
+type KiroExchangeCodeInput struct {
+	SessionID    string
 	State        string
-	CodeVerifier string
+	Code         string
+	CallbackPath string
+	LoginOption  string
+	ProxyID      *int64
+}
+
+type KiroGenerateIDCAuthURLInput struct {
+	ProxyID  *int64
+	StartURL string
+	Region   string
+}
+
+type KiroRefreshTokenInput struct {
+	RefreshToken string
+	AuthMethod   string
+	Provider     string
 	ClientID     string
 	ClientSecret string
-	DeviceCode   string
-	ProxyURL     string
-	ExpiresAt    time.Time
-	Interval     int
-	Provider     string
+	StartURL     string
+	Region       string
+	ProfileArn   string
+	ProxyID      *int64
 }
 
-type kiroRegisterClientResponse struct {
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
+type KiroImportTokenInput struct {
+	TokenJSON              string
+	DeviceRegistrationJSON string
 }
 
-type kiroDeviceAuthorizationResponse struct {
-	DeviceCode              string `json:"deviceCode"`
-	UserCode                string `json:"userCode"`
-	VerificationURI         string `json:"verificationUri"`
-	VerificationURIComplete string `json:"verificationUriComplete"`
-	ExpiresIn               int    `json:"expiresIn"`
-	Interval                int    `json:"interval"`
-}
-
-type kiroSocialTokenResponse struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ProfileARN   string `json:"profileArn"`
-	ExpiresIn    int    `json:"expiresIn"`
-}
-
-type kiroBuilderTokenResponse struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int    `json:"expiresIn"`
-}
-
-type kiroOAuthErrorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description"`
-}
-
-func (s *KiroOAuthService) GenerateAuthURL(ctx context.Context, input KiroOAuthStartInput) (*KiroOAuthStartResult, error) {
-	method, provider, err := normalizeKiroOAuthMethod(input.Method)
+func (s *KiroOAuthService) GenerateAuthURL(ctx context.Context, input *KiroGenerateAuthURLInput) (*KiroAuthURLResult, error) {
+	provider := strings.TrimSpace(input.Provider)
+	if provider == "" {
+		provider = string(kiropkg.SocialProviderGoogle)
+	}
+	if provider != string(kiropkg.SocialProviderGoogle) && provider != string(kiropkg.SocialProviderGitHub) {
+		return nil, fmt.Errorf("unsupported kiro social provider: %s", provider)
+	}
+	state, err := kiropkg.GenerateState()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate state failed: %w", err)
 	}
-	proxyURL, err := s.resolveProxyURL(ctx, input.ProxyID)
+	codeVerifier, err := kiropkg.GenerateCodeVerifier()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate code verifier failed: %w", err)
 	}
-	if method == kiroBuilderIDMethod {
-		return s.startBuilderIDDeviceFlow(ctx, proxyURL)
-	}
-	if method == kiroCLIMethod {
-		return s.startKiroCLIFlow(provider, proxyURL)
-	}
-	return s.startSocialFlow(method, provider, proxyURL)
+	sessionID := kiropkg.GenerateSessionID()
+	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	s.sessionStore.Set(sessionID, &kiropkg.AuthSession{
+		State:        state,
+		CodeVerifier: codeVerifier,
+		ProxyURL:     proxyURL,
+		CreatedAt:    time.Now(),
+		AuthType:     "social",
+		Provider:     provider,
+		RedirectURI:  kiroSocialRedirectURI,
+	})
+	return &KiroAuthURLResult{
+		AuthURL:   kiropkg.BuildSocialSignInURL(kiroSocialRedirectURI, kiropkg.GenerateCodeChallenge(codeVerifier), state),
+		SessionID: sessionID,
+		State:     state,
+	}, nil
 }
 
-func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroOAuthExchangeCodeInput) (*KiroOAuthTokenInfo, error) {
-	if input == nil {
-		return nil, fmt.Errorf("input is required")
-	}
-	session, ok := s.getSession(input.SessionID)
+func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroExchangeCodeInput) (*KiroTokenInfo, error) {
+	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
-		return nil, fmt.Errorf("session 不存在或已过期")
-	}
-	if session.Method == kiroBuilderIDMethod {
-		return nil, fmt.Errorf("builder-id session must be completed by device-code polling")
+		return nil, fmt.Errorf("session not found or expired")
 	}
 	if strings.TrimSpace(input.State) == "" || input.State != session.State {
-		return nil, fmt.Errorf("state 无效")
+		return nil, fmt.Errorf("state invalid")
 	}
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		resolved, err := s.resolveProxyURL(ctx, input.ProxyID)
+		proxyURL, _ = s.resolveProxyURL(ctx, input.ProxyID)
+	}
+
+	switch session.AuthType {
+	case "social":
+		token, err := kiropkg.CreateSocialToken(
+			ctx,
+			proxyURL,
+			input.Code,
+			session.CodeVerifier,
+			buildKiroSocialExchangeRedirectURI(session.RedirectURI, session.Provider, input.CallbackPath, input.LoginOption),
+		)
 		if err != nil {
 			return nil, err
 		}
-		proxyURL = resolved
-	}
-	payload := map[string]string{
-		"code":          strings.TrimSpace(input.Code),
-		"code_verifier": session.CodeVerifier,
-		"redirect_uri":  KiroSocialRedirectURI,
-	}
-	if payload["code"] == "" {
-		return nil, fmt.Errorf("authorization code is required")
-	}
-	if session.Method == kiroCLIMethod {
-		return s.exchangeKiroCLICode(ctx, input.SessionID, payload["code"], session, proxyURL)
-	}
-	var tokenResp kiroSocialTokenResponse
-	targetURL := strings.TrimRight(s.authEndpoint, "/") + "/oauth/token"
-	if err := postKiroOAuthJSON(ctx, targetURL, payload, proxyURL, kiroOAuthUserAgent, &tokenResp); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
-		return nil, fmt.Errorf("kiro OAuth response missing tokens")
-	}
-	if tokenResp.ExpiresIn <= 0 {
-		tokenResp.ExpiresIn = 3600
-	}
-	s.deleteSession(input.SessionID)
-	return &KiroOAuthTokenInfo{
-		AccessToken:  strings.TrimSpace(tokenResp.AccessToken),
-		RefreshToken: strings.TrimSpace(tokenResp.RefreshToken),
-		ProfileARN:   strings.TrimSpace(tokenResp.ProfileARN),
-		ExpiresIn:    tokenResp.ExpiresIn,
-		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-		AuthMethod:   "social",
-		Provider:     session.Provider,
-		Email:        extractEmailFromJWT(tokenResp.AccessToken),
-	}, nil
-}
-
-func (s *KiroOAuthService) exchangeKiroCLICode(ctx context.Context, sessionID string, code string, session *kiroOAuthSession, proxyURL string) (*KiroOAuthTokenInfo, error) {
-	payload := map[string]string{
-		"code":          code,
-		"code_verifier": session.CodeVerifier,
-		"redirect_uri":  KiroCLITokenRedirectURI,
-	}
-	var tokenResp kiroSocialTokenResponse
-	targetURL := strings.TrimRight(s.authEndpoint, "/") + "/oauth/token"
-	if err := postKiroOAuthJSONWithAccept(ctx, targetURL, payload, proxyURL, "Kiro-CLI", "*/*", &tokenResp); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
-		return nil, fmt.Errorf("kiro CLI OAuth response missing tokens")
-	}
-	if tokenResp.ExpiresIn <= 0 {
-		tokenResp.ExpiresIn = 3600
-	}
-	s.deleteSession(sessionID)
-	return &KiroOAuthTokenInfo{
-		AccessToken:  strings.TrimSpace(tokenResp.AccessToken),
-		RefreshToken: strings.TrimSpace(tokenResp.RefreshToken),
-		ProfileARN:   strings.TrimSpace(tokenResp.ProfileARN),
-		ExpiresIn:    tokenResp.ExpiresIn,
-		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-		AuthMethod:   kiroCLIMethod,
-		Provider:     kiroCLIProvider,
-		Email:        extractEmailFromJWT(tokenResp.AccessToken),
-	}, nil
-}
-
-func (s *KiroOAuthService) PollDeviceCode(ctx context.Context, input KiroOAuthPollInput) (*KiroOAuthPollResult, error) {
-	session, ok := s.getSession(input.SessionID)
-	if !ok {
-		return nil, fmt.Errorf("session 不存在或已过期")
-	}
-	if session.Method != kiroBuilderIDMethod {
-		return nil, fmt.Errorf("session is not a builder-id device-code flow")
-	}
-	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
-		resolved, err := s.resolveProxyURL(ctx, input.ProxyID)
+		token.Provider = session.Provider
+		s.sessionStore.Delete(input.SessionID)
+		return toKiroTokenInfo(token), nil
+	case "idc":
+		token, err := kiropkg.ExchangeIDCAuthCode(ctx, proxyURL, session.ClientID, session.ClientSecret, input.Code, session.CodeVerifier, session.RedirectURI, session.Region, session.StartURL)
 		if err != nil {
 			return nil, err
 		}
-		proxyURL = resolved
+		s.sessionStore.Delete(input.SessionID)
+		return toKiroTokenInfo(token), nil
+	default:
+		return nil, fmt.Errorf("unsupported auth session type: %s", session.AuthType)
 	}
-	payload := map[string]string{
-		"clientId":     session.ClientID,
-		"clientSecret": session.ClientSecret,
-		"deviceCode":   session.DeviceCode,
-		"grantType":    kiroDeviceCodeGrantType,
-	}
-	var tokenResp kiroBuilderTokenResponse
-	targetURL := strings.TrimRight(s.oidcEndpoint, "/") + "/token"
-	status, err := postKiroOAuthJSONAllowPending(ctx, targetURL, payload, proxyURL, "KiroIDE", &tokenResp)
-	if err != nil {
-		return nil, err
-	}
-	if status == "pending" {
-		return &KiroOAuthPollResult{Status: "pending", Interval: session.Interval}, nil
-	}
-	if status == "slow_down" {
-		s.bumpSessionInterval(input.SessionID, 5)
-		session, _ = s.getSession(input.SessionID)
-		return &KiroOAuthPollResult{Status: "pending", Interval: session.Interval}, nil
-	}
-	if strings.TrimSpace(tokenResp.AccessToken) == "" || strings.TrimSpace(tokenResp.RefreshToken) == "" {
-		return nil, fmt.Errorf("kiro device token response missing tokens")
-	}
-	if tokenResp.ExpiresIn <= 0 {
-		tokenResp.ExpiresIn = 3600
-	}
-	s.deleteSession(input.SessionID)
-	return &KiroOAuthPollResult{
-		Status: "complete",
-		TokenInfo: &KiroOAuthTokenInfo{
-			AccessToken:  strings.TrimSpace(tokenResp.AccessToken),
-			RefreshToken: strings.TrimSpace(tokenResp.RefreshToken),
-			ExpiresIn:    tokenResp.ExpiresIn,
-			ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-			AuthMethod:   kiroBuilderIDMethod,
-			Provider:     kiroBuilderIDProvider,
-			ClientID:     session.ClientID,
-			ClientSecret: session.ClientSecret,
-			Email:        extractEmailFromJWT(tokenResp.AccessToken),
-		},
-	}, nil
 }
 
-func (s *KiroOAuthService) startKiroCLIFlow(provider, proxyURL string) (*KiroOAuthStartResult, error) {
-	state, err := generateKiroCLIState()
-	if err != nil {
-		return nil, fmt.Errorf("生成 state 失败: %w", err)
+func buildKiroSocialExchangeRedirectURI(baseRedirectURI, provider, callbackPath, loginOption string) string {
+	option := strings.ToLower(strings.TrimSpace(loginOption))
+	if option == "" {
+		switch provider {
+		case string(kiropkg.SocialProviderGitHub):
+			option = "github"
+		case string(kiropkg.SocialProviderGoogle):
+			option = "google"
+		}
 	}
-	codeVerifier, err := generateKiroOAuthRandom(32)
-	if err != nil {
-		return nil, fmt.Errorf("生成 code_verifier 失败: %w", err)
+	return kiropkg.BuildSocialTokenRedirectURI(baseRedirectURI, callbackPath, option)
+}
+
+func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGenerateIDCAuthURLInput) (*KiroIDCAuthURLResult, error) {
+	startURL := strings.TrimSpace(input.StartURL)
+	if startURL == "" {
+		startURL = kiropkg.BuilderIDStartURL
 	}
-	sessionID, err := generateKiroOAuthRandom(32)
-	if err != nil {
-		return nil, fmt.Errorf("生成 session_id 失败: %w", err)
+	region := strings.TrimSpace(input.Region)
+	if region == "" {
+		region = "us-east-1"
 	}
-	authURL, err := url.Parse(kiroCLISignInEndpoint)
+	state, err := kiropkg.GenerateState()
+	if err != nil {
+		return nil, fmt.Errorf("generate state failed: %w", err)
+	}
+	codeVerifier, err := kiropkg.GenerateCodeVerifier()
+	if err != nil {
+		return nil, fmt.Errorf("generate code verifier failed: %w", err)
+	}
+	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	reg, err := kiropkg.RegisterIDCClient(ctx, proxyURL, kiroIDCRedirectURI, startURL, region)
 	if err != nil {
 		return nil, err
 	}
-	q := authURL.Query()
-	q.Set("state", state)
-	q.Set("code_challenge", generateKiroOAuthCodeChallenge(codeVerifier))
-	q.Set("code_challenge_method", "S256")
-	q.Set("redirect_uri", kiroCLIRedirectURI)
-	q.Set("redirect_from", "kirocli")
-	authURL.RawQuery = q.Encode()
-
-	s.setSession(sessionID, &kiroOAuthSession{
-		Method:       kiroCLIMethod,
-		Provider:     provider,
+	sessionID := kiropkg.GenerateSessionID()
+	s.sessionStore.Set(sessionID, &kiropkg.AuthSession{
 		State:        state,
 		CodeVerifier: codeVerifier,
 		ProxyURL:     proxyURL,
-		ExpiresAt:    time.Now().Add(10 * time.Minute),
+		CreatedAt:    time.Now(),
+		AuthType:     "idc",
+		RedirectURI:  kiroIDCRedirectURI,
+		ClientID:     reg.ClientID,
+		ClientSecret: reg.ClientSecret,
+		Region:       region,
+		StartURL:     startURL,
 	})
-	return &KiroOAuthStartResult{
-		Mode:      "auth_url",
-		Method:    kiroCLIMethod,
-		AuthURL:   authURL.String(),
+	return &KiroIDCAuthURLResult{
+		AuthURL:   kiropkg.BuildIDCAuthURL(reg.ClientID, kiroIDCRedirectURI, state, kiropkg.GenerateCodeChallenge(codeVerifier), region),
 		SessionID: sessionID,
 		State:     state,
+		ClientID:  reg.ClientID,
+		Region:    region,
+		StartURL:  startURL,
 	}, nil
 }
 
-func (s *KiroOAuthService) startSocialFlow(method, provider, proxyURL string) (*KiroOAuthStartResult, error) {
-	state, err := generateKiroOAuthRandom(32)
-	if err != nil {
-		return nil, fmt.Errorf("生成 state 失败: %w", err)
+func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshTokenInput) (*KiroTokenInfo, error) {
+	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	refreshToken := strings.TrimSpace(input.RefreshToken)
+	if refreshToken == "" {
+		return nil, fmt.Errorf("kiro refresh token is required")
 	}
-	codeVerifier, err := generateKiroOAuthRandom(64)
-	if err != nil {
-		return nil, fmt.Errorf("生成 code_verifier 失败: %w", err)
+	authMethod := resolveKiroRefreshAuthMethod(input.AuthMethod, input.ClientID, input.ClientSecret)
+
+	var token *kiropkg.TokenData
+	var err error
+	switch authMethod {
+	case "idc":
+		clientID := strings.TrimSpace(input.ClientID)
+		clientSecret := strings.TrimSpace(input.ClientSecret)
+		if clientID == "" || clientSecret == "" {
+			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
+		}
+		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL)
+	default:
+		token, err = kiropkg.RefreshSocialToken(ctx, proxyURL, refreshToken, input.Provider)
 	}
-	sessionID, err := generateKiroOAuthRandom(32)
-	if err != nil {
-		return nil, fmt.Errorf("生成 session_id 失败: %w", err)
-	}
-	authURL, err := url.Parse(strings.TrimRight(s.authEndpoint, "/") + "/login")
 	if err != nil {
 		return nil, err
 	}
-	q := authURL.Query()
-	q.Set("idp", provider)
-	q.Set("redirect_uri", KiroSocialRedirectURI)
-	q.Set("code_challenge", generateKiroOAuthCodeChallenge(codeVerifier))
-	q.Set("code_challenge_method", "S256")
-	q.Set("state", state)
-	q.Set("prompt", "select_account")
-	authURL.RawQuery = q.Encode()
+	if token.ProfileArn == "" {
+		token.ProfileArn = input.ProfileArn
+	}
+	if token.ClientID == "" {
+		token.ClientID = input.ClientID
+	}
+	if token.ClientSecret == "" {
+		token.ClientSecret = input.ClientSecret
+	}
+	if token.StartURL == "" {
+		token.StartURL = input.StartURL
+	}
+	if token.Region == "" {
+		token.Region = input.Region
+	}
+	return toKiroTokenInfo(token), nil
+}
 
-	s.setSession(sessionID, &kiroOAuthSession{
-		Method:       method,
-		Provider:     provider,
-		State:        state,
-		CodeVerifier: codeVerifier,
-		ProxyURL:     proxyURL,
-		ExpiresAt:    time.Now().Add(10 * time.Minute),
+func resolveKiroRefreshAuthMethod(authMethod, clientID, clientSecret string) string {
+	method := strings.ToLower(strings.TrimSpace(authMethod))
+	if method != "" {
+		return method
+	}
+	if strings.TrimSpace(clientID) != "" && strings.TrimSpace(clientSecret) != "" {
+		return "idc"
+	}
+	return "social"
+}
+
+func (s *KiroOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*KiroTokenInfo, error) {
+	if account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return nil, fmt.Errorf("not a kiro oauth account")
+	}
+	return s.RefreshToken(ctx, &KiroRefreshTokenInput{
+		RefreshToken: account.GetCredential("refresh_token"),
+		AuthMethod:   account.GetCredential("auth_method"),
+		Provider:     account.GetCredential("provider"),
+		ClientID:     account.GetCredential("client_id"),
+		ClientSecret: account.GetCredential("client_secret"),
+		StartURL:     account.GetCredential("start_url"),
+		Region:       account.GetCredential("region"),
+		ProfileArn:   account.GetCredential("profile_arn"),
+		ProxyID:      account.ProxyID,
 	})
-	return &KiroOAuthStartResult{
-		Mode:      "auth_url",
-		Method:    method,
-		AuthURL:   authURL.String(),
-		SessionID: sessionID,
-		State:     state,
-	}, nil
 }
 
-func (s *KiroOAuthService) startBuilderIDDeviceFlow(ctx context.Context, proxyURL string) (*KiroOAuthStartResult, error) {
-	clientResp, err := s.registerBuilderIDClient(ctx, proxyURL)
+func (s *KiroOAuthService) ImportToken(input *KiroImportTokenInput) (*KiroTokenInfo, error) {
+	token, err := kiropkg.ParseImportedToken(input.TokenJSON, input.DeviceRegistrationJSON)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(clientResp.ClientID) == "" || strings.TrimSpace(clientResp.ClientSecret) == "" {
-		return nil, fmt.Errorf("kiro client registration response missing client credentials")
-	}
-	deviceResp, err := s.requestBuilderIDDeviceAuthorization(ctx, proxyURL, clientResp)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(deviceResp.DeviceCode) == "" || strings.TrimSpace(deviceResp.UserCode) == "" {
-		return nil, fmt.Errorf("kiro device authorization response missing device code")
-	}
-	if deviceResp.Interval <= 0 {
-		deviceResp.Interval = kiroOAuthDefaultDeviceInterval
-	}
-	if deviceResp.ExpiresIn <= 0 {
-		deviceResp.ExpiresIn = 600
-	}
-	sessionID, err := generateKiroOAuthRandom(32)
-	if err != nil {
-		return nil, fmt.Errorf("生成 session_id 失败: %w", err)
-	}
-	s.setSession(sessionID, &kiroOAuthSession{
-		Method:       kiroBuilderIDMethod,
-		Provider:     kiroBuilderIDProvider,
-		ClientID:     strings.TrimSpace(clientResp.ClientID),
-		ClientSecret: strings.TrimSpace(clientResp.ClientSecret),
-		DeviceCode:   strings.TrimSpace(deviceResp.DeviceCode),
-		ProxyURL:     proxyURL,
-		ExpiresAt:    time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second),
-		Interval:     deviceResp.Interval,
-	})
-	return &KiroOAuthStartResult{
-		Mode:                    "device_code",
-		Method:                  kiroBuilderIDMethod,
-		SessionID:               sessionID,
-		VerificationURI:         strings.TrimSpace(deviceResp.VerificationURI),
-		VerificationURIComplete: strings.TrimSpace(deviceResp.VerificationURIComplete),
-		UserCode:                strings.TrimSpace(deviceResp.UserCode),
-		ExpiresIn:               deviceResp.ExpiresIn,
-		Interval:                deviceResp.Interval,
-	}, nil
+	return toKiroTokenInfo(token), nil
 }
 
-func (s *KiroOAuthService) registerBuilderIDClient(ctx context.Context, proxyURL string) (*kiroRegisterClientResponse, error) {
-	payload := map[string]any{
-		"clientName": "Kiro IDE",
-		"clientType": "public",
-		"scopes": []string{
-			"codewhisperer:completions",
-			"codewhisperer:analysis",
-			"codewhisperer:conversations",
-			"codewhisperer:transformations",
-			"codewhisperer:taskassist",
-		},
-		"grantTypes": []string{
-			kiroDeviceCodeGrantType,
-			"refresh_token",
-		},
+func (s *KiroOAuthService) BuildAccountCredentials(tokenInfo *KiroTokenInfo) map[string]any {
+	if tokenInfo == nil {
+		return map[string]any{}
 	}
-	var out kiroRegisterClientResponse
-	targetURL := strings.TrimRight(s.oidcEndpoint, "/") + "/client/register"
-	if err := postKiroOAuthJSON(ctx, targetURL, payload, proxyURL, "KiroIDE", &out); err != nil {
-		return nil, fmt.Errorf("register Kiro client failed: %w", err)
+
+	creds := map[string]any{}
+	if tokenInfo.AccessToken != "" {
+		creds["access_token"] = tokenInfo.AccessToken
 	}
-	return &out, nil
+	if tokenInfo.RefreshToken != "" {
+		creds["refresh_token"] = tokenInfo.RefreshToken
+	}
+	if tokenInfo.ProfileArn != "" {
+		creds["profile_arn"] = tokenInfo.ProfileArn
+	}
+	if tokenInfo.ExpiresAt != "" {
+		creds["expires_at"] = tokenInfo.ExpiresAt
+	}
+	if tokenInfo.AuthMethod != "" {
+		creds["auth_method"] = tokenInfo.AuthMethod
+	}
+	if tokenInfo.Provider != "" {
+		creds["provider"] = tokenInfo.Provider
+	}
+	if tokenInfo.ClientID != "" {
+		creds["client_id"] = tokenInfo.ClientID
+	}
+	if tokenInfo.ClientSecret != "" {
+		creds["client_secret"] = tokenInfo.ClientSecret
+	}
+	if tokenInfo.ClientIDHash != "" {
+		creds["client_id_hash"] = tokenInfo.ClientIDHash
+	}
+	if tokenInfo.Email != "" {
+		creds["email"] = tokenInfo.Email
+	}
+	if tokenInfo.StartURL != "" {
+		creds["start_url"] = tokenInfo.StartURL
+	}
+	if tokenInfo.Region != "" {
+		creds["region"] = tokenInfo.Region
+	}
+
+	return creds
 }
 
-func (s *KiroOAuthService) requestBuilderIDDeviceAuthorization(ctx context.Context, proxyURL string, client *kiroRegisterClientResponse) (*kiroDeviceAuthorizationResponse, error) {
-	payload := map[string]string{
-		"clientId":     client.ClientID,
-		"clientSecret": client.ClientSecret,
-		"startUrl":     kiroBuilderIDStartURL,
+func toKiroTokenInfo(token *kiropkg.TokenData) *KiroTokenInfo {
+	if token == nil {
+		return nil
 	}
-	var out kiroDeviceAuthorizationResponse
-	targetURL := strings.TrimRight(s.oidcEndpoint, "/") + "/device_authorization"
-	if err := postKiroOAuthJSON(ctx, targetURL, payload, proxyURL, "KiroIDE", &out); err != nil {
-		return nil, fmt.Errorf("request Kiro device authorization failed: %w", err)
+	return &KiroTokenInfo{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		ProfileArn:   token.ProfileArn,
+		ExpiresAt:    token.ExpiresAt,
+		AuthMethod:   token.AuthMethod,
+		Provider:     token.Provider,
+		ClientID:     token.ClientID,
+		ClientSecret: token.ClientSecret,
+		ClientIDHash: token.ClientIDHash,
+		Email:        token.Email,
+		StartURL:     token.StartURL,
+		Region:       token.Region,
 	}
-	return &out, nil
 }
 
 func (s *KiroOAuthService) resolveProxyURL(ctx context.Context, proxyID *int64) (string, error) {
-	if proxyID == nil {
+	if proxyID == nil || s.proxyRepo == nil {
 		return "", nil
 	}
-	if s.proxyRepo == nil {
-		return "", fmt.Errorf("proxy repository is not configured")
-	}
 	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-	if err != nil {
-		return "", fmt.Errorf("proxy not found: %w", err)
-	}
-	if proxy == nil {
-		return "", fmt.Errorf("proxy not found")
+	if err != nil || proxy == nil {
+		return "", err
 	}
 	return proxy.URL(), nil
-}
-
-func (s *KiroOAuthService) setSession(sessionID string, session *kiroOAuthSession) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cleanupExpiredSessionsLocked(time.Now())
-	s.sessions[sessionID] = session
-}
-
-func (s *KiroOAuthService) getSession(sessionID string) (*kiroOAuthSession, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	s.cleanupExpiredSessionsLocked(now)
-	session, ok := s.sessions[strings.TrimSpace(sessionID)]
-	if !ok || session == nil {
-		return nil, false
-	}
-	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
-		delete(s.sessions, sessionID)
-		return nil, false
-	}
-	cp := *session
-	return &cp, true
-}
-
-func (s *KiroOAuthService) deleteSession(sessionID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.sessions, strings.TrimSpace(sessionID))
-}
-
-func (s *KiroOAuthService) bumpSessionInterval(sessionID string, delta int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if session, ok := s.sessions[strings.TrimSpace(sessionID)]; ok && session != nil {
-		session.Interval += delta
-	}
-}
-
-func (s *KiroOAuthService) cleanupExpiredSessionsLocked(now time.Time) {
-	for id, session := range s.sessions {
-		if session == nil || (!session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now)) {
-			delete(s.sessions, id)
-		}
-	}
-}
-
-func normalizeKiroOAuthMethod(raw string) (method string, provider string, err error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "aws", "builder", "builder-id", "aws-builder-id":
-		return kiroBuilderIDMethod, kiroBuilderIDProvider, nil
-	case "google", "kiro-cli", "cli", "native":
-		return kiroCLIMethod, kiroCLIProvider, nil
-	case "github":
-		return "", "", fmt.Errorf("github Kiro OAuth is not supported; use AWS Builder ID or Kiro CLI login")
-	default:
-		return "", "", fmt.Errorf("unsupported Kiro OAuth method: %s", raw)
-	}
-}
-
-func generateKiroCLIState() (string, error) {
-	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const stateLen = 10
-	buf := make([]byte, stateLen)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	out := make([]byte, stateLen)
-	for i, b := range buf {
-		out[i] = alphabet[int(b)%len(alphabet)]
-	}
-	return string(out), nil
-}
-
-func generateKiroOAuthRandom(size int) (string, error) {
-	buf := make([]byte, size)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-func generateKiroOAuthCodeChallenge(codeVerifier string) string {
-	sum := sha256.Sum256([]byte(codeVerifier))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func postKiroOAuthJSON(ctx context.Context, targetURL string, payload any, proxyURL string, userAgent string, out any) error {
-	return postKiroOAuthJSONWithAccept(ctx, targetURL, payload, proxyURL, userAgent, "application/json", out)
-}
-
-func postKiroOAuthJSONWithAccept(ctx context.Context, targetURL string, payload any, proxyURL string, userAgent string, accept string, out any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(accept) == "" {
-		accept = "application/json"
-	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("User-Agent", userAgent)
-
-	client, err := httppool.GetClient(httppool.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               60 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-	})
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("kiro OAuth request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	if out == nil {
-		return nil
-	}
-	if err := json.Unmarshal(respBody, out); err != nil {
-		return err
-	}
-	return nil
-}
-
-func postKiroOAuthJSONAllowPending(ctx context.Context, targetURL string, payload any, proxyURL string, userAgent string, out any) (string, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-
-	client, err := httppool.GetClient(httppool.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               60 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-	})
-	if err != nil {
-		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode == http.StatusBadRequest {
-		var errResp kiroOAuthErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			switch errResp.Error {
-			case "authorization_pending":
-				return "pending", nil
-			case "slow_down":
-				return "slow_down", nil
-			}
-		}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("kiro device token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(respBody, out); err != nil {
-			return "", err
-		}
-	}
-	return "complete", nil
-}
-
-func extractEmailFromJWT(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return ""
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
-	}
-	for _, key := range []string{"email", "username"} {
-		if v, ok := claims[key].(string); ok && strings.Contains(v, "@") {
-			return v
-		}
-	}
-	return ""
 }

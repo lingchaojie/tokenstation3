@@ -4,8 +4,10 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -50,6 +52,13 @@ type Account struct {
 
 	TempUnschedulableUntil  *time.Time
 	TempUnschedulableReason string
+
+	KiroQuotaState     string
+	KiroQuotaReason    string
+	KiroQuotaResetAt   *time.Time
+	KiroRuntimeState   string
+	KiroRuntimeReason  string
+	KiroRuntimeResetAt *time.Time
 
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
@@ -191,12 +200,20 @@ func (a *Account) IsGemini() bool {
 	return a.Platform == PlatformGemini
 }
 
+func (a *Account) IsKiro() bool {
+	return a.Platform == PlatformKiro
+}
+
 func (a *Account) IsGrok() bool {
 	return a.Platform == PlatformGrok
 }
 
 func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
+}
+
+func (a *Account) IsOpenAICompatible() bool {
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -513,9 +530,10 @@ func (a *Account) GetModelMapping() map[string]string {
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
 	if a.Credentials == nil {
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
+		// 部分平台在未显式配置 model_mapping 时仍应使用默认映射，
+		// 以限制可调度/可转发的模型集合。
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+			return defaults
 		}
 		if a.Platform == domain.PlatformGrok {
 			return xai.DefaultModelMapping()
@@ -524,9 +542,8 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return nil
 	}
 	if len(rawMapping) == 0 {
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+			return defaults
 		}
 		if a.Platform == domain.PlatformGrok {
 			return xai.DefaultModelMapping()
@@ -551,14 +568,24 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return result
 	}
 
-	// Antigravity 平台使用默认映射
-	if a.Platform == domain.PlatformAntigravity {
-		return domain.DefaultAntigravityModelMapping
+	if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+		return defaults
 	}
 	if a.Platform == domain.PlatformGrok {
 		return xai.DefaultModelMapping()
 	}
 	return nil
+}
+
+func defaultModelMappingForPlatform(platform string) map[string]string {
+	switch platform {
+	case domain.PlatformAntigravity:
+		return domain.DefaultAntigravityModelMapping
+	case domain.PlatformKiro:
+		return domain.DefaultKiroModelMapping
+	default:
+		return nil
+	}
 }
 
 func mapPtr(m map[string]any) uintptr {
@@ -769,6 +796,9 @@ func (a *Account) GetBaseURL() string {
 	}
 	baseURL := a.GetCredential("base_url")
 	if baseURL == "" {
+		if a.Platform == PlatformKiro {
+			return ""
+		}
 		return "https://api.anthropic.com"
 	}
 	if a.Platform == PlatformAntigravity {
@@ -1085,10 +1115,6 @@ func (a *Account) IsOpenAI() bool {
 	return a.Platform == PlatformOpenAI
 }
 
-func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.IsOpenAI() || a.IsKiro() || a.IsGrok())
-}
-
 func (a *Account) IsAnthropic() bool {
 	return a.Platform == PlatformAnthropic
 }
@@ -1239,9 +1265,6 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return true
 	}
 	if !a.IsOpenAICompatible() {
-		return false
-	}
-	if a.IsKiro() && capability != OpenAIEndpointCapabilityChatCompletions {
 		return false
 	}
 	if a.IsGrok() {
@@ -1586,6 +1609,48 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 	}
 	enabled, ok := a.Extra["anthropic_passthrough"].(bool)
 	return ok && enabled
+}
+
+// ValidateKiroCreditUnitPriceFromExtra rejects invalid account-level Kiro credit pricing.
+func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra["kiro_credit_unit_price_usd"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	var value float64
+	switch v := raw.(type) {
+	case float64:
+		value = v
+	case float32:
+		value = float64(v)
+	case int:
+		value = float64(v)
+	case int64:
+		value = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+		}
+		value = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+		}
+		value = parsed
+	default:
+		return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return fmt.Errorf("kiro_credit_unit_price_usd must be a finite number >= 0")
+	}
+	extra["kiro_credit_unit_price_usd"] = value
+	return nil
 }
 
 // WebSearch 模拟三态常量

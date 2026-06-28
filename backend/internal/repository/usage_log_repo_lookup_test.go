@@ -72,6 +72,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullFloat64{},
+			sql.NullFloat64{},
 			createdAt,
 		)
 

@@ -121,6 +121,25 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"tab_flash_lite_preview": "tab_flash_lite_preview",
 }
 
+// DefaultKiroModelMapping 是 Kiro 平台的默认模型映射。
+// 键为对外暴露/允许请求的模型名，值为实际发送到 Kiro 上游的模型名。
+var DefaultKiroModelMapping = map[string]string{
+	"claude-opus-4-8":                     "claude-opus-4.8",
+	"claude-opus-4-8-thinking":            "claude-opus-4.8",
+	"claude-opus-4-7":                     "claude-opus-4.7",
+	"claude-opus-4-7-thinking":            "claude-opus-4.7",
+	"claude-opus-4-6":                     "claude-opus-4.6",
+	"claude-opus-4-6-thinking":            "claude-opus-4.6",
+	"claude-sonnet-4-6":                   "claude-sonnet-4.6",
+	"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
+	"claude-opus-4-5-20251101":            "claude-opus-4.5",
+	"claude-opus-4-5-20251101-thinking":   "claude-opus-4.5",
+	"claude-sonnet-4-5-20250929":          "claude-sonnet-4.5",
+	"claude-sonnet-4-5-20250929-thinking": "claude-sonnet-4.5",
+	"claude-haiku-4-5-20251001":           "claude-haiku-4.5",
+	"claude-haiku-4-5-20251001-thinking":  "claude-haiku-4.5",
+}
+
 // DefaultBedrockModelMapping 是 AWS Bedrock 平台的默认模型映射
 // 将 Anthropic 标准模型名映射到 Bedrock 模型 ID
 // 注意：此处的 "us." 前缀仅为默认值，ResolveBedrockModelID 会根据账号配置的

@@ -50,10 +50,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if account.IsKiro() {
-		upstreamModel = ResolveKiroModelID(billingModel)
-		return s.forwardAnthropicViaKiro(ctx, c, account, &anthropicReq, originalModel, billingModel, upstreamModel, startTime)
-	}
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	anthropicDigestChain := ""

@@ -29,6 +29,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -90,6 +91,7 @@ const (
 // ForceCacheBillingContextKey 强制缓存计费上下文键
 // 用于粘性会话切换时，将 input_tokens 转为 cache_read_input_tokens 计费
 type forceCacheBillingKeyType struct{}
+type kiroCooldownRecoveryAttemptedKeyType struct{}
 
 // accountWithLoad 账号与负载信息的组合，用于负载感知调度
 type accountWithLoad struct {
@@ -98,6 +100,7 @@ type accountWithLoad struct {
 }
 
 var ForceCacheBillingContextKey = forceCacheBillingKeyType{}
+var kiroCooldownRecoveryAttemptedKey = kiroCooldownRecoveryAttemptedKeyType{}
 
 var (
 	windowCostPrefetchCacheHitTotal  atomic.Int64
@@ -547,6 +550,7 @@ type ClaudeUsage struct {
 	CacheCreation5mTokens    int // 5分钟缓存创建token（来自嵌套 cache_creation 对象）
 	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+	KiroCredits              float64
 }
 
 // ForwardResult 转发结果
@@ -633,6 +637,8 @@ type GatewayService struct {
 	deferredService       *DeferredService
 	concurrencyService    *ConcurrencyService
 	claudeTokenProvider   *ClaudeTokenProvider
+	kiroTokenProvider     *KiroTokenProvider
+	kiroCooldownStore     KiroCooldownStore
 	sessionLimitCache     SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
 	rpmCache              RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
 	userGroupRateResolver *userGroupRateResolver
@@ -673,6 +679,8 @@ func NewGatewayService(
 	httpUpstream HTTPUpstream,
 	deferredService *DeferredService,
 	claudeTokenProvider *ClaudeTokenProvider,
+	kiroTokenProvider *KiroTokenProvider,
+	kiroCooldownStore KiroCooldownStore,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
 	digestStore *DigestSessionStore,
@@ -707,6 +715,8 @@ func NewGatewayService(
 		httpUpstream:          httpUpstream,
 		deferredService:       deferredService,
 		claudeTokenProvider:   claudeTokenProvider,
+		kiroTokenProvider:     kiroTokenProvider,
+		kiroCooldownStore:     kiroCooldownStore,
 		sessionLimitCache:     sessionLimitCache,
 		rpmCache:              rpmCache,
 		userGroupRateCache:    gocache.New(userGroupRateTTL, time.Minute),
@@ -1810,7 +1820,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				}
 				continue
 			}
-			if !s.isAccountAllowedForPlatform(account, platform, useMixed, requestedModel) {
+			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
 				filteredPlatform++
 				continue
 			}
@@ -1865,7 +1875,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						var stickyCacheMissReason string
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed, requestedModel) &&
+							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
@@ -2048,7 +2058,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				// 注意：不再检查 isAccountInGroup，因为 accountByID 已经从按分组过滤的
 				// accounts 列表构建，账号一定在分组内。而 scheduler snapshot 缓存
 				// 反序列化后 AccountGroups 字段为空，导致 isAccountInGroup 永远返回 false。
-				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed, requestedModel)
+				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)
 				modelSchedulable := s.isAccountSchedulableForModelSelection(ctx, account, requestedModel)
 				quotaOK := s.isAccountSchedulableForQuota(account)
@@ -2165,7 +2175,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if !s.isAccountSchedulableForSelection(acc) {
 			continue
 		}
-		if !s.isAccountAllowedForPlatform(acc, platform, useMixed, requestedModel) {
+		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -2472,10 +2482,10 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		return accounts, useMixed, err
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
-	platforms := schedulablePlatformsForRequest(platform, hasForcePlatform)
-	var accounts []Account
-	var err error
-	if len(platforms) > 1 {
+	if useMixed {
+		platforms := []string{platform, PlatformAntigravity}
+		var accounts []Account
+		var err error
 		if groupID != nil {
 			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
 		} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
@@ -2483,7 +2493,42 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		} else {
 			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 		}
-	} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		if err != nil {
+			slog.Debug("account_scheduling_list_failed",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"error", err)
+			return nil, useMixed, err
+		}
+		filtered := make([]Account, 0, len(accounts))
+		for _, acc := range accounts {
+			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+				continue
+			}
+			filtered = append(filtered, acc)
+		}
+		slog.Debug("account_scheduling_list_mixed",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"raw_count", len(accounts),
+			"filtered_count", len(filtered))
+		if slog.Default().Enabled(ctx, slog.LevelDebug) {
+			for _, acc := range filtered {
+				slog.Debug("account_scheduling_account_detail",
+					"account_id", acc.ID,
+					"name", acc.Name,
+					"platform", acc.Platform,
+					"type", acc.Type,
+					"status", acc.Status,
+					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
+			}
+		}
+		return filtered, useMixed, nil
+	}
+
+	var accounts []Account
+	var err error
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	} else if groupID != nil {
 		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
@@ -2498,21 +2543,12 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			"error", err)
 		return nil, useMixed, err
 	}
-	filtered := make([]Account, 0, len(accounts))
-	for _, acc := range accounts {
-		if acc.Platform == PlatformAntigravity && platform != PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-			continue
-		}
-		filtered = append(filtered, acc)
-	}
-	slog.Debug("account_scheduling_list",
+	slog.Debug("account_scheduling_list_single",
 		"group_id", derefGroupID(groupID),
 		"platform", platform,
-		"platforms", platforms,
-		"raw_count", len(accounts),
-		"filtered_count", len(filtered))
+		"count", len(accounts))
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		for _, acc := range filtered {
+		for _, acc := range accounts {
 			slog.Debug("account_scheduling_account_detail",
 				"account_id", acc.ID,
 				"name", acc.Name,
@@ -2522,7 +2558,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 		}
 	}
-	return filtered, useMixed, nil
+	return accounts, useMixed, nil
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
@@ -2536,43 +2572,108 @@ func (s *GatewayService) IsSingleAntigravityAccountGroup(ctx context.Context, gr
 	return len(accounts) == 1
 }
 
-func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool, requestedModel string) bool {
+func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool) bool {
 	if account == nil {
 		return false
 	}
-	platform = strings.TrimSpace(platform)
-	if platform == "" {
-		return true
-	}
-	if account.Platform == platform {
-		return true
-	}
-	if account.Platform == PlatformAntigravity {
-		return useMixed && account.IsMixedSchedulingEnabled()
-	}
-	if account.Platform == PlatformKiro {
-		if platform == PlatformOpenAI {
-			return isKiroBridgeAccountAllowed(account, platform, requestedModel)
+	if useMixed {
+		if account.Platform == platform {
+			return true
 		}
-		if useMixed && platform == PlatformAnthropic {
-			return isKiroBridgeAccountAllowed(account, platform, requestedModel)
-		}
+		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
 	}
-	return false
+	return account.Platform == platform
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
 	if account == nil {
 		return false
 	}
-	return account.IsSchedulable()
+	if !account.IsSchedulable() {
+		return false
+	}
+	return s.isKiroRuntimeSchedulable(context.Background(), account)
 }
 
 func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Context, account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
-	return account.IsSchedulableForModelWithContext(ctx, requestedModel)
+	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+		return false
+	}
+	return s.isKiroRuntimeSchedulable(ctx, account)
+}
+
+func (s *GatewayService) isKiroRuntimeSchedulable(ctx context.Context, account *Account) bool {
+	if !isKiroDirectModeAccount(account) || s == nil || s.kiroCooldownStore == nil {
+		return true
+	}
+	state, err := s.getKiroCooldownState(ctx, buildKiroAccountKey(account))
+	if err != nil {
+		return true
+	}
+	return state == nil || !state.Active
+}
+
+func (s *GatewayService) tryRecoverKiroCooldownPool(ctx context.Context, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, allowMixedScheduling bool) bool {
+	if s == nil || s.kiroCooldownStore == nil || ctx.Value(kiroCooldownRecoveryAttemptedKey) == true {
+		return false
+	}
+	tokenKeys := s.kiroTransientCooldownRecoveryKeys(ctx, accounts, requestedModel, excludedIDs, allowMixedScheduling)
+	if len(tokenKeys) == 0 {
+		return false
+	}
+	cleared, err := s.kiroCooldownStore.ClearEarliestTransientCooldown(ctx, tokenKeys)
+	if err != nil {
+		logger.LegacyPrintf("service.gateway", "Kiro cooldown pool recovery failed: %v", err)
+		return false
+	}
+	if cleared {
+		logger.LegacyPrintf("service.gateway", "Kiro cooldown pool recovery cleared one transient cooldown")
+	}
+	return cleared
+}
+
+func (s *GatewayService) kiroTransientCooldownRecoveryKeys(ctx context.Context, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, allowMixedScheduling bool) []string {
+	tokenKeys := make([]string, 0, len(accounts))
+	eligible := 0
+	for i := range accounts {
+		acc := &accounts[i]
+		if !isKiroDirectModeAccount(acc) {
+			if allowMixedScheduling {
+				continue
+			}
+			return nil
+		}
+		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		if !acc.IsSchedulable() {
+			continue
+		}
+		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForQuota(acc) ||
+			!s.isAccountSchedulableForWindowCost(ctx, acc, false) ||
+			!s.isAccountSchedulableForRPM(ctx, acc, false) {
+			continue
+		}
+		eligible++
+		state, err := s.getKiroCooldownState(ctx, buildKiroAccountKey(acc))
+		if err != nil || state == nil || !state.Active {
+			return nil
+		}
+		if state.Reason != kirocooldown.CooldownReason429 {
+			return nil
+		}
+		tokenKeys = append(tokenKeys, buildKiroAccountKey(acc))
+	}
+	if eligible == 0 || len(tokenKeys) != eligible {
+		return nil
+	}
+	return tokenKeys
 }
 
 // isAccountInGroup checks if the account belongs to the specified group.
@@ -3534,7 +3635,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if s.isAccountAllowedForPlatform(account, nativePlatform, true, requestedModel) {
+							if s.isAccountAllowedForPlatform(account, nativePlatform, true) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -3586,7 +3687,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				continue
 			}
 			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-			if !s.isAccountAllowedForPlatform(acc, nativePlatform, true, requestedModel) {
+			if !s.isAccountAllowedForPlatform(acc, nativePlatform, true) {
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3655,7 +3756,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-						if s.isAccountAllowedForPlatform(account, nativePlatform, true, requestedModel) {
+						if s.isAccountAllowedForPlatform(account, nativePlatform, true) {
 							return account, nil
 						}
 					}
@@ -3698,7 +3799,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			continue
 		}
 		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-		if !s.isAccountAllowedForPlatform(acc, nativePlatform, true, requestedModel) {
+		if !s.isAccountAllowedForPlatform(acc, nativePlatform, true) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3866,7 +3967,7 @@ func (s *GatewayService) diagnoseSelectionFailure(
 	if !s.isAccountSchedulableForSelection(acc) {
 		return selectionFailureDiagnosis{Category: "unschedulable", Detail: "generic_unschedulable"}
 	}
-	if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling, requestedModel) {
+	if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
 		return selectionFailureDiagnosis{
 			Category: "platform_filtered",
 			Detail:   fmt.Sprintf("account_platform=%s requested_platform=%s", acc.Platform, strings.TrimSpace(platform)),
@@ -8951,7 +9052,7 @@ func (p *postUsageBillingParams) shouldUpdateRateLimits() bool {
 }
 
 func (p *postUsageBillingParams) shouldUpdateAccountQuota() bool {
-	return p.Cost.TotalCost > 0 && (p.Account.IsAPIKeyOrBedrock() || p.Account.IsKiroOAuth()) && p.Account.HasAnyQuotaLimit()
+	return p.Cost.TotalCost > 0 && p.Account.IsAPIKeyOrBedrock() && p.Account.HasAnyQuotaLimit()
 }
 
 // postUsageBilling is the legacy fallback billing path used when the unified
@@ -9444,6 +9545,9 @@ type recordUsageOpts struct {
 	// 长上下文计费（仅 Gemini 路径需要）
 	LongContextThreshold  int
 	LongContextMultiplier float64
+
+	// Kiro 账号在上游返回 auto 等无法定价模型时使用保守计费兜底。
+	IsKiroAccount bool
 }
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
@@ -9582,6 +9686,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	// 计算费用
+	opts.IsKiroAccount = account != nil && account.Platform == PlatformKiro
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, opts)
 
 	// 判断计费方式：订阅模式 vs 余额模式
@@ -9669,6 +9774,28 @@ func (s *GatewayService) calculateRecordUsageCost(
 
 	// Token 计费
 	return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+}
+
+const kiroConservativeFallbackBillingModel = "claude-opus-4-6"
+
+func shouldUseKiroConservativeBillingFallback(result *ForwardResult, billingModel string, opts *recordUsageOpts) bool {
+	if result == nil {
+		return false
+	}
+
+	return opts != nil && opts.IsKiroAccount
+}
+
+func (s *GatewayService) calculateKiroConservativeTokenCost(tokens UsageTokens, multiplier float64) *CostBreakdown {
+	if s == nil || s.billingService == nil {
+		return nil
+	}
+	cost, err := s.billingService.CalculateCost(kiroConservativeFallbackBillingModel, tokens, multiplier)
+	if err != nil {
+		logger.LegacyPrintf("service.gateway", "Calculate conservative Kiro fallback cost failed: %v", err)
+		return nil
+	}
+	return cost
 }
 
 // resolveChannelPricing 检查指定模型是否存在渠道级别定价。
@@ -9776,6 +9903,12 @@ func (s *GatewayService) calculateTokenCost(
 	}
 	if err != nil {
 		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
+		if shouldUseKiroConservativeBillingFallback(result, billingModel, opts) {
+			if fallback := s.calculateKiroConservativeTokenCost(tokens, multiplier); fallback != nil {
+				logger.LegacyPrintf("service.gateway", "Using conservative Kiro fallback pricing for model=%s", billingModel)
+				return fallback
+			}
+		}
 		return &CostBreakdown{ActualCost: 0}
 	}
 	return cost
@@ -9852,6 +9985,10 @@ func (s *GatewayService) buildRecordUsageLog(
 		usageLog.CacheReadCost = cost.CacheReadCost
 		usageLog.TotalCost = cost.TotalCost
 		usageLog.ActualCost = cost.ActualCost
+	}
+	if result.Usage.KiroCredits > 0 {
+		kiroCredits := result.Usage.KiroCredits
+		usageLog.KiroCredits = &kiroCredits
 	}
 
 	return usageLog

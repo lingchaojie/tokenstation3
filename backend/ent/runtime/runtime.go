@@ -899,6 +899,28 @@ func init() {
 	groupDescRpmLimit := groupFields[31].Descriptor()
 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
+	// groupDescKiroCacheEmulationEnabled is the schema descriptor for kiro_cache_emulation_enabled field.
+	groupDescKiroCacheEmulationEnabled := groupFields[32].Descriptor()
+	// group.DefaultKiroCacheEmulationEnabled holds the default value on creation for the kiro_cache_emulation_enabled field.
+	group.DefaultKiroCacheEmulationEnabled = groupDescKiroCacheEmulationEnabled.Default.(bool)
+	// groupDescKiroAutoStickyEnabled is the schema descriptor for kiro_auto_sticky_enabled field.
+	groupDescKiroAutoStickyEnabled := groupFields[33].Descriptor()
+	// group.DefaultKiroAutoStickyEnabled holds the default value on creation for the kiro_auto_sticky_enabled field.
+	group.DefaultKiroAutoStickyEnabled = groupDescKiroAutoStickyEnabled.Default.(bool)
+	// groupDescKiroStickySessionTTLSeconds is the schema descriptor for kiro_sticky_session_ttl_seconds field.
+	groupDescKiroStickySessionTTLSeconds := groupFields[34].Descriptor()
+	// group.DefaultKiroStickySessionTTLSeconds holds the default value on creation for the kiro_sticky_session_ttl_seconds field.
+	group.DefaultKiroStickySessionTTLSeconds = groupDescKiroStickySessionTTLSeconds.Default.(int)
+	// groupDescKiroCacheEmulationRatio is the schema descriptor for kiro_cache_emulation_ratio field.
+	groupDescKiroCacheEmulationRatio := groupFields[35].Descriptor()
+	// group.DefaultKiroCacheEmulationRatio holds the default value on creation for the kiro_cache_emulation_ratio field.
+	group.DefaultKiroCacheEmulationRatio = groupDescKiroCacheEmulationRatio.Default.(float64)
+	// groupDescKiroEndpointMode is the schema descriptor for kiro_endpoint_mode field.
+	groupDescKiroEndpointMode := groupFields[36].Descriptor()
+	// group.DefaultKiroEndpointMode holds the default value on creation for the kiro_endpoint_mode field.
+	group.DefaultKiroEndpointMode = groupDescKiroEndpointMode.Default.(string)
+	// group.KiroEndpointModeValidator is a validator for the "kiro_endpoint_mode" field. It is called by the builders before save.
+	group.KiroEndpointModeValidator = groupDescKiroEndpointMode.Validators[0].(func(string) error)
 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()
 	idempotencyrecordMixinFields0 := idempotencyrecordMixin[0].Fields()
 	_ = idempotencyrecordMixinFields0
@@ -1799,7 +1821,7 @@ func init() {
 	// usagelog.DefaultCacheTTLOverridden holds the default value on creation for the cache_ttl_overridden field.
 	usagelog.DefaultCacheTTLOverridden = usagelogDescCacheTTLOverridden.Default.(bool)
 	// usagelogDescCreatedAt is the schema descriptor for created_at field.
-	usagelogDescCreatedAt := usagelogFields[40].Descriptor()
+	usagelogDescCreatedAt := usagelogFields[41].Descriptor()
 	// usagelog.DefaultCreatedAt holds the default value on creation for the created_at field.
 	usagelog.DefaultCreatedAt = usagelogDescCreatedAt.Default.(func() time.Time)
 	userMixin := schema.User{}.Mixin()

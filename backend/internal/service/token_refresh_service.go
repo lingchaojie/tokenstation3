@@ -46,6 +46,7 @@ func NewTokenRefreshService(
 	openaiOAuthService *OpenAIOAuthService,
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
+	kiroOAuthService *KiroOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -67,6 +68,7 @@ func NewTokenRefreshService(
 	claudeRefresher := NewClaudeTokenRefresher(oauthService)
 	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
 	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
+	kiroRefresher := NewKiroTokenRefresher(kiroOAuthService)
 	var grokOAuthService *GrokOAuthService
 	if len(grokOAuthServices) > 0 {
 		grokOAuthService = grokOAuthServices[0]
@@ -79,6 +81,7 @@ func NewTokenRefreshService(
 		openAIRefresher,
 		geminiRefresher,
 		agRefresher,
+		kiroRefresher,
 		grokRefresher,
 	}
 
@@ -88,6 +91,7 @@ func NewTokenRefreshService(
 		openAIRefresher,
 		geminiRefresher,
 		agRefresher,
+		kiroRefresher,
 		grokRefresher,
 	}
 

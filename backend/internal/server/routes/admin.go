@@ -360,6 +360,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 		// Antigravity 默认模型映射
 		accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
+		accounts.GET("/kiro/default-model-mapping", h.Admin.Account.GetKiroDefaultModelMapping)
 
 		// Claude OAuth routes
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)
@@ -419,8 +420,10 @@ func registerKiroOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	kiro := admin.Group("/kiro")
 	{
 		kiro.POST("/oauth/auth-url", h.Admin.KiroOAuth.GenerateAuthURL)
+		kiro.POST("/oauth/idc-auth-url", h.Admin.KiroOAuth.GenerateIDCAuthURL)
 		kiro.POST("/oauth/exchange-code", h.Admin.KiroOAuth.ExchangeCode)
-		kiro.POST("/oauth/poll", h.Admin.KiroOAuth.PollDeviceCode)
+		kiro.POST("/oauth/refresh-token", h.Admin.KiroOAuth.RefreshToken)
+		kiro.POST("/oauth/import-token", h.Admin.KiroOAuth.ImportToken)
 	}
 }
 

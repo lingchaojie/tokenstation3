@@ -233,11 +233,17 @@ type ParsedRequest struct {
 	Model           string          // 请求的模型名称
 	Stream          bool            // 是否为流式请求
 	MetadataUserID  string          // metadata.user_id（用于会话亲和）
+	BodySessionID   string          // body-provided stable session hint
 	HasSystem       bool            // 是否包含 system 字段（包含 null 也视为显式传入）
 	ThinkingEnabled bool            // 是否开启 thinking（部分平台会影响最终模型名）
 	OutputEffort    string          // output_config.effort（Claude API 的推理强度控制）
 	MaxTokens       int             // max_tokens 值（用于探测请求拦截）
 	SessionContext  *SessionContext // 可选：请求上下文区分因子（nil 时行为不变）
+
+	// ExplicitSessionID 客户端通过 HTTP 请求头（X-Session-ID / Anthropic-Session-Id）
+	// 显式传递的会话标识符。由 Handler 层设置，不从请求体解析，因此 ReplaceBody 后保留。
+	// 一旦非空，GenerateSessionHash 将以最高优先级用它作为粘性会话 key（混入 APIKeyID 隔离用户）。
+	ExplicitSessionID string
 
 	protocol      string    // 当前 Body 的协议格式，用于 Body 替换后刷新 raw range
 	systemRange   jsonRange // system/systemInstruction.parts 的 raw JSON 范围，绑定 Body 当前内容
@@ -246,6 +252,9 @@ type ParsedRequest struct {
 
 	// GroupID 请求所属分组 ID（来自 API Key）
 	GroupID *int64
+
+	// Group 请求所属分组快照（来自 API Key 认证缓存），供请求热路径使用，避免二次查库。
+	Group *Group
 
 	// OnUpstreamAccepted 上游接受请求后立即调用（用于提前释放串行锁）
 	// 流式请求在收到 2xx 响应头后调用，避免持锁等流完成
