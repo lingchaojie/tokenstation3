@@ -96,6 +96,9 @@ const filteredGroups = computed(() => {
       result = result.filter(
         (g) => g.platform === 'antigravity' || g.platform === 'anthropic' || g.platform === 'gemini'
       )
+    } else if (props.platform === 'kiro' && props.mixedScheduling) {
+      // kiro 账户启用混合调度后，只能选择 kiro / anthropic 分组（绝不含 gemini）
+      result = result.filter((g) => g.platform === 'kiro' || g.platform === 'anthropic')
     } else {
       // 默认：只能选择同 platform 的分组
       result = result.filter((g) => g.platform === props.platform)
