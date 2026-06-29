@@ -13,6 +13,7 @@ Start with:
 - `backend/internal/pkg/kirocooldown`
 - `backend/internal/service/kiro_*.go`
 - KIRO-related sections of `backend/internal/service/gateway_service.go`
+- Account-level `extra.custom_headers` helpers in `backend/internal/service/account.go`, validation in `backend/internal/service/admin_service.go`, and final header application in `backend/internal/service/gateway_service.go`; KIRO relay accounts use the shared Anthropic-compatible request builder.
 - KIRO sticky/session wiring in `backend/internal/handler/gateway_handler.go`
 - KIRO-related sections of `backend/internal/service/gateway_forward_as_chat_completions.go`
 - KIRO-related sections of `backend/internal/service/gateway_forward_as_responses.go`
@@ -60,6 +61,8 @@ Specific misses from that approach:
 - KIRO direct accounts and KIRO relay accounts must be distinguished with `isKiroDirectModeAccount` or equivalent logic. Relay accounts with `base_url` should not use KIRO runtime, usage, count-tokens blocking, or credits display.
 - Usage changed from old `kiro_usage` assumptions to `kiro_credit`, `kiro_bonus`, `kiro_overage`, runtime/quota state, and `kiro_credits` window stats. DTOs, service enrichment, account list status, today stats, and usage cells must be checked together.
 - Shared backend files carry KIRO forwarding details: model mapping, sticky session TTL, web search cache emulation, SSE internal credit stripping, stream keepalive, cooldown recovery, token provider routing, and background OAuth refresh candidates.
+- Shared platform lists are not always identical to nianzs upstream. Preserve local DEV platforms such as `grok` when touching common refresh/scheduling SQL or admin filters; otherwise a KIRO sync can regress non-KIRO local features.
+- Account-level `extra.custom_headers` is an upstream shared feature that affects KIRO relay accounts because relay falls back to the Anthropic-compatible gateway path. It must be validated on save and applied after authentication/default/mimic headers while still blocking auth and hop-by-hop headers.
 - `gateway_handler.go` is part of KIRO sticky behavior even though it is not KIRO-named. Missing the upstream explicit session headers or `BindStickySessionForGroup` calls makes KIRO group TTL/auto-sticky settings ineffective.
 - OpenAI-compatible gateway files (`openai_gateway_chat_completions.go`, `openai_gateway_messages.go`, and `openai_gateway_service.go`) propagate `kiro_credits` from terminal stream/JSON usage into usage logs. Missing these paths causes admin/user usage to lose KIRO credits even when forwarding works.
 - Token refresh and cache invalidation are coupled: refreshing or reauthing a KIRO account must clear both the generic account token cache and KIRO-specific cache keys.

@@ -32,6 +32,23 @@ func TestValidateKiroCreditUnitPriceFromExtra(t *testing.T) {
 	})
 }
 
+func TestValidateAccountCustomHeaders(t *testing.T) {
+	require.NoError(t, ValidateAccountCustomHeaders(map[string]string{
+		"X-Client-Trace": "trace-1",
+		"User-Agent":     "custom-agent",
+	}))
+
+	require.Error(t, ValidateAccountCustomHeaders(map[string]string{
+		"Bad Header": "value",
+	}))
+	require.Error(t, ValidateAccountCustomHeaders(map[string]string{
+		"Authorization": "Bearer no",
+	}))
+	require.Error(t, ValidateAccountCustomHeaders(map[string]string{
+		"X-Api-Key": "no",
+	}))
+}
+
 func TestUpdateAccount_ValidatesKiroCreditUnitPriceExtra(t *testing.T) {
 	accountID := int64(201)
 	repo := &updateAccountOveragesRepoStub{
@@ -70,6 +87,33 @@ func TestUpdateAccount_ValidatesKiroCreditUnitPriceExtra(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, repo.updateCalls)
 	require.Equal(t, 0.071, updated.Extra["kiro_credit_unit_price_usd"])
+}
+
+func TestUpdateAccount_KiroRelayDoesNotValidateNativeCreditUnitPrice(t *testing.T) {
+	accountID := int64(202)
+	repo := &updateAccountOveragesRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformKiro,
+			Type:     AccountTypeAPIKey,
+			Status:   StatusActive,
+			Credentials: map[string]any{
+				"base_url": "https://relay.example.com",
+			},
+			Extra: map[string]any{},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{
+			"kiro_credit_unit_price_usd": -0.1,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, -0.1, updated.Extra["kiro_credit_unit_price_usd"])
 }
 
 type createAccountKiroCreditRepoStub struct {
@@ -113,4 +157,27 @@ func TestCreateAccount_ValidatesKiroCreditUnitPriceExtra(t *testing.T) {
 	require.Equal(t, 1, repo.createCalls)
 	require.Equal(t, created, repo.createdAccount)
 	require.Equal(t, float64(0), created.Extra["kiro_credit_unit_price_usd"])
+}
+
+func TestCreateAccount_KiroRelayDoesNotValidateNativeCreditUnitPrice(t *testing.T) {
+	repo := &createAccountKiroCreditRepoStub{}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                 "kiro-relay",
+		Platform:             PlatformKiro,
+		Type:                 AccountTypeAPIKey,
+		SkipDefaultGroupBind: true,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example.com",
+		},
+		Extra: map[string]any{
+			"kiro_credit_unit_price_usd": -0.1,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.createCalls)
+	require.Equal(t, created, repo.createdAccount)
+	require.Equal(t, -0.1, created.Extra["kiro_credit_unit_price_usd"])
 }
