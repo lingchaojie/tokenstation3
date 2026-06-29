@@ -2473,14 +2473,15 @@
           <Select v-model="form.status" :options="statusOptions" />
         </div>
 
-        <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
-        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
-          <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
+        <!-- Mixed Scheduling (for antigravity and kiro accounts) -->
+        <div v-if="account?.platform === 'antigravity' || account?.platform === 'kiro'" class="flex items-center gap-2">
+          <label class="flex cursor-pointer items-center gap-2">
             <input
               type="checkbox"
               v-model="mixedScheduling"
-              disabled
-              class="h-4 w-4 cursor-not-allowed rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+              :disabled="account?.platform === 'antigravity'"
+              :class="account?.platform === 'antigravity' ? 'cursor-not-allowed opacity-60' : ''"
+              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('admin.accounts.mixedScheduling') }}
@@ -2501,6 +2502,61 @@
                 class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
               ></div>
             </div>
+          </div>
+        </div>
+        <!-- Kiro mixed-scheduling config fields -->
+        <div v-if="account?.platform === 'kiro' && mixedScheduling" class="mt-3 space-y-3 rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-700 dark:bg-blue-900/20">
+          <label class="flex items-start gap-3 text-sm text-blue-700 dark:text-blue-300">
+            <input
+              v-model="kiroAutoStickyEnabled"
+              type="checkbox"
+              class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span class="block text-xs font-medium text-blue-700 dark:text-blue-400">{{ t('admin.groups.kiroCache.stickyRouting') }}</span>
+              <span class="mt-1 block text-xs text-blue-600 dark:text-blue-300">{{ t('admin.groups.kiroCache.stickyRoutingHint') }}</span>
+            </span>
+          </label>
+          <div v-if="kiroAutoStickyEnabled">
+            <label class="input-label">{{ t('admin.groups.kiroCache.stickyTTL') }}</label>
+            <input
+              v-model.number="kiroStickyTtlSeconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t('admin.groups.kiroCache.stickyTTLHint') }}</p>
+          </div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.groups.kiroCache.title') }}</label>
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.groups.kiroCache.description') }}</p>
+          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="kiroCacheEmulationEnabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t('admin.groups.kiroCache.enabled') }}
+          </label>
+          <div v-if="kiroCacheEmulationEnabled">
+            <label class="input-label">{{ t('admin.groups.kiroCache.ratio') }}</label>
+            <input
+              v-model.number="kiroCacheEmulationRatio"
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              class="input"
+              placeholder="1"
+            />
+            <p class="input-hint">{{ t('admin.groups.kiroCache.ratioHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.groups.kiroCache.endpointMode') }}</label>
+            <Select v-model="kiroEndpointMode" :options="kiroEndpointModeOptions" />
+            <p class="input-hint">{{ t('admin.groups.kiroCache.endpointModeHint') }}</p>
           </div>
         </div>
         <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
@@ -2774,6 +2830,16 @@ const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
+// Kiro mixed-scheduling config refs
+const kiroEndpointMode = ref<'q' | 'krs'>('q')
+const kiroCacheEmulationEnabled = ref(false)
+const kiroCacheEmulationRatio = ref(1)
+const kiroAutoStickyEnabled = ref(true)
+const kiroStickyTtlSeconds = ref(3600)
+const kiroEndpointModeOptions = computed(() => [
+  { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
+  { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
+])
 const antigravityProjectId = ref('')
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
@@ -3227,6 +3293,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   const extra = newAccount.extra as Record<string, unknown> | undefined
   mixedScheduling.value = extra?.mixed_scheduling === true
   allowOverages.value = extra?.allow_overages === true
+  // Backfill kiro mixed-scheduling config
+  kiroEndpointMode.value = (extra?.kiro_endpoint_mode as 'q' | 'krs') ?? 'q'
+  kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
+  kiroCacheEmulationRatio.value = typeof extra?.kiro_cache_emulation_ratio === 'number' ? extra.kiro_cache_emulation_ratio : 1
+  kiroAutoStickyEnabled.value = extra?.kiro_auto_sticky_enabled !== false
+  kiroStickyTtlSeconds.value = typeof extra?.kiro_sticky_session_ttl_seconds === 'number' ? extra.kiro_sticky_session_ttl_seconds : 3600
   const kiroCreditUnitPrice = extra?.kiro_credit_unit_price_usd
   kiroCreditUnitPriceUsd.value = typeof kiroCreditUnitPrice === 'number'
     ? kiroCreditUnitPrice
@@ -4281,6 +4353,21 @@ const handleSubmit = async () => {
       const newExtra: Record<string, unknown> = { ...currentExtra }
       const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
       newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
+      if (mixedScheduling.value) {
+        newExtra.mixed_scheduling = true
+        newExtra.kiro_endpoint_mode = kiroEndpointMode.value
+        newExtra.kiro_cache_emulation_enabled = kiroCacheEmulationEnabled.value
+        newExtra.kiro_cache_emulation_ratio = kiroCacheEmulationRatio.value
+        newExtra.kiro_auto_sticky_enabled = kiroAutoStickyEnabled.value
+        newExtra.kiro_sticky_session_ttl_seconds = kiroStickyTtlSeconds.value
+      } else {
+        delete newExtra.mixed_scheduling
+        delete newExtra.kiro_endpoint_mode
+        delete newExtra.kiro_cache_emulation_enabled
+        delete newExtra.kiro_cache_emulation_ratio
+        delete newExtra.kiro_auto_sticky_enabled
+        delete newExtra.kiro_sticky_session_ttl_seconds
+      }
       updatePayload.extra = newExtra
     }
 
