@@ -908,6 +908,15 @@ func (s *GatewayService) BindStickySessionForGroup(ctx context.Context, groupID 
 	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, stickySessionTTLForGroup(group))
 }
 
+// BindStickySessionForAccountGroup 按所选账号+分组解析 TTL 后绑定粘性会话。
+func (s *GatewayService) BindStickySessionForAccountGroup(ctx context.Context, groupID *int64, sessionHash string, account *Account, group *Group) error {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, stickySessionTTLForAccountGroup(account, group))
+}
+
 func (s *GatewayService) BindStickySessionWithTTL(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
 	if sessionHash == "" || accountID <= 0 || s.cache == nil {
 		return nil
@@ -921,6 +930,15 @@ func (s *GatewayService) BindStickySessionWithTTL(ctx context.Context, groupID *
 func stickySessionTTLForGroup(group *Group) time.Duration {
 	if group != nil && group.Platform == PlatformKiro {
 		return group.EffectiveKiroStickySessionTTL()
+	}
+	return stickySessionTTL
+}
+
+// stickySessionTTLForAccountGroup 解析粘性 TTL：原生 kiro 组取组配置；
+// mixed kiro 账号混入非 kiro 组取账号配置；其它回退默认 stickySessionTTL。
+func stickySessionTTLForAccountGroup(account *Account, group *Group) time.Duration {
+	if seconds := resolveKiroStickySessionTTLSeconds(account, group); seconds > 0 {
+		return time.Duration(seconds) * time.Second
 	}
 	return stickySessionTTL
 }
