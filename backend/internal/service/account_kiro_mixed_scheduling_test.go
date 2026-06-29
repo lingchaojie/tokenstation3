@@ -29,4 +29,9 @@ func TestAccountEligibleForMixedPlatform(t *testing.T) {
 	require.True(t, accountEligibleForMixedPlatform(anti, PlatformAnthropic))
 	require.True(t, accountEligibleForMixedPlatform(anti, PlatformGemini))
 	require.False(t, accountEligibleForMixedPlatform(&Account{Platform: PlatformOpenAI}, PlatformAnthropic))
+
+	// flag-gating regression guards
+	require.False(t, accountEligibleForMixedPlatform(nil, PlatformAnthropic))
+	require.False(t, accountEligibleForMixedPlatform(&Account{Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": false}}, PlatformAnthropic))
+	require.False(t, accountEligibleForMixedPlatform(&Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": false}}, PlatformAnthropic))
 }

@@ -1396,6 +1396,7 @@ func (a *Account) IsMixedSchedulingEnabled() bool {
 }
 
 // IsKiroMixedSchedulingEnabled 检查 kiro 账户是否启用混合调度（可参与 anthropic 分组）。
+// 非 kiro 平台始终返回 false。
 func (a *Account) IsKiroMixedSchedulingEnabled() bool {
 	if a == nil || a.Platform != PlatformKiro || a.Extra == nil {
 		return false
