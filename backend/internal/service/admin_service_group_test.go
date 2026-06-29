@@ -109,6 +109,10 @@ func (s *groupRepoStubForAdmin) GetAccountCount(_ context.Context, _ int64) (int
 	panic("unexpected GetAccountCount call")
 }
 
+func (s *groupRepoStubForAdmin) HasSchedulableMixedKiroStickyAccount(_ context.Context, _ int64) (bool, error) {
+	return false, nil
+}
+
 func (s *groupRepoStubForAdmin) DeleteAccountGroupsByGroupID(_ context.Context, _ int64) (int64, error) {
 	panic("unexpected DeleteAccountGroupsByGroupID call")
 }
@@ -627,6 +631,10 @@ func (s *groupRepoStubForFallbackCycle) GetAccountCount(_ context.Context, _ int
 	panic("unexpected GetAccountCount call")
 }
 
+func (s *groupRepoStubForFallbackCycle) HasSchedulableMixedKiroStickyAccount(_ context.Context, _ int64) (bool, error) {
+	return false, nil
+}
+
 func (s *groupRepoStubForFallbackCycle) DeleteAccountGroupsByGroupID(_ context.Context, _ int64) (int64, error) {
 	panic("unexpected DeleteAccountGroupsByGroupID call")
 }
@@ -700,6 +708,10 @@ func (s *groupRepoStubForInvalidRequestFallback) ExistsByName(_ context.Context,
 
 func (s *groupRepoStubForInvalidRequestFallback) GetAccountCount(_ context.Context, _ int64) (int64, int64, error) {
 	panic("unexpected GetAccountCount call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) HasSchedulableMixedKiroStickyAccount(_ context.Context, _ int64) (bool, error) {
+	return false, nil
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) DeleteAccountGroupsByGroupID(_ context.Context, _ int64) (int64, error) {

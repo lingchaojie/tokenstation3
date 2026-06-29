@@ -232,6 +232,10 @@ func (s *groupRepoStub) GetAccountCount(ctx context.Context, groupID int64) (int
 	panic("unexpected GetAccountCount call")
 }
 
+func (s *groupRepoStub) HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error) {
+	return false, nil
+}
+
 func (s *groupRepoStub) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	panic("unexpected DeleteAccountGroupsByGroupID call")
 }

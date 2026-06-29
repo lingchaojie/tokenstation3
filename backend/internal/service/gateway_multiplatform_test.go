@@ -288,6 +288,9 @@ func (m *mockGroupRepoForGateway) ExistsByName(ctx context.Context, name string)
 func (m *mockGroupRepoForGateway) GetAccountCount(ctx context.Context, groupID int64) (int64, int64, error) {
 	return 0, 0, nil
 }
+func (m *mockGroupRepoForGateway) HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error) {
+	return false, nil
+}
 func (m *mockGroupRepoForGateway) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	return 0, nil
 }

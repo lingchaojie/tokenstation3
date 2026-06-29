@@ -43,6 +43,9 @@ func (groupRepoNoop) ExistsByName(context.Context, string) (bool, error) {
 func (groupRepoNoop) GetAccountCount(context.Context, int64) (int64, int64, error) {
 	panic("unexpected GetAccountCount call")
 }
+func (groupRepoNoop) HasSchedulableMixedKiroStickyAccount(context.Context, int64) (bool, error) {
+	return false, nil
+}
 func (groupRepoNoop) DeleteAccountGroupsByGroupID(context.Context, int64) (int64, error) {
 	panic("unexpected DeleteAccountGroupsByGroupID call")
 }

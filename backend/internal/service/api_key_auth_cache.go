@@ -103,6 +103,7 @@ type APIKeyAuthGroupSnapshot struct {
 	KiroStickySessionTTLSeconds int     `json:"kiro_sticky_session_ttl_seconds"`
 	KiroCacheEmulationRatio     float64 `json:"kiro_cache_emulation_ratio"`
 	KiroEndpointMode            string  `json:"kiro_endpoint_mode"`
+	HasMixedKiroAutoStickyAccount bool   `json:"has_mixed_kiro_auto_sticky_account"`
 }
 
 // APIKeyAuthCacheEntry 缓存条目，支持负缓存

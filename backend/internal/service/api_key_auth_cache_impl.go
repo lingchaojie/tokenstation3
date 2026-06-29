@@ -297,9 +297,23 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			KiroStickySessionTTLSeconds:     apiKey.Group.EffectiveKiroStickySessionTTLSeconds(),
 			KiroCacheEmulationRatio:         apiKey.Group.EffectiveKiroCacheEmulationRatio(),
 			KiroEndpointMode:                apiKey.Group.EffectiveKiroEndpointMode(),
+				HasMixedKiroAutoStickyAccount:   s.computeHasMixedKiroAutoSticky(ctx, apiKey.Group),
 		}
 	}
 	return snapshot
+}
+
+// computeHasMixedKiroAutoSticky 仅对 anthropic 分组查询（kiro 只混入 anthropic）；
+// 其它平台或查询失败返回 false（benign：退回 fallback hash）。
+func (s *APIKeyService) computeHasMixedKiroAutoSticky(ctx context.Context, group *Group) bool {
+	if group == nil || group.Platform != PlatformAnthropic || group.ID <= 0 || s.groupRepo == nil {
+		return false
+	}
+	ok, err := s.groupRepo.HasSchedulableMixedKiroStickyAccount(ctx, group.ID)
+	if err != nil {
+		return false
+	}
+	return ok
 }
 
 func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapshot) *APIKey {
@@ -378,6 +392,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
+				HasMixedKiroAutoStickyAccount:   snapshot.Group.HasMixedKiroAutoStickyAccount,
 		}
 	}
 	s.compileAPIKeyIPRules(apiKey)

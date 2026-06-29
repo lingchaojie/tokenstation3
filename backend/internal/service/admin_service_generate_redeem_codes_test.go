@@ -194,6 +194,10 @@ func (s *generateRedeemCodesGroupRepoStub) GetAccountCount(ctx context.Context, 
 	panic("unexpected GetAccountCount call")
 }
 
+func (s *generateRedeemCodesGroupRepoStub) HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error) {
+	return false, nil
+}
+
 func (s *generateRedeemCodesGroupRepoStub) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	panic("unexpected DeleteAccountGroupsByGroupID call")
 }
