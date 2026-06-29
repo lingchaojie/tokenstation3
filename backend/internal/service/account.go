@@ -1409,6 +1409,72 @@ func (a *Account) IsKiroMixedSchedulingEnabled() bool {
 	return false
 }
 
+// kiroExtraBool 从 Extra 读 bool。
+func (a *Account) kiroExtraBool(key string) bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	if v, ok := a.Extra[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// kiroExtraFloat 从 Extra 读 float（兼容 json.Number / float64 / int）。
+func (a *Account) kiroExtraFloat(key string) float64 {
+	if a == nil || a.Extra == nil {
+		return 0
+	}
+	switch v := a.Extra[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	}
+	return 0
+}
+
+// kiroExtraInt 从 Extra 读 int（兼容 json.Number / float64 / int）。
+func (a *Account) kiroExtraInt(key string) int {
+	return int(a.kiroExtraFloat(key))
+}
+
+// KiroEndpointMode 返回账号级 Kiro endpoint 模式，默认 q，未知值兜底 q。
+func (a *Account) KiroEndpointMode() string {
+	if a != nil && a.Extra != nil {
+		if s, ok := a.Extra["kiro_endpoint_mode"].(string); ok && s == KiroEndpointModeKRS {
+			return KiroEndpointModeKRS
+		}
+	}
+	return KiroEndpointModeQ
+}
+
+// KiroCacheEmulationEnabled 账号级缓存模拟开关（需 ratio>0 才真正生效，与 group 语义一致）。
+func (a *Account) KiroCacheEmulationEnabled() bool {
+	return a.kiroExtraBool("kiro_cache_emulation_enabled") && a.KiroCacheEmulationRatio() > 0
+}
+
+// KiroCacheEmulationRatio 账号级缓存模拟比率，归一化到 [0,1]。
+func (a *Account) KiroCacheEmulationRatio() float64 {
+	if !a.kiroExtraBool("kiro_cache_emulation_enabled") {
+		return 0
+	}
+	return normalizeKiroCacheEmulationRatio(a.kiroExtraFloat("kiro_cache_emulation_ratio"))
+}
+
+// KiroAutoStickyEnabled 账号级 auto-sticky 开关。
+func (a *Account) KiroAutoStickyEnabled() bool {
+	return a.kiroExtraBool("kiro_auto_sticky_enabled")
+}
+
+// KiroStickySessionTTLSeconds 账号级粘性 TTL，归一化（0 → 默认 3600，含上下限）。
+func (a *Account) KiroStickySessionTTLSeconds() int {
+	return normalizeKiroStickySessionTTLSeconds(a.kiroExtraInt("kiro_sticky_session_ttl_seconds"))
+}
+
 // accountEligibleForMixedPlatform 判定账号能否在 targetPlatform 的混合池中被调度。
 // antigravity → anthropic+gemini；kiro → 仅 anthropic。
 func accountEligibleForMixedPlatform(acc *Account, targetPlatform string) bool {
