@@ -5038,6 +5038,21 @@ const resetKiroOAuthLocalState = () => {
 
 const buildKiroCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
   const credentials = kiroOAuth.buildCredentials(tokenInfo)
+  if (kiroAccountType.value === 'idc') {
+    const startUrl =
+      typeof tokenInfo.start_url === 'string' && tokenInfo.start_url.trim()
+        ? tokenInfo.start_url.trim()
+        : kiroIDCStartUrl.value.trim()
+    if (startUrl) {
+      credentials.start_url = startUrl
+    }
+    credentials.region =
+      typeof tokenInfo.region === 'string' && tokenInfo.region.trim()
+        ? tokenInfo.region.trim()
+        : kiroIDCRegion.value.trim() || 'us-east-1'
+    credentials.auth_method = tokenInfo.auth_method || 'idc'
+    credentials.provider = tokenInfo.provider || 'AWS'
+  }
   const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)
   if (modelMapping) {
     credentials.model_mapping = modelMapping
@@ -5361,10 +5376,15 @@ const handleGenerateUrl = async () => {
     await antigravityOAuth.generateAuthUrl(form.proxy_id)
   } else if (form.platform === 'kiro') {
     if (kiroAccountType.value === 'idc') {
+      const startUrl = kiroIDCStartUrl.value.trim()
+      if (!startUrl) {
+        appStore.showError(t('admin.accounts.oauth.kiro.startUrlRequired'))
+        return
+      }
       await kiroOAuth.generateIDCAuthUrl({
         proxyId: form.proxy_id,
-        startUrl: kiroIDCStartUrl.value.trim() || undefined,
-        region: kiroIDCRegion.value.trim() || undefined
+        startUrl,
+        region: kiroIDCRegion.value.trim() || 'us-east-1'
       })
     } else {
       await kiroOAuth.generateAuthUrl(

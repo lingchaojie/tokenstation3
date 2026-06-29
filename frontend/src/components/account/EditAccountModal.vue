@@ -720,6 +720,34 @@
         </template>
       </div>
 
+      <div
+        v-if="isKiroOrganizationAccount"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">{{ t('admin.accounts.oauth.kiro.idcStartUrlLabel') }}</label>
+            <input
+              v-model="editKiroIDCStartUrl"
+              type="text"
+              class="input font-mono"
+              :placeholder="t('admin.accounts.oauth.kiro.startUrlPlaceholder')"
+              data-testid="kiro-idc-start-url-input"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
+            <input
+              v-model="editKiroIDCRegion"
+              type="text"
+              class="input font-mono"
+              :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')"
+              data-testid="kiro-idc-region-input"
+            />
+          </div>
+        </div>
+      </div>
+
       <div v-if="isKiroAccount && !isKiroRelay" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
         <input
@@ -2649,6 +2677,15 @@ const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 const isKiroOAuthAccount = computed(() => props.account?.platform === 'kiro' && props.account?.type === 'oauth')
 const isKiroAccount = computed(() => props.account?.platform === 'kiro')
 const isKiroRelay = computed(() => isKiroRelayAccount(props.account))
+const isKiroOrganizationAccount = computed(() => {
+  if (!isKiroOAuthAccount.value || isKiroRelay.value) return false
+  const credentials = (props.account?.credentials || {}) as Record<string, unknown>
+  return (
+    credentials.auth_method === 'idc' ||
+    typeof credentials.start_url === 'string' ||
+    typeof credentials.region === 'string'
+  )
+})
 
 // Model mapping type
 interface ModelMapping {
@@ -2668,6 +2705,8 @@ const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 const kiroCreditUnitPriceUsd = ref(0)
+const editKiroIDCStartUrl = ref('https://view.awsapps.com/start')
+const editKiroIDCRegion = ref('us-east-1')
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3161,6 +3200,20 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
   editVertexLocation.value = 'us-central1'
+  editKiroIDCStartUrl.value =
+    newAccount.platform === 'kiro' &&
+    newAccount.type === 'oauth' &&
+    typeof credentials?.start_url === 'string' &&
+    credentials.start_url.trim()
+      ? credentials.start_url.trim()
+      : 'https://view.awsapps.com/start'
+  editKiroIDCRegion.value =
+    newAccount.platform === 'kiro' &&
+    newAccount.type === 'oauth' &&
+    typeof credentials?.region === 'string' &&
+    credentials.region.trim()
+      ? credentials.region.trim()
+      : 'us-east-1'
   antigravityProjectId.value =
     newAccount.platform === 'antigravity' &&
     newAccount.type === 'oauth' &&
@@ -4206,6 +4259,16 @@ const handleSubmit = async () => {
         newCredentials.model_mapping = modelMapping
       } else {
         delete newCredentials.model_mapping
+      }
+
+      if (isKiroOrganizationAccount.value) {
+        const startUrl = editKiroIDCStartUrl.value.trim()
+        if (!startUrl) {
+          appStore.showError(t('admin.accounts.oauth.kiro.startUrlRequired'))
+          return
+        }
+        newCredentials.start_url = startUrl
+        newCredentials.region = editKiroIDCRegion.value.trim() || 'us-east-1'
       }
 
       updatePayload.credentials = newCredentials
