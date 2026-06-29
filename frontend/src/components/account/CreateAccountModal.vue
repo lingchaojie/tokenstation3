@@ -4095,15 +4095,23 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
+function normalizeKiroTtlSeconds(v: number): number {
+  const n = Math.floor(Number(v))
+  if (!Number.isFinite(n) || n <= 0) return 3600
+  if (n < 60) return 60
+  if (n > 86400) return 86400
+  return n
+}
+
 function buildKiroMixedExtra(): Record<string, unknown> | undefined {
   if (!mixedScheduling.value) return undefined
   return {
     mixed_scheduling: true,
-    kiro_endpoint_mode: kiroEndpointMode.value,
+    kiro_endpoint_mode: kiroEndpointMode.value === 'krs' ? 'krs' : 'q',
     kiro_cache_emulation_enabled: kiroCacheEmulationEnabled.value,
-    kiro_cache_emulation_ratio: kiroCacheEmulationRatio.value,
+    kiro_cache_emulation_ratio: Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0)),
     kiro_auto_sticky_enabled: kiroAutoStickyEnabled.value,
-    kiro_sticky_session_ttl_seconds: kiroStickyTtlSeconds.value,
+    kiro_sticky_session_ttl_seconds: normalizeKiroTtlSeconds(kiroStickyTtlSeconds.value),
   }
 }
 
