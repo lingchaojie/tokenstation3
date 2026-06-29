@@ -4253,6 +4253,7 @@ const handleSubmit = async () => {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      delete newCredentials.preferred_endpoint
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
       if (modelMapping) {

@@ -59,7 +59,7 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
 			``,
 			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7,"_sub2api_kiro_credits":0.17}}`,
 			``,
 		}, "\n"))),
 	}
@@ -72,8 +72,10 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 9, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 3, result.Usage.CacheCreationInputTokens)
+	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.NotNil(t, result.ReasoningEffort)
 	require.Equal(t, "high", *result.ReasoningEffort)
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
 }
 
 func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
@@ -94,7 +96,7 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
 			``,
 			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8,"_sub2api_kiro_credits":0.23}}`,
 			``,
 			`event: message_stop`,
 			`data: {"type":"message_stop"}`,
@@ -110,7 +112,50 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	require.Equal(t, 8, result.Usage.OutputTokens)
 	require.Equal(t, 11, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 4, result.Usage.CacheCreationInputTokens)
+	require.InDelta(t, 0.23, result.Usage.KiroCredits, 0.000001)
 	require.NotNil(t, result.ReasoningEffort)
 	require.Equal(t, "medium", *result.ReasoningEffort)
 	require.Contains(t, rec.Body.String(), `[DONE]`)
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestForwardAsChatCompletionsKiroDirectUsesKiroEndpointMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusForbidden, `{"message":"blocked"}`),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+	}
+	account := &Account{
+		ID:          101,
+		Name:        "kiro direct",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	parsed := &ParsedRequest{
+		Model:  "claude-sonnet-4-6",
+		Stream: false,
+		Group:  &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+
+	_, _ = svc.ForwardAsChatCompletions(context.Background(), c, account, body, parsed)
+
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://runtime.us-east-1.kiro.dev/generateAssistantResponse", upstream.requests[0].URL.String())
+	require.Equal(t, "Bearer kiro-access-token", upstream.requests[0].Header.Get("Authorization"))
 }

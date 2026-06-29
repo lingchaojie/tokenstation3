@@ -4,6 +4,37 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { KiroTokenInfo } from '@/api/admin/kiro'
 
+const extractCallbackParts = (input: string): { code: string; callbackPath?: string; loginOption?: string } => {
+  const raw = input.trim()
+  if (!raw) return { code: '' }
+  try {
+    const parsed = new URL(raw)
+    return {
+      code: parsed.searchParams.get('code') || raw,
+      callbackPath: parsed.pathname || undefined,
+      loginOption: parsed.searchParams.get('login_option') || undefined
+    }
+  } catch {
+    const match = raw.match(/[?&]code=([^&\s]+)/)
+    const pathMatch = raw.match(/^(?:https?:\/\/[^/?#]+)?([^?#\s]+)[?#]/)
+    const loginOptionMatch = raw.match(/[?&]login_option=([^&\s]+)/)
+    if (match?.[1]) {
+      return {
+        code: decodeURIComponent(match[1]),
+        callbackPath: pathMatch?.[1],
+        loginOption: loginOptionMatch?.[1] ? decodeURIComponent(loginOptionMatch[1]) : undefined
+      }
+    }
+    return { code: raw }
+  }
+}
+
+const assignIfPresent = (target: Record<string, unknown>, key: string, value: unknown) => {
+  if (value !== undefined && value !== null && value !== '') {
+    target[key] = value
+  }
+}
+
 export function useKiroOAuth() {
   const appStore = useAppStore()
   const { t } = useI18n()
@@ -88,15 +119,22 @@ export function useKiroOAuth() {
     loginOption?: string
     proxyId?: number | null
   }): Promise<KiroTokenInfo | null> => {
+    const callbackParts = extractCallbackParts(params.code)
+    const code = callbackParts.code
+    if (!code || !params.sessionId || !params.state) {
+      error.value = t('admin.accounts.oauth.authFailed')
+      return null
+    }
+
     loading.value = true
     error.value = ''
     try {
       return await adminAPI.kiro.exchangeCode({
         session_id: params.sessionId,
         state: params.state,
-        code: params.code.trim(),
-        callback_path: params.callbackPath,
-        login_option: params.loginOption,
+        code,
+        callback_path: params.callbackPath || callbackParts.callbackPath,
+        login_option: params.loginOption || callbackParts.loginOption,
         proxy_id: params.proxyId || undefined
       })
     } catch (err: any) {
@@ -161,20 +199,22 @@ export function useKiroOAuth() {
     }
   }
 
-  const buildCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => ({
-    access_token: tokenInfo.access_token,
-    refresh_token: tokenInfo.refresh_token,
-    profile_arn: tokenInfo.profile_arn,
-    expires_at: tokenInfo.expires_at,
-    auth_method: tokenInfo.auth_method,
-    provider: tokenInfo.provider,
-    client_id: tokenInfo.client_id,
-    client_secret: tokenInfo.client_secret,
-    client_id_hash: tokenInfo.client_id_hash,
-    email: tokenInfo.email,
-    start_url: tokenInfo.start_url,
-    region: tokenInfo.region
-  })
+  const buildCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
+    const creds: Record<string, unknown> = {}
+    assignIfPresent(creds, 'access_token', tokenInfo.access_token)
+    assignIfPresent(creds, 'refresh_token', tokenInfo.refresh_token)
+    assignIfPresent(creds, 'profile_arn', tokenInfo.profile_arn)
+    assignIfPresent(creds, 'expires_at', tokenInfo.expires_at)
+    assignIfPresent(creds, 'auth_method', tokenInfo.auth_method)
+    assignIfPresent(creds, 'provider', tokenInfo.provider)
+    assignIfPresent(creds, 'client_id', tokenInfo.client_id)
+    assignIfPresent(creds, 'client_secret', tokenInfo.client_secret)
+    assignIfPresent(creds, 'client_id_hash', tokenInfo.client_id_hash)
+    assignIfPresent(creds, 'email', tokenInfo.email)
+    assignIfPresent(creds, 'start_url', tokenInfo.start_url)
+    assignIfPresent(creds, 'region', tokenInfo.region)
+    return creds
+  }
 
   return {
     authUrl,

@@ -12,6 +12,7 @@ import {
   getPresetMappingsByPlatform,
   splitModelMappingObject,
 } from '../useModelWhitelist'
+import { getKiroDefaultModelMapping } from '@/api/admin/accounts'
 
 describe('useModelWhitelist', () => {
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -52,6 +53,11 @@ describe('useModelWhitelist', () => {
   })
 
   it('Kiro 模型列表和默认映射包含上游 Opus 4.8', async () => {
+    vi.mocked(getKiroDefaultModelMapping).mockResolvedValueOnce({
+      'claude-opus-4-8': 'claude-opus-4.8',
+      'claude-opus-4-8-thinking': 'claude-opus-4.8',
+    })
+
     const models = getModelsByPlatform('kiro')
     expect(models).toContain('claude-opus-4-8')
     expect(models).toContain('claude-opus-4-8-thinking')
@@ -69,6 +75,7 @@ describe('useModelWhitelist', () => {
         { from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' },
       ])
     )
+    expect(getKiroDefaultModelMapping).toHaveBeenCalledTimes(1)
   })
 
   it('Claude 预设映射包含 Fable 和 Mythos 最新模型', () => {

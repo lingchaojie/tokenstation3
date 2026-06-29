@@ -150,5 +150,31 @@ describe('useKiroOAuth', () => {
       client_secret: 'client-secret'
     })
     expect(credentials.profile_arn).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(credentials, 'profile_arn')).toBe(false)
+  })
+
+  it('extracts code and social callback metadata from pasted callback URL', async () => {
+    vi.mocked(adminAPI.kiro.exchangeCode).mockResolvedValueOnce({
+      access_token: 'at',
+      refresh_token: 'rt'
+    })
+
+    const oauth = useKiroOAuth()
+    const tokenInfo = await oauth.exchangeAuthCode({
+      code: 'http://127.0.0.1:9876/oauth/callback?login_option=google&code=auth-code&state=callback-state',
+      sessionId: 'sess-social',
+      state: 'state-social',
+      proxyId: 12
+    })
+
+    expect(tokenInfo).toMatchObject({ access_token: 'at' })
+    expect(adminAPI.kiro.exchangeCode).toHaveBeenCalledWith({
+      session_id: 'sess-social',
+      state: 'state-social',
+      code: 'auth-code',
+      callback_path: '/oauth/callback',
+      login_option: 'google',
+      proxy_id: 12
+    })
   })
 })
