@@ -418,16 +418,16 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 		return usage, err
 	}
 
-	if account.Platform == PlatformKiro {
-		usage, err := s.getKiroUsage(ctx, account, "active", forceProbe)
+	if account.Platform == PlatformGemini {
+		usage, err := s.getGeminiUsage(ctx, account)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
 		}
 		return usage, err
 	}
 
-	if account.Platform == PlatformGemini {
-		usage, err := s.getGeminiUsage(ctx, account)
+	if isKiroDirectModeAccount(account) {
+		usage, err := s.getKiroUsage(ctx, account, "active", forceProbe)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
 		}
@@ -551,6 +551,9 @@ func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int
 	}
 
 	if account.Platform == PlatformKiro {
+		if account.Type != AccountTypeOAuth && account.Type != AccountTypeAPIKey {
+			return nil, fmt.Errorf("passive usage only supported for Kiro OAuth/APIKey accounts")
+		}
 		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 
@@ -1110,6 +1113,7 @@ func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Accou
 			Cost:         stats.Cost,
 			StandardCost: stats.StandardCost,
 			UserCost:     stats.UserCost,
+			KiroCredits:  stats.KiroCredits,
 		}
 
 		// 缓存窗口统计（1 分钟）
@@ -1138,6 +1142,7 @@ func (s *AccountUsageService) GetTodayStats(ctx context.Context, accountID int64
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
+		KiroCredits:  stats.KiroCredits,
 	}, nil
 }
 
@@ -1210,6 +1215,7 @@ func windowStatsFromAccountStats(stats *usagestats.AccountStats) *WindowStats {
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
+		KiroCredits:  stats.KiroCredits,
 	}
 }
 

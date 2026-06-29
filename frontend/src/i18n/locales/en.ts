@@ -2362,6 +2362,7 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        kiro: 'Kiro',
         grok: 'Grok',
       },
       deleteConfirm:
@@ -2382,6 +2383,21 @@ export default {
         defaultValidityDays: 'Default Validity (Days)',
         validityHint: 'Number of days the subscription is valid when assigned to a user',
         noLimit: 'No limit'
+      },
+      kiroCache: {
+        title: 'Kiro Cache Emulation',
+        description: 'Simulate Anthropic prompt cache usage for this Kiro group only.',
+        enabled: 'Enable cache emulation',
+        ratio: 'Cache ratio',
+        ratioHint: '0 to 1. For example, 0.5 applies half of the simulated cache tokens.',
+        endpointMode: 'Kiro inference endpoint',
+        endpointModeQ: 'AWS Q (default)',
+        endpointModeKRS: 'Kiro Runtime Service',
+        endpointModeHint: 'q = AWS Q (shared rate-limit pool with other tools); krs = Kiro native gateway (separate pool), for gradual rollout.',
+        stickyRouting: 'Enable Kiro account sticky routing',
+        stickyRoutingHint: 'When enabled, multi-turn conversations are pinned to the same account when possible. X-Session-ID still takes precedence for explicit session binding.',
+        stickyTTL: 'Sticky binding TTL (seconds)',
+        stickyTTLHint: 'A session is rebalanced after being idle longer than this value. Range: 60-86400, default: 3600.'
       },
       imagePricing: {
         title: 'Image Generation Pricing',
@@ -3283,6 +3299,9 @@ export default {
         antigravityOauth: 'Antigravity OAuth',
         grokOauth: 'Grok OAuth',
         antigravityApikey: 'Connect via Base URL + API Key',
+        kiroOauth: 'Social OAuth / AWS Builder ID / Import',
+        kiroApikey: 'Connect to AWS directly via API Key',
+        kiroApikeyRelay: 'Relay via external API Key + Base URL',
         upstream: 'Upstream',
         upstreamDesc: 'Connect via Base URL + API Key'
       },
@@ -3306,8 +3325,12 @@ export default {
         rateLimitedAutoResume: 'Auto resumes in {time}',
         modelRateLimitedUntil: '{model} rate limited until {time}',
         modelCreditOveragesUntil: '{model} using AI Credits until {time}',
+        overageActive: 'Overage',
+        overageActiveUntil: 'Using overage until the reset window at {time}',
         creditsExhausted: 'Credits Exhausted',
         creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}',
+        overageExhausted: 'Overage Exhausted',
+        overageExhaustedUntil: 'Overage exhausted, expected recovery at {time}',
         overloadedUntil: 'Overloaded until {time}',
         viewTempUnschedDetails: 'View temp unschedulable details'
       },
@@ -3867,6 +3890,15 @@ export default {
       bedrockApiKeyLeaveEmpty: 'Leave empty to keep current key',
       apiKeyIsRequired: 'API Key is required',
       leaveEmptyToKeep: 'Leave empty to keep current key',
+      kiroCreditUnitPriceUsd: 'Credit Unit Price',
+      kiroCreditUnitPriceUsdHint: 'Used only to estimate Kiro Credits cost in today stats. 0 hides the estimate.',
+      kiro: {
+        baseUrlHint: 'Leave empty to connect directly to AWS (q.{region}.amazonaws.com). Region is controlled by the api_region credential, default us-east-1',
+        apiKeyHint: 'Kiro API Key (starts with ksk_), used as the Bearer token for direct AWS access',
+        relayBaseUrlHint: 'External Anthropic-compatible upstream URL (e.g. https://your-relay.example.com); requests go to {base_url}/v1/messages',
+        relayApiKeyHint: 'API Key for that external upstream (sent via the x-api-key header)',
+        relayPriorityHint: 'Keep a low priority (larger number) so it acts as a fallback only; used when all native Kiro accounts fail'
+      },
       // Upstream type
       upstream: {
         baseUrl: 'Upstream Base URL',
@@ -3990,6 +4022,51 @@ export default {
           validateAndCreate: 'Validate & Create Account',
           pleaseEnterRefreshToken: 'Please enter Refresh Token',
           pleaseEnterSessionToken: 'Please enter Session Token'
+        },
+        kiro: {
+          title: 'Kiro Authorization',
+          followSteps: 'Follow these steps to authorize your Kiro account:',
+          step1GenerateUrl: 'Click the button below to generate the authorization URL',
+          generateAuthUrl: 'Generate Authorization URL',
+          step2OpenUrl: 'Open the URL in your browser and complete authorization',
+          openUrlDesc:
+            'Open the authorization URL in a new tab. The Kiro sign-in page will open at app.kiro.dev; choose Google or GitHub there. After approval, the browser may redirect to http://localhost:49153/oauth/callback and show an unreachable-page error; that is expected.',
+          step3EnterCode: 'Enter Callback URL or Code',
+          authCodeDesc:
+            'After authorization, copy the full callback URL from the browser address bar (recommended), or paste only the code parameter value below.',
+          authCode: 'Callback URL or Code',
+          authCodePlaceholder:
+            'Option 1 (recommended): Paste the full callback URL\n(http://localhost:49153/oauth/callback?code=...&state=...&login_option=github)\nOption 2: Paste only the code value',
+          authCodeHint:
+            'The system will auto-extract code/state and Kiro callback metadata from the URL. If the localhost page cannot be reached, copy the full URL from the address bar.',
+          importDialogTitle: 'Import Kiro Token',
+          authModeTitle: 'Kiro Authorization Method',
+          oauthTitle: 'Social OAuth',
+          oauthSubtitle: 'Browser-based auth with Google or GitHub',
+          oauthProviderTitle: 'Social Sign-In Provider',
+          googleTitle: 'Google',
+          githubTitle: 'GitHub',
+          googleDesc: 'Sign in to Kiro with your Google account',
+          githubDesc: 'Sign in to Kiro with your GitHub account',
+          idcTitle: 'AWS Builder ID / IDC',
+          importTitle: 'Import from Kiro IDE',
+          socialSubtitle: 'Google / GitHub sign-in',
+          idcSubtitle: 'AWS Builder ID or enterprise Identity Center',
+          googleOauth: 'Google OAuth',
+          githubOauth: 'GitHub OAuth',
+          idcLogin: 'Builder ID / IDC Login',
+          importTokenFile: 'Import Token File',
+          importSubtitle: 'Use this if you already signed in via Kiro IDE',
+          startUrlLabel: 'Builder ID / IDC Start URL',
+          idcStartUrlLabel: 'Builder ID / IDC Start URL',
+          startUrlPlaceholder: 'https://view.awsapps.com/start',
+          regionLabel: 'Region',
+          regionPlaceholder: 'us-east-1',
+          tokenJsonLabel: 'Kiro Token JSON',
+          tokenJsonHint: 'Sign in through Kiro IDE first, then paste the contents of `~/.aws/sso/cache/kiro-auth-token.json` here.',
+          deviceRegistrationLabel: 'Device Registration JSON',
+          deviceRegistrationHint: 'Optional. Only needed when the token file does not include full client details and only has `clientIdHash`.',
+          importAndUpdate: 'Import and Update'
         },
         grok: {
           title: 'Grok Account Authorization',
@@ -4324,6 +4401,12 @@ export default {
         grokLastStatus: 'Status {status}',
         grokLastProbe: 'Probe {time}',
         grokLastHeadersSeen: 'Headers {time}',
+        kiroCredits: 'Credits',
+        kiroBonus: 'Bonus',
+        kiroReset: 'Reset',
+        kiroOverage: 'Overage',
+        kiroDaysLeft: '{days}d left',
+        kiroExpires: 'Expires',
         passiveSampled: 'Passive',
         activeQuery: 'Query'
       },
