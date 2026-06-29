@@ -5034,10 +5034,6 @@ func (s *GatewayService) claudeOAuthSystemPromptInjectionSettings(ctx context.Co
 	return s.settingService.GetClaudeOAuthSystemPromptInjectionSettings(ctx)
 }
 
-func (s *GatewayService) forwardKiroAsAnthropic(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
-	return s.forwardKiroMessages(ctx, c, account, parsed, startTime)
-}
-
 // Forward 转发请求到Claude API
 func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
 	startTime := time.Now()
