@@ -20,4 +20,8 @@ func TestStickySessionTTLForAccountGroup(t *testing.T) {
 	require.Equal(t, 1200*time.Second, stickySessionTTLForAccountGroup(mixedKiro, anthropicGroup))
 	require.Equal(t, 1800*time.Second, stickySessionTTLForAccountGroup(mixedKiro, kiroGroup))
 	require.Equal(t, stickySessionTTL, stickySessionTTLForAccountGroup(anthropicAcct, anthropicGroup))
+
+	// nil 账号 → 安全回退默认 TTL（不 panic）
+	require.Equal(t, stickySessionTTL, stickySessionTTLForAccountGroup(nil, anthropicGroup))
+	require.Equal(t, stickySessionTTL, stickySessionTTLForAccountGroup(nil, nil))
 }
