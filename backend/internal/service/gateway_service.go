@@ -4258,6 +4258,10 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 			requestedModel = claude.NormalizeModelID(requestedModel)
 		}
 	}
+	// Kiro 账号使用严格 model_mapping 白名单：空映射或未命中均拒绝
+	if account.Platform == PlatformKiro {
+		return account.SupportsModelInMapping(requestedModel)
+	}
 	// 其他平台使用账户的模型支持检查
 	return account.IsModelSupported(requestedModel)
 }

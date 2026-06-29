@@ -38,6 +38,16 @@ const (
 
 var kiroRetrySleep = sleepWithContext
 
+// kiroModelNotInMappingError 返回"请求模型不在 kiro 账号 model_mapping 中"的错误。
+// 该错误应被上层映射为 4xx 客户端错误（model not supported），不应进入 failover 重试同一账号。
+func kiroModelNotInMappingError(account *Account, requestedModel string) error {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return fmt.Errorf("kiro account %d does not support model %q (not in account model_mapping)", accountID, requestedModel)
+}
+
 func kiroRetryBackoffDelay(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
@@ -71,9 +81,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	originalModel := parsed.Model
-	mappedModel := originalModel
-	if next := account.GetMappedModel(originalModel); next != "" {
-		mappedModel = next
+	mappedModel, matched := account.ResolveMappedModel(originalModel)
+	if !matched {
+		return nil, kiroModelNotInMappingError(account, originalModel)
 	}
 	body := parsed.Body.Bytes()
 	if mappedModel != originalModel {

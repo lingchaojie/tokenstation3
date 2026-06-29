@@ -719,6 +719,17 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 	return requestedModel, false
 }
 
+// SupportsModelInMapping 报告请求模型是否命中账号的 model_mapping（精确或通配符，含归一化）。
+// 严格语义：空映射或未命中均返回 false。
+// 仅在 kiro 等需要严格白名单的平台调用；anthropic/openai 等沿用 IsModelSupported 的"空=放行"语义。
+func (a *Account) SupportsModelInMapping(requestedModel string) bool {
+	if a == nil {
+		return false
+	}
+	_, matched := a.ResolveMappedModel(requestedModel)
+	return matched
+}
+
 // GetOpenAICompactMode returns the compact routing mode for an OpenAI account.
 // Missing or invalid values fall back to "auto".
 func (a *Account) GetOpenAICompactMode() string {
