@@ -68,6 +68,9 @@ func (s *stubGroupRepoForAvailable) BindAccountsToGroup(ctx context.Context, gro
 func (s *stubGroupRepoForAvailable) UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
 	return nil
 }
+func (s *stubGroupRepoForAvailable) HasSchedulableMixedKiroStickyAccount(context.Context, int64) (bool, error) {
+	panic("unexpected")
+}
 
 // newAvailableChannelService 构造一个 ChannelService，channelRepo.ListAll 返回给定 channels，
 // groupRepo 由参数决定。传入空 stub 表示「活跃分组列表为空」。

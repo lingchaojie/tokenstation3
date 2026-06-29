@@ -806,35 +806,45 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 	// 解法：优先用 system prompt；如果客户端没有传 system prompt，则退到第一条 user
 	// 消息。它们在同一对话后续轮次中通常保持不变，而完整 messages 会每轮追加导致 hash
 	// 变化。混入 APIKeyID 后，可以让同一个 API Key 下的同一对话固定路由到同一账号。
-	if isKiroGroup(parsed.Group) {
-		if !parsed.Group.EffectiveKiroAutoStickyEnabled() {
-			slog.Info("sticky.hash_source",
-				"source", "kiro_auto_sticky_disabled",
-			)
+	// 原生 kiro 组：维持原语义（关闭 auto-sticky 时返回 ""）。
+	// 含 mixed kiro auto-sticky 账号的 anthropic 组：尝试稳定 hash；未命中则继续往下走档位 3。
+	nativeKiro := isKiroGroup(parsed.Group)
+	mixedKiroSticky := parsed.Group != nil && parsed.Group.HasMixedKiroAutoStickyAccount
+	if nativeKiro || mixedKiroSticky {
+		autoStickyOn := mixedKiroSticky || (nativeKiro && parsed.Group.EffectiveKiroAutoStickyEnabled())
+		if autoStickyOn {
+			stableSeed := extractTextFromSystemRaw(parsed.SystemRaw())
+			source := "kiro_system_prompt"
+			if stableSeed == "" {
+				stableSeed = extractFirstUserMessageTextFromRaw(parsed.MessagesRaw())
+				source = "kiro_first_user_message"
+			}
+			if stableSeed != "" {
+				var sb strings.Builder
+				if parsed.SessionContext != nil {
+					_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
+					_, _ = sb.WriteString("|")
+				}
+				_, _ = sb.WriteString(stableSeed)
+				hash := s.hashContent(sb.String())
+				slog.Info("sticky.hash_source",
+					"source", source,
+					"hash", hash,
+					"seed_len", len(stableSeed),
+				)
+				return hash
+			}
+		}
+		// 原生 kiro 组维持原行为：返回 ""，不落档位 3。
+		if nativeKiro {
+			if !autoStickyOn {
+				slog.Info("sticky.hash_source",
+					"source", "kiro_auto_sticky_disabled",
+				)
+			}
 			return ""
 		}
-		stableSeed := extractTextFromSystemRaw(parsed.SystemRaw())
-		source := "kiro_system_prompt"
-		if stableSeed == "" {
-			stableSeed = extractFirstUserMessageTextFromRaw(parsed.MessagesRaw())
-			source = "kiro_first_user_message"
-		}
-		if stableSeed != "" {
-			var sb strings.Builder
-			if parsed.SessionContext != nil {
-				_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
-				_, _ = sb.WriteString("|")
-			}
-			_, _ = sb.WriteString(stableSeed)
-			hash := s.hashContent(sb.String())
-			slog.Info("sticky.hash_source",
-				"source", source,
-				"hash", hash,
-				"seed_len", len(stableSeed),
-			)
-			return hash
-		}
-		return ""
+		// 混合组未命中稳定 hash → 继续往下走档位 3 fallback。
 	}
 
 	// 3. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
