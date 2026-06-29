@@ -3,6 +3,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -74,5 +75,14 @@ func TestKiroForwardGuard_RejectsUnmappedModel(t *testing.T) {
 	// 不需要 gin.Context（守卫在最前），传 nil 让它在守卫处就报错
 	_, err = s.forwardKiroMessages(nil, nil, acc, parsed, time.Now())
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "model_mapping")
+}
+
+func TestKiroModelNotSupportedError_Type(t *testing.T) {
+	err := kiroModelNotInMappingError(&Account{ID: 7}, "claude-future")
+	var typed *KiroModelNotSupportedError
+	require.True(t, errors.As(err, &typed))
+	require.Equal(t, int64(7), typed.AccountID)
+	require.Equal(t, "claude-future", typed.RequestedModel)
 	require.Contains(t, err.Error(), "model_mapping")
 }

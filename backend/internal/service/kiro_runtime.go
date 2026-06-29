@@ -38,14 +38,25 @@ const (
 
 var kiroRetrySleep = sleepWithContext
 
+// KiroModelNotSupportedError 表示请求模型不在 kiro 账号的 model_mapping 白名单中。
+// 应被网关 handler 映射为 400 Bad Request（客户端/配置错误,非上游故障）。
+type KiroModelNotSupportedError struct {
+	AccountID      int64
+	RequestedModel string
+}
+
+func (e *KiroModelNotSupportedError) Error() string {
+	return fmt.Sprintf("kiro account %d does not support model %q (not in account model_mapping)", e.AccountID, e.RequestedModel)
+}
+
 // kiroModelNotInMappingError 返回"请求模型不在 kiro 账号 model_mapping 中"的错误。
-// 该错误应被上层映射为 4xx 客户端错误（model not supported），不应进入 failover 重试同一账号。
+// 该错误应被上层映射为 400 Bad Request（客户端/配置错误），不应进入 failover 重试同一账号。
 func kiroModelNotInMappingError(account *Account, requestedModel string) error {
 	accountID := int64(0)
 	if account != nil {
 		accountID = account.ID
 	}
-	return fmt.Errorf("kiro account %d does not support model %q (not in account model_mapping)", accountID, requestedModel)
+	return &KiroModelNotSupportedError{AccountID: accountID, RequestedModel: requestedModel}
 }
 
 func kiroRetryBackoffDelay(attempt int) time.Duration {

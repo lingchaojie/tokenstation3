@@ -842,6 +842,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 
+				// Kiro model-mapping rejection: client/config error, return 400 immediately, no failover
+				var kiroModelErr *service.KiroModelNotSupportedError
+				if errors.As(err, &kiroModelErr) {
+					h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", kiroModelErr.Error(), streamStarted)
+					return
+				}
+
 				var promptTooLongErr *service.PromptTooLongError
 				if errors.As(err, &promptTooLongErr) {
 					reqLog.Warn("gateway.prompt_too_long_from_antigravity",

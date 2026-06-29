@@ -727,6 +727,12 @@ func (a *Account) SupportsModelInMapping(requestedModel string) bool {
 		return false
 	}
 	_, matched := a.ResolveMappedModel(requestedModel)
+	if !matched && a.Platform == PlatformKiro && len(a.GetModelMapping()) == 0 {
+		slog.Warn("kiro_account_empty_model_mapping",
+			"account_id", a.ID,
+			"requested_model", requestedModel,
+		)
+	}
 	return matched
 }
 
