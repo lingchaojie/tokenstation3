@@ -555,7 +555,7 @@ func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string 
 	if parsed == nil || parsed.Group == nil {
 		return KiroEndpointModeQ
 	}
-	return parsed.Group.EffectiveKiroEndpointMode()
+	return resolveKiroEndpointMode(account, parsed.Group)
 }
 
 func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
