@@ -598,10 +598,15 @@ const handleGenerateUrl = async () => {
     await geminiOAuth.generateAuthUrl(props.account.proxy_id, projectId, geminiOAuthType.value, tierId)
   } else if (isKiro.value) {
     if (kiroAccountType.value === 'idc') {
+      const startUrl = kiroIDCStartUrl.value.trim()
+      if (!startUrl) {
+        appStore.showError(t('admin.accounts.oauth.kiro.startUrlRequired'))
+        return
+      }
       await kiroOAuth.generateIDCAuthUrl({
         proxyId: props.account.proxy_id,
-        startUrl: kiroIDCStartUrl.value,
-        region: kiroIDCRegion.value
+        startUrl,
+        region: kiroIDCRegion.value.trim() || 'us-east-1'
       })
     } else {
       await kiroOAuth.generateAuthUrl(
@@ -714,9 +719,25 @@ const handleExchangeCode = async () => {
     if (!tokenInfo) return
 
     try {
+      const credentials = kiroOAuth.buildCredentials(tokenInfo)
+      if (kiroAccountType.value === 'idc') {
+        const startUrl =
+          typeof tokenInfo.start_url === 'string' && tokenInfo.start_url.trim()
+            ? tokenInfo.start_url.trim()
+            : kiroIDCStartUrl.value.trim()
+        if (startUrl) {
+          credentials.start_url = startUrl
+        }
+        credentials.region =
+          typeof tokenInfo.region === 'string' && tokenInfo.region.trim()
+            ? tokenInfo.region.trim()
+            : kiroIDCRegion.value.trim() || 'us-east-1'
+        credentials.auth_method = tokenInfo.auth_method || 'idc'
+        credentials.provider = tokenInfo.provider || 'AWS'
+      }
       const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
         type: 'oauth',
-        credentials: buildUpdatedCredentials(kiroOAuth.buildCredentials(tokenInfo))
+        credentials: buildUpdatedCredentials(credentials)
       })
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))

@@ -48,27 +48,27 @@ describe('useKiroOAuth', () => {
     expect(oauth.state.value).toBe('state-1')
   })
 
-  it('starts Kiro IDC OAuth through the upstream IDC endpoint', async () => {
+  it('starts Kiro Organization OAuth through the upstream IDC endpoint with normalized settings', async () => {
     vi.mocked(adminAPI.kiro.generateIDCAuthUrl).mockResolvedValueOnce({
       auth_url: 'https://device.sso.aws.amazon.com/start',
       session_id: 'session-idc',
       state: 'state-idc',
       client_id: 'client-id',
       region: 'us-east-1',
-      start_url: 'https://view.awsapps.com/start'
+      start_url: 'https://d-99674ac649.awsapps.com/start'
     })
 
     const oauth = useKiroOAuth()
     const started = await oauth.generateIDCAuthUrl({
       proxyId: 3,
-      startUrl: 'https://view.awsapps.com/start',
-      region: 'us-east-1'
+      startUrl: '  https://d-99674ac649.awsapps.com/start  ',
+      region: '  us-east-1  '
     })
 
     expect(started).toBe(true)
     expect(adminAPI.kiro.generateIDCAuthUrl).toHaveBeenCalledWith({
       proxy_id: 3,
-      start_url: 'https://view.awsapps.com/start',
+      start_url: 'https://d-99674ac649.awsapps.com/start',
       region: 'us-east-1'
     })
     expect(oauth.authUrl.value).toBe('https://device.sso.aws.amazon.com/start')

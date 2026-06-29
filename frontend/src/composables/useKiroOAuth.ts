@@ -60,10 +60,12 @@ export function useKiroOAuth() {
     state.value = ''
 
     try {
+      const startUrl = params.startUrl?.trim()
+      const region = params.region?.trim()
       const response = await adminAPI.kiro.generateIDCAuthUrl({
         proxy_id: params.proxyId || undefined,
-        start_url: params.startUrl,
-        region: params.region
+        start_url: startUrl || undefined,
+        region: region || undefined
       })
       authUrl.value = response.auth_url
       sessionId.value = response.session_id

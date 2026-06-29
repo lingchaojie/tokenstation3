@@ -192,6 +192,39 @@ function buildAntigravityAccount(projectId = 'configured-project') {
   } as any
 }
 
+function buildKiroOrganizationAccount() {
+  return {
+    id: 4,
+    name: 'Kiro Organization',
+    notes: '',
+    platform: 'kiro',
+    type: 'oauth',
+    credentials: {
+      access_token: 'at',
+      refresh_token: 'rt',
+      auth_method: 'idc',
+      provider: 'AWS',
+      client_id: 'client-id',
+      client_secret: 'client-secret',
+      client_id_hash: 'client-hash',
+      start_url: 'https://d-99674ac649.awsapps.com/start',
+      region: 'us-east-1',
+      model_mapping: {
+        'claude-sonnet-4-5': 'claude-sonnet-4-5'
+      }
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -642,5 +675,36 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty(
       'antigravity_project_id'
     )
+  })
+
+  it('loads and submits Kiro Organization start URL and region credentials', async () => {
+    const account = buildKiroOrganizationAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    const startUrlInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-start-url-input"]')
+    const regionInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-region-input"]')
+
+    expect(startUrlInput.element.value).toBe('https://d-99674ac649.awsapps.com/start')
+    expect(regionInput.element.value).toBe('us-east-1')
+
+    await startUrlInput.setValue('  https://d-1111111111.awsapps.com/start  ')
+    await regionInput.setValue('  us-west-2  ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      auth_method: 'idc',
+      provider: 'AWS',
+      client_id: 'client-id',
+      client_secret: 'client-secret',
+      client_id_hash: 'client-hash',
+      start_url: 'https://d-1111111111.awsapps.com/start',
+      region: 'us-west-2'
+    })
   })
 })
