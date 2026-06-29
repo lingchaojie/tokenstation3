@@ -374,11 +374,9 @@ const bedrockPresetMappings = [
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5', to: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
 ]
 
-const kiroDefaultMappings = kiroPresetMappings.map(({ from, to }) => ({ from, to }))
-
-// Antigravity 默认映射（从后端 API 获取，与 constants.go 保持一致）
+// Antigravity / Kiro 默认映射（从后端 API 获取，与后端 constants.go 保持一致）
 // 使用 fetchAntigravityDefaultMappings() 异步获取
-import { getAntigravityDefaultModelMapping } from '@/api/admin/accounts'
+import { getAntigravityDefaultModelMapping, getKiroDefaultModelMapping } from '@/api/admin/accounts'
 
 let _antigravityDefaultMappingsCache: { from: string; to: string }[] | null = null
 let _kiroDefaultMappingsCache: { from: string; to: string }[] | null = null
@@ -401,7 +399,13 @@ export async function fetchKiroDefaultMappings(): Promise<{ from: string; to: st
   if (_kiroDefaultMappingsCache !== null) {
     return _kiroDefaultMappingsCache.map(({ from, to }) => ({ from, to }))
   }
-  _kiroDefaultMappingsCache = kiroDefaultMappings.map(({ from, to }) => ({ from, to }))
+  try {
+    const mapping = await getKiroDefaultModelMapping()
+    _kiroDefaultMappingsCache = Object.entries(mapping).map(([from, to]) => ({ from, to }))
+  } catch (e) {
+    console.warn('[fetchKiroDefaultMappings] API failed, using empty fallback', e)
+    _kiroDefaultMappingsCache = []
+  }
   return _kiroDefaultMappingsCache.map(({ from, to }) => ({ from, to }))
 }
 

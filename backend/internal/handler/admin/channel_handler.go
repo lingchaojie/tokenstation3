@@ -531,22 +531,6 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 		return
 	}
 
-	if platform == service.PlatformKiro {
-		models := []string{
-			"kiro-auto",
-			"kiro-claude-sonnet-4-5",
-			"kiro-claude-sonnet-4",
-			"kiro-claude-opus-4-5",
-			"kiro-claude-haiku-4-5",
-			"claude-sonnet-4-5",
-			"claude-sonnet-4",
-			"claude-opus-4-5",
-			"claude-haiku-4-5",
-		}
-		response.Success(c, gin.H{"models": models})
-		return
-	}
-
 	models := h.pricingService.ListModelNamesByProvider(provider)
 	response.Success(c, gin.H{"models": models})
 }

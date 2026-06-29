@@ -473,5 +473,8 @@ func TestSyncPricingModels_ValidPlatform_EmptyService(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		require.NotNil(t, body.Data.Models, "models must not be null for platform=%s", platform)
+		if platform == "kiro" {
+			require.Empty(t, body.Data.Models, "kiro must not use the old hardcoded kiro-claude model list")
+		}
 	}
 }
