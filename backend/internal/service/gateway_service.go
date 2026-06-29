@@ -797,7 +797,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return hash
 	}
 
-	// 2.5. Kiro 分组专用：使用对话生命周期内稳定的内容做 hash
+	// 2.5. Kiro / 混合 kiro 分组：使用对话生命周期内稳定的内容做 hash
 	//
 	// 背景：Kiro 采用 stateless replay 架构，每次请求都生成新的 conversationId，
 	// 无法依赖 conversationId 做粘性。同时 Claude Code / cursor 等客户端通常
@@ -837,7 +837,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		}
 		// 原生 kiro 组维持原行为：返回 ""，不落档位 3。
 		if nativeKiro {
-			if !autoStickyOn {
+			if !parsed.Group.EffectiveKiroAutoStickyEnabled() {
 				slog.Info("sticky.hash_source",
 					"source", "kiro_auto_sticky_disabled",
 				)
