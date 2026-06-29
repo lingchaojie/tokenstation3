@@ -1395,6 +1395,35 @@ func (a *Account) IsMixedSchedulingEnabled() bool {
 	return false
 }
 
+// IsKiroMixedSchedulingEnabled 检查 kiro 账户是否启用混合调度（可参与 anthropic 分组）。
+func (a *Account) IsKiroMixedSchedulingEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro || a.Extra == nil {
+		return false
+	}
+	if v, ok := a.Extra["mixed_scheduling"]; ok {
+		if enabled, ok := v.(bool); ok {
+			return enabled
+		}
+	}
+	return false
+}
+
+// accountEligibleForMixedPlatform 判定账号能否在 targetPlatform 的混合池中被调度。
+// antigravity → anthropic+gemini；kiro → 仅 anthropic。
+func accountEligibleForMixedPlatform(acc *Account, targetPlatform string) bool {
+	if acc == nil {
+		return false
+	}
+	switch acc.Platform {
+	case PlatformAntigravity:
+		return acc.IsMixedSchedulingEnabled()
+	case PlatformKiro:
+		return targetPlatform == PlatformAnthropic && acc.IsKiroMixedSchedulingEnabled()
+	default:
+		return false
+	}
+}
+
 // IsOveragesEnabled 检查 Antigravity 账号是否启用 AI Credits 超量请求。
 func (a *Account) IsOveragesEnabled() bool {
 	if a.Platform != PlatformAntigravity {
