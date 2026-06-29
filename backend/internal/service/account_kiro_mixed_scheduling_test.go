@@ -35,3 +35,22 @@ func TestAccountEligibleForMixedPlatform(t *testing.T) {
 	require.False(t, accountEligibleForMixedPlatform(&Account{Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": false}}, PlatformAnthropic))
 	require.False(t, accountEligibleForMixedPlatform(&Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": false}}, PlatformAnthropic))
 }
+
+func TestMixedSchedulingPlatforms(t *testing.T) {
+	require.Equal(t, []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro}, mixedSchedulingPlatforms(PlatformAnthropic))
+	require.Equal(t, []string{PlatformGemini, PlatformAntigravity}, mixedSchedulingPlatforms(PlatformGemini))
+}
+
+func TestIsAccountAllowedForPlatform_Kiro(t *testing.T) {
+	s := &GatewayService{}
+	kiro := &Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": true}}
+	// useMixed=true, anthropic 池：放行
+	require.True(t, s.isAccountAllowedForPlatform(kiro, PlatformAnthropic, true))
+	// gemini 池：拒绝
+	require.False(t, s.isAccountAllowedForPlatform(kiro, PlatformGemini, true))
+	// 非混合（强制平台）：拒绝
+	require.False(t, s.isAccountAllowedForPlatform(kiro, PlatformAnthropic, false))
+	// 未开 mixed 的 kiro：拒绝
+	kiroOff := &Account{Platform: PlatformKiro}
+	require.False(t, s.isAccountAllowedForPlatform(kiroOff, PlatformAnthropic, true))
+}

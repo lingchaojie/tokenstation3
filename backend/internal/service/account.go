@@ -1425,6 +1425,15 @@ func accountEligibleForMixedPlatform(acc *Account, targetPlatform string) bool {
 	}
 }
 
+// mixedSchedulingPlatforms 返回 targetPlatform 的混合候选平台列表。
+// anthropic → [anthropic, antigravity, kiro]；gemini → [gemini, antigravity]。
+func mixedSchedulingPlatforms(platform string) []string {
+	if platform == PlatformAnthropic {
+		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro}
+	}
+	return []string{platform, PlatformAntigravity}
+}
+
 // IsOveragesEnabled 检查 Antigravity 账号是否启用 AI Credits 超量请求。
 func (a *Account) IsOveragesEnabled() bool {
 	if a.Platform != PlatformAntigravity {

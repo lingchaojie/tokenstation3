@@ -2634,7 +2634,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
+		platforms := mixedSchedulingPlatforms(platform)
 		var accounts []Account
 		var err error
 		if groupID != nil {
@@ -2653,7 +2653,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if (acc.Platform == PlatformAntigravity || acc.Platform == PlatformKiro) && !accountEligibleForMixedPlatform(&acc, platform) {
 				continue
 			}
 			filtered = append(filtered, acc)
@@ -2727,13 +2727,13 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 	if account == nil {
 		return false
 	}
-	if useMixed {
-		if account.Platform == platform {
-			return true
-		}
-		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
+	if account.Platform == platform {
+		return true
 	}
-	return account.Platform == platform
+	if !useMixed {
+		return false
+	}
+	return accountEligibleForMixedPlatform(account, platform)
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
