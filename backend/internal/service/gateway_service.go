@@ -797,7 +797,7 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return hash
 	}
 
-	// 2.5. Kiro 分组专用：使用对话生命周期内稳定的内容做 hash
+	// 2.5. Kiro / 混合 kiro 分组：使用对话生命周期内稳定的内容做 hash
 	//
 	// 背景：Kiro 采用 stateless replay 架构，每次请求都生成新的 conversationId，
 	// 无法依赖 conversationId 做粘性。同时 Claude Code / cursor 等客户端通常
@@ -806,35 +806,45 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 	// 解法：优先用 system prompt；如果客户端没有传 system prompt，则退到第一条 user
 	// 消息。它们在同一对话后续轮次中通常保持不变，而完整 messages 会每轮追加导致 hash
 	// 变化。混入 APIKeyID 后，可以让同一个 API Key 下的同一对话固定路由到同一账号。
-	if isKiroGroup(parsed.Group) {
-		if !parsed.Group.EffectiveKiroAutoStickyEnabled() {
-			slog.Info("sticky.hash_source",
-				"source", "kiro_auto_sticky_disabled",
-			)
+	// 原生 kiro 组：维持原语义（关闭 auto-sticky 时返回 ""）。
+	// 含 mixed kiro auto-sticky 账号的 anthropic 组：尝试稳定 hash；未命中则继续往下走档位 3。
+	nativeKiro := isKiroGroup(parsed.Group)
+	mixedKiroSticky := parsed.Group != nil && parsed.Group.HasMixedKiroAutoStickyAccount
+	if nativeKiro || mixedKiroSticky {
+		autoStickyOn := mixedKiroSticky || (nativeKiro && parsed.Group.EffectiveKiroAutoStickyEnabled())
+		if autoStickyOn {
+			stableSeed := extractTextFromSystemRaw(parsed.SystemRaw())
+			source := "kiro_system_prompt"
+			if stableSeed == "" {
+				stableSeed = extractFirstUserMessageTextFromRaw(parsed.MessagesRaw())
+				source = "kiro_first_user_message"
+			}
+			if stableSeed != "" {
+				var sb strings.Builder
+				if parsed.SessionContext != nil {
+					_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
+					_, _ = sb.WriteString("|")
+				}
+				_, _ = sb.WriteString(stableSeed)
+				hash := s.hashContent(sb.String())
+				slog.Info("sticky.hash_source",
+					"source", source,
+					"hash", hash,
+					"seed_len", len(stableSeed),
+				)
+				return hash
+			}
+		}
+		// 原生 kiro 组维持原行为：返回 ""，不落档位 3。
+		if nativeKiro {
+			if !parsed.Group.EffectiveKiroAutoStickyEnabled() {
+				slog.Info("sticky.hash_source",
+					"source", "kiro_auto_sticky_disabled",
+				)
+			}
 			return ""
 		}
-		stableSeed := extractTextFromSystemRaw(parsed.SystemRaw())
-		source := "kiro_system_prompt"
-		if stableSeed == "" {
-			stableSeed = extractFirstUserMessageTextFromRaw(parsed.MessagesRaw())
-			source = "kiro_first_user_message"
-		}
-		if stableSeed != "" {
-			var sb strings.Builder
-			if parsed.SessionContext != nil {
-				_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
-				_, _ = sb.WriteString("|")
-			}
-			_, _ = sb.WriteString(stableSeed)
-			hash := s.hashContent(sb.String())
-			slog.Info("sticky.hash_source",
-				"source", source,
-				"hash", hash,
-				"seed_len", len(stableSeed),
-			)
-			return hash
-		}
-		return ""
+		// 混合组未命中稳定 hash → 继续往下走档位 3 fallback。
 	}
 
 	// 3. 最后 fallback: 使用 session上下文 + system + 所有消息的完整摘要串
@@ -898,6 +908,15 @@ func (s *GatewayService) BindStickySessionForGroup(ctx context.Context, groupID 
 	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, stickySessionTTLForGroup(group))
 }
 
+// BindStickySessionForAccountGroup 按所选账号+分组解析 TTL 后绑定粘性会话。
+func (s *GatewayService) BindStickySessionForAccountGroup(ctx context.Context, groupID *int64, sessionHash string, account *Account, group *Group) error {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, stickySessionTTLForAccountGroup(account, group))
+}
+
 func (s *GatewayService) BindStickySessionWithTTL(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
 	if sessionHash == "" || accountID <= 0 || s.cache == nil {
 		return nil
@@ -911,6 +930,15 @@ func (s *GatewayService) BindStickySessionWithTTL(ctx context.Context, groupID *
 func stickySessionTTLForGroup(group *Group) time.Duration {
 	if group != nil && group.Platform == PlatformKiro {
 		return group.EffectiveKiroStickySessionTTL()
+	}
+	return stickySessionTTL
+}
+
+// stickySessionTTLForAccountGroup 解析粘性 TTL：原生 kiro 组取组配置；
+// mixed kiro 账号混入非 kiro 组取账号配置；其它回退默认 stickySessionTTL。
+func stickySessionTTLForAccountGroup(account *Account, group *Group) time.Duration {
+	if seconds := resolveKiroStickySessionTTLSeconds(account, group); seconds > 0 {
+		return time.Duration(seconds) * time.Second
 	}
 	return stickySessionTTL
 }
@@ -2634,7 +2662,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
+		platforms := mixedSchedulingPlatforms(platform)
 		var accounts []Account
 		var err error
 		if groupID != nil {
@@ -2653,7 +2681,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if (acc.Platform == PlatformAntigravity || acc.Platform == PlatformKiro) && !accountEligibleForMixedPlatform(&acc, platform) {
 				continue
 			}
 			filtered = append(filtered, acc)
@@ -2727,13 +2755,13 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 	if account == nil {
 		return false
 	}
-	if useMixed {
-		if account.Platform == platform {
-			return true
-		}
-		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
+	if account.Platform == platform {
+		return true
 	}
-	return account.Platform == platform
+	if !useMixed {
+		return false
+	}
+	return accountEligibleForMixedPlatform(account, platform)
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
@@ -4229,6 +4257,10 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		} else {
 			requestedModel = claude.NormalizeModelID(requestedModel)
 		}
+	}
+	// Kiro 账号使用严格 model_mapping 白名单：空映射或未命中均拒绝
+	if account.Platform == PlatformKiro {
+		return account.SupportsModelInMapping(requestedModel)
 	}
 	// 其他平台使用账户的模型支持检查
 	return account.IsModelSupported(requestedModel)

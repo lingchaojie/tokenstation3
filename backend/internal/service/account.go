@@ -719,6 +719,23 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 	return requestedModel, false
 }
 
+// SupportsModelInMapping 报告请求模型是否命中账号的 model_mapping（精确或通配符，含归一化）。
+// 严格语义：空映射或未命中均返回 false。
+// 仅在 kiro 等需要严格白名单的平台调用；anthropic/openai 等沿用 IsModelSupported 的"空=放行"语义。
+func (a *Account) SupportsModelInMapping(requestedModel string) bool {
+	if a == nil {
+		return false
+	}
+	_, matched := a.ResolveMappedModel(requestedModel)
+	if !matched && a.Platform == PlatformKiro && len(a.GetModelMapping()) == 0 {
+		slog.Warn("kiro_account_empty_model_mapping",
+			"account_id", a.ID,
+			"requested_model", requestedModel,
+		)
+	}
+	return matched
+}
+
 // GetOpenAICompactMode returns the compact routing mode for an OpenAI account.
 // Missing or invalid values fall back to "auto".
 func (a *Account) GetOpenAICompactMode() string {
@@ -1393,6 +1410,138 @@ func (a *Account) IsMixedSchedulingEnabled() bool {
 		}
 	}
 	return false
+}
+
+// IsKiroMixedSchedulingEnabled 检查 kiro 账户是否启用混合调度（可参与 anthropic 分组）。
+// 非 kiro 平台始终返回 false。
+func (a *Account) IsKiroMixedSchedulingEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro || a.Extra == nil {
+		return false
+	}
+	if v, ok := a.Extra["mixed_scheduling"]; ok {
+		if enabled, ok := v.(bool); ok {
+			return enabled
+		}
+	}
+	return false
+}
+
+// kiroExtraBool 从 Extra 读 bool。
+func (a *Account) kiroExtraBool(key string) bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	if v, ok := a.Extra[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// kiroExtraFloat 从 Extra 读 float（兼容 json.Number / float64 / int / string 数字）。
+func (a *Account) kiroExtraFloat(key string) float64 {
+	if a == nil || a.Extra == nil {
+		return 0
+	}
+	switch v := a.Extra[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	}
+	return 0
+}
+
+// kiroExtraInt 从 Extra 读 int（兼容 json.Number / float64 / int）。
+func (a *Account) kiroExtraInt(key string) int {
+	return int(a.kiroExtraFloat(key))
+}
+
+// KiroEndpointMode 返回账号级 Kiro endpoint 模式，默认 q，未知值兜底 q。
+// 非 kiro 平台始终返回 KiroEndpointModeQ（与 group.go EffectiveKiroEndpointMode 语义一致）。
+func (a *Account) KiroEndpointMode() string {
+	if a == nil || a.Platform != PlatformKiro {
+		return KiroEndpointModeQ
+	}
+	if a.Extra != nil {
+		if s, ok := a.Extra["kiro_endpoint_mode"].(string); ok && s == KiroEndpointModeKRS {
+			return KiroEndpointModeKRS
+		}
+	}
+	return KiroEndpointModeQ
+}
+
+// KiroCacheEmulationEnabled 账号级缓存模拟开关（需 ratio>0 才真正生效，与 group 语义一致）。
+// 非 kiro 平台始终返回 false。
+func (a *Account) KiroCacheEmulationEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro {
+		return false
+	}
+	if !a.kiroExtraBool("kiro_cache_emulation_enabled") {
+		return false
+	}
+	return a.KiroCacheEmulationRatio() > 0
+}
+
+// KiroCacheEmulationRatio 账号级缓存模拟比率，归一化到 [0,1]。
+// 非 kiro 平台始终返回 0。
+func (a *Account) KiroCacheEmulationRatio() float64 {
+	if a == nil || a.Platform != PlatformKiro {
+		return 0
+	}
+	if !a.kiroExtraBool("kiro_cache_emulation_enabled") {
+		return 0
+	}
+	return normalizeKiroCacheEmulationRatio(a.kiroExtraFloat("kiro_cache_emulation_ratio"))
+}
+
+// KiroAutoStickyEnabled 账号级 auto-sticky 开关。
+// 非 kiro 平台始终返回 false。
+func (a *Account) KiroAutoStickyEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro {
+		return false
+	}
+	return a.kiroExtraBool("kiro_auto_sticky_enabled")
+}
+
+// KiroStickySessionTTLSeconds 账号级粘性 TTL，归一化（0 → 默认 3600，含上下限）。
+// 非 kiro 平台始终返回 0（与 group.go EffectiveKiroStickySessionTTLSeconds 语义一致）。
+func (a *Account) KiroStickySessionTTLSeconds() int {
+	if a == nil || a.Platform != PlatformKiro {
+		return 0
+	}
+	return normalizeKiroStickySessionTTLSeconds(a.kiroExtraInt("kiro_sticky_session_ttl_seconds"))
+}
+
+// accountEligibleForMixedPlatform 判定账号能否在 targetPlatform 的混合池中被调度。
+// antigravity → anthropic+gemini；kiro → 仅 anthropic。
+func accountEligibleForMixedPlatform(acc *Account, targetPlatform string) bool {
+	if acc == nil {
+		return false
+	}
+	switch acc.Platform {
+	case PlatformAntigravity:
+		return acc.IsMixedSchedulingEnabled()
+	case PlatformKiro:
+		return targetPlatform == PlatformAnthropic && acc.IsKiroMixedSchedulingEnabled()
+	default:
+		return false
+	}
+}
+
+// mixedSchedulingPlatforms 返回 targetPlatform 的混合候选平台列表。
+// anthropic → [anthropic, antigravity, kiro]；其它平台 → [platform, antigravity]。
+// 注意：默认分支会自动加入 antigravity；新增"不应混合"的平台时需显式加分支。
+func mixedSchedulingPlatforms(platform string) []string {
+	if platform == PlatformAnthropic {
+		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro}
+	}
+	return []string{platform, PlatformAntigravity}
 }
 
 // IsOveragesEnabled 检查 Antigravity 账号是否启用 AI Credits 超量请求。

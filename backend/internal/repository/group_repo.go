@@ -565,6 +565,24 @@ func (r *groupRepository) GetAccountCount(ctx context.Context, groupID int64) (t
 	return
 }
 
+func (r *groupRepository) HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error) {
+	var exists bool
+	err := scanSingleRow(ctx, r.sql,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM account_groups ag JOIN accounts a ON a.id = ag.account_id
+			WHERE ag.group_id = $1
+			  AND a.deleted_at IS NULL
+			  AND a.platform = 'kiro'
+			  AND a.status = 'active'
+			  AND a.schedulable = true
+			  AND COALESCE((a.extra->>'mixed_scheduling')::boolean, false) = true
+			  AND COALESCE((a.extra->>'kiro_auto_sticky_enabled')::boolean, false) = true
+		)`,
+		[]any{groupID}, &exists)
+	return exists, err
+}
+
 func (r *groupRepository) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	res, err := r.sql.ExecContext(ctx, "DELETE FROM account_groups WHERE group_id = $1", groupID)
 	if err != nil {

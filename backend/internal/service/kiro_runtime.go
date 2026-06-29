@@ -38,6 +38,27 @@ const (
 
 var kiroRetrySleep = sleepWithContext
 
+// KiroModelNotSupportedError 表示请求模型不在 kiro 账号的 model_mapping 白名单中。
+// 应被网关 handler 映射为 400 Bad Request（客户端/配置错误,非上游故障）。
+type KiroModelNotSupportedError struct {
+	AccountID      int64
+	RequestedModel string
+}
+
+func (e *KiroModelNotSupportedError) Error() string {
+	return fmt.Sprintf("kiro account %d does not support model %q (not in account model_mapping)", e.AccountID, e.RequestedModel)
+}
+
+// kiroModelNotInMappingError 返回"请求模型不在 kiro 账号 model_mapping 中"的错误。
+// 该错误应被上层映射为 400 Bad Request（客户端/配置错误），不应进入 failover 重试同一账号。
+func kiroModelNotInMappingError(account *Account, requestedModel string) error {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return &KiroModelNotSupportedError{AccountID: accountID, RequestedModel: requestedModel}
+}
+
 func kiroRetryBackoffDelay(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
@@ -71,9 +92,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	originalModel := parsed.Model
-	mappedModel := originalModel
-	if next := account.GetMappedModel(originalModel); next != "" {
-		mappedModel = next
+	mappedModel, matched := account.ResolveMappedModel(originalModel)
+	if !matched {
+		return nil, kiroModelNotInMappingError(account, originalModel)
 	}
 	body := parsed.Body.Bytes()
 	if mappedModel != originalModel {
@@ -555,7 +576,7 @@ func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string 
 	if parsed == nil || parsed.Group == nil {
 		return KiroEndpointModeQ
 	}
-	return parsed.Group.EffectiveKiroEndpointMode()
+	return resolveKiroEndpointMode(account, parsed.Group)
 }
 
 func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {

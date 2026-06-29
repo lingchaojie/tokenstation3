@@ -82,6 +82,11 @@ type Group struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
+	// HasMixedKiroAutoStickyAccount 标记该组是否存在可调度、启用 mixed_scheduling
+	// 且 kiro_auto_sticky_enabled 的 kiro 账号。仅用于 auto-sticky 稳定 hash 门控。
+	// 在 auth-snapshot 构建时计算；bounded-stale（随 auth 缓存 TTL）。
+	HasMixedKiroAutoStickyAccount bool
+
 	AccountGroups           []AccountGroup
 	AccountCount            int64
 	ActiveAccountCount      int64

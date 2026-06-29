@@ -64,6 +64,9 @@ func (s *userAPIKeyRouteGroupRepoStub) BindAccountsToGroup(context.Context, int6
 func (s *userAPIKeyRouteGroupRepoStub) UpdateSortOrders(context.Context, []GroupSortOrderUpdate) error {
 	panic("unexpected")
 }
+func (s *userAPIKeyRouteGroupRepoStub) HasSchedulableMixedKiroStickyAccount(context.Context, int64) (bool, error) {
+	panic("unexpected")
+}
 
 type userAPIKeyRouteRepoStub struct {
 	routes                       map[string]UserAPIKeyRoute

@@ -87,6 +87,9 @@ func (f *fakeGroupRepo) ExistsByName(context.Context, string) (bool, error) { re
 func (f *fakeGroupRepo) GetAccountCount(context.Context, int64) (int64, int64, error) {
 	return 0, 0, nil
 }
+func (f *fakeGroupRepo) HasSchedulableMixedKiroStickyAccount(context.Context, int64) (bool, error) {
+	return false, nil
+}
 func (f *fakeGroupRepo) DeleteAccountGroupsByGroupID(context.Context, int64) (int64, error) {
 	return 0, nil
 }

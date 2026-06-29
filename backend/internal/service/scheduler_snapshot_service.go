@@ -486,6 +486,25 @@ func (s *SchedulerSnapshotService) handleGroupEvent(ctx context.Context, groupID
 	return s.rebuildByGroupIDs(ctx, groupIDs, "group_change", seen)
 }
 
+// rebuildPlatformsForMixedAccount 返回混合调度账号变更时需额外重建的平台桶。
+// antigravity → anthropic+gemini；kiro → 仅 anthropic；否则 nil。
+func rebuildPlatformsForMixedAccount(account *Account) []string {
+	if account == nil {
+		return nil
+	}
+	switch account.Platform {
+	case PlatformAntigravity:
+		if account.IsMixedSchedulingEnabled() {
+			return []string{PlatformAnthropic, PlatformGemini}
+		}
+	case PlatformKiro:
+		if account.IsKiroMixedSchedulingEnabled() {
+			return []string{PlatformAnthropic}
+		}
+	}
+	return nil
+}
+
 func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account *Account, groupIDs []int64, reason string, seen map[batchSeenKey]struct{}) error {
 	if account == nil {
 		return nil
@@ -499,11 +518,8 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	if err := s.rebuildBucketsForPlatform(ctx, account.Platform, groupIDs, reason, seen); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled() {
-		if err := s.rebuildBucketsForPlatform(ctx, PlatformAnthropic, groupIDs, reason, seen); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if err := s.rebuildBucketsForPlatform(ctx, PlatformGemini, groupIDs, reason, seen); err != nil && firstErr == nil {
+	for _, mixedPlatform := range rebuildPlatformsForMixedAccount(account) {
+		if err := s.rebuildBucketsForPlatform(ctx, mixedPlatform, groupIDs, reason, seen); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -677,7 +693,7 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	}
 
 	if useMixed {
-		platforms := []string{bucket.Platform, PlatformAntigravity}
+		platforms := mixedSchedulingPlatforms(bucket.Platform)
 		var accounts []Account
 		var err error
 		if groupID > 0 {
@@ -692,7 +708,7 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if (acc.Platform == PlatformAntigravity || acc.Platform == PlatformKiro) && !accountEligibleForMixedPlatform(&acc, bucket.Platform) {
 				continue
 			}
 			filtered = append(filtered, acc)

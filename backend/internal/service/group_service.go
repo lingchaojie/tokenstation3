@@ -28,6 +28,9 @@ type GroupRepository interface {
 
 	ExistsByName(ctx context.Context, name string) (bool, error)
 	GetAccountCount(ctx context.Context, groupID int64) (total int64, active int64, err error)
+	// HasSchedulableMixedKiroStickyAccount 报告分组内是否存在可调度、启用 mixed_scheduling
+	// 且 kiro_auto_sticky_enabled 的 kiro 账号。
+	HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error)
 	DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error)
 	// GetAccountIDsByGroupIDs 获取多个分组的所有账号 ID（去重）
 	GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error)

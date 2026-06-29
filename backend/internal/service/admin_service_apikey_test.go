@@ -302,6 +302,9 @@ func (s *groupRepoStubForGroupUpdate) ExistsByName(context.Context, string) (boo
 func (s *groupRepoStubForGroupUpdate) GetAccountCount(context.Context, int64) (int64, int64, error) {
 	panic("unexpected")
 }
+func (s *groupRepoStubForGroupUpdate) HasSchedulableMixedKiroStickyAccount(context.Context, int64) (bool, error) {
+	return false, nil
+}
 func (s *groupRepoStubForGroupUpdate) DeleteAccountGroupsByGroupID(context.Context, int64) (int64, error) {
 	panic("unexpected")
 }
