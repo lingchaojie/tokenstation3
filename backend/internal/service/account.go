@@ -1420,7 +1420,7 @@ func (a *Account) kiroExtraBool(key string) bool {
 	return false
 }
 
-// kiroExtraFloat 从 Extra 读 float（兼容 json.Number / float64 / int）。
+// kiroExtraFloat 从 Extra 读 float（兼容 json.Number / float64 / int / string 数字）。
 func (a *Account) kiroExtraFloat(key string) float64 {
 	if a == nil || a.Extra == nil {
 		return 0
@@ -1433,6 +1433,9 @@ func (a *Account) kiroExtraFloat(key string) float64 {
 	case json.Number:
 		f, _ := v.Float64()
 		return f
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
 	}
 	return 0
 }
@@ -1443,8 +1446,12 @@ func (a *Account) kiroExtraInt(key string) int {
 }
 
 // KiroEndpointMode 返回账号级 Kiro endpoint 模式，默认 q，未知值兜底 q。
+// 非 kiro 平台始终返回 KiroEndpointModeQ（与 group.go EffectiveKiroEndpointMode 语义一致）。
 func (a *Account) KiroEndpointMode() string {
-	if a != nil && a.Extra != nil {
+	if a == nil || a.Platform != PlatformKiro {
+		return KiroEndpointModeQ
+	}
+	if a.Extra != nil {
 		if s, ok := a.Extra["kiro_endpoint_mode"].(string); ok && s == KiroEndpointModeKRS {
 			return KiroEndpointModeKRS
 		}
@@ -1453,12 +1460,23 @@ func (a *Account) KiroEndpointMode() string {
 }
 
 // KiroCacheEmulationEnabled 账号级缓存模拟开关（需 ratio>0 才真正生效，与 group 语义一致）。
+// 非 kiro 平台始终返回 false。
 func (a *Account) KiroCacheEmulationEnabled() bool {
-	return a.kiroExtraBool("kiro_cache_emulation_enabled") && a.KiroCacheEmulationRatio() > 0
+	if a == nil || a.Platform != PlatformKiro {
+		return false
+	}
+	if !a.kiroExtraBool("kiro_cache_emulation_enabled") {
+		return false
+	}
+	return a.KiroCacheEmulationRatio() > 0
 }
 
 // KiroCacheEmulationRatio 账号级缓存模拟比率，归一化到 [0,1]。
+// 非 kiro 平台始终返回 0。
 func (a *Account) KiroCacheEmulationRatio() float64 {
+	if a == nil || a.Platform != PlatformKiro {
+		return 0
+	}
 	if !a.kiroExtraBool("kiro_cache_emulation_enabled") {
 		return 0
 	}
@@ -1466,12 +1484,20 @@ func (a *Account) KiroCacheEmulationRatio() float64 {
 }
 
 // KiroAutoStickyEnabled 账号级 auto-sticky 开关。
+// 非 kiro 平台始终返回 false。
 func (a *Account) KiroAutoStickyEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro {
+		return false
+	}
 	return a.kiroExtraBool("kiro_auto_sticky_enabled")
 }
 
 // KiroStickySessionTTLSeconds 账号级粘性 TTL，归一化（0 → 默认 3600，含上下限）。
+// 非 kiro 平台始终返回 0（与 group.go EffectiveKiroStickySessionTTLSeconds 语义一致）。
 func (a *Account) KiroStickySessionTTLSeconds() int {
+	if a == nil || a.Platform != PlatformKiro {
+		return 0
+	}
 	return normalizeKiroStickySessionTTLSeconds(a.kiroExtraInt("kiro_sticky_session_ttl_seconds"))
 }
 
