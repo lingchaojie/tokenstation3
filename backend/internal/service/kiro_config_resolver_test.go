@@ -19,6 +19,10 @@ func TestResolveKiroEndpointMode(t *testing.T) {
 	require.Equal(t, KiroEndpointModeKRS, resolveKiroEndpointMode(mixedKiroAcct, kiroGroup))
 	require.Equal(t, KiroEndpointModeKRS, resolveKiroEndpointMode(mixedKiroAcct, anthropicGroup))
 	require.Equal(t, KiroEndpointModeQ, resolveKiroEndpointMode(anthropicAcct, anthropicGroup))
+
+	// group-first 不变量：原生 kiro 组配置覆盖账号配置
+	qGroup := &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	require.Equal(t, KiroEndpointModeQ, resolveKiroEndpointMode(mixedKiroAcct, qGroup))
 }
 
 func TestResolveKiroCacheEmulation(t *testing.T) {
@@ -38,9 +42,17 @@ func TestResolveKiroCacheEmulation(t *testing.T) {
 
 	enabled, _ = resolveKiroCacheEmulation(&Account{Platform: PlatformAnthropic}, anthropicGroup)
 	require.False(t, enabled)
+
+	// nil group + kiro direct 账号 → 走账号配置（生产中 parsed.Group 可能为 nil）
+	enabled, ratio = resolveKiroCacheEmulation(mixedKiroAcct, nil)
+	require.True(t, enabled)
+	require.Equal(t, 0.5, ratio)
+	// nil group + 非 kiro 账号 → 安全默认
+	enabled, _ = resolveKiroCacheEmulation(&Account{Platform: PlatformAnthropic}, nil)
+	require.False(t, enabled)
 }
 
-func TestResolveKiroStickyTTL(t *testing.T) {
+func TestResolveKiroStickySessionTTLSeconds(t *testing.T) {
 	anthropicGroup := &Group{Platform: PlatformAnthropic}
 	kiroGroup := &Group{Platform: PlatformKiro, KiroStickySessionTTLSeconds: 1800}
 	mixedKiroAcct := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Extra: map[string]any{
