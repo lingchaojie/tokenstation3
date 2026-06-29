@@ -297,7 +297,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			KiroStickySessionTTLSeconds:     apiKey.Group.EffectiveKiroStickySessionTTLSeconds(),
 			KiroCacheEmulationRatio:         apiKey.Group.EffectiveKiroCacheEmulationRatio(),
 			KiroEndpointMode:                apiKey.Group.EffectiveKiroEndpointMode(),
-				HasMixedKiroAutoStickyAccount:   s.computeHasMixedKiroAutoSticky(ctx, apiKey.Group),
+			HasMixedKiroAutoStickyAccount:   s.computeHasMixedKiroAutoSticky(ctx, apiKey.Group),
 		}
 	}
 	return snapshot
@@ -311,6 +311,7 @@ func (s *APIKeyService) computeHasMixedKiroAutoSticky(ctx context.Context, group
 	}
 	ok, err := s.groupRepo.HasSchedulableMixedKiroStickyAccount(ctx, group.ID)
 	if err != nil {
+		slog.Warn("compute_has_mixed_kiro_auto_sticky_failed", "group_id", group.ID, "error", err)
 		return false
 	}
 	return ok
@@ -392,7 +393,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
-				HasMixedKiroAutoStickyAccount:   snapshot.Group.HasMixedKiroAutoStickyAccount,
+			HasMixedKiroAutoStickyAccount:   snapshot.Group.HasMixedKiroAutoStickyAccount,
 		}
 	}
 	s.compileAPIKeyIPRules(apiKey)
