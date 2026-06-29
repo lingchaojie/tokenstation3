@@ -1426,7 +1426,8 @@ func accountEligibleForMixedPlatform(acc *Account, targetPlatform string) bool {
 }
 
 // mixedSchedulingPlatforms 返回 targetPlatform 的混合候选平台列表。
-// anthropic → [anthropic, antigravity, kiro]；gemini → [gemini, antigravity]。
+// anthropic → [anthropic, antigravity, kiro]；其它平台 → [platform, antigravity]。
+// 注意：默认分支会自动加入 antigravity；新增"不应混合"的平台时需显式加分支。
 func mixedSchedulingPlatforms(platform string) []string {
 	if platform == PlatformAnthropic {
 		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro}

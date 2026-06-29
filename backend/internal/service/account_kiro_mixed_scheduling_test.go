@@ -39,6 +39,7 @@ func TestAccountEligibleForMixedPlatform(t *testing.T) {
 func TestMixedSchedulingPlatforms(t *testing.T) {
 	require.Equal(t, []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro}, mixedSchedulingPlatforms(PlatformAnthropic))
 	require.Equal(t, []string{PlatformGemini, PlatformAntigravity}, mixedSchedulingPlatforms(PlatformGemini))
+	require.Equal(t, []string{"future", PlatformAntigravity}, mixedSchedulingPlatforms("future"))
 }
 
 func TestIsAccountAllowedForPlatform_Kiro(t *testing.T) {
