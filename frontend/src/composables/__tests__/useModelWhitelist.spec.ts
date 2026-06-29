@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn(),
+  getKiroDefaultModelMapping: vi.fn()
 }))
 
 import {
   buildModelMappingObject,
+  fetchKiroDefaultMappings,
   getModelsByPlatform,
   getPresetMappingsByPlatform,
   splitModelMappingObject,
@@ -47,6 +49,26 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-mythos-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
+  })
+
+  it('Kiro 模型列表和默认映射包含上游 Opus 4.8', async () => {
+    const models = getModelsByPlatform('kiro')
+    expect(models).toContain('claude-opus-4-8')
+    expect(models).toContain('claude-opus-4-8-thinking')
+
+    expect(getPresetMappingsByPlatform('kiro')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4.8' }),
+        expect.objectContaining({ label: 'Opus 4.8 Thinking', from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' }),
+      ])
+    )
+
+    await expect(fetchKiroDefaultMappings()).resolves.toEqual(
+      expect.arrayContaining([
+        { from: 'claude-opus-4-8', to: 'claude-opus-4.8' },
+        { from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' },
+      ])
+    )
   })
 
   it('Claude 预设映射包含 Fable 和 Mythos 最新模型', () => {

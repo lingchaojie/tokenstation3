@@ -84,19 +84,20 @@ const antigravityModels = [
 ]
 
 const kiroModels = [
-  'kiro-auto',
-  'kiro-claude-sonnet-4-5',
-  'kiro-claude-opus-4-5',
-  'kiro-claude-haiku-4-5',
-  'kiro-claude-sonnet-4',
-  'kiro-claude-sonnet-4-5-agentic',
-  'kiro-claude-opus-4-5-agentic',
-  'kiro-claude-haiku-4-5-agentic',
-  'kiro-claude-sonnet-4-agentic',
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-haiku-4-5',
-  'claude-sonnet-4'
+  'claude-opus-4-8',
+  'claude-opus-4-8-thinking',
+  'claude-opus-4-7',
+  'claude-opus-4-7-thinking',
+  'claude-opus-4-6',
+  'claude-opus-4-6-thinking',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-6-thinking',
+  'claude-opus-4-5-20251101',
+  'claude-opus-4-5-20251101-thinking',
+  'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4-5-20250929-thinking',
+  'claude-haiku-4-5-20251001',
+  'claude-haiku-4-5-20251001-thinking'
 ]
 
 // 智谱 GLM
@@ -300,11 +301,20 @@ const geminiPresetMappings = [
 ]
 
 const kiroPresetMappings = [
-  { label: 'Kiro Auto', from: 'claude-*', to: 'kiro-auto', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
-  { label: 'Sonnet→Kiro', from: 'claude-sonnet-*', to: 'kiro-claude-sonnet-4-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
-  { label: 'Opus→Kiro', from: 'claude-opus-*', to: 'kiro-claude-opus-4-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
-  { label: 'Haiku→Kiro', from: 'claude-haiku-*', to: 'kiro-claude-haiku-4-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
-  { label: 'Agentic Sonnet', from: 'claude-sonnet-4-5', to: 'kiro-claude-sonnet-4-5-agentic', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' }
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 4.8 Thinking', from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4.7', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 4.7 Thinking', from: 'claude-opus-4-7-thinking', to: 'claude-opus-4.7', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4.6', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 4.6 Thinking', from: 'claude-opus-4-6-thinking', to: 'claude-opus-4.6', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Sonnet 4.6 Thinking', from: 'claude-sonnet-4-6-thinking', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Opus 4.5', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4.5', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300' },
+  { label: 'Opus 4.5 Thinking', from: 'claude-opus-4-5-20251101-thinking', to: 'claude-opus-4.5', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300' },
+  { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4.5', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
+  { label: 'Sonnet 4.5 Thinking', from: 'claude-sonnet-4-5-20250929-thinking', to: 'claude-sonnet-4.5', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
+  { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' },
+  { label: 'Haiku 4.5 Thinking', from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' }
 ]
 
 const grokPresetMappings = [
@@ -364,11 +374,14 @@ const bedrockPresetMappings = [
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5', to: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
 ]
 
+const kiroDefaultMappings = kiroPresetMappings.map(({ from, to }) => ({ from, to }))
+
 // Antigravity 默认映射（从后端 API 获取，与 constants.go 保持一致）
 // 使用 fetchAntigravityDefaultMappings() 异步获取
 import { getAntigravityDefaultModelMapping } from '@/api/admin/accounts'
 
 let _antigravityDefaultMappingsCache: { from: string; to: string }[] | null = null
+let _kiroDefaultMappingsCache: { from: string; to: string }[] | null = null
 
 export async function fetchAntigravityDefaultMappings(): Promise<{ from: string; to: string }[]> {
   if (_antigravityDefaultMappingsCache !== null) {
@@ -382,6 +395,14 @@ export async function fetchAntigravityDefaultMappings(): Promise<{ from: string;
     _antigravityDefaultMappingsCache = []
   }
   return _antigravityDefaultMappingsCache
+}
+
+export async function fetchKiroDefaultMappings(): Promise<{ from: string; to: string }[]> {
+  if (_kiroDefaultMappingsCache !== null) {
+    return _kiroDefaultMappingsCache.map(({ from, to }) => ({ from, to }))
+  }
+  _kiroDefaultMappingsCache = kiroDefaultMappings.map(({ from, to }) => ({ from, to }))
+  return _kiroDefaultMappingsCache.map(({ from, to }) => ({ from, to }))
 }
 
 // =====================

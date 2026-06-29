@@ -744,6 +744,51 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
 }
 
+func TestGatewayService_KiroRelayAppliesAllowedAccountCustomHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "opencode/1.0")
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+	}
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example.com",
+		},
+		Extra: map[string]any{
+			"custom_headers": map[string]any{
+				"User-Agent":     "relay-custom-agent/1.0",
+				"X-Client-Trace": "trace-123",
+				"X-Api-Key":      "must-not-override",
+			},
+		},
+	}
+
+	req, _, err := svc.buildUpstreamRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}`),
+		"relay-api-key",
+		"apikey",
+		"claude-opus-4-8",
+		false,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "relay-custom-agent/1.0", getHeaderRaw(req.Header, "user-agent"))
+	require.Equal(t, "trace-123", getHeaderRaw(req.Header, "x-client-trace"))
+	require.Equal(t, "relay-api-key", getHeaderRaw(req.Header, "x-api-key"))
+}
+
 func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

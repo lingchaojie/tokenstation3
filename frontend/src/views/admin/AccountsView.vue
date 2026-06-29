@@ -232,7 +232,14 @@
           <template #cell-platform_type="{ row }">
             <div class="flex min-w-0 flex-col gap-1">
               <div class="flex flex-wrap items-center gap-1">
-                <PlatformTypeBadge :platform="row.platform" :type="row.type" :plan-type="row.credentials?.plan_type" :privacy-mode="row.extra?.privacy_mode" :subscription-expires-at="row.credentials?.subscription_expires_at" />
+                <PlatformTypeBadge
+                  :platform="row.platform"
+                  :type="row.type"
+                  :plan-type="row.credentials?.plan_type"
+                  :overages-enabled="isKiroOveragesEnabled(row)"
+                  :privacy-mode="row.extra?.privacy_mode"
+                  :subscription-expires-at="row.credentials?.subscription_expires_at"
+                />
                 <span
                   v-if="getAntigravityTierLabel(row)"
                   :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
@@ -269,6 +276,9 @@
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
+              :platform="row.platform"
+              :kiro-credit-unit-price-usd="getKiroCreditUnitPriceUsd(row)"
+              :is-relay="isKiroRelayAccount(row)"
               :loading="todayStatsLoading"
               :error="todayStatsError"
             />
@@ -288,6 +298,7 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+              @kiro-usage-meta="handleKiroUsageMeta(row, $event)"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -437,6 +448,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { isKiroRelayAccount } from '@/utils/kiroAccount'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
@@ -907,6 +919,12 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.schedulable !== next.schedulable ||
     current.status !== next.status ||
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
+    current.kiro_quota_state !== next.kiro_quota_state ||
+    current.kiro_quota_reason !== next.kiro_quota_reason ||
+    current.kiro_quota_reset_at !== next.kiro_quota_reset_at ||
+    current.kiro_runtime_state !== next.kiro_runtime_state ||
+    current.kiro_runtime_reason !== next.kiro_runtime_reason ||
+    current.kiro_runtime_reset_at !== next.kiro_runtime_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
@@ -1081,6 +1099,26 @@ function getAntigravityTierLabel(row: any): string | null {
     case 'g1-ultra-tier': return t('admin.accounts.tier.ultra')
     default: return null
   }
+}
+
+const isKiroOveragesEnabled = (account: Account) => {
+  return account.platform === 'kiro' && account.credentials?.kiro_overages_enabled === true
+}
+
+const handleKiroUsageMeta = (account: Account, meta: { plan_type?: string; kiro_overages_enabled: boolean }) => {
+  if (account.platform !== 'kiro') return
+  account.credentials = {
+    ...(account.credentials || {}),
+    ...(meta.plan_type ? { plan_type: meta.plan_type } : {}),
+    kiro_overages_enabled: meta.kiro_overages_enabled
+  }
+}
+
+const getKiroCreditUnitPriceUsd = (account: Account): number => {
+  if (account.platform !== 'kiro') return 0
+  const raw = account.extra?.kiro_credit_unit_price_usd
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0
+  return Number.isFinite(value) && value > 0 ? value : 0
 }
 
 type OpenAICompactBadgeState = 'active' | 'blocked' | 'auto'
@@ -1443,7 +1481,13 @@ const accountMatchesCurrentFilters = (account: Account) => {
   if (filters.status) {
     const now = Date.now()
     const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
-    const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
+    const kiroRuntimeResetAt = account.kiro_runtime_reset_at ? new Date(account.kiro_runtime_reset_at).getTime() : Number.NaN
+    const isKiroRuntimeLimited =
+      account.platform === 'kiro' &&
+      account.kiro_runtime_state === 'cooldown' &&
+      Number.isFinite(kiroRuntimeResetAt) &&
+      kiroRuntimeResetAt > now
+    const isRateLimited = (Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) || isKiroRuntimeLimited
     const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
 

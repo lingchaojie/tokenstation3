@@ -1,81 +1,89 @@
-/**
- * Admin Kiro API endpoints
- * Handles Kiro OAuth browser and AWS Builder ID device-code flows.
- */
-
 import { apiClient } from '../client'
 
-export type KiroOAuthMethod = 'builder-id' | 'aws' | 'kiro-cli' | 'google'
-
-export interface KiroAuthUrlRequest {
-  method?: KiroOAuthMethod
-  proxy_id?: number
-}
-
 export interface KiroAuthUrlResponse {
-  mode: 'auth_url' | 'device_code'
-  method: 'builder-id' | 'kiro-cli' | 'google'
-  auth_url?: string
-  session_id: string
-  state?: string
-  verification_uri?: string
-  verification_uri_complete?: string
-  user_code?: string
-  expires_in?: number
-  interval?: number
-}
-
-export interface KiroExchangeCodeRequest {
+  auth_url: string
   session_id: string
   state: string
-  code: string
-  proxy_id?: number
 }
 
-export interface KiroPollDeviceCodeRequest {
-  session_id: string
-  proxy_id?: number
+export interface KiroIDCAuthUrlResponse extends KiroAuthUrlResponse {
+  client_id?: string
+  region?: string
+  start_url?: string
 }
 
 export interface KiroTokenInfo {
   access_token?: string
   refresh_token?: string
   profile_arn?: string
-  expires_in?: number
   expires_at?: string
-  auth_method?: 'builder-id' | 'social' | string
-  provider?: 'AWS' | 'Google' | 'Github' | string
+  auth_method?: string
+  provider?: string
   client_id?: string
   client_secret?: string
+  client_id_hash?: string
   email?: string
+  start_url?: string
+  region?: string
   [key: string]: unknown
 }
 
-export interface KiroPollDeviceCodeResponse {
-  status: 'pending' | 'complete'
-  token_info?: KiroTokenInfo
-  interval?: number
-}
-
-export async function generateAuthUrl(
-  payload: KiroAuthUrlRequest
-): Promise<KiroAuthUrlResponse> {
+export async function generateAuthUrl(payload: {
+  proxy_id?: number
+  provider?: string
+}): Promise<KiroAuthUrlResponse> {
   const { data } = await apiClient.post<KiroAuthUrlResponse>('/admin/kiro/oauth/auth-url', payload)
   return data
 }
 
-export async function exchangeCode(
-  payload: KiroExchangeCodeRequest
-): Promise<KiroTokenInfo> {
+export async function generateIDCAuthUrl(payload: {
+  proxy_id?: number
+  start_url?: string
+  region?: string
+}): Promise<KiroIDCAuthUrlResponse> {
+  const { data } = await apiClient.post<KiroIDCAuthUrlResponse>('/admin/kiro/oauth/idc-auth-url', payload)
+  return data
+}
+
+export async function exchangeCode(payload: {
+  session_id: string
+  state: string
+  code: string
+  callback_path?: string
+  login_option?: string
+  proxy_id?: number
+}): Promise<KiroTokenInfo> {
   const { data } = await apiClient.post<KiroTokenInfo>('/admin/kiro/oauth/exchange-code', payload)
   return data
 }
 
-export async function pollDeviceCode(
-  payload: KiroPollDeviceCodeRequest
-): Promise<KiroPollDeviceCodeResponse> {
-  const { data } = await apiClient.post<KiroPollDeviceCodeResponse>('/admin/kiro/oauth/poll', payload)
+export async function refreshToken(payload: {
+  refresh_token: string
+  auth_method?: string
+  provider?: string
+  client_id?: string
+  client_secret?: string
+  start_url?: string
+  region?: string
+  profile_arn?: string
+  proxy_id?: number
+}): Promise<KiroTokenInfo> {
+  const { data } = await apiClient.post<KiroTokenInfo>('/admin/kiro/oauth/refresh-token', payload)
   return data
 }
 
-export default { generateAuthUrl, exchangeCode, pollDeviceCode }
+export async function importToken(payload: {
+  token_json: string
+  device_registration_json?: string
+}): Promise<KiroTokenInfo> {
+  const { data } = await apiClient.post<KiroTokenInfo>('/admin/kiro/oauth/import-token', payload)
+  return data
+}
+
+export default {
+  generateAuthUrl,
+  generateIDCAuthUrl,
+  exchangeCode,
+  refreshToken,
+  importToken
+}

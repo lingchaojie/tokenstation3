@@ -1388,6 +1388,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.stream_keepalive_interval",
 		},
 		{
+			name:    "gateway kiro stream keepalive range",
+			mutate:  func(c *Config) { c.Gateway.KiroStreamKeepaliveInterval = 4 },
+			wantErr: "gateway.kiro_stream_keepalive_interval",
+		},
+		{
+			name:    "gateway kiro stream keepalive negative",
+			mutate:  func(c *Config) { c.Gateway.KiroStreamKeepaliveInterval = -1 },
+			wantErr: "gateway.kiro_stream_keepalive_interval must be non-negative",
+		},
+		{
 			name:    "gateway openai ws oauth max conns factor",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.OAuthMaxConnsFactor = 0 },
 			wantErr: "gateway.openai_ws.oauth_max_conns_factor",
@@ -1966,6 +1976,9 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.StreamKeepaliveInterval != 10 {
 		t.Fatalf("stream_keepalive_interval = %d, want 10", cfg.Gateway.StreamKeepaliveInterval)
+	}
+	if cfg.Gateway.KiroStreamKeepaliveInterval != 25 {
+		t.Fatalf("kiro_stream_keepalive_interval = %d, want 25", cfg.Gateway.KiroStreamKeepaliveInterval)
 	}
 	if cfg.Gateway.ImageStreamDataIntervalTimeout != 900 {
 		t.Fatalf("image_stream_data_interval_timeout = %d, want 900", cfg.Gateway.ImageStreamDataIntervalTimeout)
