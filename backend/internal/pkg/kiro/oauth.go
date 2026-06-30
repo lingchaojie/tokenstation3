@@ -317,6 +317,9 @@ func BuildExternalIDPAuthURL(input ExternalIDPAuthURLInput) (string, error) {
 	params.Set("response_type", "code")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("response_mode", "query")
+	if isMicrosoftExternalIDPEndpoint(endpoint) {
+		params.Set("prompt", "login")
+	}
 	params.Set("scope", strings.Join(scopes, " "))
 	params.Set("state", state)
 	if loginHint := strings.TrimSpace(input.LoginHint); loginHint != "" {
@@ -331,6 +334,14 @@ func BuildExternalIDPAuthURL(input ExternalIDPAuthURLInput) (string, error) {
 		params.Set("code_challenge_method", method)
 	}
 	return endpoint + "?" + params.Encode(), nil
+}
+
+func isMicrosoftExternalIDPEndpoint(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "login.microsoftonline.com")
 }
 
 func ExchangeExternalIDPAuthCode(ctx context.Context, proxyURL, issuerURL, clientID string, scopes []string, code, codeVerifier, redirectURI, loginHint string) (*TokenData, error) {

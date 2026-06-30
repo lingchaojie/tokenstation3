@@ -83,6 +83,9 @@ func TestBuildExternalIDPAuthURLUsesOAuthCallbackRedirect(t *testing.T) {
 	if params.Get("code_challenge_method") != "S256" {
 		t.Fatalf("code_challenge_method = %q", params.Get("code_challenge_method"))
 	}
+	if params.Get("prompt") != "login" {
+		t.Fatalf("prompt = %q", params.Get("prompt"))
+	}
 }
 
 func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
