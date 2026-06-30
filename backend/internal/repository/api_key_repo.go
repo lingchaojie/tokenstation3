@@ -199,6 +199,11 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldMessagesDispatchModelConfig,
 				group.FieldModelsListConfig,
 				group.FieldRpmLimit,
+				group.FieldKiroEndpointMode,
+				group.FieldKiroCacheEmulationEnabled,
+				group.FieldKiroCacheEmulationRatio,
+				group.FieldKiroAutoStickyEnabled,
+				group.FieldKiroStickySessionTTLSeconds,
 			)
 		}).
 		Only(ctx)

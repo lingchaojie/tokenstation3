@@ -148,6 +148,45 @@ func (s *APIKeyRepoSuite) TestGetByKeyForAuth_PreservesMessagesDispatchModelConf
 	s.Require().Equal("gpt-5.4-nano", got.Group.MessagesDispatchModelConfig.ExactModelMappings["claude-sonnet-4.5"])
 }
 
+// TestGetByKeyForAuth_PreservesKiroGroupConfig guards against the auth-path
+// group projection dropping kiro_* columns. If these fields are not in the
+// WithGroup Select, a native kiro group silently falls back to defaults
+// (q endpoint / cache emulation off / auto-sticky off), ignoring its config.
+func (s *APIKeyRepoSuite) TestGetByKeyForAuth_PreservesKiroGroupConfig() {
+	user := s.mustCreateUser("getbykey-auth-kiro@test.com")
+	group, err := s.client.Group.Create().
+		SetName("g-auth-kiro").
+		SetPlatform(service.PlatformKiro).
+		SetStatus(service.StatusActive).
+		SetSubscriptionType(service.SubscriptionTypeStandard).
+		SetRateMultiplier(1).
+		SetKiroEndpointMode(service.KiroEndpointModeKRS).
+		SetKiroCacheEmulationEnabled(true).
+		SetKiroCacheEmulationRatio(0.6).
+		SetKiroAutoStickyEnabled(true).
+		SetKiroStickySessionTTLSeconds(7200).
+		Save(s.ctx)
+	s.Require().NoError(err)
+
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-getbykey-auth-kiro",
+		Name:    "Kiro Key",
+		GroupID: &group.ID,
+		Status:  service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	got, err := s.repo.GetByKeyForAuth(s.ctx, key.Key)
+	s.Require().NoError(err)
+	s.Require().NotNil(got.Group)
+	s.Require().Equal(service.KiroEndpointModeKRS, got.Group.EffectiveKiroEndpointMode())
+	s.Require().True(got.Group.EffectiveKiroCacheEmulationEnabled())
+	s.Require().InDelta(0.6, got.Group.EffectiveKiroCacheEmulationRatio(), 0.0001)
+	s.Require().True(got.Group.EffectiveKiroAutoStickyEnabled())
+	s.Require().Equal(7200, got.Group.EffectiveKiroStickySessionTTLSeconds())
+}
+
 // --- Update ---
 
 func (s *APIKeyRepoSuite) TestUpdate() {
