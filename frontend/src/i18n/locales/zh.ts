@@ -4206,6 +4206,10 @@ export default {
           authCodePlaceholder:
             '方式1（推荐）：粘贴完整回调链接\n(http://localhost:49153/oauth/callback?code=...&state=...&login_option=github)\n方式2：仅粘贴 code 参数值',
           authCodeHint: '系统会自动从链接中解析 code/state 以及 Kiro 回调元数据；若无法访问 localhost 页面，请直接复制地址栏完整链接。',
+          externalIDPAuthUrl: 'M365 登录 URL',
+          externalIDPAuthUrlHint:
+            '这是根据第一段 external_idp 回调生成的第二段链接。复制后在浏览器打开，完成 Microsoft 登录后再把返回的 /oauth/callback?code=... 地址粘贴到上方。',
+          externalIDPAuthUrlCopy: '复制 M365 登录 URL',
           importDialogTitle: '导入 Kiro Token',
           authModeTitle: 'Kiro 授权方式',
           oauthTitle: '社交 OAuth',

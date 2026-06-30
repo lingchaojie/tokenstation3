@@ -674,6 +674,39 @@
                     {{ oauthAuthCodeHint }}
                   </p>
 
+                  <div v-if="externalAuthUrl" class="mt-3 space-y-2">
+                    <label class="input-label">
+                      <Icon name="externalLink" size="sm" class="mr-1 inline text-blue-500" />
+                      {{ oauthExternalIDPAuthUrl }}
+                    </label>
+                    <div class="flex items-center gap-2">
+                      <input
+                        :value="externalAuthUrl"
+                        readonly
+                        type="text"
+                        class="input flex-1 bg-gray-50 font-mono text-xs dark:bg-gray-700"
+                      />
+                      <button
+                        type="button"
+                        class="btn btn-secondary p-2"
+                        :title="oauthExternalIDPAuthUrlCopy"
+                        @click="handleCopyExternalAuthUrl"
+                      >
+                        <Icon
+                          v-if="copied"
+                          name="check"
+                          size="sm"
+                          class="text-green-500"
+                          :stroke-width="2"
+                        />
+                        <Icon v-else name="copy" size="sm" />
+                      </button>
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                      {{ oauthExternalIDPAuthUrlHint }}
+                    </p>
+                  </div>
+
                   <!-- Gemini-specific state parameter warning -->
                   <div
                     v-if="platform === 'gemini'"
@@ -723,6 +756,7 @@ import type { AccountPlatform } from '@/types'
 interface Props {
   addMethod: AddMethod
   authUrl?: string
+  externalAuthUrl?: string
   sessionId?: string
   loading?: boolean
   error?: string
@@ -743,6 +777,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   authUrl: '',
+  externalAuthUrl: '',
   sessionId: '',
   loading: false,
   error: '',
@@ -800,6 +835,9 @@ const oauthAuthCodeDesc = computed(() => t(getOAuthKey('authCodeDesc')))
 const oauthAuthCode = computed(() => t(getOAuthKey('authCode')))
 const oauthAuthCodePlaceholder = computed(() => t(getOAuthKey('authCodePlaceholder')))
 const oauthAuthCodeHint = computed(() => t(getOAuthKey('authCodeHint')))
+const oauthExternalIDPAuthUrl = computed(() => t(getOAuthKey('externalIDPAuthUrl')))
+const oauthExternalIDPAuthUrlHint = computed(() => t(getOAuthKey('externalIDPAuthUrlHint')))
+const oauthExternalIDPAuthUrlCopy = computed(() => t(getOAuthKey('externalIDPAuthUrlCopy')))
 const oauthImportantNotice = computed(() => {
   if (props.platform === 'openai') return t('admin.accounts.oauth.openai.importantNotice')
   if (props.platform === 'antigravity') return t('admin.accounts.oauth.antigravity.importantNotice')
@@ -910,6 +948,12 @@ const handleGenerateUrl = () => {
 const handleCopyUrl = () => {
   if (props.authUrl) {
     copyToClipboard(props.authUrl, 'URL copied to clipboard')
+  }
+}
+
+const handleCopyExternalAuthUrl = () => {
+  if (props.externalAuthUrl) {
+    copyToClipboard(props.externalAuthUrl, 'URL copied to clipboard')
   }
 }
 

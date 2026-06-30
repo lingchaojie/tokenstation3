@@ -288,6 +288,7 @@
         ref="oauthFlowRef"
         :add-method="addMethod"
         :auth-url="currentAuthUrl"
+        :external-auth-url="currentExternalAuthUrl"
         :session-id="currentSessionId"
         :loading="currentLoading"
         :error="currentError"
@@ -450,6 +451,10 @@ const currentAuthUrl = computed(() => {
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
   if (isGrok.value) return grokOAuth.authUrl.value
   return claudeOAuth.authUrl.value
+})
+const currentExternalAuthUrl = computed(() => {
+  if (isKiro.value) return kiroOAuth.externalIDPAuthUrl.value
+  return ''
 })
 const currentSessionId = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.sessionId.value
