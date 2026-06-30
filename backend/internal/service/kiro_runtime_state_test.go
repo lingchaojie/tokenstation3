@@ -281,7 +281,7 @@ func TestGatewayServiceTryRecoverKiroCooldownPoolClearsOnlyTransientCooldown(t *
 	require.True(t, recovered)
 	require.True(t, store.clearCalled)
 	require.Len(t, store.clearKeys, 1)
-	require.Equal(t, buildKiroAccountKey(&accounts[0]), store.clearKeys[0])
+	require.Equal(t, kiroRuntimeKey(&accounts[0]), store.clearKeys[0])
 }
 
 func TestGatewayServiceTryRecoverKiroCooldownPoolSkipsSuspended(t *testing.T) {
@@ -345,7 +345,7 @@ func TestSelectAccountWithLoadAwarenessRecoversKiroCooldownPool(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, account.ID, result.Account.ID)
 	require.True(t, store.clearCalled)
-	require.Equal(t, []string{buildKiroAccountKey(&account)}, store.clearKeys)
+	require.Equal(t, []string{kiroRuntimeKey(&account)}, store.clearKeys)
 }
 
 func TestClassifyKiroHTTPErrorMonthlyRequestCount(t *testing.T) {

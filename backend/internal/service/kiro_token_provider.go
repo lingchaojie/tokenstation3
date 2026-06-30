@@ -70,6 +70,7 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= kiroTokenRefreshSkew
 
 	if needsRefresh && p.refreshAPI != nil && p.executor != nil {
+		preRefreshAccount := snapshotKiroMachineIdentityAccount(account)
 		result, err := p.refreshAPI.RefreshIfNeeded(ctx, account, p.executor, kiroTokenRefreshSkew)
 		if err != nil {
 			if p.refreshPolicy.OnRefreshError == ProviderRefreshErrorReturn {
@@ -86,7 +87,11 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 				account = result.Account
 			}
 			if len(result.NewCredentials) > 0 {
-				account.Credentials = cloneCredentials(result.NewCredentials)
+				stableCredentials := mergeKiroCredentialsWithStableMachineID(preRefreshAccount, result.NewCredentials)
+				account.Credentials = cloneCredentials(stableCredentials)
+				if stringFromMap(result.NewCredentials, "machine_id") != stringFromMap(stableCredentials, "machine_id") {
+					_ = persistAccountCredentials(ctx, p.accountRepo, account, stableCredentials)
+				}
 			}
 			expiresAt = account.GetCredentialAsTime("expires_at")
 		}
@@ -187,7 +192,7 @@ func (p *KiroTokenProvider) ForceRefreshAccessToken(ctx context.Context, account
 		return "", err
 	}
 
-	newCredentials := MergeCredentials(account.Credentials, p.kiroOAuthService.BuildAccountCredentials(tokenInfo))
+	newCredentials := mergeKiroCredentialsWithStableMachineID(account, p.kiroOAuthService.BuildAccountCredentials(tokenInfo))
 	newCredentials["_token_version"] = time.Now().UnixMilli()
 	if err := persistAccountCredentials(ctx, p.accountRepo, account, newCredentials); err != nil {
 		return "", err

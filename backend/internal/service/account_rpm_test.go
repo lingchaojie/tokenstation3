@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -26,6 +27,63 @@ func TestGetBaseRPM(t *testing.T) {
 			a := &Account{Extra: tt.extra}
 			if got := a.GetBaseRPM(); got != tt.expected {
 				t.Errorf("GetBaseRPM() = %d, want %d", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSupportsAccountRPM(t *testing.T) {
+	tests := []struct {
+		name     string
+		account  *Account
+		expected bool
+	}{
+		{
+			name:     "anthropic oauth",
+			account:  &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+			expected: true,
+		},
+		{
+			name:     "anthropic setup token",
+			account:  &Account{Platform: PlatformAnthropic, Type: AccountTypeSetupToken},
+			expected: true,
+		},
+		{
+			name:     "kiro oauth direct",
+			account:  &Account{Platform: PlatformKiro, Type: AccountTypeOAuth},
+			expected: true,
+		},
+		{
+			name:     "kiro api key direct",
+			account:  &Account{Platform: PlatformKiro, Type: AccountTypeAPIKey},
+			expected: true,
+		},
+		{
+			name: "kiro relay api key",
+			account: &Account{
+				Platform: PlatformKiro,
+				Type:     AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"base_url": "https://relay.example.com",
+				},
+			},
+			expected: false,
+		},
+		{
+			name:     "anthropic api key",
+			account:  &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey},
+			expected: false,
+		},
+		{
+			name:     "nil account",
+			account:  nil,
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.account.SupportsAccountRPM(); got != tt.expected {
+				t.Errorf("SupportsAccountRPM() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
@@ -85,6 +143,67 @@ func TestCheckRPMSchedulability(t *testing.T) {
 				t.Errorf("CheckRPMSchedulability(%d) = %d, want %d", tt.currentRPM, got, tt.expected)
 			}
 		})
+	}
+}
+
+type stubRPMCacheForAccountRPMTest struct {
+	counts map[int64]int
+}
+
+func (s *stubRPMCacheForAccountRPMTest) IncrementRPM(context.Context, int64) (int, error) {
+	return 0, nil
+}
+
+func (s *stubRPMCacheForAccountRPMTest) GetRPM(_ context.Context, accountID int64) (int, error) {
+	return s.counts[accountID], nil
+}
+
+func (s *stubRPMCacheForAccountRPMTest) GetRPMBatch(_ context.Context, accountIDs []int64) (map[int64]int, error) {
+	result := make(map[int64]int, len(accountIDs))
+	for _, accountID := range accountIDs {
+		result[accountID] = s.counts[accountID]
+	}
+	return result, nil
+}
+
+func TestKiroDirectAccountRPMSchedulability(t *testing.T) {
+	svc := &GatewayService{
+		rpmCache: &stubRPMCacheForAccountRPMTest{
+			counts: map[int64]int{
+				101: 2,
+				102: 2,
+			},
+		},
+	}
+	ctx := context.Background()
+
+	direct := &Account{
+		ID:       101,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"base_rpm":          1,
+			"rpm_sticky_buffer": 1,
+		},
+	}
+	if got := svc.isAccountSchedulableForRPM(ctx, direct, false); got {
+		t.Fatal("Kiro direct account at red-zone RPM should not be schedulable for non-sticky routing")
+	}
+
+	relay := &Account{
+		ID:       102,
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://relay.example.com",
+		},
+		Extra: map[string]any{
+			"base_rpm":          1,
+			"rpm_sticky_buffer": 1,
+		},
+	}
+	if got := svc.isAccountSchedulableForRPM(ctx, relay, false); !got {
+		t.Fatal("Kiro relay account should not be constrained by account RPM")
 	}
 }
 

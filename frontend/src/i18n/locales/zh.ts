@@ -4024,6 +4024,9 @@ export default {
       mixedSchedulingHint: '启用后可参与 Anthropic/Gemini 分组的调度',
       mixedSchedulingTooltip:
         '！！注意！！ Antigravity Claude 和 Anthropic Claude 无法在同个上下文中使用，如果你同时有 Anthropic 账号和 Antigravity 账号，开启此选项会导致经常 400 报错。开启后，请用分组功能做好 Antigravity 账号和 Anthropic 账号的隔离。一定要弄明白再开启！！',
+      kiroMixedScheduling: '加入 Anthropic /v1/messages 调度',
+      kiroMixedSchedulingTooltip:
+        '启用后，该 Kiro 账号可参与 Anthropic 分组的 /v1/messages 混合调度，不会参与 Gemini 分组。建议配合分组和模型映射隔离 Kiro 与原生 Anthropic 账号，避免同一会话在不同上游之间切换。',
       aiCreditsBalance: 'AI Credits',
       allowOverages: '允许超量请求 (AI Credits)',
       allowOveragesTooltip:

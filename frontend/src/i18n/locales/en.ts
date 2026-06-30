@@ -3853,6 +3853,9 @@ export default {
       mixedSchedulingHint: 'Enable to participate in Anthropic/Gemini group scheduling',
       mixedSchedulingTooltip:
         '!! WARNING !! Antigravity Claude and Anthropic Claude cannot be used in the same context. If you have both Anthropic and Antigravity accounts, enabling this option will cause frequent 400 errors. When enabled, please use the group feature to isolate Antigravity accounts from Anthropic accounts. Make sure you understand this before enabling!!',
+      kiroMixedScheduling: 'Use in Anthropic /v1/messages',
+      kiroMixedSchedulingTooltip:
+        'When enabled, this Kiro account can participate in Anthropic group /v1/messages mixed scheduling. It does not participate in Gemini groups. Use groups and model mappings to isolate Kiro from native Anthropic accounts and avoid switching upstreams within one session.',
       aiCreditsBalance: 'AI Credits',
       allowOverages: 'Allow Overages (AI Credits)',
       allowOveragesTooltip:

@@ -57,6 +57,50 @@ func TestBuildKiroMachineIDDerivesFromRefreshToken(t *testing.T) {
 	require.Equal(t, kiropkg.BuildMachineID("refresh-token", "", "account:102"), buildKiroMachineID(account))
 }
 
+func TestBuildKiroAccountKeyStableAcrossRefreshTokenRotation(t *testing.T) {
+	machineID := kiropkg.BuildMachineID("refresh-a", "", "account:104")
+	accountA := &Account{
+		ID:       104,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"machine_id":    machineID,
+			"refresh_token": "refresh-a",
+		},
+	}
+	accountB := &Account{
+		ID:       104,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"machine_id":    machineID,
+			"refresh_token": "refresh-b",
+		},
+	}
+
+	require.Equal(t, "machine:"+machineID[:16], buildKiroAccountKey(accountA))
+	require.Equal(t, buildKiroAccountKey(accountA), buildKiroAccountKey(accountB))
+}
+
+func TestMergeKiroCredentialsWithStableMachineIDPreservesOldRefreshDerivedID(t *testing.T) {
+	account := &Account{
+		ID:       105,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"refresh_token": "old-refresh",
+		},
+	}
+
+	merged := mergeKiroCredentialsWithStableMachineID(account, map[string]any{
+		"access_token":  "new-access",
+		"refresh_token": "rotated-refresh",
+	})
+
+	require.Equal(t, "rotated-refresh", merged["refresh_token"])
+	require.Equal(t, kiropkg.BuildMachineID("old-refresh", "", "account:105"), merged["machine_id"])
+}
+
 func TestBuildKiroMachineIDDerivesFromAPIKeyAccount(t *testing.T) {
 	account := &Account{
 		ID:       103,

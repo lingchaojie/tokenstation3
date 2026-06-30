@@ -371,7 +371,9 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
 	var requestCtx kiropkg.KiroRequestContext
-	if err := s.checkAndWaitKiroCooldown(ctx, buildKiroAccountKey(account)); err != nil {
+	machineID := ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
+	accountKey := buildKiroAccountKey(account)
+	if err := s.checkAndWaitKiroCooldown(ctx, accountKey); err != nil {
 		if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
 			return nil, requestCtx, failoverErr
 		}
@@ -395,12 +397,11 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	endpoints := buildKiroEndpoints(account, kiroEndpointModeForRequest(account, parsed))
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
-	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 
 	for idx, endpoint := range endpoints {
 		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
+			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, machineID, endpoint.AmzTarget, account)
 			if err != nil {
 				return nil, requestCtx, err
 			}
@@ -489,6 +490,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
+						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
 						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
 						if err != nil {

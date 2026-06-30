@@ -63,8 +63,8 @@ func kiroListAvailableProfiles(ctx context.Context, account *Account, token stri
 		return nil, fmt.Errorf("create list profiles request: %w", err)
 	}
 
+	machineID := ensureKiroMachineIDCredential(account)
 	accountKey := buildKiroAccountKey(account)
-	machineID := buildKiroMachineID(account)
 
 	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
 	req.Header.Set("X-Amz-Target", "AmazonCodeWhispererService.ListAvailableProfiles")

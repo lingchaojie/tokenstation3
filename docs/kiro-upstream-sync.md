@@ -73,6 +73,14 @@ reference:
   real profile ARN.
 - Usage limits (`getUsageLimits`): continue using the existing query parameter
   placement for `profileArn`.
+- `machine_id` handling follows kiro.rs credential behavior: accept a
+  credential-level 64-character hex value or UUID-shaped `machineId`, normalize
+  it to 64 lowercase hex, and persist a generated `machine_id` for legacy
+  credentials that do not have one. Generated IDs use the same derivation seeds
+  as kiro.rs (`KotlinNativeAPI/<refresh_token>` for OAuth,
+  `KiroAPIKey/<api_key>` for Kiro API keys). Once persisted, refresh-token
+  rotation must not change the machine ID or the Kiro runtime User-Agent
+  machine suffix.
 
 Do not remove this behavior during nianzs syncs unless intentionally reverting
 the kiro.rs alignment.

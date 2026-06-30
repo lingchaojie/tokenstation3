@@ -8,6 +8,8 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(currentDir, "../CreateAccountModal.vue"), "utf8");
 const editSource = readFileSync(resolve(currentDir, "../EditAccountModal.vue"), "utf8");
 const reauthSource = readFileSync(resolve(currentDir, "../../admin/account/ReAuthAccountModal.vue"), "utf8");
+const zhSource = readFileSync(resolve(currentDir, "../../../i18n/locales/zh.ts"), "utf8");
+const enSource = readFileSync(resolve(currentDir, "../../../i18n/locales/en.ts"), "utf8");
 
 describe("CreateAccountModal Kiro reference account modes", () => {
   it("exposes OAuth, direct API key, relay API key, and IDC organization sign-in controls", () => {
@@ -51,5 +53,16 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(reauthSource).toContain("kiroOAuthProvider");
     expect(reauthSource).toContain("callbackPath: oauthFlowRef.value?.oauthCallbackPath");
     expect(reauthSource).toContain("loginOption: oauthFlowRef.value?.oauthLoginOption");
+  });
+
+  it("uses Kiro-specific mixed scheduling copy", () => {
+    expect(source).toContain("admin.accounts.kiroMixedScheduling");
+    expect(source).toContain("admin.accounts.kiroMixedSchedulingTooltip");
+    expect(editSource).toContain("admin.accounts.kiroMixedScheduling");
+    expect(editSource).toContain("admin.accounts.kiroMixedSchedulingTooltip");
+    expect(zhSource).toContain("kiroMixedScheduling: '加入 Anthropic /v1/messages 调度'");
+    expect(zhSource).toContain("该 Kiro 账号可参与 Anthropic 分组的 /v1/messages 混合调度");
+    expect(zhSource).not.toContain("该 Kiro 账号可参与 Anthropic/Gemini");
+    expect(enSource).toContain("kiroMixedScheduling: 'Use in Anthropic /v1/messages'");
   });
 });

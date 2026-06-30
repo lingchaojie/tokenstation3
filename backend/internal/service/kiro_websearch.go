@@ -383,6 +383,7 @@ func buildKiroWebSearchMCPRequest(query string) kiropkg.MCPRequest {
 
 func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Account, endpoint string, payload []byte, token string) (*http.Response, string, error) {
 	currentToken := token
+	machineID := ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 	accountKey := buildKiroAccountKey(account)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
@@ -395,7 +396,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			return nil, currentToken, err
 		}
 
-		req, err := newKiroJSONRequest(ctx, endpoint, payload, currentToken, accountKey, buildKiroMachineID(account), "", account)
+		req, err := newKiroJSONRequest(ctx, endpoint, payload, currentToken, accountKey, machineID, "", account)
 		if err != nil {
 			return nil, currentToken, err
 		}
@@ -432,6 +433,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				return resp, currentToken, nil
 			}
 			currentToken = refreshedToken
+			machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 			accountKey = buildKiroAccountKey(account)
 			if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 				return nil, currentToken, sleepErr

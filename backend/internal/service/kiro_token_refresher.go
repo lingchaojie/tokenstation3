@@ -47,5 +47,5 @@ func (r *KiroTokenRefresher) Refresh(ctx context.Context, account *Account) (map
 	}
 
 	newCredentials := r.kiroOAuthService.BuildAccountCredentials(tokenInfo)
-	return MergeCredentials(account.Credentials, newCredentials), nil
+	return mergeKiroCredentialsWithStableMachineID(account, newCredentials), nil
 }
