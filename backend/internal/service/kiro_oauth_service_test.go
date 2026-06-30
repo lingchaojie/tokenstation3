@@ -19,6 +19,10 @@ func TestKiroSocialAuthRedirectURIUsesLoopbackIP(t *testing.T) {
 	require.Equal(t, "http://localhost:49153", kiroSocialRedirectURI)
 }
 
+func TestKiroExternalIDPAuthRedirectURIUsesOAuthCallback(t *testing.T) {
+	require.Equal(t, "http://localhost:49153/oauth/callback", kiroExternalIDPRedirectURI)
+}
+
 func TestBuildKiroSocialExchangeRedirectURIUsesProviderDefault(t *testing.T) {
 	require.Equal(
 		t,
@@ -48,6 +52,37 @@ func TestKiroOAuthService_ExchangeCodeRejectsExpiredSession(t *testing.T) {
 		Code:      "auth-code",
 	})
 	require.EqualError(t, err, "session not found or expired")
+}
+
+func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
+	svc := NewKiroOAuthService(nil)
+	svc.sessionStore.Set("session-external", &kiropkg.AuthSession{
+		State:        "state-external",
+		CodeVerifier: "verifier-external",
+		CreatedAt:    time.Now(),
+		AuthType:     "social",
+		Provider:     string(kiropkg.SocialProviderGoogle),
+		RedirectURI:  kiroSocialRedirectURI,
+	})
+
+	result, err := svc.StartExternalIDPAuth(context.Background(), &KiroStartExternalIDPAuthInput{
+		SessionID:   "session-external",
+		CallbackURL: "http://localhost:49153/signin/callback?login_option=external_idp&login_hint=phoebe.baral%40mrdev.cyou&issuer_url=https%3A%2F%2Flogin.microsoftonline.com%2F1f44574f-f8aa-40cf-8e43-e6bff9b4298a%2Fv2.0&client_id=e491fadf-0239-44f9-be3b-d3e1ff193c79&state=state-external&scopes=api%3A%2F%2Fe491fadf-0239-44f9-be3b-d3e1ff193c79%2Fcodewhisperer%3Aconversations+offline_access",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "session-external", result.SessionID)
+	require.Equal(t, "state-external", result.State)
+	require.Contains(t, result.AuthURL, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/authorize?")
+	require.Contains(t, result.AuthURL, "redirect_uri=http%3A%2F%2Flocalhost%3A49153%2Foauth%2Fcallback")
+	require.Contains(t, result.AuthURL, "login_hint=phoebe.baral%40mrdev.cyou")
+
+	session, ok := svc.sessionStore.Get("session-external")
+	require.True(t, ok)
+	require.Equal(t, "external_idp", session.AuthType)
+	require.Equal(t, "Internal", session.Provider)
+	require.Equal(t, "http://localhost:49153/oauth/callback", session.RedirectURI)
+	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0", session.IssuerURL)
+	require.Equal(t, []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"}, session.Scopes)
 }
 
 func TestKiroOAuthService_RefreshTokenRejectsMissingRefreshToken(t *testing.T) {

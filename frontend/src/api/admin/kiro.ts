@@ -12,6 +12,13 @@ export interface KiroIDCAuthUrlResponse extends KiroAuthUrlResponse {
   start_url?: string
 }
 
+export interface KiroExternalIDPAuthUrlResponse extends KiroAuthUrlResponse {
+  client_id?: string
+  issuer_url?: string
+  scopes?: string
+  email?: string
+}
+
 export interface KiroTokenInfo {
   access_token?: string
   refresh_token?: string
@@ -25,6 +32,8 @@ export interface KiroTokenInfo {
   email?: string
   start_url?: string
   region?: string
+  issuer_url?: string
+  scopes?: string
   [key: string]: unknown
 }
 
@@ -42,6 +51,15 @@ export async function generateIDCAuthUrl(payload: {
   region?: string
 }): Promise<KiroIDCAuthUrlResponse> {
   const { data } = await apiClient.post<KiroIDCAuthUrlResponse>('/admin/kiro/oauth/idc-auth-url', payload)
+  return data
+}
+
+export async function startExternalIDPAuth(payload: {
+  session_id: string
+  callback_url: string
+  proxy_id?: number
+}): Promise<KiroExternalIDPAuthUrlResponse> {
+  const { data } = await apiClient.post<KiroExternalIDPAuthUrlResponse>('/admin/kiro/oauth/external-idp-auth-url', payload)
   return data
 }
 
@@ -66,6 +84,9 @@ export async function refreshToken(payload: {
   start_url?: string
   region?: string
   profile_arn?: string
+  issuer_url?: string
+  scopes?: string
+  email?: string
   proxy_id?: number
 }): Promise<KiroTokenInfo> {
   const { data } = await apiClient.post<KiroTokenInfo>('/admin/kiro/oauth/refresh-token', payload)
@@ -83,6 +104,7 @@ export async function importToken(payload: {
 export default {
   generateAuthUrl,
   generateIDCAuthUrl,
+  startExternalIDPAuth,
   exchangeCode,
   refreshToken,
   importToken

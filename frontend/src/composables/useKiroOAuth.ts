@@ -29,6 +29,17 @@ const extractCallbackParts = (input: string): { code: string; callbackPath?: str
   }
 }
 
+const isExternalIDPCallback = (input: string): boolean => {
+  const raw = input.trim()
+  if (!raw) return false
+  try {
+    const parsed = raw.includes('?') ? new URL(raw) : new URL(`http://localhost/callback?${raw.replace(/^\?/, '')}`)
+    return parsed.searchParams.get('login_option') === 'external_idp'
+  } catch {
+    return /[?&]login_option=external_idp(?:&|$)/.test(raw)
+  }
+}
+
 const assignIfPresent = (target: Record<string, unknown>, key: string, value: unknown) => {
   if (value !== undefined && value !== null && value !== '') {
     target[key] = value
@@ -111,6 +122,38 @@ export function useKiroOAuth() {
     }
   }
 
+  const startExternalIDPAuth = async (params: {
+    callbackUrl: string
+    sessionId: string
+    proxyId?: number | null
+  }): Promise<boolean> => {
+    const callbackUrl = params.callbackUrl.trim()
+    if (!callbackUrl || !params.sessionId) {
+      error.value = t('admin.accounts.oauth.authFailed')
+      return false
+    }
+
+    loading.value = true
+    error.value = ''
+    try {
+      const response = await adminAPI.kiro.startExternalIDPAuth({
+        session_id: params.sessionId,
+        callback_url: callbackUrl,
+        proxy_id: params.proxyId || undefined
+      })
+      authUrl.value = response.auth_url
+      sessionId.value = response.session_id
+      state.value = response.state
+      return true
+    } catch (err: any) {
+      error.value = err.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(error.value)
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
   const exchangeAuthCode = async (params: {
     code: string
     sessionId: string
@@ -155,6 +198,9 @@ export function useKiroOAuth() {
     startUrl?: string
     region?: string
     profileArn?: string
+    issuerUrl?: string
+    scopes?: string
+    email?: string
     proxyId?: number | null
   }): Promise<KiroTokenInfo | null> => {
     loading.value = true
@@ -169,6 +215,9 @@ export function useKiroOAuth() {
         start_url: payload.startUrl,
         region: payload.region,
         profile_arn: payload.profileArn,
+        issuer_url: payload.issuerUrl,
+        scopes: payload.scopes,
+        email: payload.email,
         proxy_id: payload.proxyId || undefined
       })
     } catch (err: any) {
@@ -213,6 +262,8 @@ export function useKiroOAuth() {
     assignIfPresent(creds, 'email', tokenInfo.email)
     assignIfPresent(creds, 'start_url', tokenInfo.start_url)
     assignIfPresent(creds, 'region', tokenInfo.region)
+    assignIfPresent(creds, 'issuer_url', tokenInfo.issuer_url)
+    assignIfPresent(creds, 'scopes', tokenInfo.scopes)
     return creds
   }
 
@@ -225,6 +276,8 @@ export function useKiroOAuth() {
     resetState,
     generateAuthUrl,
     generateIDCAuthUrl,
+    startExternalIDPAuth,
+    isExternalIDPCallback,
     exchangeAuthCode,
     validateRefreshToken,
     importToken,

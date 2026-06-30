@@ -30,8 +30,9 @@ const (
 )
 
 var (
-	socialAuthEndpointURL = socialAuthEndpoint
-	oidcEndpointOverride  = ""
+	socialAuthEndpointURL            = socialAuthEndpoint
+	oidcEndpointOverride             = ""
+	externalIDPTokenEndpointOverride = ""
 )
 
 type SocialProvider string
@@ -53,6 +54,10 @@ type AuthSession struct {
 	ClientSecret string
 	Region       string
 	StartURL     string
+	IssuerURL    string
+	Scopes       []string
+	LoginHint    string
+	Audience     string
 }
 
 type SessionStore struct {
@@ -124,6 +129,28 @@ type TokenData struct {
 	Email        string `json:"email,omitempty"`
 	StartURL     string `json:"startUrl,omitempty"`
 	Region       string `json:"region,omitempty"`
+	IssuerURL    string `json:"issuerUrl,omitempty"`
+	Scopes       string `json:"scopes,omitempty"`
+}
+
+type ExternalIDPCallback struct {
+	LoginHint string
+	IssuerURL string
+	ClientID  string
+	State     string
+	Scopes    []string
+	Audience  string
+}
+
+type ExternalIDPAuthURLInput struct {
+	IssuerURL           string
+	ClientID            string
+	Scopes              []string
+	RedirectURI         string
+	State               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	LoginHint           string
 }
 
 type socialTokenResponse struct {
@@ -143,6 +170,14 @@ type createTokenResponse struct {
 	RefreshToken string `json:"refreshToken"`
 	ProfileArn   string `json:"profileArn"`
 	ExpiresIn    int    `json:"expiresIn"`
+}
+
+type externalIDPTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
+	TokenType    string `json:"token_type"`
 }
 
 type userInfoResponse struct {
@@ -221,6 +256,121 @@ func BuildSocialTokenRedirectURI(baseRedirectURI, callbackPath, loginOption stri
 		return fullRedirectURI + "?login_option=" + url.QueryEscape(option)
 	}
 	return fullRedirectURI
+}
+
+func ParseExternalIDPCallbackURL(rawURL string) (*ExternalIDPCallback, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("parse external idp callback url failed: %w", err)
+	}
+	query := parsed.Query()
+	if !strings.EqualFold(strings.TrimSpace(query.Get("login_option")), "external_idp") {
+		return nil, fmt.Errorf("callback is not external_idp")
+	}
+	callback := &ExternalIDPCallback{
+		LoginHint: strings.TrimSpace(query.Get("login_hint")),
+		IssuerURL: strings.TrimRight(strings.TrimSpace(query.Get("issuer_url")), "/"),
+		ClientID:  strings.TrimSpace(query.Get("client_id")),
+		State:     strings.TrimSpace(query.Get("state")),
+		Scopes:    splitOAuthScopes(query.Get("scopes")),
+		Audience:  strings.TrimSpace(query.Get("audience")),
+	}
+	if callback.IssuerURL == "" {
+		return nil, fmt.Errorf("external idp issuer_url is required")
+	}
+	if callback.ClientID == "" {
+		return nil, fmt.Errorf("external idp client_id is required")
+	}
+	if callback.State == "" {
+		return nil, fmt.Errorf("external idp state is required")
+	}
+	if len(callback.Scopes) == 0 {
+		return nil, fmt.Errorf("external idp scopes are required")
+	}
+	return callback, nil
+}
+
+func BuildExternalIDPAuthURL(input ExternalIDPAuthURLInput) (string, error) {
+	endpoint, err := externalIDPAuthorizeEndpoint(input.IssuerURL)
+	if err != nil {
+		return "", err
+	}
+	clientID := strings.TrimSpace(input.ClientID)
+	if clientID == "" {
+		return "", fmt.Errorf("external idp client_id is required")
+	}
+	redirectURI := strings.TrimSpace(input.RedirectURI)
+	if redirectURI == "" {
+		return "", fmt.Errorf("external idp redirect_uri is required")
+	}
+	state := strings.TrimSpace(input.State)
+	if state == "" {
+		return "", fmt.Errorf("external idp state is required")
+	}
+	scopes := normalizeOAuthScopes(input.Scopes)
+	if len(scopes) == 0 {
+		return "", fmt.Errorf("external idp scopes are required")
+	}
+
+	params := url.Values{}
+	params.Set("client_id", clientID)
+	params.Set("response_type", "code")
+	params.Set("redirect_uri", redirectURI)
+	params.Set("response_mode", "query")
+	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	if loginHint := strings.TrimSpace(input.LoginHint); loginHint != "" {
+		params.Set("login_hint", loginHint)
+	}
+	if challenge := strings.TrimSpace(input.CodeChallenge); challenge != "" {
+		params.Set("code_challenge", challenge)
+		method := strings.TrimSpace(input.CodeChallengeMethod)
+		if method == "" {
+			method = "S256"
+		}
+		params.Set("code_challenge_method", method)
+	}
+	return endpoint + "?" + params.Encode(), nil
+}
+
+func ExchangeExternalIDPAuthCode(ctx context.Context, proxyURL, issuerURL, clientID string, scopes []string, code, codeVerifier, redirectURI, loginHint string) (*TokenData, error) {
+	tokenURL, err := externalIDPTokenEndpoint(issuerURL)
+	if err != nil {
+		return nil, err
+	}
+	form := url.Values{}
+	form.Set("client_id", strings.TrimSpace(clientID))
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", strings.TrimSpace(code))
+	form.Set("redirect_uri", strings.TrimSpace(redirectURI))
+	form.Set("code_verifier", strings.TrimSpace(codeVerifier))
+	if joinedScopes := strings.Join(normalizeOAuthScopes(scopes), " "); joinedScopes != "" {
+		form.Set("scope", joinedScopes)
+	}
+	var resp externalIDPTokenResponse
+	if err := doForm(ctx, proxyURL, tokenURL, form, &resp); err != nil {
+		return nil, err
+	}
+	return externalIDPTokenData(resp, issuerURL, clientID, scopes, loginHint, ""), nil
+}
+
+func RefreshExternalIDPToken(ctx context.Context, proxyURL, issuerURL, clientID string, scopes []string, refreshToken, loginHint string) (*TokenData, error) {
+	tokenURL, err := externalIDPTokenEndpoint(issuerURL)
+	if err != nil {
+		return nil, err
+	}
+	form := url.Values{}
+	form.Set("client_id", strings.TrimSpace(clientID))
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", strings.TrimSpace(refreshToken))
+	if joinedScopes := strings.Join(normalizeOAuthScopes(scopes), " "); joinedScopes != "" {
+		form.Set("scope", joinedScopes)
+	}
+	var resp externalIDPTokenResponse
+	if err := doForm(ctx, proxyURL, tokenURL, form, &resp); err != nil {
+		return nil, err
+	}
+	return externalIDPTokenData(resp, issuerURL, clientID, scopes, loginHint, refreshToken), nil
 }
 
 func CreateSocialToken(ctx context.Context, proxyURL, code, codeVerifier, redirectURI string) (*TokenData, error) {
@@ -445,6 +595,92 @@ func getOIDCEndpoint(region string) string {
 	return fmt.Sprintf("https://oidc.%s.amazonaws.com", region)
 }
 
+func externalIDPAuthorizeEndpoint(issuerURL string) (string, error) {
+	base, err := normalizeExternalIDPIssuerBase(issuerURL)
+	if err != nil {
+		return "", err
+	}
+	return base + "/oauth2/v2.0/authorize", nil
+}
+
+func externalIDPTokenEndpoint(issuerURL string) (string, error) {
+	if strings.TrimSpace(externalIDPTokenEndpointOverride) != "" {
+		return strings.TrimRight(strings.TrimSpace(externalIDPTokenEndpointOverride), "/"), nil
+	}
+	base, err := normalizeExternalIDPIssuerBase(issuerURL)
+	if err != nil {
+		return "", err
+	}
+	return base + "/oauth2/v2.0/token", nil
+}
+
+func normalizeExternalIDPIssuerBase(issuerURL string) (string, error) {
+	raw := strings.TrimRight(strings.TrimSpace(issuerURL), "/")
+	if raw == "" {
+		return "", fmt.Errorf("external idp issuer_url is required")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse external idp issuer_url failed: %w", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" {
+		return "", fmt.Errorf("external idp issuer_url must be an https url")
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/v2.0")
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func splitOAuthScopes(raw string) []string {
+	return normalizeOAuthScopes(strings.Fields(strings.TrimSpace(raw)))
+}
+
+func normalizeOAuthScopes(scopes []string) []string {
+	out := make([]string, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
+	}
+	return out
+}
+
+func externalIDPTokenData(resp externalIDPTokenResponse, issuerURL, clientID string, scopes []string, loginHint, fallbackRefreshToken string) *TokenData {
+	expiresIn := resp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	refreshToken := resp.RefreshToken
+	if refreshToken == "" {
+		refreshToken = fallbackRefreshToken
+	}
+	scopeString := strings.Join(normalizeOAuthScopes(scopes), " ")
+	if strings.TrimSpace(scopeString) == "" {
+		scopeString = resp.Scope
+	}
+	return &TokenData{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
+		AuthMethod:   "external_idp",
+		Provider:     "Internal",
+		ClientID:     strings.TrimSpace(clientID),
+		Email:        strings.TrimSpace(loginHint),
+		Region:       defaultIDCRegion,
+		IssuerURL:    strings.TrimRight(strings.TrimSpace(issuerURL), "/"),
+		Scopes:       scopeString,
+	}
+}
+
 func oidcHeaders(accountKey, machineID string) map[string]string {
 	headers := BuildOIDCHeaders(accountKey, machineID)
 	if headers["amz-sdk-invocation-id"] == "" {
@@ -482,6 +718,41 @@ func doJSON(ctx context.Context, proxyURL, method, rawURL string, payload any, o
 	for key, value := range extraHeaders {
 		req.Header.Set(key, value)
 	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyText := strings.TrimSpace(string(respBody))
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(bodyText), "invalid_grant") {
+			return &RefreshTokenInvalidError{StatusCode: resp.StatusCode, Body: bodyText}
+		}
+		return fmt.Errorf("upstream request failed (status %d): %s", resp.StatusCode, bodyText)
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	return json.Unmarshal(respBody, out)
+}
+
+func doForm(ctx context.Context, proxyURL, rawURL string, form url.Values, out any) error {
+	client, err := newHTTPClient(proxyURL)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {

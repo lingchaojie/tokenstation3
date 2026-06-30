@@ -17,6 +17,7 @@ vi.mock('@/api/admin', () => ({
     kiro: {
       generateAuthUrl: vi.fn(),
       generateIDCAuthUrl: vi.fn(),
+      startExternalIDPAuth: vi.fn(),
       exchangeCode: vi.fn(),
       refreshToken: vi.fn(),
       importToken: vi.fn()
@@ -96,6 +97,36 @@ describe('useKiroOAuth', () => {
     })
   })
 
+  it('starts Microsoft external_idp auth from pasted Kiro organization callback', async () => {
+    vi.mocked(adminAPI.kiro.startExternalIDPAuth).mockResolvedValueOnce({
+      auth_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A49153%2Foauth%2Fcallback',
+      session_id: 'session-external',
+      state: 'state-external',
+      client_id: 'client-id',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'scope-a offline_access'
+    })
+
+    const callbackUrl = 'http://localhost:49153/signin/callback?login_option=external_idp&state=state-external'
+    const oauth = useKiroOAuth()
+    const started = await oauth.startExternalIDPAuth({
+      callbackUrl,
+      sessionId: 'session-external',
+      proxyId: 7
+    })
+
+    expect(started).toBe(true)
+    expect(oauth.isExternalIDPCallback(callbackUrl)).toBe(true)
+    expect(adminAPI.kiro.startExternalIDPAuth).toHaveBeenCalledWith({
+      session_id: 'session-external',
+      callback_url: callbackUrl,
+      proxy_id: 7
+    })
+    expect(oauth.authUrl.value).toContain('login.microsoftonline.com')
+    expect(oauth.sessionId.value).toBe('session-external')
+    expect(oauth.state.value).toBe('state-external')
+  })
+
   it('validates Kiro refresh tokens with refresh metadata', async () => {
     vi.mocked(adminAPI.kiro.refreshToken).mockResolvedValueOnce({
       access_token: 'new-at',
@@ -112,6 +143,9 @@ describe('useKiroOAuth', () => {
       startUrl: 'https://view.awsapps.com/start',
       region: 'us-east-1',
       profileArn: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/default',
+      issuerUrl: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'scope-a offline_access',
+      email: 'user@example.com',
       proxyId: 10
     })
 
@@ -125,6 +159,9 @@ describe('useKiroOAuth', () => {
       start_url: 'https://view.awsapps.com/start',
       region: 'us-east-1',
       profile_arn: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/default',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'scope-a offline_access',
+      email: 'user@example.com',
       proxy_id: 10
     })
   })
@@ -138,7 +175,9 @@ describe('useKiroOAuth', () => {
       auth_method: 'builder-id',
       provider: 'AWS',
       client_id: 'client-id',
-      client_secret: 'client-secret'
+      client_secret: 'client-secret',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'scope-a offline_access'
     })
 
     expect(credentials).toMatchObject({
@@ -147,7 +186,9 @@ describe('useKiroOAuth', () => {
       auth_method: 'builder-id',
       provider: 'AWS',
       client_id: 'client-id',
-      client_secret: 'client-secret'
+      client_secret: 'client-secret',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'scope-a offline_access'
     })
     expect(credentials.profile_arn).toBeUndefined()
     expect(Object.prototype.hasOwnProperty.call(credentials, 'profile_arn')).toBe(false)

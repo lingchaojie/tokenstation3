@@ -6247,6 +6247,15 @@ const handleKiroExchange = async (authCode: string) => {
   kiroOAuth.error.value = ''
 
   try {
+    if (kiroOAuth.isExternalIDPCallback(authCode)) {
+      await kiroOAuth.startExternalIDPAuth({
+        callbackUrl: authCode.trim(),
+        sessionId: kiroOAuth.sessionId.value,
+        proxyId: form.proxy_id
+      })
+      return
+    }
+
     const stateFromInput = oauthFlowRef.value?.oauthState || ''
     const stateToUse = stateFromInput || kiroOAuth.state.value
     if (!stateToUse) {
