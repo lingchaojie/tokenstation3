@@ -277,7 +277,7 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 	if err != nil {
 		return nil, fmt.Errorf("create kiro usage request failed: %w", err)
 	}
-	s.applyKiroRuntimeHeaders(req, account, token)
+	s.applyKiroRuntimeHeaders(ctx, req, account, token)
 
 	client, err := httpclient.GetClient(httpclient.Options{
 		ProxyURL:           accountProxyURL(account),
@@ -310,12 +310,12 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 	return &parsed, nil
 }
 
-func (s *AccountUsageService) applyKiroRuntimeHeaders(req *http.Request, account *Account, token string) {
+func (s *AccountUsageService) applyKiroRuntimeHeaders(ctx context.Context, req *http.Request, account *Account, token string) {
 	if req == nil {
 		return
 	}
+	machineID := ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 	accountKey := buildKiroAccountKey(account)
-	machineID := buildKiroMachineID(account)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
@@ -582,7 +582,7 @@ func (s *AccountUsageService) attachKiroRuntimeState(ctx context.Context, accoun
 	usage.KiroRuntimeState = ""
 	usage.KiroRuntimeReason = ""
 	usage.KiroRuntimeResetAt = nil
-	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroAccountKey(account))
+	state, err := s.kiroCooldownStore.GetState(ctx, kiroRuntimeKey(account))
 	if err != nil || state == nil {
 		return
 	}
@@ -607,7 +607,7 @@ func (s *AccountUsageService) EnrichAccountWithKiroRuntimeState(ctx context.Cont
 	if s.kiroCooldownStore == nil {
 		return
 	}
-	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroAccountKey(account))
+	state, err := s.kiroCooldownStore.GetState(ctx, kiroRuntimeKey(account))
 	if err != nil || state == nil {
 		return
 	}

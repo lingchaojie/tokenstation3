@@ -2788,7 +2788,7 @@ func (s *GatewayService) isKiroRuntimeSchedulable(ctx context.Context, account *
 	if !isKiroDirectModeAccount(account) || s == nil || s.kiroCooldownStore == nil {
 		return true
 	}
-	state, err := s.getKiroCooldownState(ctx, buildKiroAccountKey(account))
+	state, err := s.getKiroCooldownState(ctx, kiroRuntimeKey(account))
 	if err != nil {
 		return true
 	}
@@ -2840,14 +2840,15 @@ func (s *GatewayService) kiroTransientCooldownRecoveryKeys(ctx context.Context, 
 			continue
 		}
 		eligible++
-		state, err := s.getKiroCooldownState(ctx, buildKiroAccountKey(acc))
+		tokenKey := kiroRuntimeKey(acc)
+		state, err := s.getKiroCooldownState(ctx, tokenKey)
 		if err != nil || state == nil || !state.Active {
 			return nil
 		}
 		if state.Reason != kirocooldown.CooldownReason429 {
 			return nil
 		}
-		tokenKeys = append(tokenKeys, buildKiroAccountKey(acc))
+		tokenKeys = append(tokenKeys, tokenKey)
 	}
 	if eligible == 0 || len(tokenKeys) != eligible {
 		return nil
@@ -4148,7 +4149,7 @@ func (s *GatewayService) diagnoseSelectionFailure(
 		return selectionFailureDiagnosis{Category: "excluded"}
 	}
 	if isKiroDirectModeAccount(acc) {
-		if state, err := s.getKiroCooldownState(ctx, buildKiroAccountKey(acc)); err == nil && state != nil && state.Active {
+		if state, err := s.getKiroCooldownState(ctx, kiroRuntimeKey(acc)); err == nil && state != nil && state.Active {
 			return selectionFailureDiagnosis{
 				Category: "unschedulable",
 				Detail:   fmt.Sprintf("kiro_runtime_%s remaining=%s", state.Reason, state.Remaining.Truncate(time.Second)),

@@ -416,11 +416,12 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	endpoints := buildKiroEndpoints(account, KiroEndpointModeQ)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	machineID := ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 	for idx, endpoint := range endpoints {
 		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
+			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, machineID, endpoint.AmzTarget, account)
 			if err != nil {
 				return nil, err
 			}
@@ -449,6 +450,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
+						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
 						buildResult, err = kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
 						if err != nil {

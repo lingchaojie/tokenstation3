@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,6 +103,7 @@ func TestKiroTokenProviderGetAccessTokenReturnsRefreshedToken(t *testing.T) {
 	require.Equal(t, "new-access", token)
 	require.Equal(t, "new-access", account.GetCredential("access_token"))
 	require.Equal(t, "rotated-refresh", account.GetCredential("refresh_token"))
+	require.Equal(t, kiropkg.BuildMachineID("old-refresh", "", "account:88"), account.GetCredential("machine_id"))
 	require.Equal(t, 1, executor.refreshCalls)
 }
 
@@ -127,6 +129,63 @@ func TestKiroTokenProviderForceRefreshInvalidGrantSetsError(t *testing.T) {
 	require.Equal(t, account.ID, repo.setErrorID)
 	require.Contains(t, repo.setErrorMsg, "Token refresh failed (non-retryable)")
 	require.Contains(t, repo.setErrorMsg, "invalid_grant")
+}
+
+func TestKiroTokenProviderForceRefreshPreservesMachineIDAcrossRefreshRotation(t *testing.T) {
+	account := &Account{
+		ID:       43,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+	}
+	repo := &kiroTokenProviderRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	provider := NewKiroTokenProvider(repo, nil, nil)
+	provider.kiroOAuthService = &stubKiroAccountTokenRefresher{
+		tokenInfo: &KiroTokenInfo{
+			AccessToken:  "new-access",
+			RefreshToken: "rotated-refresh",
+			ExpiresAt:    time.Now().Add(time.Hour).Format(time.RFC3339),
+		},
+	}
+
+	token, err := provider.ForceRefreshAccessToken(context.Background(), account)
+
+	require.NoError(t, err)
+	require.Equal(t, "new-access", token)
+	require.Equal(t, "rotated-refresh", account.GetCredential("refresh_token"))
+	require.Equal(t, kiropkg.BuildMachineID("old-refresh", "", "account:43"), account.GetCredential("machine_id"))
+}
+
+func TestKiroTokenRefresherPreservesMachineIDAcrossRefreshRotation(t *testing.T) {
+	account := &Account{
+		ID:       44,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+	}
+	refresher := &KiroTokenRefresher{
+		kiroOAuthService: &KiroOAuthService{},
+	}
+	tokenInfo := &KiroTokenInfo{
+		AccessToken:  "new-access",
+		RefreshToken: "rotated-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+
+	newCredentials := mergeKiroCredentialsWithStableMachineID(account, refresher.kiroOAuthService.BuildAccountCredentials(tokenInfo))
+
+	require.Equal(t, "rotated-refresh", newCredentials["refresh_token"])
+	require.Equal(t, kiropkg.BuildMachineID("old-refresh", "", "account:44"), newCredentials["machine_id"])
 }
 
 func TestKiroTokenProviderForceRefreshRaceRecoveryDoesNotSetError(t *testing.T) {

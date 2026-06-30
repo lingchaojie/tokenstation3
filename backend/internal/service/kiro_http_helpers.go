@@ -45,6 +45,9 @@ func buildKiroAccountKey(account *Account) string {
 	if account == nil {
 		return ""
 	}
+	if machineID, ok := accountKiroMachineID(account); ok {
+		return "machine:" + machineID[:16]
+	}
 	return kiropkg.BuildAccountKey(
 		account.GetCredential("client_id"),
 		account.GetCredential("client_id_hash"),
@@ -54,14 +57,24 @@ func buildKiroAccountKey(account *Account) string {
 	)
 }
 
+func accountKiroMachineID(account *Account) (string, bool) {
+	if account == nil {
+		return "", false
+	}
+	for _, key := range []string{"machine_id", "machineId"} {
+		if machineID, ok := kiropkg.NormalizeMachineID(account.GetCredential(key)); ok {
+			return machineID, true
+		}
+	}
+	return "", false
+}
+
 func buildKiroMachineID(account *Account) string {
 	if account == nil {
 		return kiropkg.BuildMachineID("", "", "account:nil")
 	}
-	for _, key := range []string{"machine_id", "machineId"} {
-		if machineID, ok := kiropkg.NormalizeMachineID(account.GetCredential(key)); ok {
-			return machineID
-		}
+	if machineID, ok := accountKiroMachineID(account); ok {
+		return machineID
 	}
 	fallbackKey := buildKiroMachineIDFallbackKey(account)
 	if account.Type == AccountTypeAPIKey {
@@ -98,6 +111,105 @@ func buildKiroMachineIDFallbackKey(account *Account) string {
 		return "name:" + name
 	}
 	return "account:unknown"
+}
+
+func ensureKiroMachineIDCredential(account *Account) string {
+	if account == nil {
+		return kiropkg.BuildMachineID("", "", "account:nil")
+	}
+	if machineID, ok := accountKiroMachineID(account); ok {
+		if account.GetCredential("machine_id") == "" {
+			if account.Credentials == nil {
+				account.Credentials = make(map[string]any)
+			}
+			account.Credentials["machine_id"] = machineID
+		}
+		return machineID
+	}
+	machineID := buildKiroMachineID(account)
+	if account.Credentials == nil {
+		account.Credentials = make(map[string]any)
+	}
+	account.Credentials["machine_id"] = machineID
+	return machineID
+}
+
+func ensureKiroMachineIDPersisted(ctx context.Context, repo AccountRepository, account *Account) string {
+	if account == nil {
+		return kiropkg.BuildMachineID("", "", "account:nil")
+	}
+	hadMachineID := false
+	if _, ok := accountKiroMachineID(account); ok {
+		hadMachineID = true
+	}
+	machineID := ensureKiroMachineIDCredential(account)
+	if !hadMachineID && repo != nil {
+		if updater, ok := any(repo).(accountCredentialsUpdater); ok {
+			_ = updater.UpdateCredentials(ctx, account.ID, cloneCredentials(account.Credentials))
+		}
+	}
+	return machineID
+}
+
+func kiroRuntimeKey(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	ensureKiroMachineIDCredential(account)
+	return buildKiroAccountKey(account)
+}
+
+func snapshotKiroMachineIdentityAccount(account *Account) *Account {
+	if account == nil {
+		return nil
+	}
+	return &Account{
+		ID:          account.ID,
+		Name:        account.Name,
+		Platform:    account.Platform,
+		Type:        account.Type,
+		Credentials: cloneCredentials(account.Credentials),
+	}
+}
+
+func mergeKiroCredentialsWithStableMachineID(account *Account, newCredentials map[string]any) map[string]any {
+	merged := cloneCredentials(newCredentials)
+	if account != nil {
+		merged = MergeCredentials(account.Credentials, merged)
+	}
+	if account == nil {
+		return merged
+	}
+	if machineID, ok := accountKiroMachineID(account); ok {
+		merged["machine_id"] = machineID
+		return merged
+	}
+	if machineID, ok := kiropkg.NormalizeMachineID(stringFromMap(merged, "machine_id")); ok {
+		merged["machine_id"] = machineID
+		return merged
+	}
+	if machineID, ok := kiropkg.NormalizeMachineID(stringFromMap(merged, "machineId")); ok {
+		merged["machine_id"] = machineID
+		return merged
+	}
+	merged["machine_id"] = buildKiroMachineID(account)
+	return merged
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 }
 
 func buildKiroRequestID(resp *http.Response) string {
