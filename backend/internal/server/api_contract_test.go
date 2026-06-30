@@ -1761,6 +1761,10 @@ func (stubGroupRepo) GetAccountCount(ctx context.Context, groupID int64) (int64,
 	return 0, 0, errors.New("not implemented")
 }
 
+func (stubGroupRepo) HasSchedulableMixedKiroStickyAccount(ctx context.Context, groupID int64) (bool, error) {
+	return false, nil
+}
+
 func (stubGroupRepo) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	return 0, errors.New("not implemented")
 }

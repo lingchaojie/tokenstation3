@@ -583,10 +583,8 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 	_ = s
 	_ = ctx
 	_ = token
-	var profileArn string
-	if kiroEndpointModeForRequest(account, parsed) == KiroEndpointModeKRS {
-		profileArn = kiroResolveProfileArnForKRS(account)
-	}
+	mode := kiroEndpointModeForRequest(account, parsed)
+	profileArn := kiroResolveProfileArnForPayload(account, mode)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 	if err != nil {
