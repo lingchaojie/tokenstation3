@@ -2484,7 +2484,7 @@
               class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {{ t('admin.accounts.mixedScheduling') }}
+              {{ t(account?.platform === 'kiro' ? 'admin.accounts.kiroMixedScheduling' : 'admin.accounts.mixedScheduling') }}
             </span>
           </label>
           <div class="group relative">
@@ -2497,7 +2497,7 @@
             <div
               class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
             >
-              {{ t('admin.accounts.mixedSchedulingTooltip') }}
+              {{ t(account?.platform === 'kiro' ? 'admin.accounts.kiroMixedSchedulingTooltip' : 'admin.accounts.mixedSchedulingTooltip') }}
               <div
                 class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
               ></div>
