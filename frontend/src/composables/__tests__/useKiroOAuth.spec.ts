@@ -98,6 +98,11 @@ describe('useKiroOAuth', () => {
   })
 
   it('starts Microsoft external_idp auth from pasted Kiro organization callback', async () => {
+    vi.mocked(adminAPI.kiro.generateAuthUrl).mockResolvedValueOnce({
+      auth_url: 'https://kiro.example/signin',
+      session_id: 'session-external',
+      state: 'state-kiro'
+    })
     vi.mocked(adminAPI.kiro.startExternalIDPAuth).mockResolvedValueOnce({
       auth_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A49153%2Foauth%2Fcallback',
       session_id: 'session-external',
@@ -109,6 +114,8 @@ describe('useKiroOAuth', () => {
 
     const callbackUrl = 'http://localhost:49153/signin/callback?login_option=external_idp&state=state-external'
     const oauth = useKiroOAuth()
+    await oauth.generateAuthUrl(7, 'Google')
+
     const started = await oauth.startExternalIDPAuth({
       callbackUrl,
       sessionId: 'session-external',
@@ -122,7 +129,8 @@ describe('useKiroOAuth', () => {
       callback_url: callbackUrl,
       proxy_id: 7
     })
-    expect(oauth.authUrl.value).toContain('login.microsoftonline.com')
+    expect(oauth.authUrl.value).toBe('https://kiro.example/signin')
+    expect(oauth.externalIDPAuthUrl.value).toContain('login.microsoftonline.com')
     expect(oauth.sessionId.value).toBe('session-external')
     expect(oauth.state.value).toBe('state-external')
   })

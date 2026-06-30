@@ -51,6 +51,7 @@ export function useKiroOAuth() {
   const { t } = useI18n()
 
   const authUrl = ref('')
+  const externalIDPAuthUrl = ref('')
   const sessionId = ref('')
   const state = ref('')
   const loading = ref(false)
@@ -58,6 +59,7 @@ export function useKiroOAuth() {
 
   const resetState = () => {
     authUrl.value = ''
+    externalIDPAuthUrl.value = ''
     sessionId.value = ''
     state.value = ''
     loading.value = false
@@ -71,6 +73,7 @@ export function useKiroOAuth() {
     loading.value = true
     error.value = ''
     authUrl.value = ''
+    externalIDPAuthUrl.value = ''
     sessionId.value = ''
     state.value = ''
 
@@ -98,6 +101,7 @@ export function useKiroOAuth() {
     loading.value = true
     error.value = ''
     authUrl.value = ''
+    externalIDPAuthUrl.value = ''
     sessionId.value = ''
     state.value = ''
 
@@ -141,7 +145,7 @@ export function useKiroOAuth() {
         callback_url: callbackUrl,
         proxy_id: params.proxyId || undefined
       })
-      authUrl.value = response.auth_url
+      externalIDPAuthUrl.value = response.auth_url
       sessionId.value = response.session_id
       state.value = response.state
       return true
@@ -269,6 +273,7 @@ export function useKiroOAuth() {
 
   return {
     authUrl,
+    externalIDPAuthUrl,
     sessionId,
     state,
     loading,

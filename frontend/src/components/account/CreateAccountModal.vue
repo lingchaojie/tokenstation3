@@ -3318,6 +3318,7 @@
         ref="oauthFlowRef"
         :add-method="form.platform === 'anthropic' ? addMethod : 'oauth'"
         :auth-url="currentAuthUrl"
+        :external-auth-url="currentExternalAuthUrl"
         :session-id="currentSessionId"
         :loading="currentOAuthLoading"
         :error="currentOAuthError"
@@ -3837,6 +3838,11 @@ const currentAuthUrl = computed(() => {
   if (form.platform === 'kiro') return kiroOAuth.authUrl.value
   if (form.platform === 'grok') return grokOAuth.authUrl.value
   return oauth.authUrl.value
+})
+
+const currentExternalAuthUrl = computed(() => {
+  if (form.platform === 'kiro') return kiroOAuth.externalIDPAuthUrl.value
+  return ''
 })
 
 const currentSessionId = computed(() => {

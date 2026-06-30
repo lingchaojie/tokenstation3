@@ -4042,6 +4042,10 @@ export default {
             'Option 1 (recommended): Paste the full callback URL\n(http://localhost:49153/oauth/callback?code=...&state=...&login_option=github)\nOption 2: Paste only the code value',
           authCodeHint:
             'The system will auto-extract code/state and Kiro callback metadata from the URL. If the localhost page cannot be reached, copy the full URL from the address bar.',
+          externalIDPAuthUrl: 'M365 Sign-In URL',
+          externalIDPAuthUrlHint:
+            'This second URL is generated from the first external_idp callback. Copy and open it in your browser, then paste the returned /oauth/callback?code=... URL above after Microsoft sign-in.',
+          externalIDPAuthUrlCopy: 'Copy M365 sign-in URL',
           importDialogTitle: 'Import Kiro Token',
           authModeTitle: 'Kiro Authorization Method',
           oauthTitle: 'Social OAuth',

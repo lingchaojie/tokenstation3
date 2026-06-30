@@ -65,4 +65,14 @@ describe('OAuthAuthorizationFlow', () => {
     expect((wrapper.vm as any).oauthCallbackPath).toBe('/oauth/callback')
     expect((wrapper.vm as any).oauthLoginOption).toBe('github')
   })
+
+  it('shows external identity provider URL separately from the primary auth URL', () => {
+    const wrapper = mountFlow({
+      externalAuthUrl: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize'
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.oauth.kiro.externalIDPAuthUrl')
+    expect(wrapper.find('input[value="https://example.com/authorize"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize"]').exists()).toBe(true)
+  })
 })
