@@ -103,6 +103,27 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Empty(t, req.Header.Get("Anthropic-Beta"))
 }
 
+func TestNewKiroJSONRequestAddsProfileArnHeaderForMCP(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/MCP",
+		},
+	}
+
+	req, err := newKiroJSONRequest(
+		context.Background(),
+		"https://q.us-east-1.amazonaws.com/mcp",
+		[]byte(`{"jsonrpc":"2.0","method":"tools/list","id":"tools_list"}`),
+		"access-token",
+		"account-key",
+		buildKiroMachineID(account),
+		"",
+		account,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/MCP", req.Header.Get("x-amzn-kiro-profile-arn"))
+}
+
 func TestApplyKiroConditionalHeadersAPIKeyTokenType(t *testing.T) {
 	apiKeyAccount := &Account{
 		Platform: PlatformKiro,

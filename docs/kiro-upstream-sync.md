@@ -54,3 +54,25 @@ pricing, runtime/quota state, and usage/overage fields are a front/back contract
 - When behavior differs from nianzs intentionally, keep the difference scoped and
   document the reason in the relevant code or PR, not as a one-off historical
   note in this file.
+
+## Intentional KIRO Runtime Differences
+
+Profile ARN placement intentionally follows `https://github.com/hank9999/kiro.rs`
+for Kiro IDE/Q runtime requests, even when this differs from the nianzs
+reference:
+
+- Q chat API (`https://q.{region}.amazonaws.com/generateAssistantResponse`):
+  include a non-empty credential `profile_arn` as the request-body root field
+  `profileArn`. Do not add `x-amzn-kiro-profile-arn` to the Q chat request
+  headers.
+- Q MCP API (`https://q.{region}.amazonaws.com/mcp`): include non-empty
+  credential `profile_arn` as the request header `x-amzn-kiro-profile-arn`.
+- KRS runtime API (`https://runtime.us-east-1.kiro.dev/generateAssistantResponse`):
+  keep both body `profileArn` and header `x-amzn-kiro-profile-arn`, including the
+  existing default ARN fallback for accounts whose credential has not resolved a
+  real profile ARN.
+- Usage limits (`getUsageLimits`): continue using the existing query parameter
+  placement for `profileArn`.
+
+Do not remove this behavior during nianzs syncs unless intentionally reverting
+the kiro.rs alignment.

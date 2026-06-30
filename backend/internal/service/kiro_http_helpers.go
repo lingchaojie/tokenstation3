@@ -193,6 +193,16 @@ func resolveKiroPayloadProfileArn(account *Account) string {
 	return strings.TrimSpace(account.GetCredential("profile_arn"))
 }
 
+// kiroResolveProfileArnForPayload 返回 generateAssistantResponse 请求体中的 profileArn。
+// 对齐 kiro.rs:Q endpoint 主聊天请求在 JSON 根对象携带已有 profileArn,但不使用默认
+// 占位 ARN fallback;KRS endpoint 仍使用 kiroResolveProfileArnForKRS 的 fallback 逻辑。
+func kiroResolveProfileArnForPayload(account *Account, mode string) string {
+	if mode == KiroEndpointModeKRS {
+		return kiroResolveProfileArnForKRS(account)
+	}
+	return resolveKiroPayloadProfileArn(account)
+}
+
 // kiroResolveProfileArnForKRS 返回 KRS endpoint 所需的 profileArn。
 // KRS endpoint（runtime.us-east-1.kiro.dev）强制要求 profileArn，
 // 凭据无值时 fallback 到默认 ARN（Social → Social ARN，其余 → BuilderID 占位符）。
@@ -202,6 +212,10 @@ func kiroResolveProfileArnForKRS(account *Account) string {
 		return arn
 	}
 	return kiroDefaultProfileARN(account)
+}
+
+func isKiroMCPEndpoint(endpointURL string) bool {
+	return strings.HasPrefix(endpointURL, "https://q.") && strings.HasSuffix(endpointURL, ".amazonaws.com/mcp")
 }
 
 func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account) (*http.Request, error) {
@@ -227,8 +241,11 @@ func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte,
 	if amzTarget != "" {
 		req.Header.Set("X-Amz-Target", amzTarget)
 	}
-	if account != nil && endpointURL == kiroKRSEndpointURL {
-		profileArn := kiroResolveProfileArnForKRS(account)
+	if account != nil && (endpointURL == kiroKRSEndpointURL || isKiroMCPEndpoint(endpointURL)) {
+		profileArn := resolveKiroPayloadProfileArn(account)
+		if endpointURL == kiroKRSEndpointURL {
+			profileArn = kiroResolveProfileArnForKRS(account)
+		}
 		if profileArn != "" {
 			req.Header.Set("x-amzn-kiro-profile-arn", profileArn)
 		}
