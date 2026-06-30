@@ -13,6 +13,9 @@ const (
 	// Kiro desktop social auth uses localhost loopback callbacks from a fixed
 	// allowlist. Use one of the bundled ports from the official client.
 	kiroSocialRedirectURI = "http://localhost:49153"
+	// Microsoft-backed external IdP apps allow the OAuth callback path, not the
+	// intermediate /signin/callback path emitted by app.kiro.dev.
+	kiroExternalIDPRedirectURI = "http://localhost:49153/oauth/callback"
 	// AWS IAM Identity Center native/public clients require an explicit loopback IP redirect URI.
 	kiroIDCRedirectURI = "http://127.0.0.1:9876/oauth/callback"
 )
@@ -46,6 +49,16 @@ type KiroIDCAuthURLResult struct {
 	StartURL  string `json:"start_url"`
 }
 
+type KiroExternalIDPAuthURLResult struct {
+	AuthURL   string `json:"auth_url"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
+	ClientID  string `json:"client_id"`
+	IssuerURL string `json:"issuer_url"`
+	Scopes    string `json:"scopes"`
+	Email     string `json:"email,omitempty"`
+}
+
 type KiroTokenInfo struct {
 	AccessToken  string `json:"access_token,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
@@ -59,6 +72,8 @@ type KiroTokenInfo struct {
 	Email        string `json:"email,omitempty"`
 	StartURL     string `json:"start_url,omitempty"`
 	Region       string `json:"region,omitempty"`
+	IssuerURL    string `json:"issuer_url,omitempty"`
+	Scopes       string `json:"scopes,omitempty"`
 }
 
 type KiroGenerateAuthURLInput struct {
@@ -73,6 +88,12 @@ type KiroExchangeCodeInput struct {
 	CallbackPath string
 	LoginOption  string
 	ProxyID      *int64
+}
+
+type KiroStartExternalIDPAuthInput struct {
+	SessionID   string
+	CallbackURL string
+	ProxyID     *int64
 }
 
 type KiroGenerateIDCAuthURLInput struct {
@@ -90,6 +111,9 @@ type KiroRefreshTokenInput struct {
 	StartURL     string
 	Region       string
 	ProfileArn   string
+	IssuerURL    string
+	Scopes       string
+	Email        string
 	ProxyID      *int64
 }
 
@@ -160,6 +184,23 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroExchange
 		token.Provider = session.Provider
 		s.sessionStore.Delete(input.SessionID)
 		return toKiroTokenInfo(token), nil
+	case "external_idp":
+		token, err := kiropkg.ExchangeExternalIDPAuthCode(
+			ctx,
+			proxyURL,
+			session.IssuerURL,
+			session.ClientID,
+			session.Scopes,
+			input.Code,
+			session.CodeVerifier,
+			session.RedirectURI,
+			session.LoginHint,
+		)
+		if err != nil {
+			return nil, err
+		}
+		s.sessionStore.Delete(input.SessionID)
+		return toKiroTokenInfo(token), nil
 	case "idc":
 		token, err := kiropkg.ExchangeIDCAuthCode(ctx, proxyURL, session.ClientID, session.ClientSecret, input.Code, session.CodeVerifier, session.RedirectURI, session.Region, session.StartURL)
 		if err != nil {
@@ -183,6 +224,60 @@ func buildKiroSocialExchangeRedirectURI(baseRedirectURI, provider, callbackPath,
 		}
 	}
 	return kiropkg.BuildSocialTokenRedirectURI(baseRedirectURI, callbackPath, option)
+}
+
+func (s *KiroOAuthService) StartExternalIDPAuth(ctx context.Context, input *KiroStartExternalIDPAuthInput) (*KiroExternalIDPAuthURLResult, error) {
+	session, ok := s.sessionStore.Get(input.SessionID)
+	if !ok {
+		return nil, fmt.Errorf("session not found or expired")
+	}
+	callback, err := kiropkg.ParseExternalIDPCallbackURL(input.CallbackURL)
+	if err != nil {
+		return nil, err
+	}
+	if callback.State != session.State {
+		return nil, fmt.Errorf("state invalid")
+	}
+	if strings.TrimSpace(session.CodeVerifier) == "" {
+		return nil, fmt.Errorf("code verifier missing")
+	}
+	proxyURL := session.ProxyURL
+	if input.ProxyID != nil {
+		proxyURL, _ = s.resolveProxyURL(ctx, input.ProxyID)
+	}
+	authURL, err := kiropkg.BuildExternalIDPAuthURL(kiropkg.ExternalIDPAuthURLInput{
+		IssuerURL:           callback.IssuerURL,
+		ClientID:            callback.ClientID,
+		Scopes:              callback.Scopes,
+		RedirectURI:         kiroExternalIDPRedirectURI,
+		State:               callback.State,
+		CodeChallenge:       kiropkg.GenerateCodeChallenge(session.CodeVerifier),
+		CodeChallengeMethod: "S256",
+		LoginHint:           callback.LoginHint,
+	})
+	if err != nil {
+		return nil, err
+	}
+	session.ProxyURL = proxyURL
+	session.AuthType = "external_idp"
+	session.Provider = "Internal"
+	session.RedirectURI = kiroExternalIDPRedirectURI
+	session.ClientID = callback.ClientID
+	session.IssuerURL = callback.IssuerURL
+	session.Scopes = callback.Scopes
+	session.LoginHint = callback.LoginHint
+	session.Audience = callback.Audience
+	s.sessionStore.Set(input.SessionID, session)
+
+	return &KiroExternalIDPAuthURLResult{
+		AuthURL:   authURL,
+		SessionID: input.SessionID,
+		State:     callback.State,
+		ClientID:  callback.ClientID,
+		IssuerURL: callback.IssuerURL,
+		Scopes:    strings.Join(callback.Scopes, " "),
+		Email:     callback.LoginHint,
+	}, nil
 }
 
 func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGenerateIDCAuthURLInput) (*KiroIDCAuthURLResult, error) {
@@ -248,6 +343,14 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
 		}
 		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL)
+	case "external_idp":
+		clientID := strings.TrimSpace(input.ClientID)
+		issuerURL := strings.TrimSpace(input.IssuerURL)
+		scopes := strings.Fields(strings.TrimSpace(input.Scopes))
+		if clientID == "" || issuerURL == "" || len(scopes) == 0 {
+			return nil, fmt.Errorf("kiro external_idp refresh requires client_id, issuer_url and scopes")
+		}
+		token, err = kiropkg.RefreshExternalIDPToken(ctx, proxyURL, issuerURL, clientID, scopes, refreshToken, input.Email)
 	default:
 		token, err = kiropkg.RefreshSocialToken(ctx, proxyURL, refreshToken, input.Provider)
 	}
@@ -268,6 +371,12 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 	}
 	if token.Region == "" {
 		token.Region = input.Region
+	}
+	if token.IssuerURL == "" {
+		token.IssuerURL = input.IssuerURL
+	}
+	if token.Scopes == "" {
+		token.Scopes = input.Scopes
 	}
 	return toKiroTokenInfo(token), nil
 }
@@ -296,6 +405,9 @@ func (s *KiroOAuthService) RefreshAccountToken(ctx context.Context, account *Acc
 		StartURL:     account.GetCredential("start_url"),
 		Region:       account.GetCredential("region"),
 		ProfileArn:   account.GetCredential("profile_arn"),
+		IssuerURL:    account.GetCredential("issuer_url"),
+		Scopes:       account.GetCredential("scopes"),
+		Email:        account.GetCredential("email"),
 		ProxyID:      account.ProxyID,
 	})
 }
@@ -350,6 +462,12 @@ func (s *KiroOAuthService) BuildAccountCredentials(tokenInfo *KiroTokenInfo) map
 	if tokenInfo.Region != "" {
 		creds["region"] = tokenInfo.Region
 	}
+	if tokenInfo.IssuerURL != "" {
+		creds["issuer_url"] = tokenInfo.IssuerURL
+	}
+	if tokenInfo.Scopes != "" {
+		creds["scopes"] = tokenInfo.Scopes
+	}
 
 	return creds
 }
@@ -371,6 +489,8 @@ func toKiroTokenInfo(token *kiropkg.TokenData) *KiroTokenInfo {
 		Email:        token.Email,
 		StartURL:     token.StartURL,
 		Region:       token.Region,
+		IssuerURL:    token.IssuerURL,
+		Scopes:       token.Scopes,
 	}
 }
 

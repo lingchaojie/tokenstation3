@@ -421,6 +421,7 @@ func registerKiroOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		kiro.POST("/oauth/auth-url", h.Admin.KiroOAuth.GenerateAuthURL)
 		kiro.POST("/oauth/idc-auth-url", h.Admin.KiroOAuth.GenerateIDCAuthURL)
+		kiro.POST("/oauth/external-idp-auth-url", h.Admin.KiroOAuth.StartExternalIDPAuth)
 		kiro.POST("/oauth/exchange-code", h.Admin.KiroOAuth.ExchangeCode)
 		kiro.POST("/oauth/refresh-token", h.Admin.KiroOAuth.RefreshToken)
 		kiro.POST("/oauth/import-token", h.Admin.KiroOAuth.ImportToken)

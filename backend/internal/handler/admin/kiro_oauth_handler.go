@@ -60,6 +60,30 @@ func (h *KiroOAuthHandler) GenerateIDCAuthURL(c *gin.Context) {
 	response.Success(c, result)
 }
 
+type KiroStartExternalIDPAuthRequest struct {
+	SessionID   string `json:"session_id" binding:"required"`
+	CallbackURL string `json:"callback_url" binding:"required"`
+	ProxyID     *int64 `json:"proxy_id"`
+}
+
+func (h *KiroOAuthHandler) StartExternalIDPAuth(c *gin.Context) {
+	var req KiroStartExternalIDPAuthRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求无效: "+err.Error())
+		return
+	}
+	result, err := h.kiroOAuthService.StartExternalIDPAuth(c.Request.Context(), &service.KiroStartExternalIDPAuthInput{
+		SessionID:   req.SessionID,
+		CallbackURL: req.CallbackURL,
+		ProxyID:     req.ProxyID,
+	})
+	if err != nil {
+		response.BadRequest(c, "生成 external_idp 授权链接失败: "+err.Error())
+		return
+	}
+	response.Success(c, result)
+}
+
 type KiroExchangeCodeRequest struct {
 	SessionID    string `json:"session_id" binding:"required"`
 	State        string `json:"state" binding:"required"`
@@ -99,6 +123,9 @@ type KiroRefreshTokenRequest struct {
 	StartURL     string `json:"start_url"`
 	Region       string `json:"region"`
 	ProfileArn   string `json:"profile_arn"`
+	IssuerURL    string `json:"issuer_url"`
+	Scopes       string `json:"scopes"`
+	Email        string `json:"email"`
 	ProxyID      *int64 `json:"proxy_id"`
 }
 
@@ -117,6 +144,9 @@ func (h *KiroOAuthHandler) RefreshToken(c *gin.Context) {
 		StartURL:     req.StartURL,
 		Region:       req.Region,
 		ProfileArn:   req.ProfileArn,
+		IssuerURL:    req.IssuerURL,
+		Scopes:       req.Scopes,
+		Email:        req.Email,
 		ProxyID:      req.ProxyID,
 	})
 	if err != nil {

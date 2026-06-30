@@ -704,6 +704,15 @@ const handleExchangeCode = async () => {
     const sessionId = kiroOAuth.sessionId.value
     if (!sessionId) return
 
+    if (kiroOAuth.isExternalIDPCallback(authCode)) {
+      await kiroOAuth.startExternalIDPAuth({
+        callbackUrl: authCode.trim(),
+        sessionId,
+        proxyId: props.account.proxy_id
+      })
+      return
+    }
+
     const stateFromInput = oauthFlowRef.value?.oauthState || ''
     const stateToUse = stateFromInput || kiroOAuth.state.value
     if (!stateToUse) return
