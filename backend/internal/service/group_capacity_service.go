@@ -73,6 +73,7 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 
 	// Collect account IDs and config values
 	accountIDs := make([]int64, 0, len(accounts))
+	rpmAccountIDs := make([]int64, 0, len(accounts))
 	sessionTimeouts := make(map[int64]time.Duration)
 	var concurrencyMax, sessionsMax, rpmMax int
 
@@ -90,8 +91,9 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 			sessionTimeouts[acc.ID] = timeout
 		}
 
-		if rpm := acc.GetBaseRPM(); rpm > 0 {
+		if rpm := acc.GetBaseRPM(); acc.SupportsAccountRPM() && rpm > 0 {
 			rpmMax += rpm
+			rpmAccountIDs = append(rpmAccountIDs, acc.ID)
 		}
 	}
 
@@ -105,7 +107,7 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 
 	var rpmMap map[int64]int
 	if rpmMax > 0 && s.rpmCache != nil {
-		rpmMap, _ = s.rpmCache.GetRPMBatch(ctx, accountIDs)
+		rpmMap, _ = s.rpmCache.GetRPMBatch(ctx, rpmAccountIDs)
 	}
 
 	// Aggregate

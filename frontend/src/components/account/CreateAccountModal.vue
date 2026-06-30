@@ -2471,9 +2471,9 @@
         </div>
       </div>
 
-      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
+      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等；Kiro direct: RPM) -->
       <div
-        v-if="form.platform === 'anthropic' && accountCategory === 'oauth-based'"
+        v-if="supportsAccountRpmControls"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2484,7 +2484,7 @@
         </div>
 
         <!-- Window Cost Limit -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.windowCost.label') }}</label>
@@ -2544,7 +2544,7 @@
         </div>
 
         <!-- Session Limit -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionLimit.label') }}</label>
@@ -2693,7 +2693,7 @@
           </div>
 
           <!-- 用户消息限速模式（独立于 RPM 开关，始终可见） -->
-          <div class="mt-4">
+          <div v-if="supportsAnthropicQuotaControls" class="mt-4">
             <label class="input-label">{{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueue') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 mb-2">
               {{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueueHint') }}
@@ -2714,7 +2714,7 @@
         </div>
 
         <!-- TLS Fingerprint -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
@@ -2749,7 +2749,7 @@
         </div>
 
         <!-- Session ID Masking -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionIdMasking.label') }}</label>
@@ -2776,7 +2776,7 @@
         </div>
 
         <!-- Cache TTL Override -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.cacheTTLOverride.label') }}</label>
@@ -2816,7 +2816,7 @@
         </div>
 
         <!-- Custom Base URL Relay -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.customBaseUrl.label') }}</label>
@@ -4128,7 +4128,7 @@ const antigravityMixedChannelConfirmed = ref(false)
 const showAdvancedOAuth = ref(false)
 const showGeminiHelpDialog = ref(false)
 
-// Quota control state (Anthropic OAuth/SetupToken only)
+// Quota control state
 const windowCostEnabled = ref(false)
 const windowCostLimit = ref<number | null>(null)
 const windowCostStickyReserve = ref<number | null>(null)
@@ -4153,6 +4153,31 @@ const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
 const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
+const supportsAnthropicQuotaControls = computed(() =>
+  form.platform === 'anthropic' && accountCategory.value === 'oauth-based'
+)
+const supportsKiroDirectRPMControls = computed(() =>
+  form.platform === 'kiro' && (accountCategory.value === 'oauth-based' || accountCategory.value === 'apikey')
+)
+const supportsAccountRpmControls = computed(() =>
+  supportsAnthropicQuotaControls.value || supportsKiroDirectRPMControls.value
+)
+
+const applyAccountRPMExtra = (extra: Record<string, unknown>) => {
+  if (!supportsAccountRpmControls.value) {
+    return
+  }
+  if (rpmLimitEnabled.value) {
+    const DEFAULT_BASE_RPM = 15
+    extra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
+      ? baseRpm.value
+      : DEFAULT_BASE_RPM
+    extra.rpm_strategy = rpmStrategy.value
+    if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
+      extra.rpm_sticky_buffer = rpmStickyBuffer.value
+    }
+  }
+}
 
 // Gemini tier selection (used as fallback when auto-detection is unavailable/fails)
 const geminiTierGoogleOne = ref<'google_one_free' | 'google_ai_pro' | 'google_ai_ultra'>('google_one_free')
@@ -5559,6 +5584,7 @@ const createAccountAndFinish = async (
     const kiroExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
     kiroExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
+    applyAccountRPMExtra(kiroExtra)
     const kiroMixed = buildKiroMixedExtra()
     if (kiroMixed) Object.assign(kiroExtra, kiroMixed)
     finalExtra = kiroExtra
@@ -6321,16 +6347,7 @@ const handleAnthropicExchange = async (authCode: string) => {
     }
 
     // Add RPM limit settings
-    if (rpmLimitEnabled.value) {
-      const DEFAULT_BASE_RPM = 15
-      extra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
-        ? baseRpm.value
-        : DEFAULT_BASE_RPM
-      extra.rpm_strategy = rpmStrategy.value
-      if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
-        extra.rpm_sticky_buffer = rpmStickyBuffer.value
-      }
-    }
+    applyAccountRPMExtra(extra)
 
     // UMQ mode（独立于 RPM）
     if (userMsgQueueMode.value) {
@@ -6466,16 +6483,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         }
 
         // Add RPM limit settings
-        if (rpmLimitEnabled.value) {
-          const DEFAULT_BASE_RPM = 15
-          extra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
-            ? baseRpm.value
-            : DEFAULT_BASE_RPM
-          extra.rpm_strategy = rpmStrategy.value
-          if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
-            extra.rpm_sticky_buffer = rpmStickyBuffer.value
-          }
-        }
+        applyAccountRPMExtra(extra)
 
         // UMQ mode（独立于 RPM）
         if (userMsgQueueMode.value) {

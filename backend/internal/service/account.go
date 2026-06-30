@@ -1953,6 +1953,18 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 	return a.Platform == PlatformAnthropic && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
+// SupportsAccountRPM 判断账号是否支持账号级 RPM 限制。
+// Anthropic OAuth/SetupToken 和 Kiro 直连账号支持；Kiro relay 账号由外部中转自行限流。
+func (a *Account) SupportsAccountRPM() bool {
+	if a == nil {
+		return false
+	}
+	if a.IsAnthropicOAuthOrSetupToken() {
+		return true
+	}
+	return isKiroDirectModeAccount(a)
+}
+
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
 // 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征

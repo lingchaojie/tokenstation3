@@ -2087,9 +2087,9 @@
         </div>
       </div>
 
-      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
+      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等；Kiro direct: RPM) -->
       <div
-        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        v-if="supportsAccountRpmControls"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2100,7 +2100,7 @@
         </div>
 
         <!-- Window Cost Limit -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.windowCost.label') }}</label>
@@ -2160,7 +2160,7 @@
         </div>
 
         <!-- Session Limit -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionLimit.label') }}</label>
@@ -2309,7 +2309,7 @@
           </div>
 
           <!-- 用户消息限速模式（独立于 RPM 开关，始终可见） -->
-          <div class="mt-4">
+          <div v-if="supportsAnthropicQuotaControls" class="mt-4">
             <label class="input-label">{{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueue') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 mb-2">
               {{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueueHint') }}
@@ -2330,7 +2330,7 @@
         </div>
 
         <!-- TLS Fingerprint -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
@@ -2365,7 +2365,7 @@
         </div>
 
         <!-- Session ID Masking -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionIdMasking.label') }}</label>
@@ -2392,7 +2392,7 @@
         </div>
 
         <!-- Cache TTL Override -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.cacheTTLOverride.label') }}</label>
@@ -2432,7 +2432,7 @@
         </div>
 
         <!-- Custom Base URL Relay -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.customBaseUrl.label') }}</label>
@@ -2883,7 +2883,7 @@ const mixedChannelWarningRawMessage = ref('')
 const mixedChannelWarningAction = ref<(() => Promise<void>) | null>(null)
 const antigravityMixedChannelConfirmed = ref(false)
 
-// Quota control state (Anthropic OAuth/SetupToken only)
+// Quota control state
 const windowCostEnabled = ref(false)
 const windowCostLimit = ref<number | null>(null)
 const windowCostStickyReserve = ref<number | null>(null)
@@ -2908,6 +2908,35 @@ const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
 const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
+const supportsAnthropicQuotaControls = computed(() =>
+  props.account?.platform === 'anthropic' &&
+  (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
+)
+const supportsAccountRpmControls = computed(() =>
+  supportsAnthropicQuotaControls.value || (props.account?.platform === 'kiro' && !isKiroRelay.value)
+)
+
+const applyAccountRPMExtra = (extra: Record<string, unknown>) => {
+  if (!supportsAccountRpmControls.value) {
+    return
+  }
+  if (rpmLimitEnabled.value) {
+    const DEFAULT_BASE_RPM = 15
+    extra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
+      ? baseRpm.value
+      : DEFAULT_BASE_RPM
+    extra.rpm_strategy = rpmStrategy.value
+    if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
+      extra.rpm_sticky_buffer = rpmStickyBuffer.value
+    } else {
+      delete extra.rpm_sticky_buffer
+    }
+  } else {
+    delete extra.base_rpm
+    delete extra.rpm_strategy
+    delete extra.rpm_sticky_buffer
+  }
+}
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
@@ -3450,7 +3479,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     antigravityModelMappings.value = []
   }
 
-  // Load quota control settings (Anthropic OAuth/SetupToken only)
+  // Load quota control settings
   loadQuotaControlSettings(newAccount)
 
   loadTempUnschedRules(credentials)
@@ -3826,7 +3855,7 @@ function loadTempUnschedRules(credentials?: Record<string, unknown>) {
   })
 }
 
-// Load quota control settings from account (Anthropic OAuth/SetupToken only)
+// Load quota control settings from account
 function loadQuotaControlSettings(account: Account) {
   // Reset all quota control state first
   windowCostEnabled.value = false
@@ -3848,27 +3877,27 @@ function loadQuotaControlSettings(account: Account) {
   customBaseUrlEnabled.value = false
   customBaseUrl.value = ''
 
-  // Remaining quota control settings only apply to Anthropic accounts
-  if (account.platform !== 'anthropic') {
+  const isAnthropicQuotaAccount =
+    account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token')
+  const supportsRPM = isAnthropicQuotaAccount || (account.platform === 'kiro' && !isKiroRelayAccount(account))
+
+  if (!supportsRPM) {
     return
   }
 
-  // Window cost / session limit only apply to Anthropic OAuth/SetupToken accounts
-  if (account.type !== 'oauth' && account.type !== 'setup-token') {
-    return
-  }
+  if (isAnthropicQuotaAccount) {
+    // Load from extra field (via backend DTO fields)
+    if (account.window_cost_limit != null && account.window_cost_limit > 0) {
+      windowCostEnabled.value = true
+      windowCostLimit.value = account.window_cost_limit
+      windowCostStickyReserve.value = account.window_cost_sticky_reserve ?? 10
+    }
 
-  // Load from extra field (via backend DTO fields)
-  if (account.window_cost_limit != null && account.window_cost_limit > 0) {
-    windowCostEnabled.value = true
-    windowCostLimit.value = account.window_cost_limit
-    windowCostStickyReserve.value = account.window_cost_sticky_reserve ?? 10
-  }
-
-  if (account.max_sessions != null && account.max_sessions > 0) {
-    sessionLimitEnabled.value = true
-    maxSessions.value = account.max_sessions
-    sessionIdleTimeout.value = account.session_idle_timeout_minutes ?? 5
+    if (account.max_sessions != null && account.max_sessions > 0) {
+      sessionLimitEnabled.value = true
+      maxSessions.value = account.max_sessions
+      sessionIdleTimeout.value = account.session_idle_timeout_minutes ?? 5
+    }
   }
 
   // RPM limit
@@ -3877,6 +3906,10 @@ function loadQuotaControlSettings(account: Account) {
     baseRpm.value = account.base_rpm
     rpmStrategy.value = (account.rpm_strategy as 'tiered' | 'sticky_exempt') || 'tiered'
     rpmStickyBuffer.value = account.rpm_sticky_buffer ?? null
+  }
+
+  if (!isAnthropicQuotaAccount) {
+    return
   }
 
   // UMQ mode（独立于 RPM 加载，防止编辑无 RPM 账号时丢失已有配置）
@@ -4424,8 +4457,8 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    // For Anthropic OAuth/SetupToken accounts, handle quota control settings in extra
-    if (props.account.platform === 'anthropic' && (props.account.type === 'oauth' || props.account.type === 'setup-token')) {
+    // For Anthropic OAuth/SetupToken accounts, handle Anthropic-only quota control settings in extra
+    if (supportsAnthropicQuotaControls.value) {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
 
@@ -4445,24 +4478,6 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.max_sessions
         delete newExtra.session_idle_timeout_minutes
-      }
-
-      // RPM limit settings
-      if (rpmLimitEnabled.value) {
-        const DEFAULT_BASE_RPM = 15
-        newExtra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
-          ? baseRpm.value
-          : DEFAULT_BASE_RPM
-        newExtra.rpm_strategy = rpmStrategy.value
-        if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
-          newExtra.rpm_sticky_buffer = rpmStickyBuffer.value
-        } else {
-          delete newExtra.rpm_sticky_buffer
-        }
-      } else {
-        delete newExtra.base_rpm
-        delete newExtra.rpm_strategy
-        delete newExtra.rpm_sticky_buffer
       }
 
       // UMQ mode（独立于 RPM 保存）
@@ -4511,6 +4526,15 @@ const handleSubmit = async () => {
         delete newExtra.custom_base_url
       }
 
+      updatePayload.extra = newExtra
+    }
+
+    // Account-level RPM settings for Anthropic OAuth/SetupToken and Kiro direct accounts
+    if (supportsAccountRpmControls.value) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      applyAccountRPMExtra(newExtra)
       updatePayload.extra = newExtra
     }
 
