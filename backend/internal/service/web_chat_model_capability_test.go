@@ -16,7 +16,7 @@ func TestResolveWebChatModelThinkingEfforts(t *testing.T) {
 		{"anthropic", "claude-opus-4-8-thinking", []string{"medium", "high", "xhigh"}, true},
 		{"openai", "gpt-5.5", []string{"low", "medium", "high", "xhigh"}, true},
 		{"gemini", "gemini-3.1-pro-preview", []string{"low", "high"}, true},
-		{"openai", "glm-4.7", []string{}, true},       // glm: on/off only → empty efforts
+		{"openai", "glm-4.7", []string{}, true},          // glm: on/off only → empty efforts
 		{"openai", "mystery-model-x", []string{}, false}, // unknown → no thinking
 	}
 	for _, tc := range cases {
