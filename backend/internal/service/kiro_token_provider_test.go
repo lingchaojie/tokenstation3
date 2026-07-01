@@ -210,3 +210,56 @@ func TestKiroTokenProviderForceRefreshRaceRecoveryDoesNotSetError(t *testing.T) 
 	require.Equal(t, "fresh-access", token)
 	require.Equal(t, 0, repo.setErrorCalls)
 }
+
+// TestKiroTokenCacheKeyIsolatesExternalIDPAccountsSharingClientID reproduces a
+// production token-cache collision: two different external_idp accounts that
+// authenticated against the SAME IdP app registration share the same client_id
+// (and have an empty client_id_hash), yet are distinct people with distinct
+// refresh tokens. The access-token cache key MUST NOT collapse them into one
+// slot, otherwise one account's Bearer token is served for the other.
+func TestKiroTokenCacheKeyIsolatesExternalIDPAccountsSharingClientID(t *testing.T) {
+	sharedClientID := "e491fadf-0239-44f9-be3b-d3e1ff193c79"
+	accountA := &Account{
+		ID:       8,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_method":   "external_idp",
+			"client_id":     sharedClientID,
+			"refresh_token": "refresh-token-belonging-to-account-a",
+		},
+	}
+	accountE := &Account{
+		ID:       12,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_method":   "external_idp",
+			"client_id":     sharedClientID,
+			"refresh_token": "refresh-token-belonging-to-account-e",
+		},
+	}
+
+	keyA := KiroTokenCacheKey(accountA)
+	keyE := KiroTokenCacheKey(accountE)
+
+	require.NotEqual(t, keyA, keyE,
+		"two distinct external_idp accounts sharing the same IdP client_id must not share a token cache key")
+}
+
+// TestKiroTokenCacheKeyIsStablePerAccount guarantees the key is deterministic
+// for a given account across calls (so cache hits still work within one account).
+func TestKiroTokenCacheKeyIsStablePerAccount(t *testing.T) {
+	account := &Account{
+		ID:       12,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_method":   "external_idp",
+			"client_id":     "e491fadf-0239-44f9-be3b-d3e1ff193c79",
+			"refresh_token": "refresh-token-belonging-to-account-e",
+		},
+	}
+
+	require.Equal(t, KiroTokenCacheKey(account), KiroTokenCacheKey(account))
+}
