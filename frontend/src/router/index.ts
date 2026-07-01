@@ -223,7 +223,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/user/ChatView.vue'),
     meta: {
       requiresAuth: true,
-      requiresAdmin: true,
+      requiresAdmin: false,
       title: 'Chat',
       titleKey: 'chat.title',
       descriptionKey: 'chat.description',

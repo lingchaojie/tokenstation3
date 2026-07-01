@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 import type { PaginatedResponse } from '@/types'
 
-const ADMIN_CHAT_API_BASE = '/admin/chat'
+const ADMIN_CHAT_API_BASE = '/chat'
 
 export type WebChatPriceStatus = 'confirmed' | 'unverified'
 export type WebChatConversationStatus = 'active' | 'archived' | 'deleted'

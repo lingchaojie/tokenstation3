@@ -23,9 +23,6 @@ func RegisterAdminRoutes(
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
 
-		// Web Chat 灰度功能，仅管理员可用
-		registerAdminWebChatRoutes(admin, h)
-
 		// 仪表盘
 		registerDashboardRoutes(admin, h)
 
@@ -141,23 +138,6 @@ func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	apiKeys := admin.Group("/api-keys")
 	{
 		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
-	}
-}
-
-func registerAdminWebChatRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	chat := admin.Group("/chat")
-	{
-		chat.GET("/models", h.WebChat.ListModels)
-		chat.GET("/conversations", h.WebChat.ListConversations)
-		chat.POST("/conversations", h.WebChat.CreateConversation)
-		chat.GET("/conversations/:id", h.WebChat.GetConversation)
-		chat.PATCH("/conversations/:id", h.WebChat.UpdateConversation)
-		chat.DELETE("/conversations/:id", h.WebChat.DeleteConversation)
-		chat.POST("/conversations/:id/messages", h.WebChat.SendMessage)
-		chat.POST("/conversations/:id/messages/:message_id/cancel", h.WebChat.CancelMessage)
-		chat.POST("/attachments", h.WebChat.UploadAttachment)
-		chat.GET("/attachments/:id/download", h.WebChat.DownloadAttachment)
-		chat.GET("/artifacts/:id/download", h.WebChat.DownloadArtifact)
 	}
 }
 

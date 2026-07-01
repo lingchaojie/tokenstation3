@@ -700,11 +700,11 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   }
   if (authStore.isAdmin) {
     items.push(
-      { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
       { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
     )
   }
   items.push(
+    { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
