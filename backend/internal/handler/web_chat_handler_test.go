@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWebChatRoutesAreNotRegisteredForRegularUsers(t *testing.T) {
+func TestWebChatRoutesAreRegisteredForRegularUsers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeWebChatService{}
 	router := newWebChatUserRoutesTestRouter(fake, 42)
@@ -27,8 +27,11 @@ func TestWebChatRoutesAreNotRegisteredForRegularUsers(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/chat/conversations", nil)
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusNotFound, w.Code)
-	require.False(t, fake.listCalled)
+	// WebChat is open to all authenticated users (no admin gate). The route is
+	// registered under the authenticated user group, so a regular user reaches
+	// the handler (200) rather than a 404.
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, fake.listCalled)
 }
 
 func TestWebChatAdminRoutesRequireAdmin(t *testing.T) {
