@@ -642,7 +642,7 @@
               min="0"
               max="1"
               class="input"
-              placeholder="1"
+              placeholder="0.5"
             />
             <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
           </div>
@@ -1996,7 +1996,7 @@
               min="0"
               max="1"
               class="input"
-              placeholder="1"
+              placeholder="0.5"
             />
             <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
           </div>
@@ -3454,7 +3454,7 @@ const createForm = reactive({
   kiro_cache_emulation_enabled: false,
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
-  kiro_cache_emulation_ratio: 1,
+  kiro_cache_emulation_ratio: 0.5,
   kiro_endpoint_mode: "q" as "q" | "krs",
 });
 
@@ -3792,7 +3792,7 @@ const editForm = reactive({
   kiro_cache_emulation_enabled: false,
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
-  kiro_cache_emulation_ratio: 1,
+  kiro_cache_emulation_ratio: 0.5,
   kiro_endpoint_mode: "q" as "q" | "krs",
 });
 
@@ -4056,7 +4056,7 @@ const closeCreateModal = () => {
   createForm.kiro_cache_emulation_enabled = false;
   createForm.kiro_auto_sticky_enabled = true;
   createForm.kiro_sticky_session_ttl_seconds = 3600;
-  createForm.kiro_cache_emulation_ratio = 1;
+  createForm.kiro_cache_emulation_ratio = 0.5;
   createForm.kiro_endpoint_mode = "q";
   resetModelsListState(createModelsListState);
   createModelRoutingRules.value = [];
@@ -4228,7 +4228,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.kiro_sticky_session_ttl_seconds =
     group.kiro_sticky_session_ttl_seconds ?? 3600;
   editForm.kiro_cache_emulation_enabled = group.kiro_cache_emulation_enabled ?? false;
-  editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 1;
+  editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 0.5;
   editForm.kiro_endpoint_mode = group.kiro_endpoint_mode === "krs" ? "krs" : "q";
   resetModelsListState(editModelsListState, group.models_list_config);
   // 加载模型路由规则（异步加载账号名称）

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -154,9 +155,14 @@ func TestWebChatCapabilities_SkipsUnsupportedCatalogProviders(t *testing.T) {
 }
 
 func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *testing.T) {
-	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc.defaultGroups = stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 1, APIKeyTypeOpenAI: 2}}
+	svc.accountLister = stubAccountLister{byGroup: map[int64][]Account{
+		1: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4-20250514")},
+		2: {acctWithMapping(PlatformOpenAI, "gpt-5.5")},
+	}}
 
-	caps, err := svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4-20250514")
+	caps, err := svc.resolveWebChatSendCapability(context.Background(), "anthropic", "claude-sonnet-4-20250514")
 
 	require.NoError(t, err)
 	require.Equal(t, "anthropic", caps.Provider)
@@ -165,7 +171,7 @@ func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *test
 	require.Equal(t, "claude-sonnet-4-20250514", caps.Model)
 	require.True(t, caps.SupportsText)
 
-	caps, err = svc.resolveWebChatSendCapability("openai", "gpt-5.5")
+	caps, err = svc.resolveWebChatSendCapability(context.Background(), "openai", "gpt-5.5")
 	require.NoError(t, err)
 	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.Equal(t, "gpt-5.5", caps.Model)
@@ -184,8 +190,13 @@ func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t
 	_, err = resolver.ResolveWebChatCapability("anthropic", "missing-model")
 	require.ErrorIs(t, err, ErrWebChatInvalidModel)
 
-	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	_, err = svc.resolveWebChatSendCapability("anthropic", "claude-sonnet-4")
+	svc := NewWebChatService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc.defaultGroups = stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 1}}
+	svc.accountLister = stubAccountLister{byGroup: map[int64][]Account{
+		1: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4")},
+	}}
+	// A model not present in any default group is rejected.
+	_, err = svc.resolveWebChatSendCapability(context.Background(), "anthropic", "claude-opus-4-8")
 	require.ErrorIs(t, err, ErrWebChatInvalidModel)
 }
 

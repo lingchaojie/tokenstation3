@@ -165,6 +165,14 @@ func normalizeWebChatThinkingEffort(caps WebChatModelCapability, config WebChatT
 	if !config.Enabled || !caps.SupportsThinking {
 		return "", false
 	}
+
+	// On/off-toggle families (e.g. GLM) advertise no effort tiers. When thinking
+	// is enabled we emit "high": GLM's native scale is high/max, and the
+	// downstream NormalizeGLMOpenAIReasoningEffort maps high→high accordingly.
+	if len(caps.ThinkingEfforts) == 0 {
+		return "high", true
+	}
+
 	effort := strings.ToLower(strings.TrimSpace(config.Effort))
 	switch effort {
 	case "":
@@ -176,9 +184,6 @@ func normalizeWebChatThinkingEffort(caps WebChatModelCapability, config WebChatT
 	}
 
 	allowed := caps.ThinkingEfforts
-	if len(allowed) == 0 {
-		allowed = []string{"low", "medium", "high", "xhigh"}
-	}
 	for _, allowedEffort := range allowed {
 		if effort == strings.ToLower(strings.TrimSpace(allowedEffort)) {
 			return effort, true

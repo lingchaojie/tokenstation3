@@ -735,7 +735,7 @@ describe('useChatStore', () => {
       filename: 'notes.txt',
       contentType: 'text/plain',
     })
-    expect(apiClient.get).toHaveBeenCalledWith('/admin/chat/attachments/42/download', {
+    expect(apiClient.get).toHaveBeenCalledWith('/chat/attachments/42/download', {
       responseType: 'blob',
     })
   })

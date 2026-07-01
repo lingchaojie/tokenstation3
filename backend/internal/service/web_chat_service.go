@@ -32,17 +32,12 @@ type webChatUserResolver interface {
 	GetByID(ctx context.Context, id int64) (*User, error)
 }
 
-type webChatCapabilityResolver interface {
-	ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error)
-}
-
 type WebChatService struct {
 	repo           WebChatRepository
 	attachmentRepo webChatAttachmentCreator
 	storage        WebChatStorage
 
 	userResolver         webChatUserResolver
-	capabilityResolver   webChatCapabilityResolver
 	apiKeyService        webChatAPIKeyService
 	subscriptionService  webChatSubscriptionService
 	billingCacheService  webChatBillingEligibilityService
@@ -50,6 +45,9 @@ type WebChatService struct {
 	openAIGatewayService webChatOpenAIGatewayService
 	geminiCompatService  webChatGeminiCompatService
 	usageLogRepository   webChatUsageLogLookupRepository
+
+	defaultGroups webChatDefaultGroupResolver
+	accountLister webChatAccountLister
 
 	activeCancelMu sync.Mutex
 	activeCancels  map[webChatAssistantKey]context.CancelFunc
@@ -72,6 +70,8 @@ func NewWebChatService(
 	openAIGatewayService *OpenAIGatewayService,
 	geminiCompatService *GeminiMessagesCompatService,
 	usageLogRepo UsageLogRepository,
+	settingService *SettingService,
+	accountService *AccountService,
 	cfg *config.Config,
 ) *WebChatService {
 	if storage == nil && cfg != nil {
@@ -82,7 +82,6 @@ func NewWebChatService(
 		attachmentRepo:       repo,
 		storage:              storage,
 		userResolver:         userRepo,
-		capabilityResolver:   NewWebChatCatalogCapabilityResolver(DefaultWebChatCatalogModels()),
 		apiKeyService:        apiKeyService,
 		subscriptionService:  subscriptionService,
 		billingCacheService:  billingCacheService,
@@ -90,6 +89,8 @@ func NewWebChatService(
 		openAIGatewayService: openAIGatewayService,
 		geminiCompatService:  geminiCompatService,
 		usageLogRepository:   usageLogRepo,
+		defaultGroups:        settingService,
+		accountLister:        accountService,
 	}
 }
 
@@ -130,7 +131,7 @@ func (s *WebChatService) CreateConversation(ctx context.Context, userID int64, i
 	if s == nil || s.repo == nil || userID <= 0 {
 		return nil, ErrWebChatConversationNotFound
 	}
-	caps, err := s.resolveWebChatSendCapability(in.DefaultProvider, in.DefaultModel)
+	caps, err := s.resolveWebChatSendCapability(ctx, in.DefaultProvider, in.DefaultModel)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +182,7 @@ func (s *WebChatService) UpdateConversation(ctx context.Context, userID, convers
 		if in.DefaultModel != nil {
 			model = *in.DefaultModel
 		}
-		caps, err := s.resolveWebChatSendCapability(provider, model)
+		caps, err := s.resolveWebChatSendCapability(ctx, provider, model)
 		if err != nil {
 			return nil, err
 		}
@@ -236,11 +237,11 @@ func (s *WebChatService) OpenArtifact(ctx context.Context, userID, artifactID in
 	return rc, WebChatDownloadMeta{Filename: artifact.Filename, ContentType: artifact.ContentType, SizeBytes: size}, nil
 }
 
-func (s *WebChatService) ListModels(_ context.Context, userID int64) ([]WebChatModelCapability, error) {
+func (s *WebChatService) ListModels(ctx context.Context, userID int64) ([]WebChatModelCapability, error) {
 	if userID <= 0 {
 		return nil, ErrUserNotFound
 	}
-	return WebChatModelCapabilitiesFromCatalog(DefaultWebChatCatalogModels()), nil
+	return resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
 }
 
 func (s *WebChatService) CancelMessage(ctx context.Context, userID, conversationID, messageID int64) error {
@@ -294,7 +295,7 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 	if err != nil {
 		return nil, err
 	}
-	caps, err := s.resolveWebChatSendCapability(in.Provider, in.Model)
+	caps, err := s.resolveWebChatSendCapability(ctx, in.Provider, in.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -473,18 +474,24 @@ func (s *WebChatService) resolveWebChatSendUser(ctx context.Context, in WebChatS
 	return user, nil
 }
 
-func (s *WebChatService) resolveWebChatSendCapability(provider, model string) (WebChatModelCapability, error) {
-	if s.capabilityResolver == nil {
-		return WebChatModelCapability{}, ErrWebChatInvalidModel
-	}
-	caps, err := s.capabilityResolver.ResolveWebChatCapability(strings.TrimSpace(provider), strings.TrimSpace(model))
+// resolveWebChatSendCapability validates the requested model against the live
+// dynamic catalog. NOTE: this rebuilds the catalog (2 setting lookups + 2
+// ListByGroup queries) on every send/create/update. Acceptable at current
+// scale (the send path already does heavier DB work), but consider a short-TTL
+// cache or a lighter single-model check if this path gets hot.
+func (s *WebChatService) resolveWebChatSendCapability(ctx context.Context, provider, model string) (WebChatModelCapability, error) {
+	catalog, err := resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
 	if err != nil {
 		return WebChatModelCapability{}, err
 	}
-	if caps.Model == "" || caps.Provider == "" || caps.Platform == "" {
-		return WebChatModelCapability{}, ErrWebChatInvalidModel
+	p := strings.ToLower(strings.TrimSpace(provider))
+	base := normalizeWebChatModelName(strings.TrimSpace(model))
+	for _, c := range catalog {
+		if c.Provider == p && normalizeWebChatModelName(c.Model) == base {
+			return c, nil
+		}
 	}
-	return caps, nil
+	return WebChatModelCapability{}, ErrWebChatInvalidModel
 }
 
 func webChatFindMessage(messages []WebChatMessage, id int64) (WebChatMessage, bool) {

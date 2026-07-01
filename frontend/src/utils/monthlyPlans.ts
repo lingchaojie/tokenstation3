@@ -33,7 +33,10 @@ interface MonthlyPlanCopy {
   badge: string
   description: string
   benefits: string[]
-  features: string[]
+  // Qualitative feature line(s) only. The amount-bearing lines (total obtainable
+  // and seven-day quota) are generated dynamically from the plan's DB quota so the
+  // copy stays in sync when the quota is changed via the admin panel.
+  featureTail: string[]
 }
 
 export const monthlyPlanKeys: MonthlyPlanKey[] = ['basic', 'plus', 'pro', 'max']
@@ -66,14 +69,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
       badge: '入门',
       description: '适合轻量试用、小型自动化，以及保持个人编程 Agent 在线。',
       benefits: ['轻量 Claude Code 会话', 'OpenAI 兼容接口调试', '个人脚本和低频项目'],
-      features: ['总共可获取：$200', '7 日额度：$50', '可使用充值余额兜底'],
+      featureTail: ['可使用充值余额兜底'],
     },
     en: {
       name: 'Basic monthly',
       badge: 'Start',
       description: 'For focused LINX2.AI trials, small automations, and keeping a personal coding agent online.',
       benefits: ['Light Claude Code sessions', 'OpenAI-compatible API testing', 'Personal scripts and low-frequency projects'],
-      features: ['Total obtainable: $200', 'Seven-day quota: $50', 'Recharge balance fallback'],
+      featureTail: ['Recharge balance fallback'],
     },
   },
   plus: {
@@ -82,14 +85,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
       badge: '日常',
       description: '适合日常开发，把 LINX2.AI 作为个人工作的默认统一网关。',
       benefits: ['日常 Claude Code 编程', 'OpenAI Responses / Chat 工作流', '个人开发者和原型项目'],
-      features: ['总共可获取：$440', '7 日额度：$110', '优先扣月卡额度'],
+      featureTail: ['优先扣月卡额度'],
     },
     en: {
       name: 'Plus monthly',
       badge: 'Daily',
       description: 'For regular development days where LINX2.AI becomes the default gateway for individual work.',
       benefits: ['Daily Claude Code development', 'OpenAI Responses / Chat workflows', 'Solo builders and prototype projects'],
-      features: ['Total obtainable: $440', 'Seven-day quota: $110', 'Quota used before recharge balance'],
+      featureTail: ['Quota used before recharge balance'],
     },
   },
   pro: {
@@ -98,14 +101,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
       badge: '热门',
       description: '适合主力项目、更重的 Agent 循环，以及需要更大订阅额度的团队。',
       benefits: ['主力项目和长会话开发', '高频 Claude Code / OpenAI 调用', '小团队共享工作负载'],
-      features: ['总共可获取：$1,040', '7 日额度：$260', '适合主力项目'],
+      featureTail: ['适合主力项目'],
     },
     en: {
       name: 'Pro monthly',
       badge: 'Popular',
       description: 'For primary projects, heavier agent loops, and teams that need more room before fallback billing.',
       benefits: ['Primary projects and long coding sessions', 'Frequent Claude Code / OpenAI calls', 'Small-team shared workloads'],
-      features: ['Total obtainable: $1,040', 'Seven-day quota: $260', 'Built for active projects'],
+      featureTail: ['Built for active projects'],
     },
   },
   max: {
@@ -114,14 +117,14 @@ const monthlyPlanCopy: Record<MonthlyPlanKey, Record<MonthlyPlanLocale, MonthlyP
       badge: '高强度',
       description: '适合并行项目、长会话和高强度 LINX2.AI 流量。',
       benefits: ['多项目并行和高并发使用', '重度 Agent 循环与批量任务', '高频 Claude Code / OpenAI 生产流量'],
-      features: ['总共可获取：$2,200', '7 日额度：$550', '最高月卡额度'],
+      featureTail: ['最高月卡额度'],
     },
     en: {
       name: 'Max monthly',
       badge: 'Scale',
       description: 'For demanding users running parallel projects, longer sessions, and high-intensity LINX2.AI traffic.',
       benefits: ['Parallel projects and high-concurrency usage', 'Heavy agent loops and batch tasks', 'High-frequency Claude Code / OpenAI production traffic'],
-      features: ['Total obtainable: $2,200', 'Seven-day quota: $550', 'Highest monthly card capacity'],
+      featureTail: ['Highest monthly card capacity'],
     },
   },
 }
@@ -156,12 +159,22 @@ function quotaLabel(quotaUsd: number, locale: MonthlyPlanLocale): string {
   return `${formatMonthlyPlanUsd(quotaUsd)} / ${locale === 'zh' ? '7 天' : '7 days'}`
 }
 
+// Build the amount-bearing feature lines from live quota values so PaymentView plan
+// cards stay consistent with the DB-driven seven-day quota (editable via admin panel).
+function amountFeatureLines(sevenDayQuotaUsd: number, monthlyTotalUsd: number, locale: MonthlyPlanLocale): string[] {
+  if (locale === 'zh') {
+    return [`总共可获取：${formatMonthlyPlanUsd(monthlyTotalUsd)}`, `7 日额度：${formatMonthlyPlanUsd(sevenDayQuotaUsd)}`]
+  }
+  return [`Total obtainable: ${formatMonthlyPlanUsd(monthlyTotalUsd)}`, `Seven-day quota: ${formatMonthlyPlanUsd(sevenDayQuotaUsd)}`]
+}
+
 function displayFor(key: MonthlyPlanKey, locale: MonthlyPlanLocale, overrides?: { priceCny?: number; sevenDayQuotaUsd?: number }): MonthlyPlanDisplay {
   const base = monthlyPlanBase[key]
   const copy = monthlyPlanCopy[key][locale]
   const priceCny = overrides?.priceCny ?? base.priceCny
   const sevenDayQuotaUsd = overrides?.sevenDayQuotaUsd ?? base.sevenDayQuotaUsd
   const monthlyTotalUsd = sevenDayQuotaUsd * 4
+  const features = [...amountFeatureLines(sevenDayQuotaUsd, monthlyTotalUsd, locale), ...copy.featureTail]
 
   return {
     key,
@@ -176,7 +189,7 @@ function displayFor(key: MonthlyPlanKey, locale: MonthlyPlanLocale, overrides?: 
     monthlyTotalLabel: formatMonthlyPlanUsd(monthlyTotalUsd),
     description: copy.description,
     benefits: copy.benefits,
-    features: copy.features,
+    features,
     featured: base.featured,
   }
 }

@@ -66,6 +66,33 @@ func TestBuildWebChatCompletionsPayload_IncludesThinkingEffortWhenEnabled(t *tes
 	}`, string(payload))
 }
 
+func TestBuildWebChatCompletionsPayload_OnOffThinkingEmitsHigh(t *testing.T) {
+	messages := []WebChatMessage{{
+		Role:        WebChatRoleUser,
+		ContentText: "Think through the tradeoffs",
+	}}
+
+	// GLM-style on/off toggle: SupportsThinking with no effort tiers. Enabling
+	// thinking must emit reasoning_effort "high" (not the old "medium" default).
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), WebChatModelCapability{
+		Model:            "glm-4.7",
+		SupportsText:     true,
+		SupportsThinking: true,
+		ThinkingEfforts:  nil,
+	}, messages, true, WebChatCompletionsPayloadOptions{
+		Thinking: WebChatThinkingConfig{Enabled: true},
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"model":"glm-4.7",
+		"stream":true,
+		"stream_options":{"include_usage":true},
+		"reasoning_effort":"high",
+		"messages":[{"role":"user","content":"Think through the tradeoffs"}]
+	}`, string(payload))
+}
+
 func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t *testing.T) {
 	messages := []WebChatMessage{{
 		Role:        WebChatRoleUser,

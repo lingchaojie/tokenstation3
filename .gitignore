@@ -140,3 +140,6 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# Playwright MCP browser snapshots (may contain secrets)
+.playwright-mcp/

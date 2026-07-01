@@ -500,13 +500,14 @@ client = Anthropic(
     base_url="${baseUrl}",
 )
 
-message = client.messages.create(
+with client.messages.stream(
     model="claude-opus-4-7",
     max_tokens=1024,
     messages=[{"role": "user", "content": "Hello, Claude"}],
-)
-
-print(message.content[0].text)`
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+print()`
   }
 }
 
@@ -615,12 +616,16 @@ client = OpenAI(
     base_url="${baseUrl}",
 )
 
-response = client.responses.create(
+stream = client.responses.create(
     model="gpt-5.5",
     input="Hello, GPT",
+    stream=True,
 )
 
-print(response.output_text)`
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="", flush=True)
+print()`
   }
 }
 

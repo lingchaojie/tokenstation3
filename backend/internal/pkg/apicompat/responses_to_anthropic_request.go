@@ -57,9 +57,16 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 		out.ensureOutputConfig().Effort = effort
 		// Enable thinking for non-low efforts
 		if effort != "low" {
+			budget := defaultThinkingBudget(effort)
 			out.Thinking = &AnthropicThinking{
 				Type:         "enabled",
-				BudgetTokens: defaultThinkingBudget(effort),
+				BudgetTokens: budget,
+			}
+			// Anthropic requires max_tokens > thinking.budget_tokens, else 400.
+			// Bump only when the (possibly defaulted) max_tokens is too small;
+			// never shrink a larger client-provided value.
+			if out.MaxTokens <= budget {
+				out.MaxTokens = budget + anthropicThinkingMaxTokensPadding
 			}
 		}
 	}
@@ -88,6 +95,10 @@ func responsesImageGenerationConfig(tools []ResponsesTool) (string, string) {
 	}
 	return "", ""
 }
+
+// anthropicThinkingMaxTokensPadding is added on top of budget_tokens when
+// auto-raising max_tokens to satisfy Anthropic's max_tokens > budget_tokens rule.
+const anthropicThinkingMaxTokensPadding = 1000
 
 // defaultThinkingBudget returns a sensible thinking budget based on effort level.
 func defaultThinkingBudget(effort string) int {
