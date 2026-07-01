@@ -134,15 +134,17 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	return accessToken, nil
 }
 
+// KiroTokenCacheKey returns the Redis cache key for an account's access token.
+//
+// The key MUST isolate per account.ID. Access/refresh tokens are per-account
+// secrets, so two account rows must never share a cache slot. Keying by
+// client_id_hash/client_id was unsafe for external_idp accounts: every account
+// authenticated against the same IdP app registration shares one client_id
+// (with an empty client_id_hash), which collapsed distinct people onto a single
+// token slot and served one account's Bearer token for another.
 func KiroTokenCacheKey(account *Account) string {
 	if account == nil {
 		return "kiro:account:0"
-	}
-	if clientIDHash := strings.TrimSpace(account.GetCredential("client_id_hash")); clientIDHash != "" {
-		return "kiro:" + clientIDHash
-	}
-	if clientID := strings.TrimSpace(account.GetCredential("client_id")); clientID != "" {
-		return "kiro:client:" + clientID
 	}
 	return "kiro:account:" + strconv.FormatInt(account.ID, 10)
 }
