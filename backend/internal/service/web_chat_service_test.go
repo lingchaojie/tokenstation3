@@ -738,7 +738,6 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
 	double.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI}, Acquired: true}
 	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	double.capabilityResolver = webChatCapabilityResolverStub{}
 	double.defaultGroups = stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 1, APIKeyTypeOpenAI: 2}}
 	double.accountLister = stubAccountLister{byGroup: map[int64][]Account{
 		1: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4")},
@@ -1073,32 +1072,6 @@ func (r *webChatUsageLogRepoStub) GetByRequestIDAndAPIKeyID(ctx context.Context,
 		return nil, r.double.usageLookupErr
 	}
 	return &UsageLog{ID: 88, RequestID: requestID, APIKeyID: apiKeyID}, nil
-}
-
-type webChatCapabilityResolverStub struct{}
-
-func (webChatCapabilityResolverStub) ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error) {
-	switch model {
-	case "claude-sonnet-4":
-		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true, SupportsImageInput: true, SupportsFileContext: true, SupportsWebSearch: true}, nil
-	case "gpt-image-2":
-		return WebChatModelCapability{
-			Provider:                     provider,
-			Platform:                     PlatformOpenAI,
-			Model:                        model,
-			SupportsText:                 true,
-			SupportsImageGeneration:      true,
-			SupportsArtifactOutput:       true,
-			ImageGenerationSizes:         []string{"1024x1024"},
-			ImageGenerationOutputFormats: []string{"webp"},
-		}, nil
-	case "gpt-5.5":
-		return WebChatModelCapability{Provider: provider, Platform: PlatformOpenAI, Model: model, SupportsText: true, SupportsFileContext: true, SupportsWebSearch: true}, nil
-	case "text-only":
-		return WebChatModelCapability{Provider: provider, Platform: PlatformAnthropic, Model: model, SupportsText: true}, nil
-	default:
-		return WebChatModelCapability{}, ErrWebChatInvalidModel
-	}
 }
 
 type webChatUserResolverStub struct {

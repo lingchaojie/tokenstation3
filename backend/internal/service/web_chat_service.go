@@ -32,17 +32,12 @@ type webChatUserResolver interface {
 	GetByID(ctx context.Context, id int64) (*User, error)
 }
 
-type webChatCapabilityResolver interface {
-	ResolveWebChatCapability(provider, model string) (WebChatModelCapability, error)
-}
-
 type WebChatService struct {
 	repo           WebChatRepository
 	attachmentRepo webChatAttachmentCreator
 	storage        WebChatStorage
 
 	userResolver         webChatUserResolver
-	capabilityResolver   webChatCapabilityResolver
 	apiKeyService        webChatAPIKeyService
 	subscriptionService  webChatSubscriptionService
 	billingCacheService  webChatBillingEligibilityService
@@ -87,7 +82,6 @@ func NewWebChatService(
 		attachmentRepo:       repo,
 		storage:              storage,
 		userResolver:         userRepo,
-		capabilityResolver:   NewWebChatCatalogCapabilityResolver(DefaultWebChatCatalogModels()),
 		apiKeyService:        apiKeyService,
 		subscriptionService:  subscriptionService,
 		billingCacheService:  billingCacheService,
@@ -480,6 +474,11 @@ func (s *WebChatService) resolveWebChatSendUser(ctx context.Context, in WebChatS
 	return user, nil
 }
 
+// resolveWebChatSendCapability validates the requested model against the live
+// dynamic catalog. NOTE: this rebuilds the catalog (2 setting lookups + 2
+// ListByGroup queries) on every send/create/update. Acceptable at current
+// scale (the send path already does heavier DB work), but consider a short-TTL
+// cache or a lighter single-model check if this path gets hot.
 func (s *WebChatService) resolveWebChatSendCapability(ctx context.Context, provider, model string) (WebChatModelCapability, error) {
 	catalog, err := resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
 	if err != nil {
