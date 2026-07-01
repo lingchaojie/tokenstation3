@@ -34,8 +34,17 @@ var webChatDefaultGroupSpecs = []webChatDefaultGroupSpec{
 // Metadata is enriched from the static catalog by normalized name; unmatched
 // models fall back to per-family capability defaults so they remain usable.
 func resolveWebChatCatalog(ctx context.Context, groups webChatDefaultGroupResolver, accounts webChatAccountLister) ([]WebChatModelCapability, error) {
-	seen := map[string]struct{}{}
-	out := make([]WebChatModelCapability, 0, 16)
+	// canonical raw routing key per (provider\x00normalizedBase). The raw key is
+	// what the account's model_mapping actually recognizes; the normalized base
+	// is only for enrichment/dedup/family/display. Prefer a non-"-thinking" raw
+	// key so the deep-thinking toggle controls thinking instead of it being baked in.
+	type webChatCatalogEntry struct {
+		provider string
+		base     string
+		rawKey   string
+	}
+	chosen := map[string]webChatCatalogEntry{}
+	order := make([]string, 0, 16)
 
 	catalog := map[string]WebChatCatalogModel{}
 	for _, m := range DefaultWebChatCatalogModels() {
@@ -64,13 +73,26 @@ func resolveWebChatCatalog(ctx context.Context, groups webChatDefaultGroupResolv
 				if resolveWebChatModelFamily(base) != spec.Family {
 					continue
 				}
-				if _, dup := seen[base]; dup {
+				k := spec.Provider + "\x00" + base
+				existing, ok := chosen[k]
+				if !ok {
+					chosen[k] = webChatCatalogEntry{provider: spec.Provider, base: base, rawKey: rawKey}
+					order = append(order, k)
 					continue
 				}
-				seen[base] = struct{}{}
-				out = append(out, buildWebChatCapability(spec.Provider, base, catalog))
+				// Upgrade to a non-thinking raw key if we previously stored a -thinking one.
+				if strings.HasSuffix(existing.rawKey, "-thinking") && !strings.HasSuffix(rawKey, "-thinking") {
+					existing.rawKey = rawKey
+					chosen[k] = existing
+				}
 			}
 		}
+	}
+
+	out := make([]WebChatModelCapability, 0, len(order))
+	for _, k := range order {
+		e := chosen[k]
+		out = append(out, buildWebChatCapability(e.provider, e.rawKey, e.base, catalog))
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
@@ -82,12 +104,12 @@ func resolveWebChatCatalog(ctx context.Context, groups webChatDefaultGroupResolv
 	return out, nil
 }
 
-func buildWebChatCapability(provider, model string, catalog map[string]WebChatCatalogModel) WebChatModelCapability {
+func buildWebChatCapability(provider, routingKey, base string, catalog map[string]WebChatCatalogModel) WebChatModelCapability {
 	var caps WebChatModelCapability
-	key := provider + "\x00" + model
+	key := provider + "\x00" + base
 	if cm, ok := catalog[key]; ok {
 		cm.Provider = provider
-		cm.ModelName = model
+		cm.ModelName = routingKey // dispatch/account-match uses the real mapping key
 		if built, ok := WebChatModelCapabilityFromCatalogModel(cm); ok {
 			caps = built
 		}
@@ -98,13 +120,13 @@ func buildWebChatCapability(provider, model string, catalog map[string]WebChatCa
 			caps.KeyType = route.KeyType
 		}
 		caps.Provider = provider
-		caps.Model = model
-		caps.DisplayName = model
+		caps.Model = routingKey
+		caps.DisplayName = base
 		caps.SupportsText = true
 		caps.SupportsFileContext = true
 		caps.PriceStatus = "unverified"
 	}
-	fam := ResolveWebChatModelCapability(provider, model)
+	fam := ResolveWebChatModelCapability(provider, base)
 	caps.SupportsThinking = fam.SupportsThinking
 	caps.ThinkingEfforts = fam.ThinkingEfforts
 	return caps

@@ -487,7 +487,7 @@ func (s *WebChatService) resolveWebChatSendCapability(ctx context.Context, provi
 	p := strings.ToLower(strings.TrimSpace(provider))
 	base := normalizeWebChatModelName(strings.TrimSpace(model))
 	for _, c := range catalog {
-		if c.Provider == p && c.Model == base {
+		if c.Provider == p && normalizeWebChatModelName(c.Model) == base {
 			return c, nil
 		}
 	}

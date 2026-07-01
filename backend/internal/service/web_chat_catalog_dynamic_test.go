@@ -66,3 +66,26 @@ func TestResolveWebChatCatalog_SkipsInactiveAndUnconfigured(t *testing.T) {
 		t.Fatalf("expected empty catalog (inactive acct + no openai group), got %d", len(got))
 	}
 }
+
+func TestResolveWebChatCatalog_DatedKeyRoutingPreserved(t *testing.T) {
+	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 3}}
+	al := stubAccountLister{byGroup: map[int64][]Account{
+		3: {acctWithMapping("kiro", "claude-opus-4-5-20251101", "claude-opus-4-5-20251101-thinking")},
+	}}
+	got, err := resolveWebChatCatalog(context.Background(), gr, al)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 model, got %d: %+v", len(got), got)
+	}
+	// caps.Model must be the real mapping key the account recognizes (dated,
+	// non-thinking), NOT the normalized "claude-opus-4-5" — otherwise account
+	// selection (SupportsModelInMapping) fails with no-available-accounts.
+	if got[0].Model != "claude-opus-4-5-20251101" {
+		t.Fatalf("routing key not preserved: Model=%q want claude-opus-4-5-20251101", got[0].Model)
+	}
+	if !got[0].SupportsThinking {
+		t.Fatalf("claude family should support thinking")
+	}
+}

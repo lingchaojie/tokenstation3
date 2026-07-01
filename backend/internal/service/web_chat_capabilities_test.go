@@ -168,7 +168,7 @@ func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *test
 	require.Equal(t, "anthropic", caps.Provider)
 	require.Equal(t, PlatformAnthropic, caps.Platform)
 	require.Equal(t, APIKeyTypeAnthropic, caps.KeyType)
-	require.Equal(t, "claude-sonnet-4", caps.Model)
+	require.Equal(t, "claude-sonnet-4-20250514", caps.Model)
 	require.True(t, caps.SupportsText)
 
 	caps, err = svc.resolveWebChatSendCapability(context.Background(), "openai", "gpt-5.5")
