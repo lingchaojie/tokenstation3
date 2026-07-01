@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 import type { PaginatedResponse } from '@/types'
 
-const ADMIN_CHAT_API_BASE = '/chat'
+const CHAT_API_BASE = '/chat'
 
 export type WebChatPriceStatus = 'confirmed' | 'unverified'
 export type WebChatConversationStatus = 'active' | 'archived' | 'deleted'
@@ -296,7 +296,7 @@ function streamRequestInit(request: SendWebChatMessageRequest, token: string | n
 }
 
 export async function listChatModels(): Promise<WebChatModel[]> {
-  const { data } = await apiClient.get<WebChatModel[]>(`${ADMIN_CHAT_API_BASE}/models`)
+  const { data } = await apiClient.get<WebChatModel[]>(`${CHAT_API_BASE}/models`)
   return data ?? []
 }
 
@@ -304,21 +304,21 @@ export async function listChatConversations(
   page = 1,
   pageSize = 50
 ): Promise<PaginatedResponse<WebChatConversation>> {
-  const { data } = await apiClient.get<PaginatedResponse<WebChatConversation>>(`${ADMIN_CHAT_API_BASE}/conversations`, {
+  const { data } = await apiClient.get<PaginatedResponse<WebChatConversation>>(`${CHAT_API_BASE}/conversations`, {
     params: { page, page_size: pageSize },
   })
   return data
 }
 
 export async function getChatConversation(id: number): Promise<WebChatConversationDetail> {
-  const { data } = await apiClient.get<WebChatConversationDetail>(`${ADMIN_CHAT_API_BASE}/conversations/${id}`)
+  const { data } = await apiClient.get<WebChatConversationDetail>(`${CHAT_API_BASE}/conversations/${id}`)
   return data
 }
 
 export async function createChatConversation(
   request: CreateWebChatConversationRequest
 ): Promise<WebChatConversation> {
-  const { data } = await apiClient.post<WebChatConversation>(`${ADMIN_CHAT_API_BASE}/conversations`, request)
+  const { data } = await apiClient.post<WebChatConversation>(`${CHAT_API_BASE}/conversations`, request)
   return data
 }
 
@@ -326,25 +326,25 @@ export async function updateChatConversation(
   id: number,
   request: UpdateWebChatConversationRequest
 ): Promise<WebChatConversation> {
-  const { data } = await apiClient.patch<WebChatConversation>(`${ADMIN_CHAT_API_BASE}/conversations/${id}`, request)
+  const { data } = await apiClient.patch<WebChatConversation>(`${CHAT_API_BASE}/conversations/${id}`, request)
   return data
 }
 
 export async function deleteChatConversation(id: number): Promise<void> {
-  await apiClient.delete(`${ADMIN_CHAT_API_BASE}/conversations/${id}`)
+  await apiClient.delete(`${CHAT_API_BASE}/conversations/${id}`)
 }
 
 export async function uploadChatAttachment(file: File): Promise<WebChatAttachment> {
   const formData = new FormData()
   formData.append('file', file)
-  const { data } = await apiClient.post<WebChatAttachment>(`${ADMIN_CHAT_API_BASE}/attachments`, formData, {
+  const { data } = await apiClient.post<WebChatAttachment>(`${CHAT_API_BASE}/attachments`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return data
 }
 
 export async function cancelChatMessage(conversationId: number, messageId: number): Promise<void> {
-  await apiClient.post(`${ADMIN_CHAT_API_BASE}/conversations/${conversationId}/messages/${messageId}/cancel`)
+  await apiClient.post(`${CHAT_API_BASE}/conversations/${conversationId}/messages/${messageId}/cancel`)
 }
 
 export async function sendChatMessageStream(
@@ -352,7 +352,7 @@ export async function sendChatMessageStream(
   request: SendWebChatMessageRequest,
   signal?: AbortSignal
 ): Promise<WebChatStreamSendResult> {
-  const url = `${API_BASE_URL}${ADMIN_CHAT_API_BASE}/conversations/${conversationId}/messages`
+  const url = `${API_BASE_URL}${CHAT_API_BASE}/conversations/${conversationId}/messages`
   let response = await fetch(url, streamRequestInit(request, localStorage.getItem('auth_token'), signal))
 
   if (response.status === 401 && localStorage.getItem('refresh_token')) {
@@ -383,11 +383,11 @@ export async function sendChatMessageStream(
 }
 
 export function chatAttachmentDownloadUrl(id: number): string {
-  return chatDownloadUrl(`${ADMIN_CHAT_API_BASE}/attachments/${id}/download`)
+  return chatDownloadUrl(`${CHAT_API_BASE}/attachments/${id}/download`)
 }
 
 export function chatArtifactDownloadUrl(id: number): string {
-  return chatDownloadUrl(`${ADMIN_CHAT_API_BASE}/artifacts/${id}/download`)
+  return chatDownloadUrl(`${CHAT_API_BASE}/artifacts/${id}/download`)
 }
 
 async function downloadChatBlob(path: string, fallbackName: string): Promise<WebChatDownload> {
@@ -406,11 +406,11 @@ async function downloadChatBlob(path: string, fallbackName: string): Promise<Web
 }
 
 export async function downloadChatAttachment(id: number): Promise<WebChatDownload> {
-  return downloadChatBlob(`${ADMIN_CHAT_API_BASE}/attachments/${id}/download`, `chat-attachment-${id}`)
+  return downloadChatBlob(`${CHAT_API_BASE}/attachments/${id}/download`, `chat-attachment-${id}`)
 }
 
 export async function downloadChatArtifact(id: number): Promise<WebChatDownload> {
-  return downloadChatBlob(`${ADMIN_CHAT_API_BASE}/artifacts/${id}/download`, `chat-artifact-${id}`)
+  return downloadChatBlob(`${CHAT_API_BASE}/artifacts/${id}/download`, `chat-artifact-${id}`)
 }
 
 export const chatAPI = {

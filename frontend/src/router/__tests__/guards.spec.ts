@@ -201,7 +201,7 @@ describe('路由守卫逻辑', () => {
     })
 
     it('未认证用户访问 /chat 重定向到 /login', () => {
-      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: true }, authState)
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: false }, authState)
       expect(redirect).toBe('/login')
     })
   })
@@ -237,9 +237,9 @@ describe('路由守卫逻辑', () => {
       expect(redirect).toBe('/dashboard')
     })
 
-    it('普通用户访问 /chat 被拒绝，重定向到 /dashboard', () => {
-      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: true }, authState)
-      expect(redirect).toBe('/dashboard')
+    it('普通用户访问 /chat 允许通过', () => {
+      const redirect = simulateGuard('/chat', { requiresAuth: true, requiresAdmin: false }, authState)
+      expect(redirect).toBeNull()
     })
 
     it('访问管理页面被拒绝，重定向到 /dashboard', () => {
