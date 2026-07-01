@@ -37,7 +37,7 @@ func TestWebChatAdminRoutesRequireAdmin(t *testing.T) {
 	router := newWebChatAdminRoutesTestRouter(fake, 0)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/chat/conversations", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/chat/conversations", nil)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)
@@ -60,7 +60,7 @@ func TestWebChatCreateConversationUsesCurrentUser(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/admin/chat/conversations",
+		"/api/v1/chat/conversations",
 		strings.NewReader(`{"model":"claude-sonnet-4-20250514","provider":"anthropic","title":"work"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -84,7 +84,7 @@ func TestWebChatSendMessageBindsThinkingSettings(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/admin/chat/conversations/7/messages",
+		"/api/v1/chat/conversations/7/messages",
 		strings.NewReader(`{"model":"gpt-5.4","provider":"openai","content":"hello","stream":true,"thinking":{"enabled":true,"effort":"high"}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -108,7 +108,7 @@ func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/admin/chat/conversations/7/messages",
+		"/api/v1/chat/conversations/7/messages",
 		strings.NewReader(`{"model":"gpt-image-2","provider":"openai","content":"draw","stream":true,"image_generation":{"enabled":true,"size":"1536x1024","aspect_ratio":"3:2","quality":"high","output_format":"webp","background":"transparent"}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -136,7 +136,7 @@ func TestWebChatSendMessageBindsWebSearchSettings(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/admin/chat/conversations/7/messages",
+		"/api/v1/chat/conversations/7/messages",
 		strings.NewReader(`{"model":"gpt-5.5","provider":"openai","content":"latest news","stream":true,"web_search":{"enabled":true}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -177,7 +177,7 @@ func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin
 
 func newWebChatAdminRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
 	router := gin.New()
-	admin := router.Group("/api/v1/admin")
+	admin := router.Group("/api/v1")
 	admin.Use(func(c *gin.Context) {
 		if userID > 0 {
 			c.Set(string(servermiddleware.ContextKeyUser), servermiddleware.AuthSubject{UserID: userID})

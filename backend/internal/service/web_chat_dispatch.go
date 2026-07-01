@@ -142,7 +142,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	usageCtx = withWebChatStreamCapture(usageCtx, upstreamCapture)
 	postDispatchCtx := context.WithValue(context.WithoutCancel(ctx), ctxkey.ClientRequestID, usageClientID)
 	usageRequestID := "client:" + usageClientID
-	inboundEndpoint := fmt.Sprintf("/api/v1/admin/chat/conversations/%d/messages", input.ConversationID)
+	inboundEndpoint := fmt.Sprintf("/api/v1/chat/conversations/%d/messages", input.ConversationID)
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
 	usageRecorded := false
 	artifactCandidates := make([]WebChatArtifactCandidate, 0, 1)
