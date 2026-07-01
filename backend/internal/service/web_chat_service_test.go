@@ -290,7 +290,7 @@ func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
 		UserID:         42,
 		User:           user,
 		ConversationID: 7,
-		Model:          "text-only",
+		Model:          "claude-sonnet-4",
 		Provider:       "anthropic",
 		AttachmentIDs:  []int64{99},
 		GinContext:     newTestGinContext(context.Background()),
@@ -339,15 +339,14 @@ func TestWebChatSend_UsesInjectedUserResolver(t *testing.T) {
 	require.Same(t, resolvedUser, svc.billingUser)
 }
 
-func TestWebChatSend_RejectsMissingCapabilityResolver(t *testing.T) {
+func TestWebChatSend_RejectsModelNotInDynamicCatalog(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
-	svc.capabilityResolver = nil
 
 	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
-		Model:          "claude-sonnet-4",
+		Model:          "claude-opus-4-8",
 		Provider:       "anthropic",
 		Text:           "hello",
 		GinContext:     newTestGinContext(context.Background()),
@@ -412,13 +411,14 @@ func TestWebChatSend_UsesCreateMessageAttachmentsWithoutReattaching(t *testing.T
 	svc := newWebChatServiceWithStubs(t)
 	svc.repo.attachOnCreate = true
 	svc.repo.attachUploadedErr = errors.New("reattach called")
+	svc.availableGroups = []Group{{ID: 12, Platform: PlatformOpenAI, Status: StatusActive}}
 
 	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
-		Model:          "claude-sonnet-4",
-		Provider:       "anthropic",
+		Model:          "gpt-image-2",
+		Provider:       "openai",
 		Text:           "describe this",
 		AttachmentIDs:  []int64{99},
 		GinContext:     newTestGinContext(context.Background()),
@@ -515,7 +515,7 @@ func TestWebChatSend_ValidatesHistoricalContextBeforeBilling(t *testing.T) {
 		UserID:         42,
 		User:           &User{ID: 42, AllowedGroups: []int64{11}},
 		ConversationID: 7,
-		Model:          "text-only",
+		Model:          "claude-sonnet-4",
 		Provider:       "anthropic",
 		Text:           "continue",
 		GinContext:     newTestGinContext(context.Background()),
@@ -737,8 +737,13 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 	double.repo = repo
 	double.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
 	double.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI}, Acquired: true}
-	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	double.WebChatService = NewWebChatService(repo, storage, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	double.capabilityResolver = webChatCapabilityResolverStub{}
+	double.defaultGroups = stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 1, APIKeyTypeOpenAI: 2}}
+	double.accountLister = stubAccountLister{byGroup: map[int64][]Account{
+		1: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4")},
+		2: {acctWithMapping(PlatformOpenAI, "gpt-5.5", "gpt-image-2")},
+	}}
 	double.apiKeyService = &webChatAPIKeyServiceStub{double: double}
 	double.subscriptionService = &webChatSubscriptionServiceStub{double: double}
 	double.billingCacheService = &webChatBillingCacheServiceStub{double: double}
