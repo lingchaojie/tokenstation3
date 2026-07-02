@@ -4,11 +4,18 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { chatAPI } from '@/api/chat'
 import { getPublicModelCatalog } from '@/api/settings'
 import ModelCatalog from '../ModelCatalog.vue'
 
 vi.mock('@/api/settings', () => ({
   getPublicModelCatalog: vi.fn(),
+}))
+
+vi.mock('@/api/chat', () => ({
+  chatAPI: {
+    listModels: vi.fn(),
+  },
 }))
 
 const i18nMessages = vi.hoisted(() => ({
@@ -124,6 +131,31 @@ const catalogFixture = {
 }
 
 const mockedGetPublicModelCatalog = vi.mocked(getPublicModelCatalog)
+const mockedListChatModels = vi.mocked(chatAPI.listModels)
+
+function chatModelsForCatalog(models = catalogFixture.models) {
+  return models.map((model) => ({
+    provider: model.provider,
+    platform: model.provider,
+    key_type: model.provider,
+    model: model.model_name,
+    display_name: model.display_name,
+    supports_text: model.modalities.includes('text'),
+    supports_image_input: model.features.includes('vision input'),
+    supports_file_context: true,
+    supports_artifact_output: model.features.includes('image generation'),
+    supports_thinking: model.modalities.includes('text'),
+    thinking_efforts: model.modalities.includes('text') ? ['low', 'medium', 'high'] : [],
+    supports_web_search: false,
+    supports_image_generation: model.features.includes('image generation'),
+    image_generation_sizes: model.features.includes('image generation') ? ['1024x1024'] : [],
+    image_generation_aspect_ratios: model.features.includes('image generation') ? ['1:1'] : [],
+    image_generation_qualities: [],
+    image_generation_output_formats: [],
+    image_generation_backgrounds: [],
+    price_status: model.price_status,
+  }))
+}
 
 function mountCatalog() {
   return mount(ModelCatalog, {
@@ -156,6 +188,8 @@ function mountCatalog() {
 describe('ModelCatalog', () => {
   beforeEach(() => {
     mockedGetPublicModelCatalog.mockReset()
+    mockedListChatModels.mockReset()
+    mockedListChatModels.mockResolvedValue(chatModelsForCatalog())
   })
 
   it('renders confirmed and pending model cards', async () => {
@@ -181,6 +215,20 @@ describe('ModelCatalog', () => {
     expect(text).not.toContain('Confirmed prices')
     expect(text).not.toContain('Updated')
     expect(text).not.toContain('Source')
+  })
+
+  it('hides public catalog models that are not available from web chat models', async () => {
+    mockedGetPublicModelCatalog.mockResolvedValue(catalogFixture)
+    mockedListChatModels.mockResolvedValue(chatModelsForCatalog(catalogFixture.models.slice(0, 2)))
+
+    const wrapper = mountCatalog()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Claude Opus 4.8')
+    expect(wrapper.text()).toContain('GPT-Image-2')
+    expect(wrapper.text()).not.toContain('Alibaba Cloud')
+    expect(wrapper.text()).not.toContain('Qwen3.6 Plus')
+    expect(wrapper.find('[data-testid="model-catalog-provider-chip"][data-provider="qwen"]').exists()).toBe(false)
   })
 
   it('links each model card to chat with the selected provider and model', async () => {

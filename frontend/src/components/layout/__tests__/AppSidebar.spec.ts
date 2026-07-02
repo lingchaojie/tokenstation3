@@ -67,18 +67,17 @@ describe('AppSidebar admin personal dashboard navigation', () => {
 })
 
 describe('AppSidebar model marketplace navigation', () => {
-  it('keeps the model marketplace route inside the admin-only self navigation branch', () => {
-    expect(componentSource).toContain('if (authStore.isAdmin) {')
+  it('keeps the model marketplace route in self navigation for authenticated users', () => {
+    expect(componentSource).not.toContain('管理员灰度入口')
     expect(componentSource).toContain("path: '/dashboard/models'")
     expect(componentSource).toContain("t('nav.modelMarketplace')")
   })
 })
 
 describe('AppSidebar web chat navigation', () => {
-  it('keeps the chat route before the model marketplace route inside the admin-only branch', () => {
-    expect(componentSource).toContain('if (authStore.isAdmin) {')
+  it('keeps the model marketplace route before the chat route in self navigation', () => {
     expect(componentSource).toContain("path: '/chat'")
     expect(componentSource).toContain("t('nav.chat')")
-    expect(componentSource.indexOf("path: '/chat'")).toBeLessThan(componentSource.indexOf("path: '/dashboard/models'"))
+    expect(componentSource.indexOf("path: '/dashboard/models'")).toBeLessThan(componentSource.indexOf("path: '/chat'"))
   })
 })

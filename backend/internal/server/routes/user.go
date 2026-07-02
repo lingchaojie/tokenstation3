@@ -78,6 +78,12 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
+		// 认证用户可见的模型目录，用于模型广场和首页 Web Chat 模型预览。
+		settings := authenticated.Group("/settings")
+		{
+			settings.GET("/model-catalog", h.Setting.GetPublicModelCatalog)
+		}
+
 		// 使用记录
 		usage := authenticated.Group("/usage")
 		{

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 )
 
 type stubGroupResolver struct{ ids map[string]int64 }
@@ -26,6 +28,127 @@ func acctWithMapping(platform string, keys ...string) Account {
 		m[k] = k
 	}
 	return Account{Platform: platform, Status: StatusActive, Credentials: map[string]any{"model_mapping": m}}
+}
+
+type countingGroupResolver struct {
+	mu    sync.Mutex
+	ids   map[string]int64
+	calls int
+}
+
+func (s *countingGroupResolver) GetDefaultAPIKeyGroupID(_ context.Context, keyType string) (*int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if id, ok := s.ids[NormalizeAPIKeyType(keyType)]; ok {
+		return &id, nil
+	}
+	return nil, nil
+}
+
+func (s *countingGroupResolver) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+type countingAccountLister struct {
+	mu      sync.Mutex
+	byGroup map[int64][]Account
+	delay   time.Duration
+	calls   int
+}
+
+func (s *countingAccountLister) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	if s.delay > 0 {
+		timer := time.NewTimer(s.delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return s.byGroup[groupID], nil
+}
+
+func (s *countingAccountLister) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func TestWebChatServiceListModelsCachesDynamicCatalogWithinTTL(t *testing.T) {
+	groups := &countingGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 3, APIKeyTypeOpenAI: 6}}
+	accounts := &countingAccountLister{byGroup: map[int64][]Account{
+		3: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4")},
+		6: {acctWithMapping(PlatformOpenAI, "gpt-5.5")},
+	}}
+	svc := &WebChatService{defaultGroups: groups, accountLister: accounts}
+
+	first, err := svc.ListModels(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("first ListModels error: %v", err)
+	}
+	second, err := svc.ListModels(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("second ListModels error: %v", err)
+	}
+
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("expected two models from both calls, got %d and %d", len(first), len(second))
+	}
+	if got := groups.callCount(); got != 2 {
+		t.Fatalf("default group lookups=%d want 2 (one catalog build)", got)
+	}
+	if got := accounts.callCount(); got != 2 {
+		t.Fatalf("account group lookups=%d want 2 (one catalog build)", got)
+	}
+}
+
+func TestWebChatServiceListModelsSingleflightCoalescesConcurrentMiss(t *testing.T) {
+	groups := &countingGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 3, APIKeyTypeOpenAI: 6}}
+	accounts := &countingAccountLister{
+		byGroup: map[int64][]Account{
+			3: {acctWithMapping(PlatformAnthropic, "claude-sonnet-4")},
+			6: {acctWithMapping(PlatformOpenAI, "gpt-5.5")},
+		},
+		delay: 20 * time.Millisecond,
+	}
+	svc := &WebChatService{defaultGroups: groups, accountLister: accounts}
+
+	const requests = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, requests)
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			models, err := svc.ListModels(context.Background(), 42)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if len(models) != 2 {
+				errs <- context.Canceled
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("ListModels error: %v", err)
+	}
+
+	if got := groups.callCount(); got != 2 {
+		t.Fatalf("default group lookups=%d want 2 (one singleflight catalog build)", got)
+	}
+	if got := accounts.callCount(); got != 2 {
+		t.Fatalf("account group lookups=%d want 2 (one singleflight catalog build)", got)
+	}
 }
 
 func TestResolveWebChatCatalog_UnionAndProviderAndDedup(t *testing.T) {

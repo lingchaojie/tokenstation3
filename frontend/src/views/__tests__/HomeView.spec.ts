@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import HomeView from '../HomeView.vue'
 
-const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelCatalogMock, getPublicModelPricingMock, getPublicPlansMock } = vi.hoisted(() => ({
+const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicModelCatalogMock, getPublicModelPricingMock, getPublicPlansMock, getChatModelsMock } = vi.hoisted(() => ({
   appState: {
     cachedPublicSettings: null as null | {
       site_name?: string
@@ -28,6 +28,7 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicMo
   getPublicModelCatalogMock: vi.fn(),
   getPublicModelPricingMock: vi.fn(),
   getPublicPlansMock: vi.fn(),
+  getChatModelsMock: vi.fn(),
 }))
 
 vi.mock('@/stores', () => ({
@@ -74,6 +75,12 @@ vi.mock('@/api/settings', () => ({
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getPublicPlans: getPublicPlansMock,
+  },
+}))
+
+vi.mock('@/api/chat', () => ({
+  chatAPI: {
+    listModels: getChatModelsMock,
   },
 }))
 
@@ -156,6 +163,7 @@ const modelCatalogFixture = {
   providers: [
     { key: 'anthropic', name: 'Anthropic', accent_color: '#d97745', model_count: 2 },
     { key: 'openai', name: 'OpenAI', accent_color: '#27a644', model_count: 3 },
+    { key: 'gemini', name: 'Gemini', accent_color: '#4f8df5', model_count: 1 },
     { key: 'qwen', name: 'Alibaba Cloud', accent_color: '#7c6df2', model_count: 1 },
     { key: 'deepseek', name: 'DeepSeek', accent_color: '#4b6bfb', model_count: 1 },
   ],
@@ -247,6 +255,22 @@ const modelCatalogFixture = {
       updated_at: '2026-06-21',
     },
     {
+      provider: 'gemini',
+      provider_name: 'Gemini',
+      model_name: 'gemini-3.5-flash',
+      display_name: 'Gemini 3.5 Flash',
+      modalities: ['text'],
+      description: 'Gemini model retained in the public reference catalog.',
+      context_window: 1048576,
+      features: ['tool use', 'prompt caching'],
+      pricing: { currency: 'USD', unit: '1M tokens', input_per_million: 1.5, output_per_million: 9, cache_read_per_million: 0.15 },
+      price_status: 'confirmed',
+      released_at: '2026-06-21',
+      release_status: 'unverified',
+      source_url: 'https://ai.google.dev/gemini-api/docs/pricing',
+      updated_at: '2026-06-21',
+    },
+    {
       provider: 'qwen',
       provider_name: 'Alibaba Cloud',
       model_name: 'qwen3.6-plus',
@@ -280,6 +304,38 @@ const modelCatalogFixture = {
     },
   ],
 }
+
+function webChatModel(provider: string, model: string, displayName: string) {
+  return {
+    provider,
+    platform: provider,
+    key_type: provider,
+    model,
+    display_name: displayName,
+    supports_text: true,
+    supports_image_input: true,
+    supports_file_context: true,
+    supports_artifact_output: true,
+    supports_thinking: true,
+    thinking_efforts: ['low', 'medium', 'high'],
+    supports_web_search: provider !== 'gemini',
+    supports_image_generation: model.includes('image'),
+    image_generation_sizes: model.includes('image') ? ['1024x1024', '1536x1024'] : [],
+    image_generation_aspect_ratios: model.includes('image') ? ['1:1', '3:2'] : [],
+    image_generation_qualities: model.includes('image') ? ['low', 'medium', 'high'] : [],
+    image_generation_output_formats: model.includes('image') ? ['png', 'webp'] : [],
+    image_generation_backgrounds: model.includes('image') ? ['opaque', 'auto'] : [],
+    price_status: 'confirmed',
+  }
+}
+
+const webChatModelsFixture = [
+  webChatModel('anthropic', 'claude-opus-4-8', 'Claude Opus 4.8'),
+  webChatModel('anthropic', 'claude-sonnet-4-6', 'Claude Sonnet 4.6'),
+  webChatModel('openai', 'gpt-5.5', 'GPT-5.5'),
+  webChatModel('openai', 'gpt-5.4-mini', 'GPT-5.4 Mini'),
+  webChatModel('openai', 'gpt-image-2', 'GPT-Image-2'),
+]
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -333,10 +389,12 @@ describe('HomeView landing page', () => {
     getPublicModelCatalogMock.mockReset()
     getPublicModelPricingMock.mockReset()
     getPublicPlansMock.mockReset()
+    getChatModelsMock.mockReset()
     fetchPublicSettingsMock.mockResolvedValue({})
     getPublicModelCatalogMock.mockResolvedValue(modelCatalogFixture)
     getPublicModelPricingMock.mockResolvedValue(modelPricingFixture)
     getPublicPlansMock.mockResolvedValue([])
+    getChatModelsMock.mockResolvedValue(webChatModelsFixture)
     document.documentElement.classList.remove('dark')
     localStorage.clear()
 
@@ -650,7 +708,7 @@ describe('HomeView landing page', () => {
     expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
   })
 
-  it('hides model-branch chat and marketplace entries from regular users', async () => {
+  it('shows model-branch chat and marketplace entries to regular users', async () => {
     authState.isAuthenticated = true
     authState.isAdmin = false
     authState.user = { email: 'user@example.com' }
@@ -659,11 +717,11 @@ describe('HomeView landing page', () => {
     await flushPromises()
 
     const header = wrapper.get('[data-testid="homepage-header-actions"]')
-    expect(header.text()).not.toContain('对话')
-    expect(header.text()).not.toContain('模型广场')
-    expect(wrapper.find('header a[href="/chat"]').exists()).toBe(false)
-    expect(wrapper.find('header a[href="/models"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(false)
+    expect(header.text()).toContain('对话')
+    expect(header.text()).toContain('模型广场')
+    expect(wrapper.get('header a[href="/chat"]').text()).toContain('对话')
+    expect(wrapper.get('header a[href="/models"]').text()).toContain('模型广场')
+    expect(wrapper.find('[data-testid="homepage-chat-entry"]').exists()).toBe(true)
   })
 
   it('shows model-branch chat and marketplace entries to admins', async () => {
@@ -690,15 +748,16 @@ describe('HomeView landing page', () => {
     expect(chatEntry.text()).toContain('新对话')
   })
 
-  it('renders the new homepage model catalog preview for admins only', async () => {
+  it('renders the authenticated homepage model catalog from dynamically available web chat models', async () => {
     authState.isAuthenticated = true
-    authState.isAdmin = true
-    authState.user = { email: 'admin@example.com' }
+    authState.isAdmin = false
+    authState.user = { email: 'user@example.com' }
 
     const wrapper = mountHome()
     await flushPromises()
 
     expect(getPublicModelCatalogMock).toHaveBeenCalledTimes(1)
+    expect(getChatModelsMock).toHaveBeenCalledTimes(1)
     expect(getPublicModelPricingMock).not.toHaveBeenCalled()
     const modelPricingSection = wrapper.get('section#model-pricing')
     expect(modelPricingSection.text()).toContain('真实模型目录，直接发起对话')
@@ -706,17 +765,14 @@ describe('HomeView landing page', () => {
     expect(modelPricingSection.find('[data-testid="homepage-model-pricing-table"]').exists()).toBe(false)
 
     const modelCards = wrapper.findAll('[data-testid="homepage-model-catalog-card"]')
-    expect(modelCards).toHaveLength(6)
+    expect(modelCards).toHaveLength(webChatModelsFixture.length)
     expect(modelCards[0].text()).toContain('Claude Opus 4.8')
     expect(modelCards[4].text()).toContain('立即对话')
     expect(modelCards[4].find('a[href="/chat?provider=openai&model=gpt-image-2"]').exists()).toBe(true)
-    const toggle = wrapper.get('[data-testid="homepage-model-catalog-toggle"]')
-    expect(toggle.text()).toContain('展开更多模型')
-    await toggle.trigger('click')
-    await flushPromises()
-    expect(wrapper.findAll('[data-testid="homepage-model-catalog-card"]')).toHaveLength(modelCatalogFixture.models.length)
-    expect(wrapper.text()).toContain('DeepSeek V3.2')
-    expect(toggle.text()).toContain('收起模型')
+    expect(modelPricingSection.text()).not.toContain('Gemini 3.5 Flash')
+    expect(modelPricingSection.text()).not.toContain('Qwen3.6 Plus')
+    expect(modelPricingSection.text()).not.toContain('DeepSeek V3.2')
+    expect(wrapper.find('[data-testid="homepage-model-catalog-toggle"]').exists()).toBe(false)
   })
 
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {

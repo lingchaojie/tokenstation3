@@ -54,16 +54,22 @@ describe('useModelWhitelist', () => {
 
   it('Kiro 模型列表和默认映射包含上游 Opus 4.8', async () => {
     vi.mocked(getKiroDefaultModelMapping).mockResolvedValueOnce({
+      'claude-sonnet-5': 'claude-sonnet-5',
+      'claude-sonnet-5-thinking': 'claude-sonnet-5',
       'claude-opus-4-8': 'claude-opus-4.8',
       'claude-opus-4-8-thinking': 'claude-opus-4.8',
     })
 
     const models = getModelsByPlatform('kiro')
+    expect(models).toContain('claude-sonnet-5')
+    expect(models).toContain('claude-sonnet-5-thinking')
     expect(models).toContain('claude-opus-4-8')
     expect(models).toContain('claude-opus-4-8-thinking')
 
     expect(getPresetMappingsByPlatform('kiro')).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5' }),
+        expect.objectContaining({ label: 'Sonnet 5 Thinking', from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5' }),
         expect.objectContaining({ label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4.8' }),
         expect.objectContaining({ label: 'Opus 4.8 Thinking', from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' }),
       ])
@@ -71,6 +77,8 @@ describe('useModelWhitelist', () => {
 
     await expect(fetchKiroDefaultMappings()).resolves.toEqual(
       expect.arrayContaining([
+        { from: 'claude-sonnet-5', to: 'claude-sonnet-5' },
+        { from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5' },
         { from: 'claude-opus-4-8', to: 'claude-opus-4.8' },
         { from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' },
       ])

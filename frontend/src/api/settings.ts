@@ -71,6 +71,6 @@ export interface PublicModelCatalogResponse {
 }
 
 export async function getPublicModelCatalog(): Promise<PublicModelCatalogResponse> {
-  const { data } = await apiClient.get<PublicModelCatalogResponse>('/admin/settings/model-catalog')
+  const { data } = await apiClient.get<PublicModelCatalogResponse>('/settings/model-catalog')
   return data
 }
