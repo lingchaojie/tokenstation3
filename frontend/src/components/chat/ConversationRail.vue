@@ -138,7 +138,7 @@ import type { WebChatConversation } from '@/api/chat'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { providerIconModel } from '@/utils/modelCatalog'
+import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
 const query = ref('')
@@ -181,7 +181,7 @@ const groupedConversations = computed(() => {
       groups.set(model, {
         model,
         provider,
-        label: modelConfig?.display_name || model,
+        label: modelConfig?.display_name || displayModelName(model) || model,
         conversations: [conversation],
       })
     }

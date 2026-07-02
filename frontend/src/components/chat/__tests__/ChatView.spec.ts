@@ -84,9 +84,9 @@ const imageModel: WebChatModel = {
   supports_image_generation: true,
   image_generation_sizes: ['1024x1024', '1536x1024'],
   image_generation_aspect_ratios: ['1:1', '3:2'],
-  image_generation_qualities: ['medium', 'high'],
+  image_generation_qualities: ['low', 'medium', 'high'],
   image_generation_output_formats: ['png', 'webp'],
-  image_generation_backgrounds: ['opaque', 'transparent'],
+  image_generation_backgrounds: ['opaque', 'auto'],
   price_status: 'confirmed',
 }
 
@@ -231,6 +231,8 @@ describe('Composer', () => {
     const options = menu.findAll('[data-testid="chat-provider-option"]')
     expect(options).toHaveLength(2)
     expect(options.map((option) => option.findComponent(ModelIcon).props('model'))).toEqual(['claude', 'gpt-5'])
+    expect(options.map((option) => option.text())).toEqual(['Anthropic', 'OpenAI'])
+    expect(menu.get('[data-testid="chat-provider-options"]').classes()).not.toContain('absolute')
 
     await options[0].trigger('click')
 
@@ -238,6 +240,62 @@ describe('Composer', () => {
       provider: 'anthropic',
       model: 'claude-opus-4-8',
     })
+  })
+
+  it('shows provider labels in title case without changing selected routing values', async () => {
+    const store = useChatStore()
+    store.models = [chatModel]
+    store.selectedModel = chatModel
+
+    const wrapper = mount(Composer)
+
+    await wrapper.get('[data-testid="chat-model-menu-toggle"]').trigger('click')
+
+    const menu = wrapper.get('[data-testid="chat-model-menu"]')
+    expect(menu.get('[data-testid="chat-provider-trigger"]').text()).toContain('OpenAI')
+    expect(store.selectedModel).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.4',
+    })
+  })
+
+  it('formats model fallback labels without changing selected routing values', async () => {
+    const rawModel: WebChatModel = {
+      ...chatModel,
+      model: 'gpt-5.4',
+      display_name: '',
+    }
+    const store = useChatStore()
+    store.models = [rawModel]
+    store.selectedModel = rawModel
+
+    const wrapper = mount(Composer)
+
+    expect(wrapper.get('[data-testid="chat-model-menu-toggle"]').text()).toContain('GPT-5.4')
+
+    await wrapper.get('[data-testid="chat-model-menu-toggle"]').trigger('click')
+
+    const option = wrapper.get('[data-testid="chat-model-select"] option')
+    expect(option.text()).toBe('GPT-5.4')
+    expect(store.selectedModel).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.4',
+    })
+  })
+
+  it('omits secondary status text for thinking and web search toggles', async () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+
+    const wrapper = mount(Composer)
+
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="chat-thinking-toggle"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-web-search-toggle"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('关闭')
+    expect(wrapper.text()).not.toContain('强制搜索')
+    expect(wrapper.text()).not.toContain('使用该模型最高思考档位')
   })
 })
 
@@ -364,6 +422,9 @@ describe('ModelSelector', () => {
 
     const toggle = wrapper.get('[data-testid="chat-image-generation-toggle"]')
     expect(toggle.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="chat-thinking-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="chat-web-search-toggle"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="chat-image-generation-background"] option').map((option) => option.text())).toEqual(['Opaque', 'Auto'])
 
     await toggle.trigger('click')
     expect(store.imageGenerationEnabled).toBe(false)
@@ -374,14 +435,13 @@ describe('ModelSelector', () => {
     await wrapper.get('[data-testid="chat-image-generation-aspect-ratio"]').setValue('3:2')
     await wrapper.get('[data-testid="chat-image-generation-quality"]').setValue('high')
     await wrapper.get('[data-testid="chat-image-generation-output-format"]').setValue('webp')
-    await wrapper.get('[data-testid="chat-image-generation-background"]').setValue('transparent')
 
     expect(store.imageGenerationEnabled).toBe(true)
     expect(store.imageGenerationSize).toBe('1536x1024')
     expect(store.imageGenerationAspectRatio).toBe('3:2')
     expect(store.imageGenerationQuality).toBe('high')
     expect(store.imageGenerationOutputFormat).toBe('webp')
-    expect(store.imageGenerationBackground).toBe('transparent')
+    expect(store.imageGenerationBackground).toBe('opaque')
   })
 
   it('does not render an Artifacts capability control in the model header', () => {

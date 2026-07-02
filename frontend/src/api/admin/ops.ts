@@ -1100,6 +1100,9 @@ export type OpsErrorListQueryParams = {
   phase?: string
   error_owner?: string
   error_source?: string
+  error_type?: string
+  request_error_type?: string
+  upstream_error_kind?: string
   resolved?: string
   view?: OpsErrorListView
 

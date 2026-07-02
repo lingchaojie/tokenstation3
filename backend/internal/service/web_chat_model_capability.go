@@ -52,6 +52,9 @@ func resolveWebChatModelFamily(model string) webChatModelFamily {
 // modality/image fields are still derived from the catalog by the caller.
 func ResolveWebChatModelCapability(provider, model string) WebChatModelCapability {
 	caps := WebChatModelCapability{Provider: strings.ToLower(strings.TrimSpace(provider)), Model: model}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-") {
+		return caps
+	}
 	switch resolveWebChatModelFamily(model) {
 	case webChatFamilyClaude:
 		caps.SupportsThinking = true

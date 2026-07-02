@@ -911,22 +911,38 @@ func escapeLikePattern(s string) string {
 	return likePatternReplacer.Replace(s)
 }
 
+func opsRequestErrorTypePhaseOwner(errorType string) (string, string, bool) {
+	switch strings.TrimSpace(strings.ToLower(errorType)) {
+	case "upstream":
+		return "upstream", "provider", true
+	case "request":
+		return "request", "client", true
+	case "auth":
+		return "auth", "client", true
+	case "routing":
+		return "routing", "platform", true
+	case "internal":
+		return "internal", "platform", true
+	default:
+		return "", "", false
+	}
+}
+
 func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
+	if filter == nil {
+		filter = &service.OpsErrorLogFilter{}
+	}
 	clauses := make([]string, 0, 12)
 	args := make([]any, 0, 12)
 	clauses = append(clauses, "1=1")
 
 	phaseFilter := ""
-	if filter != nil {
-		phaseFilter = strings.TrimSpace(strings.ToLower(filter.Phase))
-	}
+	phaseFilter = strings.TrimSpace(strings.ToLower(filter.Phase))
 	// ops_error_logs stores client-visible error requests (status>=400),
 	// but we also persist "recovered" upstream errors (status<400) for upstream health visibility.
 	// If Resolved is not specified, do not filter by resolved state (backward-compatible).
 	resolvedFilter := (*bool)(nil)
-	if filter != nil {
-		resolvedFilter = filter.Resolved
-	}
+	resolvedFilter = filter.Resolved
 	// Keep list endpoints scoped to client errors unless explicitly filtering upstream phase.
 	// cyber_policy is exempt from the status >= 400 guard: streaming cyber hits arrive with
 	// status 200 (the SSE stream opened successfully before upstream returned response.failed),
@@ -957,19 +973,40 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 		args = append(args, *filter.AccountID)
 		clauses = append(clauses, "e.account_id = $"+itoa(len(args)))
 	}
-	if phase := phaseFilter; phase != "" {
+	if phase, owner, ok := opsRequestErrorTypePhaseOwner(filter.RequestErrorType); ok {
+		args = append(args, phase)
+		clauses = append(clauses, "e.error_phase = $"+itoa(len(args)))
+		args = append(args, owner)
+		clauses = append(clauses, "LOWER(COALESCE(e.error_owner,'')) = $"+itoa(len(args)))
+	} else if phase := phaseFilter; phase != "" {
 		args = append(args, phase)
 		clauses = append(clauses, "e.error_phase = $"+itoa(len(args)))
 	}
-	if filter != nil {
-		if owner := strings.TrimSpace(strings.ToLower(filter.Owner)); owner != "" {
-			args = append(args, owner)
-			clauses = append(clauses, "LOWER(COALESCE(e.error_owner,'')) = $"+itoa(len(args)))
-		}
-		if source := strings.TrimSpace(strings.ToLower(filter.Source)); source != "" {
-			args = append(args, source)
-			clauses = append(clauses, "LOWER(COALESCE(e.error_source,'')) = $"+itoa(len(args)))
-		}
+	if owner := strings.TrimSpace(strings.ToLower(filter.Owner)); owner != "" {
+		args = append(args, owner)
+		clauses = append(clauses, "LOWER(COALESCE(e.error_owner,'')) = $"+itoa(len(args)))
+	}
+	if source := strings.TrimSpace(strings.ToLower(filter.Source)); source != "" {
+		args = append(args, source)
+		clauses = append(clauses, "LOWER(COALESCE(e.error_source,'')) = $"+itoa(len(args)))
+	}
+	if errorType := strings.TrimSpace(strings.ToLower(filter.ErrorType)); errorType != "" {
+		args = append(args, errorType)
+		clauses = append(clauses, "LOWER(COALESCE(e.error_type,'')) = $"+itoa(len(args)))
+	}
+	if kind := strings.TrimSpace(strings.ToLower(filter.UpstreamErrorKind)); kind != "" {
+		args = append(args, kind)
+		clauses = append(clauses, `EXISTS (
+				SELECT 1
+				FROM jsonb_array_elements(COALESCE(NULLIF(e.upstream_errors, 'null'::jsonb), '[]'::jsonb)) AS upstream_error_event(item)
+				WHERE LOWER(COALESCE(
+					upstream_error_event.item->>'kind',
+					upstream_error_event.item->>'type',
+					upstream_error_event.item->>'code',
+					upstream_error_event.item->>'provider_error_type',
+					''
+				)) = $`+itoa(len(args))+`
+			)`)
 	}
 	if resolvedFilter != nil {
 		args = append(args, *resolvedFilter)
@@ -980,9 +1017,7 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	// Excluded = business-limited errors (quota/concurrency/billing).
 	// Upstream 429/529 are included in errors view to match SLA calculation.
 	view := ""
-	if filter != nil {
-		view = strings.ToLower(strings.TrimSpace(filter.View))
-	}
+	view = strings.ToLower(strings.TrimSpace(filter.View))
 	switch view {
 	case "", "errors":
 		clauses = append(clauses, "COALESCE(e.is_business_limited,false) = false")

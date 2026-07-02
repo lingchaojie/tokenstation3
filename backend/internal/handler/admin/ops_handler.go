@@ -68,6 +68,17 @@ func parseOpsViewParam(c *gin.Context) string {
 	}
 }
 
+func applyOpsErrorClassificationFilters(c *gin.Context, filter *service.OpsErrorLogFilter, includeRequestErrorType bool) {
+	if c == nil || filter == nil {
+		return
+	}
+	filter.ErrorType = strings.TrimSpace(c.Query("error_type"))
+	if includeRequestErrorType {
+		filter.RequestErrorType = strings.TrimSpace(c.Query("request_error_type"))
+	}
+	filter.UpstreamErrorKind = strings.TrimSpace(c.Query("upstream_error_kind"))
+}
+
 func NewOpsHandler(opsService *service.OpsService) *OpsHandler {
 	return &OpsHandler{opsService: opsService}
 }
@@ -108,6 +119,7 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 	filter.Phase = strings.TrimSpace(c.Query("phase"))
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	applyOpsErrorClassificationFilters(c, filter, true)
 	filter.Query = strings.TrimSpace(c.Query("q"))
 	filter.UserQuery = strings.TrimSpace(c.Query("user_query"))
 	// Model 过滤：admin 走精确匹配（ModelFuzzy 默认 false，保持管理端语义）。
@@ -228,6 +240,7 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 	filter.Phase = strings.TrimSpace(c.Query("phase"))
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	applyOpsErrorClassificationFilters(c, filter, true)
 	filter.Query = strings.TrimSpace(c.Query("q"))
 	filter.UserQuery = strings.TrimSpace(c.Query("user_query"))
 	// Model 过滤：admin 走精确匹配（ModelFuzzy 默认 false，保持管理端语义）。
@@ -364,6 +377,7 @@ func (h *OpsHandler) ListRequestErrorUpstreamErrors(c *gin.Context) {
 	filter.Phase = "upstream"
 	filter.Owner = "provider"
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	applyOpsErrorClassificationFilters(c, filter, false)
 	filter.Query = strings.TrimSpace(c.Query("q"))
 
 	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {
@@ -444,6 +458,7 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 	filter.Phase = "upstream"
 	filter.Owner = "provider"
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	applyOpsErrorClassificationFilters(c, filter, false)
 	filter.Query = strings.TrimSpace(c.Query("q"))
 
 	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {

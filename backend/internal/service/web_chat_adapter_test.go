@@ -107,9 +107,9 @@ func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t
 		SupportsImageGeneration:      true,
 		ImageGenerationSizes:         []string{"1024x1024", "1536x1024"},
 		ImageGenerationAspectRatios:  []string{"1:1", "3:2"},
-		ImageGenerationQualities:     []string{"medium", "high"},
+		ImageGenerationQualities:     []string{"low", "medium", "high"},
 		ImageGenerationOutputFormats: []string{"png", "webp"},
-		ImageGenerationBackgrounds:   []string{"opaque", "transparent"},
+		ImageGenerationBackgrounds:   []string{"opaque", "auto"},
 	}, messages, true, WebChatCompletionsPayloadOptions{
 		ImageGeneration: WebChatImageGenerationConfig{
 			Enabled:      true,
@@ -117,7 +117,7 @@ func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t
 			AspectRatio:  "3:2",
 			Quality:      "high",
 			OutputFormat: "webp",
-			Background:   "transparent",
+			Background:   "auto",
 		},
 	})
 
@@ -132,7 +132,7 @@ func TestBuildWebChatCompletionsPayload_IncludesImageGenerationToolWhenEnabled(t
 			"size":"1536x1024",
 			"quality":"high",
 			"output_format":"webp",
-			"background":"transparent"
+			"background":"auto"
 		}],
 		"messages":[{"role":"user","content":"Generate a wide hero image"}]
 	}`, string(payload))

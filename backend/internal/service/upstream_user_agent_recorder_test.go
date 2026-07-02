@@ -72,7 +72,8 @@ func TestOpenAIGatewayServiceBuildOpenAIWSHeadersRecordsFinalFallbackUserAgent(t
 	svc := &OpenAIGatewayService{upstreamUARepo: repo}
 	account := &Account{ID: 88, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
-	headers, _ := svc.buildOpenAIWSHeaders(
+	headers, _, _ := svc.buildOpenAIWSHeaders(
+		context.Background(),
 		c,
 		account,
 		"token",

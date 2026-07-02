@@ -13,9 +13,9 @@ export type WebChatArtifactSource = 'model_output' | 'image_output' | 'generated
 export type WebChatThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type WebChatImageGenerationSize = '1024x1024' | '1536x1024' | '1024x1536' | '1K' | '2K' | '4K'
 export type WebChatImageGenerationAspectRatio = '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-export type WebChatImageGenerationQuality = 'medium' | 'high'
+export type WebChatImageGenerationQuality = 'low' | 'medium' | 'high'
 export type WebChatImageGenerationOutputFormat = 'png' | 'jpeg' | 'webp'
-export type WebChatImageGenerationBackground = 'opaque' | 'transparent'
+export type WebChatImageGenerationBackground = 'opaque' | 'auto'
 
 export interface WebChatThinkingConfig {
   enabled: boolean

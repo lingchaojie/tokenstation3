@@ -125,6 +125,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 		"'openai'",
 		"'gemini'",
 		"'antigravity'",
+		"'grok'",
 		"'kiro'",
 	)
 

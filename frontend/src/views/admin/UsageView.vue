@@ -122,6 +122,23 @@
         <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
       </div>
       <div v-show="activeTab === 'errors'">
+        <div class="mb-3 flex flex-wrap items-end gap-3 rounded-md border border-gray-200 bg-gray-50/60 p-3 dark:border-dark-700 dark:bg-dark-800/40">
+          <div class="w-52 min-w-[13rem]">
+            <label class="input-label">{{ t('usage.errors.errorType') }}</label>
+            <Select v-model="errErrorType" :options="errErrorTypeOptions" @change="onErrFilterChange" />
+          </div>
+          <div class="w-52 min-w-[13rem]">
+            <label class="input-label">{{ t('usage.errors.requestErrorType') }}</label>
+            <Select v-model="errRequestErrorType" :options="errRequestErrorTypeOptions" @change="onErrFilterChange" />
+          </div>
+          <div class="w-52 min-w-[13rem]">
+            <label class="input-label">{{ t('usage.errors.upstreamEventType') }}</label>
+            <Select v-model="errUpstreamErrorKind" :options="errUpstreamErrorKindOptions" @change="onErrFilterChange" />
+          </div>
+          <button type="button" class="btn btn-secondary h-10 px-3" @click="resetErrFilters">
+            {{ t('common.reset') }}
+          </button>
+        </div>
         <OpsErrorLogTable
           :rows="errRows" :total="errTotal" :loading="errLoading"
           :page="errPage" :page-size="errPageSize"
@@ -476,6 +493,7 @@ const resetFilters = () => {
   endDate.value = range.end
   filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
+  resetErrFilterValues()
   applyFilters()
 }
 const handlePageChange = (p: number) => { pagination.page = p; loadLogs() }
@@ -631,8 +649,59 @@ const errLoading = ref(false)
 const errPage = ref(1)
 const errPageSize = ref(20)
 const errTotal = ref(0)
+const errErrorType = ref('')
+const errRequestErrorType = ref('')
+const errUpstreamErrorKind = ref('')
 const showErrorModal = ref(false)
 const selectedErrorId = ref<number | null>(null)
+
+const errErrorTypeOptions = computed(() => [
+  { value: '', label: t('common.all') },
+  { value: 'rate_limit_error', label: 'rate_limit_error' },
+  { value: 'upstream_error', label: 'upstream_error' },
+  { value: 'api_error', label: 'api_error' },
+  { value: 'authentication_error', label: 'authentication_error' },
+  { value: 'invalid_request_error', label: 'invalid_request_error' },
+  { value: 'billing_error', label: 'billing_error' },
+  { value: 'subscription_error', label: 'subscription_error' },
+  { value: 'overloaded_error', label: 'overloaded_error' },
+  { value: 'forbidden_error', label: 'forbidden_error' },
+  { value: 'not_found_error', label: 'not_found_error' },
+  { value: 'cyber_policy', label: 'cyber_policy' },
+])
+
+const errRequestErrorTypeOptions = computed(() => [
+  { value: '', label: t('common.all') },
+  { value: 'upstream', label: t('admin.ops.errorLog.typeUpstream') },
+  { value: 'request', label: t('admin.ops.errorLog.typeRequest') },
+  { value: 'auth', label: t('admin.ops.errorLog.typeAuth') },
+  { value: 'routing', label: t('admin.ops.errorLog.typeRouting') },
+  { value: 'internal', label: t('admin.ops.errorLog.typeInternal') },
+])
+
+const errUpstreamErrorKindOptions = computed(() => [
+  { value: '', label: t('common.all') },
+  { value: 'failover', label: 'failover' },
+  { value: 'upstream_error_event', label: 'upstream_error_event' },
+])
+
+const resetErrFilterValues = () => {
+  errErrorType.value = ''
+  errRequestErrorType.value = ''
+  errUpstreamErrorKind.value = ''
+}
+
+const onErrFilterChange = () => {
+  errPage.value = 1
+  if (activeTab.value === 'errors') {
+    loadAdminErrors()
+  }
+}
+
+const resetErrFilters = () => {
+  resetErrFilterValues()
+  onErrFilterChange()
+}
 
 // 注意：'YYYY-MM-DDT00:00:00' 无时区后缀，按本地时区解析后再转 UTC——与页面其它日期处理语义一致，刻意如此，勿改成 'T00:00:00Z'
 const toRFC3339 = (d: string | undefined, endOfDay = false): string | undefined =>
@@ -652,6 +721,9 @@ const loadAdminErrors = async () => {
       account_id: filters.value.account_id ?? undefined,
       group_id: filters.value.group_id ?? undefined,
       model: filters.value.model || undefined,
+      error_type: errErrorType.value || undefined,
+      request_error_type: errRequestErrorType.value || undefined,
+      upstream_error_kind: errUpstreamErrorKind.value || undefined,
     })
     errRows.value = resp.items
     errTotal.value = resp.total

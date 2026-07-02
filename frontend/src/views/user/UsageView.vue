@@ -133,6 +133,31 @@
               <button @click="resetFilters" class="btn btn-secondary">
                 {{ t('common.reset') }}
               </button>
+              <div class="relative" ref="columnDropdownRef">
+                <button
+                  @click="showColumnDropdown = !showColumnDropdown"
+                  class="btn btn-secondary px-2 md:px-3"
+                  :title="t('admin.users.columnSettings')"
+                >
+                  <Icon name="menu" size="sm" class="md:mr-1.5" />
+                  <span class="hidden md:inline">{{ t('admin.users.columnSettings') }}</span>
+                </button>
+                <div
+                  v-if="showColumnDropdown"
+                  class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                >
+                  <button
+                    v-for="col in toggleableColumns"
+                    :key="col.key"
+                    type="button"
+                    @click="toggleColumn(col.key)"
+                    class="flex w-full items-center justify-between px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                  >
+                    <span>{{ col.label }}</span>
+                    <Icon v-if="isColumnVisible(col.key)" name="check" size="sm" class="text-primary-500" />
+                  </button>
+                </div>
+              </div>
               <button @click="exportToCSV" :disabled="exporting" class="btn btn-primary">
                 <svg
                   v-if="exporting"
@@ -178,7 +203,7 @@
              虚拟化器测高 race 导致的概率空白,已在 DataTable 内用「就绪门控 + initialRect 兜底」根治。 -->
         <div v-show="activeTab === 'usage'" class="flex min-h-0 flex-1 flex-col">
           <DataTable
-          :columns="columns"
+          :columns="visibleColumns"
           :data="usageLogs"
           :loading="loading"
           :server-side-sort="true"
@@ -604,7 +629,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { usageAPI, keysAPI } from '@/api'
@@ -676,6 +701,10 @@ const cacheStats = computed(() => {
   return { cacheRead, totalInput, ratePercent }
 })
 
+const ALWAYS_VISIBLE = ['created_at']
+const DEFAULT_HIDDEN_COLUMNS = ['user_agent']
+const HIDDEN_COLUMNS_KEY = 'user-usage-hidden-columns'
+
 const columns = computed<Column[]>(() => [
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
@@ -691,6 +720,31 @@ const columns = computed<Column[]>(() => [
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false }
 ])
+
+const hiddenColumns = reactive<Set<string>>(new Set())
+const toggleableColumns = computed(() => columns.value.filter((col) => !ALWAYS_VISIBLE.includes(col.key)))
+const visibleColumns = computed(() =>
+  columns.value.filter((col) => ALWAYS_VISIBLE.includes(col.key) || !hiddenColumns.has(col.key))
+)
+const isColumnVisible = (key: string) => !hiddenColumns.has(key)
+const toggleColumn = (key: string) => {
+  if (hiddenColumns.has(key)) hiddenColumns.delete(key)
+  else hiddenColumns.add(key)
+  try {
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+  } catch (error) {
+    console.error('Failed to save usage columns:', error)
+  }
+}
+const loadSavedColumns = () => {
+  try {
+    const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
+    const values = saved ? JSON.parse(saved) as string[] : DEFAULT_HIDDEN_COLUMNS
+    values.forEach((key) => hiddenColumns.add(key))
+  } catch {
+    DEFAULT_HIDDEN_COLUMNS.forEach((key) => hiddenColumns.add(key))
+  }
+}
 
 const usageLogs = ref<UsageLog[]>([])
 const apiKeys = ref<ApiKey[]>([])
@@ -1110,9 +1164,23 @@ const switchToErrors = () => {
   if (errorRows.value.length === 0) loadErrors()
 }
 
+const showColumnDropdown = ref(false)
+const columnDropdownRef = ref<HTMLElement | null>(null)
+const handleColumnClickOutside = (event: MouseEvent) => {
+  if (columnDropdownRef.value && !columnDropdownRef.value.contains(event.target as HTMLElement)) {
+    showColumnDropdown.value = false
+  }
+}
+
 onMounted(() => {
+  loadSavedColumns()
   loadApiKeys()
   loadUsageLogs()
   loadUsageStats()
+  document.addEventListener('click', handleColumnClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleColumnClickOutside)
 })
 </script>

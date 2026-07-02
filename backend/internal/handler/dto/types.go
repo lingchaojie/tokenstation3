@@ -290,6 +290,17 @@ type Account struct {
 	QuotaNotifyTotalEnabled    *bool    `json:"quota_notify_total_enabled,omitempty"`
 	QuotaNotifyTotalThreshold  *float64 `json:"quota_notify_total_threshold,omitempty"`
 
+	// 影子账号关系（spark 维度影子）
+	ParentAccountID *int64 `json:"parent_account_id,omitempty"`
+	QuotaDimension  string `json:"quota_dimension,omitempty"`
+
+	// 影子账号回填的母账号信息（仅影子非空，源自母账号 Credentials/Extra）
+	ParentEmail                 string `json:"parent_email,omitempty"`
+	ParentPlanType              string `json:"parent_plan_type,omitempty"`
+	ParentPrivacyMode           string `json:"parent_privacy_mode,omitempty"`
+	ParentSubscriptionExpiresAt string `json:"parent_subscription_expires_at,omitempty"`
+	ParentChatGPTAccountID      string `json:"parent_chatgpt_account_id,omitempty"`
+
 	Proxy         *Proxy         `json:"proxy,omitempty"`
 	AccountGroups []AccountGroup `json:"account_groups,omitempty"`
 
@@ -655,8 +666,9 @@ type UserSubscription struct {
 	SevenDayRemainingUSD *float64   `json:"seven_day_remaining_usd"`
 	SevenDayResetAt      *time.Time `json:"seven_day_reset_at"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 
 	User  *User  `json:"user,omitempty"`
 	Group *Group `json:"group,omitempty"`

@@ -32,7 +32,7 @@ import { computed } from 'vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { providerIconModel } from '@/utils/modelCatalog'
+import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
 
@@ -43,7 +43,8 @@ const conversationTitle = computed(() => {
 
 const modelLabel = computed(() => {
   const model = chatStore.selectedModel
-  return model?.display_name || model?.model || 'Select model'
+  if (!model) return 'Select model'
+  return model.display_name || displayModelName(model.model) || 'Select model'
 })
 
 const subtitle = computed(() => {

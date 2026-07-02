@@ -96,11 +96,30 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	cache := &billingCacheStub{}
 	h := buildTestHandler(repo, cache)
 
-	body := `{"quotas":[
-		{"platform":"anthropic","daily_limit_usd":10.0,"weekly_limit_usd":null,"monthly_limit_usd":100.0},
-		{"platform":"openai","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null}
-	]}`
-	c, w := putReq(t, body)
+	quotas := make([]map[string]any, 0, len(service.AllowedQuotaPlatforms))
+	for _, platform := range service.AllowedQuotaPlatforms {
+		quota := map[string]any{
+			"platform":          platform,
+			"daily_limit_usd":   nil,
+			"weekly_limit_usd":  nil,
+			"monthly_limit_usd": nil,
+		}
+		switch platform {
+		case service.PlatformAnthropic:
+			quota["daily_limit_usd"] = 10.0
+			quota["monthly_limit_usd"] = 100.0
+		case service.PlatformOpenAI:
+			quota["daily_limit_usd"] = 80.0
+			quota["weekly_limit_usd"] = 300.0
+		}
+		quotas = append(quotas, quota)
+	}
+	payload, err := json.Marshal(map[string]any{"quotas": quotas})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	c, w := putReq(t, string(payload))
 	h.UpdateUserPlatformQuotas(c)
 
 	if w.Code != http.StatusOK {
@@ -109,7 +128,7 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	if len(repo.upsertCalls) != 1 {
 		t.Fatalf("UpsertForUser should be called once, got %d", len(repo.upsertCalls))
 	}
-	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != 2 {
+	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != len(service.AllowedQuotaPlatforms) {
 		t.Errorf("unexpected upsert call: %+v", repo.upsertCalls[0])
 	}
 	// 缓存失效覆盖所有 quota platform：请求中的平台 + 未提交平台的软删除。

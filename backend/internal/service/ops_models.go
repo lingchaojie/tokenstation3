@@ -111,14 +111,17 @@ type OpsErrorLogFilter struct {
 	GroupID   *int64
 	AccountID *int64
 
-	StatusCodes      []int
-	StatusCodesOther bool
-	Phase            string // Special: Phase=="upstream" bypasses status>=400 clause; do not set together with ErrorPhasesAny.
-	Owner            string
-	Source           string
-	Resolved         *bool
-	Query            string
-	UserQuery        string // Search by user email
+	StatusCodes       []int
+	StatusCodesOther  bool
+	Phase             string // Special: Phase=="upstream" bypasses status>=400 clause; do not set together with ErrorPhasesAny.
+	Owner             string
+	Source            string
+	ErrorType         string
+	RequestErrorType  string
+	UpstreamErrorKind string
+	Resolved          *bool
+	Query             string
+	UserQuery         string // Search by user email
 
 	// Optional correlation keys for exact matching.
 	RequestID       string
