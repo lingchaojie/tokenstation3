@@ -23,7 +23,7 @@
         <div
           v-if="modelMenuOpen"
           ref="modelMenuRef"
-          class="absolute bottom-full left-0 z-40 mb-2 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-xl"
+          class="absolute bottom-full left-0 z-40 mb-2 max-h-[min(28rem,calc(100vh-8rem))] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-xl"
           data-testid="chat-model-menu"
         >
           <div class="mb-3 text-xs font-medium text-linear-ink-tertiary">Model</div>
@@ -41,14 +41,15 @@
                 @keydown.esc.prevent="providerMenuOpen = false"
               >
                 <ModelIcon :model="providerIconModel(selectedProvider)" size="16px" aria-hidden="true" />
-                <span class="min-w-0 flex-1 truncate">{{ selectedProvider || 'Provider' }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ providerLabel(selectedProvider) || 'Provider' }}</span>
                 <Icon name="chevronDown" size="sm" class="shrink-0 text-linear-ink-tertiary" />
               </button>
               <div
                 v-if="providerMenuOpen"
-                class="absolute left-0 top-full z-50 mt-1 w-full overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-0 py-1 shadow-lg"
+                class="mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-linear-hairline bg-linear-surface-0 py-1 shadow-lg"
                 role="listbox"
                 aria-label="Provider"
+                data-testid="chat-provider-options"
               >
                 <button
                   v-for="provider in providers"
@@ -61,7 +62,7 @@
                   @click="selectProvider(provider)"
                 >
                   <ModelIcon :model="providerIconModel(provider)" size="16px" aria-hidden="true" />
-                  <span class="min-w-0 flex-1 truncate">{{ provider }}</span>
+                  <span class="min-w-0 flex-1 truncate">{{ providerLabel(provider) }}</span>
                   <Icon v-if="provider === selectedProvider" name="check" size="sm" class="text-linear-accent" />
                 </button>
               </div>
@@ -76,7 +77,7 @@
                 data-testid="chat-model-select"
               >
                 <option v-for="model in modelOptions" :key="modelKey(model)" :value="modelKey(model)">
-                  {{ model.display_name || model.model }}
+                  {{ model.display_name || displayModelName(model.model) }}
                 </option>
               </select>
             </label>
@@ -103,9 +104,6 @@
               <Icon name="globe" size="sm" />
               <span>联网搜索</span>
             </button>
-            <span class="min-w-0 truncate text-xs text-linear-ink-tertiary">
-              {{ chatStore.webSearchEnabled ? '强制搜索' : '关闭' }}
-            </span>
           </div>
 
           <div v-if="chatStore.selectedModelSupportsThinking" class="flex min-w-0 items-center gap-2">
@@ -123,9 +121,6 @@
               <Icon name="brain" size="sm" />
               <span>深度思考</span>
             </button>
-            <span class="min-w-0 truncate text-xs text-linear-ink-tertiary">
-              {{ chatStore.thinkingEnabled ? '使用该模型最高思考档位' : '关闭' }}
-            </span>
           </div>
 
           <div v-if="chatStore.selectedModelSupportsImageGeneration" class="grid min-w-0 gap-2 sm:col-span-2">
@@ -342,7 +337,7 @@ import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { providerIconModel } from '@/utils/modelCatalog'
+import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
 const chatStore = useChatStore()
 const draft = ref('')
@@ -387,7 +382,8 @@ const selectedModelKey = computed({
 
 const selectedModelLabel = computed(() => {
   const model = chatStore.selectedModel
-  return model?.display_name || model?.model || 'Select model'
+  if (!model) return 'Select model'
+  return model.display_name || displayModelName(model.model) || 'Select model'
 })
 
 const hasDraft = computed(() => draft.value.trim().length > 0 || chatStore.pendingAttachments.length > 0)
@@ -483,6 +479,17 @@ function toggleImageGeneration(): void {
 
 function optionLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function providerLabel(provider: string): string {
+  const normalized = provider.trim().toLowerCase()
+  const labels: Record<string, string> = {
+    anthropic: 'Anthropic',
+    gemini: 'Gemini',
+    openai: 'OpenAI',
+    qwen: 'Qwen',
+  }
+  return labels[normalized] || optionLabel(provider.trim())
 }
 
 function handleDocumentClick(event: MouseEvent): void {

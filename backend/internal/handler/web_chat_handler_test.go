@@ -112,7 +112,7 @@ func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/chat/conversations/7/messages",
-		strings.NewReader(`{"model":"gpt-image-2","provider":"openai","content":"draw","stream":true,"image_generation":{"enabled":true,"size":"1536x1024","aspect_ratio":"3:2","quality":"high","output_format":"webp","background":"transparent"}}`),
+		strings.NewReader(`{"model":"gpt-image-2","provider":"openai","content":"draw","stream":true,"image_generation":{"enabled":true,"size":"1536x1024","aspect_ratio":"3:2","quality":"high","output_format":"webp","background":"auto"}}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
@@ -128,7 +128,7 @@ func TestWebChatSendMessageBindsImageGenerationSettings(t *testing.T) {
 	require.Equal(t, "3:2", fake.sendInput.ImageGeneration.AspectRatio)
 	require.Equal(t, "high", fake.sendInput.ImageGeneration.Quality)
 	require.Equal(t, "webp", fake.sendInput.ImageGeneration.OutputFormat)
-	require.Equal(t, "transparent", fake.sendInput.ImageGeneration.Background)
+	require.Equal(t, "auto", fake.sendInput.ImageGeneration.Background)
 }
 
 func TestWebChatSendMessageBindsWebSearchSettings(t *testing.T) {

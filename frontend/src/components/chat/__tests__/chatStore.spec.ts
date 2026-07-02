@@ -53,9 +53,9 @@ const imageModel: WebChatModel = {
   supports_image_generation: true,
   image_generation_sizes: ['1024x1024', '1536x1024'] as WebChatImageGenerationSize[],
   image_generation_aspect_ratios: ['1:1', '3:2'] as WebChatImageGenerationAspectRatio[],
-  image_generation_qualities: ['medium', 'high'] as WebChatImageGenerationQuality[],
+  image_generation_qualities: ['low', 'medium', 'high'] as WebChatImageGenerationQuality[],
   image_generation_output_formats: ['png', 'webp'] as WebChatImageGenerationOutputFormat[],
-  image_generation_backgrounds: ['opaque', 'transparent'] as WebChatImageGenerationBackground[],
+  image_generation_backgrounds: ['opaque', 'auto'] as WebChatImageGenerationBackground[],
 }
 
 const webSearchModel: WebChatModel = {
@@ -590,7 +590,7 @@ describe('useChatStore', () => {
     store.imageGenerationAspectRatio = '3:2'
     store.imageGenerationQuality = 'high'
     store.imageGenerationOutputFormat = 'webp'
-    store.imageGenerationBackground = 'transparent'
+    store.imageGenerationBackground = 'opaque'
     store.currentConversation = {
       conversation: {
         id: 8,
@@ -619,7 +619,7 @@ describe('useChatStore', () => {
         aspect_ratio: '3:2',
         quality: 'high',
         output_format: 'webp',
-        background: 'transparent',
+        background: 'opaque',
       },
     }), expect.any(AbortSignal))
   })
