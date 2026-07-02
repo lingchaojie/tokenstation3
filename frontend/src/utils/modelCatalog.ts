@@ -1,4 +1,5 @@
 import type { PublicModelCatalogModel } from '@/api/settings'
+import type { WebChatModel } from '@/api/chat'
 
 export type ModelCatalogSortKey = 'default' | 'newest' | 'provider'
 
@@ -115,6 +116,26 @@ export function buildModelCatalogProviderOptions(models: PublicModelCatalogModel
       .map(([value, item]) => ({ value, label: item.label, count: item.count }))
       .sort((a, b) => providerRank(a.value) - providerRank(b.value) || a.label.localeCompare(b.label)),
   ]
+}
+
+export function modelCatalogAvailabilityKey(provider: string, model: string): string {
+  const normalizedProvider = provider.trim().toLowerCase()
+  const normalizedModel = model.trim()
+  return normalizedProvider && normalizedModel ? `${normalizedProvider}\x00${normalizedModel}` : ''
+}
+
+export function filterModelCatalogByWebChatModels(
+  catalogModels: PublicModelCatalogModel[],
+  chatModels: WebChatModel[],
+): PublicModelCatalogModel[] {
+  const available = new Set(
+    chatModels
+      .map((model) => modelCatalogAvailabilityKey(model.provider, model.model))
+      .filter((key) => key.length > 0),
+  )
+  return catalogModels.filter((model) =>
+    available.has(modelCatalogAvailabilityKey(model.provider, model.model_name)),
+  )
 }
 
 export function providerIconModel(providerKey: string): string {

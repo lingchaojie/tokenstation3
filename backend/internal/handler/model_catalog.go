@@ -85,7 +85,8 @@ func cloneFloat64Ptr(value *float64) *float64 {
 	return &clone
 }
 
-// GetPublicModelCatalog returns the admin-only model marketplace catalog.
+// GetPublicModelCatalog returns the model marketplace catalog for authenticated users.
+// GET /api/v1/settings/model-catalog
 // GET /api/v1/admin/settings/model-catalog
 func (h *SettingHandler) GetPublicModelCatalog(c *gin.Context) {
 	models := publicModelCatalogModelsSnapshot()

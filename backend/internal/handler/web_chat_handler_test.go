@@ -34,6 +34,18 @@ func TestWebChatRoutesAreRegisteredForRegularUsers(t *testing.T) {
 	require.True(t, fake.listCalled)
 }
 
+func TestModelCatalogRouteIsRegisteredForRegularUsers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := newWebChatUserRoutesTestRouter(&fakeWebChatService{}, 42)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/model-catalog", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"models"`)
+}
+
 func TestWebChatAdminRoutesRequireAdmin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeWebChatService{}
@@ -168,6 +180,7 @@ func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin
 		ChannelMonitor:   &handler.ChannelMonitorUserHandler{},
 		Totp:             &handler.TotpHandler{},
 		AvailableChannel: &handler.AvailableChannelHandler{},
+		Setting:          &handler.SettingHandler{},
 		WebChat:          handler.NewWebChatHandler(fake),
 	}, servermiddleware.JWTAuthMiddleware(func(c *gin.Context) {
 		if userID > 0 {

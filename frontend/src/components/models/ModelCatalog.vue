@@ -191,12 +191,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { chatAPI } from '@/api/chat'
 import { getPublicModelCatalog, type PublicModelCatalogModel, type PublicModelCatalogProvider } from '@/api/settings'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
   buildModelCatalogProviderOptions,
+  filterModelCatalogByWebChatModels,
   filterModelCatalog,
   formatContextWindow,
   formatModelCatalogAmount,
@@ -315,9 +317,13 @@ async function loadCatalog() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const catalog = await getPublicModelCatalog()
-    models.value = catalog.models
-    providers.value = catalog.providers
+    const [catalog, chatModels] = await Promise.all([
+      getPublicModelCatalog(),
+      chatAPI.listModels(),
+    ])
+    models.value = filterModelCatalogByWebChatModels(catalog.models, chatModels)
+    const providerKeys = new Set(models.value.map((model) => model.provider))
+    providers.value = catalog.providers.filter((provider) => providerKeys.has(provider.key))
   } catch (err) {
     errorMessage.value = extractApiErrorMessage(err, t('modelCatalog.loadError'))
     models.value = []

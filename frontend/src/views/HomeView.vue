@@ -51,8 +51,8 @@
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
-            <router-link v-if="isAdmin" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
-            <router-link v-if="isAdmin" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
+            <router-link v-if="isAuthenticated" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
+            <router-link v-if="isAuthenticated" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
             <a
               v-if="docUrl"
@@ -127,7 +127,7 @@
         </div>
 
         <div
-          v-if="isAdmin"
+          v-if="isAuthenticated"
           data-testid="homepage-chat-entry"
           class="mx-auto mt-12 grid w-full max-w-6xl overflow-hidden rounded-lg border border-linear-hairline bg-linear-surface-1 text-left lg:grid-cols-[280px_minmax(0,1fr)]"
         >
@@ -498,19 +498,19 @@
         <div class="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
           <div class="mb-8 grid gap-6 lg:grid-cols-[0.78fr_1.22fr] lg:items-end">
             <div>
-              <p class="linx-section-kicker">{{ isAdmin ? copy.modelCatalogKicker : copy.modelPricingKicker }}</p>
-              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ isAdmin ? copy.modelCatalogTitle : copy.modelPricingTitle }}</h2>
+              <p class="linx-section-kicker">{{ showDynamicModelCatalog ? copy.modelCatalogKicker : copy.modelPricingKicker }}</p>
+              <h2 class="mt-4 text-[clamp(2rem,4vw,2.9rem)] font-semibold leading-tight tracking-[-0.055em] text-linear-ink">{{ showDynamicModelCatalog ? copy.modelCatalogTitle : copy.modelPricingTitle }}</h2>
             </div>
             <div class="text-left lg:max-w-2xl">
-              <p class="text-base leading-7 text-linear-ink-subtle">{{ isAdmin ? copy.modelCatalogDescription : copy.modelPricingDescription }}</p>
+              <p class="text-base leading-7 text-linear-ink-subtle">{{ showDynamicModelCatalog ? copy.modelCatalogDescription : copy.modelPricingDescription }}</p>
               <span class="font-mono-brand mt-4 inline-flex rounded-full border border-primary-500/25 bg-primary-500/10 px-3 py-1.5 text-xs font-medium text-primary-300">
-                {{ isAdmin ? copy.modelCatalogUnit : copy.modelPricingUnit }}
+                {{ showDynamicModelCatalog ? copy.modelCatalogUnit : copy.modelPricingUnit }}
               </span>
             </div>
           </div>
 
           <div
-            v-if="isAdmin && visibleHomeCatalogModels.length > 0"
+            v-if="showDynamicModelCatalog && visibleHomeCatalogModels.length > 0"
             data-testid="homepage-model-catalog-grid"
             class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
           >
@@ -585,7 +585,7 @@
           </div>
 
           <div
-            v-else-if="!isAdmin"
+            v-else-if="!showDynamicModelCatalog"
             data-testid="homepage-model-pricing-table"
             class="overflow-hidden rounded-2xl border border-linear-hairline bg-linear-surface-1 text-left"
           >
@@ -643,7 +643,7 @@
           </div>
 
           <button
-            v-if="isAdmin && hasHiddenHomeCatalogModels"
+            v-if="showDynamicModelCatalog && hasHiddenHomeCatalogModels"
             type="button"
             data-testid="homepage-model-catalog-toggle"
             class="mx-auto mt-6 inline-flex items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 px-5 py-2.5 text-sm font-medium text-linear-ink-muted transition-colors hover:border-linear-hairline-strong hover:bg-linear-surface-2 hover:text-linear-ink"
@@ -722,9 +722,15 @@ import {
   type PublicModelCatalogModel,
   type PublicModelPricingProvider,
 } from '@/api/settings'
+import { chatAPI } from '@/api/chat'
 import { paymentAPI } from '@/api/payment'
 import type { SubscriptionPlan } from '@/types/payment'
-import { formatContextWindow, formatModelCatalogAmount, providerIconModel } from '@/utils/modelCatalog'
+import {
+  filterModelCatalogByWebChatModels,
+  formatContextWindow,
+  formatModelCatalogAmount,
+  providerIconModel,
+} from '@/utils/modelCatalog'
 
 const { t, locale } = useI18n()
 
@@ -874,10 +880,13 @@ function chatRouteForModel(model: PublicModelCatalogModel) {
 
 async function loadModelCatalog() {
   try {
-    const data = await getPublicModelCatalog()
-    modelCatalogModels.value = data.models || []
+    const [data, chatModels] = await Promise.all([
+      getPublicModelCatalog(),
+      chatAPI.listModels(),
+    ])
+    modelCatalogModels.value = filterModelCatalogByWebChatModels(data.models || [], chatModels)
   } catch (error) {
-    console.error('Failed to load public model catalog:', error)
+    console.error('Failed to load dynamic web chat model catalog:', error)
     modelCatalogModels.value = []
   }
 }
@@ -893,7 +902,7 @@ async function loadModelPricing() {
 }
 
 function loadHomeModelData() {
-  if (isAdmin.value) {
+  if (showDynamicModelCatalog.value) {
     loadModelCatalog()
     return
   }
@@ -1107,6 +1116,7 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const isAdmin = computed(() => authStore.isAdmin)
+const showDynamicModelCatalog = computed(() => isAuthenticated.value)
 const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
 const chatPath = computed(() => (isAuthenticated.value ? '/chat' : { path: '/login', query: { redirect: '/chat' } }))
 const userInitial = computed(() => {
@@ -1145,7 +1155,6 @@ function ensureBrandFonts() {
 onMounted(() => {
   initTheme()
   ensureBrandFonts()
-  authStore.checkAuth()
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
@@ -1153,7 +1162,7 @@ onMounted(() => {
   loadPublicSubscriptionPlans()
 })
 
-watch(isAdmin, () => {
+watch(showDynamicModelCatalog, () => {
   loadHomeModelData()
 })
 </script>

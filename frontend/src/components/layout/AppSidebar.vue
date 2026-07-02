@@ -691,19 +691,15 @@ const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘。
 //
-// 条目顺序：仪表盘（可选）→ 管理员灰度入口（可选）→ 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
+// 条目顺序：仪表盘（可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
 // 可用渠道紧挨渠道状态之上，让用户"先看自己能用什么、再看对应状态"。
 function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   const items: NavItem[] = []
   if (withDashboard) {
     items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon })
   }
-  if (authStore.isAdmin) {
-    items.push(
-      { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
-    )
-  }
   items.push(
+    { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
     { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },

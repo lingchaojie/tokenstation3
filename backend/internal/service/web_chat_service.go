@@ -12,17 +12,27 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	webChatMaxUploadBytes      = 20 << 20
 	webChatMaxTextPreviewBytes = 64 << 10
+	webChatCatalogCacheTTL     = 30 * time.Second
 )
+
+const webChatCatalogSingleflightKey = "web-chat-catalog"
+
+type webChatCatalogCacheEntry struct {
+	models    []WebChatModelCapability
+	expiresAt time.Time
+}
 
 type webChatAttachmentCreator interface {
 	CreateAttachment(ctx context.Context, in CreateWebChatAttachmentInput) (*WebChatAttachment, error)
@@ -48,6 +58,10 @@ type WebChatService struct {
 
 	defaultGroups webChatDefaultGroupResolver
 	accountLister webChatAccountLister
+
+	catalogCacheMu sync.RWMutex
+	catalogCache   webChatCatalogCacheEntry
+	catalogFlight  singleflight.Group
 
 	activeCancelMu sync.Mutex
 	activeCancels  map[webChatAssistantKey]context.CancelFunc
@@ -241,7 +255,7 @@ func (s *WebChatService) ListModels(ctx context.Context, userID int64) ([]WebCha
 	if userID <= 0 {
 		return nil, ErrUserNotFound
 	}
-	return resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
+	return s.resolveCachedWebChatCatalog(ctx)
 }
 
 func (s *WebChatService) CancelMessage(ctx context.Context, userID, conversationID, messageID int64) error {
@@ -480,7 +494,7 @@ func (s *WebChatService) resolveWebChatSendUser(ctx context.Context, in WebChatS
 // scale (the send path already does heavier DB work), but consider a short-TTL
 // cache or a lighter single-model check if this path gets hot.
 func (s *WebChatService) resolveWebChatSendCapability(ctx context.Context, provider, model string) (WebChatModelCapability, error) {
-	catalog, err := resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
+	catalog, err := s.resolveCachedWebChatCatalog(ctx)
 	if err != nil {
 		return WebChatModelCapability{}, err
 	}
@@ -492,6 +506,77 @@ func (s *WebChatService) resolveWebChatSendCapability(ctx context.Context, provi
 		}
 	}
 	return WebChatModelCapability{}, ErrWebChatInvalidModel
+}
+
+func (s *WebChatService) resolveCachedWebChatCatalog(ctx context.Context) ([]WebChatModelCapability, error) {
+	if models, ok := s.cachedWebChatCatalog(time.Now()); ok {
+		return models, nil
+	}
+
+	value, err, _ := s.catalogFlight.Do(webChatCatalogSingleflightKey, func() (any, error) {
+		if models, ok := s.cachedWebChatCatalog(time.Now()); ok {
+			return models, nil
+		}
+
+		models, err := resolveWebChatCatalog(ctx, s.defaultGroups, s.accountLister)
+		if err != nil {
+			return nil, err
+		}
+
+		cached := cloneWebChatModelCapabilities(models)
+		s.catalogCacheMu.Lock()
+		s.catalogCache = webChatCatalogCacheEntry{
+			models:    cached,
+			expiresAt: time.Now().Add(webChatCatalogCacheTTL),
+		}
+		s.catalogCacheMu.Unlock()
+
+		return cloneWebChatModelCapabilities(cached), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	models, ok := value.([]WebChatModelCapability)
+	if !ok {
+		return nil, errors.New("web chat catalog cache returned unexpected value")
+	}
+	return cloneWebChatModelCapabilities(models), nil
+}
+
+func (s *WebChatService) cachedWebChatCatalog(now time.Time) ([]WebChatModelCapability, bool) {
+	s.catalogCacheMu.RLock()
+	defer s.catalogCacheMu.RUnlock()
+	if !s.catalogCache.expiresAt.After(now) {
+		return nil, false
+	}
+	return cloneWebChatModelCapabilities(s.catalogCache.models), true
+}
+
+func cloneWebChatModelCapabilities(models []WebChatModelCapability) []WebChatModelCapability {
+	if len(models) == 0 {
+		return []WebChatModelCapability{}
+	}
+	out := make([]WebChatModelCapability, len(models))
+	for i := range models {
+		out[i] = models[i]
+		out[i].ThinkingEfforts = cloneWebChatStringSlice(models[i].ThinkingEfforts)
+		out[i].ImageGenerationSizes = cloneWebChatStringSlice(models[i].ImageGenerationSizes)
+		out[i].ImageGenerationAspectRatios = cloneWebChatStringSlice(models[i].ImageGenerationAspectRatios)
+		out[i].ImageGenerationQualities = cloneWebChatStringSlice(models[i].ImageGenerationQualities)
+		out[i].ImageGenerationOutputFormats = cloneWebChatStringSlice(models[i].ImageGenerationOutputFormats)
+		out[i].ImageGenerationBackgrounds = cloneWebChatStringSlice(models[i].ImageGenerationBackgrounds)
+	}
+	return out
+}
+
+func cloneWebChatStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func webChatFindMessage(messages []WebChatMessage, id int64) (WebChatMessage, bool) {
