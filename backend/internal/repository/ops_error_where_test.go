@@ -38,6 +38,36 @@ func TestBuildOpsErrorLogsWhere_UserScopedFilters(t *testing.T) {
 	}
 }
 
+func TestBuildOpsErrorLogsWhere_ErrorTypeRequestTypeAndUpstreamKind(t *testing.T) {
+	filter := &service.OpsErrorLogFilter{
+		ErrorType:         "rate_limit_error",
+		RequestErrorType:  "routing",
+		UpstreamErrorKind: "failover",
+		View:              "all",
+	}
+	where, args := buildOpsErrorLogsWhere(filter)
+
+	for _, want := range []string{
+		"LOWER(COALESCE(e.error_type,'')) = $",
+		"e.error_phase = $",
+		"LOWER(COALESCE(e.error_owner,'')) = $",
+		"jsonb_array_elements(",
+		"NULLIF(e.upstream_errors, 'null'::jsonb)",
+		"LOWER(COALESCE(",
+		"upstream_error_event.item->>'kind'",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("where missing %q\nfull: %s", want, where)
+		}
+	}
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[0] != "routing" || args[1] != "platform" || args[2] != "rate_limit_error" || args[3] != "failover" {
+		t.Fatalf("unexpected args: %v", args)
+	}
+}
+
 func TestBuildOpsErrorLogsWhere_ModelFuzzy(t *testing.T) {
 	// 默认（ModelFuzzy=false）保持精确匹配
 	exact := &service.OpsErrorLogFilter{Model: "claude"}

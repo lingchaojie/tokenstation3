@@ -1113,6 +1113,8 @@ export default {
       category: 'Category', platform: 'Platform', message: 'Message',
       keyName: 'Key Name', keyDeleted: 'Deleted', allKeys: 'All keys',
       modelPlaceholder: 'Search model', allCategories: 'All categories',
+      errorType: 'Error type', requestErrorType: 'Request error type',
+      upstreamEventType: 'Upstream event type',
       empty: 'No error requests', failedToLoad: 'Failed to load error requests',
       categories: {
         auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',

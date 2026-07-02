@@ -413,4 +413,35 @@ describe('admin UsageView errors tab filter forwarding', () => {
       group_id: 3,
     }))
   })
+
+  it('forwards error type filters to listErrorLogs on the errors tab', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, AuditLogModal: true, Pagination: true, Select: true,
+        DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+        ModelDistributionChart: true, GroupDistributionChart: true, EndpointDistributionChart: true,
+        OpsErrorLogTable: true, OpsErrorDetailModal: true,
+      } },
+    })
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.errErrorType = 'rate_limit_error'
+    vm.errRequestErrorType = 'upstream'
+    vm.errUpstreamErrorKind = 'failover'
+
+    const tabs = wrapper.findAll('button.tab')
+    await tabs[1].trigger('click')
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
+      view: 'all',
+      error_type: 'rate_limit_error',
+      request_error_type: 'upstream',
+      upstream_error_kind: 'failover',
+    }))
+  })
 })

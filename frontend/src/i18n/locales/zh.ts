@@ -1118,6 +1118,8 @@ export default {
       category: '分类', platform: '平台', message: '错误信息',
       keyName: 'Key 名称', keyDeleted: '已删除', allKeys: '全部 Key',
       modelPlaceholder: '搜索模型', allCategories: '全部分类',
+      errorType: '错误类型', requestErrorType: '请求错误类型',
+      upstreamEventType: '上游事件类型',
       empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
       categories: {
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
