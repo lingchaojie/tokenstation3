@@ -366,6 +366,15 @@ func TestBuildKiroPayloadAddsAdditionalModelRequestFieldsForOutputConfigModels(t
 			wantEffort: "medium",
 		},
 		{
+			name: "sonnet 5 thinking alias",
+			body: []byte(`{
+				"model":"claude-sonnet-5-thinking",
+				"messages":[{"role":"user","content":"hello kiro"}]
+			}`),
+			modelID:    "claude-sonnet-5",
+			wantEffort: "high",
+		},
+		{
 			name: "enabled budget mapping",
 			body: []byte(`{
 				"model":"claude-sonnet-4-6",
@@ -1761,6 +1770,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-opus-4-7":                     "claude-opus-4.7",
 		"claude-opus-4-7-thinking":            "claude-opus-4.7",
 		"claude-opus-4.7":                     "claude-opus-4.7",
+		"claude-sonnet-5":                     "claude-sonnet-5",
+		"claude-sonnet-5-thinking":            "claude-sonnet-5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
 		"claude-sonnet-4.6":                   "claude-sonnet-4.6",
@@ -1812,6 +1823,8 @@ func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
 	cases := map[string]bool{
 		"claude-opus-4.6":            true,
 		"claude-opus-4-9-thinking":   true,
+		"claude-sonnet-5":            true,
+		"claude-sonnet-5-thinking":   true,
 		"claude-sonnet-5-0-thinking": true,
 		"claude-haiku-4.5":           false,
 		"claude-opus-4-5":            false,

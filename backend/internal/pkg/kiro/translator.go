@@ -257,6 +257,8 @@ func MapModel(model string) string {
 		return "claude-opus-4.7"
 	case "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6":
 		return "claude-opus-4.6"
+	case "claude-sonnet-5", "claude-sonnet-5-thinking":
+		return "claude-sonnet-5"
 	case "claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4.6":
 		return "claude-sonnet-4.6"
 	case "claude-opus-4-5-20251101", "claude-opus-4-5-20251101-thinking", "claude-opus-4.5":
@@ -1430,6 +1432,10 @@ func buildAdditionalModelRequestFields(thinking *thinkingDirective, modelID stri
 // 这是基于已知模型列表的静态判断，未来可改为动态从 ListAvailableModels 发现。
 func isOutputConfigPathModel(modelID string) bool {
 	normalized := normalizeClaudeVersionNumber(strings.ToLower(strings.TrimSpace(modelID)))
+	normalized = strings.TrimSuffix(normalized, "-thinking")
+	if normalized == "claude-sonnet-5" {
+		return true
+	}
 	// Claude 4.6+ 所有模型使用 output_config 路径
 	for _, prefix := range []string{"claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8",
 		"claude-sonnet-4.6", "claude-sonnet-4.7", "claude-sonnet-4.8",
