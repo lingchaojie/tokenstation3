@@ -70,6 +70,7 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 	}
 	svc.initSubCache(cfg)
 	svc.initMaintenanceQueue(cfg)
+	svc.StartSubCacheInvalidationSubscriber(context.Background())
 	return svc
 }
 
@@ -185,6 +186,48 @@ func (s *SubscriptionService) InvalidateSubCache(userID, groupID int64) {
 		return
 	}
 	s.subCacheL1.Del(subCacheKey(userID, groupID))
+}
+
+// InvalidateSubCacheSync 失效订阅 L1 缓存并等待 Ristretto 删除操作生效。
+func (s *SubscriptionService) InvalidateSubCacheSync(userID, groupID int64) {
+	s.invalidateSubCacheKeySync(subCacheKey(userID, groupID))
+}
+
+func (s *SubscriptionService) invalidateSubCacheKeySync(key string) {
+	if s.subCacheL1 == nil {
+		return
+	}
+	s.subCacheL1.Del(key)
+	s.subCacheL1.Wait()
+}
+
+// StartSubCacheInvalidationSubscriber 启动跨实例订阅 L1 缓存失效订阅。
+func (s *SubscriptionService) StartSubCacheInvalidationSubscriber(ctx context.Context) {
+	if s.billingCacheService == nil || s.subCacheL1 == nil {
+		return
+	}
+	if err := s.billingCacheService.SubscribeSubscriptionCacheInvalidation(ctx, func(cacheKey string) {
+		s.invalidateSubCacheKeySync(cacheKey)
+	}); err != nil {
+		log.Printf("Warning: failed to start subscription cache invalidation subscriber: %v", err)
+	}
+}
+
+func (s *SubscriptionService) invalidateSubscriptionCaches(userID, groupID int64) error {
+	s.InvalidateSubCacheSync(userID, groupID)
+	if s.billingCacheService == nil {
+		return nil
+	}
+
+	cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
+		return fmt.Errorf("invalidate billing subscription cache: %w", err)
+	}
+	if err := s.billingCacheService.PublishSubscriptionCacheInvalidation(cacheCtx, subCacheKey(userID, groupID)); err != nil {
+		return fmt.Errorf("publish subscription cache invalidation: %w", err)
+	}
+	return nil
 }
 
 // AssignSubscriptionInput 分配订阅输入
@@ -849,16 +892,9 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 		return err
 	}
 
-	// 失效订阅缓存
 	cacheGroupID := subscriptionCacheGroupID(sub)
-	s.InvalidateSubCache(sub.UserID, cacheGroupID)
-	if s.billingCacheService != nil {
-		userID, groupID := sub.UserID, cacheGroupID
-		go func() {
-			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
-		}()
+	if err := s.invalidateSubscriptionCaches(sub.UserID, cacheGroupID); err != nil {
+		return err
 	}
 	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, nil, sub)
 
@@ -1202,10 +1238,7 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	// so call Wait() immediately after to flush pending operations and guarantee
 	// the deleted key is not returned on the very next Get() call.
 	cacheGroupID := subscriptionCacheGroupID(sub)
-	s.InvalidateSubCache(sub.UserID, cacheGroupID)
-	if s.subCacheL1 != nil {
-		s.subCacheL1.Wait()
-	}
+	s.InvalidateSubCacheSync(sub.UserID, cacheGroupID)
 	if s.billingCacheService != nil {
 		_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, cacheGroupID)
 	}

@@ -719,9 +719,23 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gpt-5.5': openaiModel('GPT-5.5', 1050000),
     'gpt-5.4': openaiModel('GPT-5.4', 1050000),
     'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),
-    'gpt-5.3-codex': openaiModel('GPT-5.3 Codex', 400000),
     'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
-    'gpt-5.2': openaiModel('GPT-5.2', 400000)
+    'gpt-5.2': openaiModel('GPT-5.2', 400000),
+    'codex-mini-latest': {
+      name: 'Codex Mini',
+      limit: {
+        context: 200000,
+        output: 100000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
+      }
+    }
   }
   const geminiModels = {
     'gemini-2.0-flash': {
