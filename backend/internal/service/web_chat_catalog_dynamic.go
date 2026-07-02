@@ -127,7 +127,12 @@ func buildWebChatCapability(provider, routingKey, base string, catalog map[strin
 		caps.PriceStatus = "unverified"
 	}
 	fam := ResolveWebChatModelCapability(provider, base)
-	caps.SupportsThinking = fam.SupportsThinking
-	caps.ThinkingEfforts = fam.ThinkingEfforts
+	if caps.SupportsImageGeneration {
+		caps.SupportsThinking = false
+		caps.ThinkingEfforts = nil
+	} else {
+		caps.SupportsThinking = fam.SupportsThinking
+		caps.ThinkingEfforts = fam.ThinkingEfforts
+	}
 	return caps
 }

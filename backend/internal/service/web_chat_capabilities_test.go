@@ -103,12 +103,14 @@ func TestWebChatCapabilities_DerivesOpenAIImageGenerationOptionsFromCatalogModel
 	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.True(t, caps.SupportsImageGeneration)
 	require.True(t, caps.SupportsArtifactOutput)
+	require.False(t, caps.SupportsThinking)
+	require.Empty(t, caps.ThinkingEfforts)
 	require.False(t, caps.SupportsWebSearch)
 	require.Equal(t, []string{"1024x1024", "1536x1024", "1024x1536"}, caps.ImageGenerationSizes)
 	require.Equal(t, []string{"1:1", "3:2", "2:3"}, caps.ImageGenerationAspectRatios)
-	require.Equal(t, []string{"medium", "high"}, caps.ImageGenerationQualities)
+	require.Equal(t, []string{"low", "medium", "high"}, caps.ImageGenerationQualities)
 	require.Equal(t, []string{"png", "jpeg", "webp"}, caps.ImageGenerationOutputFormats)
-	require.Equal(t, []string{"opaque", "transparent"}, caps.ImageGenerationBackgrounds)
+	require.Equal(t, []string{"opaque", "auto"}, caps.ImageGenerationBackgrounds)
 }
 
 func TestWebChatCapabilities_DerivesGeminiImageGenerationOptionsFromCatalogModel(t *testing.T) {
@@ -176,6 +178,26 @@ func TestWebChatModelDefaultCapabilityResolverResolvesCatalogBackedModel(t *test
 	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.Equal(t, "gpt-5.5", caps.Model)
 	require.True(t, caps.SupportsWebSearch)
+}
+
+func TestResolveWebChatCatalog_OpenAIImageModelDoesNotInheritGPTThinking(t *testing.T) {
+	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeOpenAI: 2}}
+	al := stubAccountLister{byGroup: map[int64][]Account{
+		2: {acctWithMapping(PlatformOpenAI, "gpt-image-2")},
+	}}
+
+	got, err := resolveWebChatCatalog(context.Background(), gr, al)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "openai", got[0].Provider)
+	require.Equal(t, "gpt-image-2", got[0].Model)
+	require.True(t, got[0].SupportsImageGeneration)
+	require.False(t, got[0].SupportsThinking)
+	require.Empty(t, got[0].ThinkingEfforts)
+	require.False(t, got[0].SupportsWebSearch)
+	require.Equal(t, []string{"low", "medium", "high"}, got[0].ImageGenerationQualities)
+	require.Equal(t, []string{"opaque", "auto"}, got[0].ImageGenerationBackgrounds)
 }
 
 func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t *testing.T) {

@@ -237,7 +237,7 @@ func webChatImageGenerationQualitiesForProvider(provider string, enabled bool) [
 	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "openai":
-		return []string{"medium", "high"}
+		return []string{"low", "medium", "high"}
 	default:
 		return nil
 	}
@@ -261,7 +261,7 @@ func webChatImageGenerationBackgroundsForProvider(provider string, enabled bool)
 	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "openai":
-		return []string{"opaque", "transparent"}
+		return []string{"opaque", "auto"}
 	default:
 		return nil
 	}
