@@ -35,13 +35,17 @@ func (r *revokeCacheUserSubRepoStub) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (r *revokeCacheUserSubRepoStub) GetActiveByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+func (r *revokeCacheUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
 	r.getActiveCalls++
 	if r.deleted || r.sub == nil || r.sub.UserID != userID || r.sub.GroupID != groupID {
 		return nil, ErrSubscriptionNotFound
 	}
 	cp := *r.sub
 	return &cp, nil
+}
+
+func (r *revokeCacheUserSubRepoStub) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	return r.GetByUserIDAndGroupID(ctx, userID, groupID)
 }
 
 func TestRevokeSubscription_InvalidatesL1CacheSynchronously(t *testing.T) {
