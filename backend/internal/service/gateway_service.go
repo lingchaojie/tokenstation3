@@ -7258,6 +7258,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// （user-agent/x-stainless-*/x-app/Accept/x-stainless-helper-method/x-client-request-id）
 	if tokenType == "oauth" && mimicClaudeCode {
 		applyClaudeCodeMimicHeaders(req, reqStream)
+		// Default mimic headers fill the full Claude Code header surface, but
+		// account-level fingerprint cache remains the source of truth for the
+		// UA/X-Stainless identity once it has learned a newer real CLI.
+		if fingerprint != nil {
+			s.identityService.ApplyFingerprint(req, fingerprint)
+		}
 	}
 
 	// 写入最终 anthropic-beta header
@@ -11068,6 +11074,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// OAuth + mimic Claude Code：强制注入 CLI 指纹 header
 	if tokenType == "oauth" && mimicClaudeCode {
 		applyClaudeCodeMimicHeaders(req, false)
+		if ctEnableFP && ctFingerprint != nil {
+			s.identityService.ApplyFingerprint(req, ctFingerprint)
+		}
 	}
 
 	// 写入最终 anthropic-beta header（Del 一次避免白名单透传值残留）
