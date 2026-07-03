@@ -3773,6 +3773,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// （Chrome/Firefox/Safari/Edge 等），替换为后台配置的 Codex UA，避免 Cloudflare 触发 JS 质询。
 	s.overrideBrowserUserAgent(ctx, account, req)
 
+	if isOpenAIResponsesCompactPath(c) {
+		alignOpenAICompactVersionHeader(req)
+	}
+
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
 	}
@@ -4558,6 +4562,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// （Chrome/Firefox/Safari/Edge 等），替换为后台配置的 Codex UA，避免 Cloudflare 触发 JS 质询。
 	s.overrideBrowserUserAgent(ctx, account, req)
 
+	if isOpenAIResponsesCompactPath(c) {
+		alignOpenAICompactVersionHeader(req)
+	}
+
 	// Ensure required headers exist
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -4589,6 +4597,19 @@ func (s *OpenAIGatewayService) overrideBrowserUserAgent(ctx context.Context, acc
 		}
 	}
 	req.Header.Set("user-agent", codexUA)
+}
+
+func alignOpenAICompactVersionHeader(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if version, ok := openai.ParseCodexEngineVersion(req.Header.Get("user-agent")); ok && strings.TrimSpace(version) != "" {
+		req.Header.Set("version", version)
+		return
+	}
+	if strings.TrimSpace(req.Header.Get("version")) == "" {
+		req.Header.Set("version", codexCLIVersion)
+	}
 }
 
 func (s *OpenAIGatewayService) handleErrorResponse(
