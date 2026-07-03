@@ -271,6 +271,7 @@ const clientTabs = computed((): TabConfig[] => {
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
@@ -282,6 +283,7 @@ const clientTabs = computed((): TabConfig[] => {
       }
       tabs.push(
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
         { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
         { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
@@ -302,6 +304,7 @@ const clientTabs = computed((): TabConfig[] => {
     default:
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: t('keys.useKeyModal.cliTabs.anthropicPythonSdk'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
       ]
@@ -337,6 +340,9 @@ const platformDescription = computed(() => {
   if (activeClientTab.value === 'opencode') {
     return t('keys.useKeyModal.opencode.description')
   }
+  if (activeClientTab.value === 'workbuddy') {
+    return t('keys.useKeyModal.workBuddy.description')
+  }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.description')
   }
@@ -358,6 +364,9 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (activeClientTab.value === 'workbuddy') {
+    return t('keys.useKeyModal.workBuddy.note')
+  }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.note')
   }
@@ -410,7 +419,15 @@ const currentFiles = computed((): FileConfig[] => {
     const trimmed = value.replace(/\/+$/, '')
     return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
   }
+  const ensureChatCompletions = (value: string) => {
+    const trimmed = value.replace(/\/+$/, '')
+    if (trimmed.endsWith('/chat/completions')) {
+      return trimmed
+    }
+    return `${ensureV1(trimmed)}/chat/completions`
+  }
   const apiBase = ensureV1(baseRoot)
+  const chatCompletionsUrl = ensureChatCompletions(apiBase)
   const antigravityBase = ensureV1(`${baseRoot}/antigravity`)
   const antigravityGeminiBase = (() => {
     const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
@@ -442,6 +459,10 @@ const currentFiles = computed((): FileConfig[] => {
       default:
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
     }
+  }
+
+  if (activeClientTab.value === 'workbuddy') {
+    return [generateWorkBuddyConfigFile(chatCompletionsUrl, apiKey, props.platform)]
   }
 
   switch (props.platform) {
@@ -490,6 +511,88 @@ const currentFiles = computed((): FileConfig[] => {
   }
 })
 
+interface WorkBuddyModelConfig {
+  id: string
+  maxInputTokens: number
+  maxOutputTokens: number
+  supportsImages: boolean
+  supportsReasoning: boolean
+}
+
+function workBuddyModelsForPlatform(platform: Props['platform']): WorkBuddyModelConfig[] {
+  const openAIModels: WorkBuddyModelConfig[] = [
+    {
+      id: 'gpt-5.5',
+      maxInputTokens: 1050000,
+      maxOutputTokens: 128000,
+      supportsImages: true,
+      supportsReasoning: true
+    }
+  ]
+  const claudeModels: WorkBuddyModelConfig[] = [
+    {
+      id: 'claude-sonnet-5',
+      maxInputTokens: 1000000,
+      maxOutputTokens: 128000,
+      supportsImages: true,
+      supportsReasoning: true
+    },
+    {
+      id: 'claude-opus-4-8',
+      maxInputTokens: 1000000,
+      maxOutputTokens: 128000,
+      supportsImages: true,
+      supportsReasoning: true
+    }
+  ]
+
+  if (platform === 'openai') {
+    return openAIModels
+  }
+  if (platform === 'unified') {
+    return [...openAIModels, ...claudeModels]
+  }
+  return claudeModels
+}
+
+function generateWorkBuddyConfigFile(
+  chatCompletionsUrl: string,
+  apiKey: string,
+  platform: Props['platform']
+): FileConfig {
+  const models = workBuddyModelsForPlatform(platform).map((model) => ({
+    id: model.id,
+    // WorkBuddy integrations can send the displayed model name as `model`, so
+    // keep `name` identical to the gateway-supported id.
+    name: model.id,
+    vendor: 'Custom',
+    url: chatCompletionsUrl,
+    apiKey,
+    maxInputTokens: model.maxInputTokens,
+    maxOutputTokens: model.maxOutputTokens,
+    supportsToolCall: true,
+    supportsImages: model.supportsImages,
+    supportsReasoning: model.supportsReasoning
+  }))
+  const content = JSON.stringify(
+    {
+      models,
+      availableModels: models.map((model) => model.id)
+    },
+    null,
+    2
+  )
+  const path = activeTab.value === 'unix'
+    ? '~/.workbuddy/models.json'
+    : '%userprofile%\\.workbuddy\\models.json'
+
+  return {
+    path,
+    content,
+    hint: t('keys.useKeyModal.workBuddy.hint')
+  }
+}
+
 function generateAnthropicPythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
   return {
     path: 'anthropic_client.py',
@@ -501,7 +604,7 @@ client = Anthropic(
 )
 
 with client.messages.stream(
-    model="claude-opus-4-7",
+    model="claude-opus-4-8",
     max_tokens=1024,
     messages=[{"role": "user", "content": "Hello, Claude"}],
 ) as stream:
