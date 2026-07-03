@@ -288,12 +288,12 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, "2026-06-21", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 31)
+	require.Equal(t, "2026-07-03", resp.Data.UpdatedAt)
+	require.Len(t, resp.Data.Models, 32)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
-	require.Equal(t, 7, resp.Data.Providers[0].ModelCount)
+	require.Equal(t, 8, resp.Data.Providers[0].ModelCount)
 
 	for _, provider := range resp.Data.Providers {
 		key := strings.ToLower(provider.Key)
@@ -354,7 +354,7 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 		}
 	}
 	require.NotEmpty(t, anthropic)
-	require.Equal(t, "claude-opus-4-8", anthropic[0].ModelName)
+	require.Equal(t, "claude-sonnet-5", anthropic[0].ModelName)
 	for idx := 1; idx < len(anthropic); idx++ {
 		require.GreaterOrEqual(t, anthropic[idx-1].ReleasedAt, anthropic[idx].ReleasedAt)
 	}
@@ -495,6 +495,17 @@ func TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPrici
 	require.InDelta(t, 25, *opus.Output, 0.001)
 	require.InDelta(t, 0.5, *opus.CacheRead, 0.001)
 
+	sonnet5, ok := byModel["claude-sonnet-5"]
+	require.True(t, ok, "expected claude-sonnet-5 in public model catalog")
+	require.Equal(t, "confirmed", sonnet5.PriceStatus)
+	require.Equal(t, "https://docs.anthropic.com/en/docs/about-claude/pricing", sonnet5.SourceURL)
+	require.NotNil(t, sonnet5.Input)
+	require.NotNil(t, sonnet5.Output)
+	require.NotNil(t, sonnet5.CacheRead)
+	require.InDelta(t, 2, *sonnet5.Input, 0.001)
+	require.InDelta(t, 10, *sonnet5.Output, 0.001)
+	require.InDelta(t, 0.2, *sonnet5.CacheRead, 0.001)
+
 	qwen, ok := byModel["qwen3.6-plus"]
 	require.True(t, ok, "expected qwen3.6-plus in public model catalog")
 	require.Equal(t, "unverified", qwen.PriceStatus)
@@ -559,6 +570,7 @@ func TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(t *test
 	}
 
 	require.Equal(t, 1_000_000, byModel["claude-opus-4-8"].ContextWindow)
+	require.Equal(t, 1_000_000, byModel["claude-sonnet-5"].ContextWindow)
 	require.Equal(t, 200_000, byModel["claude-sonnet-4-5"].ContextWindow)
 	require.Equal(t, 1_050_000, byModel["gpt-5.5"].ContextWindow)
 	require.Equal(t, 400_000, byModel["gpt-5.4-mini"].ContextWindow)
