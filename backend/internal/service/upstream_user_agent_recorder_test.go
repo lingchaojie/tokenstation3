@@ -145,6 +145,40 @@ func TestGatewayServiceBuildCountTokensRequestMimicUsesCachedFingerprintUserAgen
 	}}, repo.records)
 }
 
+func TestGatewayServiceBuildCountTokensRequestMimicSkipsClientRequestHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	c.Request.Header.Set("User-Agent", "opencode/1.14.48 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
+	c.Request.Header.Set("x-client-request-id", "opencode-request-id")
+	c.Request.Header.Set("X-Claude-Code-Session-Id", "opencode-session-id")
+
+	identityCache := &upstreamUserAgentIdentityCacheStub{fp: &Fingerprint{
+		ClientID:                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		UserAgent:               "claude-cli/2.1.199 (external, cli)",
+		StainlessLang:           "js",
+		StainlessPackageVersion: "0.94.0",
+		StainlessOS:             "Linux",
+		StainlessArch:           "x64",
+		StainlessRuntime:        "node",
+		StainlessRuntimeVersion: "v26.3.0",
+		UpdatedAt:               time.Now().Unix(),
+	}}
+	svc := &GatewayService{
+		identityService: NewIdentityService(identityCache),
+	}
+	account := &Account{ID: 14, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+
+	req, _, err := svc.buildCountTokensRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-opus-4-8", true)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
+	require.NotEqual(t, "opencode-request-id", getHeaderRaw(req.Header, "x-client-request-id"))
+	require.Empty(t, getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"))
+}
+
 func TestOpenAIGatewayServiceRecordUpstreamUserAgentUsesFinalWireHeader(t *testing.T) {
 	repo := &accountUpstreamUserAgentRepoStub{}
 	svc := &OpenAIGatewayService{upstreamUARepo: repo}
