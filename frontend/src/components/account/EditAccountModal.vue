@@ -508,9 +508,9 @@
 
       </div>
 
-      <!-- OpenAI / Kiro OAuth Model Restriction (OAuth 类型没有 apikey 容器，需要独立区域) -->
+      <!-- OpenAI / Kiro / Anthropic OAuth Model Restriction (OAuth 类型没有 apikey 容器，需要独立区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'kiro') && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'anthropic') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -2714,6 +2714,7 @@ import {
 } from '@/utils/openaiWsMode'
 import {
   fetchKiroDefaultMappings,
+  getModelsByPlatform,
   getPresetMappingsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
@@ -3297,6 +3298,22 @@ const loadModelRestrictionFromMapping = (rawMapping?: Record<string, unknown>) =
       : 'whitelist'
 }
 
+const loadAnthropicOAuthModelRestriction = (rawMapping?: Record<string, unknown>) => {
+  const parsed = splitModelMappingObject(rawMapping)
+  if (parsed.allowedModels.length > 0 || parsed.modelMappings.length > 0) {
+    allowedModels.value = parsed.allowedModels
+    modelMappings.value = parsed.modelMappings
+    modelRestrictionMode.value = parsed.modelMappings.length > 0 && parsed.allowedModels.length === 0
+      ? 'mapping'
+      : 'whitelist'
+    return
+  }
+
+  allowedModels.value = [...getModelsByPlatform('anthropic')]
+  modelMappings.value = []
+  modelRestrictionMode.value = 'whitelist'
+}
+
 const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value)
 
@@ -3645,6 +3662,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     } else if (newAccount.platform === 'openai' && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
+    } else if (newAccount.platform === 'anthropic' && newAccount.credentials) {
+      const oauthCredentials = newAccount.credentials as Record<string, unknown>
+      loadAnthropicOAuthModelRestriction(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
       modelRestrictionMode.value = 'whitelist'
       modelMappings.value = []
@@ -4394,6 +4414,22 @@ const handleSubmit = async () => {
           ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       applyOpenAIModelMappingCredentials(newCredentials)
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // Anthropic OAuth: persist model mapping to credentials
+    if (props.account.platform === 'anthropic' && props.account.type === 'oauth') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      const modelMapping = buildModelRestrictionMapping()
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
+      }
 
       updatePayload.credentials = newCredentials
     }

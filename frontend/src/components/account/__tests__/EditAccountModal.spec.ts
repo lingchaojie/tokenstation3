@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
+import { claudeModels } from '@/composables/useModelWhitelist'
 
 const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -282,6 +283,29 @@ function buildOpenAISetupTokenAccount() {
       openai_oauth_responses_websockets_v2_mode: 'ctx_pool',
       openai_oauth_responses_websockets_v2_enabled: true
     }
+  } as any
+}
+
+function buildAnthropicOAuthAccount() {
+  return {
+    id: 5,
+    name: 'Claude OAuth',
+    notes: '',
+    platform: 'anthropic',
+    type: 'oauth',
+    credentials: {
+      access_token: 'anthropic-access-token',
+      refresh_token: 'anthropic-refresh-token'
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
   } as any
 }
 
@@ -813,5 +837,24 @@ describe('EditAccountModal', () => {
       start_url: 'https://d-1111111111.awsapps.com/start',
       region: 'us-west-2'
     })
+  })
+
+  it('defaults Anthropic OAuth model mapping to the supported Claude model list', async () => {
+    const account = buildAnthropicOAuthAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe(claudeModels.join(','))
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual(
+      Object.fromEntries(claudeModels.map((model) => [model, model]))
+    )
   })
 })
