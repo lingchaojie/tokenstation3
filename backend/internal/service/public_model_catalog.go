@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-06-21"
+const PublicModelCatalogUpdatedAt = "2026-07-03"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -124,6 +124,7 @@ var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
 	"claude-opus-4-8":          {ReleasedAt: "2026-06-21", ReleaseStatus: "unverified"},
 	"claude-opus-4-7":          {ReleasedAt: "2026-05-01", ReleaseStatus: "unverified"},
 	"claude-opus-4-6":          {ReleasedAt: "2026-04-01", ReleaseStatus: "unverified"},
+	"claude-sonnet-5":          {ReleasedAt: "2026-06-30", ReleaseStatus: "confirmed"},
 	"claude-sonnet-4-6":        {ReleasedAt: "2026-04-01", ReleaseStatus: "unverified"},
 	"claude-opus-4-5":          {ReleasedAt: "2026-03-01", ReleaseStatus: "unverified"},
 	"claude-sonnet-4-5":        {ReleasedAt: "2025-09-29", ReleaseStatus: "confirmed"},
@@ -186,6 +187,7 @@ var publicModelCatalogModels = []PublicModelCatalogModel{
 	catalogModel("anthropic", "Anthropic", "claude-opus-4-5", "Claude Opus 4.5", textModalities(), "Claude Opus model for high-accuracy reasoning, coding, and analysis.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-20250514", "Claude Sonnet 4", textModalities(), "Balanced Claude Sonnet model for coding, writing, and production chat workloads.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", textModalities(), "Balanced Claude Sonnet model with strong coding and agent performance.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
+	catalogModel("anthropic", "Anthropic", "claude-sonnet-5", "Claude Sonnet 5", textModalities(), "Best combination of speed and intelligence in the Claude model family, with a 1M-token context window.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(2, 10, 0.2), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", textModalities(), "Balanced Claude Sonnet model for production coding and agent workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("openai", "OpenAI", "gpt-5.5", "GPT-5.5", textModalities(), "OpenAI frontier text model for complex reasoning and agentic work.", 1050000, contextSourceOpenAI, textFeatures("tool use", "prompt caching"), usdWithCache(5, 30, 0.5), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.4", "GPT-5.4", textModalities(), "OpenAI flagship text model for advanced reasoning, coding, and multimodal-adjacent workflows.", 1050000, contextSourceOpenAI, textFeatures("tool use", "prompt caching"), usdWithCache(2.5, 15, 0.25), "confirmed", sourceOpenAI),
