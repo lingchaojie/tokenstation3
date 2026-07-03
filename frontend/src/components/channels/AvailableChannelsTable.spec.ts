@@ -14,6 +14,14 @@ vi.mock('vue-i18n', () => ({
   }),
 }))
 
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({
+    cachedPublicSettings: {
+      server_utc_offset: 0,
+    },
+  }),
+}))
+
 vi.mock('@/components/icons/Icon.vue', () => ({
   default: { template: '<span class="icon-stub" />' },
 }))

@@ -203,16 +203,17 @@
              虚拟化器测高 race 导致的概率空白,已在 DataTable 内用「就绪门控 + initialRect 兜底」根治。 -->
         <div v-show="activeTab === 'usage'" class="flex min-h-0 flex-1 flex-col">
           <DataTable
-          :columns="visibleColumns"
-          :data="usageLogs"
-          :loading="loading"
-          :server-side-sort="true"
-          :estimate-row-height="88"
-          :overscan="12"
-          default-sort-key="created_at"
-          default-sort-order="desc"
-          @sort="handleSort"
-        >
+            :columns="visibleColumns"
+            :data="usageLogs"
+            :loading="loading"
+            :server-side-sort="true"
+            :estimate-row-height="88"
+            :overscan="12"
+            default-sort-key="created_at"
+            default-sort-order="desc"
+            @sort="handleSort"
+            @ipGeoBatchFailed="handleIpGeoBatchFailed"
+          >
           <template #cell-api_key="{ row }">
             <span class="text-sm text-gray-900 dark:text-white">{{
               row.api_key?.name || '-'
@@ -980,6 +981,10 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   sortState.sort_order = order
   pagination.page = 1
   loadUsageLogs()
+}
+
+const handleIpGeoBatchFailed = () => {
+  appStore.showError(t('usage.ipGeo.batchFailed'))
 }
 
 /**

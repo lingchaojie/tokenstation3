@@ -235,6 +235,28 @@ func TestMigration158MakesPlanEntitlementsGeneric(t *testing.T) {
 	require.NotContains(t, sql, "payment_orders")
 }
 
+func TestMigration165AddsGroupPeakRateMultiplier(t *testing.T) {
+	content, err := FS.ReadFile("165_add_group_peak_rate_multiplier.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "peak_rate_enabled")
+	require.Contains(t, sql, "peak_start")
+	require.Contains(t, sql, "peak_end")
+	require.Contains(t, sql, "peak_rate_multiplier")
+}
+
+func TestMigration166BackfillsGrokMediaGenerationGroups(t *testing.T) {
+	content, err := FS.ReadFile("166_enable_grok_media_generation_groups.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "UPDATE groups")
+	require.Contains(t, sql, "SET allow_image_generation = true")
+	require.Contains(t, sql, "WHERE platform = 'grok'")
+	require.Contains(t, sql, "AND allow_image_generation = false")
+}
+
 func TestMigration154AddsSparkShadowColumnsAndConstraintsWithoutHotIndexes(t *testing.T) {
 	content, err := FS.ReadFile("154_account_spark_shadow.sql")
 	require.NoError(t, err)

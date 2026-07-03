@@ -194,9 +194,10 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('client = OpenAI(')
     expect(codeBlock.text()).toContain('api_key="sk-test"')
     expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
-    expect(codeBlock.text()).toContain('response = client.responses.create(')
+    expect(codeBlock.text()).toContain('stream = client.responses.create(')
     expect(codeBlock.text()).toContain('model="gpt-5.5"')
-    expect(codeBlock.text()).toContain('print(response.output_text)')
+    expect(codeBlock.text()).toContain('stream=True')
+    expect(codeBlock.text()).toContain('print(event.delta, end="", flush=True)')
   })
 
   it('renders OpenAI Imagen 2 Python SDK image generation config', async () => {
@@ -315,11 +316,10 @@ describe('UseKeyModal', () => {
       'gpt-5.5',
       'gpt-5.4',
       'gpt-5.4-mini',
-      'gpt-5.3-codex',
       'gpt-5.3-codex-spark',
-      'gpt-5.2'
+      'gpt-5.2',
+      'codex-mini-latest'
     ])
-    expect(parsed.provider.openai.models).not.toHaveProperty('codex-mini-latest')
     expect(parsed.provider.openai.models).not.toHaveProperty('codex-auto-review')
     expect(parsed.provider.openai.models).not.toHaveProperty('gpt-image-2')
     expect(parsed.provider.openai.models).not.toHaveProperty('gpt-4o-audio-preview')

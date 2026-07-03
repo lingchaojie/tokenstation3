@@ -170,8 +170,7 @@ import {
 } from '@/utils/registrationEmailPolicy'
 import {
   clearAllAffiliateReferralCodes,
-  loadAffiliateReferralCode,
-  oauthAffiliatePayload
+  loadAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
 
 const { t, locale } = useI18n()
@@ -504,7 +503,6 @@ async function handleVerify(): Promise<void> {
         email: email.value,
         password: password.value,
         verify_code: verifyCode.value.trim(),
-        ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode()),
       }
       if (invitationCode.value) {
         payload.invitation_code = invitationCode.value
