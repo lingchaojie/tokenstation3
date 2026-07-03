@@ -43,11 +43,59 @@ describe('UseKeyModal', () => {
     expect(tabLabels).toEqual([
       'keys.useKeyModal.cliTabs.claudeCode',
       'keys.useKeyModal.cliTabs.codexCli',
+      'keys.useKeyModal.cliTabs.workBuddy',
       'keys.useKeyModal.cliTabs.opencode',
       'keys.useKeyModal.cliTabs.openaiPythonSdk',
       'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
     ])
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
+  })
+
+  it('renders WorkBuddy models.json with gateway-supported model ids', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'unified'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const workBuddyTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.workBuddy')
+    )
+
+    expect(workBuddyTab).toBeDefined()
+    await workBuddyTab!.trigger('click')
+    await nextTick()
+
+    const filePath = wrapper.find('.linx-code-panel span')
+    expect(filePath.text()).toBe('~/.workbuddy/models.json')
+
+    const codeBlock = wrapper.find('pre code')
+    expect(codeBlock.exists()).toBe(true)
+    expect(wrapper.text()).toContain('keys.useKeyModal.workBuddy.description')
+    expect(wrapper.text()).toContain('keys.useKeyModal.workBuddy.note')
+
+    const parsed = JSON.parse(codeBlock.text())
+    expect(parsed.availableModels).toEqual(['gpt-5.5', 'claude-sonnet-5', 'claude-opus-4-8'])
+    expect(parsed.models.map((model: any) => model.id)).toEqual(parsed.availableModels)
+    expect(parsed.models.map((model: any) => model.name)).toEqual(parsed.availableModels)
+    expect(parsed.models.every((model: any) => model.url === 'https://example.com/v1/chat/completions')).toBe(true)
+    expect(parsed.models.every((model: any) => model.apiKey === 'sk-test')).toBe(true)
+    expect(parsed.models.every((model: any) => model.vendor === 'Custom')).toBe(true)
+    expect(codeBlock.text()).not.toContain('Claude Sonnet 5')
+    expect(codeBlock.text()).not.toContain('Claude Opus 4.8')
   })
 
   it('renders Anthropic Python SDK client config', async () => {

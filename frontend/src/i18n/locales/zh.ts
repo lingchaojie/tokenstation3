@@ -931,6 +931,7 @@ export default {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
+        workBuddy: 'WorkBuddy',
         anthropicPythonSdk: 'Python SDK',
         openaiPythonSdk: 'Python SDK',
         openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
@@ -956,6 +957,11 @@ export default {
         subtitle: 'opencode.json',
         description: '将以下配置写入 OpenCode 配置文件，使用当前支持的 Claude 或 OpenAI 模型通过此 API 密钥访问网关。',
         hint: '配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。可使用默认 provider（openai/anthropic/google）或自定义 provider_id。API Key 支持直接配置或通过客户端 /connect 命令配置。示例仅供参考，模型与选项可按需调整。'
+      },
+      workBuddy: {
+        description: '将以下配置写入 WorkBuddy 自定义模型配置文件。模型 id 和 name 已使用当前网关支持的实际模型 ID。',
+        note: 'WorkBuddy 使用 OpenAI 兼容的 Chat Completions 接口；请保持 url 以 /chat/completions 结尾，并避免把 name 改成展示名。',
+        hint: '配置文件路径：macOS/Linux 为 ~/.workbuddy/models.json，Windows 为 %userprofile%\\.workbuddy\\models.json。保存后如未出现模型，请重启 WorkBuddy。'
       }
     },
     customKeyLabel: '自定义密钥',
