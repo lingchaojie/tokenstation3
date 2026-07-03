@@ -2161,9 +2161,9 @@
         />
       </div>
 
-      <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(form.platform === 'openai' || form.platform === 'kiro' || form.platform === 'grok') && accountCategory === 'oauth-based'"
+        v-if="(form.platform === 'openai' || form.platform === 'kiro' || form.platform === 'grok' || form.platform === 'anthropic') && accountCategory === 'oauth-based'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -4151,6 +4151,26 @@ function buildKiroMixedExtra(): Record<string, unknown> | undefined {
 const buildOpenAICompactModelMapping = () =>
   buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
 
+const applyAnthropicOAuthModelMapping = (
+  credentials: Record<string, unknown>,
+  platform: AccountPlatform,
+  type: AccountType
+) => {
+  if (platform !== 'anthropic' || (type !== 'oauth' && type !== 'setup-token')) {
+    return
+  }
+  const modelMapping = buildModelMappingObject(
+    modelRestrictionMode.value,
+    allowedModels.value,
+    modelMappings.value
+  )
+  if (modelMapping) {
+    credentials.model_mapping = modelMapping
+  } else {
+    delete credentials.model_mapping
+  }
+}
+
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningDetails = ref<{ groupName: string; currentPlatform: string; otherPlatform: string } | null>(
   null
@@ -5622,6 +5642,7 @@ const createAccountAndFinish = async (
       delete credentials.compact_model_mapping
     }
   }
+  applyAnthropicOAuthModelMapping(credentials, platform, type)
   if (platform === 'kiro') {
     const kiroExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
@@ -6570,6 +6591,7 @@ const handleCookieAuth = async (sessionKey: string) => {
 
         const credentials: Record<string, unknown> = { ...tokenInfo }
         applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+        applyAnthropicOAuthModelMapping(credentials, form.platform, addMethod.value as AccountType)
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true
           credentials.temp_unschedulable_rules = tempUnschedPayload
