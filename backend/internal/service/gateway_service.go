@@ -7662,12 +7662,10 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			// 与原代码严格等价：original buildCountTokensRequest 在 count_tokens mimic
-			// 分支上**不**会跳过白名单透传（与 messages mimic 路径不同），所以
-			// incomingBeta = req.Header[anthropic-beta] = 客户端透传过来的 client beta。
-			// 重构后直接从 clientHeaders 拿同一个值，保持行为一致。
+			// mimic 路径与 /v1/messages 对齐：不信任客户端透传 beta，只发送
+			// Claude Code mimic 所需 beta 与 count_tokens 专用 token-counting beta。
 			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
-			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
+			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
 		}
 		if clientBeta == "" {
 			return claude.CountTokensBetaHeader, true
@@ -11044,13 +11042,18 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
 	}
 
-	// 白名单透传 headers（恢复真实 wire casing）
-	for key, values := range clientHeaders {
-		lowerKey := strings.ToLower(key)
-		if allowedHeaders[lowerKey] {
-			wireKey := resolveWireCasing(key)
-			for _, v := range values {
-				addHeaderRaw(req.Header, wireKey, v)
+	// 白名单透传 headers（恢复真实 wire casing）。
+	// OAuth mimicry 路径与 /v1/messages 对齐：跳过客户端 header 透传，避免
+	// opencode 等入站的 x-client-request-id / x-claude-code-session-id 等
+	// 客户端指纹混入我们构造的 Claude Code header。
+	if tokenType != "oauth" || !mimicClaudeCode {
+		for key, values := range clientHeaders {
+			lowerKey := strings.ToLower(key)
+			if allowedHeaders[lowerKey] {
+				wireKey := resolveWireCasing(key)
+				for _, v := range values {
+					addHeaderRaw(req.Header, wireKey, v)
+				}
 			}
 		}
 	}
