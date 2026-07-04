@@ -50,6 +50,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
+		logOpenAIImagesRequestBodyReadError(c, reqLog, err, time.Since(requestStart))
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
@@ -381,6 +382,50 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		)
 		return
 	}
+}
+
+func logOpenAIImagesRequestBodyReadError(c *gin.Context, reqLog *zap.Logger, readErr error, duration time.Duration) {
+	if reqLog == nil {
+		reqLog = requestLogger(c, "handler.openai_gateway.images")
+	}
+
+	fields := []zap.Field{
+		zap.Error(readErr),
+		zap.String("read_error", readErr.Error()),
+		zap.Int64("read_duration_ms", duration.Milliseconds()),
+	}
+	if c != nil && c.Request != nil {
+		req := c.Request
+		path := ""
+		if req.URL != nil {
+			path = req.URL.Path
+		}
+		fields = append(fields,
+			zap.String("method", req.Method),
+			zap.String("path", path),
+			zap.String("endpoint", NormalizeInboundEndpoint(path)),
+			zap.String("content_type", summarizeRequestContentType(req.Header.Get("Content-Type"))),
+			zap.String("content_encoding", strings.TrimSpace(req.Header.Get("Content-Encoding"))),
+			zap.Int64("content_length", req.ContentLength),
+			zap.String("transfer_encoding", strings.Join(req.TransferEncoding, ",")),
+		)
+	}
+	if maxErr, ok := extractMaxBytesError(readErr); ok {
+		fields = append(fields, zap.Int64("max_body_bytes", maxErr.Limit))
+	}
+
+	reqLog.Warn("openai.images.request_body_read_failed", fields...)
+}
+
+func summarizeRequestContentType(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return ""
+	}
+	if mediaType, _, found := strings.Cut(contentType, ";"); found {
+		return strings.TrimSpace(mediaType)
+	}
+	return contentType
 }
 
 func isMultipartImagesContentType(contentType string) bool {
