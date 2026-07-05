@@ -4,46 +4,187 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// TestResolveRebateRatePercent_PerUserOverride verifies that per-inviter
-// AffRebateRatePercent overrides the global rate, that NULL falls back to the
-// global rate, and that out-of-range exclusive rates are clamped silently.
-//
-// SettingService is left nil here so globalRebateRatePercent returns the
-// documented default (AffiliateRebateRateDefault = 20%) — this exercises the
-// fallback path without spinning up a settings stub.
-func TestResolveRebateRatePercent_PerUserOverride(t *testing.T) {
-	t.Parallel()
-	svc := &AffiliateService{}
+// affiliateRewardFakeRepo is a minimal AffiliateRepository fake for
+// GrantFirstRechargeReward tests. It returns per-user summaries (so the
+// invitee's InviterID can be controlled) and records AccrueQuota calls.
+type affiliateRewardFakeRepo struct {
+	paymentFulfillmentAffiliateRepoStub
+	// summaries lets tests control the summary returned by EnsureUserAffiliate
+	// per user id (notably the invitee's InviterID).
+	summaries map[int64]*AffiliateSummary
+}
 
-	// nil exclusive rate → falls back to global default (20%)
-	require.InDelta(t, AffiliateRebateRateDefault,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{}), 1e-9)
+func (r *affiliateRewardFakeRepo) EnsureUserAffiliate(_ context.Context, userID int64) (*AffiliateSummary, error) {
+	if s, ok := r.summaries[userID]; ok && s != nil {
+		cp := *s
+		return &cp, nil
+	}
+	return &AffiliateSummary{UserID: userID}, nil
+}
 
-	// exclusive rate set → overrides global
-	rate := 50.0
-	require.InDelta(t, 50.0,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &rate}), 1e-9)
+// affiliateRewardFakeUserRepo records UpdateBalance calls for the invitee-side
+// reward and can be forced to fail to exercise the rollback/error path.
+type affiliateRewardFakeUserRepo struct {
+	mockUserRepo
+	balanceCalls []struct {
+		userID int64
+		amount float64
+	}
+	failUserID int64
+}
 
-	// exclusive rate 0 → returns 0 (no rebate, intentional)
-	zero := 0.0
-	require.InDelta(t, 0.0,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &zero}), 1e-9)
+func (r *affiliateRewardFakeUserRepo) UpdateBalance(_ context.Context, id int64, amount float64) error {
+	if r.failUserID != 0 && id == r.failUserID {
+		return fmt.Errorf("forced balance failure for %d", id)
+	}
+	r.balanceCalls = append(r.balanceCalls, struct {
+		userID int64
+		amount float64
+	}{id, amount})
+	return nil
+}
 
-	// exclusive rate above max → clamped to Max
-	tooHigh := 250.0
-	require.InDelta(t, AffiliateRebateRateMax,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &tooHigh}), 1e-9)
+func newRewardTestService(t *testing.T, repo AffiliateRepository, userRepo UserRepository, overrides map[string]string) *AffiliateService {
+	t.Helper()
+	base := map[string]string{
+		SettingKeyAffiliateEnabled:                "true",
+		SettingKeyAffiliateFirstRechargeThreshold: "20",
+		SettingKeyAffiliateInviterReward:          "5",
+		SettingKeyAffiliateInviteeReward:          "5",
+		SettingKeyAffiliateRebateFreezeHours:      "0",
+	}
+	for k, v := range overrides {
+		base[k] = v
+	}
+	ss := NewSettingService(&paymentFulfillmentSettingRepoStub{values: base}, nil)
+	return NewAffiliateService(repo, ss, nil, nil, userRepo)
+}
 
-	// exclusive rate below min → clamped to Min
-	tooLow := -5.0
-	require.InDelta(t, AffiliateRebateRateMin,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &tooLow}), 1e-9)
+func TestGrantFirstRechargeReward(t *testing.T) {
+	ctx := context.Background()
+	const inviteeID, inviterID = int64(100), int64(200)
+	orderID := int64(9)
+
+	newRepo := func() *affiliateRewardFakeRepo {
+		return &affiliateRewardFakeRepo{
+			summaries: map[int64]*AffiliateSummary{
+				inviteeID: {UserID: inviteeID, InviterID: int64Ptr(inviterID)},
+				inviterID: {UserID: inviterID},
+			},
+		}
+	}
+
+	t.Run("首充余额达标_双方各得", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 20, false, true, &orderID)
+		require.NoError(t, err)
+		require.True(t, res.Qualified)
+		require.Equal(t, inviterID, res.InviterID)
+		require.Equal(t, 5.0, res.InviterReward)
+		require.Equal(t, 5.0, res.InviteeReward)
+		require.Len(t, repo.accrueCalls, 1)
+		require.Equal(t, inviterID, repo.accrueCalls[0].inviterID)
+		require.Equal(t, inviteeID, repo.accrueCalls[0].inviteeUserID)
+		require.Equal(t, 5.0, repo.accrueCalls[0].amount)
+		require.Len(t, ur.balanceCalls, 1)
+		require.Equal(t, inviteeID, ur.balanceCalls[0].userID)
+		require.Equal(t, 5.0, ur.balanceCalls[0].amount)
+	})
+
+	t.Run("首充余额不达标_不发", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 19.99, false, true, &orderID)
+		require.NoError(t, err)
+		require.False(t, res.Qualified)
+		require.Empty(t, repo.accrueCalls)
+		require.Empty(t, ur.balanceCalls)
+	})
+
+	t.Run("订阅无条件达标", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 1, true, true, &orderID)
+		require.NoError(t, err)
+		require.True(t, res.Qualified)
+		require.Len(t, repo.accrueCalls, 1)
+		require.Len(t, ur.balanceCalls, 1)
+	})
+
+	t.Run("非首充_跳过", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 100, false, false, &orderID)
+		require.NoError(t, err)
+		require.False(t, res.Qualified)
+		require.Empty(t, repo.accrueCalls)
+		require.Empty(t, ur.balanceCalls)
+	})
+
+	t.Run("无邀请人_跳过", func(t *testing.T) {
+		repo := newRepo()
+		repo.summaries[inviteeID].InviterID = nil
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 50, false, true, &orderID)
+		require.NoError(t, err)
+		require.False(t, res.Qualified)
+		require.Empty(t, repo.accrueCalls)
+		require.Empty(t, ur.balanceCalls)
+	})
+
+	t.Run("阈值边界_等于阈值达标", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, nil)
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 20, false, true, &orderID)
+		require.NoError(t, err)
+		require.True(t, res.Qualified)
+	})
+
+	t.Run("被邀请方奖励为0_只发邀请方", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, map[string]string{SettingKeyAffiliateInviteeReward: "0"})
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 20, false, true, &orderID)
+		require.NoError(t, err)
+		require.True(t, res.Qualified)
+		require.Equal(t, 5.0, res.InviterReward)
+		require.Equal(t, 0.0, res.InviteeReward)
+		require.Len(t, repo.accrueCalls, 1)
+		require.Empty(t, ur.balanceCalls)
+	})
+
+	t.Run("总开关关闭_跳过", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{}
+		svc := newRewardTestService(t, repo, ur, map[string]string{SettingKeyAffiliateEnabled: "false"})
+		res, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 50, false, true, &orderID)
+		require.NoError(t, err)
+		require.False(t, res.Qualified)
+		require.Empty(t, repo.accrueCalls)
+		require.Empty(t, ur.balanceCalls)
+	})
+
+	t.Run("被邀请方加余额失败_返回错误", func(t *testing.T) {
+		repo := newRepo()
+		ur := &affiliateRewardFakeUserRepo{failUserID: inviteeID}
+		svc := newRewardTestService(t, repo, ur, nil)
+		_, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 20, false, true, &orderID)
+		require.Error(t, err)
+	})
 }
 
 // TestIsEnabled_NilSettingServiceReturnsDefault verifies that IsEnabled

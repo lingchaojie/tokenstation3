@@ -143,8 +143,12 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
-  /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
-  effective_rebate_rate_percent: number
+  /** 被邀请人首充达标阈值（余额充值到账额需 ≥ 此值；订阅无条件达标）。 */
+  first_recharge_threshold: number
+  /** 邀请方在被邀请人首充达标后获得的固定奖励额。 */
+  inviter_reward: number
+  /** 被邀请方在首充达标后获得的固定奖励额。 */
+  invitee_reward: number
   invitees: AffiliateInvitee[]
 }
 

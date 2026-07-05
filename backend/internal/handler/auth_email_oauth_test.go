@@ -137,7 +137,7 @@ func TestEmailOAuthCallbackCreatesPasswordRegistrationSessionForNewEmail(t *test
 			service.SettingKeyAffiliateEnabled: "true",
 		},
 		affiliateFactory: func(_ *dbent.Client, settingSvc *service.SettingService) *service.AffiliateService {
-			return service.NewAffiliateService(affiliateRepo, settingSvc, nil, nil)
+			return service.NewAffiliateService(affiliateRepo, settingSvc, nil, nil, nil)
 		},
 	})
 	ctx := context.Background()
@@ -235,7 +235,7 @@ func TestCompleteEmailOAuthRegistrationUsesAffiliateCodeFromPendingSession(t *te
 			service.SettingKeyAffiliateEnabled: "true",
 		},
 		affiliateFactory: func(_ *dbent.Client, settingSvc *service.SettingService) *service.AffiliateService {
-			return service.NewAffiliateService(affiliateRepo, settingSvc, nil, nil)
+			return service.NewAffiliateService(affiliateRepo, settingSvc, nil, nil, nil)
 		},
 	})
 	ctx := context.Background()
@@ -393,6 +393,10 @@ func (r *oauthEmailAffiliateRepoStub) BindInviter(_ context.Context, userID, inv
 
 func (r *oauthEmailAffiliateRepoStub) AccrueQuota(context.Context, int64, int64, float64, int, *int64) (bool, error) {
 	panic("unexpected AccrueQuota call")
+}
+
+func (r *oauthEmailAffiliateRepoStub) LockUserAffiliateForUpdate(context.Context, int64) error {
+	panic("unexpected LockUserAffiliateForUpdate call")
 }
 
 func (r *oauthEmailAffiliateRepoStub) GetAccruedRebateFromInvitee(context.Context, int64, int64) (float64, error) {

@@ -688,6 +688,10 @@ func (r *paymentFulfillmentAffiliateRepoStub) AccrueQuota(_ context.Context, inv
 	return true, nil
 }
 
+func (r *paymentFulfillmentAffiliateRepoStub) LockUserAffiliateForUpdate(context.Context, int64) error {
+	return nil
+}
+
 func (r *paymentFulfillmentAffiliateRepoStub) GetAccruedRebateFromInvitee(context.Context, int64, int64) (float64, error) {
 	return 0, nil
 }
@@ -1183,45 +1187,34 @@ func TestPaymentAmountToleranceForThreeDecimalCurrency(t *testing.T) {
 	assert.InDelta(t, 0.0005, paymentAmountToleranceForCurrency("KWD"), 1e-12)
 }
 
-func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
+// NOTE: TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate and
+// TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAudit
+// were removed with the percentage-rebate model — they asserted old-model
+// behavior (rebateAmount = amount * rate%) and used the deleted
+// SettingKeyAffiliateRebateRate. New-model settlement coverage
+// (GrantFirstRechargeReward: first-recharge-only, fixed amount, both parties)
+// is added in Phase 3.
+
+// newFirstRechargeRewardEnv builds a PaymentService wired with an affiliate
+// service (fixed-amount first-recharge model) over a real ent client, so the
+// full applyAffiliateRebateForOrder path (audit claim, row lock, first-recharge
+// counting, dual-party payout) can be exercised.
+func newFirstRechargeRewardEnv(t *testing.T, inviterID int64) (*PaymentService, *dbent.Client, *paymentFulfillmentAffiliateRepoStub, *mockUserRepo, int64) {
+	t.Helper()
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
-	plan, _ := createPaymentOrderSeatPlanFixture(t, ctx, client, nil)
 
-	user, err := client.User.Create().
-		SetEmail("subscription-affiliate@example.com").
+	invitee := client.User.Create().
+		SetEmail("invitee@example.com").
 		SetPasswordHash("hash").
-		SetUsername("subscription-affiliate-user").
-		Save(ctx)
-	require.NoError(t, err)
+		SetUsername("invitee-user").
+		SaveX(ctx)
+	inviteeID := invitee.ID
 
-	order, err := client.PaymentOrder.Create().
-		SetUserID(user.ID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetAmount(120).
-		SetPayAmount(120).
-		SetFeeRate(0).
-		SetRechargeCode("PAY-SUB-AFFILIATE").
-		SetOutTradeNo("sub2_subscription_affiliate").
-		SetPaymentType(payment.TypeAlipay).
-		SetPaymentTradeNo("trade-sub-affiliate").
-		SetOrderType(payment.OrderTypeSubscription).
-		SetPlanID(plan.ID).
-		SetSubscriptionGroupID(plan.GroupID).
-		SetSubscriptionDays(30).
-		SetStatus(OrderStatusPaid).
-		SetExpiresAt(time.Now().Add(time.Hour)).
-		SetClientIP("127.0.0.1").
-		SetSrcHost("api.example.com").
-		Save(ctx)
-	require.NoError(t, err)
-
-	inviterID := int64(9001)
 	affiliateRepo := &paymentFulfillmentAffiliateRepoStub{
 		inviteeSummary: &AffiliateSummary{
-			UserID:    user.ID,
+			UserID:    inviteeID,
 			AffCode:   "INVITEE",
 			InviterID: &inviterID,
 			CreatedAt: time.Now().Add(-24 * time.Hour),
@@ -1233,133 +1226,119 @@ func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
 		},
 	}
 	settingSvc := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
-		SettingKeyAffiliateEnabled:           "true",
-		SettingKeyAffiliateRebateRate:        "20",
-		SettingKeyAffiliateRebateFreezeHours: "0",
+		SettingKeyAffiliateEnabled:                "true",
+		SettingKeyAffiliateFirstRechargeThreshold: "20",
+		SettingKeyAffiliateInviterReward:          "5",
+		SettingKeyAffiliateInviteeReward:          "5",
+		SettingKeyAffiliateRebateFreezeHours:      "0",
 	}}, nil)
-	subRepo := newSubscriptionUserSubRepoStub()
-	group := &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}
-	subscriptionSvc := NewSubscriptionService(&subscriptionGroupRepoStub{
-		group: group,
-	}, subRepo, nil, nil, nil)
+	userRepo := &mockUserRepo{}
+	affiliateSvc := NewAffiliateService(affiliateRepo, settingSvc, nil, nil, userRepo)
+
 	svc := &PaymentService{
 		entClient:        client,
-		configService:    NewPaymentConfigService(client, nil, nil),
-		groupRepo:        &subscriptionGroupRepoStub{group: group},
-		subscriptionSvc:  subscriptionSvc,
-		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+		affiliateService: affiliateSvc,
 	}
-
-	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
-	require.NoError(t, err)
-
-	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
-	require.NoError(t, err)
-	require.Equal(t, OrderStatusCompleted, reloaded.Status)
-	require.Len(t, affiliateRepo.accrueCalls, 1)
-	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
-	require.Equal(t, user.ID, affiliateRepo.accrueCalls[0].inviteeUserID)
-	require.Equal(t, 24.0, affiliateRepo.accrueCalls[0].amount)
-	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
-	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
-	require.Equal(t, 1, subRepo.createCalls)
-
-	applied, err := client.PaymentAuditLog.Query().
-		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("AFFILIATE_REBATE_APPLIED")).
-		Only(ctx)
-	require.NoError(t, err)
-	require.Contains(t, applied.Detail, `"baseAmount":120`)
-	require.Contains(t, applied.Detail, `"rebateAmount":24`)
+	return svc, client, affiliateRepo, userRepo, inviteeID
 }
 
-func TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAudit(t *testing.T) {
-	ctx := context.Background()
-	client := newPaymentConfigServiceTestClient(t)
-	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
-	plan, _ := createPaymentOrderSeatPlanFixture(t, ctx, client, nil)
-
-	user, err := client.User.Create().
-		SetEmail("subscription-affiliate-idempotent@example.com").
-		SetPasswordHash("hash").
-		SetUsername("subscription-affiliate-idempotent-user").
-		Save(ctx)
-	require.NoError(t, err)
-
+func createFirstRechargeBalanceOrder(t *testing.T, ctx context.Context, client *dbent.Client, userID int64, amount float64, status, code, outTradeNo string) *dbent.PaymentOrder {
+	t.Helper()
 	order, err := client.PaymentOrder.Create().
-		SetUserID(user.ID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetAmount(80).
-		SetPayAmount(80).
+		SetUserID(userID).
+		SetUserEmail("invitee@example.com").
+		SetUserName("invitee-user").
+		SetAmount(amount).
+		SetPayAmount(amount).
 		SetFeeRate(0).
-		SetRechargeCode("PAY-SUB-AFFILIATE-IDEMPOTENT").
-		SetOutTradeNo("sub2_subscription_affiliate_idempotent").
+		SetRechargeCode(code).
+		SetOutTradeNo(outTradeNo).
 		SetPaymentType(payment.TypeAlipay).
-		SetPaymentTradeNo("trade-sub-affiliate-idempotent").
-		SetOrderType(payment.OrderTypeSubscription).
-		SetPlanID(plan.ID).
-		SetSubscriptionGroupID(plan.GroupID).
-		SetSubscriptionDays(30).
-		SetStatus(OrderStatusPaid).
+		SetPaymentTradeNo(outTradeNo + "-trade").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(status).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
 		SetSrcHost("api.example.com").
 		Save(ctx)
 	require.NoError(t, err)
-	_, err = client.PaymentAuditLog.Create().
-		SetOrderID(strconv.FormatInt(order.ID, 10)).
-		SetAction("SUBSCRIPTION_SUCCESS").
-		SetDetail(`{"groupID":7,"validityDays":30}`).
-		SetOperator("system").
-		Save(ctx)
-	require.NoError(t, err)
-	_, err = client.PaymentAuditLog.Create().
-		SetOrderID(strconv.FormatInt(order.ID, 10)).
-		SetAction("AFFILIATE_REBATE_APPLIED").
-		SetDetail(`{"baseAmount":80,"rebateAmount":16}`).
-		SetOperator("system").
-		Save(ctx)
-	require.NoError(t, err)
+	return order
+}
 
-	inviterID := int64(9001)
-	affiliateRepo := &paymentFulfillmentAffiliateRepoStub{
-		inviteeSummary: &AffiliateSummary{
-			UserID:    user.ID,
-			AffCode:   "INVITEE",
-			InviterID: &inviterID,
-			CreatedAt: time.Now().Add(-24 * time.Hour),
-		},
-		inviterSummary: &AffiliateSummary{
-			UserID:    inviterID,
-			AffCode:   "INVITER",
-			CreatedAt: time.Now().Add(-48 * time.Hour),
-		},
+// TestApplyAffiliateRebate_FirstRechargeApplied verifies that the invitee's
+// first qualifying balance recharge pays both parties and records an
+// AFFILIATE_REBATE_APPLIED audit log.
+func TestApplyAffiliateRebate_FirstRechargeApplied(t *testing.T) {
+	ctx := context.Background()
+	const inviterID = int64(6001)
+	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+
+	var balanceCredits []struct {
+		userID int64
+		amount float64
 	}
-	settingSvc := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
-		SettingKeyAffiliateEnabled:    "true",
-		SettingKeyAffiliateRebateRate: "20",
-	}}, nil)
-	subRepo := newSubscriptionUserSubRepoStub()
-	group := &Group{ID: plan.GroupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}
-	subscriptionSvc := NewSubscriptionService(&subscriptionGroupRepoStub{
-		group: group,
-	}, subRepo, nil, nil, nil)
-	svc := &PaymentService{
-		entClient:        client,
-		configService:    NewPaymentConfigService(client, nil, nil),
-		groupRepo:        &subscriptionGroupRepoStub{group: group},
-		subscriptionSvc:  subscriptionSvc,
-		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+	userRepo.updateBalanceFn = func(_ context.Context, id int64, amount float64) error {
+		balanceCredits = append(balanceCredits, struct {
+			userID int64
+			amount float64
+		}{id, amount})
+		return nil
 	}
 
-	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
-	require.NoError(t, err)
+	order := createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 20, OrderStatusRecharging, "PAY-FIRST-APPLIED", "sub2_first_applied")
 
-	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, order))
+
+	// Inviter side → aff_quota via AccrueQuota.
+	require.Len(t, affiliateRepo.accrueCalls, 1)
+	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
+	require.Equal(t, inviteeID, affiliateRepo.accrueCalls[0].inviteeUserID)
+	require.Equal(t, 5.0, affiliateRepo.accrueCalls[0].amount)
+	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
+	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
+
+	// Invitee side → account balance via UpdateBalance.
+	require.Len(t, balanceCredits, 1)
+	require.Equal(t, inviteeID, balanceCredits[0].userID)
+	require.Equal(t, 5.0, balanceCredits[0].amount)
+
+	applied, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("AFFILIATE_REBATE_APPLIED")).
+		Only(ctx)
 	require.NoError(t, err)
-	require.Equal(t, OrderStatusCompleted, reloaded.Status)
-	require.Empty(t, affiliateRepo.accrueCalls)
-	require.Zero(t, subRepo.createCalls)
+	require.Contains(t, applied.Detail, `"inviterReward":5`)
+	require.Contains(t, applied.Detail, `"inviteeReward":5`)
+}
+
+// TestApplyAffiliateRebate_SecondRechargeSkipped verifies that once the invitee
+// already has a prior succeeded recharge, a subsequent recharge is treated as
+// non-first (countPriorSucceededRecharges > 0) and skips the reward, recording
+// AFFILIATE_REBATE_SKIPPED with isFirstRecharge:false.
+func TestApplyAffiliateRebate_SecondRechargeSkipped(t *testing.T) {
+	ctx := context.Background()
+	const inviterID = int64(6002)
+	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+
+	userRepo.updateBalanceFn = func(context.Context, int64, float64) error {
+		t.Fatalf("UpdateBalance should not be called for a skipped (non-first) recharge")
+		return nil
+	}
+
+	// Prior COMPLETED recharge → makes the next order non-first.
+	createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 50, OrderStatusCompleted, "PAY-HIST", "sub2_hist")
+	secondOrder := createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 50, OrderStatusRecharging, "PAY-SECOND", "sub2_second")
+
+	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, secondOrder))
+
+	require.Empty(t, affiliateRepo.accrueCalls, "non-first recharge must not accrue inviter reward")
+
+	skipped, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(secondOrder.ID, 10)),
+			paymentauditlog.ActionEQ("AFFILIATE_REBATE_SKIPPED")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Contains(t, skipped.Detail, `"isFirstRecharge":false`)
 }
 
 var _ AffiliateRepository = (*paymentFulfillmentAffiliateRepoStub)(nil)
