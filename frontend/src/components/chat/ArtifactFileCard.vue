@@ -18,7 +18,7 @@
     <button
       class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-linear-hairline bg-linear-surface-1 text-linear-ink-muted transition-colors hover:bg-linear-surface-2 hover:text-linear-ink"
       type="button"
-      :title="`Download ${artifact.filename}`"
+      :title="t('chat.downloadFile', { filename: artifact.filename })"
       :data-testid="`chat-artifact-file-download-${artifact.id}`"
       @click="$emit('download')"
     >
@@ -29,9 +29,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import type { WebChatArtifact } from '@/api/chat'
 import Icon from '@/components/icons/Icon.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   artifact: WebChatArtifact

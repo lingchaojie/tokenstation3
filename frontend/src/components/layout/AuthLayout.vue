@@ -76,7 +76,7 @@ const DEFAULT_SITE_NAME = 'LINX2.AI'
 const siteName = computed(() => appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const siteSubtitle = computed(
-  () => appStore.cachedPublicSettings?.site_subtitle || 'AI Gateway Platform · Anthropic / OpenAI-compatible routes'
+  () => appStore.cachedPublicSettings?.site_subtitle || t('auth.layout.subtitleFallback')
 )
 const usesDefaultBrand = computed(() => siteName.value.trim().toUpperCase() === DEFAULT_SITE_NAME)
 

@@ -20,7 +20,7 @@
             @click="showConversationList"
           >
             <Icon name="chevronLeft" size="sm" />
-            <span>Chats</span>
+            <span>{{ t('chat.viewChats') }}</span>
           </button>
           <span class="min-w-0 flex-1 truncate text-sm font-medium text-linear-ink">
             {{ mobileTitle }}
@@ -36,6 +36,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import Composer from '@/components/chat/Composer.vue'
 import ConversationRail from '@/components/chat/ConversationRail.vue'
@@ -44,6 +45,7 @@ import MessageList from '@/components/chat/MessageList.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { useChatStore } from '@/stores/chat'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 
 const props = withDefaults(defineProps<{
@@ -56,7 +58,7 @@ const mobilePanel = ref<'list' | 'chat'>(props.initialMobilePanel)
 
 const mobileTitle = computed(() => {
   const conversation = chatStore.currentConversation?.conversation
-  return conversation?.title || conversation?.last_model || chatStore.selectedModel?.display_name || 'Chat'
+  return conversation?.title || conversation?.last_model || chatStore.selectedModel?.display_name || t('chat.chatFallbackTitle')
 })
 
 function showChatPanel(): void {
