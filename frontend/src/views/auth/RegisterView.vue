@@ -182,6 +182,25 @@
           </transition>
         </div>
 
+        <!-- Affiliate Code Input (Optional) -->
+        <div>
+          <label for="aff_code" class="input-label">
+            {{ t('auth.affiliateCodeLabel') }}
+          </label>
+          <input
+            id="aff_code"
+            v-model="formData.aff_code"
+            type="text"
+            autocomplete="off"
+            :disabled="registrationActionDisabled"
+            class="input"
+            :placeholder="t('auth.affiliateCodePlaceholder')"
+          />
+          <p class="input-hint">
+            {{ t('auth.affiliateCodeHint') }}
+          </p>
+        </div>
+
         <!-- Turnstile Widget -->
         <div v-if="turnstileEnabled && turnstileSiteKey">
           <TurnstileWidget
