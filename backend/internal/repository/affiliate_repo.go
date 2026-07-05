@@ -171,6 +171,12 @@ func (r *affiliateRepository) LockUserAffiliateForUpdate(ctx context.Context, us
 	if userID <= 0 {
 		return service.ErrUserNotFound
 	}
+	// 资金安全原语：行锁必须在事务内才有意义。若 ctx 未携带 tx，
+	// clientFromContext 会静默回退到非事务 client，使 FOR UPDATE 立即释放、
+	// 锁形同虚设。此处将"静默误用"变为"响亮报错"。
+	if dbent.TxFromContext(ctx) == nil {
+		return fmt.Errorf("LockUserAffiliateForUpdate must run inside a transaction")
+	}
 	client := clientFromContext(ctx, r.client)
 	// 复用 ensure 路径保证行存在（幂等，ON CONFLICT DO NOTHING）。
 	if _, err := ensureUserAffiliateWithClient(ctx, client, userID); err != nil {

@@ -1195,5 +1195,151 @@ func TestPaymentAmountToleranceForThreeDecimalCurrency(t *testing.T) {
 // (GrantFirstRechargeReward: first-recharge-only, fixed amount, both parties)
 // is added in Phase 3.
 
+// newFirstRechargeRewardEnv builds a PaymentService wired with an affiliate
+// service (fixed-amount first-recharge model) over a real ent client, so the
+// full applyAffiliateRebateForOrder path (audit claim, row lock, first-recharge
+// counting, dual-party payout) can be exercised.
+func newFirstRechargeRewardEnv(t *testing.T, inviterID int64) (*PaymentService, *dbent.Client, *paymentFulfillmentAffiliateRepoStub, *mockUserRepo, int64) {
+	t.Helper()
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+
+	invitee := client.User.Create().
+		SetEmail("invitee@example.com").
+		SetPasswordHash("hash").
+		SetUsername("invitee-user").
+		SaveX(ctx)
+	inviteeID := invitee.ID
+
+	affiliateRepo := &paymentFulfillmentAffiliateRepoStub{
+		inviteeSummary: &AffiliateSummary{
+			UserID:    inviteeID,
+			AffCode:   "INVITEE",
+			InviterID: &inviterID,
+			CreatedAt: time.Now().Add(-24 * time.Hour),
+		},
+		inviterSummary: &AffiliateSummary{
+			UserID:    inviterID,
+			AffCode:   "INVITER",
+			CreatedAt: time.Now().Add(-48 * time.Hour),
+		},
+	}
+	settingSvc := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
+		SettingKeyAffiliateEnabled:                "true",
+		SettingKeyAffiliateFirstRechargeThreshold: "20",
+		SettingKeyAffiliateInviterReward:          "5",
+		SettingKeyAffiliateInviteeReward:          "5",
+		SettingKeyAffiliateRebateFreezeHours:      "0",
+	}}, nil)
+	userRepo := &mockUserRepo{}
+	affiliateSvc := NewAffiliateService(affiliateRepo, settingSvc, nil, nil, userRepo)
+
+	svc := &PaymentService{
+		entClient:        client,
+		affiliateService: affiliateSvc,
+	}
+	return svc, client, affiliateRepo, userRepo, inviteeID
+}
+
+func createFirstRechargeBalanceOrder(t *testing.T, ctx context.Context, client *dbent.Client, userID int64, amount float64, status, code, outTradeNo string) *dbent.PaymentOrder {
+	t.Helper()
+	order, err := client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail("invitee@example.com").
+		SetUserName("invitee-user").
+		SetAmount(amount).
+		SetPayAmount(amount).
+		SetFeeRate(0).
+		SetRechargeCode(code).
+		SetOutTradeNo(outTradeNo).
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo(outTradeNo + "-trade").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(status).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+	return order
+}
+
+// TestApplyAffiliateRebate_FirstRechargeApplied verifies that the invitee's
+// first qualifying balance recharge pays both parties and records an
+// AFFILIATE_REBATE_APPLIED audit log.
+func TestApplyAffiliateRebate_FirstRechargeApplied(t *testing.T) {
+	ctx := context.Background()
+	const inviterID = int64(6001)
+	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+
+	var balanceCredits []struct {
+		userID int64
+		amount float64
+	}
+	userRepo.updateBalanceFn = func(_ context.Context, id int64, amount float64) error {
+		balanceCredits = append(balanceCredits, struct {
+			userID int64
+			amount float64
+		}{id, amount})
+		return nil
+	}
+
+	order := createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 20, OrderStatusRecharging, "PAY-FIRST-APPLIED", "sub2_first_applied")
+
+	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, order))
+
+	// Inviter side → aff_quota via AccrueQuota.
+	require.Len(t, affiliateRepo.accrueCalls, 1)
+	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
+	require.Equal(t, inviteeID, affiliateRepo.accrueCalls[0].inviteeUserID)
+	require.Equal(t, 5.0, affiliateRepo.accrueCalls[0].amount)
+	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
+	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
+
+	// Invitee side → account balance via UpdateBalance.
+	require.Len(t, balanceCredits, 1)
+	require.Equal(t, inviteeID, balanceCredits[0].userID)
+	require.Equal(t, 5.0, balanceCredits[0].amount)
+
+	applied, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("AFFILIATE_REBATE_APPLIED")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Contains(t, applied.Detail, `"inviterReward":5`)
+	require.Contains(t, applied.Detail, `"inviteeReward":5`)
+}
+
+// TestApplyAffiliateRebate_SecondRechargeSkipped verifies that once the invitee
+// already has a prior succeeded recharge, a subsequent recharge is treated as
+// non-first (countPriorSucceededRecharges > 0) and skips the reward, recording
+// AFFILIATE_REBATE_SKIPPED with isFirstRecharge:false.
+func TestApplyAffiliateRebate_SecondRechargeSkipped(t *testing.T) {
+	ctx := context.Background()
+	const inviterID = int64(6002)
+	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+
+	userRepo.updateBalanceFn = func(context.Context, int64, float64) error {
+		t.Fatalf("UpdateBalance should not be called for a skipped (non-first) recharge")
+		return nil
+	}
+
+	// Prior COMPLETED recharge → makes the next order non-first.
+	createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 50, OrderStatusCompleted, "PAY-HIST", "sub2_hist")
+	secondOrder := createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 50, OrderStatusRecharging, "PAY-SECOND", "sub2_second")
+
+	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, secondOrder))
+
+	require.Empty(t, affiliateRepo.accrueCalls, "non-first recharge must not accrue inviter reward")
+
+	skipped, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(secondOrder.ID, 10)),
+			paymentauditlog.ActionEQ("AFFILIATE_REBATE_SKIPPED")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Contains(t, skipped.Detail, `"isFirstRecharge":false`)
+}
+
 var _ AffiliateRepository = (*paymentFulfillmentAffiliateRepoStub)(nil)
 var _ SettingRepository = (*paymentFulfillmentSettingRepoStub)(nil)
