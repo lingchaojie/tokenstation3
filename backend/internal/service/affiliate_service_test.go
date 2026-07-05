@@ -10,41 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestResolveRebateRatePercent_PerUserOverride verifies that per-inviter
-// AffRebateRatePercent overrides the global rate, that NULL falls back to the
-// global rate, and that out-of-range exclusive rates are clamped silently.
-//
-// SettingService is left nil here so globalRebateRatePercent returns the
-// documented default (AffiliateRebateRateDefault = 20%) — this exercises the
-// fallback path without spinning up a settings stub.
-func TestResolveRebateRatePercent_PerUserOverride(t *testing.T) {
-	t.Parallel()
-	svc := &AffiliateService{}
-
-	// nil exclusive rate → falls back to global default (20%)
-	require.InDelta(t, AffiliateRebateRateDefault,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{}), 1e-9)
-
-	// exclusive rate set → overrides global
-	rate := 50.0
-	require.InDelta(t, 50.0,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &rate}), 1e-9)
-
-	// exclusive rate 0 → returns 0 (no rebate, intentional)
-	zero := 0.0
-	require.InDelta(t, 0.0,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &zero}), 1e-9)
-
-	// exclusive rate above max → clamped to Max
-	tooHigh := 250.0
-	require.InDelta(t, AffiliateRebateRateMax,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &tooHigh}), 1e-9)
-
-	// exclusive rate below min → clamped to Min
-	tooLow := -5.0
-	require.InDelta(t, AffiliateRebateRateMin,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &tooLow}), 1e-9)
-}
+// NOTE: TestResolveRebateRatePercent_PerUserOverride was removed alongside the
+// percentage-rebate model (resolveRebateRatePercent / AffiliateRebateRate*).
+// New-model coverage (GrantFirstRechargeReward) is added in Phase 3.
 
 // TestIsEnabled_NilSettingServiceReturnsDefault verifies that IsEnabled
 // safely handles a nil settingService dependency by returning the default

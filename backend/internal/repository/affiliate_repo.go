@@ -162,6 +162,34 @@ VALUES ($1, 'accrue', $2, $3, $4, NOW(), NOW())`, inviterID, amount, inviteeUser
 	return applied, nil
 }
 
+// LockUserAffiliateForUpdate 确保被邀请人 affiliate 行存在并对其加行锁（FOR UPDATE）。
+// 用于串行化同一被邀请人的首充奖励结算：并发订单在履约事务内各自调用本方法，
+// 第二个调用会阻塞直到第一个事务提交/回滚释放锁；随后其首充计数将看到兄弟订单
+// （RECHARGING/PAID/COMPLETED），从而正确判定为非首充并跳过。
+// 必须在事务上下文内调用（ctx 携带 tx），否则 FOR UPDATE 行锁会随查询立即释放，失去串行化意义。
+func (r *affiliateRepository) LockUserAffiliateForUpdate(ctx context.Context, userID int64) error {
+	if userID <= 0 {
+		return service.ErrUserNotFound
+	}
+	client := clientFromContext(ctx, r.client)
+	// 复用 ensure 路径保证行存在（幂等，ON CONFLICT DO NOTHING）。
+	if _, err := ensureUserAffiliateWithClient(ctx, client, userID); err != nil {
+		return err
+	}
+	rows, err := client.QueryContext(ctx, `SELECT 1 FROM user_affiliates WHERE user_id = $1 FOR UPDATE`, userID)
+	if err != nil {
+		return fmt.Errorf("lock user affiliate for update: %w", err)
+	}
+	defer rows.Close()
+	// 消费结果集以确保锁被真正获取；行必存在（上面已 ensure）。
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("lock user affiliate for update: %w", err)
+	}
+	return nil
+}
+
 func (r *affiliateRepository) GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error) {
 	client := clientFromContext(ctx, r.client)
 	rows, err := client.QueryContext(ctx,

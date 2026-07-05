@@ -100,6 +100,9 @@ type AffiliateRepository interface {
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
 	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error)
+	// LockUserAffiliateForUpdate 确保行存在并对其加行锁（FOR UPDATE），
+	// 用于串行化同一被邀请人的首充奖励结算，防并发重复发放。必须在事务上下文内调用。
+	LockUserAffiliateForUpdate(ctx context.Context, userID int64) error
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
 	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
 	TransferQuotaToBalance(ctx context.Context, userID int64) (float64, float64, error)
@@ -316,6 +319,16 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 		return ErrAffiliateAlreadyBound
 	}
 	return nil
+}
+
+// LockInviteeForSettlement 对被邀请人的 affiliate 行加行锁（FOR UPDATE），
+// 串行化同一被邀请人的首充奖励结算，防止并发订单各自观察到 priorCount==0 而重复发放。
+// 必须在履约事务上下文内调用（ctx 携带 tx），锁随事务提交/回滚释放。
+func (s *AffiliateService) LockInviteeForSettlement(ctx context.Context, userID int64) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	return s.repo.LockUserAffiliateForUpdate(ctx, userID)
 }
 
 // AffiliateRewardResult 描述一次首充奖励结算的结果，供调用方写审计与失效缓存。

@@ -292,7 +292,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder) e
 	case redeemActionRedeem:
 		// Code exists but unused — skip creation, proceed to redeem
 	}
-	if _, err := s.redeemService.Redeem(ContextSkipRedeemAffiliate(ctx), o.UserID, o.RechargeCode); err != nil {
+	if _, err := s.redeemService.Redeem(ctx, o.UserID, o.RechargeCode); err != nil {
 		return fmt.Errorf("redeem balance: %w", err)
 	}
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
@@ -654,6 +654,15 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	}
 	if !claimed {
 		return nil
+	}
+
+	// 串行化同一被邀请人的首充结算：加行锁后再计数，防并发订单重复发放。
+	// 第二个并发结算会阻塞至第一个提交，随后其计数看到兄弟订单而正确跳过。
+	if err := s.affiliateService.LockInviteeForSettlement(txCtx, o.UserID); err != nil {
+		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
+			"error": err.Error(),
+		})
+		return fmt.Errorf("lock invitee for settlement: %w", err)
 	}
 
 	priorCount, err := s.countPriorSucceededRecharges(txCtx, o.UserID, o.ID)
