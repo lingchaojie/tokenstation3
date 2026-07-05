@@ -665,10 +665,10 @@ func (r *affiliateRepository) GetAffiliateUserOverview(ctx context.Context, user
 	); err != nil {
 		return nil, err
 	}
-	if hasCustomRate {
-		overview.RebateRatePercent = customRate
-		overview.RebateRateCustom = true
-	}
+	// 旧的按比例返现已停用：per-user 专属比例列仍被扫描（DB 列保留），
+	// 但不再映射到展示层（首充固定奖励模型无此字段）。
+	_ = customRate
+	_ = hasCustomRate
 	return &overview, rows.Err()
 }
 

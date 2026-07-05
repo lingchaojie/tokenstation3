@@ -142,20 +142,20 @@ type SystemSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	DefaultConcurrency           int
-	DefaultBalance               float64
-	RiskControlEnabled           bool
-	CyberSessionBlockEnabled     bool
-	CyberSessionBlockTTLSeconds  int
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
-	DefaultAnthropicGroupID      *int64 `json:"default_anthropic_group_id"`
-	DefaultOpenAIGroupID         *int64 `json:"default_openai_group_id"`
+	DefaultConcurrency              int
+	DefaultBalance                  float64
+	RiskControlEnabled              bool
+	CyberSessionBlockEnabled        bool
+	CyberSessionBlockTTLSeconds     int
+	AffiliateEnabled                bool
+	AffiliateRebateFreezeHours      int
+	AffiliateFirstRechargeThreshold float64
+	AffiliateInviterReward          float64
+	AffiliateInviteeReward          float64
+	DefaultUserRPMLimit             int
+	DefaultSubscriptions            []DefaultSubscriptionSetting
+	DefaultAnthropicGroupID         *int64 `json:"default_anthropic_group_id"`
+	DefaultOpenAIGroupID            *int64 `json:"default_openai_group_id"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`

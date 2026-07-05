@@ -604,6 +604,28 @@ func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID in
 	return false
 }
 
+// countPriorSucceededRecharges 统计用户在 excludeOrderID 之外的成功充值订单数
+// （order_type ∈ {balance, subscription}，status ∈ {PAID, RECHARGING, COMPLETED}）。
+// 返回 0 表示当前订单为首充。必须在履约事务上下文内调用（ctx 携带 tx）。
+func (s *PaymentService) countPriorSucceededRecharges(ctx context.Context, userID, excludeOrderID int64) (int, error) {
+	client := s.entClient
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		client = tx.Client()
+	}
+	n, err := client.PaymentOrder.Query().
+		Where(
+			paymentorder.UserIDEQ(userID),
+			paymentorder.IDNEQ(excludeOrderID),
+			paymentorder.OrderTypeIn(payment.OrderTypeBalance, payment.OrderTypeSubscription),
+			paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted),
+		).
+		Count(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count prior recharges: %w", err)
+	}
+	return n, nil
+}
+
 func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *dbent.PaymentOrder) error {
 	baseAmount := affiliateRebateBaseAmount(o)
 	if o == nil || baseAmount <= 0 {
@@ -634,49 +656,62 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 		return nil
 	}
 
-	sourceOrderID := o.ID
-	rebateAmount, err := s.affiliateService.AccrueInviteRebateForOrder(txCtx, o.UserID, baseAmount, &sourceOrderID)
+	priorCount, err := s.countPriorSucceededRecharges(txCtx, o.UserID, o.ID)
 	if err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
 			"error": err.Error(),
 		})
-		return fmt.Errorf("accrue affiliate rebate: %w", err)
+		return fmt.Errorf("count prior recharges: %w", err)
+	}
+	isFirstRecharge := priorCount == 0
+	isSubscription := o.OrderType == payment.OrderTypeSubscription
+
+	sourceOrderID := o.ID
+	result, err := s.affiliateService.GrantFirstRechargeReward(txCtx, o.UserID, baseAmount, isSubscription, isFirstRecharge, &sourceOrderID)
+	if err != nil {
+		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
+			"error": err.Error(),
+		})
+		return fmt.Errorf("grant first recharge reward: %w", err)
 	}
 
-	if rebateAmount <= 0 {
+	if !result.Qualified {
+		reason := "not first recharge or below threshold or no inviter"
 		if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_SKIPPED", map[string]any{
-			"baseAmount": baseAmount,
-			"reason":     "no inviter bound or rebate amount <= 0",
+			"baseAmount":      baseAmount,
+			"isFirstRecharge": isFirstRecharge,
+			"isSubscription":  isSubscription,
+			"reason":          reason,
 		}); err != nil {
-			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-				"error": err.Error(),
-			})
+			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": err.Error()})
 			return fmt.Errorf("update affiliate rebate skipped audit: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-				"error": fmt.Sprintf("commit affiliate rebate tx: %v", err),
-			})
+			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": fmt.Sprintf("commit: %v", err)})
 			return fmt.Errorf("commit affiliate rebate tx: %w", err)
 		}
 		return nil
 	}
 
 	if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_APPLIED", map[string]any{
-		"baseAmount":   baseAmount,
-		"rebateAmount": rebateAmount,
+		"baseAmount":     baseAmount,
+		"inviterID":      result.InviterID,
+		"inviterReward":  result.InviterReward,
+		"inviteeReward":  result.InviteeReward,
+		"isSubscription": isSubscription,
 	}); err != nil {
-		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-			"error": err.Error(),
-		})
+		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": err.Error()})
 		return fmt.Errorf("update affiliate rebate applied audit: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-			"error": fmt.Sprintf("commit affiliate rebate tx: %v", err),
-		})
+		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": fmt.Sprintf("commit: %v", err)})
 		return fmt.Errorf("commit affiliate rebate tx: %w", err)
+	}
+
+	// 提交后失效被邀请方余额缓存（best-effort）
+	if result.InviteeReward > 0 {
+		s.affiliateService.InvalidateUserBalanceCache(ctx, o.UserID)
 	}
 	return nil
 }
