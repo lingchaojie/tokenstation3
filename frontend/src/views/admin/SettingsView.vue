@@ -5977,13 +5977,6 @@
                   <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
                     <thead class="bg-gray-50 dark:bg-dark-800">
                       <tr>
-                        <th class="px-3 py-2 text-left">
-                          <input
-                            type="checkbox"
-                            :checked="affiliateState.entries.length > 0 && affiliateState.selected.length === affiliateState.entries.length"
-                            @change="toggleAffiliateSelectAll"
-                          />
-                        </th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.email') }}</th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.username') }}</th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.code') }}</th>
@@ -5992,23 +5985,16 @@
                     </thead>
                     <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
                       <tr v-if="affiliateState.loading">
-                        <td colspan="5" class="px-3 py-6 text-center text-sm text-gray-500">
+                        <td colspan="4" class="px-3 py-6 text-center text-sm text-gray-500">
                           {{ t('common.loading') }}
                         </td>
                       </tr>
                       <tr v-else-if="affiliateState.entries.length === 0">
-                        <td colspan="5" class="px-3 py-6 text-center text-sm text-gray-500">
+                        <td colspan="4" class="px-3 py-6 text-center text-sm text-gray-500">
                           {{ t('admin.settings.features.affiliate.customUsers.empty') }}
                         </td>
                       </tr>
                       <tr v-for="entry in affiliateState.entries" :key="entry.user_id">
-                        <td class="px-3 py-2">
-                          <input
-                            type="checkbox"
-                            :checked="affiliateState.selected.includes(entry.user_id)"
-                            @change="toggleAffiliateSelect(entry.user_id)"
-                          />
-                        </td>
                         <td class="px-3 py-2 text-sm text-gray-900 dark:text-white">{{ entry.email }}</td>
                         <td class="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{{ entry.username }}</td>
                         <td class="px-3 py-2 text-sm font-mono">
@@ -10270,7 +10256,6 @@ interface AffiliateState {
   page: number;
   pageSize: number;
   search: string;
-  selected: number[];
   searchTimer: number | null;
 }
 
@@ -10281,7 +10266,6 @@ const affiliateState = reactive<AffiliateState>({
   page: 1,
   pageSize: 20,
   search: "",
-  selected: [],
   searchTimer: null,
 });
 
@@ -10379,9 +10363,6 @@ async function loadAffiliateUsers() {
     });
     affiliateState.entries = res.items ?? [];
     affiliateState.total = res.total ?? 0;
-    // Drop selections that are no longer visible.
-    const visibleIds = new Set(affiliateState.entries.map((e) => e.user_id));
-    affiliateState.selected = affiliateState.selected.filter((id) => visibleIds.has(id));
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   } finally {
@@ -10400,17 +10381,6 @@ function changeAffiliatePage(page: number) {
   if (page < 1) return;
   affiliateState.page = page;
   loadAffiliateUsers();
-}
-
-function toggleAffiliateSelectAll(e: Event) {
-  const checked = (e.target as HTMLInputElement).checked;
-  affiliateState.selected = checked ? affiliateState.entries.map((entry) => entry.user_id) : [];
-}
-
-function toggleAffiliateSelect(userId: number) {
-  const idx = affiliateState.selected.indexOf(userId);
-  if (idx >= 0) affiliateState.selected.splice(idx, 1);
-  else affiliateState.selected.push(userId);
 }
 
 // openAffiliateModal opens the add/edit modal, prefilling fields from the
