@@ -28,33 +28,35 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 
 const conversationTitle = computed(() => {
   const conversation = chatStore.currentConversation?.conversation
-  return conversation?.title || 'New chat'
+  return conversation?.title || t('chat.newChat')
 })
 
 const modelLabel = computed(() => {
   const model = chatStore.selectedModel
-  if (!model) return 'Select model'
-  return model.display_name || displayModelName(model.model) || 'Select model'
+  if (!model) return t('chat.selectModel')
+  return model.display_name || displayModelName(model.model) || t('chat.selectModel')
 })
 
 const subtitle = computed(() => {
   const capabilities: string[] = []
   const model = chatStore.selectedModel
-  if (!model) return 'Choose a model in the composer'
-  if (model.supports_image_input) capabilities.push('Images')
-  if (model.supports_file_context) capabilities.push('Files')
+  if (!model) return t('chat.chooseModelInComposer')
+  if (model.supports_image_input) capabilities.push(t('chat.capabilityImages'))
+  if (model.supports_file_context) capabilities.push(t('chat.capabilityFiles'))
   if (model.supports_thinking) capabilities.push('Thinking')
-  if (model.supports_image_generation) capabilities.push('Generate')
+  if (model.supports_image_generation) capabilities.push(t('chat.capabilityGenerate'))
   return capabilities.length > 0 ? capabilities.join(' · ') : modelLabel.value
 })
 </script>

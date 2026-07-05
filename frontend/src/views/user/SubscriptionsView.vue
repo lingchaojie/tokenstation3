@@ -50,7 +50,7 @@
                   v-if="hasPlanSeatLimit(subscription)"
                   class="mt-2 inline-flex items-center rounded-full border border-orange-200/70 bg-orange-50 px-2.5 py-1 text-[11px] font-medium text-orange-700 dark:border-orange-400/20 dark:bg-orange-400/10 dark:text-orange-200"
                 >
-                  当前已开通 {{ subscription.seat_used }}/{{ subscription.seat_limit }}
+                  {{ t('userSubscriptions.seatOpened', { used: subscription.seat_used, limit: subscription.seat_limit }) }}
                 </span>
               </div>
             </div>

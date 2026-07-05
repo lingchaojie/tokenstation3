@@ -3,15 +3,15 @@
     <div class="border-b border-linear-hairline px-3 py-4">
       <div class="flex items-center justify-between gap-2">
         <div class="min-w-0">
-          <h2 class="text-2xl font-semibold text-linear-ink">会话</h2>
-          <p class="mt-1 truncate text-xs text-linear-ink-tertiary">即刻开启模型会话</p>
+          <h2 class="text-2xl font-semibold text-linear-ink">{{ t('chat.title') }}</h2>
+          <p class="mt-1 truncate text-xs text-linear-ink-tertiary">{{ t('chat.description') }}</p>
         </div>
         <div class="flex items-center gap-1">
           <button
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"
             type="button"
-            title="Refresh"
-            aria-label="Refresh conversations"
+            :title="t('chat.refresh')"
+            :aria-label="t('chat.refreshConversations')"
             @click="refreshConversations"
           >
             <Icon name="refresh" size="sm" />
@@ -19,8 +19,8 @@
           <button
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"
             type="button"
-            title="Search"
-            aria-label="Focus search"
+            :title="t('chat.search')"
+            :aria-label="t('chat.focusSearch')"
             @click="searchInput?.focus()"
           >
             <Icon name="search" size="sm" />
@@ -31,13 +31,13 @@
       <button
         class="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-primary-500/70 bg-linear-canvas px-3 text-sm font-medium text-primary-600 transition-colors hover:bg-primary-500/5 dark:text-primary-300"
         type="button"
-        title="New chat"
-        aria-label="New chat"
+        :title="t('chat.newChat')"
+        :aria-label="t('chat.newChat')"
         data-testid="chat-new"
         @click="startNewChat"
       >
         <Icon name="plus" size="sm" />
-        <span>New chat</span>
+        <span>{{ t('chat.newChat') }}</span>
       </button>
 
       <div class="mt-3 flex items-center gap-2">
@@ -48,8 +48,8 @@
             v-model="query"
             class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-canvas pl-9 pr-3 text-sm text-linear-ink outline-none transition-colors placeholder:text-linear-ink-tertiary focus:border-linear-hairline-strong"
             type="search"
-            placeholder="Search chats"
-            aria-label="Search chats"
+            :placeholder="t('chat.searchChats')"
+            :aria-label="t('chat.searchChats')"
           />
         </div>
         <div class="inline-flex shrink-0 rounded-lg border border-linear-hairline bg-linear-canvas p-0.5">
@@ -59,7 +59,7 @@
             type="button"
             @click="groupedView = true"
           >
-            Group
+            {{ t('chat.viewGroup') }}
           </button>
           <button
             class="h-7 rounded-md px-2 text-xs font-medium transition-colors"
@@ -67,16 +67,16 @@
             type="button"
             @click="groupedView = false"
           >
-            Chats
+            {{ t('chat.viewChats') }}
           </button>
         </div>
       </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-      <p class="text-xs font-medium text-linear-ink-tertiary">Recently used</p>
+      <p class="text-xs font-medium text-linear-ink-tertiary">{{ t('chat.recentlyUsed') }}</p>
       <div v-if="filteredConversations.length === 0" class="px-1 py-8 text-sm leading-6 text-linear-ink-subtle">
-        No conversations yet.
+        {{ t('chat.noConversations') }}
       </div>
 
       <div v-else-if="groupedView" class="mt-3 space-y-3">
@@ -133,6 +133,7 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import type { WebChatConversation } from '@/api/chat'
 import ModelIcon from '@/components/common/ModelIcon.vue'
@@ -140,6 +141,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 const query = ref('')
 const groupedView = ref(true)
@@ -221,20 +223,20 @@ const ConversationRow = defineComponent({
         }, conversationTitle(props.conversation)),
         h('span', {
           class: 'mt-0.5 block truncate text-xs text-linear-ink-tertiary',
-        }, props.conversation.last_model || props.conversation.default_model || 'No model'),
+        }, props.conversation.last_model || props.conversation.default_model || t('chat.noModel')),
       ]),
       h('button', {
         class: 'hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex',
         type: 'button',
-        title: 'Rename',
-        'aria-label': 'Rename conversation',
+        title: t('chat.rename'),
+        'aria-label': t('chat.renameConversation'),
         onClick: () => emit('rename'),
       }, [h(Icon, { name: 'edit', size: 'xs' })]),
       h('button', {
         class: 'hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex',
         type: 'button',
-        title: 'Delete',
-        'aria-label': 'Delete conversation',
+        title: t('chat.deleteAction'),
+        'aria-label': t('chat.deleteConversation'),
         onClick: () => emit('delete'),
       }, [h(Icon, { name: 'trash', size: 'xs' })]),
     ])
@@ -242,7 +244,7 @@ const ConversationRow = defineComponent({
 })
 
 function conversationTitle(conversation: WebChatConversation): string {
-  return conversation.title || 'Untitled chat'
+  return conversation.title || t('chat.untitledChat')
 }
 
 function modelGroupId(model: string): string {
@@ -280,13 +282,13 @@ async function openConversation(conversationId: number): Promise<void> {
 }
 
 async function renameConversation(conversationId: number, currentTitle: string): Promise<void> {
-  const nextTitle = window.prompt('Rename conversation', currentTitle)
+  const nextTitle = window.prompt(t('chat.renameConversation'), currentTitle)
   if (!nextTitle || nextTitle.trim() === currentTitle) return
   await chatStore.renameConversation(conversationId, nextTitle.trim())
 }
 
 async function deleteConversation(conversationId: number): Promise<void> {
-  if (!window.confirm('Delete this conversation?')) return
+  if (!window.confirm(t('chat.deleteConfirm'))) return
   await chatStore.deleteConversation(conversationId)
 }
 </script>

@@ -15,7 +15,7 @@
           type="button"
           @click="clearAttachments"
         >
-          Clear
+          {{ t('chat.clear') }}
         </button>
       </div>
 
@@ -26,13 +26,13 @@
           class="absolute bottom-full left-0 z-40 mb-2 max-h-[min(28rem,calc(100vh-8rem))] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-xl"
           data-testid="chat-model-menu"
         >
-          <div class="mb-3 text-xs font-medium text-linear-ink-tertiary">Model</div>
+          <div class="mb-3 text-xs font-medium text-linear-ink-tertiary">{{ t('chat.model') }}</div>
           <div class="grid gap-2">
             <div ref="providerMenuRef" class="relative">
               <button
                 type="button"
                 class="flex h-9 w-full items-center gap-2 rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-left text-sm text-linear-ink outline-none transition-colors hover:border-linear-hairline-strong focus:border-linear-hairline-strong"
-                aria-label="Provider"
+                :aria-label="t('chat.provider')"
                 aria-haspopup="listbox"
                 :aria-expanded="providerMenuOpen"
                 data-testid="chat-provider-trigger"
@@ -41,14 +41,14 @@
                 @keydown.esc.prevent="providerMenuOpen = false"
               >
                 <ModelIcon :model="providerIconModel(selectedProvider)" size="16px" aria-hidden="true" />
-                <span class="min-w-0 flex-1 truncate">{{ providerLabel(selectedProvider) || 'Provider' }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ providerLabel(selectedProvider) || t('chat.provider') }}</span>
                 <Icon name="chevronDown" size="sm" class="shrink-0 text-linear-ink-tertiary" />
               </button>
               <div
                 v-if="providerMenuOpen"
                 class="mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-linear-hairline bg-linear-surface-0 py-1 shadow-lg"
                 role="listbox"
-                aria-label="Provider"
+                :aria-label="t('chat.provider')"
                 data-testid="chat-provider-options"
               >
                 <button
@@ -69,11 +69,11 @@
             </div>
 
             <label class="block">
-              <span class="sr-only">Model</span>
+              <span class="sr-only">{{ t('chat.model') }}</span>
               <select
                 v-model="selectedModelKey"
                 class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong"
-                aria-label="Model"
+                :aria-label="t('chat.model')"
                 data-testid="chat-model-select"
               >
                 <option v-for="model in modelOptions" :key="modelKey(model)" :value="modelKey(model)">
@@ -97,12 +97,12 @@
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                 : 'border-linear-hairline bg-linear-surface-1 text-linear-ink-muted hover:border-linear-hairline-strong'"
               :aria-pressed="chatStore.webSearchEnabled ? 'true' : 'false'"
-              aria-label="Web search"
+              :aria-label="t('chat.webSearch')"
               data-testid="chat-web-search-toggle"
               @click="toggleWebSearch"
             >
               <Icon name="globe" size="sm" />
-              <span>联网搜索</span>
+              <span>{{ t('chat.webSearch') }}</span>
             </button>
           </div>
 
@@ -114,12 +114,12 @@
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                 : 'border-linear-hairline bg-linear-surface-1 text-linear-ink-muted hover:border-linear-hairline-strong'"
               :aria-pressed="chatStore.thinkingEnabled ? 'true' : 'false'"
-              aria-label="Deep thinking"
+              :aria-label="t('chat.deepThinking')"
               data-testid="chat-thinking-toggle"
               @click="toggleThinking"
             >
               <Icon name="brain" size="sm" />
-              <span>深度思考</span>
+              <span>{{ t('chat.deepThinking') }}</span>
             </button>
           </div>
 
@@ -132,22 +132,22 @@
                   ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                   : 'border-linear-hairline bg-linear-surface-1 text-linear-ink-muted hover:border-linear-hairline-strong'"
                 :aria-pressed="chatStore.imageGenerationEnabled ? 'true' : 'false'"
-                aria-label="Image generation"
+                :aria-label="t('chat.imageGeneration')"
                 data-testid="chat-image-generation-toggle"
                 @click="toggleImageGeneration"
               >
                 <Icon name="image" size="sm" />
-                <span>Generate</span>
+                <span>{{ t('chat.generate') }}</span>
               </button>
             </div>
             <div class="grid min-w-0 gap-2 sm:grid-cols-3">
               <label v-if="chatStore.imageGenerationSizeOptions.length > 0" class="block min-w-0">
-                <span class="sr-only">Image generation size</span>
+                <span class="sr-only">{{ t('chat.imageSize') }}</span>
                 <select
                   v-model="chatStore.imageGenerationSize"
                   class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="!chatStore.imageGenerationEnabled"
-                  aria-label="Image generation size"
+                  :aria-label="t('chat.imageSize')"
                   data-testid="chat-image-generation-size"
                 >
                   <option v-for="size in chatStore.imageGenerationSizeOptions" :key="size" :value="size">
@@ -156,12 +156,12 @@
                 </select>
               </label>
               <label v-if="chatStore.imageGenerationAspectRatioOptions.length > 0" class="block min-w-0">
-                <span class="sr-only">Image generation aspect ratio</span>
+                <span class="sr-only">{{ t('chat.imageAspectRatio') }}</span>
                 <select
                   v-model="chatStore.imageGenerationAspectRatio"
                   class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="!chatStore.imageGenerationEnabled"
-                  aria-label="Image generation aspect ratio"
+                  :aria-label="t('chat.imageAspectRatio')"
                   data-testid="chat-image-generation-aspect-ratio"
                 >
                   <option v-for="aspectRatio in chatStore.imageGenerationAspectRatioOptions" :key="aspectRatio" :value="aspectRatio">
@@ -170,12 +170,12 @@
                 </select>
               </label>
               <label v-if="chatStore.imageGenerationQualityOptions.length > 0" class="block min-w-0">
-                <span class="sr-only">Image generation quality</span>
+                <span class="sr-only">{{ t('chat.imageQuality') }}</span>
                 <select
                   v-model="chatStore.imageGenerationQuality"
                   class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="!chatStore.imageGenerationEnabled"
-                  aria-label="Image generation quality"
+                  :aria-label="t('chat.imageQuality')"
                   data-testid="chat-image-generation-quality"
                 >
                   <option v-for="quality in chatStore.imageGenerationQualityOptions" :key="quality" :value="quality">
@@ -184,12 +184,12 @@
                 </select>
               </label>
               <label v-if="chatStore.imageGenerationOutputFormatOptions.length > 0" class="block min-w-0">
-                <span class="sr-only">Image generation output format</span>
+                <span class="sr-only">{{ t('chat.imageOutputFormat') }}</span>
                 <select
                   v-model="chatStore.imageGenerationOutputFormat"
                   class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="!chatStore.imageGenerationEnabled"
-                  aria-label="Image generation output format"
+                  :aria-label="t('chat.imageOutputFormat')"
                   data-testid="chat-image-generation-output-format"
                 >
                   <option v-for="format in chatStore.imageGenerationOutputFormatOptions" :key="format" :value="format">
@@ -198,12 +198,12 @@
                 </select>
               </label>
               <label v-if="chatStore.imageGenerationBackgroundOptions.length > 0" class="block min-w-0">
-                <span class="sr-only">Image generation background</span>
+                <span class="sr-only">{{ t('chat.imageBackground') }}</span>
                 <select
                   v-model="chatStore.imageGenerationBackground"
                   class="h-9 w-full rounded-lg border border-linear-hairline bg-linear-surface-1 px-3 text-sm text-linear-ink outline-none transition-colors focus:border-linear-hairline-strong disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="!chatStore.imageGenerationEnabled"
-                  aria-label="Image generation background"
+                  :aria-label="t('chat.imageBackground')"
                   data-testid="chat-image-generation-background"
                 >
                   <option v-for="background in chatStore.imageGenerationBackgroundOptions" :key="background" :value="background">
@@ -218,8 +218,8 @@
         <textarea
           v-model="draft"
           class="max-h-44 min-h-[92px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-linear-ink outline-none placeholder:text-linear-ink-tertiary disabled:cursor-not-allowed disabled:opacity-60"
-          placeholder="Message, paste context, or describe what to generate"
-          aria-label="Message"
+          :placeholder="t('chat.messagePlaceholder')"
+          :aria-label="t('chat.messageLabel')"
           :disabled="chatStore.streaming"
           @keydown.enter="handleComposerEnter"
         />
@@ -229,8 +229,8 @@
             <button
               class="inline-flex h-9 max-w-[13rem] items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-linear-ink transition-colors hover:bg-linear-surface-1"
               type="button"
-              title="Model"
-              aria-label="Model"
+              :title="t('chat.model')"
+              :aria-label="t('chat.model')"
               data-testid="chat-model-menu-toggle"
               :aria-expanded="modelMenuOpen ? 'true' : 'false'"
               @click="toggleModelMenu"
@@ -249,20 +249,20 @@
               v-if="hasModelOptions"
               class="inline-flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink"
               type="button"
-              title="Options"
-              aria-label="Options"
+              :title="t('chat.options')"
+              :aria-label="t('chat.options')"
               data-testid="chat-options-toggle"
               :aria-expanded="optionsOpen ? 'true' : 'false'"
               @click="toggleOptions"
             >
               <Icon name="cog" size="sm" />
-              <span class="hidden sm:inline">Options</span>
+              <span class="hidden sm:inline">{{ t('chat.options') }}</span>
             </button>
             <button
               class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
-              title="Upload image"
-              aria-label="Upload image"
+              :title="t('chat.attachImage')"
+              :aria-label="t('chat.attachImage')"
               :disabled="chatStore.streaming || uploading"
               @click="imageInput?.click()"
             >
@@ -271,8 +271,8 @@
             <button
               class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
-              title="Upload file"
-              aria-label="Upload file"
+              :title="t('chat.attachFile')"
+              :aria-label="t('chat.attachFile')"
               :disabled="chatStore.streaming || uploading"
               @click="fileInput?.click()"
             >
@@ -284,8 +284,8 @@
             <button
               class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-500 text-white transition-colors hover:bg-primary-400 disabled:cursor-not-allowed disabled:bg-linear-surface-2 disabled:text-linear-ink-tertiary"
               type="button"
-              title="Send"
-              aria-label="Send message"
+              :title="t('chat.send')"
+              :aria-label="t('chat.send')"
               data-testid="chat-send"
               :disabled="sendDisabled"
               @click="submit"
@@ -296,8 +296,8 @@
               v-if="chatStore.streaming"
               class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-linear-hairline bg-linear-canvas text-linear-ink transition-colors hover:bg-linear-surface-1"
               type="button"
-              title="Stop"
-              aria-label="Stop response"
+              :title="t('chat.stop')"
+              :aria-label="t('chat.stop')"
               data-testid="chat-stop"
               @click="chatStore.cancelStream()"
             >
@@ -331,6 +331,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import type { WebChatModel } from '@/api/chat'
 import AttachmentChip from '@/components/chat/AttachmentChip.vue'
@@ -339,6 +340,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 const draft = ref('')
 const uploading = ref(false)
@@ -382,8 +384,8 @@ const selectedModelKey = computed({
 
 const selectedModelLabel = computed(() => {
   const model = chatStore.selectedModel
-  if (!model) return 'Select model'
-  return model.display_name || displayModelName(model.model) || 'Select model'
+  if (!model) return t('chat.selectModel')
+  return model.display_name || displayModelName(model.model) || t('chat.selectModel')
 })
 
 const hasDraft = computed(() => draft.value.trim().length > 0 || chatStore.pendingAttachments.length > 0)

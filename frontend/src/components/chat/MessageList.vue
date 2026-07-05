@@ -4,9 +4,9 @@
       <div class="flex h-12 w-12 items-center justify-center rounded-lg border border-linear-hairline bg-linear-surface-1 text-linear-ink-muted">
         <Icon name="chat" size="lg" />
       </div>
-      <h1 class="mt-4 text-2xl font-semibold tracking-[-0.03em] text-linear-ink">Start a new chat</h1>
+      <h1 class="mt-4 text-2xl font-semibold tracking-[-0.03em] text-linear-ink">{{ t('chat.emptyTitle') }}</h1>
       <p class="mt-2 max-w-md text-sm leading-6 text-linear-ink-subtle">
-        Choose a model, upload context if needed, and send a message. Usage is billed through the same subscription-first rules as API keys.
+        {{ t('chat.emptyDescription') }}
       </p>
     </div>
 
@@ -23,7 +23,7 @@
           data-testid="chat-user-message"
         >
           <div class="mb-1.5 flex items-center justify-between gap-3 text-xs text-white/75">
-            <span>You</span>
+            <span>{{ t('chat.you') }}</span>
             <span v-if="message.status !== 'completed'">{{ messageStatusLabel(message) }}</span>
           </div>
 
@@ -31,10 +31,10 @@
             {{ message.content_text }}
           </p>
           <p v-if="!message.content_text && isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
-            Thinking...
+            {{ t('chat.thinkingStatus') }}
           </p>
           <p v-else-if="!message.content_text && isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
-            Response interrupted before completion.
+            {{ t('chat.responseInterrupted') }}
           </p>
 
         </div>
@@ -78,7 +78,7 @@
             <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-linear-ink-muted">
               <span class="inline-flex min-w-0 items-center gap-2 font-medium">
                 <Icon name="brain" size="sm" />
-                <span>Thinking and tools</span>
+                <span>{{ t('chat.thinkingAndTools') }}</span>
               </span>
               <span class="shrink-0 text-xs text-linear-ink-tertiary">
                 {{ processSummary(message) }}
@@ -126,20 +126,20 @@
             </a>
           </div>
           <p v-if="!message.content_text && isLiveStreaming(message)" class="text-sm text-linear-ink-subtle">
-            Thinking...
+            {{ t('chat.thinkingStatus') }}
           </p>
           <p v-else-if="!message.content_text && isStaleStreaming(message)" class="text-sm text-linear-ink-subtle">
-            Response interrupted before completion.
+            {{ t('chat.responseInterrupted') }}
           </p>
 
           <div v-if="message.status === 'failed'" class="mt-3 flex items-center gap-2 text-xs">
-            <span class="text-red-500">{{ message.error_message || 'Message failed.' }}</span>
+            <span class="text-red-500">{{ message.error_message || t('chat.messageFailed') }}</span>
             <button
               class="rounded-lg border border-linear-hairline bg-linear-canvas px-2 py-1 text-linear-ink-muted transition-colors hover:bg-linear-surface-2 hover:text-linear-ink"
               type="button"
               @click="retryMessage(message.id)"
             >
-              Retry
+              {{ t('chat.retry') }}
             </button>
           </div>
         </div>
@@ -173,6 +173,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 
@@ -185,6 +186,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { providerIconModel } from '@/utils/modelCatalog'
 
+const { t } = useI18n()
 const chatStore = useChatStore()
 const messages = computed(() => chatStore.currentMessages)
 const STALE_STREAMING_MS = 10 * 60 * 1000
@@ -196,7 +198,7 @@ interface SourceLink {
 }
 
 function assistantLabel(message: WebChatMessage): string {
-  return message.model || 'Assistant'
+  return message.model || t('chat.assistant')
 }
 
 function isStreamingStatus(message: WebChatMessage): boolean {
@@ -215,7 +217,15 @@ function isLiveStreaming(message: WebChatMessage): boolean {
 }
 
 function messageStatusLabel(message: WebChatMessage): string {
-  return isStaleStreaming(message) ? 'interrupted' : message.status
+  if (isStaleStreaming(message)) return t('chat.statusInterrupted')
+  const statusKeys: Record<string, string> = {
+    pending: 'chat.statusPending',
+    streaming: 'chat.statusStreaming',
+    completed: 'chat.statusCompleted',
+    failed: 'chat.statusFailed',
+  }
+  const key = statusKeys[message.status]
+  return key ? t(key) : message.status
 }
 
 function isImageArtifact(artifact: WebChatArtifact): boolean {
@@ -318,9 +328,9 @@ function processBlockTitle(block: Record<string, unknown>): string {
   const type = processBlockType(block)
   if (type === 'tool_call') {
     const name = typeof block.name === 'string' && block.name.trim() ? block.name : 'tool'
-    return `Tool: ${name}`
+    return t('chat.toolCall', { name })
   }
-  if (type === 'tool_result') return 'Tool result'
+  if (type === 'tool_result') return t('chat.toolResult')
   return 'Thinking'
 }
 
@@ -335,9 +345,11 @@ function processSummary(message: WebChatMessage): string {
   const blocks = processBlocks(message)
   const thinkingCount = blocks.filter((block) => block.type === 'reasoning').length
   const toolCount = blocks.filter((block) => block.type === 'tool_call' || block.type === 'tool_result').length
-  if (thinkingCount > 0 && toolCount > 0) return `${thinkingCount} thought · ${toolCount} tool`
-  if (toolCount > 0) return `${toolCount} tool`
-  return `${thinkingCount} thought`
+  if (thinkingCount > 0 && toolCount > 0) {
+    return `${t('chat.thoughtCount', { count: thinkingCount })} · ${t('chat.toolCount', { count: toolCount })}`
+  }
+  if (toolCount > 0) return t('chat.toolCount', { count: toolCount })
+  return t('chat.thoughtCount', { count: thinkingCount })
 }
 
 async function retryMessage(messageId: number): Promise<void> {

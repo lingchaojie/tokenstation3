@@ -13,13 +13,13 @@
         class="flex aspect-[4/3] min-h-40 items-center justify-center gap-2 px-4 text-sm text-linear-ink-subtle"
       >
         <Icon name="image" size="sm" />
-        <span>{{ loading ? 'Loading preview...' : 'Preview unavailable' }}</span>
+        <span>{{ loading ? t('chat.loadingPreview') : t('chat.previewUnavailable') }}</span>
       </div>
 
       <button
         class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-linear-hairline bg-linear-surface-1/95 text-linear-ink-muted shadow-sm transition-colors hover:bg-linear-surface-2 hover:text-linear-ink"
         type="button"
-        :title="`Download ${artifact.filename}`"
+        :title="t('chat.downloadFile', { filename: artifact.filename })"
         :data-testid="`chat-artifact-image-download-${artifact.id}`"
         @click="downloadImage"
       >
@@ -36,9 +36,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { chatAPI, type WebChatArtifact, type WebChatDownload } from '@/api/chat'
 import Icon from '@/components/icons/Icon.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   artifact: WebChatArtifact

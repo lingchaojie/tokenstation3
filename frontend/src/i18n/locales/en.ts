@@ -506,8 +506,8 @@ export default {
   },
 
   chat: {
-    title: '会话',
-    description: '即刻开启模型会话',
+    title: 'Conversations',
+    description: 'Start a model conversation instantly',
     openWebChat: 'Open web chat',
     openWebChatShort: 'Chat',
     newChat: 'New chat',
@@ -520,6 +520,68 @@ export default {
     modelSelector: 'Choose model',
     unsupportedImage: 'The current model does not support image input',
     unsupportedFile: 'The current model does not support file context',
+    // Conversation rail
+    refresh: 'Refresh',
+    refreshConversations: 'Refresh conversations',
+    search: 'Search',
+    focusSearch: 'Focus search',
+    searchChats: 'Search chats',
+    viewGroup: 'Group',
+    viewChats: 'Chats',
+    recentlyUsed: 'Recently used',
+    noConversations: 'No conversations yet.',
+    rename: 'Rename',
+    renameConversation: 'Rename conversation',
+    deleteAction: 'Delete',
+    deleteConversation: 'Delete conversation',
+    untitledChat: 'Untitled chat',
+    noModel: 'No model',
+    deleteConfirm: 'Delete this conversation?',
+    // Message list
+    emptyTitle: 'Start a new chat',
+    emptyDescription: 'Choose a model, upload context if needed, and send a message. Usage is billed through the same subscription-first rules as API keys.',
+    you: 'You',
+    assistant: 'Assistant',
+    thinkingAndTools: 'Thinking and tools',
+    thinkingStatus: 'Thinking...',
+    toolCall: 'Tool: {name}',
+    toolResult: 'Tool result',
+    thoughtCount: '{count} thought',
+    toolCount: '{count} tool',
+    loadingPreview: 'Loading preview...',
+    previewUnavailable: 'Preview unavailable',
+    downloadFile: 'Download {filename}',
+    responseInterrupted: 'Response interrupted before completion.',
+    messageFailed: 'Message failed.',
+    retry: 'Retry',
+    statusPending: 'pending',
+    statusStreaming: 'streaming',
+    statusCompleted: 'completed',
+    statusFailed: 'failed',
+    statusInterrupted: 'interrupted',
+    // Composer
+    clear: 'Clear',
+    model: 'Model',
+    provider: 'Provider',
+    webSearch: 'Web search',
+    deepThinking: 'Deep thinking',
+    generate: 'Generate',
+    imageGeneration: 'Image generation',
+    options: 'Options',
+    messagePlaceholder: 'Message, paste context, or describe what to generate',
+    messageLabel: 'Message',
+    imageSize: 'Image generation size',
+    imageAspectRatio: 'Image generation aspect ratio',
+    imageQuality: 'Image generation quality',
+    imageOutputFormat: 'Image generation output format',
+    imageBackground: 'Image generation background',
+    // Conversation header
+    selectModel: 'Select model',
+    chooseModelInComposer: 'Choose a model in the composer',
+    capabilityImages: 'Images',
+    capabilityFiles: 'Files',
+    capabilityGenerate: 'Generate',
+    chatFallbackTitle: 'Chat',
   },
 
   // Auth
@@ -534,6 +596,7 @@ export default {
       routes: 'Routes',
       billing: 'Billing',
       billingValue: 'Usage ledger enabled',
+      subtitleFallback: 'AI Gateway Platform · Anthropic / OpenAI-compatible routes',
     },
     signIn: 'Sign In',
     signingIn: 'Signing in...',
@@ -7228,7 +7291,8 @@ export default {
     tableOfContents: 'Contents',
     copyCode: 'Copy',
     copiedCode: 'Copied',
-    copyCodeFailed: 'Failed'
+    copyCodeFailed: 'Failed',
+    loadFailed: 'Failed to load page'
   },
 
   // Announcements Page
@@ -7286,7 +7350,8 @@ export default {
     resetIn: 'Resets in {time}',
     quotaEndsIn: 'Quota ends in {time}',
     windowNotActive: 'Awaiting first use',
-    usageOf: '{used} of {limit}'
+    usageOf: '{used} of {limit}',
+    seatOpened: '{used}/{limit} activated'
   },
 
   // Onboarding Tour

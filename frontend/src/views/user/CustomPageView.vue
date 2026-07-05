@@ -145,6 +145,16 @@ const loading = ref(false)
 const pageTheme = ref<'light' | 'dark'>('light')
 const renderedHtml = ref('')
 const markdownContainer = ref<HTMLElement | null>(null)
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 const tocItems = ref<TocItem[]>([])
 const tocVisible = ref(typeof window !== 'undefined' ? window.innerWidth > 768 : true)
 const activeHeadingId = ref('')
@@ -230,7 +240,7 @@ async function fetchAndRenderMarkdown(slug: string) {
       headers: authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {},
     })
     if (!resp.ok) {
-      renderedHtml.value = '<p class="text-red-500">Page not found</p>'
+      renderedHtml.value = `<p class="text-red-500">${escapeHtml(t('customPage.notFoundTitle'))}</p>`
       return
     }
     let raw = await resp.text()
@@ -263,7 +273,7 @@ async function fetchAndRenderMarkdown(slug: string) {
     renderedHtml.value = withIds
     tocItems.value = toc
   } catch {
-    renderedHtml.value = '<p class="text-red-500">Failed to load page</p>'
+    renderedHtml.value = `<p class="text-red-500">${escapeHtml(t('customPage.loadFailed'))}</p>`
   } finally {
     loading.value = false
     await nextTick()

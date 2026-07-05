@@ -16,6 +16,23 @@ vi.mock('vue-router', async () => {
   }
 })
 
+vi.mock('vue-i18n', async () => {
+  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+  const { default: en } = await vi.importActual<{ default: Record<string, unknown> }>('@/i18n/locales/en')
+  const resolve = (key: string): unknown =>
+    key.split('.').reduce<unknown>((acc, part) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[part] : undefined), en)
+  const translate = (key: string, params?: Record<string, unknown>): string => {
+    const value = resolve(key)
+    if (typeof value !== 'string') return key
+    if (!params) return value
+    return value.replace(/\{(\w+)\}/g, (_match, name: string) => (params[name] !== undefined ? String(params[name]) : `{${name}}`))
+  }
+  return {
+    ...actual,
+    useI18n: () => ({ t: translate, locale: { value: 'en' } }),
+  }
+})
+
 import ChatView from '@/views/user/ChatView.vue'
 import ChatShell from '@/components/chat/ChatShell.vue'
 import Composer from '@/components/chat/Composer.vue'
@@ -389,7 +406,7 @@ describe('ModelSelector', () => {
     await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
 
     const toggle = wrapper.get('[data-testid="chat-thinking-toggle"]')
-    expect(toggle.text()).toContain('深度思考')
+    expect(toggle.text()).toContain('Deep thinking')
     expect(toggle.attributes('aria-pressed')).toBe('false')
     expect(wrapper.find('[data-testid="chat-thinking-effort"]').exists()).toBe(false)
 
@@ -497,8 +514,8 @@ describe('ConversationRail reference layout', () => {
     })
 
     const rail = wrapper.get('[data-testid="chat-conversation-rail"]')
-    expect(rail.text()).toContain('会话')
-    expect(rail.text()).toContain('即刻开启模型会话')
+    expect(rail.text()).toContain('Conversations')
+    expect(rail.text()).toContain('Start a model conversation instantly')
     expect(rail.text()).toContain('GPT Image 2')
     expect(rail.text()).toContain('GPT-5.4')
     expect(wrapper.find('[data-testid="chat-model-group-gpt-image-2"]').exists()).toBe(true)
