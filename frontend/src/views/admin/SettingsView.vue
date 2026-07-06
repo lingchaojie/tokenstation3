@@ -8692,7 +8692,12 @@ const announcementIntervalSeconds = computed({
   get: () => Math.round(form.announcement_banner_interval_ms / 1000),
   set: (v: number) => {
     const n = Math.floor(Number(v));
-    form.announcement_banner_interval_ms = Number.isFinite(n) ? n * 1000 : 3000;
+    if (!Number.isFinite(n)) {
+      form.announcement_banner_interval_ms = 3000;
+      return;
+    }
+    const clamped = Math.min(60, Math.max(1, n));
+    form.announcement_banner_interval_ms = clamped * 1000;
   },
 });
 
