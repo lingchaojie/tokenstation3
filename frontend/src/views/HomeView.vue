@@ -762,6 +762,7 @@ const showAnnouncement = ref(true)
 
 const DEFAULT_BANNER_INTERVAL_MS = 3000
 
+// 注:copy 定义在本段之后,但 banners 是 computed(惰性求值,渲染时才读 copy.value),无初始化顺序问题。
 // 每条 banner 取当前 locale 文案,缺失回退另一语言;两者皆空则丢弃。
 const banners = computed<string[]>(() => {
   const raw = appStore.cachedPublicSettings?.announcement_banners ?? []
