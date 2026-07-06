@@ -800,6 +800,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyTablePageSizeOptions,
 		SettingKeyCustomMenuItems,
 		SettingKeyCustomEndpoints,
+		SettingKeyAnnouncementBanners,
+		SettingKeyAnnouncementBannerIntervalMs,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyDingTalkConnectEnabled,
 		SettingKeyWeChatConnectEnabled,
@@ -925,6 +927,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TablePageSizeOptions:             tablePageSizeOptions,
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		AnnouncementBanners:              settings[SettingKeyAnnouncementBanners],
+		AnnouncementBannerIntervalMs:     parseAnnouncementInterval(settings[SettingKeyAnnouncementBannerIntervalMs]),
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
@@ -1457,6 +1461,8 @@ type PublicSettingsInjectionPayload struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  json.RawMessage          `json:"custom_menu_items"`
 	CustomEndpoints                  json.RawMessage          `json:"custom_endpoints"`
+	AnnouncementBanners              json.RawMessage          `json:"announcement_banners"`
+	AnnouncementBannerIntervalMs     int                      `json:"announcement_banner_interval_ms"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
@@ -1526,6 +1532,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TablePageSizeOptions:             settings.TablePageSizeOptions,
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
+		AnnouncementBanners:              safeRawJSONArray(settings.AnnouncementBanners),
+		AnnouncementBannerIntervalMs:     settings.AnnouncementBannerIntervalMs,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
@@ -2135,6 +2143,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyTablePageSizeOptions] = string(tablePageSizeOptionsJSON)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
+	updates[SettingKeyAnnouncementBanners] = settings.AnnouncementBanners
+	updates[SettingKeyAnnouncementBannerIntervalMs] = strconv.Itoa(normalizeAnnouncementInterval(settings.AnnouncementBannerIntervalMs))
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -3110,6 +3120,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyTablePageSizeOptions:                      "[10,20,50,100]",
 		SettingKeyCustomMenuItems:                           "[]",
 		SettingKeyCustomEndpoints:                           "[]",
+		SettingKeyAnnouncementBanners:                       "[]",
+		SettingKeyAnnouncementBannerIntervalMs:              "3000",
 		SettingKeyWeChatConnectEnabled:                      "false",
 		SettingKeyWeChatConnectAppID:                        "",
 		SettingKeyWeChatConnectAppSecret:                    "",
@@ -3342,12 +3354,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		AnnouncementBanners:              settings[SettingKeyAnnouncementBanners],
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
 		settings[SettingKeyTablePageSizeOptions],
 	)
+	result.AnnouncementBannerIntervalMs = parseAnnouncementInterval(settings[SettingKeyAnnouncementBannerIntervalMs])
 
 	// 解析整数类型
 	if port, err := strconv.Atoi(settings[SettingKeySMTPPort]); err == nil {
@@ -4050,6 +4064,35 @@ func parseTablePreferences(defaultPageSizeRaw, optionsRaw string) (int, []int) {
 	}
 
 	return normalizeTablePreferences(defaultPageSize, options)
+}
+
+const (
+	defaultAnnouncementIntervalMs = 3000
+	minAnnouncementIntervalMs     = 1000
+	maxAnnouncementIntervalMs     = 60000
+)
+
+// normalizeAnnouncementInterval clamps the banner rotation interval (ms) into a
+// sane range; 0/invalid/out-of-range falls back to the default.
+func normalizeAnnouncementInterval(v int) int {
+	if v <= 0 {
+		return defaultAnnouncementIntervalMs
+	}
+	if v < minAnnouncementIntervalMs {
+		return minAnnouncementIntervalMs
+	}
+	if v > maxAnnouncementIntervalMs {
+		return maxAnnouncementIntervalMs
+	}
+	return v
+}
+
+// parseAnnouncementInterval parses the stored interval string (ms) and clamps it.
+func parseAnnouncementInterval(raw string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+		return normalizeAnnouncementInterval(v)
+	}
+	return normalizeAnnouncementInterval(0)
 }
 
 func normalizeTablePreferences(defaultPageSize int, options []int) (int, []int) {

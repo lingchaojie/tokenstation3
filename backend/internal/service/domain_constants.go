@@ -29,9 +29,9 @@ const (
 	AffiliateRebateFreezeHoursMax     = 720   // 最大 30 天
 
 	// 首充固定奖励模型（替代旧的按比例返现）
-	AffiliateFirstRechargeThresholdDefault = 20.0 // 首充达标阈值（USD，订阅无条件达标）
-	AffiliateInviterRewardDefault          = 5.0  // 邀请方奖励（进返利余额 aff_quota）
-	AffiliateInviteeRewardDefault          = 5.0  // 被邀请方奖励（进账户余额）
+	AffiliateFirstRechargeThresholdDefault = 20.0      // 首充达标阈值（USD，订阅无条件达标）
+	AffiliateInviterRewardDefault          = 5.0       // 邀请方奖励（进返利余额 aff_quota）
+	AffiliateInviteeRewardDefault          = 5.0       // 被邀请方奖励（进账户余额）
 	AffiliateRewardMax                     = 1000000.0 // 奖励/阈值上限，防误配
 )
 
@@ -166,11 +166,11 @@ const (
 	SettingKeyPasswordResetEnabled             = "password_reset_enabled"              // 是否启用忘记密码功能（需要先开启邮件验证）
 	SettingKeyFrontendURL                      = "frontend_url"                        // 前端基础URL，用于生成邮件中的重置密码链接
 	SettingKeyInvitationCodeEnabled            = "invitation_code_enabled"             // 是否启用邀请码注册
-	SettingKeyAffiliateEnabled                 = "affiliate_enabled"                    // 邀请返利功能总开关
-	SettingKeyAffiliateRebateFreezeHours       = "affiliate_rebate_freeze_hours"        // 返利冻结期（小时，0=不冻结）
-	SettingKeyAffiliateFirstRechargeThreshold  = "affiliate_first_recharge_threshold"   // 首充达标阈值（USD）
-	SettingKeyAffiliateInviterReward           = "affiliate_inviter_reward"             // 邀请方奖励（进返利余额）
-	SettingKeyAffiliateInviteeReward           = "affiliate_invitee_reward"             // 被邀请方奖励（进账户余额）
+	SettingKeyAffiliateEnabled                 = "affiliate_enabled"                   // 邀请返利功能总开关
+	SettingKeyAffiliateRebateFreezeHours       = "affiliate_rebate_freeze_hours"       // 返利冻结期（小时，0=不冻结）
+	SettingKeyAffiliateFirstRechargeThreshold  = "affiliate_first_recharge_threshold"  // 首充达标阈值（USD）
+	SettingKeyAffiliateInviterReward           = "affiliate_inviter_reward"            // 邀请方奖励（进返利余额）
+	SettingKeyAffiliateInviteeReward           = "affiliate_invitee_reward"            // 被邀请方奖励（进账户余额）
 	SettingKeyRiskControlEnabled               = "risk_control_enabled"                // 是否启用风控中心入口与审计链路
 	SettingKeyContentModerationConfig          = "content_moderation_config"           // 内容审计配置（JSON）
 	SettingKeyCyberSessionBlockEnabled         = "cyber_session_block_enabled"         // cyber 命中后会话级自动屏蔽总开关(默认关)
@@ -279,20 +279,22 @@ const (
 	SettingKeyGoogleOAuthFrontendRedirectURL = "google_oauth_frontend_redirect_url"
 
 	// OEM设置
-	SettingKeySiteName                    = "site_name"                     // 网站名称
-	SettingKeySiteLogo                    = "site_logo"                     // 网站Logo (base64)
-	SettingKeySiteSubtitle                = "site_subtitle"                 // 网站副标题
-	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
-	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
-	SettingKeyDocURL                      = "doc_url"                       // 文档链接
-	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
-	SettingKeyHideCcsImportButton         = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
-	SettingKeyPurchaseSubscriptionEnabled = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口
-	SettingKeyPurchaseSubscriptionURL     = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
-	SettingKeyTableDefaultPageSize        = "table_default_page_size"       // 表格默认每页条数
-	SettingKeyTablePageSizeOptions        = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
-	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
-	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
+	SettingKeySiteName                     = "site_name"                       // 网站名称
+	SettingKeySiteLogo                     = "site_logo"                       // 网站Logo (base64)
+	SettingKeySiteSubtitle                 = "site_subtitle"                   // 网站副标题
+	SettingKeyAPIBaseURL                   = "api_base_url"                    // API端点地址（用于客户端配置和导入）
+	SettingKeyContactInfo                  = "contact_info"                    // 客服联系方式
+	SettingKeyDocURL                       = "doc_url"                         // 文档链接
+	SettingKeyHomeContent                  = "home_content"                    // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
+	SettingKeyHideCcsImportButton          = "hide_ccs_import_button"          // 是否隐藏 API Keys 页面的导入 CCS 按钮
+	SettingKeyPurchaseSubscriptionEnabled  = "purchase_subscription_enabled"   // 是否展示"购买订阅"页面入口
+	SettingKeyPurchaseSubscriptionURL      = "purchase_subscription_url"       // "购买订阅"页面 URL（作为 iframe src）
+	SettingKeyTableDefaultPageSize         = "table_default_page_size"         // 表格默认每页条数
+	SettingKeyTablePageSizeOptions         = "table_page_size_options"         // 表格可选每页条数（JSON 数组）
+	SettingKeyCustomMenuItems              = "custom_menu_items"               // 自定义菜单项（JSON 数组）
+	SettingKeyCustomEndpoints              = "custom_endpoints"                // 自定义端点列表（JSON 数组）
+	SettingKeyAnnouncementBanners          = "announcement_banners"            // 顶部滚动公告（JSON 数组）
+	SettingKeyAnnouncementBannerIntervalMs = "announcement_banner_interval_ms" // 公告切换间隔（毫秒）
 
 	// 默认配置
 	SettingKeyDefaultConcurrency      = "default_concurrency"        // 新用户默认并发量

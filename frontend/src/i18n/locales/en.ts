@@ -6486,6 +6486,16 @@ export default {
         moveUp: 'Move Up',
         moveDown: 'Move Down',
       },
+      announcementBanners: {
+        title: 'Top Rolling Announcements',
+        description: 'Configure rolling banners on the homepage top bar (zh/en). Empty falls back to the default copy.',
+        intervalSeconds: 'Interval (seconds)',
+        itemLabel: 'Banner {n}',
+        add: 'Add banner',
+        remove: 'Remove',
+        moveUp: 'Move up',
+        moveDown: 'Move down',
+      },
       payment: {
         title: 'Payment Settings',
         description: 'Configure payment system options',
