@@ -25,6 +25,13 @@ type CustomEndpoint struct {
 	Description string `json:"description"`
 }
 
+// AnnouncementBanner represents an admin-configured rolling top-bar announcement.
+type AnnouncementBanner struct {
+	ID     string `json:"id"`
+	TextZH string `json:"text_zh"`
+	TextEN string `json:"text_en"`
+}
+
 // SystemSettings represents the admin settings API response payload.
 type SystemSettings struct {
 	RegistrationEnabled              bool                     `json:"registration_enabled"`
@@ -559,6 +566,20 @@ func ParseUserVisibleMenuItems(raw string) []CustomMenuItem {
 		}
 	}
 	return filtered
+}
+
+// ParseAnnouncementBanners parses a JSON string into a slice of AnnouncementBanner.
+// Returns empty slice on empty/invalid input.
+func ParseAnnouncementBanners(raw string) []AnnouncementBanner {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return []AnnouncementBanner{}
+	}
+	var items []AnnouncementBanner
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []AnnouncementBanner{}
+	}
+	return items
 }
 
 // ParseCustomEndpoints parses a JSON string into a slice of CustomEndpoint.
