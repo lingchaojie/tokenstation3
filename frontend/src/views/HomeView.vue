@@ -22,11 +22,13 @@
       class="relative z-30 flex items-center justify-center gap-3 border-b border-linear-hairline bg-linear-surface-1/70 px-4 py-2.5 text-center text-xs font-medium text-linear-ink-muted sm:text-sm"
     >
       <span class="ui-accent-dot h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
-      <span>{{ copy.announcement }}</span>
+      <Transition name="banner-fade" mode="out-in">
+        <span :key="currentBannerIndex">{{ currentBannerText }}</span>
+      </Transition>
       <button
         class="absolute right-3 top-1/2 -translate-y-1/2 text-linear-ink-tertiary transition-colors hover:text-linear-ink"
         :aria-label="'close'"
-        @click="showAnnouncement = false"
+        @click="dismissAnnouncement"
       >
         <Icon name="x" size="sm" />
       </button>
@@ -1266,5 +1268,14 @@ watch(showDynamicModelCatalog, () => {
   .animate-rise-delayed {
     animation: none;
   }
+}
+
+.banner-fade-enter-active,
+.banner-fade-leave-active {
+  transition: opacity 0.4s ease;
+}
+.banner-fade-enter-from,
+.banner-fade-leave-to {
+  opacity: 0;
 }
 </style>
