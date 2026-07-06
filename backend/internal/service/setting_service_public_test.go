@@ -66,8 +66,10 @@ func TestSettingService_GetPublicSettings_ExposesRegistrationEmailSuffixWhitelis
 func TestSettingService_GetPublicSettings_ExposesTablePreferences(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
-			SettingKeyTableDefaultPageSize: "50",
-			SettingKeyTablePageSizeOptions: "[20,50,100]",
+			SettingKeyTableDefaultPageSize:         "50",
+			SettingKeyTablePageSizeOptions:         "[20,50,100]",
+			SettingKeyAnnouncementBanners:          `[{"id":"a","text_zh":"你好","text_en":"hi"}]`,
+			SettingKeyAnnouncementBannerIntervalMs: "5000",
 		},
 	}
 	svc := NewSettingService(repo, &config.Config{})
@@ -76,6 +78,8 @@ func TestSettingService_GetPublicSettings_ExposesTablePreferences(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, 50, settings.TableDefaultPageSize)
 	require.Equal(t, []int{20, 50, 100}, settings.TablePageSizeOptions)
+	require.Equal(t, `[{"id":"a","text_zh":"你好","text_en":"hi"}]`, settings.AnnouncementBanners)
+	require.Equal(t, 5000, settings.AnnouncementBannerIntervalMs)
 }
 
 func TestSettingService_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t *testing.T) {
