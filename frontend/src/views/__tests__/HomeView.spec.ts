@@ -11,6 +11,8 @@ const { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPublicMo
       site_subtitle?: string
       doc_url?: string
       home_content?: string
+      announcement_banners?: Array<{ id: string; text_zh: string; text_en: string }>
+      announcement_banner_interval_ms?: number
     },
     siteName: 'LINX2.AI',
     siteLogo: '',
@@ -368,6 +370,7 @@ function mountHome() {
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
         Icon: { template: '<svg data-testid="icon" />' },
         ModelIcon: { template: '<span data-testid="model-icon" />' },
+        transition: true,
       },
     },
   })
@@ -845,5 +848,47 @@ describe('HomeView landing page', () => {
     expect(landing.classes()).not.toContain('dark')
     expect(landing.classes()).toContain('bg-linear-canvas')
     expect(wrapper.find('[data-testid="linear-product-console"] .linx-panel-strong').exists()).toBe(true)
+  })
+
+  it('空列表回退到默认公告文案', async () => {
+    appState.cachedPublicSettings = {
+      announcement_banners: [],
+      announcement_banner_interval_ms: 3000,
+    }
+    const wrapper = mountHome()
+    await flushPromises()
+    expect(wrapper.text()).toContain('统一 Claude Code')
+  })
+
+  it('多条 banner 按间隔轮换', async () => {
+    vi.useFakeTimers()
+    appState.cachedPublicSettings = {
+      announcement_banners: [
+        { id: 'a', text_zh: '甲', text_en: 'Alpha' },
+        { id: 'b', text_zh: '乙', text_en: 'Beta' },
+      ],
+      announcement_banner_interval_ms: 3000,
+    }
+    const wrapper = mountHome()
+    await flushPromises()
+    expect(wrapper.text()).toContain('甲')
+    vi.advanceTimersByTime(3000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('乙')
+    vi.useRealTimers()
+  })
+
+  it('单条 banner 不轮换', async () => {
+    vi.useFakeTimers()
+    appState.cachedPublicSettings = {
+      announcement_banners: [{ id: 'a', text_zh: '甲', text_en: 'Alpha' }],
+      announcement_banner_interval_ms: 3000,
+    }
+    const wrapper = mountHome()
+    await flushPromises()
+    vi.advanceTimersByTime(9000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('甲')
+    vi.useRealTimers()
   })
 })
