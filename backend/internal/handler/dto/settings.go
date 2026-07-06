@@ -134,20 +134,22 @@ type SystemSettings struct {
 	GoogleOAuthRedirectURL            string `json:"google_oauth_redirect_url"`
 	GoogleOAuthFrontendRedirectURL    string `json:"google_oauth_frontend_redirect_url"`
 
-	SiteName                    string           `json:"site_name"`
-	SiteLogo                    string           `json:"site_logo"`
-	SiteSubtitle                string           `json:"site_subtitle"`
-	APIBaseURL                  string           `json:"api_base_url"`
-	ContactInfo                 string           `json:"contact_info"`
-	DocURL                      string           `json:"doc_url"`
-	HomeContent                 string           `json:"home_content"`
-	HideCcsImportButton         bool             `json:"hide_ccs_import_button"`
-	PurchaseSubscriptionEnabled bool             `json:"purchase_subscription_enabled"`
-	PurchaseSubscriptionURL     string           `json:"purchase_subscription_url"`
-	TableDefaultPageSize        int              `json:"table_default_page_size"`
-	TablePageSizeOptions        []int            `json:"table_page_size_options"`
-	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
-	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
+	SiteName                     string               `json:"site_name"`
+	SiteLogo                     string               `json:"site_logo"`
+	SiteSubtitle                 string               `json:"site_subtitle"`
+	APIBaseURL                   string               `json:"api_base_url"`
+	ContactInfo                  string               `json:"contact_info"`
+	DocURL                       string               `json:"doc_url"`
+	HomeContent                  string               `json:"home_content"`
+	HideCcsImportButton          bool                 `json:"hide_ccs_import_button"`
+	PurchaseSubscriptionEnabled  bool                 `json:"purchase_subscription_enabled"`
+	PurchaseSubscriptionURL      string               `json:"purchase_subscription_url"`
+	TableDefaultPageSize         int                  `json:"table_default_page_size"`
+	TablePageSizeOptions         []int                `json:"table_page_size_options"`
+	CustomMenuItems              []CustomMenuItem     `json:"custom_menu_items"`
+	CustomEndpoints              []CustomEndpoint     `json:"custom_endpoints"`
+	AnnouncementBanners          []AnnouncementBanner `json:"announcement_banners"`
+	AnnouncementBannerIntervalMs int                  `json:"announcement_banner_interval_ms"`
 
 	DefaultConcurrency              int                          `json:"default_concurrency"`
 	DefaultBalance                  float64                      `json:"default_balance"`
@@ -316,6 +318,8 @@ type PublicSettings struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  []CustomMenuItem         `json:"custom_menu_items"`
 	CustomEndpoints                  []CustomEndpoint         `json:"custom_endpoints"`
+	AnnouncementBanners              []AnnouncementBanner     `json:"announcement_banners"`
+	AnnouncementBannerIntervalMs     int                      `json:"announcement_banner_interval_ms"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
