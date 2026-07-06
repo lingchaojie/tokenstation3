@@ -819,6 +819,9 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     variants: reasoningVariants
   })
   const openaiModels = {
+    'gpt-5.6-sol': openaiModel('GPT-5.6 Sol', 1050000),
+    'gpt-5.6-terra': openaiModel('GPT-5.6 Terra', 1050000),
+    'gpt-5.6-luna': openaiModel('GPT-5.6 Luna', 1050000),
     'gpt-5.5': openaiModel('GPT-5.5', 1050000),
     'gpt-5.4': openaiModel('GPT-5.4', 1050000),
     'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),

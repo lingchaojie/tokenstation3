@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import type { ApiKey, PublicSettings } from '@/types'
 
@@ -27,12 +27,36 @@ const {
   authGetPublicSettings: vi.fn(),
   copyToClipboard: vi.fn().mockResolvedValue(true),
   i18nMessages: {
+    'common.actions': 'Actions',
+    'common.cancel': 'Cancel',
+    'common.name': 'Name',
+    'common.refresh': 'Refresh',
+    'common.status': 'Status',
+    'keys.apiKey': 'API Key',
+    'keys.allStatus': 'All Status',
     'keys.cannotImportUnconfiguredKey': 'Cannot import an unconfigured key',
     'keys.ccsClientSelect.claudeCode': 'Claude Code',
     'keys.ccsClientSelect.claudeCodeDesc': 'Import as Claude Code configuration',
     'keys.ccsClientSelect.description': 'Please select the client type to import to CC-Switch:',
     'keys.ccsClientSelect.title': 'Select Client',
+    'keys.columnSettings': 'Column Settings',
+    'keys.createKey': 'Create API Key',
+    'keys.created': 'Created',
+    'keys.currentConcurrency': 'Current Concurrency',
+    'keys.expiresAt': 'Expires',
     'keys.importToCcSwitch': 'Import to CCS',
+    'keys.keyTypeLabel': 'Provider Type',
+    'keys.keyTypes.anthropic': 'Anthropic',
+    'keys.keyTypes.openai': 'OpenAI',
+    'keys.keyTypes.unified': 'Unified',
+    'keys.lastUsedAt': 'Last Used',
+    'keys.rateLimitColumn': 'Rate Limit',
+    'keys.searchPlaceholder': 'Search name or key...',
+    'keys.status.active': 'Active',
+    'keys.status.expired': 'Expired',
+    'keys.status.inactive': 'Inactive',
+    'keys.status.quota_exhausted': 'Quota exhausted',
+    'keys.usage': 'Usage',
     'keys.useKey': 'Use Key'
   } as Record<string, string>,
   isCurrentStep: vi.fn(() => false),
@@ -103,24 +127,35 @@ const keysViewSource = readFileSync(
 )
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
+
 const BaseDialogStub = {
   props: ['show', 'title'],
-  template: '<section v-if="show" data-testid="base-dialog"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
+  template:
+    '<section v-if="show" data-testid="base-dialog"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
 }
+
 const TablePageLayoutStub = {
-  template: '<div><slot name="filters" /><slot name="actions" /><slot name="table" /><slot name="pagination" /></div>'
+  template:
+    '<div><slot name="filters" /><slot name="actions" /><slot name="table" /><slot name="pagination" /></div>'
 }
+
 const DataTableStub = {
-  props: ['data'],
+  props: ['columns', 'data'],
+  emits: ['sort'],
   template: `
     <div>
+      <div data-test="columns">{{ columns.map((col) => col.key).join(',') }}</div>
       <div v-for="row in data" :key="row.id">
         <slot name="cell-actions" :row="row" />
+        <div data-test="current-concurrency">
+          <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
+        </div>
       </div>
       <slot v-if="data.length === 0" name="empty" />
     </div>
   `
 }
+
 const UseKeyModalStub = {
   props: ['show', 'apiKey', 'baseUrl', 'platform', 'allowMessagesDispatch'],
   template: `
@@ -134,12 +169,13 @@ const UseKeyModalStub = {
   `
 }
 
-const makePublicSettings = (overrides: Partial<PublicSettings> = {}): PublicSettings => ({
-  api_base_url: 'https://api.example.com',
-  hide_ccs_import_button: false,
-  site_name: 'Sub2API',
-  ...overrides
-}) as PublicSettings
+const makePublicSettings = (overrides: Partial<PublicSettings> = {}): PublicSettings =>
+  ({
+    api_base_url: 'https://api.example.com',
+    hide_ccs_import_button: false,
+    site_name: 'Sub2API',
+    ...overrides
+  }) as PublicSettings
 
 const makeApiKey = (overrides: Partial<ApiKey> = {}): ApiKey => ({
   id: 1,
@@ -158,6 +194,7 @@ const makeApiKey = (overrides: Partial<ApiKey> = {}): ApiKey => ({
   expires_at: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+  current_concurrency: 3,
   rate_limit_5h: 0,
   rate_limit_1d: 0,
   rate_limit_7d: 0,
@@ -181,32 +218,49 @@ const listResponse = (items: ApiKey[]) => ({
   pages: items.length > 0 ? 1 : 0
 })
 
-const mountKeysView = () => mount(KeysView, {
-  global: {
-    stubs: {
-      AppLayout: AppLayoutStub,
-      TablePageLayout: TablePageLayoutStub,
-      DataTable: DataTableStub,
-      Pagination: true,
-      BaseDialog: BaseDialogStub,
-      ConfirmDialog: true,
-      EmptyState: true,
-      Select: true,
-      SearchInput: true,
-      Icon: true,
-      UseKeyModal: UseKeyModalStub,
-      EndpointPopover: true,
-      Teleport: true
+const mountKeysView = async () => {
+  const wrapper = mount(KeysView, {
+    global: {
+      stubs: {
+        AppLayout: AppLayoutStub,
+        TablePageLayout: TablePageLayoutStub,
+        DataTable: DataTableStub,
+        Pagination: true,
+        BaseDialog: BaseDialogStub,
+        ConfirmDialog: true,
+        EmptyState: true,
+        Select: true,
+        SearchInput: true,
+        Icon: true,
+        UseKeyModal: UseKeyModalStub,
+        EndpointPopover: true,
+        Teleport: true
+      }
     }
+  })
+  await flushPromises()
+  await nextTick()
+  return wrapper
+}
+
+const visibleColumnKeys = (wrapper: VueWrapper) =>
+  wrapper.get('[data-test="columns"]').text().split(',').filter(Boolean)
+
+const getButtonByText = (wrapper: VueWrapper, text: string) => {
+  const button = wrapper.findAll('button').find((item) => item.text().includes(text))
+  if (!button) {
+    throw new Error(`Button not found: ${text}`)
   }
-})
+  return button
+}
 
 beforeEach(() => {
+  localStorage.clear()
   vi.clearAllMocks()
   vi.spyOn(window, 'open').mockReturnValue(null)
   vi.spyOn(document, 'hasFocus').mockReturnValue(false)
   authGetPublicSettings.mockResolvedValue(makePublicSettings())
-  keysList.mockResolvedValue(listResponse([]))
+  keysList.mockResolvedValue(listResponse([makeApiKey()]))
   usageGetDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
 })
 
@@ -235,9 +289,7 @@ describe('KeysView provider routing actions', () => {
     })
     keysList.mockResolvedValue(listResponse([key]))
 
-    const wrapper = mountKeysView()
-    await flushPromises()
-    await nextTick()
+    const wrapper = await mountKeysView()
 
     const useKeyButton = wrapper.findAll('button').find((button) => button.text().includes('Use Key'))
     expect(useKeyButton).toBeDefined()
@@ -263,9 +315,7 @@ describe('KeysView provider routing actions', () => {
     })
     keysList.mockResolvedValue(listResponse([key]))
 
-    const wrapper = mountKeysView()
-    await flushPromises()
-    await nextTick()
+    const wrapper = await mountKeysView()
 
     const useKeyButton = wrapper.findAll('button').find((button) => button.text().includes('Use Key'))
     expect(useKeyButton).toBeDefined()
@@ -293,9 +343,7 @@ describe('KeysView provider routing actions', () => {
     })
     keysList.mockResolvedValue(listResponse([key]))
 
-    const wrapper = mountKeysView()
-    await flushPromises()
-    await nextTick()
+    const wrapper = await mountKeysView()
 
     const importButton = wrapper.findAll('button').find((button) => button.text().includes('Import to CCS'))
     expect(importButton).toBeDefined()
@@ -305,5 +353,91 @@ describe('KeysView provider routing actions', () => {
     expect(showError).toHaveBeenCalledWith('Cannot import an unconfigured key')
 
     wrapper.unmount()
+  })
+})
+
+describe('user KeysView column settings', () => {
+  it('uses the default API key columns with local group column hidden and low-frequency columns hidden', async () => {
+    const wrapper = await mountKeysView()
+
+    expect(visibleColumnKeys(wrapper)).toEqual([
+      'name',
+      'key',
+      'key_type',
+      'current_concurrency',
+      'usage',
+      'expires_at',
+      'status',
+      'created_at',
+      'actions'
+    ])
+    expect(visibleColumnKeys(wrapper)).not.toContain('group')
+    expect(visibleColumnKeys(wrapper)).not.toContain('rate_limit')
+    expect(visibleColumnKeys(wrapper)).not.toContain('last_used_at')
+  })
+
+  it('hides the key_type column when every key is unified', async () => {
+    keysList.mockResolvedValue(listResponse([
+      makeApiKey({
+        key_type: 'unified',
+        group_binding_mode: 'auto'
+      })
+    ]))
+
+    const wrapper = await mountKeysView()
+
+    expect(visibleColumnKeys(wrapper)).not.toContain('key_type')
+  })
+
+  it('shows a hidden column when toggled and persists the preference', async () => {
+    const wrapper = await mountKeysView()
+
+    await wrapper.get('button[title="Column Settings"]').trigger('click')
+    await getButtonByText(wrapper, 'Rate Limit').trigger('click')
+    await nextTick()
+
+    expect(visibleColumnKeys(wrapper)).toContain('rate_limit')
+    expect(localStorage.getItem('api-key-hidden-columns')).toBe(JSON.stringify(['last_used_at']))
+    expect(localStorage.getItem('api-key-column-settings-version')).toBe('1')
+  })
+
+  it('restores column preferences from localStorage while ignoring the removed group column', async () => {
+    localStorage.setItem('api-key-hidden-columns', JSON.stringify(['group', 'created_at']))
+    localStorage.setItem('api-key-column-settings-version', '1')
+
+    const wrapper = await mountKeysView()
+
+    expect(visibleColumnKeys(wrapper)).toEqual([
+      'name',
+      'key',
+      'key_type',
+      'current_concurrency',
+      'usage',
+      'rate_limit',
+      'expires_at',
+      'status',
+      'last_used_at',
+      'actions'
+    ])
+  })
+
+  it('does not include always-visible columns in the toggleable menu', async () => {
+    const wrapper = await mountKeysView()
+
+    await wrapper.get('button[title="Column Settings"]').trigger('click')
+    await nextTick()
+
+    const columnMenuText = wrapper.text()
+    expect(columnMenuText).toContain('API Key')
+    expect(columnMenuText).toContain('Current Concurrency')
+    expect(columnMenuText).toContain('Rate Limit')
+    expect(columnMenuText).not.toContain('Name')
+    expect(columnMenuText).not.toContain('Actions')
+  })
+
+  it('renders the current concurrency value', async () => {
+    const wrapper = await mountKeysView()
+
+    expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
   })
 })

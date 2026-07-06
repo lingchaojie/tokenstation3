@@ -569,6 +569,7 @@ func ProvideAPIKeyService(
 	cache APIKeyCache,
 	cfg *config.Config,
 	billingCacheService *BillingCacheService,
+	concurrencyService *ConcurrencyService,
 ) *APIKeyService {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
@@ -576,6 +577,7 @@ func ProvideAPIKeyService(
 	if settingService != nil {
 		settingService.SetOnUpdateCallback(svc.InvalidateEffectiveGroupCache)
 	}
+	svc.SetConcurrencyService(concurrencyService)
 	return svc
 }
 

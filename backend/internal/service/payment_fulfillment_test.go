@@ -1265,6 +1265,88 @@ func createFirstRechargeBalanceOrder(t *testing.T, ctx context.Context, client *
 	return order
 }
 
+func createFirstRechargeSubscriptionOrder(t *testing.T, ctx context.Context, client *dbent.Client, userID, groupID int64, amount float64, code, outTradeNo string) *dbent.PaymentOrder {
+	t.Helper()
+	order, err := client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail("invitee@example.com").
+		SetUserName("invitee-user").
+		SetAmount(amount).
+		SetPayAmount(amount).
+		SetFeeRate(0).
+		SetRechargeCode(code).
+		SetOutTradeNo(outTradeNo).
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo(outTradeNo + "-trade").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(30).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+	return order
+}
+
+func TestExecuteSubscriptionFulfillmentAppliesFirstRechargeReward(t *testing.T) {
+	ctx := context.Background()
+	const (
+		inviterID = int64(9001)
+		groupID   = int64(7)
+	)
+	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: groupID, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	svc.groupRepo = groupRepo
+	svc.subscriptionSvc = NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+
+	var balanceCredits []struct {
+		userID int64
+		amount float64
+	}
+	userRepo.updateBalanceFn = func(_ context.Context, id int64, amount float64) error {
+		balanceCredits = append(balanceCredits, struct {
+			userID int64
+			amount float64
+		}{id, amount})
+		return nil
+	}
+
+	order := createFirstRechargeSubscriptionOrder(t, ctx, client, inviteeID, groupID, 9.99, "PAY-SUB-FIRST", "sub2_subscription_first_reward")
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Equal(t, 1, subRepo.createCalls)
+
+	require.Len(t, affiliateRepo.accrueCalls, 1)
+	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
+	require.Equal(t, inviteeID, affiliateRepo.accrueCalls[0].inviteeUserID)
+	require.Equal(t, 5.0, affiliateRepo.accrueCalls[0].amount)
+	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
+	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
+
+	require.Len(t, balanceCredits, 1)
+	require.Equal(t, inviteeID, balanceCredits[0].userID)
+	require.Equal(t, 5.0, balanceCredits[0].amount)
+
+	applied, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("AFFILIATE_REBATE_APPLIED")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Contains(t, applied.Detail, `"baseAmount":9.99`)
+	require.Contains(t, applied.Detail, `"inviterReward":5`)
+	require.Contains(t, applied.Detail, `"inviteeReward":5`)
+	require.Contains(t, applied.Detail, `"isSubscription":true`)
+}
+
 // TestApplyAffiliateRebate_FirstRechargeApplied verifies that the invitee's
 // first qualifying balance recharge pays both parties and records an
 // AFFILIATE_REBATE_APPLIED audit log.
