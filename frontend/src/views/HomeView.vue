@@ -708,7 +708,7 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
@@ -757,6 +757,56 @@ const isHomeContentUrl = computed(() => {
 })
 
 const showAnnouncement = ref(true)
+
+const DEFAULT_BANNER_INTERVAL_MS = 3000
+
+// 每条 banner 取当前 locale 文案,缺失回退另一语言;两者皆空则丢弃。
+const banners = computed<string[]>(() => {
+  const raw = appStore.cachedPublicSettings?.announcement_banners ?? []
+  const zh = localeCode.value === 'zh'
+  const texts = raw
+    .map((b) => {
+      const primary = zh ? b.text_zh : b.text_en
+      const fallback = zh ? b.text_en : b.text_zh
+      return (primary || fallback || '').trim()
+    })
+    .filter((s) => s.length > 0)
+  // 空列表回退到内置默认双语文案
+  return texts.length > 0 ? texts : [copy.value.announcement]
+})
+
+const bannerIntervalMs = computed(() => {
+  const v = appStore.cachedPublicSettings?.announcement_banner_interval_ms
+  return typeof v === 'number' && v > 0 ? v : DEFAULT_BANNER_INTERVAL_MS
+})
+
+const currentBannerIndex = ref(0)
+const currentBannerText = computed(
+  () => banners.value[currentBannerIndex.value] ?? banners.value[0] ?? '',
+)
+
+let bannerTimer: ReturnType<typeof setInterval> | null = null
+
+function stopBannerRotation() {
+  if (bannerTimer !== null) {
+    clearInterval(bannerTimer)
+    bannerTimer = null
+  }
+}
+
+function startBannerRotation() {
+  stopBannerRotation()
+  if (!showAnnouncement.value) return
+  if (banners.value.length <= 1) return
+  bannerTimer = setInterval(() => {
+    currentBannerIndex.value = (currentBannerIndex.value + 1) % banners.value.length
+  }, bannerIntervalMs.value)
+}
+
+function dismissAnnouncement() {
+  showAnnouncement.value = false
+  stopBannerRotation()
+}
 
 const providers = ['Claude Code', 'Codex', 'Messages', 'Responses', 'Chat', 'Images']
 
@@ -1160,6 +1210,18 @@ onMounted(() => {
   }
   loadHomeModelData()
   loadPublicSubscriptionPlans()
+  startBannerRotation()
+})
+
+watch([() => banners.value.length, bannerIntervalMs, showAnnouncement], () => {
+  if (currentBannerIndex.value >= banners.value.length) {
+    currentBannerIndex.value = 0
+  }
+  startBannerRotation()
+})
+
+onBeforeUnmount(() => {
+  stopBannerRotation()
 })
 
 watch(showDynamicModelCatalog, () => {
