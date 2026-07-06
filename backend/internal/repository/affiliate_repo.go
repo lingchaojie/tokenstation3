@@ -186,7 +186,7 @@ func (r *affiliateRepository) LockUserAffiliateForUpdate(ctx context.Context, us
 	if err != nil {
 		return fmt.Errorf("lock user affiliate for update: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	// 消费结果集以确保锁被真正获取；行必存在（上面已 ensure）。
 	for rows.Next() {
 	}
