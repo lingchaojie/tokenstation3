@@ -507,20 +507,22 @@ type UpdateSettingsRequest struct {
 	GoogleOAuthFrontendRedirectURL string `json:"google_oauth_frontend_redirect_url"`
 
 	// OEM设置
-	SiteName                    string                `json:"site_name"`
-	SiteLogo                    string                `json:"site_logo"`
-	SiteSubtitle                string                `json:"site_subtitle"`
-	APIBaseURL                  string                `json:"api_base_url"`
-	ContactInfo                 string                `json:"contact_info"`
-	DocURL                      string                `json:"doc_url"`
-	HomeContent                 string                `json:"home_content"`
-	HideCcsImportButton         bool                  `json:"hide_ccs_import_button"`
-	PurchaseSubscriptionEnabled *bool                 `json:"purchase_subscription_enabled"`
-	PurchaseSubscriptionURL     *string               `json:"purchase_subscription_url"`
-	TableDefaultPageSize        int                   `json:"table_default_page_size"`
-	TablePageSizeOptions        []int                 `json:"table_page_size_options"`
-	CustomMenuItems             *[]dto.CustomMenuItem `json:"custom_menu_items"`
-	CustomEndpoints             *[]dto.CustomEndpoint `json:"custom_endpoints"`
+	SiteName                     string                    `json:"site_name"`
+	SiteLogo                     string                    `json:"site_logo"`
+	SiteSubtitle                 string                    `json:"site_subtitle"`
+	APIBaseURL                   string                    `json:"api_base_url"`
+	ContactInfo                  string                    `json:"contact_info"`
+	DocURL                       string                    `json:"doc_url"`
+	HomeContent                  string                    `json:"home_content"`
+	HideCcsImportButton          bool                      `json:"hide_ccs_import_button"`
+	PurchaseSubscriptionEnabled  *bool                     `json:"purchase_subscription_enabled"`
+	PurchaseSubscriptionURL      *string                   `json:"purchase_subscription_url"`
+	TableDefaultPageSize         int                       `json:"table_default_page_size"`
+	TablePageSizeOptions         []int                     `json:"table_page_size_options"`
+	CustomMenuItems              *[]dto.CustomMenuItem     `json:"custom_menu_items"`
+	CustomEndpoints              *[]dto.CustomEndpoint     `json:"custom_endpoints"`
+	AnnouncementBanners          *[]dto.AnnouncementBanner `json:"announcement_banners"`
+	AnnouncementBannerIntervalMs *int                      `json:"announcement_banner_interval_ms"`
 
 	// 默认配置
 	DefaultConcurrency                        int                               `json:"default_concurrency"`
@@ -1398,6 +1400,58 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		customMenuJSON = string(menuBytes)
 	}
 
+	// 公告栏验证
+	const (
+		maxAnnouncementBanners = 20
+		maxBannerTextLen       = 200
+	)
+	announcementBannersJSON := previousSettings.AnnouncementBanners
+	if req.AnnouncementBanners != nil {
+		banners := *req.AnnouncementBanners
+		if len(banners) > maxAnnouncementBanners {
+			response.BadRequest(c, "Too many announcement banners (max 20)")
+			return
+		}
+		seen := make(map[string]struct{}, len(banners))
+		for i, b := range banners {
+			if strings.TrimSpace(b.TextZH) == "" && strings.TrimSpace(b.TextEN) == "" {
+				response.BadRequest(c, "Announcement banner must have at least one non-empty text")
+				return
+			}
+			if len(b.TextZH) > maxBannerTextLen || len(b.TextEN) > maxBannerTextLen {
+				response.BadRequest(c, "Announcement banner text is too long (max 200 characters)")
+				return
+			}
+			if strings.TrimSpace(b.ID) == "" {
+				id, err := generateMenuItemID()
+				if err != nil {
+					response.Error(c, http.StatusInternalServerError, "Failed to generate banner ID")
+					return
+				}
+				banners[i].ID = id
+			} else if !menuItemIDPattern.MatchString(b.ID) {
+				response.BadRequest(c, "Announcement banner ID contains invalid characters")
+				return
+			}
+			if _, dup := seen[banners[i].ID]; dup {
+				response.BadRequest(c, "Duplicate announcement banner ID: "+banners[i].ID)
+				return
+			}
+			seen[banners[i].ID] = struct{}{}
+		}
+		bytes, err := json.Marshal(banners)
+		if err != nil {
+			response.BadRequest(c, "Failed to serialize announcement banners")
+			return
+		}
+		announcementBannersJSON = string(bytes)
+	}
+
+	announcementIntervalMs := previousSettings.AnnouncementBannerIntervalMs
+	if req.AnnouncementBannerIntervalMs != nil {
+		announcementIntervalMs = *req.AnnouncementBannerIntervalMs
+	}
+
 	// 自定义端点验证
 	const (
 		maxCustomEndpoints        = 10
@@ -1655,6 +1709,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TablePageSizeOptions:                   req.TablePageSizeOptions,
 		CustomMenuItems:                        customMenuJSON,
 		CustomEndpoints:                        customEndpointsJSON,
+		AnnouncementBanners:                    announcementBannersJSON,
+		AnnouncementBannerIntervalMs:           announcementIntervalMs,
 		DefaultConcurrency:                     req.DefaultConcurrency,
 		DefaultBalance:                         req.DefaultBalance,
 		AffiliateRebateFreezeHours:             affiliateRebateFreezeHours,
@@ -2656,6 +2712,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.CustomMenuItems != after.CustomMenuItems {
 		changed = append(changed, "custom_menu_items")
+	}
+	if before.AnnouncementBanners != after.AnnouncementBanners {
+		changed = append(changed, "announcement_banners")
+	}
+	if before.AnnouncementBannerIntervalMs != after.AnnouncementBannerIntervalMs {
+		changed = append(changed, "announcement_banner_interval_ms")
 	}
 	if before.CustomEndpoints != after.CustomEndpoints {
 		changed = append(changed, "custom_endpoints")
