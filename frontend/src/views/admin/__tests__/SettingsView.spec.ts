@@ -192,6 +192,10 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.defaults.platformQuotaNotice": "月限额为 30 天滚动窗口，非自然月",
     "admin.settings.authSourceDefaults.platformQuotasOverride": "平台限额覆盖",
     "admin.settings.authSourceDefaults.platformQuotasOverrideHint": "留空的字段继承「系统默认平台限额」；填 0 表示禁止该窗口使用。",
+    "admin.settings.announcementBanners.title": "顶部滚动公告",
+    "admin.settings.announcementBanners.description": "配置首页顶部滚动展示的公告条目。",
+    "admin.settings.announcementBanners.intervalSeconds": "切换间隔（秒）",
+    "admin.settings.announcementBanners.add": "添加公告",
   };
   return {
     ...actual,
@@ -792,6 +796,22 @@ describe("admin SettingsView payment visible method controls", () => {
       expect.objectContaining({
         antigravity_user_agent_version: "1.23.2",
       }),
+    );
+  });
+
+  it("renders the announcement banner add control with standard button chrome", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGeneralTab(wrapper);
+
+    const addButton = wrapper
+      .findAll("button")
+      .find((node) => node.text() === "添加公告");
+
+    expect(addButton).toBeDefined();
+    expect(addButton?.classes()).toEqual(
+      expect.arrayContaining(["btn", "btn-secondary"]),
     );
   });
 

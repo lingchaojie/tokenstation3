@@ -5648,7 +5648,7 @@
               </div>
               <button
                 type="button"
-                class="btn-secondary"
+                class="btn btn-secondary"
                 @click="addAnnouncementBanner"
               >
                 {{ t("admin.settings.announcementBanners.add") }}
