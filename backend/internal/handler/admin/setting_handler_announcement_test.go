@@ -128,3 +128,31 @@ func TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsBothTextsEmpty(
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Contains(t, resp.Message, "at least one non-empty text")
 }
+
+func TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsLongID(t *testing.T) {
+	handler, _ := newAnnouncementTestHandler(map[string]string{
+		service.SettingKeyPromoCodeEnabled: "true",
+	})
+
+	body := map[string]any{
+		"promo_code_enabled": true,
+		"announcement_banners": []map[string]any{
+			{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text_zh": "公告", "text_en": "Announcement"}, // 33 chars
+		},
+	}
+	rawBody, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", bytes.NewReader(rawBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.UpdateSettings(c)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp response.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Contains(t, resp.Message, "ID is too long")
+}

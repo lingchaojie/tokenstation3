@@ -1404,6 +1404,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	const (
 		maxAnnouncementBanners = 20
 		maxBannerTextLen       = 200
+		maxBannerIDLen         = 32
 	)
 	announcementBannersJSON := previousSettings.AnnouncementBanners
 	if req.AnnouncementBanners != nil {
@@ -1429,6 +1430,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 					return
 				}
 				banners[i].ID = id
+			} else if len(b.ID) > maxBannerIDLen {
+				response.BadRequest(c, "Announcement banner ID is too long (max 32 characters)")
+				return
 			} else if !menuItemIDPattern.MatchString(b.ID) {
 				response.BadRequest(c, "Announcement banner ID contains invalid characters")
 				return
@@ -1439,12 +1443,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			seen[banners[i].ID] = struct{}{}
 		}
-		bytes, err := json.Marshal(banners)
+		bannerBytes, err := json.Marshal(banners)
 		if err != nil {
 			response.BadRequest(c, "Failed to serialize announcement banners")
 			return
 		}
-		announcementBannersJSON = string(bytes)
+		announcementBannersJSON = string(bannerBytes)
 	}
 
 	announcementIntervalMs := previousSettings.AnnouncementBannerIntervalMs
