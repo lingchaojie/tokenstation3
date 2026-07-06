@@ -322,6 +322,12 @@ describe('user UsageView tooltip', () => {
     list.mockResolvedValue({ items: [] })
 
     let exportedBlob: Blob | null = null
+    let csvContent = ''
+    const OriginalBlob = globalThis.Blob
+    vi.stubGlobal('Blob', vi.fn((parts: BlobPart[], options?: BlobPropertyBag) => {
+      csvContent = parts.map((part) => String(part)).join('')
+      return new OriginalBlob(parts, options)
+    }))
     const originalCreateObjectURL = window.URL.createObjectURL
     const originalRevokeObjectURL = window.URL.revokeObjectURL
     window.URL.createObjectURL = vi.fn((blob: Blob | MediaSource) => {
@@ -366,18 +372,18 @@ describe('user UsageView tooltip', () => {
     expect(hasSortedExportQuery).toBe(true)
     expect(clickSpy).toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalled()
-    const csv = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(String(reader.result))
-      reader.onerror = () => reject(reader.error)
-      reader.readAsText(exportedBlob as Blob)
-    })
-    expect(csv).toContain('Billed Cost')
-    expect(csv).not.toContain('Rate Multiplier')
-    expect(csv).not.toContain('Original Cost')
+    expect(csvContent.startsWith('\uFEFF')).toBe(true)
+    expect(csvContent).toContain('Billed Cost')
+    expect(csvContent).not.toContain('Rate Multiplier')
+    expect(csvContent).not.toContain('Original Cost')
+    expect(csvContent).not.toContain('IP Address')
+    expect(csvContent).not.toContain('Upstream Endpoint')
+    expect(csvContent).not.toContain('account_cost')
+    expect(csvContent).not.toContain('account_rate_multiplier')
 
     window.URL.createObjectURL = originalCreateObjectURL
     window.URL.revokeObjectURL = originalRevokeObjectURL
+    vi.unstubAllGlobals()
     clickSpy.mockRestore()
   })
 

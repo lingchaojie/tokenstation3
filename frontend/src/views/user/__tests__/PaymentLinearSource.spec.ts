@@ -40,15 +40,15 @@ describe('Payment Linear page contract', () => {
   })
 
   it('keeps the base selected state on supported payment provider branches', () => {
-    for (const provider of ['alipay', 'wxpay', 'stripe', 'airwallex']) {
-      const providerBranch = methodSelectorSource.match(
-        new RegExp(`if \\(type(?:\\.includes\\('${provider}'\\)| === '${provider}')\\) return '([^']+)'`),
-      )
+    const selectedClass = methodSelectorSource.match(/const SELECTED_METHOD_CLASS = '([^']+)'/)?.[1]
 
-      expect(providerBranch?.[1], provider).toBeDefined()
-      for (const selectedClass of requiredSelectedClasses) {
-        expect(providerBranch?.[1], `${provider} selected state includes ${selectedClass}`).toContain(selectedClass)
-      }
+    expect(selectedClass).toBeDefined()
+    for (const className of requiredSelectedClasses) {
+      expect(selectedClass, `selected state includes ${className}`).toContain(className)
     }
+    expect(methodSelectorSource).toContain('if (isBuiltInAlipayMethod(type)) return SELECTED_METHOD_CLASS')
+    expect(methodSelectorSource).toContain('if (isBuiltInWxpayMethod(type)) return SELECTED_METHOD_CLASS')
+    expect(methodSelectorSource).toContain("if (type === 'stripe') return SELECTED_METHOD_CLASS")
+    expect(methodSelectorSource).toContain("if (type === 'airwallex') return SELECTED_METHOD_CLASS")
   })
 })

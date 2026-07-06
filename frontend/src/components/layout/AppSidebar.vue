@@ -9,14 +9,22 @@
     <!-- Logo/Brand -->
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
       <!-- Custom Logo or Default Logo -->
-      <div class="sidebar-logo flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white p-1 ring-1 ring-black/5">
+      <router-link
+        :to="homePath"
+        class="sidebar-logo flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white p-1 ring-1 ring-black/5 transition-opacity hover:opacity-80"
+        @click="handleMenuItemClick(homePath)"
+      >
         <img v-if="settingsLoaded" :src="siteLogo || '/linx2-icon.png'" alt="Logo" class="h-full w-full object-contain" />
-      </div>
+      </router-link>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
-        <span class="sidebar-brand-title text-sm font-semibold tracking-[-0.02em] text-gray-950 dark:text-linear-ink">
+        <router-link
+          :to="homePath"
+          class="sidebar-brand-title text-sm font-semibold tracking-[-0.02em] text-gray-950 transition-colors hover:text-primary-600 dark:text-linear-ink dark:hover:text-primary-400"
+          @click="handleMenuItemClick(homePath)"
+        >
           <LinxWordmark v-if="usesDefaultBrand" />
           <span v-else>{{ siteName }}</span>
-        </span>
+        </router-link>
         <!-- Version Badge -->
         <VersionBadge :version="siteVersion" />
       </div>
@@ -239,6 +247,8 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
 const isDark = ref(document.documentElement.classList.contains('dark'))
+
+const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
 
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
