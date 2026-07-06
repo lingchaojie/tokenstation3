@@ -710,7 +710,7 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
@@ -726,6 +726,7 @@ import {
 } from '@/api/settings'
 import { chatAPI } from '@/api/chat'
 import { paymentAPI } from '@/api/payment'
+import { useAnnouncementBanner } from '@/composables/useAnnouncementBanner'
 import type { SubscriptionPlan } from '@/types/payment'
 import {
   filterModelCatalogByWebChatModels,
@@ -757,59 +758,6 @@ const isHomeContentUrl = computed(() => {
   const content = trimmedHomeContent.value
   return content.startsWith('http://') || content.startsWith('https://')
 })
-
-const showAnnouncement = ref(true)
-
-const DEFAULT_BANNER_INTERVAL_MS = 3000
-
-// 注:copy 定义在本段之后,但 banners 是 computed(惰性求值,渲染时才读 copy.value),无初始化顺序问题。
-// 每条 banner 取当前 locale 文案,缺失回退另一语言;两者皆空则丢弃。
-const banners = computed<string[]>(() => {
-  const raw = appStore.cachedPublicSettings?.announcement_banners ?? []
-  const zh = localeCode.value === 'zh'
-  const texts = raw
-    .map((b) => {
-      const primary = zh ? b.text_zh : b.text_en
-      const fallback = zh ? b.text_en : b.text_zh
-      return (primary || fallback || '').trim()
-    })
-    .filter((s) => s.length > 0)
-  // 空列表回退到内置默认双语文案
-  return texts.length > 0 ? texts : [copy.value.announcement]
-})
-
-const bannerIntervalMs = computed(() => {
-  const v = appStore.cachedPublicSettings?.announcement_banner_interval_ms
-  return typeof v === 'number' && v > 0 ? v : DEFAULT_BANNER_INTERVAL_MS
-})
-
-const currentBannerIndex = ref(0)
-const currentBannerText = computed(
-  () => banners.value[currentBannerIndex.value] ?? banners.value[0] ?? '',
-)
-
-let bannerTimer: ReturnType<typeof setInterval> | null = null
-
-function stopBannerRotation() {
-  if (bannerTimer !== null) {
-    clearInterval(bannerTimer)
-    bannerTimer = null
-  }
-}
-
-function startBannerRotation() {
-  stopBannerRotation()
-  if (!showAnnouncement.value) return
-  if (banners.value.length <= 1) return
-  bannerTimer = setInterval(() => {
-    currentBannerIndex.value = (currentBannerIndex.value + 1) % banners.value.length
-  }, bannerIntervalMs.value)
-}
-
-function dismissAnnouncement() {
-  showAnnouncement.value = false
-  stopBannerRotation()
-}
 
 const providers = ['Claude Code', 'Codex', 'Messages', 'Responses', 'Chat', 'Images']
 
@@ -1126,6 +1074,16 @@ const copies = {
 const localeCode = computed(() => (String(locale.value).startsWith('zh') ? 'zh' : 'en'))
 const copy = computed(() => copies[localeCode.value])
 
+// 顶部滚动公告:复用共享 composable。首页始终有内容——没配置时回退到内置双语
+// 营销文案(fallbackText),关闭仅本次会话内存态(不传 dismissKey,与原行为一致)。
+// 必须放在 copy 之后:composable 内的 watch 会在创建时同步求值 banners→fallbackText→copy。
+const {
+  showAnnouncement,
+  currentBannerIndex,
+  currentBannerText,
+  dismissAnnouncement,
+} = useAnnouncementBanner({ fallbackText: () => copy.value.announcement })
+
 const publicPlanByMonthlyKey = computed(() => {
   const byKey: Partial<Record<string, SubscriptionPlan>> = {}
   for (const plan of publicSubscriptionPlans.value) {
@@ -1213,18 +1171,6 @@ onMounted(() => {
   }
   loadHomeModelData()
   loadPublicSubscriptionPlans()
-  startBannerRotation()
-})
-
-watch([() => banners.value.length, bannerIntervalMs, showAnnouncement], () => {
-  if (currentBannerIndex.value >= banners.value.length) {
-    currentBannerIndex.value = 0
-  }
-  startBannerRotation()
-})
-
-onBeforeUnmount(() => {
-  stopBannerRotation()
 })
 
 watch(showDynamicModelCatalog, () => {
