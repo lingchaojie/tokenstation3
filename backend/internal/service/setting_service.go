@@ -4052,6 +4052,27 @@ func parseTablePreferences(defaultPageSizeRaw, optionsRaw string) (int, []int) {
 	return normalizeTablePreferences(defaultPageSize, options)
 }
 
+const (
+	defaultAnnouncementIntervalMs = 3000
+	minAnnouncementIntervalMs     = 1000
+	maxAnnouncementIntervalMs     = 60000
+)
+
+// normalizeAnnouncementInterval clamps the banner rotation interval (ms) into a
+// sane range; 0/invalid/out-of-range falls back to the default.
+func normalizeAnnouncementInterval(v int) int {
+	if v <= 0 {
+		return defaultAnnouncementIntervalMs
+	}
+	if v < minAnnouncementIntervalMs {
+		return minAnnouncementIntervalMs
+	}
+	if v > maxAnnouncementIntervalMs {
+		return maxAnnouncementIntervalMs
+	}
+	return v
+}
+
 func normalizeTablePreferences(defaultPageSize int, options []int) (int, []int) {
 	const minPageSize = 5
 	const maxPageSize = 1000
