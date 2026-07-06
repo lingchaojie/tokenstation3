@@ -892,11 +892,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		loginAgreementUpdatedAt = defaultLoginAgreementDate
 	}
 
-	announcementInterval := normalizeAnnouncementInterval(0)
-	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyAnnouncementBannerIntervalMs])); err == nil {
-		announcementInterval = normalizeAnnouncementInterval(v)
-	}
-
 	var balanceLowNotifyThreshold float64
 	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
 		balanceLowNotifyThreshold = v
@@ -933,7 +928,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		AnnouncementBanners:              settings[SettingKeyAnnouncementBanners],
-		AnnouncementBannerIntervalMs:     announcementInterval,
+		AnnouncementBannerIntervalMs:     parseAnnouncementInterval(settings[SettingKeyAnnouncementBannerIntervalMs]),
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
@@ -3366,10 +3361,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		settings[SettingKeyTableDefaultPageSize],
 		settings[SettingKeyTablePageSizeOptions],
 	)
-	result.AnnouncementBannerIntervalMs = normalizeAnnouncementInterval(0)
-	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyAnnouncementBannerIntervalMs])); err == nil {
-		result.AnnouncementBannerIntervalMs = normalizeAnnouncementInterval(v)
-	}
+	result.AnnouncementBannerIntervalMs = parseAnnouncementInterval(settings[SettingKeyAnnouncementBannerIntervalMs])
 
 	// 解析整数类型
 	if port, err := strconv.Atoi(settings[SettingKeySMTPPort]); err == nil {
@@ -4093,6 +4085,14 @@ func normalizeAnnouncementInterval(v int) int {
 		return maxAnnouncementIntervalMs
 	}
 	return v
+}
+
+// parseAnnouncementInterval parses the stored interval string (ms) and clamps it.
+func parseAnnouncementInterval(raw string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+		return normalizeAnnouncementInterval(v)
+	}
+	return normalizeAnnouncementInterval(0)
 }
 
 func normalizeTablePreferences(defaultPageSize int, options []int) (int, []int) {
