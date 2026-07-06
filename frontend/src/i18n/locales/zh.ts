@@ -6641,6 +6641,16 @@ export default {
         moveUp: '上移',
         moveDown: '下移',
       },
+      announcementBanners: {
+        title: '顶部滚动公告',
+        description: '配置首页顶部滚动展示的公告条目,支持中英文;留空则显示默认文案。',
+        intervalSeconds: '切换间隔(秒)',
+        itemLabel: '公告 {n}',
+        add: '添加公告',
+        remove: '删除',
+        moveUp: '上移',
+        moveDown: '下移',
+      },
       payment: {
         title: '支付设置',
         description: '配置支付系统选项',
