@@ -7916,6 +7916,12 @@ const form = reactive<SettingsForm>({
     visibility: "user" | "admin";
     sort_order: number;
   }>,
+  announcement_banners: [] as Array<{
+    id: string;
+    text_zh: string;
+    text_en: string;
+  }>,
+  announcement_banner_interval_ms: 3000,
   custom_endpoints: [] as Array<{
     name: string;
     endpoint: string;
@@ -8584,6 +8590,33 @@ function moveMenuItem(index: number, direction: -1 | 1) {
     item.sort_order = i;
   });
 }
+
+// Announcement banner management
+function addAnnouncementBanner() {
+  form.announcement_banners.push({ id: "", text_zh: "", text_en: "" });
+}
+
+function removeAnnouncementBanner(index: number) {
+  form.announcement_banners.splice(index, 1);
+}
+
+function moveAnnouncementBanner(index: number, direction: -1 | 1) {
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= form.announcement_banners.length) return;
+  const items = form.announcement_banners;
+  const temp = items[index];
+  items[index] = items[targetIndex];
+  items[targetIndex] = temp;
+}
+
+// 间隔以秒为单位的双向绑定(存储用 ms)
+const announcementIntervalSeconds = computed({
+  get: () => Math.round(form.announcement_banner_interval_ms / 1000),
+  set: (v: number) => {
+    const n = Math.floor(Number(v));
+    form.announcement_banner_interval_ms = Number.isFinite(n) ? n * 1000 : 3000;
+  },
+});
 
 // Custom endpoint management
 function addEndpoint() {
