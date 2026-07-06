@@ -185,6 +185,12 @@ export interface CustomEndpoint {
   description: string
 }
 
+export interface AnnouncementBanner {
+  id: string
+  text_zh: string
+  text_en: string
+}
+
 export interface LoginAgreementDocument {
   id: string
   title: string
@@ -213,6 +219,8 @@ export interface PublicSettings {
   contact_info: string
   doc_url: string
   home_content: string
+  announcement_banners: AnnouncementBanner[]
+  announcement_banner_interval_ms: number
   hide_ccs_import_button: boolean
   payment_enabled: boolean
   risk_control_enabled: boolean
