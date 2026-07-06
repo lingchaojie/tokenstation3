@@ -8,26 +8,29 @@
       class="relative min-h-screen transition-all duration-300"
       :class="[sidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-64']"
     >
-      <!-- Announcement bar (admin-configured; only shown when banners exist) -->
-      <div
-        v-if="bannerVisible"
-        class="relative z-30 flex items-center justify-center gap-3 border-b border-gray-200 bg-white/90 px-4 py-2 text-center text-xs font-medium text-gray-600 backdrop-blur-xl dark:border-linear-hairline dark:bg-linear-canvas/90 dark:text-linear-ink-muted sm:text-sm"
-      >
-        <span class="ui-accent-dot h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
-        <Transition name="banner-fade" mode="out-in">
-          <span :key="currentBannerIndex">{{ currentBannerText }}</span>
-        </Transition>
-        <button
-          class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-600 dark:text-linear-ink-tertiary dark:hover:text-linear-ink"
-          :aria-label="t('common.close')"
-          @click="dismissAnnouncement"
+      <div data-testid="authenticated-top-chrome" class="sticky top-0 z-30">
+        <!-- Announcement bar (admin-configured; only shown when banners exist) -->
+        <div
+          v-if="bannerVisible"
+          data-testid="authenticated-announcement-bar"
+          class="relative z-10 flex items-center justify-center gap-3 border-b border-gray-200 bg-white/90 px-4 py-2 text-center text-xs font-medium text-gray-600 backdrop-blur-xl dark:border-linear-hairline dark:bg-linear-canvas/90 dark:text-linear-ink-muted sm:text-sm"
         >
-          <Icon name="x" size="sm" />
-        </button>
-      </div>
+          <span class="ui-accent-dot h-1.5 w-1.5 flex-shrink-0 rounded-full"></span>
+          <Transition name="banner-fade" mode="out-in">
+            <span :key="currentBannerIndex">{{ currentBannerText }}</span>
+          </Transition>
+          <button
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-600 dark:text-linear-ink-tertiary dark:hover:text-linear-ink"
+            :aria-label="t('common.close')"
+            @click="dismissAnnouncement"
+          >
+            <Icon name="x" size="sm" />
+          </button>
+        </div>
 
-      <!-- Header -->
-      <AppHeader />
+        <!-- Header -->
+        <AppHeader />
+      </div>
 
       <!-- Main Content -->
       <main class="p-4 md:p-5 lg:p-6">

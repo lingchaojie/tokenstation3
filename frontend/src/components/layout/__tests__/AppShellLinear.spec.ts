@@ -31,4 +31,11 @@ describe('Linear app shell source contract', () => {
     expect(tablePageLayoutSource).toContain('linx-panel')
     expect(tablePageLayoutSource).toContain('linx-page')
   })
+
+  it('keeps the authenticated announcement bar fixed with the header chrome', () => {
+    expect(appLayoutSource).toContain('data-testid="authenticated-top-chrome"')
+    expect(appLayoutSource).toContain('sticky top-0')
+    expect(appLayoutSource).toContain('data-testid="authenticated-announcement-bar"')
+    expect(headerSource).not.toContain('class="sticky top-0')
+  })
 })
