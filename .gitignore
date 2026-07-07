@@ -137,6 +137,7 @@ docs/*
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/legal/
 !docs/legal/*.md
+!docs/superpowers/
 .serena/
 .codex/
 frontend/coverage/
