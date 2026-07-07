@@ -260,6 +260,10 @@ type OpenAIForwardResult struct {
 
 	wsReplayInput       []json.RawMessage
 	wsReplayInputExists bool
+
+	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
+	CaptureResponse  []byte
+	CaptureTruncated bool
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -3699,6 +3703,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
 	}
+	if capturedResp, truncated := takeCaptureResult(c); capturedResp != nil {
+		forwardResult.CaptureResponse = capturedResp
+		forwardResult.CaptureTruncated = truncated
+	}
 	return forwardResult, nil
 }
 
@@ -4300,6 +4308,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		return nil, errors.New("streaming not supported")
 	}
 
+	var tee *sseTee
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, b, tr) }()
+	}
+
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
@@ -4346,6 +4360,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if tee != nil {
+			tee.appendLine(line)
+		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
@@ -4529,6 +4546,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
 	stop()
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, cr, tr)
+	}
 	c.Data(resp.StatusCode, contentType, body)
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
@@ -4594,6 +4615,10 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
+	}
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, cr, tr)
 	}
 	c.Data(resp.StatusCode, contentType, body)
 

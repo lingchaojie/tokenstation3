@@ -32,6 +32,7 @@ type OpenAIGatewayHandler struct {
 	billingCacheService      *service.BillingCacheService
 	apiKeyService            *service.APIKeyService
 	usageRecordWorkerPool    *service.UsageRecordWorkerPool
+	capturePool              *service.ConversationCapturePool
 	errorPassthroughService  *service.ErrorPassthroughService
 	contentModerationService *service.ContentModerationService
 	opsService               *service.OpsService
@@ -125,6 +126,7 @@ func NewOpenAIGatewayHandler(
 	contentModerationService *service.ContentModerationService,
 	opsService *service.OpsService,
 	cfg *config.Config,
+	capturePool *service.ConversationCapturePool,
 ) *OpenAIGatewayHandler {
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 3
@@ -139,6 +141,7 @@ func NewOpenAIGatewayHandler(
 		billingCacheService:      billingCacheService,
 		apiKeyService:            apiKeyService,
 		usageRecordWorkerPool:    usageRecordWorkerPool,
+		capturePool:              capturePool,
 		errorPassthroughService:  errorPassthroughService,
 		contentModerationService: contentModerationService,
 		opsService:               opsService,
@@ -147,6 +150,35 @@ func NewOpenAIGatewayHandler(
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
+}
+
+func (h *OpenAIGatewayHandler) captureLimit() int {
+	if h.cfg == nil {
+		return 0
+	}
+	return h.cfg.Gateway.Capture.MaxBodyBytes
+}
+
+// submitCapture 把一次 OpenAI 透传调用的原始上游快照提交到归档通道。
+// capturePool 为 nil（未启用/未注入）或结果未采集时直接返回，热路径零成本。
+func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.OpenAIForwardResult, account *service.Account, body []byte, upstreamEndpoint string) {
+	if h.capturePool == nil || result == nil || result.CaptureResponse == nil {
+		return
+	}
+	h.capturePool.Submit(&service.CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         string(account.Platform),
+		RequestID:        result.RequestID,
+		RequestedModel:   result.Model,
+		UpstreamModel:    result.UpstreamModel,
+		UpstreamEndpoint: upstreamEndpoint,
+		Stream:           result.Stream,
+		HTTPStatus:       200,
+		RawRequest:       service.SnapshotForCapture(body, h.captureLimit()),
+		RawResponse:      result.CaptureResponse,
+		RequestHeaders:   service.RedactRequestHeaders(c.Request.Header),
+		Truncated:        result.CaptureTruncated,
+	})
 }
 
 // Responses handles OpenAI Responses API endpoint
@@ -556,6 +588,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				).Error("openai.record_usage_failed", zap.Error(err))
 			}
 		})
+		h.submitCapture(c, result, account, body, upstreamEndpoint)
 		reqLog.Debug("openai.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
@@ -971,6 +1004,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				).Error("openai_messages.record_usage_failed", zap.Error(err))
 			}
 		})
+		h.submitCapture(c, result, account, body, upstreamEndpoint)
 		reqLog.Debug("openai_messages.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
