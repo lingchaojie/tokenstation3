@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	entgo.io/ent v0.14.5
+	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/alitto/pond/v2 v2.6.2
@@ -59,7 +60,6 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/ClickHouse/ch-go v0.73.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.47.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
