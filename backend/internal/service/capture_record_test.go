@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSnapshotBytesCopiesInput(t *testing.T) {
 	src := []byte(`{"a":1}`)
@@ -113,6 +116,32 @@ func TestSSETeeConcurrentAppendAndRead(t *testing.T) {
 		_, _ = acc.bytes() // must be race-free under -race
 	}
 	<-done
+}
+
+func TestRedactHeadersStripsCredentials(t *testing.T) {
+	h := map[string][]string{
+		"Authorization":     {"Bearer secret"},
+		"X-Api-Key":         {"sk-xxx"},
+		"Cookie":            {"a=b"},
+		"Anthropic-Version": {"2023-06-01"},
+		"Anthropic-Beta":    {"tools-2024"},
+		"X-Request-Id":      {"req-1"},
+	}
+	out := redactHeadersJSON(h)
+	s := string(out)
+	for _, secret := range []string{"secret", "sk-xxx", "a=b"} {
+		if strings.Contains(s, secret) {
+			t.Fatalf("credential leaked: %q in %s", secret, s)
+		}
+	}
+	for _, keep := range []string{"2023-06-01", "tools-2024", "req-1"} {
+		if !strings.Contains(s, keep) {
+			t.Fatalf("must keep %q; got %s", keep, s)
+		}
+	}
+	if redactHeadersJSON(nil) != nil {
+		t.Fatal("nil headers -> nil")
+	}
 }
 
 func TestExtractResponseColumnsStreamSSE(t *testing.T) {

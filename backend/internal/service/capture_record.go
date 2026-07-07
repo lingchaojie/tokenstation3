@@ -3,6 +3,8 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -246,6 +248,39 @@ func extractResponseColumns(resp []byte, stream bool) responseColumns {
 	}
 	return cols
 }
+
+// redactedHeaderKeys 需剥离的凭证类 header（小写匹配）。
+var redactedHeaderKeys = map[string]struct{}{
+	"authorization":       {},
+	"x-api-key":           {},
+	"cookie":              {},
+	"set-cookie":          {},
+	"proxy-authorization": {},
+	"x-goog-api-key":      {},
+}
+
+// redactHeadersJSON 剥离凭证类头后序列化为 JSON。保留影响模型行为/诊断的头
+// （anthropic-version、anthropic-beta、x-request-id、限流头等）。nil/空 -> nil。
+func redactHeadersJSON(h map[string][]string) []byte {
+	if len(h) == 0 {
+		return nil
+	}
+	clean := make(map[string][]string, len(h))
+	for k, v := range h {
+		if _, bad := redactedHeaderKeys[strings.ToLower(k)]; bad {
+			continue
+		}
+		clean[k] = v
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// redactHTTPHeader 是 http.Header 的适配。
+func redactHTTPHeader(h http.Header) []byte { return redactHeadersJSON(map[string][]string(h)) }
 
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。
 func extractCaptureColumns(rec *CaptureRecord) {
