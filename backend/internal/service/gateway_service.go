@@ -581,8 +581,10 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse  []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
-	CaptureTruncated bool   // 采集 buffer 超过 max_body_bytes 被截断
+	CaptureResponse        []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
+	CaptureTruncated       bool   // 采集 buffer 超过 max_body_bytes 被截断
+	CaptureRequestHeaders  []byte // 上游请求头(脱敏)JSON
+	CaptureResponseHeaders []byte // 上游响应头(脱敏)JSON
 }
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
@@ -5927,9 +5929,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
 	}
-	if capturedResp, truncated := takeCaptureResult(c); capturedResp != nil {
-		result.CaptureResponse = capturedResp
-		result.CaptureTruncated = truncated
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+			result.CaptureResponse = bridge.Response
+			result.CaptureTruncated = bridge.Truncated
+			result.CaptureRequestHeaders = bridge.RequestHeaders
+			result.CaptureResponseHeaders = bridge.ResponseHeaders
+		}
 	}
 	return result, nil
 }
@@ -8596,7 +8602,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	var tee *sseTee
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() { b, tr := tee.bytes(); setCaptureResult(c, b, tr) }()
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
 	}
 
 	usage := &ClaudeUsage{}
@@ -9396,7 +9402,7 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	// 通过 gin.Context 暂存，供上层 Forward 组装 *ForwardResult 时读取（零成本：关闭时不分配）。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, capturedResp, truncated)
+		setCaptureResult(c, resp, capturedResp, truncated)
 	}
 
 	// 写入响应

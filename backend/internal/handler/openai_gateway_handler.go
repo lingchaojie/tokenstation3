@@ -176,7 +176,8 @@ func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.Ope
 		HTTPStatus:       200,
 		RawRequest:       service.SnapshotForCapture(body, h.captureLimit()),
 		RawResponse:      result.CaptureResponse,
-		RequestHeaders:   service.RedactRequestHeaders(c.Request.Header),
+		RequestHeaders:   result.CaptureRequestHeaders,
+		ResponseHeaders:  result.CaptureResponseHeaders,
 		Truncated:        result.CaptureTruncated,
 	})
 }

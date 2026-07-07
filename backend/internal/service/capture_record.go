@@ -128,21 +128,33 @@ func (t *sseTee) bytes() ([]byte, bool) {
 const captureResultContextKey = "gateway_capture_result"
 
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
+// 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	Response  []byte
-	Truncated bool
+	Response        []byte
+	Truncated       bool
+	RequestHeaders  []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
 }
 
 // setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
-func setCaptureResult(c *gin.Context, resp []byte, truncated bool) {
+// resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
+// 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
+func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncated bool) {
 	if c == nil {
 		return
 	}
-	c.Set(captureResultContextKey, &captureResultBridge{Response: resp, Truncated: truncated})
+	bridge := &captureResultBridge{Response: body, Truncated: truncated}
+	if resp != nil {
+		if resp.Request != nil {
+			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+		}
+		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
+	}
+	c.Set(captureResultContextKey, bridge)
 }
 
 // takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
-func takeCaptureResult(c *gin.Context) ([]byte, bool) {
+func takeCaptureResult(c *gin.Context) (*captureResultBridge, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -154,7 +166,7 @@ func takeCaptureResult(c *gin.Context) ([]byte, bool) {
 	if !ok || res == nil {
 		return nil, false
 	}
-	return res.Response, res.Truncated
+	return res, true
 }
 
 // responseColumns 是从原始上游响应体（流式 SSE 或非流式 JSON）轻扫描抽取出的
@@ -284,9 +296,6 @@ func redactHTTPHeader(h http.Header) []byte { return redactHeadersJSON(map[strin
 
 // SnapshotForCapture 返回 src 的受限独立副本（<= limit 字节），供 handler 采集请求体。
 func SnapshotForCapture(src []byte, limit int) []byte { b, _ := captureWithLimit(src, limit); return b }
-
-// RedactRequestHeaders 脱敏 HTTP 头后返回 JSON，供 handler 采集。
-func RedactRequestHeaders(h http.Header) []byte { return redactHTTPHeader(h) }
 
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。
 func extractCaptureColumns(rec *CaptureRecord) {

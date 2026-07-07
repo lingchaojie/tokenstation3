@@ -262,8 +262,10 @@ type OpenAIForwardResult struct {
 	wsReplayInputExists bool
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse  []byte
-	CaptureTruncated bool
+	CaptureResponse        []byte
+	CaptureTruncated       bool
+	CaptureRequestHeaders  []byte
+	CaptureResponseHeaders []byte
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -3703,9 +3705,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
 	}
-	if capturedResp, truncated := takeCaptureResult(c); capturedResp != nil {
-		forwardResult.CaptureResponse = capturedResp
-		forwardResult.CaptureTruncated = truncated
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+			forwardResult.CaptureResponse = bridge.Response
+			forwardResult.CaptureTruncated = bridge.Truncated
+			forwardResult.CaptureRequestHeaders = bridge.RequestHeaders
+			forwardResult.CaptureResponseHeaders = bridge.ResponseHeaders
+		}
 	}
 	return forwardResult, nil
 }
@@ -4311,7 +4317,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	var tee *sseTee
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() { b, tr := tee.bytes(); setCaptureResult(c, b, tr) }()
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
 	}
 
 	usage := &OpenAIUsage{}
@@ -4548,7 +4554,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	stop()
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, cr, tr)
+		setCaptureResult(c, resp, cr, tr)
 	}
 	c.Data(resp.StatusCode, contentType, body)
 	return &openaiNonStreamingResultPassthrough{
@@ -4618,7 +4624,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 	}
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, cr, tr)
+		setCaptureResult(c, resp, cr, tr)
 	}
 	c.Data(resp.StatusCode, contentType, body)
 

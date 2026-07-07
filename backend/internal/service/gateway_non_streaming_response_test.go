@@ -132,9 +132,10 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
-	capturedResp, truncated := takeCaptureResult(c)
-	require.False(t, truncated)
-	require.JSONEq(t, string(body), string(capturedResp))
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.False(t, bridge.Truncated)
+	require.JSONEq(t, string(body), string(bridge.Response))
 }
 
 func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxTriggersFailover(t *testing.T) {

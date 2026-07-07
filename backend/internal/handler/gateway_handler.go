@@ -1035,7 +1035,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					HTTPStatus:       200,
 					RawRequest:       service.SnapshotForCapture(attemptParsedReq.Body.Bytes(), h.captureLimit()),
 					RawResponse:      result.CaptureResponse,
-					RequestHeaders:   service.RedactRequestHeaders(c.Request.Header),
+					RequestHeaders:   result.CaptureRequestHeaders,
+					ResponseHeaders:  result.CaptureResponseHeaders,
 					Truncated:        result.CaptureTruncated,
 				})
 			}
