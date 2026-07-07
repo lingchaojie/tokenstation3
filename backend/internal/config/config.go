@@ -1057,6 +1057,31 @@ type CaptureClickHouseConfig struct {
 	MaxOpenConns  int      `mapstructure:"max_open_conns"`
 }
 
+// validate 仅在 Enabled=true 时校验；关闭时任意配置都放行。
+// capture 队列绝不允许 overflow=sync：归档链路不能反向阻塞转发主路径。
+func (c GatewayCaptureConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if len(c.ClickHouse.Addr) == 0 || strings.TrimSpace(c.ClickHouse.Database) == "" {
+		return fmt.Errorf("gateway.capture: clickhouse addr/database required when enabled")
+	}
+	switch c.OverflowPolicy {
+	case UsageRecordOverflowPolicyDrop, UsageRecordOverflowPolicySample:
+	default:
+		return fmt.Errorf("gateway.capture.overflow_policy must be drop|sample, got %q", c.OverflowPolicy)
+	}
+	switch c.ClickHouse.Compression {
+	case "lz4", "zstd", "none", "":
+	default:
+		return fmt.Errorf("gateway.capture.clickhouse.compression must be lz4|zstd|none, got %q", c.ClickHouse.Compression)
+	}
+	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.BatchMaxSize <= 0 {
+		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/batch_max_size must be > 0")
+	}
+	return nil
+}
+
 // TLSFingerprintConfig TLS指纹伪装配置
 // 用于模拟 Claude CLI (Node.js) 的 TLS 握手特征，避免被识别为非官方客户端
 type TLSFingerprintConfig struct {
@@ -2013,6 +2038,21 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_down_step", 16)
 	viper.SetDefault("gateway.usage_record.auto_scale_check_interval_seconds", 3)
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
+	viper.SetDefault("gateway.capture.enabled", false)
+	viper.SetDefault("gateway.capture.max_body_bytes", 8388608)
+	viper.SetDefault("gateway.capture.queue_size", 8192)
+	viper.SetDefault("gateway.capture.worker_count", 4)
+	viper.SetDefault("gateway.capture.overflow_policy", UsageRecordOverflowPolicyDrop)
+	viper.SetDefault("gateway.capture.overflow_sample_percent", 0)
+	viper.SetDefault("gateway.capture.batch_max_size", 200)
+	viper.SetDefault("gateway.capture.batch_max_interval_ms", 1000)
+	viper.SetDefault("gateway.capture.clickhouse.database", "llm_archive")
+	viper.SetDefault("gateway.capture.clickhouse.table", "model_call_archive")
+	viper.SetDefault("gateway.capture.clickhouse.dial_timeout_ms", 2000)
+	viper.SetDefault("gateway.capture.clickhouse.read_timeout_ms", 10000)
+	viper.SetDefault("gateway.capture.clickhouse.compression", "lz4")
+	viper.SetDefault("gateway.capture.clickhouse.secure", false)
+	viper.SetDefault("gateway.capture.clickhouse.max_open_conns", 8)
 	viper.SetDefault("gateway.user_group_rate_cache_ttl_seconds", 30)
 	viper.SetDefault("gateway.models_list_cache_ttl_seconds", 15)
 	// TLS指纹伪装配置（默认关闭，需要账号级别单独启用）
@@ -2829,6 +2869,9 @@ func (c *Config) Validate() error {
 		if c.Gateway.UsageRecord.AutoScaleCooldownSeconds < 0 {
 			return fmt.Errorf("gateway.usage_record.auto_scale_cooldown_seconds must be non-negative")
 		}
+	}
+	if err := c.Gateway.Capture.validate(); err != nil {
+		return err
 	}
 	if c.Gateway.UserGroupRateCacheTTLSeconds <= 0 {
 		return fmt.Errorf("gateway.user_group_rate_cache_ttl_seconds must be positive")
