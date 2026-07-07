@@ -579,6 +579,10 @@ type ForwardResult struct {
 	ImageOutputSizes   []string
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
+
+	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
+	CaptureResponse  []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
+	CaptureTruncated bool   // 采集 buffer 超过 max_body_bytes 被截断
 }
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
@@ -5913,7 +5917,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	return &ForwardResult{
+	result := &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
@@ -5922,7 +5926,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}
+	if !reqStream {
+		if capturedResp, truncated := takeNonStreamingCaptureResult(c); capturedResp != nil {
+			result.CaptureResponse = capturedResp
+			result.CaptureTruncated = truncated
+		}
+	}
+	return result, nil
 }
 
 type anthropicPassthroughForwardInput struct {
@@ -9370,6 +9381,13 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
+
+	// 归档采集：仅 gateway.capture.enabled=true 时保留完整响应 body 独立副本，
+	// 通过 gin.Context 暂存，供上层 Forward 组装 *ForwardResult 时读取（零成本：关闭时不分配）。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setNonStreamingCaptureResult(c, capturedResp, truncated)
+	}
 
 	// 写入响应
 	c.Data(resp.StatusCode, contentType, body)

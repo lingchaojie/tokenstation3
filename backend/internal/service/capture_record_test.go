@@ -39,6 +39,38 @@ func TestExtractResponseColumnsNonStream(t *testing.T) {
 	}
 }
 
+func TestNonStreamingCaptureRespectsFlag(t *testing.T) {
+	body := []byte(`{"stop_reason":"end_turn"}`)
+	if got := captureResponseIfEnabled(false, body, 1024); got != nil {
+		t.Fatal("must be nil when disabled")
+	}
+	got := captureResponseIfEnabled(true, body, 1024)
+	if string(got) != string(body) {
+		t.Fatalf("copy mismatch: %q", got)
+	}
+	body[0] = 'X'
+	if got[0] == 'X' {
+		t.Fatal("must be independent copy")
+	}
+}
+
+func TestCaptureTruncation(t *testing.T) {
+	got, truncated := captureWithLimit([]byte("0123456789"), 4)
+	if string(got) != "0123" || !truncated {
+		t.Fatalf("got %q truncated=%v", got, truncated)
+	}
+	got2, truncated2 := captureWithLimit([]byte("ab"), 4)
+	if string(got2) != "ab" || truncated2 {
+		t.Fatalf("got %q truncated=%v", got2, truncated2)
+	}
+	if got3, tr := captureWithLimit(nil, 4); got3 != nil || tr {
+		t.Fatal("nil in -> nil, false")
+	}
+	if got4, tr := captureWithLimit([]byte("x"), 0); got4 != nil || tr {
+		t.Fatal("limit<=0 -> nil, false")
+	}
+}
+
 func TestExtractResponseColumnsStreamSSE(t *testing.T) {
 	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":50}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"s\"}}\n\n" +

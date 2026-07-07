@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -46,6 +47,64 @@ func snapshotBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+// captureWithLimit 返回最多 limit 字节的独立副本及是否被截断。limit<=0 或 src 为 nil 视为不采集。
+func captureWithLimit(src []byte, limit int) ([]byte, bool) {
+	if limit <= 0 || src == nil {
+		return nil, false
+	}
+	if len(src) <= limit {
+		return snapshotBytes(src), false
+	}
+	dst := make([]byte, limit)
+	copy(dst, src[:limit])
+	return dst, true
+}
+
+// captureResponseIfEnabled 便于测试的薄封装。
+func captureResponseIfEnabled(enabled bool, src []byte, limit int) []byte {
+	if !enabled {
+		return nil
+	}
+	b, _ := captureWithLimit(src, limit)
+	return b
+}
+
+// nonStreamingCaptureContextKey 是 gin.Context 上暂存非流式响应体采集结果的 key。
+// handleNonStreamingResponse 只返回 (*ClaudeUsage, error)，真正的 *ForwardResult
+// 由上层 Forward 组装；这里借用请求级 gin.Context 把采集字节从响应处理阶段
+// 传递到 ForwardResult 组装阶段，避免改动既有函数签名影响调用方/测试。
+const nonStreamingCaptureContextKey = "gateway_capture_nonstream_result"
+
+// nonStreamingCaptureResult 是暂存在 gin.Context 上的采集结果。
+type nonStreamingCaptureResult struct {
+	Response  []byte
+	Truncated bool
+}
+
+// setNonStreamingCaptureResult 在响应处理阶段写入采集结果。
+func setNonStreamingCaptureResult(c *gin.Context, resp []byte, truncated bool) {
+	if c == nil {
+		return
+	}
+	c.Set(nonStreamingCaptureContextKey, &nonStreamingCaptureResult{Response: resp, Truncated: truncated})
+}
+
+// takeNonStreamingCaptureResult 在 ForwardResult 组装阶段读取并清理采集结果。
+func takeNonStreamingCaptureResult(c *gin.Context) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	v, ok := c.Get(nonStreamingCaptureContextKey)
+	if !ok {
+		return nil, false
+	}
+	res, ok := v.(*nonStreamingCaptureResult)
+	if !ok || res == nil {
+		return nil, false
+	}
+	return res.Response, res.Truncated
 }
 
 // responseColumns 是从原始上游响应体（流式 SSE 或非流式 JSON）轻扫描抽取出的
