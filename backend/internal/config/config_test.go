@@ -229,6 +229,31 @@ func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
 	require.Equal(t, "gpt-5.3-codex", cfg.Gateway.OpenAICompactModel)
 }
 
+func TestLoadDefaultOpenAICompactNonstreamKeepaliveEnabled(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 60, cfg.Gateway.OpenAICompactNonstreamKeepaliveInterval)
+}
+
+func TestLoadOpenAICompactNonstreamKeepaliveFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_COMPACT_NONSTREAM_KEEPALIVE_INTERVAL", "5")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 5, cfg.Gateway.OpenAICompactNonstreamKeepaliveInterval)
+}
+
+func TestLoadOpenAICompactNonstreamKeepaliveRejectsOutOfRange(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_COMPACT_NONSTREAM_KEEPALIVE_INTERVAL", "1")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "gateway.openai_compact_nonstream_keepalive_interval must be 0 or between 5-60 seconds")
+}
+
 func TestLoadDefaultOpenAIHTTP2Enabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
