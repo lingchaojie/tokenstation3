@@ -5927,11 +5927,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
 	}
-	if !reqStream {
-		if capturedResp, truncated := takeNonStreamingCaptureResult(c); capturedResp != nil {
-			result.CaptureResponse = capturedResp
-			result.CaptureTruncated = truncated
-		}
+	if capturedResp, truncated := takeCaptureResult(c); capturedResp != nil {
+		result.CaptureResponse = capturedResp
+		result.CaptureTruncated = truncated
 	}
 	return result, nil
 }
@@ -8593,6 +8591,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		return nil, errors.New("streaming not supported")
 	}
 
+	// 归档采集：仅 gateway.capture.enabled=true 时在上游 SSE 读取 goroutine 里逐行累积原始字节。
+	// tee 加锁保护；此 defer 在函数返回时读取已到达的字节写入 gin.Context 桥，供上层 Forward 组装。
+	var tee *sseTee
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, b, tr) }()
+	}
+
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	scanner := bufio.NewScanner(resp.Body)
@@ -8626,7 +8632,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		defer close(events)
 		for scanner.Scan() {
 			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-			if !sendEvent(scanEvent{line: scanner.Text()}) {
+			line := scanner.Text()
+			if tee != nil {
+				tee.appendLine(line)
+			}
+			if !sendEvent(scanEvent{line: line}) {
 				return
 			}
 		}
@@ -9386,7 +9396,7 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	// 通过 gin.Context 暂存，供上层 Forward 组装 *ForwardResult 时读取（零成本：关闭时不分配）。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setNonStreamingCaptureResult(c, capturedResp, truncated)
+		setCaptureResult(c, capturedResp, truncated)
 	}
 
 	// 写入响应

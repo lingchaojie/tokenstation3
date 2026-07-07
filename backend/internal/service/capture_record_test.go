@@ -71,6 +71,50 @@ func TestCaptureTruncation(t *testing.T) {
 	}
 }
 
+func TestSSETeeAppendsRawLinesWithFraming(t *testing.T) {
+	acc := newSSETee(1024)
+	acc.appendLine("event: message_start")
+	acc.appendLine(`data: {"type":"message_start"}`)
+	acc.appendLine("")
+	out, truncated := acc.bytes()
+	want := "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+	if string(out) != want || truncated {
+		t.Fatalf("got %q truncated=%v", out, truncated)
+	}
+}
+
+func TestSSETeeTruncates(t *testing.T) {
+	acc := newSSETee(5)
+	acc.appendLine("0123456789")
+	out, truncated := acc.bytes()
+	if len(out) > 5 || !truncated {
+		t.Fatalf("expected truncation, got %q trunc=%v", out, truncated)
+	}
+}
+
+func TestSSETeeNilAndDisabled(t *testing.T) {
+	var acc *sseTee
+	acc.appendLine("x") // no panic
+	if b, tr := acc.bytes(); b != nil || tr {
+		t.Fatal("nil tee -> nil,false")
+	}
+}
+
+func TestSSETeeConcurrentAppendAndRead(t *testing.T) {
+	acc := newSSETee(1 << 20)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			acc.appendLine("data: {}")
+		}
+		close(done)
+	}()
+	for i := 0; i < 1000; i++ {
+		_, _ = acc.bytes() // must be race-free under -race
+	}
+	<-done
+}
+
 func TestExtractResponseColumnsStreamSSE(t *testing.T) {
 	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":50}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"s\"}}\n\n" +

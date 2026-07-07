@@ -104,7 +104,7 @@ func TestHandleNonStreamingResponse_CaptureDisabledLeavesNoContextResult(t *test
 	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
-	capturedResp, truncated := takeNonStreamingCaptureResult(c)
+	capturedResp, truncated := takeCaptureResult(c)
 	require.Nil(t, capturedResp)
 	require.False(t, truncated)
 }
@@ -132,7 +132,7 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
-	capturedResp, truncated := takeNonStreamingCaptureResult(c)
+	capturedResp, truncated := takeCaptureResult(c)
 	require.False(t, truncated)
 	require.JSONEq(t, string(body), string(capturedResp))
 }

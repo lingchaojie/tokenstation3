@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -71,36 +72,83 @@ func captureResponseIfEnabled(enabled bool, src []byte, limit int) []byte {
 	return b
 }
 
-// nonStreamingCaptureContextKey 是 gin.Context 上暂存非流式响应体采集结果的 key。
-// handleNonStreamingResponse 只返回 (*ClaudeUsage, error)，真正的 *ForwardResult
-// 由上层 Forward 组装；这里借用请求级 gin.Context 把采集字节从响应处理阶段
-// 传递到 ForwardResult 组装阶段，避免改动既有函数签名影响调用方/测试。
-const nonStreamingCaptureContextKey = "gateway_capture_nonstream_result"
+// sseTee 在上游 SSE 读取 goroutine 里按行累积原始字节（含 SSE 帧换行），
+// 达到 limit 后停止累积并标记 truncated。mutex 保护：读 goroutine 写入、
+// 主 goroutine 在返回时读取，二者可能并发，必须加锁。
+type sseTee struct {
+	mu        sync.Mutex
+	buf       []byte
+	limit     int
+	truncated bool
+}
 
-// nonStreamingCaptureResult 是暂存在 gin.Context 上的采集结果。
-type nonStreamingCaptureResult struct {
+func newSSETee(limit int) *sseTee { return &sseTee{limit: limit} }
+
+func (t *sseTee) appendLine(line string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.truncated {
+		return
+	}
+	chunk := line + "\n" // 还原 scanner 去掉的换行；事件间空行 -> "\n\n"
+	if len(t.buf)+len(chunk) > t.limit {
+		if remain := t.limit - len(t.buf); remain > 0 {
+			t.buf = append(t.buf, chunk[:remain]...)
+		}
+		t.truncated = true
+		return
+	}
+	t.buf = append(t.buf, chunk...)
+}
+
+func (t *sseTee) bytes() ([]byte, bool) {
+	if t == nil {
+		return nil, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.buf == nil {
+		return nil, t.truncated
+	}
+	out := make([]byte, len(t.buf))
+	copy(out, t.buf)
+	return out, t.truncated
+}
+
+// captureResultContextKey 是 gin.Context 上暂存响应体采集结果的 key。
+// handleNonStreamingResponse / handleStreamingResponse 都不直接返回 *ForwardResult，
+// 真正的 *ForwardResult 由上层 Forward 组装；这里借用请求级 gin.Context 把采集字节
+// 从响应处理阶段传递到 ForwardResult 组装阶段，避免改动既有函数签名影响调用方/测试。
+// 流式与非流式互斥，同一请求只有一条路径会写入。
+const captureResultContextKey = "gateway_capture_result"
+
+// captureResultBridge 是暂存在 gin.Context 上的采集结果。
+type captureResultBridge struct {
 	Response  []byte
 	Truncated bool
 }
 
-// setNonStreamingCaptureResult 在响应处理阶段写入采集结果。
-func setNonStreamingCaptureResult(c *gin.Context, resp []byte, truncated bool) {
+// setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
+func setCaptureResult(c *gin.Context, resp []byte, truncated bool) {
 	if c == nil {
 		return
 	}
-	c.Set(nonStreamingCaptureContextKey, &nonStreamingCaptureResult{Response: resp, Truncated: truncated})
+	c.Set(captureResultContextKey, &captureResultBridge{Response: resp, Truncated: truncated})
 }
 
-// takeNonStreamingCaptureResult 在 ForwardResult 组装阶段读取并清理采集结果。
-func takeNonStreamingCaptureResult(c *gin.Context) ([]byte, bool) {
+// takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
+func takeCaptureResult(c *gin.Context) ([]byte, bool) {
 	if c == nil {
 		return nil, false
 	}
-	v, ok := c.Get(nonStreamingCaptureContextKey)
+	v, ok := c.Get(captureResultContextKey)
 	if !ok {
 		return nil, false
 	}
-	res, ok := v.(*nonStreamingCaptureResult)
+	res, ok := v.(*captureResultBridge)
 	if !ok || res == nil {
 		return nil, false
 	}
