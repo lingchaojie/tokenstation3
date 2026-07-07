@@ -96,6 +96,17 @@ func extractResponseColumns(resp []byte, stream bool) responseColumns {
 		if v := gjson.Get(js, "usage.cache_creation_input_tokens"); v.Exists() {
 			cols.CacheCreationTokens = int(v.Int())
 		}
+		// 流式 message_start 事件把 usage（含 cache 明细）挂在 message.usage 下。
+		if v := gjson.Get(js, "message.usage.cache_read_input_tokens"); v.Exists() {
+			cols.CacheReadTokens = int(v.Int())
+		}
+		if v := gjson.Get(js, "message.usage.cache_creation_input_tokens"); v.Exists() {
+			cols.CacheCreationTokens = int(v.Int())
+		}
+		if v := gjson.Get(js, "message.usage.output_tokens"); v.Exists() {
+			cols.OutputTokens = int(v.Int())
+		}
+		// fast-path guard: 先做字符串命中再走 content ForEach 深扫，避免逐块解析开销。
 		if strings.Contains(js, "\"signature\"") || strings.Contains(js, "signature_delta") {
 			if gjson.Get(js, "signature").Exists() ||
 				gjson.Get(js, "delta.signature").Exists() ||

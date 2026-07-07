@@ -40,12 +40,15 @@ func TestExtractResponseColumnsNonStream(t *testing.T) {
 }
 
 func TestExtractResponseColumnsStreamSSE(t *testing.T) {
-	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\n" +
+	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":50}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"s\"}}\n\n" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":3}}\n\n")
 	cols := extractResponseColumns(sse, true)
 	if cols.StopReason != "tool_use" || cols.InputTokens != 7 || cols.OutputTokens != 3 {
 		t.Fatalf("bad stream cols: %+v", cols)
+	}
+	if cols.CacheReadTokens != 100 || cols.CacheCreationTokens != 50 {
+		t.Fatalf("cache tokens must come from message.usage, got read=%d creation=%d", cols.CacheReadTokens, cols.CacheCreationTokens)
 	}
 	if !cols.SignaturePresent {
 		t.Fatal("signature_delta must set SignaturePresent")
