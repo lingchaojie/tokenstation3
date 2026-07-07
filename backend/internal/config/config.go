@@ -808,6 +808,9 @@ type GatewayConfig struct {
 	// UsageRecord: 使用量记录异步队列配置（有界队列 + 固定 worker）
 	UsageRecord GatewayUsageRecordConfig `mapstructure:"usage_record"`
 
+	// Capture: 上游调用全量归档异步通道配置（有界队列 + ClickHouse）
+	Capture GatewayCaptureConfig `mapstructure:"capture"`
+
 	// UserGroupRateCacheTTLSeconds: 用户分组倍率热路径缓存 TTL（秒）
 	UserGroupRateCacheTTLSeconds int `mapstructure:"user_group_rate_cache_ttl_seconds"`
 	// ModelsListCacheTTLSeconds: /v1/models 模型列表短缓存 TTL（秒）
@@ -1025,6 +1028,33 @@ type GatewayUsageRecordConfig struct {
 	AutoScaleCheckIntervalSeconds int `mapstructure:"auto_scale_check_interval_seconds"`
 	// AutoScaleCooldownSeconds: 自动扩缩容冷却时间（秒）
 	AutoScaleCooldownSeconds int `mapstructure:"auto_scale_cooldown_seconds"`
+}
+
+// GatewayCaptureConfig 上游调用全量归档异步通道配置（默认关闭，关时零成本）。
+type GatewayCaptureConfig struct {
+	Enabled               bool                    `mapstructure:"enabled"`
+	MaxBodyBytes          int                     `mapstructure:"max_body_bytes"`
+	QueueSize             int                     `mapstructure:"queue_size"`
+	WorkerCount           int                     `mapstructure:"worker_count"`
+	OverflowPolicy        string                  `mapstructure:"overflow_policy"`
+	OverflowSamplePercent int                     `mapstructure:"overflow_sample_percent"`
+	BatchMaxSize          int                     `mapstructure:"batch_max_size"`
+	BatchMaxIntervalMs    int                     `mapstructure:"batch_max_interval_ms"`
+	ClickHouse            CaptureClickHouseConfig `mapstructure:"clickhouse"`
+}
+
+// CaptureClickHouseConfig 远端 ClickHouse 连接配置。
+type CaptureClickHouseConfig struct {
+	Addr          []string `mapstructure:"addr"`
+	Database      string   `mapstructure:"database"`
+	Table         string   `mapstructure:"table"`
+	Username      string   `mapstructure:"username"`
+	Password      string   `mapstructure:"password"`
+	DialTimeoutMs int      `mapstructure:"dial_timeout_ms"`
+	ReadTimeoutMs int      `mapstructure:"read_timeout_ms"`
+	Compression   string   `mapstructure:"compression"`
+	Secure        bool     `mapstructure:"secure"`
+	MaxOpenConns  int      `mapstructure:"max_open_conns"`
 }
 
 // TLSFingerprintConfig TLS指纹伪装配置
