@@ -282,6 +282,12 @@ func redactHeadersJSON(h map[string][]string) []byte {
 // redactHTTPHeader 是 http.Header 的适配。
 func redactHTTPHeader(h http.Header) []byte { return redactHeadersJSON(map[string][]string(h)) }
 
+// SnapshotForCapture 返回 src 的受限独立副本（<= limit 字节），供 handler 采集请求体。
+func SnapshotForCapture(src []byte, limit int) []byte { b, _ := captureWithLimit(src, limit); return b }
+
+// RedactRequestHeaders 脱敏 HTTP 头后返回 JSON，供 handler 采集。
+func RedactRequestHeaders(h http.Header) []byte { return redactHTTPHeader(h) }
+
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。
 func extractCaptureColumns(rec *CaptureRecord) {
 	rec.SessionID = extractCaptureSessionID(rec.RawRequest)
