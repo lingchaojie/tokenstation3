@@ -6,6 +6,10 @@ import (
 	"sync"
 
 	"github.com/alitto/pond/v2"
+	"go.uber.org/zap"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 type conversationCapturePoolOptions struct {
@@ -59,6 +63,29 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 	if p.overflow == "sample" && p.sample > 0 && rand.IntN(100) < p.sample {
 		_, _ = p.pool.TrySubmit(task)
 	}
+}
+
+// NewConversationCapturePool 是 wire provider。capture 关闭时返回 nil（handler 侧已 nil 保护）；
+// ClickHouse 建连失败时降级为 noopArchiveWriter（仍可 Submit，但不落库），绝不阻塞启动、绝不影响转发。
+func NewConversationCapturePool(cfg *config.Config) *ConversationCapturePool {
+	if cfg == nil || !cfg.Gateway.Capture.Enabled {
+		return nil
+	}
+	cc := cfg.Gateway.Capture
+	writer, err := newClickHouseArchiveWriter(cc)
+	if err != nil {
+		logger.L().With(
+			zap.String("component", "service.conversation_capture_pool"),
+			zap.Error(err),
+		).Error("capture.clickhouse_init_failed_degrade_noop")
+		writer = noopArchiveWriter{}
+	}
+	return newConversationCapturePool(conversationCapturePoolOptions{
+		WorkerCount:    cc.WorkerCount,
+		QueueSize:      cc.QueueSize,
+		OverflowPolicy: cc.OverflowPolicy,
+		SamplePercent:  cc.OverflowSamplePercent,
+	}, writer)
 }
 
 func (p *ConversationCapturePool) Stop() {
