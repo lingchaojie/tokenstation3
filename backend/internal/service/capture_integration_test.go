@@ -82,7 +82,7 @@ func TestClickHouseArchiveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open readback: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var gotResp []byte
 	row := conn.QueryRow(context.Background(),

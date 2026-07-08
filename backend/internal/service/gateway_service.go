@@ -670,12 +670,6 @@ type GatewayService struct {
 	capturePool           *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
 }
 
-// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe：pool 为 nil 时错误归档为 no-op。
-func (s *GatewayService) SetCapturePool(p *ConversationCapturePool) {
-	if s != nil {
-		s.capturePool = p
-	}
-}
 
 // NewGatewayService creates a new GatewayService
 func NewGatewayService(
@@ -708,6 +702,7 @@ func NewGatewayService(
 	resolver *ModelPricingResolver,
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	capturePool *ConversationCapturePool,
 	upstreamUARepos ...AccountUpstreamUserAgentRepository,
 ) *GatewayService {
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
@@ -747,6 +742,7 @@ func NewGatewayService(
 		resolver:              resolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+		capturePool:           capturePool,
 	}
 	if len(upstreamUARepos) > 0 {
 		svc.upstreamUARepo = upstreamUARepos[0]

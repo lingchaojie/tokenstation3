@@ -392,12 +392,6 @@ type OpenAIGatewayService struct {
 	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
 }
 
-// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe。
-func (s *OpenAIGatewayService) SetCapturePool(p *ConversationCapturePool) {
-	if s != nil {
-		s.capturePool = p
-	}
-}
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
@@ -423,6 +417,7 @@ func NewOpenAIGatewayService(
 	balanceNotifyService *BalanceNotifyService,
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	capturePool *ConversationCapturePool,
 	upstreamUARepos ...AccountUpstreamUserAgentRepository,
 ) *OpenAIGatewayService {
 	svc := &OpenAIGatewayService{
@@ -459,6 +454,7 @@ func NewOpenAIGatewayService(
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
+		capturePool:           capturePool,
 	}
 	if len(upstreamUARepos) > 0 {
 		svc.upstreamUARepo = upstreamUARepos[0]

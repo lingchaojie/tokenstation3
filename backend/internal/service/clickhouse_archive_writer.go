@@ -121,7 +121,7 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig) (ArchiveWriter, 
 
 	var tlsConfig *tls.Config
 	if chCfg.Secure {
-		tlsConfig = &tls.Config{}
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 
 	maxOpenConns := chCfg.MaxOpenConns
@@ -262,7 +262,7 @@ func (w *clickHouseArchiveWriter) flush(batch []*CaptureRecord) {
 		return
 	}
 	// Close 在 Send 之后为 no-op；在 Append 失败等早退路径上负责释放底层连接资源。
-	defer chBatch.Close()
+	defer func() { _ = chBatch.Close() }()
 
 	for _, rec := range batch {
 		if err := chBatch.Append(
