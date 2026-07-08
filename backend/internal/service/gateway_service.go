@@ -667,6 +667,14 @@ type GatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	upstreamUARepo        AccountUpstreamUserAgentRepository
+	capturePool           *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
+}
+
+// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe：pool 为 nil 时错误归档为 no-op。
+func (s *GatewayService) SetCapturePool(p *ConversationCapturePool) {
+	if s != nil {
+		s.capturePool = p
+	}
 }
 
 // NewGatewayService creates a new GatewayService
@@ -8346,6 +8354,29 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	}
 
 	MarkResponseCommitted(c)
+
+	// 归档采集（错误响应）：仅在此终态提交——failover 重试路径在上面 shouldDisable 分支已返回，
+	// 不会走到这里，故不会归档中间重试。drop-safe，绝不影响转发。
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		var reqBody []byte
+		requestedModel := ""
+		stream := false
+		if v, ok := c.Get("parsed_request"); ok {
+			if pr, ok := v.(*ParsedRequest); ok && pr != nil {
+				requestedModel = pr.Model
+				stream = pr.Stream
+				if pr.Body != nil {
+					reqBody = pr.Body.Bytes()
+				}
+			}
+		}
+		// 错误路径通常无模型映射信息；用请求模型兼作 upstream_model 占位。
+		upstreamModel := requestedModel
+		limit := s.cfg.Gateway.Capture.MaxBodyBytes
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), requestedModel, upstreamModel, "", stream, reqBody, body, limit); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
 
 	// 记录上游错误响应体摘要便于排障（可选：由配置控制；不回显到客户端）
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {

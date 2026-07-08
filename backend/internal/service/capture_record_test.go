@@ -1,9 +1,47 @@
 package service
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestBuildErrorCaptureRecord(t *testing.T) {
+	// both empty -> nil (nothing to archive)
+	if buildErrorCaptureRecord(nil, "anthropic", "m", "m", "", false, nil, nil, 1024) != nil {
+		t.Fatal("empty req+resp must return nil")
+	}
+
+	resp := &http.Response{
+		StatusCode: 429,
+		Header:     http.Header{"X-Request-Id": {"req-err-1"}, "Authorization": {"Bearer secret"}},
+		Request:    &http.Request{Header: http.Header{"X-Api-Key": {"sk-xxx"}, "Anthropic-Version": {"2023-06-01"}}},
+	}
+	errBody := []byte(`{"type":"error","error":{"type":"rate_limit_error"}}`)
+	rec := buildErrorCaptureRecord(resp, "anthropic", "claude-x", "claude-x", "", true, []byte(`{"model":"claude-x"}`), errBody, 1024)
+	if rec == nil {
+		t.Fatal("expected a record")
+	}
+	if rec.HTTPStatus != 429 || rec.RequestID != "req-err-1" || rec.Platform != "anthropic" || !rec.Stream {
+		t.Fatalf("bad envelope: %+v", rec)
+	}
+	if string(rec.RawResponse) != string(errBody) {
+		t.Fatalf("raw response mismatch: %q", rec.RawResponse)
+	}
+	// credentials stripped, upstream diagnostic headers kept
+	if strings.Contains(string(rec.RequestHeaders), "sk-xxx") || strings.Contains(string(rec.ResponseHeaders), "secret") {
+		t.Fatal("credentials must be stripped from captured headers")
+	}
+	if !strings.Contains(string(rec.RequestHeaders), "2023-06-01") {
+		t.Fatalf("upstream request headers must be kept: %s", rec.RequestHeaders)
+	}
+
+	// truncation applies to error bodies too
+	rec2 := buildErrorCaptureRecord(nil, "openai", "m", "m", "", false, nil, []byte("0123456789"), 4)
+	if string(rec2.RawResponse) != "0123" || !rec2.Truncated {
+		t.Fatalf("truncation failed: %q trunc=%v", rec2.RawResponse, rec2.Truncated)
+	}
+}
 
 func TestSnapshotBytesCopiesInput(t *testing.T) {
 	src := []byte(`{"a":1}`)

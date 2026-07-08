@@ -389,6 +389,14 @@ type OpenAIGatewayService struct {
 	codexSnapshotThrottle               *accountWriteThrottle
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
+}
+
+// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe。
+func (s *OpenAIGatewayService) SetCapturePool(p *ConversationCapturePool) {
+	if s != nil {
+		s.capturePool = p
+	}
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -3981,6 +3989,16 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	if contentType == "" {
 		contentType = "application/json"
 	}
+
+	// 归档采集（错误响应）：终态提交，drop-safe，绝不影响转发。
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		reqModel, stream, _ := extractOpenAIRequestMetaFromBody(requestBody)
+		limit := s.cfg.Gateway.Capture.MaxBodyBytes
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), reqModel, reqModel, "", stream, requestBody, body, limit); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
+
 	c.Data(resp.StatusCode, contentType, body)
 
 	if upstreamMsg == "" {

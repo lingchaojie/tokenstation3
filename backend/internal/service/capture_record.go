@@ -297,6 +297,37 @@ func redactHTTPHeader(h http.Header) []byte { return redactHeadersJSON(map[strin
 // SnapshotForCapture 返回 src 的受限独立副本（<= limit 字节），供 handler 采集请求体。
 func SnapshotForCapture(src []byte, limit int) []byte { b, _ := captureWithLimit(src, limit); return b }
 
+// buildErrorCaptureRecord 组装一条“上游错误响应”归档记录。请求/响应体均受 limit
+// 截断并独立拷贝；头部从上游 http.Response 取（脱敏）。所有字段只反映上游相关信息。
+// 返回 nil 表示无需归档（reqBody 与 respBody 都为空）。
+func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upstreamModel, upstreamEndpoint string, stream bool, reqBody, respBody []byte, limit int) *CaptureRecord {
+	if len(reqBody) == 0 && len(respBody) == 0 {
+		return nil
+	}
+	rawReq, _ := captureWithLimit(reqBody, limit)
+	rawResp, truncated := captureWithLimit(respBody, limit)
+	rec := &CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         platform,
+		RequestedModel:   requestedModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: upstreamEndpoint,
+		Stream:           stream,
+		RawRequest:       rawReq,
+		RawResponse:      rawResp,
+		Truncated:        truncated,
+	}
+	if resp != nil {
+		rec.HTTPStatus = resp.StatusCode
+		rec.RequestID = resp.Header.Get("x-request-id")
+		if resp.Request != nil {
+			rec.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+		}
+		rec.ResponseHeaders = redactHTTPHeader(resp.Header)
+	}
+	return rec
+}
+
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。
 func extractCaptureColumns(rec *CaptureRecord) {
 	rec.SessionID = extractCaptureSessionID(rec.RawRequest)
