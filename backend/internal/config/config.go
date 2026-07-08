@@ -1034,6 +1034,7 @@ type GatewayUsageRecordConfig struct {
 type GatewayCaptureConfig struct {
 	Enabled               bool                    `mapstructure:"enabled"`
 	MaxBodyBytes          int                     `mapstructure:"max_body_bytes"`
+	MaxQueueBytes         int64                   `mapstructure:"max_queue_bytes"`
 	QueueSize             int                     `mapstructure:"queue_size"`
 	WorkerCount           int                     `mapstructure:"worker_count"`
 	OverflowPolicy        string                  `mapstructure:"overflow_policy"`
@@ -1078,6 +1079,13 @@ func (c GatewayCaptureConfig) validate() error {
 	}
 	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.BatchMaxSize <= 0 {
 		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/batch_max_size must be > 0")
+	}
+	// max_queue_bytes: 0 = 不限；否则必须 >= max_body_bytes，否则单条大 record 永远预留失败、该类流量永不归档。
+	if c.MaxQueueBytes < 0 {
+		return fmt.Errorf("gateway.capture.max_queue_bytes must be >= 0 (0 = unlimited)")
+	}
+	if c.MaxQueueBytes > 0 && c.MaxQueueBytes < int64(c.MaxBodyBytes) {
+		return fmt.Errorf("gateway.capture.max_queue_bytes (%d) must be >= max_body_bytes (%d) or 0", c.MaxQueueBytes, c.MaxBodyBytes)
 	}
 	return nil
 }
@@ -2040,6 +2048,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
 	viper.SetDefault("gateway.capture.enabled", false)
 	viper.SetDefault("gateway.capture.max_body_bytes", 8388608)
+	viper.SetDefault("gateway.capture.max_queue_bytes", int64(1)<<30) // 1 GiB 在途上界；0 = 不限
 	viper.SetDefault("gateway.capture.queue_size", 8192)
 	viper.SetDefault("gateway.capture.worker_count", 4)
 	viper.SetDefault("gateway.capture.overflow_policy", UsageRecordOverflowPolicyDrop)

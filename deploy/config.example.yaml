@@ -497,6 +497,7 @@ gateway:
   capture:
     enabled: false            # 总开关，默认关。关时整条链路不初始化
     max_body_bytes: 8388608   # 单条原文上限(8MB)，超出停止累积并标 is_truncated
+    max_queue_bytes: 1073741824 # 在途 record 总字节上界(1GiB)，防大 body 突发打爆内存；0=不限，非0须 >= max_body_bytes
     queue_size: 8192          # 有界内存队列容量（本期 A1，满即按策略丢弃）
     worker_count: 4           # 抽取+写入 worker 数
     overflow_policy: drop      # 队列满策略：drop（默认，绝不阻塞转发）/ sample

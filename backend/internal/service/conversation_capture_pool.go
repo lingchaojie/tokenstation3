@@ -17,6 +17,7 @@ type conversationCapturePoolOptions struct {
 	QueueSize      int
 	OverflowPolicy string // drop | sample
 	SamplePercent  int
+	MaxQueueBytes  int64 // 0 = 不限；按字节限流在途 record，防大 body 突发打爆内存
 }
 
 // ConversationCapturePool 是与转发/计费隔离的第三条异步通道。
@@ -26,6 +27,7 @@ type ConversationCapturePool struct {
 	writer   ArchiveWriter
 	overflow string
 	sample   int
+	bytes    *captureByteGauge
 	stopOnce sync.Once
 }
 
@@ -43,6 +45,7 @@ func newConversationCapturePool(opts conversationCapturePoolOptions, writer Arch
 		writer:   writer,
 		overflow: opts.OverflowPolicy,
 		sample:   opts.SamplePercent,
+		bytes:    &captureByteGauge{max: opts.MaxQueueBytes},
 	}
 }
 
@@ -51,17 +54,31 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 	if p == nil || rec == nil || p.pool == nil || p.pool.Stopped() {
 		return
 	}
-	task := func() {
-		defer func() { _ = recover() }() // worker panic 不外溢
-		extractCaptureColumns(rec)
-		_ = p.writer.Write(context.Background(), rec)
+	// reserveAndSubmit 预留字节 + 入队，两者都成功才返回 true；任一失败都撤销预留。
+	// task 顶部 defer release 覆盖所有退出路径（Write 成功/失败/drop、panic），单点释放不泄漏。
+	n := recordBytes(rec)
+	reserveAndSubmit := func() bool {
+		if !p.bytes.tryReserve(n) {
+			return false
+		}
+		task := func() {
+			defer p.bytes.release(n)
+			defer func() { _ = recover() }() // worker panic 不外溢
+			extractCaptureColumns(rec)
+			_ = p.writer.Write(context.Background(), rec)
+		}
+		if _, ok := p.pool.TrySubmit(task); ok {
+			return true
+		}
+		p.bytes.release(n) // 入队失败，撤销预留
+		return false
 	}
-	if _, ok := p.pool.TrySubmit(task); ok {
+	if reserveAndSubmit() {
 		return
 	}
-	// 队列满：drop（默认）。sample 策略下按概率再试一次入队，失败即丢。
+	// 队列满或超字节预算：drop（默认）。sample 策略下按概率再试一次入队，失败即丢。
 	if p.overflow == "sample" && p.sample > 0 && rand.IntN(100) < p.sample {
-		_, _ = p.pool.TrySubmit(task)
+		reserveAndSubmit()
 	}
 }
 
@@ -85,6 +102,7 @@ func NewConversationCapturePool(cfg *config.Config) *ConversationCapturePool {
 		QueueSize:      cc.QueueSize,
 		OverflowPolicy: cc.OverflowPolicy,
 		SamplePercent:  cc.OverflowSamplePercent,
+		MaxQueueBytes:  cc.MaxQueueBytes,
 	}, writer)
 }
 
