@@ -1024,20 +1024,26 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			})
 
 			if h.capturePool != nil && result.CaptureResponse != nil {
+				rawReq, reqTrunc := service.SnapshotForCaptureWithFlag(attemptParsedReq.Body.Bytes(), h.captureLimit())
+				effort := ""
+				if e := service.NormalizeClaudeOutputEffort(attemptParsedReq.OutputEffort); e != nil {
+					effort = *e
+				}
 				h.capturePool.Submit(&service.CaptureRecord{
 					CapturedAt:       time.Now().UTC(),
 					Platform:         string(account.Platform),
-					RequestID:        result.RequestID,
+					RequestID:        service.CaptureRequestID(result.RequestID),
 					RequestedModel:   result.Model,
 					UpstreamModel:    result.UpstreamModel,
 					UpstreamEndpoint: upstreamEndpoint,
 					Stream:           result.Stream,
 					HTTPStatus:       200,
-					RawRequest:       service.SnapshotForCapture(attemptParsedReq.Body.Bytes(), h.captureLimit()),
+					ThinkingEffort:   effort,
+					RawRequest:       rawReq,
 					RawResponse:      result.CaptureResponse,
 					RequestHeaders:   result.CaptureRequestHeaders,
 					ResponseHeaders:  result.CaptureResponseHeaders,
-					Truncated:        result.CaptureTruncated,
+					Truncated:        result.CaptureTruncated || reqTrunc,
 				})
 			}
 			return
