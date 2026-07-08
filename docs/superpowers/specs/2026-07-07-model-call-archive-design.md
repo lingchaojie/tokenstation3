@@ -251,9 +251,17 @@ SETTINGS index_granularity = 8192;
 6. wire：provider + 注入两个 handler + `provideCleanup` 注册 `.Stop()`；enabled=false 注入 no-op。
 7. 指标 + 测试（含零成本断言、overflow、契约）。
 
-## 13. 后续优化（预留，非本期）
+## 13. 实现补充与后续优化
 
+### 已实现（超出初版计划，评审驱动）
+- **上游头保真 + 只存上游相关**：`request_headers` 存**上游请求头**（`resp.Request.Header`）而非客户端头；`response_headers` 存上游响应头（`resp.Header`）。均脱敏，经 gin.Context 桥回传，不含任何客户端身份字段。
+- **非流式逐字保真**：非流式在 `ReadUpstreamResponseBody` 之后、任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整、SSE→JSON）之前快照，和流式 tee 一致 —— 同一对话流式/非流式归档结果一致。
+- **错误响应归档**：终态错误响应（`handleErrorResponse` / OpenAI `handleErrorResponsePassthrough`）也归档，`http_status` 记录真实状态码。failover 中间重试不归档（在 `shouldDisable` / `UpstreamFailoverError` 分支已提前返回）。采集池经 setter 注入 `GatewayService` / `OpenAIGatewayService`，`Submit` 非阻塞 + recover，绝不影响转发。
+- **禁用路径纯 branch-only**：`takeCaptureResult` 读取也置于 `Capture.Enabled` 守卫内。
+
+### 后续优化（预留，非本期）
 - **A2 落盘 spool + 后台 shipper**：网关容器持久卷上追加式 WAL，外部库瞬断时本地堆积、恢复后补发，把 best-effort 升级为近似不丢。配置段已在 §4 注释预留。
+- **OpenAI WebSocket 实时路径归档**：协议不同，当前未采集（`ResponsesWebSocket`）。
 - 可选 `response_json` 组装列（离线组装固化）——当前决策为只存 raw SSE，不做。
 - body 内凭证模式剥离（当前默认不动 body）。
 
