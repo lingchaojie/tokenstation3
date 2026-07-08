@@ -2067,3 +2067,38 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
 	}
 }
+
+func TestGatewayCaptureConfigDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Gateway.Capture.Enabled {
+		t.Fatal("capture must default to disabled")
+	}
+	if cfg.Gateway.Capture.OverflowPolicy != UsageRecordOverflowPolicyDrop {
+		t.Fatalf("default overflow=drop, got %q", cfg.Gateway.Capture.OverflowPolicy)
+	}
+	if cfg.Gateway.Capture.MaxBodyBytes <= 0 || cfg.Gateway.Capture.QueueSize <= 0 {
+		t.Fatal("defaults must be positive")
+	}
+}
+
+func TestGatewayCaptureValidateRejectsSyncAndEmptyAddr(t *testing.T) {
+	c := &Config{}
+	c.Gateway.Capture.Enabled = true
+	c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicySync
+	c.Gateway.Capture.MaxBodyBytes = 1
+	c.Gateway.Capture.QueueSize = 1
+	c.Gateway.Capture.WorkerCount = 1
+	c.Gateway.Capture.BatchMaxSize = 1
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("sync overflow must be rejected for capture")
+	}
+	c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicyDrop
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("empty clickhouse addr/database must be rejected")
+	}
+}

@@ -71,6 +71,7 @@ type GatewayHandler struct {
 	usageService              *service.UsageService
 	apiKeyService             *service.APIKeyService
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
+	capturePool               *service.ConversationCapturePool
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
 	concurrencyHelper         *ConcurrencyHelper
@@ -97,6 +98,7 @@ func NewGatewayHandler(
 	userMsgQueueService *service.UserMessageQueueService,
 	cfg *config.Config,
 	settingService *service.SettingService,
+	capturePool *service.ConversationCapturePool,
 ) *GatewayHandler {
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 10
@@ -126,6 +128,7 @@ func NewGatewayHandler(
 		usageService:              usageService,
 		apiKeyService:             apiKeyService,
 		usageRecordWorkerPool:     usageRecordWorkerPool,
+		capturePool:               capturePool,
 		errorPassthroughService:   errorPassthroughService,
 		contentModerationService:  contentModerationService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
@@ -135,6 +138,14 @@ func NewGatewayHandler(
 		cfg:                       cfg,
 		settingService:            settingService,
 	}
+}
+
+// captureLimit 返回归档采集单条 body 的最大字节数；未配置 cfg 时返回 0（不采集）。
+func (h *GatewayHandler) captureLimit() int {
+	if h.cfg == nil {
+		return 0
+	}
+	return h.cfg.Gateway.Capture.MaxBodyBytes
 }
 
 // Messages handles Claude API compatible messages endpoint
@@ -1011,6 +1022,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					).Error("gateway.record_usage_failed", zap.Error(err))
 				}
 			})
+
+			if h.capturePool != nil && result.CaptureResponse != nil {
+				h.capturePool.Submit(&service.CaptureRecord{
+					CapturedAt:       time.Now().UTC(),
+					Platform:         string(account.Platform),
+					RequestID:        result.RequestID,
+					RequestedModel:   result.Model,
+					UpstreamModel:    result.UpstreamModel,
+					UpstreamEndpoint: upstreamEndpoint,
+					Stream:           result.Stream,
+					HTTPStatus:       200,
+					RawRequest:       service.SnapshotForCapture(attemptParsedReq.Body.Bytes(), h.captureLimit()),
+					RawResponse:      result.CaptureResponse,
+					RequestHeaders:   result.CaptureRequestHeaders,
+					ResponseHeaders:  result.CaptureResponseHeaders,
+					Truncated:        result.CaptureTruncated,
+				})
+			}
 			return
 		}
 		if !retryWithFallback {

@@ -260,6 +260,12 @@ type OpenAIForwardResult struct {
 
 	wsReplayInput       []json.RawMessage
 	wsReplayInputExists bool
+
+	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
+	CaptureResponse        []byte
+	CaptureTruncated       bool
+	CaptureRequestHeaders  []byte
+	CaptureResponseHeaders []byte
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -383,6 +389,14 @@ type OpenAIGatewayService struct {
 	codexSnapshotThrottle               *accountWriteThrottle
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
+}
+
+// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe。
+func (s *OpenAIGatewayService) SetCapturePool(p *ConversationCapturePool) {
+	if s != nil {
+		s.capturePool = p
+	}
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -3699,6 +3713,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
 	}
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+			forwardResult.CaptureResponse = bridge.Response
+			forwardResult.CaptureTruncated = bridge.Truncated
+			forwardResult.CaptureRequestHeaders = bridge.RequestHeaders
+			forwardResult.CaptureResponseHeaders = bridge.ResponseHeaders
+		}
+	}
 	return forwardResult, nil
 }
 
@@ -3967,6 +3989,16 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	if contentType == "" {
 		contentType = "application/json"
 	}
+
+	// 归档采集（错误响应）：终态提交，drop-safe，绝不影响转发。
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		reqModel, stream, _ := extractOpenAIRequestMetaFromBody(requestBody)
+		limit := s.cfg.Gateway.Capture.MaxBodyBytes
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), reqModel, reqModel, "", stream, requestBody, body, limit); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
+
 	c.Data(resp.StatusCode, contentType, body)
 
 	if upstreamMsg == "" {
@@ -4300,6 +4332,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		return nil, errors.New("streaming not supported")
 	}
 
+	var tee *sseTee
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
+	}
+
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
@@ -4346,6 +4384,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if tee != nil {
+			tee.appendLine(line)
+		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
@@ -4496,6 +4537,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		stop()
 		return nil, err
+	}
+
+	// 归档采集：在任何改写（model 名还原、SSE→JSON 转换）之前，快照上游原始响应体，
+	// 保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, resp, capturedResp, truncated)
 	}
 
 	// Detect SSE responses from upstream and convert to JSON.

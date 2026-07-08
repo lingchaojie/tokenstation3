@@ -579,6 +579,12 @@ type ForwardResult struct {
 	ImageOutputSizes   []string
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
+
+	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
+	CaptureResponse        []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
+	CaptureTruncated       bool   // 采集 buffer 超过 max_body_bytes 被截断
+	CaptureRequestHeaders  []byte // 上游请求头(脱敏)JSON
+	CaptureResponseHeaders []byte // 上游响应头(脱敏)JSON
 }
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
@@ -661,6 +667,14 @@ type GatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	upstreamUARepo        AccountUpstreamUserAgentRepository
+	capturePool           *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
+}
+
+// SetCapturePool 注入归档采集池（wire 在 pool 构造后调用）。nil-safe：pool 为 nil 时错误归档为 no-op。
+func (s *GatewayService) SetCapturePool(p *ConversationCapturePool) {
+	if s != nil {
+		s.capturePool = p
+	}
 }
 
 // NewGatewayService creates a new GatewayService
@@ -5913,7 +5927,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	return &ForwardResult{
+	result := &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
@@ -5922,7 +5936,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+			result.CaptureResponse = bridge.Response
+			result.CaptureTruncated = bridge.Truncated
+			result.CaptureRequestHeaders = bridge.RequestHeaders
+			result.CaptureResponseHeaders = bridge.ResponseHeaders
+		}
+	}
+	return result, nil
 }
 
 type anthropicPassthroughForwardInput struct {
@@ -8332,6 +8355,29 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 
 	MarkResponseCommitted(c)
 
+	// 归档采集（错误响应）：仅在此终态提交——failover 重试路径在上面 shouldDisable 分支已返回，
+	// 不会走到这里，故不会归档中间重试。drop-safe，绝不影响转发。
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		var reqBody []byte
+		requestedModel := ""
+		stream := false
+		if v, ok := c.Get("parsed_request"); ok {
+			if pr, ok := v.(*ParsedRequest); ok && pr != nil {
+				requestedModel = pr.Model
+				stream = pr.Stream
+				if pr.Body != nil {
+					reqBody = pr.Body.Bytes()
+				}
+			}
+		}
+		// 错误路径通常无模型映射信息；用请求模型兼作 upstream_model 占位。
+		upstreamModel := requestedModel
+		limit := s.cfg.Gateway.Capture.MaxBodyBytes
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), requestedModel, upstreamModel, "", stream, reqBody, body, limit); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
+
 	// 记录上游错误响应体摘要便于排障（可选：由配置控制；不回显到客户端）
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.gateway",
@@ -8582,6 +8628,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		return nil, errors.New("streaming not supported")
 	}
 
+	// 归档采集：仅 gateway.capture.enabled=true 时在上游 SSE 读取 goroutine 里逐行累积原始字节。
+	// tee 加锁保护；此 defer 在函数返回时读取已到达的字节写入 gin.Context 桥，供上层 Forward 组装。
+	var tee *sseTee
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
+		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
+	}
+
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	scanner := bufio.NewScanner(resp.Body)
@@ -8615,7 +8669,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		defer close(events)
 		for scanner.Scan() {
 			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-			if !sendEvent(scanEvent{line: scanner.Text()}) {
+			line := scanner.Text()
+			if tee != nil {
+				tee.appendLine(line)
+			}
+			if !sendEvent(scanEvent{line: line}) {
 				return
 			}
 		}
@@ -9309,6 +9367,13 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
 	if err != nil {
 		return nil, err
+	}
+
+	// 归档采集：在任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整）之前，
+	// 快照上游原始响应体，保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, resp, capturedResp, truncated)
 	}
 
 	// 解析usage
