@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -297,6 +298,21 @@ func redactHTTPHeader(h http.Header) []byte { return redactHeadersJSON(map[strin
 // SnapshotForCapture 返回 src 的受限独立副本（<= limit 字节），供 handler 采集请求体。
 func SnapshotForCapture(src []byte, limit int) []byte { b, _ := captureWithLimit(src, limit); return b }
 
+// SnapshotForCaptureWithFlag 与 SnapshotForCapture 相同，但额外返回是否被截断，
+// 供调用方把请求截断并入 CaptureRecord.Truncated。
+func SnapshotForCaptureWithFlag(src []byte, limit int) ([]byte, bool) {
+	return captureWithLimit(src, limit)
+}
+
+// CaptureRequestID 返回上游 request_id；为空时兜底生成 UUID，
+// 仅用于归档记录（不影响返回客户端）。满足 PDF「全局唯一 request_id」。
+func CaptureRequestID(upstream string) string {
+	if s := strings.TrimSpace(upstream); s != "" {
+		return s
+	}
+	return "cap_" + uuid.NewString()
+}
+
 // buildErrorCaptureRecord 组装一条“上游错误响应”归档记录。请求/响应体均受 limit
 // 截断并独立拷贝；头部从上游 http.Response 取（脱敏）。所有字段只反映上游相关信息。
 // 返回 nil 表示无需归档（reqBody 与 respBody 都为空）。
@@ -332,9 +348,13 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 func extractCaptureColumns(rec *CaptureRecord) {
 	rec.SessionID = extractCaptureSessionID(rec.RawRequest)
 
-	rec.ThinkingEffort = ""
-	if effort := NormalizeClaudeOutputEffort(gjson.GetBytes(rec.RawRequest, "output_config.effort").String()); effort != nil {
-		rec.ThinkingEffort = *effort
+	// 仅当 submit 侧未预填时，才从 raw_request 回退抽取。
+	// Bedrock/Kiro 等 body 里 output_config 可能已被剥离/翻译，故 submit 侧优先用
+	// ParsedRequest.OutputEffort 预填；此处不覆盖已有值。
+	if rec.ThinkingEffort == "" {
+		if effort := NormalizeClaudeOutputEffort(gjson.GetBytes(rec.RawRequest, "output_config.effort").String()); effort != nil {
+			rec.ThinkingEffort = *effort
+		}
 	}
 	rec.ThinkingType = gjson.GetBytes(rec.RawRequest, "thinking.type").String()
 

@@ -197,3 +197,90 @@ func TestExtractResponseColumnsStreamSSE(t *testing.T) {
 		t.Fatal("signature_delta must set SignaturePresent")
 	}
 }
+
+func TestSnapshotForCaptureWithFlag(t *testing.T) {
+	b, tr := SnapshotForCaptureWithFlag([]byte("abc"), 8)
+	if string(b) != "abc" || tr {
+		t.Fatalf("got %q trunc=%v, want abc false", b, tr)
+	}
+	b2, tr2 := SnapshotForCaptureWithFlag([]byte("0123456789"), 4)
+	if string(b2) != "0123" || !tr2 {
+		t.Fatalf("got %q trunc=%v, want 0123 true", b2, tr2)
+	}
+	if b3, tr3 := SnapshotForCaptureWithFlag(nil, 4); b3 != nil || tr3 {
+		t.Fatalf("nil in -> nil,false; got %q %v", b3, tr3)
+	}
+}
+
+func TestCaptureRequestID(t *testing.T) {
+	if got := CaptureRequestID("req_real"); got != "req_real" {
+		t.Fatalf("passthrough failed: %q", got)
+	}
+	if got := CaptureRequestID("   "); len(got) < 8 {
+		t.Fatalf("empty upstream should fallback to uuid, got %q", got)
+	}
+	if CaptureRequestID("") == CaptureRequestID("") {
+		t.Fatal("two fallbacks must differ")
+	}
+}
+
+func TestExtractCaptureColumnsKeepsPrefilledEffort(t *testing.T) {
+	// raw_request 无 output_config（模拟 Bedrock 剥离），但已预填 effort
+	rec := &CaptureRecord{
+		RawRequest:     []byte(`{"model":"claude","messages":[]}`),
+		ThinkingEffort: "high",
+	}
+	extractCaptureColumns(rec)
+	if rec.ThinkingEffort != "high" {
+		t.Fatalf("prefilled effort overwritten: %q", rec.ThinkingEffort)
+	}
+}
+
+func TestExtractCaptureColumnsFallsBackToRawEffort(t *testing.T) {
+	rec := &CaptureRecord{
+		RawRequest: []byte(`{"output_config":{"effort":"xhigh"}}`),
+	}
+	extractCaptureColumns(rec)
+	if rec.ThinkingEffort != "xhigh" {
+		t.Fatalf("raw fallback failed: %q", rec.ThinkingEffort)
+	}
+}
+
+// TestKiroCaptureRecordExtraction 模拟 Kiro 路径提交的记录形态（Anthropic 边界：
+// raw_request 为客户端 Anthropic body，raw_response 为翻译后的 Anthropic SSE），
+// 验证 worker 的 extractCaptureColumns 能正确派生下游二次开发所需列。
+func TestKiroCaptureRecordExtraction(t *testing.T) {
+	rawReq := []byte(`{"model":"CLAUDE_SONNET_4_20250514_V1_0",` +
+		`"metadata":{"user_id":"{\"device_id\":\"d1\",\"account_uuid\":\"a1\",\"session_id\":\"sess-kiro-9\"}"}}`)
+	rawSSE := []byte("event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":18452,\"cache_read_input_tokens\":16384}}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"EqwDCkY\"}}\n\n" +
+		"event: message_delta\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1203}}\n\n")
+	rec := &CaptureRecord{
+		Platform:       "kiro",
+		Stream:         true,
+		HTTPStatus:     200,
+		RawRequest:     rawReq,
+		RawResponse:    rawSSE,
+		ThinkingEffort: "high", // 由 submit 侧从 ParsedRequest.OutputEffort 预填
+	}
+	extractCaptureColumns(rec)
+
+	if rec.SessionID != "sess-kiro-9" {
+		t.Fatalf("session_id from metadata.user_id: got %q", rec.SessionID)
+	}
+	if rec.ThinkingEffort != "high" {
+		t.Fatalf("prefilled effort must survive: %q", rec.ThinkingEffort)
+	}
+	if rec.StopReason != "end_turn" {
+		t.Fatalf("stop_reason: got %q", rec.StopReason)
+	}
+	if rec.InputTokens != 18452 || rec.OutputTokens != 1203 || rec.CacheReadTokens != 16384 {
+		t.Fatalf("usage cols: in=%d out=%d cacheRead=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens)
+	}
+	if !rec.SignaturePresent {
+		t.Fatal("signature_delta in translated SSE must set SignaturePresent (PDF >65% coverage)")
+	}
+}
