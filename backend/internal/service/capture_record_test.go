@@ -219,8 +219,8 @@ func TestCaptureRequestID(t *testing.T) {
 	if got := CaptureRequestID("   "); len(got) < 8 {
 		t.Fatalf("empty upstream should fallback to uuid, got %q", got)
 	}
-	if CaptureRequestID("") == CaptureRequestID("") {
-		t.Fatal("two fallbacks must differ")
+	if a, b := CaptureRequestID(""), CaptureRequestID(""); a == b {
+		t.Fatalf("two fallbacks must differ: %q == %q", a, b)
 	}
 }
 
