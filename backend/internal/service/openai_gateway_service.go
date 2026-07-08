@@ -392,7 +392,6 @@ type OpenAIGatewayService struct {
 	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
 }
 
-
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,
