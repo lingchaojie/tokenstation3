@@ -9338,6 +9338,13 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		return nil, err
 	}
 
+	// 归档采集：在任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整）之前，
+	// 快照上游原始响应体，保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, resp, capturedResp, truncated)
+	}
+
 	// 解析usage
 	var response struct {
 		Usage ClaudeUsage `json:"usage"`
@@ -9397,13 +9404,6 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
-
-	// 归档采集：仅 gateway.capture.enabled=true 时保留完整响应 body 独立副本，
-	// 通过 gin.Context 暂存，供上层 Forward 组装 *ForwardResult 时读取（零成本：关闭时不分配）。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, capturedResp, truncated)
-	}
 
 	// 写入响应
 	c.Data(resp.StatusCode, contentType, body)

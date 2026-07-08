@@ -4521,6 +4521,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		return nil, err
 	}
 
+	// 归档采集：在任何改写（model 名还原、SSE→JSON 转换）之前，快照上游原始响应体，
+	// 保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
+		setCaptureResult(c, resp, capturedResp, truncated)
+	}
+
 	// Detect SSE responses from upstream and convert to JSON.
 	// Some upstreams (e.g. other sub2api instances) may return SSE even when
 	// stream=false was requested. Without this conversion the client would
@@ -4552,10 +4559,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
 	stop()
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, cr, tr)
-	}
 	c.Data(resp.StatusCode, contentType, body)
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
@@ -4621,10 +4624,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
-	}
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		cr, tr := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, cr, tr)
 	}
 	c.Data(resp.StatusCode, contentType, body)
 
