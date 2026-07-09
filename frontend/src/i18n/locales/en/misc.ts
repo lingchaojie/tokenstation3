@@ -468,7 +468,6 @@ export default {
       sevenDayQuota: '7-day quota',
       totalMonthlyQuota: 'Total obtainable',
       rate: 'Rate',
-      peakRate: 'Peak Rate',
       dailyLimit: 'Daily',
       weeklyLimit: 'Weekly',
       monthlyLimit: 'Monthly',

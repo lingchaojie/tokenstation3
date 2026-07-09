@@ -493,7 +493,6 @@ export default {
       sevenDayQuota: '7 日额度',
       totalMonthlyQuota: '总共可获取',
       rate: '倍率',
-      peakRate: '高峰倍率',
       dailyLimit: '日限额',
       weeklyLimit: '周限额',
       monthlyLimit: '月限额',
