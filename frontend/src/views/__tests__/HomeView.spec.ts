@@ -581,7 +581,7 @@ describe('HomeView landing page', () => {
     const accentDots = wrapper.findAll('.ui-accent-dot')
     expect(accentDots.length).toBeGreaterThanOrEqual(2)
 
-    const docsLinks = wrapper.findAll('a[href="https://docs.example.test"]')
+    const docsLinks = wrapper.findAll('a[href="https://docs.example.test/"]')
     expect(docsLinks.length).toBeGreaterThan(0)
     expect(docsLinks[0].text()).toContain('文档')
     expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
