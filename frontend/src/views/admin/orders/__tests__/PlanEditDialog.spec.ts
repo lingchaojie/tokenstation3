@@ -14,23 +14,27 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key,
+      t: (key: string, params?: Record<string, unknown>) => {
+        if (key === 'payment.admin.subscriptionCnyPayPreview') return `preview ${params?.amount}`
+        if (key === 'payment.admin.subscriptionCnyPayPreviewWithFee') return `fee ${params?.feeRate} ${params?.total}`
+        return key
+      },
     }),
   }
 })
-
-vi.mock('@/api/admin/payment', () => ({
-  adminPaymentAPI: {
-    createPlan,
-    updatePlan,
-  },
-}))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
     showSuccess,
   }),
+}))
+
+vi.mock('@/api/admin/payment', () => ({
+  adminPaymentAPI: {
+    createPlan,
+    updatePlan,
+  },
 }))
 
 function planFixture(overrides: Partial<SubscriptionPlan> = {}): SubscriptionPlan {
@@ -78,6 +82,28 @@ function mountDialog(plan: SubscriptionPlan | null) {
   })
 }
 
+// mountCnyDialog mounts the dialog for the subscription CNY preview suite. Plans
+// are decoupled from groups in this fork, so no `groups` prop is passed.
+function mountCnyDialog(paymentConfig: Record<string, unknown> | null) {
+  return mount(PlanEditDialog, {
+    props: {
+      show: true,
+      plan: null,
+      paymentConfig,
+    },
+    global: {
+      stubs: {
+        BaseDialog: {
+          props: ['show'],
+          template: '<div v-if="show"><slot /><slot name="footer" /></div>',
+        },
+        Select: true,
+        Icon: true,
+      },
+    },
+  })
+}
+
 async function fillRequiredCreateFields(wrapper: ReturnType<typeof mountDialog>) {
   await wrapper.find('input[type="text"]').setValue('Pro monthly')
   await wrapper.find('textarea').setValue('Primary development')
@@ -85,7 +111,6 @@ async function fillRequiredCreateFields(wrapper: ReturnType<typeof mountDialog>)
   await numberInputs[0].setValue('799')
   await numberInputs[2].setValue('30')
 }
-
 describe('PlanEditDialog', () => {
   beforeEach(() => {
     createPlan.mockReset().mockResolvedValue({})
@@ -151,7 +176,6 @@ describe('PlanEditDialog', () => {
       validity_unit: 'month',
     }))
   })
-
   it('submits clear flag when an existing seven-day quota is cleared', async () => {
     const wrapper = mountDialog(planFixture({ seven_day_quota_usd: 110 }))
     await wrapper.setProps({ show: true })
@@ -229,7 +253,6 @@ describe('PlanEditDialog', () => {
     expect(createPlan).not.toHaveBeenCalled()
     expect(showError).toHaveBeenCalledWith('payment.admin.virtualSeatRangeInvalid')
   })
-
   it('prefills virtual seat range values when editing an existing plan', async () => {
     const wrapper = mountDialog(planFixture({ virtual_seat_start: 4900, virtual_seat_total: 5000 }))
     await wrapper.setProps({ show: true })
@@ -260,5 +283,33 @@ describe('PlanEditDialog', () => {
       virtual_seat_total: 100,
     }))
     expect(payload).not.toHaveProperty('seat_limit')
+  })
+})
+
+describe('PlanEditDialog subscription CNY payment preview', () => {
+  it('shows CNY channel charge using the configured subscription rate and fee', async () => {
+    const wrapper = mountCnyDialog({
+      subscription_usd_to_cny_rate: 7.15,
+      recharge_fee_rate: 2.5,
+    })
+
+    await wrapper.find('input[type="number"]').setValue('9.99')
+
+    expect(wrapper.text()).toContain('preview')
+    expect(wrapper.text()).toContain('¥71.43')
+    expect(wrapper.text()).toContain('fee 2.5')
+    expect(wrapper.text()).toContain('¥73.22')
+  })
+
+  it('hides the preview when the subscription rate is not configured', async () => {
+    const wrapper = mountCnyDialog({
+      subscription_usd_to_cny_rate: 0,
+      recharge_fee_rate: 2.5,
+    })
+
+    await wrapper.find('input[type="number"]').setValue('9.99')
+
+    expect(wrapper.text()).not.toContain('preview')
+    expect(wrapper.text()).not.toContain('¥71.43')
   })
 })
