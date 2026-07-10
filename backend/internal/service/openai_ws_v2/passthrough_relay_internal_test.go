@@ -392,6 +392,8 @@ func TestIsDisconnectErrorCoverage_CloseStatusesAndMessageBranches(t *testing.T)
 	require.True(t, isDisconnectError(coderws.CloseError{Code: coderws.StatusNoStatusRcvd}))
 	require.True(t, isDisconnectError(coderws.CloseError{Code: coderws.StatusAbnormalClosure}))
 	require.True(t, isDisconnectError(errors.New("connection reset by peer")))
+	require.True(t, isDisconnectError(errors.New("failed to read frame header: read tcp: wsarecv: An existing connection was forcibly closed by the remote host.")))
+	require.True(t, isDisconnectError(errors.New("read tcp: wsarecv: An established connection was aborted by the software in your host machine.")))
 	require.False(t, isDisconnectError(errors.New("   ")))
 }
 

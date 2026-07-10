@@ -576,9 +576,14 @@ func responsesToolsToChatTools(tools []ResponsesTool) ([]ChatTool, error) {
 	// （按 namespace+name 路由），歧义由摊平转换制造且无法消除，必须显式拒绝，
 	// 不能静默降级（重复声明发给上游、回程还原到错误工具）。
 	topLevel := make(map[string]bool)
+	topLevelKind := make(map[string]string)
 	for _, tool := range tools {
 		if (tool.Type == "function" || tool.Type == "custom") && tool.Name != "" {
+			if previousKind, exists := topLevelKind[tool.Name]; exists && previousKind != tool.Type {
+				return nil, fmt.Errorf("top-level tools named %q are declared as both %s and %s; this upstream cannot disambiguate their returned function calls, rename one of the tools", tool.Name, previousKind, tool.Type)
+			}
 			topLevel[tool.Name] = true
+			topLevelKind[tool.Name] = tool.Type
 		}
 	}
 	flatOwner := make(map[string]NamespacedToolName)

@@ -574,6 +574,55 @@ func TestResponsesToChatCompletionsRequest_RejectsToolSearchNameConflict(t *test
 	assert.Equal(t, "tool_search", out.Tools[0].Function.Name)
 }
 
+// custom 与 function 降级后都会成为 Chat function。若顶层名称相同，普通与流式
+// 回程都只能看到名字，无法判断应恢复成 custom_tool_call 还是 function_call，
+// 因此必须在请求转换阶段拒绝，不能把 function 调用静默劫持为 custom 调用。
+func TestResponsesToChatCompletionsRequest_RejectsCustomFunctionNameConflict(t *testing.T) {
+	tests := []struct {
+		name       string
+		tools      []ResponsesTool
+		toolChoice json.RawMessage
+	}{
+		{
+			name: "custom then function",
+			tools: []ResponsesTool{
+				{Type: "custom", Name: "exec"},
+				{Type: "function", Name: "exec"},
+			},
+		},
+		{
+			name: "function then custom with forced custom choice",
+			tools: []ResponsesTool{
+				{Type: "function", Name: "exec"},
+				{Type: "custom", Name: "exec"},
+			},
+			toolChoice: json.RawMessage(`{"type":"custom","name":"exec"}`),
+		},
+		{
+			name: "function then custom with forced function choice",
+			tools: []ResponsesTool{
+				{Type: "function", Name: "exec"},
+				{Type: "custom", Name: "exec"},
+			},
+			toolChoice: json.RawMessage(`{"type":"function","name":"exec"}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+				Model:      "glm-5.2",
+				Input:      json.RawMessage(`"hi"`),
+				Tools:      tt.tools,
+				ToolChoice: tt.toolChoice,
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "both")
+			assert.Contains(t, err.Error(), "exec")
+		})
+	}
+}
+
 // tool_choice 指向被转换丢弃的工具（如 web_search）或不存在的名字时不能原样转发，
 // chat 上游会因选择项指向未声明工具而 400；字符串形式与指向幸存工具的选择保持转发。
 func TestResponsesToChatCompletionsRequest_DropsToolChoiceForDroppedTool(t *testing.T) {

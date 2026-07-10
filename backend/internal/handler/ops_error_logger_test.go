@@ -139,6 +139,40 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+type nestedOpsResponseWriter struct {
+	gin.ResponseWriter
+}
+
+func TestOpsErrorLoggerMiddleware_RestoresOriginalWriterPastNestedWrapper(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var originalWriter gin.ResponseWriter
+	var writerSeenByOuter gin.ResponseWriter
+	var statusSeenByOuter int
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		originalWriter = c.Writer
+		c.Next()
+		writerSeenByOuter = c.Writer
+		statusSeenByOuter = c.Writer.Status()
+	})
+	r.GET("/v1/responses/compact", OpsErrorLoggerMiddleware(nil), func(c *gin.Context) {
+		// Mirrors compact keepalive: a downstream wrapper retains the capture
+		// writer as its delegate and is left installed when the handler returns.
+		c.Writer = &nestedOpsResponseWriter{ResponseWriter: c.Writer}
+		c.Status(http.StatusNoContent)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses/compact", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Same(t, originalWriter, writerSeenByOuter)
+	require.Equal(t, http.StatusNoContent, statusSeenByOuter)
+}
+
 // setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
 func setupOpsErrorLogTestQueue(t *testing.T, size int) {
 	t.Helper()

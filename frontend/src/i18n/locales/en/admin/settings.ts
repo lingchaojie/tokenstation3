@@ -1057,6 +1057,8 @@ export default {
         userIds: 'Specific user IDs',
         userIdsHint: 'Leave empty to apply to all Sub2API users. Specified users match requests from their API keys and take precedence over global rules.',
         userIdPlaceholder: 'e.g., 1001',
+        userIdPositiveError: 'Rule {rule}: each user ID must be a positive integer.',
+        userIdDuplicateError: 'Rule {rule}: user ID {userId} is duplicated.',
         addUserId: 'Add user ID',
         removeUserId: 'Remove user ID',
         errorMessage: 'Error message',

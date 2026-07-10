@@ -1052,6 +1052,8 @@ export default {
         userIds: '指定用户 ID',
         userIdsHint: '留空表示对全部 Sub2API 用户生效。指定后仅匹配这些用户的 API Key 请求，且优先于全局规则。',
         userIdPlaceholder: '例如: 1001',
+        userIdPositiveError: '规则 {rule}：用户 ID 必须为正整数。',
+        userIdDuplicateError: '规则 {rule}：用户 ID {userId} 重复。',
         addUserId: '添加用户 ID',
         removeUserId: '移除用户 ID',
         errorMessage: '错误消息',

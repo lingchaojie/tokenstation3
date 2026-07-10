@@ -9377,6 +9377,13 @@ function findDuplicateDefaultSubscription(
 async function saveSettings() {
   saving.value = true;
   try {
+    if (
+      openaiFastPolicyLoaded.value &&
+      !validateOpenAIFastPolicyUserIDs()
+    ) {
+      return;
+    }
+
     const normalizedTableDefaultPageSize = Math.floor(
       Number(form.table_default_page_size),
     );
@@ -9797,7 +9804,7 @@ async function saveSettings() {
             scope: rule.scope,
             user_ids:
               rule.user_ids && rule.user_ids.length > 0
-                ? [...rule.user_ids]
+                ? rule.user_ids.map((userID) => Number(userID))
                 : undefined,
             error_message:
               rule.action === "block" ? rule.error_message : undefined,
@@ -10285,6 +10292,34 @@ const openaiFastPolicyScopeOptions = computed(() => [
     label: t("admin.settings.openaiFastPolicy.scopeBedrock"),
   },
 ]);
+
+function validateOpenAIFastPolicyUserIDs(): boolean {
+  for (const [ruleIndex, rule] of openaiFastPolicyForm.rules.entries()) {
+    const seen = new Set<number>();
+    for (const rawUserID of rule.user_ids || []) {
+      const userID = Number(rawUserID);
+      if (!Number.isSafeInteger(userID) || userID <= 0) {
+        appStore.showError(
+          t("admin.settings.openaiFastPolicy.userIdPositiveError", {
+            rule: ruleIndex + 1,
+          }),
+        );
+        return false;
+      }
+      if (seen.has(userID)) {
+        appStore.showError(
+          t("admin.settings.openaiFastPolicy.userIdDuplicateError", {
+            rule: ruleIndex + 1,
+            userId: userID,
+          }),
+        );
+        return false;
+      }
+      seen.add(userID);
+    }
+  }
+  return true;
+}
 
 function addOpenAIFastPolicyRule() {
   openaiFastPolicyForm.rules.push({
