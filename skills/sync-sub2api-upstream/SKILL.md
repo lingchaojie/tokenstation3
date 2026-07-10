@@ -33,12 +33,12 @@ description: Safely synchronize Wei-Shaw/sub2api upstream updates into the local
 | 7. 执行合并 | 使用普通 merge：`git merge --no-ff --no-commit "$UPSTREAM_PIN"`。逐文件解决冲突；先理解两侧代码在完整调用链中的作用，再设计最终实现。即使是机械兼容，也不得靠复制冲突标记外的代码块完成。语义冲突必须经过用户确认。 | 无 unmerged entries；最终 merge commit 保留两个父节点；每个解决结果都能解释为何控制流与副作用正确。 | 不确定应保留哪种行为、无法解释最终逻辑，或只能靠整文件/代码块 `--ours/--theirs` 猜测。 |
 | 8. 全量语义审计 | 对 merge 涉及的所有文件审查 base、ours、theirs 和最终结果，包括 Git 自动合并且没有冲突标记的区域。沿入口到出口核对调用顺序、状态读写、副作用、错误/重试/清理路径和跨层契约。显式 `git add <paths>`，不要用 `git add -A`。 | 每个合入区域都有语义审查证据；无静默错合、重复逻辑、失效调用、冲突标记、意外文件或空白错误。 | 只能证明“编译通过”但无法证明行为正确，或发现自动合并后的语义不一致。 |
 | 9. 测试验证 | 先读取 CI workflow / Makefile 确定真实命令；依次执行生成一致性、构建、后端 unit、integration、lint、前端 lint/typecheck/关键测试/构建及相关全量测试。不要并行运行会写生成文件的任务。 | 所有必需检查通过；结果对应最终代码。 | 测试失败。若怀疑是基线欠账，在未合并的 `DEV_BASE` worktree A/B 复现并如实记录，不得直接忽略。 |
-| 10. 文档归档 | 在 `docs/upstream-sync/` 新建本次记录并更新索引。记录节点、范围、冲突决策、测试、review 和回滚分支；保持概括，不展开当前 DEV 的具体功能清单。 | 文档可独立回答合了哪个范围、如何验证、如何回滚。 | 归档信息与实际 SHA 或测试结果不一致。 |
+| 10. 文档归档 | 在 `docs/upstream-sync/` 新建本次记录并更新索引。记录节点、范围、冲突决策、最终生产代码 SHA、测试、review、回滚分支及“push/CI 待完成”状态；保持概括，不展开当前 DEV 的具体功能清单。不要要求一个 commit 在自身内容中记录自身 SHA。 | 文档可独立回答合了哪个范围、如何验证、如何回滚；已验证代码坐标准确。 | 归档信息与实际 SHA 或测试结果不一致。 |
 | 11. 独立全量复审 | 测试后启动全新 subagent，对本轮全部合入区做逐文件、逐调用链 code review；不得只看冲突文件或抽样。只给原始证据和坐标，不泄露主 agent 的“安全”结论。 | subagent 明确输出 `NO ACTIONABLE ISSUES / SAFE TO PUSH`，并证明冲突区和自动合并区都已覆盖。 | 有任何可执行问题、证据不足、抽样审查或未覆盖区域。修复或询问用户后，重跑相关测试并交给新的 subagent 复审。 |
 | 12. 推送前复核 | 再次 fetch `origin` 和 `upstream`；确认远端 dev 未前进，已验证的上游 pin 未漂移。将本地 `main` 以 `--ff-only` 更新到最新 `origin/main`，不得覆盖 main 独有提交或 dirty worktree。 | `dev` 指向最终同步提交；本地 `main == origin/main`；review 与测试仍对应待推 SHA。 | origin/dev 已移动、upstream/main 新增提交、main 无法 FF。报告差异并询问是否扩展本轮范围或重新整合。 |
 | 13. 推送 | subagent 门禁通过后，使用非强制 push 一起推送 `dev` 和 `main`，并记录远端返回及精确 dev SHA。 | `origin/dev` 指向预期 SHA；main push 为 FF 或 no-op。 | push rejected、branch protection 要求不同流程，或将发生非 FF。禁止 `--force`。 |
 | 14. 等待 CI | 查询该精确 dev SHA 的所有 required checks，持续等待到终态。若失败，读取日志、修复、重跑本地测试和独立 review，再推新 SHA 并重新等待。 | 全部 required CI checks 对精确 SHA 为 success。 | CI 需要用户权限、外部凭据或出现无法本地解决的基础设施故障；报告 blocker，不得宣称完成。 |
-| 15. 收尾 | 更新归档中的最终 dev SHA、CI 结果/链接；保留备份分支直到用户确认稳定；清理只属于本次任务且无未提交内容的临时 worktree。 | 向用户报告上游 pin、dev SHA、main 状态、测试、review、CI 和回滚点。 | 任何门禁仍未满足。 |
+| 15. 收尾 | CI 成功后不要再修改或提交仓库文件；在最终报告中记录精确 pushed dev SHA、CI 结果/链接、main 状态和回滚点。保留备份分支直到用户确认稳定；清理只属于本次任务且无未提交内容的临时 worktree。若用户明确要求把 CI 结果写回归档，必须把该修改视为新的待推 tip：重新 review、非强推并等待新 SHA 的全部 CI。 | 最终报告可核对上游 pin、pushed dev SHA、main、测试、review、CI 和回滚点，且 CI 对应仓库最终 tip。 | 任何门禁仍未满足，或 CI 后存在未验证的新提交。 |
 
 ## 节点与对比命令
 
@@ -105,12 +105,12 @@ description: Safely synchronize Wei-Shaw/sub2api upstream updates into the local
 
 | 字段 | 内容 |
 |---|---|
-| 同步坐标 | 日期、`DEV_BASE`、备份分支、`LAST_UPSTREAM`、`MERGE_BASE`、`UPSTREAM_PIN`、tag、merge commit、最终 dev SHA。 |
+| 同步坐标 | 日期、`DEV_BASE`、备份分支、`LAST_UPSTREAM`、`MERGE_BASE`、`UPSTREAM_PIN`、tag、merge commit、最终生产代码 SHA；最终 pushed dev SHA 在完成报告中记录，避免归档 commit 自指。 |
 | 范围 | 缺失 commit 数、非 merge commit 数、文件/行规模、功能类别概览。 |
 | 决策 | 冲突文件/领域、双方意图、最终方案、用户确认记录（如有）。不维护 DEV 具体功能百科。 |
 | 验证 | 实际命令及结果、A/B 基线欠账证据、静态检查、构建。 |
 | 复审 | subagent 标识/结论、发现与修复闭环。 |
-| 发布 | push 目标、精确 dev SHA、CI checks 结果和链接、完成时间。 |
+| 发布 | 归档提交时记录 push/CI 待完成；完成后在最终报告记录 push 目标、精确 dev SHA、CI checks 结果和链接、完成时间。若必须写回仓库，重新执行 push/review/CI 闭环。 |
 | 回滚 | 备份分支/SHA，以及非 force 的回滚建议。 |
 
 ## 推送与 CI 门禁
@@ -122,6 +122,7 @@ description: Safely synchronize Wei-Shaw/sub2api upstream updates into the local
 | 识别 CI | 从仓库 workflow / branch protection / GitHub checks 确定 required checks，不凭名称猜测。 |
 | 等待 | 用可用的 GitHub/`gh` 能力按 pushed dev SHA 轮询到终态；在等待期间给用户简短状态更新。 |
 | CI 失败 | 读取失败日志，定位并修复；重跑本地相关测试与独立 review；推送新 SHA 后重新等待全部 checks。 |
+| CI 后写入 | 默认禁止在 exact SHA 全绿后再提交归档或其他文件；任何写回都会产生新 tip，必须重新走 review、push 和 CI。 |
 | 完成报告 | 只有 required checks 全绿时，报告“同步完成”。否则报告“已 push，CI pending/blocked/failed”。 |
 
 ## 禁止事项
