@@ -4166,22 +4166,6 @@ func readStopReason(m map[string]any) string {
 	return getString(m, "stopReason")
 }
 
-func toInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case float64:
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case json.Number:
-		n, err := v.Int64()
-		return int(n), err == nil
-	default:
-		return 0, false
-	}
-}
-
 func readKiroTokenField(values map[string]any, key string) (int, bool) {
 	raw, exists := values[key]
 	if !exists {
