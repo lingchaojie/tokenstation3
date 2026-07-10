@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,6 +365,125 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestForwardKiroMessagesNonStreamPreservesFullCacheHitZeros(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroCacheTracker()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := kiroCacheAccount(31, "refresh-nonstream-hit", "kiro-access-token")
+	account.Name = "kiro-nonstream-full-hit"
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+	account.Credentials["profile_arn"] = "arn:aws:codewhisperer:us-east-1:123456789012:profile/NONSTREAMHIT"
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "content with explicit zero output"},
+	}))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 0, "cacheReadInputTokens": 120,
+			"cacheWriteInputTokens": 0, "outputTokens": 0, "totalTokens": 120,
+		}},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(upstreamBody),
+	}}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	requestBody := kiroCacheRequestBody("nonstream full hit", false)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	parsed.Group = kiroCacheGroup(1)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+}
+
+func TestForwardKiroMessagesStreamContentBeforeMetadataFinalZerosReplaceProvisionalUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroCacheTracker()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := kiroCacheAccount(32, "refresh-stream-hit", "kiro-access-token")
+	account.Name = "kiro-stream-final-usage"
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+	account.Credentials["profile_arn"] = "arn:aws:codewhisperer:us-east-1:123456789012:profile/STREAMHIT"
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "content arrives before metadata"},
+	}))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 0, "cacheReadInputTokens": 120,
+			"cacheWriteInputTokens": 0, "outputTokens": 0, "totalTokens": 120,
+		}},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(upstreamBody),
+	}}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0, MaxLineSize: defaultMaxLineSize,
+		}},
+		rateLimitService: &RateLimitService{},
+	}
+	requestBody := []byte(strings.Replace(string(kiroCacheRequestBody("stream provisional creation", false)), "{", `{"stream":true,`, 1))
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	parsed.Group = kiroCacheGroup(1)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+
+	start := findAnthropicSSEEventData(t, rec.Body.String(), "message_start")
+	delta := findAnthropicSSEEventData(t, rec.Body.String(), "message_delta")
+	require.Greater(t, gjson.GetBytes(start, "message.usage.cache_creation_input_tokens").Int(), int64(0))
+	require.Zero(t, gjson.GetBytes(delta, "usage.input_tokens").Int())
+	require.Equal(t, int64(120), gjson.GetBytes(delta, "usage.cache_read_input_tokens").Int())
+	require.Zero(t, gjson.GetBytes(delta, "usage.cache_creation_input_tokens").Int())
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
+}
+
+func findAnthropicSSEEventData(t *testing.T, stream, eventName string) []byte {
+	t.Helper()
+	marker := "event: " + eventName + "\ndata: "
+	start := strings.Index(stream, marker)
+	require.NotEqual(t, -1, start, "missing %s event", eventName)
+	data := stream[start+len(marker):]
+	end := strings.Index(data, "\n\n")
+	require.NotEqual(t, -1, end, "unterminated %s event", eventName)
+	return []byte(data[:end])
 }
 
 func buildKiroEventStreamFrame(t *testing.T, eventType string, payload map[string]any) []byte {

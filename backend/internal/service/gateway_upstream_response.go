@@ -1161,6 +1161,8 @@ type sseUsagePatch struct {
 	hasKiroCredits           bool
 }
 
+const kiroFinalUsageSSEField = "_sub2api_kiro_final_usage"
+
 func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePatch {
 	if len(event) == 0 {
 		return nil
@@ -1211,28 +1213,36 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 		}
 
 		patch := &sseUsagePatch{}
-		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && v > 0 {
+		kiroFinalUsage, _ := usageObj[kiroFinalUsageSSEField].(bool)
+		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
 			patch.inputTokens = v
 			patch.hasInputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && (v > 0 || kiroFinalUsage) {
 			patch.outputTokens = v
 			patch.hasOutputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
 			patch.cacheCreationInputTokens = v
 			patch.hasCacheCreationInput = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
 			patch.cacheReadInputTokens = v
 			patch.hasCacheReadInput = true
 		}
+		if kiroFinalUsage {
+			// KIRO's synthesized final delta is a complete authoritative usage
+			// snapshot. Clear provisional TTL sub-buckets even when the final
+			// aggregate cache-creation bucket is zero.
+			patch.hasCacheCreation5m = true
+			patch.hasCacheCreation1h = true
+		}
 		if cc, ok := usageObj["cache_creation"].(map[string]any); ok {
-			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && (v > 0 || kiroFinalUsage) {
 				patch.cacheCreation5mTokens = v
 				patch.hasCacheCreation5m = true
 			}
-			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && (v > 0 || kiroFinalUsage) {
 				patch.cacheCreation1hTokens = v
 				patch.hasCacheCreation1h = true
 			}
@@ -1349,11 +1359,14 @@ func stripInternalSSEUsageMap(usageObj map[string]any) bool {
 	if len(usageObj) == 0 {
 		return false
 	}
-	if _, ok := usageObj["_sub2api_kiro_credits"]; !ok {
-		return false
+	changed := false
+	for _, key := range []string{"_sub2api_kiro_credits", kiroFinalUsageSSEField} {
+		if _, ok := usageObj[key]; ok {
+			delete(usageObj, key)
+			changed = true
+		}
 	}
-	delete(usageObj, "_sub2api_kiro_credits")
-	return true
+	return changed
 }
 
 // applyCacheTTLOverride 将所有 cache creation tokens 归入指定的 TTL 类型。

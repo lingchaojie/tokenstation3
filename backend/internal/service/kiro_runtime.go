@@ -813,7 +813,7 @@ func resolveKiroInputTokens(body []byte, requestCtx kiropkg.KiroRequestContext) 
 
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
 	inputTokens := usage.InputTokens
-	if inputTokens == 0 {
+	if inputTokens == 0 && !usage.HasResolvedInputTokens() {
 		inputTokens = fallbackInput
 	}
 	return ClaudeUsage{

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -36,6 +37,14 @@ func TestBuildKiroPayloadStoresPostTranslationInputEstimate(t *testing.T) {
 	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
 	require.Greater(t, result.Context.EstimatedInputTokens, 0)
+
+	longSystemBody := []byte(fmt.Sprintf(
+		`{"model":"claude-sonnet-4-6","system":%q,"messages":[{"role":"user","content":"hello"}]}`,
+		strings.Repeat("distinct translated system instruction ", 200),
+	))
+	longSystemResult, err := BuildKiroPayloadWithContext(longSystemBody, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Greater(t, longSystemResult.Context.EstimatedInputTokens, result.Context.EstimatedInputTokens)
 }
 
 func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
@@ -52,6 +61,14 @@ func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
 		"conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String()
 	require.Contains(t, translated, "[Output truncated for Kiro context:")
 	require.Less(t, result.Context.EstimatedInputTokens, anthropictokenizer.CountTokens(largeResult))
+
+	var translatedPayload KiroPayload
+	require.NoError(t, json.Unmarshal(result.Payload, &translatedPayload))
+	withCompactedResult := estimateKiroPayloadInputTokens(translatedPayload)
+	translatedPayload.ConversationState.CurrentMessage.UserInputMessage.
+		UserInputMessageContext.ToolResults[0].Content[0].Text = ""
+	withoutCompactedResult := estimateKiroPayloadInputTokens(translatedPayload)
+	require.Greater(t, withCompactedResult, withoutCompactedResult)
 }
 
 func TestBuildRuntimeUserAgentStable(t *testing.T) {
@@ -614,6 +631,57 @@ func TestUpdateUsageFromEventDistinguishesAbsentAndExplicitZeroCacheFields(t *te
 	})
 	require.False(t, absent.upstreamCacheReadTokensPresent)
 	require.False(t, absent.upstreamCacheWriteTokensPresent)
+}
+
+func TestUpdateUsageFromEventOfficialTokenUsageWinsConflictingFlatFields(t *testing.T) {
+	var usage Usage
+	updateUsageFromEvent(&usage, "metadataEvent", map[string]any{
+		"inputTokens": 900, "outputTokens": 901, "totalTokens": 1801,
+		"metadataEvent": map[string]any{
+			"inputTokens": 800, "outputTokens": 801, "totalTokens": 1601,
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 12, "outputTokens": 7, "totalTokens": 19,
+			},
+		},
+	})
+
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 7, usage.OutputTokens)
+	require.Equal(t, 19, usage.TotalTokens)
+	require.True(t, usage.upstreamInputTokensPresent)
+	require.True(t, usage.upstreamOutputTokensPresent)
+	require.True(t, usage.upstreamTotalTokensPresent)
+}
+
+func TestUpdateUsageFromEventFlatOnlyFieldsParticipateInPresence(t *testing.T) {
+	var usage Usage
+	updateUsageFromEvent(&usage, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"inputTokens": 0, "outputTokens": 7, "totalTokens": 127,
+		},
+	})
+
+	require.Zero(t, usage.InputTokens)
+	require.Equal(t, 7, usage.OutputTokens)
+	require.Equal(t, 127, usage.TotalTokens)
+	require.True(t, usage.upstreamInputTokensPresent)
+	require.True(t, usage.upstreamOutputTokensPresent)
+	require.True(t, usage.upstreamTotalTokensPresent)
+}
+
+func TestReadKiroTokenFieldRejectsInvalidNumericValues(t *testing.T) {
+	for name, value := range map[string]any{
+		"fractional":  1.5,
+		"nan":         math.NaN(),
+		"positiveInf": math.Inf(1),
+		"negative":    -1,
+		"intOverflow": math.Pow(2, 63),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, present := readKiroTokenField(map[string]any{"tokens": value}, "tokens")
+			require.False(t, present)
+		})
+	}
 }
 
 func TestParseNonStreamingEventStream(t *testing.T) {
@@ -1865,6 +1933,80 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponseUsesEstimatedInp
 	require.Equal(t, 120, result.Usage.TotalTokens)
 }
 
+func TestParseNonStreamingFullCacheHitPreservesAuthoritativeZeroBuckets(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 0, "cacheReadInputTokens": 120,
+			"cacheWriteInputTokens": 0, "outputTokens": 0, "totalTokens": 120,
+		}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "non-empty output must not replace explicit zero"},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{
+		EstimatedInputTokens: 999,
+		CacheEmulationUsage: &Usage{
+			InputTokens: 100, CacheReadInputTokens: 200, CacheCreationInputTokens: 100,
+		},
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Equal(t, 120, result.Usage.TotalTokens)
+}
+
+func TestParseNonStreamingResolvesTotalAndOutputWithoutInput(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		simulated *Usage
+		wantInput int
+		wantRead  int
+		wantWrite int
+	}{
+		{name: "without simulation", wantInput: 120},
+		{name: "with simulation", simulated: &Usage{
+			InputTokens: 30, CacheReadInputTokens: 60, CacheCreationInputTokens: 30,
+		}, wantInput: 30, wantRead: 60, wantWrite: 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := bytes.NewBuffer(buildEventStreamFrame(t, "metadataEvent", map[string]any{
+				"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+					"totalTokens": 127, "outputTokens": 7,
+				}},
+			}))
+			result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{
+				EstimatedInputTokens: 999, CacheEmulationUsage: tc.simulated,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantInput, result.Usage.InputTokens)
+			require.Equal(t, tc.wantRead, result.Usage.CacheReadInputTokens)
+			require.Equal(t, tc.wantWrite, result.Usage.CacheCreationInputTokens)
+			require.Equal(t, 120, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
+			require.Equal(t, 7, result.Usage.OutputTokens)
+		})
+	}
+}
+
+func TestParseNonStreamingOutputOnlyUsesTranslatedInputFallback(t *testing.T) {
+	for _, simulated := range []*Usage{nil, {
+		InputTokens: 30, CacheReadInputTokens: 60, CacheCreationInputTokens: 30,
+	}} {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "metadataEvent", map[string]any{
+			"metadataEvent": map[string]any{"tokenUsage": map[string]any{"outputTokens": 7}},
+		}))
+		result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{
+			EstimatedInputTokens: 120, CacheEmulationUsage: simulated,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 120, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
+		require.Equal(t, 7, result.Usage.OutputTokens)
+	}
+}
+
 func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
@@ -1898,6 +2040,60 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	require.Contains(t, output, `"cache_read_input_tokens":60`)
 	require.Contains(t, output, `"cache_creation_input_tokens":30`)
 	require.Contains(t, output, `"ephemeral_1h_input_tokens":30`)
+}
+
+func TestStreamContentBeforeMetadataFinalUsageOverwritesProvisionalBuckets(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "content arrives first"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 0, "cacheReadInputTokens": 120,
+			"cacheWriteInputTokens": 0, "outputTokens": 0, "totalTokens": 120,
+		}},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-sonnet-4-5", 400,
+		KiroRequestContext{CacheEmulationUsage: &Usage{
+			InputTokens: 100, CacheReadInputTokens: 200, CacheCreationInputTokens: 100,
+		}},
+	)
+	require.NoError(t, err)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+
+	events := parseAnthropicSSEEvents(t, out.String())
+	require.Equal(t, int64(100), gjson.GetBytes(events["message_start"], "message.usage.input_tokens").Int())
+	require.Equal(t, int64(100), gjson.GetBytes(events["message_start"], "message.usage.cache_creation_input_tokens").Int())
+	require.Zero(t, gjson.GetBytes(events["message_delta"], "usage.input_tokens").Int())
+	require.Equal(t, int64(120), gjson.GetBytes(events["message_delta"], "usage.cache_read_input_tokens").Int())
+	require.Zero(t, gjson.GetBytes(events["message_delta"], "usage.cache_creation_input_tokens").Int())
+	require.Zero(t, gjson.GetBytes(events["message_delta"], "usage.output_tokens").Int())
+}
+
+func TestStreamResolvesTotalAndOutputWithoutInputWithAndWithoutSimulation(t *testing.T) {
+	for _, simulated := range []*Usage{nil, {
+		InputTokens: 30, CacheReadInputTokens: 60, CacheCreationInputTokens: 30,
+	}} {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "metadataEvent", map[string]any{
+			"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+				"totalTokens": 127, "outputTokens": 7,
+			}},
+		}))
+		var out bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(
+			context.Background(), stream, &out, "claude-sonnet-4-5", 999,
+			KiroRequestContext{EstimatedInputTokens: 999, CacheEmulationUsage: simulated},
+		)
+		require.NoError(t, err)
+		require.Equal(t, 120, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
+		require.Equal(t, 7, result.Usage.OutputTokens)
+	}
 }
 
 func TestKiroCacheEmulationUsageInjectedIntoStreamAtEOFKeepsSingleNormalization(t *testing.T) {
@@ -2237,6 +2433,23 @@ func buildEventStreamFrame(t *testing.T, eventType string, payload any) []byte {
 	_, _ = frame.Write(payloadBytes)
 	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
 	return frame.Bytes()
+}
+
+func parseAnthropicSSEEvents(t *testing.T, stream string) map[string][]byte {
+	t.Helper()
+	events := make(map[string][]byte)
+	var eventName string
+	for _, line := range strings.Split(stream, "\n") {
+		if name, ok := strings.CutPrefix(line, "event: "); ok {
+			eventName = name
+			continue
+		}
+		if data, ok := strings.CutPrefix(line, "data: "); ok && eventName != "" {
+			events[eventName] = []byte(data)
+			eventName = ""
+		}
+	}
+	return events
 }
 
 func TestBuildKiroPayloadTrailingInlineSystemPreservesCurrentUserAndTools(t *testing.T) {
