@@ -1187,9 +1187,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
-	}
 	if stopReason == "" {
 		if len(emittedToolContents) > 0 {
 			stopReason = "tool_use"
@@ -1199,6 +1196,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	if err := ensureMessageStart(); err != nil {
 		return nil, err
+	}
+	if requestCtx.CacheEmulationUsage != nil {
+		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
 	finalUsageMap := map[string]any{
 		"input_tokens":                usage.InputTokens,

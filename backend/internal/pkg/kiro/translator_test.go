@@ -1862,6 +1862,43 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	require.Contains(t, output, `"ephemeral_1h_input_tokens":30`)
 }
 
+func TestKiroCacheEmulationUsageInjectedIntoStreamAtEOFKeepsSingleNormalization(t *testing.T) {
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), bytes.NewBuffer(nil), &out, "claude-sonnet-4-5", 120,
+		KiroRequestContext{CacheEmulationUsage: &Usage{
+			InputTokens:              3_900_000,
+			CacheReadInputTokens:     7_800_000,
+			CacheCreationInputTokens: 3_900_000,
+		}},
+	)
+	require.NoError(t, err)
+
+	eventData := func(eventName string) []byte {
+		marker := "event: " + eventName + "\ndata: "
+		start := strings.Index(out.String(), marker)
+		require.NotEqual(t, -1, start, "missing %s", eventName)
+		data := out.String()[start+len(marker):]
+		end := strings.Index(data, "\n\n")
+		require.NotEqual(t, -1, end, "unterminated %s", eventName)
+		return []byte(data[:end])
+	}
+
+	messageStart := eventData("message_start")
+	require.Equal(t, int64(30), gjson.GetBytes(messageStart, "message.usage.input_tokens").Int())
+	require.Equal(t, int64(60), gjson.GetBytes(messageStart, "message.usage.cache_read_input_tokens").Int())
+	require.Equal(t, int64(30), gjson.GetBytes(messageStart, "message.usage.cache_creation_input_tokens").Int())
+
+	messageDelta := eventData("message_delta")
+	require.Equal(t, int64(30), gjson.GetBytes(messageDelta, "usage.input_tokens").Int())
+	require.Equal(t, int64(60), gjson.GetBytes(messageDelta, "usage.cache_read_input_tokens").Int())
+	require.Equal(t, int64(30), gjson.GetBytes(messageDelta, "usage.cache_creation_input_tokens").Int())
+
+	require.Equal(t, 30, result.Usage.InputTokens)
+	require.Equal(t, 60, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+}
+
 func TestRepairJSONKeepsStringBracesWhileRepairingTrailingComma(t *testing.T) {
 	raw := `{"key":"value with {nested}",}`
 	repaired := repairJSON(raw)
