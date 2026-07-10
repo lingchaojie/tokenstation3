@@ -431,13 +431,12 @@ func (r *apiKeyRepository) deleteWithAudit(ctx context.Context, exec *dbent.Clie
 	return nil
 }
 
-func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(
-		apikey.UserIDEQ(userID),
-		apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)),
-	)
+func (r *apiKeyRepository) apiKeyListByUserIDQuery(userID int64, filters service.APIKeyListFilters, includeHidden bool) *dbent.APIKeyQuery {
+	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+	if !includeHidden {
+		q = q.Where(apikey.Or(apikey.KeyTypeIsNil(), apikey.KeyTypeNEQ(service.APIKeyTypeWebChat)))
+	}
 
-	// Apply filters
 	if filters.Search != "" {
 		q = q.Where(apikey.Or(
 			apikey.NameContainsFold(filters.Search),
@@ -454,6 +453,12 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 			q = q.Where(apikey.GroupIDEQ(*filters.GroupID))
 		}
 	}
+
+	return q
+}
+
+func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
+	q := r.apiKeyListByUserIDQuery(userID, filters, false)
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -485,7 +490,7 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 }
 
 func (r *apiKeyRepository) ListByUserIDIncludingHidden(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+	q := r.apiKeyListByUserIDQuery(userID, service.APIKeyListFilters{}, true)
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -509,8 +514,30 @@ func (r *apiKeyRepository) ListByUserIDIncludingHidden(ctx context.Context, user
 	for i := range keys {
 		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
 	}
+	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
+		return nil, nil, err
+	}
 
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
+}
+
+func (r *apiKeyRepository) ListAllByUserID(ctx context.Context, userID int64, filters service.APIKeyListFilters) ([]service.APIKey, error) {
+	keys, err := r.apiKeyListByUserIDQuery(userID, filters, false).
+		WithGroup().
+		Order(dbent.Asc(apikey.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	outKeys := make([]service.APIKey, 0, len(keys))
+	for i := range keys {
+		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
+	}
+	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
+		return nil, err
+	}
+	return outKeys, nil
 }
 
 func (r *apiKeyRepository) attachLastUsedIPs(ctx context.Context, keys []service.APIKey) error {
@@ -681,14 +708,24 @@ func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector
 		field = apikey.FieldLastUsedAt
 	case "created_at":
 		field = apikey.FieldCreatedAt
+	case "id":
+		field = apikey.FieldID
 	default:
 		field = apikey.FieldID
 	}
 
 	if sortOrder == pagination.SortOrderAsc {
-		return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(apikey.FieldID)}
+		orders := []func(*entsql.Selector){dbent.Asc(field)}
+		if field != apikey.FieldID {
+			orders = append(orders, dbent.Asc(apikey.FieldID))
+		}
+		return orders
 	}
-	return []func(*entsql.Selector){dbent.Desc(field), dbent.Desc(apikey.FieldID)}
+	orders := []func(*entsql.Selector){dbent.Desc(field)}
+	if field != apikey.FieldID {
+		orders = append(orders, dbent.Desc(apikey.FieldID))
+	}
+	return orders
 }
 
 // SearchAPIKeys searches API keys by user ID and/or keyword (name)

@@ -127,6 +127,7 @@ type RedeemCodeBatchUpdateResult struct {
 type RedeemService struct {
 	redeemRepo           RedeemCodeRepository
 	userRepo             UserRepository
+	redeemUserRepo       RedeemUserAdjustmentRepository
 	subscriptionService  *SubscriptionService
 	cache                RedeemCache
 	billingCacheService  *BillingCacheService
@@ -144,9 +145,11 @@ func NewRedeemService(
 	entClient *dbent.Client,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 ) *RedeemService {
+	redeemUserRepo, _ := userRepo.(RedeemUserAdjustmentRepository)
 	return &RedeemService{
 		redeemRepo:           redeemRepo,
 		userRepo:             userRepo,
+		redeemUserRepo:       redeemUserRepo,
 		subscriptionService:  subscriptionService,
 		cache:                cache,
 		billingCacheService:  billingCacheService,
@@ -474,7 +477,7 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	}
 
 	// 获取用户信息
-	user, err := s.userRepo.GetByID(ctx, userID)
+	_, err = s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
@@ -502,21 +505,27 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	switch redeemCode.Type {
 	case RedeemTypeBalance:
 		amount := redeemCode.Value
-		// 负数为退款扣减，余额最低为 0
-		if amount < 0 && user.Balance+amount < 0 {
-			amount = -user.Balance
-		}
-		if err := s.userRepo.UpdateBalance(txCtx, userID, amount); err != nil {
+		if amount < 0 {
+			if s.redeemUserRepo == nil {
+				return nil, errors.New("user repository does not support atomic redeem balance adjustments")
+			}
+			if err := s.redeemUserRepo.ApplyRedeemBalanceAdjustment(txCtx, userID, amount); err != nil {
+				return nil, fmt.Errorf("update user balance: %w", err)
+			}
+		} else if err := s.userRepo.UpdateBalance(txCtx, userID, amount); err != nil {
 			return nil, fmt.Errorf("update user balance: %w", err)
 		}
 
 	case RedeemTypeConcurrency:
 		delta := int(redeemCode.Value)
-		// 负数为退款扣减，并发数最低为 0
-		if delta < 0 && user.Concurrency+delta < 0 {
-			delta = -user.Concurrency
-		}
-		if err := s.userRepo.UpdateConcurrency(txCtx, userID, delta); err != nil {
+		if delta < 0 {
+			if s.redeemUserRepo == nil {
+				return nil, errors.New("user repository does not support atomic redeem concurrency adjustments")
+			}
+			if err := s.redeemUserRepo.ApplyRedeemConcurrencyAdjustment(txCtx, userID, delta); err != nil {
+				return nil, fmt.Errorf("update user concurrency: %w", err)
+			}
+		} else if err := s.userRepo.UpdateConcurrency(txCtx, userID, delta); err != nil {
 			return nil, fmt.Errorf("update user concurrency: %w", err)
 		}
 
@@ -618,7 +627,7 @@ func (s *RedeemService) redeemPlanSubscriptionCode(ctx context.Context, userID i
 
 	if plan.GroupID > 0 {
 		input.GroupID = plan.GroupID
-		if _, _, err := s.subscriptionService.assignOrExtendSubscriptionTerm(ctx, input); err != nil {
+		if _, _, err := s.subscriptionService.assignOrExtendSubscriptionTerm(ctx, input, false); err != nil {
 			return fmt.Errorf("assign or extend plan subscription: %w", err)
 		}
 		return nil

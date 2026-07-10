@@ -80,6 +80,7 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	"157_user_platform_quotas_add_grok.sql":                   newMigrationChecksumCompatibilityRule("3c0b66925b602c43257ccd2da46bb7997467b3689a9b0d4983612a0889d58231", "5cace8fa32c6174a72721cd9b01f28f4545de1fd7bcd9ca196a4225056ec4fb8"),
 	"159_batch_image_foundation.sql":                          newMigrationChecksumCompatibilityRule("d902b70982025ec519749faf058aab7631e82c3f48167b9a4ae4db718eb72cce", "82da85b5d98e67a0507647b873a40373e84538e4adafdeed6767c0ac8b6570b2"),
 	"161_batch_image_pricing_snapshot.sql":                    newMigrationChecksumCompatibilityRule("4012af3e43636cb6af22e0176d59d1fcc70615c0f310194329461ae462c4fbd6", "96d915c9b7a6941ae99039e0ff3f1a61481eb9bddd933d11c6fadb2274554e87"),
+	"175_allow_kiro_user_platform_quotas.sql":                 newMigrationChecksumCompatibilityRule("6286ebbc5a7f8b6e67127207d091d95ce94f93508a38dbc0bad7f3a68fbc7ef1", "39e5d9a78307982b5140eaae7a9dd6a87b0c21e85e2d938d68cc240eea308d82"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。
