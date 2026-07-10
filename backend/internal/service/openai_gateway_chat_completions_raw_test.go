@@ -127,8 +127,8 @@ func TestExtractCCStreamUsagePrefersExplicitCCFields(t *testing.T) {
 
 	payload := `{"choices":[],"usage":{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"completion_tokens_details":{"image_tokens":0},"output_tokens_details":{"image_tokens":5},"_sub2api_kiro_credits":0.17}}`
 
-	usage := extractCCStreamUsage(payload)
-	require.NotNil(t, usage)
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, payload))
 	require.Zero(t, usage.InputTokens)
 	require.Zero(t, usage.OutputTokens)
 	require.Zero(t, usage.CacheReadInputTokens)
@@ -142,13 +142,48 @@ func TestExtractCCStreamUsageFallsBackToResponsesFields(t *testing.T) {
 
 	payload := `{"choices":[],"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"output_tokens_details":{"image_tokens":5}}}`
 
-	usage := extractCCStreamUsage(payload)
-	require.NotNil(t, usage)
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, payload))
 	require.Equal(t, 12, usage.InputTokens)
 	require.Equal(t, 3, usage.OutputTokens)
 	require.Equal(t, 4, usage.CacheReadInputTokens)
 	require.Equal(t, 6, usage.CacheCreationInputTokens)
 	require.Equal(t, 5, usage.ImageOutputTokens)
+}
+
+func TestExtractCCStreamUsageSkipsMalformedCanonicalFields(t *testing.T) {
+	t.Parallel()
+
+	payloads := []string{
+		`{"usage":{"prompt_tokens":null,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":false,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":true,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":"invalid","input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":-1,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":1.5,"input_tokens":12}}`,
+	}
+
+	for _, payload := range payloads {
+		usage := OpenAIUsage{}
+		require.True(t, mergeCCStreamUsage(&usage, payload), payload)
+		require.Equal(t, 12, usage.InputTokens, payload)
+	}
+	require.False(t, mergeCCStreamUsage(&OpenAIUsage{}, `{"usage":{}}`))
+}
+
+func TestMergeCCStreamUsagePreservesValidFieldsAcrossPartialAndMalformedChunks(t *testing.T) {
+	t.Parallel()
+
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_read_input_tokens":4}}`))
+	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{}}`))
+	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":null,"completion_tokens":false}}`))
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"completion_tokens":5,"cache_creation_input_tokens":6}}`))
+
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 5, usage.OutputTokens)
+	require.Equal(t, 4, usage.CacheReadInputTokens)
+	require.Equal(t, 6, usage.CacheCreationInputTokens)
 }
 
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {

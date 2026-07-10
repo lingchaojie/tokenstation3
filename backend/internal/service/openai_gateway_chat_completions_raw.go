@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -291,9 +292,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload != "[DONE]" {
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
-				if u := extractCCStreamUsage(payload); u != nil {
-					usage = *u
-				}
+				mergeCCStreamUsage(&usage, payload)
 				if firstTokenMs == nil && !usageOnlyChunk {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
@@ -368,16 +367,17 @@ func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {
 	return choices.Exists() && choices.IsArray() && len(choices.Array()) == 0
 }
 
-// extractCCStreamUsage 从单个 CC 流式 chunk 的 payload 中提取 usage 字段。
-// CC 协议中 usage 仅出现在末尾 chunk（且仅当 include_usage 生效时），
-// 但上游可能在多个 chunk 中重复——总是用最新值。
-func extractCCStreamUsage(payload string) *OpenAIUsage {
-	usageResult := gjson.Get(payload, "usage")
-	u, ok := openAICCUsageFromGJSON(usageResult)
+// mergeCCStreamUsage applies only fields that are valid and present in the
+// current chunk. Some compatibility providers repeat usage or split it across
+// chunks; a later empty/malformed/partial object must not erase an earlier
+// valid snapshot.
+func mergeCCStreamUsage(dst *OpenAIUsage, payload string) bool {
+	parsed, ok := parseCCUsageFromGJSON(gjson.Get(payload, "usage"))
 	if !ok {
-		return nil
+		return false
 	}
-	return &u
+	parsed.mergeInto(dst)
+	return true
 }
 
 // extractCCUsageFromJSONBytes extracts usage from a native Chat Completions
@@ -388,55 +388,114 @@ func extractCCUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return OpenAIUsage{}, false
 	}
-	return openAICCUsageFromGJSON(gjson.GetBytes(body, "usage"))
+	parsed, ok := parseCCUsageFromGJSON(gjson.GetBytes(body, "usage"))
+	return parsed.Usage, ok
 }
 
-func openAICCUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
+type parsedCCUsage struct {
+	Usage OpenAIUsage
+
+	inputTokensSet         bool
+	outputTokensSet        bool
+	cacheReadTokensSet     bool
+	cacheCreationTokensSet bool
+	imageOutputTokensSet   bool
+	kiroCreditsSet         bool
+}
+
+func parseCCUsageFromGJSON(value gjson.Result) (parsedCCUsage, bool) {
 	if !value.Exists() || !value.IsObject() {
-		return OpenAIUsage{}, false
+		return parsedCCUsage{}, false
 	}
 
-	return OpenAIUsage{
-		InputTokens: nonNegativeFirstPresentGJSONInt(
-			value.Get("prompt_tokens"),
-			value.Get("input_tokens"),
-		),
-		OutputTokens: nonNegativeFirstPresentGJSONInt(
-			value.Get("completion_tokens"),
-			value.Get("output_tokens"),
-		),
-		CacheReadInputTokens: nonNegativeFirstPresentGJSONInt(
-			value.Get("prompt_tokens_details.cached_tokens"),
-			value.Get("input_tokens_details.cached_tokens"),
-			value.Get("cache_read_input_tokens"),
-			value.Get("cache_read_tokens"),
-			value.Get("cached_tokens"),
-		),
-		CacheCreationInputTokens: nonNegativeFirstPresentGJSONInt(
-			value.Get("prompt_tokens_details.cache_write_tokens"),
-			value.Get("prompt_tokens_details.cache_creation_tokens"),
-			value.Get("input_tokens_details.cache_write_tokens"),
-			value.Get("input_tokens_details.cache_creation_tokens"),
-			value.Get("cache_write_tokens"),
-			value.Get("cache_creation_input_tokens"),
-			value.Get("cache_write_input_tokens"),
-			value.Get("cache_creation_tokens"),
-		),
-		ImageOutputTokens: nonNegativeFirstPresentGJSONInt(
-			value.Get("completion_tokens_details.image_tokens"),
-			value.Get("output_tokens_details.image_tokens"),
-		),
-		KiroCredits: kiroCreditsFromUsageGJSON(value),
-	}, true
+	inputTokens, inputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens"),
+		value.Get("input_tokens"),
+	)
+	outputTokens, outputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens"),
+		value.Get("output_tokens"),
+	)
+	cacheReadTokens, cacheReadTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.cached_tokens"),
+		value.Get("input_tokens_details.cached_tokens"),
+		value.Get("cache_read_input_tokens"),
+		value.Get("cache_read_tokens"),
+		value.Get("cached_tokens"),
+	)
+	cacheCreationTokens, cacheCreationTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.cache_write_tokens"),
+		value.Get("prompt_tokens_details.cache_creation_tokens"),
+		value.Get("input_tokens_details.cache_write_tokens"),
+		value.Get("input_tokens_details.cache_creation_tokens"),
+		value.Get("cache_write_tokens"),
+		value.Get("cache_creation_input_tokens"),
+		value.Get("cache_write_input_tokens"),
+		value.Get("cache_creation_tokens"),
+	)
+	imageOutputTokens, imageOutputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.image_tokens"),
+		value.Get("output_tokens_details.image_tokens"),
+	)
+	kiroCredits := kiroCreditsFromUsageGJSON(value)
+	kiroCreditsSet := kiroCredits > 0
+
+	parsed := parsedCCUsage{
+		Usage: OpenAIUsage{
+			InputTokens:              inputTokens,
+			OutputTokens:             outputTokens,
+			CacheReadInputTokens:     cacheReadTokens,
+			CacheCreationInputTokens: cacheCreationTokens,
+			ImageOutputTokens:        imageOutputTokens,
+			KiroCredits:              kiroCredits,
+		},
+		inputTokensSet:         inputTokensSet,
+		outputTokensSet:        outputTokensSet,
+		cacheReadTokensSet:     cacheReadTokensSet,
+		cacheCreationTokensSet: cacheCreationTokensSet,
+		imageOutputTokensSet:   imageOutputTokensSet,
+		kiroCreditsSet:         kiroCreditsSet,
+	}
+	return parsed, inputTokensSet || outputTokensSet || cacheReadTokensSet ||
+		cacheCreationTokensSet || imageOutputTokensSet || kiroCreditsSet
 }
 
-func nonNegativeFirstPresentGJSONInt(values ...gjson.Result) int {
-	for _, value := range values {
-		if value.Exists() {
-			return max(int(value.Int()), 0)
-		}
+func (parsed parsedCCUsage) mergeInto(dst *OpenAIUsage) {
+	if dst == nil {
+		return
 	}
-	return 0
+	if parsed.inputTokensSet {
+		dst.InputTokens = parsed.Usage.InputTokens
+	}
+	if parsed.outputTokensSet {
+		dst.OutputTokens = parsed.Usage.OutputTokens
+	}
+	if parsed.cacheReadTokensSet {
+		dst.CacheReadInputTokens = parsed.Usage.CacheReadInputTokens
+	}
+	if parsed.cacheCreationTokensSet {
+		dst.CacheCreationInputTokens = parsed.Usage.CacheCreationInputTokens
+	}
+	if parsed.imageOutputTokensSet {
+		dst.ImageOutputTokens = parsed.Usage.ImageOutputTokens
+	}
+	if parsed.kiroCreditsSet {
+		dst.KiroCredits = parsed.Usage.KiroCredits
+	}
+}
+
+func nonNegativeFirstValidGJSONInt(values ...gjson.Result) (int, bool) {
+	for _, value := range values {
+		if !value.Exists() || value.Type != gjson.Number {
+			continue
+		}
+		n, err := strconv.Atoi(value.Raw)
+		if err != nil || n < 0 {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // bufferRawChatCompletions 透传上游 CC 非流式 JSON 响应。

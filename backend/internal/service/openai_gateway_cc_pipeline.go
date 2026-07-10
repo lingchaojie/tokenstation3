@@ -204,8 +204,9 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 
 // ccStreamScanState 是 scanCCStream 返回的读取状态快照。
 type ccStreamScanState struct {
-	// Usage 为 include_usage chunk 中最近一次出现的用量（上游可能重复发送，
-	// 总是保留最新值）；终态事件中的用量由调用方在 finalize 阶段自行覆盖。
+	// Usage 为 include_usage chunk 中有效字段的累计快照（上游可能重复或拆分
+	// 发送，后出现的有效字段覆盖同字段，空/畸形字段不清零已有值）；终态事件
+	// 中的用量由调用方在 finalize 阶段自行覆盖。
 	Usage OpenAIUsage
 	// SawUsage distinguishes a real all-zero usage object from a stream that
 	// never supplied usage at all.
@@ -249,8 +250,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 			break
 		}
 
-		if u := extractCCStreamUsage(payload); u != nil {
-			st.Usage = *u
+		if mergeCCStreamUsage(&st.Usage, payload) {
 			st.SawUsage = true
 		}
 
@@ -281,23 +281,48 @@ func (s *OpenAIGatewayService) scanCCStream(
 	return st
 }
 
-// responsesUsageFromCCStreamUsage projects the CC/raw usage parser's
-// canonical result back into the Responses wire shape used by CC fallback
+// responsesUsageFromCCUsage projects the CC/raw usage parser's canonical
+// result back into the Responses wire shape used by CC fallback responses and
 // finalization. The raw parser is authoritative because it understands
 // top-level cache aliases and explicit nested zero values that ChatUsage's
 // narrower integer-only structure cannot preserve.
-func responsesUsageFromCCStreamUsage(usage OpenAIUsage) *apicompat.ResponsesUsage {
-	out := &apicompat.ResponsesUsage{
-		InputTokens:              usage.InputTokens,
-		OutputTokens:             usage.OutputTokens,
-		TotalTokens:              usage.InputTokens + usage.OutputTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
-	}
-	if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
-		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{
-			CachedTokens:     usage.CacheReadInputTokens,
-			CacheWriteTokens: usage.CacheCreationInputTokens,
+func responsesUsageFromCCUsage(usage OpenAIUsage, base ...*apicompat.ResponsesUsage) *apicompat.ResponsesUsage {
+	out := &apicompat.ResponsesUsage{}
+	if len(base) > 0 && base[0] != nil {
+		*out = *base[0]
+		if base[0].InputTokensDetails != nil {
+			details := *base[0].InputTokensDetails
+			out.InputTokensDetails = &details
 		}
+		if base[0].OutputTokensDetails != nil {
+			details := *base[0].OutputTokensDetails
+			out.OutputTokensDetails = &details
+		}
+	}
+	out.InputTokens = usage.InputTokens
+	out.OutputTokens = usage.OutputTokens
+	out.TotalTokens = usage.InputTokens + usage.OutputTokens
+	out.CacheCreationInputTokens = usage.CacheCreationInputTokens
+
+	if out.InputTokensDetails == nil {
+		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{}
+	}
+	out.InputTokensDetails.CachedTokens = usage.CacheReadInputTokens
+	out.InputTokensDetails.CacheCreationTokens = 0
+	out.InputTokensDetails.CacheWriteTokens = usage.CacheCreationInputTokens
+	if out.InputTokensDetails.CachedTokens == 0 && out.InputTokensDetails.AudioTokens == 0 &&
+		out.InputTokensDetails.CacheCreationTokens == 0 && out.InputTokensDetails.CacheWriteTokens == 0 {
+		out.InputTokensDetails = nil
+	}
+
+	if out.OutputTokensDetails == nil {
+		out.OutputTokensDetails = &apicompat.ResponsesOutputTokensDetails{}
+	}
+	out.OutputTokensDetails.ImageTokens = usage.ImageOutputTokens
+	if out.OutputTokensDetails.ReasoningTokens == 0 && out.OutputTokensDetails.AudioTokens == 0 &&
+		out.OutputTokensDetails.ImageTokens == 0 && out.OutputTokensDetails.AcceptedPredictionTokens == 0 &&
+		out.OutputTokensDetails.RejectedPredictionTokens == 0 {
+		out.OutputTokensDetails = nil
 	}
 	return out
 }
@@ -315,26 +340,23 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
 	writeError compatErrorWriter,
-) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
+) (*apicompat.ChatCompletionsResponse, OpenAIUsage, bool, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		}
-		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
+		return nil, OpenAIUsage{}, false, fmt.Errorf("read upstream body: %w", err)
 	}
 
 	var ccResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(respBody, &ccResp); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
-		return nil, OpenAIUsage{}, fmt.Errorf("parse chat completions response: %w", err)
+		return nil, OpenAIUsage{}, false, fmt.Errorf("parse chat completions response: %w", err)
 	}
 
-	usage := OpenAIUsage{}
-	if parsed, ok := extractCCUsageFromJSONBytes(respBody); ok {
-		usage = parsed
-	}
-	return &ccResp, usage, nil
+	usage, sawUsage := extractCCUsageFromJSONBytes(respBody)
+	return &ccResp, usage, sawUsage, nil
 }
 
 // writeOpenAIResponsesFallbackError 以 /v1/responses 回退路径的既有错误格式回写

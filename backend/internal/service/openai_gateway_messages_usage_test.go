@@ -33,14 +33,15 @@ func TestCopyOpenAIUsageFromResponsesUsageTrustsCanonicalCacheCreationValue(t *t
 	require.Zero(t, got.CacheCreationInputTokens)
 }
 
-func TestResponsesUsageFromCCStreamUsagePreservesCacheWriteDetails(t *testing.T) {
+func TestResponsesUsageFromCCUsagePreservesCacheWriteDetails(t *testing.T) {
 	t.Parallel()
 
-	got := responsesUsageFromCCStreamUsage(OpenAIUsage{
+	got := responsesUsageFromCCUsage(OpenAIUsage{
 		InputTokens:              12,
 		OutputTokens:             3,
 		CacheReadInputTokens:     4,
 		CacheCreationInputTokens: 6,
+		ImageOutputTokens:        5,
 	})
 
 	require.NotNil(t, got)
@@ -51,6 +52,39 @@ func TestResponsesUsageFromCCStreamUsagePreservesCacheWriteDetails(t *testing.T)
 	require.NotNil(t, got.InputTokensDetails)
 	require.Equal(t, 4, got.InputTokensDetails.CachedTokens)
 	require.Equal(t, 6, got.InputTokensDetails.CacheWriteTokens)
+	require.NotNil(t, got.OutputTokensDetails)
+	require.Equal(t, 5, got.OutputTokensDetails.ImageTokens)
+}
+
+func TestResponsesUsageFromCCUsagePreservesUnrelatedWireDetails(t *testing.T) {
+	t.Parallel()
+
+	base := &apicompat.ResponsesUsage{
+		InputTokensDetails: &apicompat.ResponsesInputTokensDetails{AudioTokens: 2},
+		OutputTokensDetails: &apicompat.ResponsesOutputTokensDetails{
+			ReasoningTokens:          7,
+			AudioTokens:              3,
+			AcceptedPredictionTokens: 4,
+			RejectedPredictionTokens: 1,
+		},
+	}
+	got := responsesUsageFromCCUsage(OpenAIUsage{
+		InputTokens:          12,
+		OutputTokens:         9,
+		ImageOutputTokens:    5,
+		CacheReadInputTokens: 4,
+	}, base)
+
+	require.NotSame(t, base, got)
+	require.Equal(t, 2, got.InputTokensDetails.AudioTokens)
+	require.Equal(t, 4, got.InputTokensDetails.CachedTokens)
+	require.Equal(t, 7, got.OutputTokensDetails.ReasoningTokens)
+	require.Equal(t, 3, got.OutputTokensDetails.AudioTokens)
+	require.Equal(t, 5, got.OutputTokensDetails.ImageTokens)
+	require.Equal(t, 4, got.OutputTokensDetails.AcceptedPredictionTokens)
+	require.Equal(t, 1, got.OutputTokensDetails.RejectedPredictionTokens)
+	require.Zero(t, base.InputTokensDetails.CachedTokens)
+	require.Zero(t, base.OutputTokensDetails.ImageTokens)
 }
 
 func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(t *testing.T) {

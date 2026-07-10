@@ -998,6 +998,7 @@ func TestResponsesToChatCompletions_AllTokenDetailsPassThrough(t *testing.T) {
 			OutputTokensDetails: &ResponsesOutputTokensDetails{
 				ReasoningTokens:          30,
 				AudioTokens:              2,
+				ImageTokens:              5,
 				AcceptedPredictionTokens: 10,
 				RejectedPredictionTokens: 3,
 			},
@@ -1013,14 +1014,24 @@ func TestResponsesToChatCompletions_AllTokenDetailsPassThrough(t *testing.T) {
 	require.NotNil(t, chat.Usage.CompletionTokensDetails)
 	assert.Equal(t, 30, chat.Usage.CompletionTokensDetails.ReasoningTokens)
 	assert.Equal(t, 2, chat.Usage.CompletionTokensDetails.AudioTokens)
+	assert.Equal(t, 5, chat.Usage.CompletionTokensDetails.ImageTokens)
 	assert.Equal(t, 10, chat.Usage.CompletionTokensDetails.AcceptedPredictionTokens)
 	assert.Equal(t, 3, chat.Usage.CompletionTokensDetails.RejectedPredictionTokens)
+
+	roundTrip := ChatUsageToResponsesUsage(chat.Usage)
+	require.NotNil(t, roundTrip.OutputTokensDetails)
+	assert.Equal(t, 30, roundTrip.OutputTokensDetails.ReasoningTokens)
+	assert.Equal(t, 2, roundTrip.OutputTokensDetails.AudioTokens)
+	assert.Equal(t, 5, roundTrip.OutputTokensDetails.ImageTokens)
+	assert.Equal(t, 10, roundTrip.OutputTokensDetails.AcceptedPredictionTokens)
+	assert.Equal(t, 3, roundTrip.OutputTokensDetails.RejectedPredictionTokens)
 
 	raw, err := json.Marshal(chat.Usage)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"prompt_tokens_details"`)
 	assert.Contains(t, string(raw), `"completion_tokens_details"`)
 	assert.Contains(t, string(raw), `"reasoning_tokens":30`)
+	assert.Contains(t, string(raw), `"image_tokens":5`)
 	assert.Contains(t, string(raw), `"accepted_prediction_tokens":10`)
 }
 
