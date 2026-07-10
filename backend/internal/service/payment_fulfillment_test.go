@@ -403,8 +403,11 @@ func TestPaymentFulfillmentRetryAfterCompletionMarkerFailureDoesNotExtendSubscri
 	plan := h.createSubscriptionPlan(t, group.ID, "Plus monthly", 399, 30, &quota)
 	order := h.createPaidSubscriptionOrder(t, h.user.ID, plan.ID, group.ID, 30)
 
-	recharging := h.client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusRecharging).SaveX(ctx)
-	require.NoError(t, h.paymentService.doSub(ctx, recharging))
+	lease, err := h.paymentService.acquirePaymentFulfillmentLease(ctx, order)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	recharging := h.client.PaymentOrder.GetX(ctx, order.ID)
+	require.NoError(t, h.paymentService.doSub(ctx, recharging, lease))
 
 	afterFirst, err := h.subscriptionRepo.GetByUserIDAndGroupID(ctx, h.user.ID, group.ID)
 	require.NoError(t, err)
@@ -1215,7 +1218,7 @@ func TestAlreadyProcessedRecoversStaleRechargingLease(t *testing.T) {
 	)
 	_, err := client.PaymentAuditLog.Create().
 		SetOrderID(strconv.FormatInt(order.ID, 10)).
-		SetAction("SUBSCRIPTION_ASSIGNED").
+		SetAction("SUBSCRIPTION_SUCCESS").
 		SetDetail(`{"groupID":7,"validityDays":30}`).
 		SetOperator("system").
 		Save(ctx)
@@ -1334,14 +1337,14 @@ func TestExecuteSubscriptionFulfillmentRecoversCommittedAssignmentWithoutExtendi
 	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
 	assertPaymentSubscriptionExpiry(t, subRepo, order, expiresAt)
 
-	assignmentAuditCount, err := client.PaymentAuditLog.Query().
+	completionAuditCount, err := client.PaymentAuditLog.Query().
 		Where(
 			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
-			paymentauditlog.ActionEQ("SUBSCRIPTION_ASSIGNED"),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_SUCCESS"),
 		).
 		Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, assignmentAuditCount)
+	require.Equal(t, 1, completionAuditCount)
 
 	// Simulate another stale recovery attempt after completion. The durable audit
 	// must make replay a no-op for the subscription entitlement.
@@ -1354,14 +1357,14 @@ func TestExecuteSubscriptionFulfillmentRecoversCommittedAssignmentWithoutExtendi
 	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
 	assertPaymentSubscriptionExpiry(t, subRepo, order, expiresAt)
 
-	assignmentAuditCount, err = client.PaymentAuditLog.Query().
+	completionAuditCount, err = client.PaymentAuditLog.Query().
 		Where(
 			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
-			paymentauditlog.ActionEQ("SUBSCRIPTION_ASSIGNED"),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_SUCCESS"),
 		).
 		Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, assignmentAuditCount)
+	require.Equal(t, 1, completionAuditCount)
 }
 
 func TestHasPaymentSubscriptionOrderNoteRequiresIndependentExactLine(t *testing.T) {

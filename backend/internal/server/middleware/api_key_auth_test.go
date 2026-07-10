@@ -273,6 +273,13 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		}
 		resetCalled := false
 		subscriptionRepo := &stubUserSubscriptionRepo{
+			getByID: func(ctx context.Context, id int64) (*service.UserSubscription, error) {
+				if id != sub.ID {
+					return nil, service.ErrSubscriptionNotFound
+				}
+				clone := *sub
+				return &clone, nil
+			},
 			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 				if userID != sub.UserID || groupID != sub.GroupID {
 					return nil, service.ErrSubscriptionNotFound
@@ -287,6 +294,8 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 				resetCalled = true
 				require.Equal(t, sub.ID, id)
 				require.True(t, !start.Before(oldWindowStart.Add(7*24*time.Hour)), "reset should preserve exact seven-day boundary semantics")
+				sub.WeeklyWindowStart = &start
+				sub.WeeklyUsageUSD = 0
 				return nil
 			},
 			resetMonthly: func(ctx context.Context, id int64, start time.Time) error { return nil },
