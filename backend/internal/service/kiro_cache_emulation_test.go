@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 )
 
 func TestKiroCacheEmulationGroupDefaultsAndNonKiro(t *testing.T) {
@@ -157,6 +158,30 @@ func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	}
 	if withMetadata <= 0 || withoutMetadata <= 0 || withMetadata > withoutMetadata*2 {
 		t.Fatalf("unexpected estimates without=%d with=%d", withoutMetadata, withMetadata)
+	}
+}
+
+func TestKiroInputTokenEstimateIgnoresMediaBase64Length(t *testing.T) {
+	buildBody := func(data string) []byte {
+		return []byte(fmt.Sprintf(
+			"{\"model\":\"claude-sonnet-4-6\",\"messages\":[{\"role\":\"user\",\"content\":["+
+				"{\"type\":\"text\",\"text\":\"describe this\"},"+
+				"{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":%q}}]}]}",
+			data,
+		))
+	}
+	small := estimateKiroInputTokens(buildBody("AAAA"))
+	large := estimateKiroInputTokens(buildBody(strings.Repeat("A", 16<<20)))
+	if large != small {
+		t.Fatalf("image base64 changed estimate: small=%d large=%d", small, large)
+	}
+}
+
+func TestResolveKiroInputTokensPrefersTranslatedEstimate(t *testing.T) {
+	body := []byte("{\"messages\":[{\"role\":\"user\",\"content\":\"raw fallback\"}]}")
+	got := resolveKiroInputTokens(body, kiropkg.KiroRequestContext{EstimatedInputTokens: 321})
+	if got != 321 {
+		t.Fatalf("resolved input tokens = %d, want translated estimate 321", got)
 	}
 }
 
