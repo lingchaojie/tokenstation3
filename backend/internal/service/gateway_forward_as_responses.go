@@ -108,8 +108,9 @@ func (s *GatewayService) ForwardAsResponses(
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
 
+	kiroDirectMode := isKiroDirectModeAccount(account)
 	var resp *http.Response
-	if isKiroDirectModeAccount(account) {
+	if kiroDirectMode {
 		var group *Group
 		if parsed != nil {
 			group = parsed.Group
@@ -209,9 +210,9 @@ func (s *GatewayService) ForwardAsResponses(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
 	} else {
-		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
 	}
 
 	return result, handleErr
@@ -247,6 +248,38 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if src.CacheCreationInputTokens > 0 {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
 	}
+}
+
+// mergeAnthropicUsageFromPayload recognizes the complete final usage snapshot
+// emitted by our KIRO translator. The raw-payload check is deliberately gated
+// by the KIRO direct call site so ordinary providers keep positive-only delta
+// semantics even if they send a similarly named field.
+func mergeAnthropicUsageFromPayload(dst *ClaudeUsage, src apicompat.AnthropicUsage, payload string, allowKiroMarkedFinalUsage bool) bool {
+	markedFinal := allowKiroMarkedFinalUsage && gjson.Get(payload, "usage."+kiroFinalUsageSSEField).Bool()
+	if !markedFinal {
+		mergeAnthropicUsage(dst, src)
+		return false
+	}
+	if dst == nil {
+		return true
+	}
+	dst.InputTokens = src.InputTokens
+	dst.OutputTokens = src.OutputTokens
+	dst.CacheReadInputTokens = src.CacheReadInputTokens
+	dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+	dst.CacheCreation5mTokens = 0
+	dst.CacheCreation1hTokens = 0
+	return true
+}
+
+func replaceAnthropicResponsesStateUsage(state *apicompat.AnthropicEventToResponsesState, usage ClaudeUsage) {
+	if state == nil {
+		return
+	}
+	state.InputTokens = usage.InputTokens
+	state.OutputTokens = usage.OutputTokens
+	state.CacheReadInputTokens = usage.CacheReadInputTokens
+	state.CacheCreationInputTokens = usage.CacheCreationInputTokens
 }
 
 func mergeKiroCreditsFromAnthropicPayload(dst *ClaudeUsage, payload string) {
@@ -292,6 +325,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -305,6 +339,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	// Accumulate the final Anthropic response from streaming events
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	hasKiroMarkedFinalUsage := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -336,13 +371,17 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		// message_start carries the initial response structure
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
-			mergeAnthropicUsage(&usage, event.Message.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
+				hasKiroMarkedFinalUsage = true
+			}
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				mergeAnthropicUsage(&usage, *event.Usage)
+				if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
+					hasKiroMarkedFinalUsage = true
+				}
 			}
 			mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
@@ -384,7 +423,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	// Update usage from accumulated delta
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 {
 		finalResp.Usage = apicompat.AnthropicUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,
@@ -433,6 +472,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -472,7 +512,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	}
 
 	// processEvent handles a single parsed Anthropic SSE event.
-	processEvent := func(event *apicompat.AnthropicStreamEvent) bool {
+	processEvent := func(event *apicompat.AnthropicStreamEvent, payload string) bool {
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
@@ -481,11 +521,15 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
-			mergeAnthropicUsage(&usage, *event.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
+				replaceAnthropicResponsesStateUsage(state, usage)
+			}
 		}
 		// Also capture usage from message_start
 		if event.Type == "message_start" && event.Message != nil {
-			mergeAnthropicUsage(&usage, event.Message.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
+				replaceAnthropicResponsesStateUsage(state, usage)
+			}
 		}
 
 		// Convert to Responses events
@@ -557,7 +601,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 		mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 
-		if processEvent(&event) {
+		if processEvent(&event, payload) {
 			return resultWithUsage(), nil
 		}
 	}

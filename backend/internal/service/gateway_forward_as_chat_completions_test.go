@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestExtractCCReasoningEffortFromBody(t *testing.T) {
@@ -59,13 +60,13 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
 			``,
 			`event: message_delta`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7,"_sub2api_kiro_credits":0.17}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"_sub2api_kiro_final_usage":true,"_sub2api_kiro_credits":0.17}}`,
 			``,
 		}, "\n"))),
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCBufferedFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now())
+	result, err := svc.handleCCBufferedFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
@@ -76,6 +77,7 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 	require.NotNil(t, result.ReasoningEffort)
 	require.Equal(t, "high", *result.ReasoningEffort)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
 }
 
 func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
@@ -105,7 +107,7 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCStreamingFromAnthropic(context.Background(), resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), true)
+	result, err := svc.handleCCStreamingFromAnthropic(context.Background(), resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), true, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 20, result.Usage.InputTokens)
@@ -117,6 +119,61 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	require.Equal(t, "medium", *result.ReasoningEffort)
 	require.Contains(t, rec.Body.String(), `[DONE]`)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestHandleCCBufferedFromAnthropic_KiroMarkedFinalUsageClearsProvisionalTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := markedKiroFinalUsageAnthropicResponse("msg_cc_buffered_final")
+
+	result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(
+		resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Equal(t, int64(120), gjson.Get(rec.Body.String(), "usage.prompt_tokens").Int())
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
+}
+
+func TestHandleCCStreamingFromAnthropic_KiroMarkedFinalUsageClearsProvisionalTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := markedKiroFinalUsageAnthropicResponse("msg_cc_stream_final")
+
+	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
+		context.Background(), resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Contains(t, rec.Body.String(), `"prompt_tokens":120`)
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
+}
+
+func markedKiroFinalUsageAnthropicResponse(messageID string) *http.Response {
+	return &http.Response{
+		Header: http.Header{"x-request-id": []string{"rid_kiro_marked_final"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"` + messageID + `","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":30,"output_tokens":0,"cache_read_input_tokens":60,"cache_creation_input_tokens":30}}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":120,"cache_creation_input_tokens":0,"_sub2api_kiro_final_usage":true}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
 }
 
 func TestForwardAsChatCompletionsKiroDirectUsesKiroEndpointMode(t *testing.T) {

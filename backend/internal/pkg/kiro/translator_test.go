@@ -1886,6 +1886,18 @@ func TestMergeKiroCacheEmulationPreservesExplicitZeroUpstreamCacheFields(t *test
 	require.Zero(t, got.CacheCreationInputTokens)
 }
 
+func TestMergeKiroCacheEmulationAggregateOverflowDoesNotWrapTotal(t *testing.T) {
+	maxTokenInt := int(^uint(0) >> 1)
+	base := Usage{
+		InputTokens: maxTokenInt, OutputTokens: 1, TotalTokens: 99,
+		upstreamInputTokensPresent: true, upstreamOutputTokensPresent: true,
+		upstreamCacheReadTokensPresent: true,
+	}
+
+	got := mergeKiroCacheEmulationUsage(base, &Usage{InputTokens: 1})
+	require.Equal(t, 99, got.TotalTokens)
+}
+
 func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{

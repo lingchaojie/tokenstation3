@@ -2939,7 +2939,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 	}
 	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		if total, ok := addKiroTokenBuckets(usage.InputTokens, usage.OutputTokens); ok {
+			usage.TotalTokens = total
+		}
 	}
 	if stopReason == "" {
 		if hasUsableToolUses(toolUses) {
@@ -2968,7 +2970,9 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 				stopReason = "max_tokens"
 				if usage.OutputTokens > requestCtx.MaxOutputTokens {
 					usage.OutputTokens = requestCtx.MaxOutputTokens
-					usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+					if total, ok := addKiroTokenBuckets(usage.InputTokens, usage.OutputTokens); ok {
+						usage.TotalTokens = total
+					}
 				}
 			}
 		}
@@ -4340,8 +4344,11 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 		return base
 	}
 	if base.hasUpstreamCacheUsage() {
-		base.TotalTokens = base.InputTokens + base.CacheReadInputTokens +
-			base.CacheCreationInputTokens + base.OutputTokens
+		if total, ok := addKiroTokenBuckets(
+			base.InputTokens, base.CacheReadInputTokens, base.CacheCreationInputTokens, base.OutputTokens,
+		); ok {
+			base.TotalTokens = total
+		}
 		return base
 	}
 
@@ -4349,8 +4356,12 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if !ok && base.InputTokens > 0 {
 		promptTotal, ok = base.InputTokens, true
 	}
-	sourceTotal := simulated.InputTokens + simulated.CacheReadInputTokens +
-		simulated.CacheCreationInputTokens
+	sourceTotal, sourceTotalOK := addKiroTokenBuckets(
+		simulated.InputTokens, simulated.CacheReadInputTokens, simulated.CacheCreationInputTokens,
+	)
+	if !sourceTotalOK {
+		return base
+	}
 	if !ok {
 		promptTotal = sourceTotal
 	}
@@ -4360,7 +4371,11 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 
 	readTokens := scaleKiroUsageBucket(simulated.CacheReadInputTokens, promptTotal, sourceTotal)
 	creationTokens := scaleKiroUsageBucket(simulated.CacheCreationInputTokens, promptTotal, sourceTotal)
-	if overflow := readTokens + creationTokens - promptTotal; overflow > 0 {
+	partitionTotal, partitionTotalOK := addKiroTokenBuckets(readTokens, creationTokens)
+	if !partitionTotalOK {
+		return base
+	}
+	if overflow := partitionTotal - promptTotal; overflow > 0 {
 		reduceCreation := min(overflow, creationTokens)
 		creationTokens -= reduceCreation
 		readTokens = max(readTokens-(overflow-reduceCreation), 0)
@@ -4376,12 +4391,20 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	base.CacheCreation1hInputTokens = scaleKiroUsageBucket(
 		simulated.CacheCreation1hInputTokens, creationTokens, simulated.CacheCreationInputTokens,
 	)
-	if overflow := base.CacheCreation5mInputTokens + base.CacheCreation1hInputTokens - creationTokens; overflow > 0 {
+	creationTTLTotal, creationTTLTotalOK := addKiroTokenBuckets(
+		base.CacheCreation5mInputTokens, base.CacheCreation1hInputTokens,
+	)
+	if !creationTTLTotalOK {
+		base.CacheCreation5mInputTokens = 0
+		base.CacheCreation1hInputTokens = 0
+	} else if overflow := creationTTLTotal - creationTokens; overflow > 0 {
 		reduceOneHour := min(overflow, base.CacheCreation1hInputTokens)
 		base.CacheCreation1hInputTokens -= reduceOneHour
 		base.CacheCreation5mInputTokens = max(base.CacheCreation5mInputTokens-(overflow-reduceOneHour), 0)
 	}
-	base.TotalTokens = promptTotal + base.OutputTokens
+	if total, ok := addKiroTokenBuckets(promptTotal, base.OutputTokens); ok {
+		base.TotalTokens = total
+	}
 	return base
 }
 
