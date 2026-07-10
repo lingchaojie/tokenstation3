@@ -1731,6 +1731,55 @@ func TestStreamEventStreamAsAnthropicRestoresShortToolName(t *testing.T) {
 	require.NotContains(t, out.String(), `"name":"`+shortName+`"`)
 }
 
+func TestMergeKiroCacheEmulationNormalizesHugeSimulationToUpstreamTotal(t *testing.T) {
+	base := Usage{
+		InputTokens: 120, OutputTokens: 7, TotalTokens: 127,
+		upstreamInputTokensPresent: true, upstreamOutputTokensPresent: true,
+		upstreamTotalTokensPresent: true,
+	}
+	simulated := &Usage{
+		InputTokens: 3_900_000, CacheReadInputTokens: 7_800_000,
+		CacheCreationInputTokens: 3_900_000, CacheCreation5mInputTokens: 3_900_000,
+	}
+	got := mergeKiroCacheEmulationUsage(base, simulated)
+	require.Equal(t, 30, got.InputTokens)
+	require.Equal(t, 60, got.CacheReadInputTokens)
+	require.Equal(t, 30, got.CacheCreationInputTokens)
+	require.Equal(t, 30, got.CacheCreation5mInputTokens)
+	require.Equal(t, 120, got.InputTokens+got.CacheReadInputTokens+got.CacheCreationInputTokens)
+	require.Equal(t, 127, got.TotalTokens)
+}
+
+func TestMergeKiroCacheEmulationPreservesExplicitUpstreamCacheFields(t *testing.T) {
+	base := Usage{
+		InputTokens: 12, OutputTokens: 7, TotalTokens: 24,
+		CacheReadInputTokens: 3, CacheCreationInputTokens: 2,
+		upstreamInputTokensPresent: true, upstreamOutputTokensPresent: true,
+		upstreamTotalTokensPresent: true, upstreamCacheReadTokensPresent: true,
+		upstreamCacheWriteTokensPresent: true,
+	}
+	got := mergeKiroCacheEmulationUsage(base, &Usage{
+		CacheReadInputTokens: 10_000_000, CacheCreationInputTokens: 5_000_000,
+	})
+	require.Equal(t, 12, got.InputTokens)
+	require.Equal(t, 3, got.CacheReadInputTokens)
+	require.Equal(t, 2, got.CacheCreationInputTokens)
+	require.Equal(t, 24, got.TotalTokens)
+}
+
+func TestMergeKiroCacheEmulationPreservesExplicitZeroUpstreamCacheFields(t *testing.T) {
+	base := Usage{
+		InputTokens: 120, OutputTokens: 7, TotalTokens: 127,
+		upstreamInputTokensPresent: true, upstreamOutputTokensPresent: true,
+		upstreamTotalTokensPresent: true, upstreamCacheReadTokensPresent: true,
+		upstreamCacheWriteTokensPresent: true,
+	}
+	got := mergeKiroCacheEmulationUsage(base, &Usage{CacheReadInputTokens: 15_600_000})
+	require.Equal(t, 120, got.InputTokens)
+	require.Zero(t, got.CacheReadInputTokens)
+	require.Zero(t, got.CacheCreationInputTokens)
+}
+
 func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
@@ -1738,25 +1787,44 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 			"tokenUsage": map[string]any{
 				"uncachedInputTokens": 120,
 				"outputTokens":        7,
+				"totalTokens":         127,
 			},
 		},
 	}))
 	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{
 		CacheEmulationUsage: &Usage{
-			InputTokens:                20,
-			CacheReadInputTokens:       70,
-			CacheCreationInputTokens:   30,
-			CacheCreation5mInputTokens: 30,
+			InputTokens:                3_900_000,
+			CacheReadInputTokens:       7_800_000,
+			CacheCreationInputTokens:   3_900_000,
+			CacheCreation5mInputTokens: 3_900_000,
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 20, result.Usage.InputTokens)
-	require.Equal(t, 70, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 30, result.Usage.InputTokens)
+	require.Equal(t, 60, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 20, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int()))
-	require.Equal(t, 70, int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int()))
+	require.Equal(t, 120, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 30, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int()))
+	require.Equal(t, 60, int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int()))
 	require.Equal(t, 30, int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int()))
 	require.Equal(t, 30, int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation.ephemeral_5m_input_tokens").Int()))
+}
+
+func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponseUsesEstimatedInputFallback(t *testing.T) {
+	requestCtx := KiroRequestContext{
+		EstimatedInputTokens: 120,
+		CacheEmulationUsage: &Usage{
+			InputTokens:              3_900_000,
+			CacheReadInputTokens:     7_800_000,
+			CacheCreationInputTokens: 3_900_000,
+		},
+	}
+	result, err := ParseNonStreamingEventStreamWithContext(bytes.NewBuffer(nil), "claude-sonnet-4-5", requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, 30, result.Usage.InputTokens)
+	require.Equal(t, 60, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.TotalTokens)
 }
 
 func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
@@ -1766,6 +1834,7 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 			"tokenUsage": map[string]any{
 				"uncachedInputTokens": 120,
 				"outputTokens":        7,
+				"totalTokens":         127,
 			},
 		},
 	}))
@@ -1775,19 +1844,20 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	var out bytes.Buffer
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 120, KiroRequestContext{
 		CacheEmulationUsage: &Usage{
-			InputTokens:                20,
-			CacheReadInputTokens:       70,
-			CacheCreationInputTokens:   30,
-			CacheCreation1hInputTokens: 30,
+			InputTokens:                3_900_000,
+			CacheReadInputTokens:       7_800_000,
+			CacheCreationInputTokens:   3_900_000,
+			CacheCreation1hInputTokens: 3_900_000,
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 20, result.Usage.InputTokens)
-	require.Equal(t, 70, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 30, result.Usage.InputTokens)
+	require.Equal(t, 60, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
 	output := out.String()
-	require.Contains(t, output, `"input_tokens":20`)
-	require.Contains(t, output, `"cache_read_input_tokens":70`)
+	require.Contains(t, output, `"input_tokens":30`)
+	require.Contains(t, output, `"cache_read_input_tokens":60`)
 	require.Contains(t, output, `"cache_creation_input_tokens":30`)
 	require.Contains(t, output, `"ephemeral_1h_input_tokens":30`)
 }

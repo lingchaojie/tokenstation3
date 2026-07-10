@@ -117,6 +117,7 @@ type KiroRequestContext struct {
 	ToolNameMap              map[string]string
 	ThinkingEnabled          bool
 	CacheEmulationUsage      *Usage
+	EstimatedInputTokens     int
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
 	StopSequences            []string
@@ -517,9 +518,11 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
+	if !usage.hasUpstreamTokenUsage() && requestCtx.EstimatedInputTokens > 0 {
+		usage.InputTokens = requestCtx.EstimatedInputTokens
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
 		Usage:        usage,
@@ -4241,19 +4244,72 @@ func toPositiveFiniteFloat(value any) (float64, bool) {
 	return out, true
 }
 
+func upstreamPromptTokenTotal(usage Usage) (int, bool) {
+	if usage.hasUpstreamCacheUsage() && usage.upstreamInputTokensPresent {
+		return usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens, true
+	}
+	if usage.upstreamTotalTokensPresent && usage.upstreamOutputTokensPresent && usage.TotalTokens >= usage.OutputTokens {
+		return usage.TotalTokens - usage.OutputTokens, true
+	}
+	if usage.upstreamInputTokensPresent {
+		return usage.InputTokens, true
+	}
+	return 0, false
+}
+
+func scaleKiroUsageBucket(tokens, targetTotal, sourceTotal int) int {
+	if tokens <= 0 || targetTotal <= 0 || sourceTotal <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(tokens) * float64(targetTotal) / float64(sourceTotal)))
+}
+
 func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if simulated == nil {
 		return base
 	}
-	if base.CacheReadInputTokens > 0 || base.CacheCreationInputTokens > 0 || base.CacheCreation5mInputTokens > 0 || base.CacheCreation1hInputTokens > 0 {
+	if base.hasUpstreamCacheUsage() {
+		base.TotalTokens = base.InputTokens + base.CacheReadInputTokens +
+			base.CacheCreationInputTokens + base.OutputTokens
 		return base
 	}
-	base.InputTokens = simulated.InputTokens
-	base.CacheReadInputTokens = simulated.CacheReadInputTokens
-	base.CacheCreationInputTokens = simulated.CacheCreationInputTokens
-	base.CacheCreation5mInputTokens = simulated.CacheCreation5mInputTokens
-	base.CacheCreation1hInputTokens = simulated.CacheCreation1hInputTokens
-	base.TotalTokens = base.InputTokens + base.OutputTokens + base.CacheReadInputTokens + base.CacheCreationInputTokens
+
+	promptTotal, ok := upstreamPromptTokenTotal(base)
+	if !ok && base.InputTokens > 0 {
+		promptTotal, ok = base.InputTokens, true
+	}
+	sourceTotal := simulated.InputTokens + simulated.CacheReadInputTokens +
+		simulated.CacheCreationInputTokens
+	if !ok {
+		promptTotal = sourceTotal
+	}
+	if promptTotal < 0 || sourceTotal <= 0 {
+		return base
+	}
+
+	readTokens := scaleKiroUsageBucket(simulated.CacheReadInputTokens, promptTotal, sourceTotal)
+	creationTokens := scaleKiroUsageBucket(simulated.CacheCreationInputTokens, promptTotal, sourceTotal)
+	if overflow := readTokens + creationTokens - promptTotal; overflow > 0 {
+		reduceCreation := min(overflow, creationTokens)
+		creationTokens -= reduceCreation
+		readTokens = max(readTokens-(overflow-reduceCreation), 0)
+	}
+
+	base.InputTokens = promptTotal - readTokens - creationTokens
+	base.CacheReadInputTokens = readTokens
+	base.CacheCreationInputTokens = creationTokens
+	base.CacheCreation5mInputTokens = scaleKiroUsageBucket(
+		simulated.CacheCreation5mInputTokens, creationTokens, simulated.CacheCreationInputTokens,
+	)
+	base.CacheCreation1hInputTokens = scaleKiroUsageBucket(
+		simulated.CacheCreation1hInputTokens, creationTokens, simulated.CacheCreationInputTokens,
+	)
+	if overflow := base.CacheCreation5mInputTokens + base.CacheCreation1hInputTokens - creationTokens; overflow > 0 {
+		reduceOneHour := min(overflow, base.CacheCreation1hInputTokens)
+		base.CacheCreation1hInputTokens -= reduceOneHour
+		base.CacheCreation5mInputTokens = max(base.CacheCreation5mInputTokens-(overflow-reduceOneHour), 0)
+	}
+	base.TotalTokens = promptTotal + base.OutputTokens
 	return base
 }
 
