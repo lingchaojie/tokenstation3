@@ -266,6 +266,7 @@ func extractResponseColumns(resp []byte, stream bool) responseColumns {
 var redactedHeaderKeys = map[string]struct{}{
 	"authorization":       {},
 	"x-api-key":           {},
+	"api-key":             {}, // Azure-style bare api-key header
 	"cookie":              {},
 	"set-cookie":          {},
 	"proxy-authorization": {},
