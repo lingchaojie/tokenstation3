@@ -122,6 +122,35 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
 }
 
+func TestExtractCCStreamUsagePrefersExplicitCCFields(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"choices":[],"usage":{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"completion_tokens_details":{"image_tokens":0},"output_tokens_details":{"image_tokens":5},"_sub2api_kiro_credits":0.17}}`
+
+	usage := extractCCStreamUsage(payload)
+	require.NotNil(t, usage)
+	require.Zero(t, usage.InputTokens)
+	require.Zero(t, usage.OutputTokens)
+	require.Zero(t, usage.CacheReadInputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Zero(t, usage.ImageOutputTokens)
+	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
+}
+
+func TestExtractCCStreamUsageFallsBackToResponsesFields(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"choices":[],"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"output_tokens_details":{"image_tokens":5}}}`
+
+	usage := extractCCStreamUsage(payload)
+	require.NotNil(t, usage)
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 3, usage.OutputTokens)
+	require.Equal(t, 4, usage.CacheReadInputTokens)
+	require.Equal(t, 6, usage.CacheCreationInputTokens)
+	require.Equal(t, 5, usage.ImageOutputTokens)
+}
+
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -159,19 +188,36 @@ func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *test
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		name      string
-		usageJSON string
-		wantWrite int
+		name       string
+		usageJSON  string
+		wantInput  int
+		wantOutput int
+		wantRead   int
+		wantWrite  int
 	}{
 		{
-			name:      "positive cache write",
-			usageJSON: `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`,
-			wantWrite: 6,
+			name:       "positive cache write",
+			usageJSON:  `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`,
+			wantInput:  12,
+			wantOutput: 3,
+			wantRead:   4,
+			wantWrite:  6,
 		},
 		{
-			name:      "nested zero overrides legacy alias",
-			usageJSON: `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_creation_input_tokens":19,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":0}}`,
-			wantWrite: 0,
+			name:       "nested zero overrides legacy alias",
+			usageJSON:  `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_creation_input_tokens":19,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":0}}`,
+			wantInput:  12,
+			wantOutput: 3,
+			wantRead:   4,
+			wantWrite:  0,
+		},
+		{
+			name:       "explicit CC zeros override Responses dialect",
+			usageJSON:  `{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`,
+			wantInput:  0,
+			wantOutput: 0,
+			wantRead:   0,
+			wantWrite:  0,
 		},
 	}
 
@@ -199,8 +245,9 @@ func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *test
 
 			require.NoError(t, err)
 			require.NotNil(t, result)
-			require.Equal(t, 12, result.Usage.InputTokens)
-			require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+			require.Equal(t, tt.wantInput, result.Usage.InputTokens)
+			require.Equal(t, tt.wantOutput, result.Usage.OutputTokens)
+			require.Equal(t, tt.wantRead, result.Usage.CacheReadInputTokens)
 			require.Equal(t, tt.wantWrite, result.Usage.CacheCreationInputTokens)
 		})
 	}

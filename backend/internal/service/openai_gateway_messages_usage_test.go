@@ -33,6 +33,26 @@ func TestCopyOpenAIUsageFromResponsesUsageTrustsCanonicalCacheCreationValue(t *t
 	require.Zero(t, got.CacheCreationInputTokens)
 }
 
+func TestResponsesUsageFromCCStreamUsagePreservesCacheWriteDetails(t *testing.T) {
+	t.Parallel()
+
+	got := responsesUsageFromCCStreamUsage(OpenAIUsage{
+		InputTokens:              12,
+		OutputTokens:             3,
+		CacheReadInputTokens:     4,
+		CacheCreationInputTokens: 6,
+	})
+
+	require.NotNil(t, got)
+	require.Equal(t, 12, got.InputTokens)
+	require.Equal(t, 3, got.OutputTokens)
+	require.Equal(t, 15, got.TotalTokens)
+	require.Equal(t, 6, got.CacheCreationInputTokens)
+	require.NotNil(t, got.InputTokensDetails)
+	require.Equal(t, 4, got.InputTokensDetails.CachedTokens)
+	require.Equal(t, 6, got.InputTokensDetails.CacheWriteTokens)
+}
+
 func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

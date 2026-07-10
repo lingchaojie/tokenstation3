@@ -373,14 +373,70 @@ func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {
 // 但上游可能在多个 chunk 中重复——总是用最新值。
 func extractCCStreamUsage(payload string) *OpenAIUsage {
 	usageResult := gjson.Get(payload, "usage")
-	if !usageResult.Exists() || !usageResult.IsObject() {
-		return nil
-	}
-	u, ok := openAIUsageFromGJSON(usageResult)
+	u, ok := openAICCUsageFromGJSON(usageResult)
 	if !ok {
 		return nil
 	}
 	return &u
+}
+
+// extractCCUsageFromJSONBytes extracts usage from a native Chat Completions
+// response. Keep this separate from the Responses parser: compatibility
+// providers occasionally return both naming dialects, and an explicitly
+// present CC value (including zero) is authoritative on a CC endpoint.
+func extractCCUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return OpenAIUsage{}, false
+	}
+	return openAICCUsageFromGJSON(gjson.GetBytes(body, "usage"))
+}
+
+func openAICCUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
+	if !value.Exists() || !value.IsObject() {
+		return OpenAIUsage{}, false
+	}
+
+	return OpenAIUsage{
+		InputTokens: nonNegativeFirstPresentGJSONInt(
+			value.Get("prompt_tokens"),
+			value.Get("input_tokens"),
+		),
+		OutputTokens: nonNegativeFirstPresentGJSONInt(
+			value.Get("completion_tokens"),
+			value.Get("output_tokens"),
+		),
+		CacheReadInputTokens: nonNegativeFirstPresentGJSONInt(
+			value.Get("prompt_tokens_details.cached_tokens"),
+			value.Get("input_tokens_details.cached_tokens"),
+			value.Get("cache_read_input_tokens"),
+			value.Get("cache_read_tokens"),
+			value.Get("cached_tokens"),
+		),
+		CacheCreationInputTokens: nonNegativeFirstPresentGJSONInt(
+			value.Get("prompt_tokens_details.cache_write_tokens"),
+			value.Get("prompt_tokens_details.cache_creation_tokens"),
+			value.Get("input_tokens_details.cache_write_tokens"),
+			value.Get("input_tokens_details.cache_creation_tokens"),
+			value.Get("cache_write_tokens"),
+			value.Get("cache_creation_input_tokens"),
+			value.Get("cache_write_input_tokens"),
+			value.Get("cache_creation_tokens"),
+		),
+		ImageOutputTokens: nonNegativeFirstPresentGJSONInt(
+			value.Get("completion_tokens_details.image_tokens"),
+			value.Get("output_tokens_details.image_tokens"),
+		),
+		KiroCredits: kiroCreditsFromUsageGJSON(value),
+	}, true
+}
+
+func nonNegativeFirstPresentGJSONInt(values ...gjson.Result) int {
+	for _, value := range values {
+		if value.Exists() {
+			return max(int(value.Int()), 0)
+		}
+	}
+	return 0
 }
 
 // bufferRawChatCompletions 透传上游 CC 非流式 JSON 响应。
@@ -405,7 +461,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	}
 
 	var usage OpenAIUsage
-	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+	if parsedUsage, ok := extractCCUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
 	}
 

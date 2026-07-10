@@ -281,7 +281,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 	return st
 }
 
-// responsesUsageFromCCStreamUsage projects the generic/raw usage parser's
+// responsesUsageFromCCStreamUsage projects the CC/raw usage parser's
 // canonical result back into the Responses wire shape used by CC fallback
 // finalization. The raw parser is authoritative because it understands
 // top-level cache aliases and explicit nested zero values that ChatUsage's
@@ -293,9 +293,10 @@ func responsesUsageFromCCStreamUsage(usage OpenAIUsage) *apicompat.ResponsesUsag
 		TotalTokens:              usage.InputTokens + usage.OutputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 	}
-	if usage.CacheReadInputTokens > 0 {
+	if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
 		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{
-			CachedTokens: usage.CacheReadInputTokens,
+			CachedTokens:     usage.CacheReadInputTokens,
+			CacheWriteTokens: usage.CacheCreationInputTokens,
 		}
 	}
 	return out
@@ -330,7 +331,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	}
 
 	usage := OpenAIUsage{}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+	if parsed, ok := extractCCUsageFromJSONBytes(respBody); ok {
 		usage = parsed
 	}
 	return &ccResp, usage, nil
