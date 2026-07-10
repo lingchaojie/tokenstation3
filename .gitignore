@@ -138,6 +138,8 @@ docs/*
 !docs/legal/
 !docs/legal/*.md
 !docs/superpowers/
+!docs/upstream-sync/
+!docs/upstream-sync/*.md
 .serena/
 .codex/
 frontend/coverage/
