@@ -84,6 +84,21 @@ type Usage struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
+
+	upstreamInputTokensPresent      bool
+	upstreamOutputTokensPresent     bool
+	upstreamTotalTokensPresent      bool
+	upstreamCacheReadTokensPresent  bool
+	upstreamCacheWriteTokensPresent bool
+}
+
+func (u Usage) hasUpstreamTokenUsage() bool {
+	return u.upstreamInputTokensPresent || u.upstreamOutputTokensPresent ||
+		u.upstreamTotalTokensPresent || u.hasUpstreamCacheUsage()
+}
+
+func (u Usage) hasUpstreamCacheUsage() bool {
+	return u.upstreamCacheReadTokensPresent || u.upstreamCacheWriteTokensPresent
 }
 
 type StreamResult struct {
@@ -4047,17 +4062,25 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		meta = event
 	}
 	if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok {
-		if value, ok := toInt(tokenUsage["uncachedInputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "uncachedInputTokens"); present {
 			usage.InputTokens = value
+			usage.upstreamInputTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["outputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "outputTokens"); present {
 			usage.OutputTokens = value
+			usage.upstreamOutputTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["totalTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "totalTokens"); present {
 			usage.TotalTokens = value
+			usage.upstreamTotalTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["cacheReadInputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "cacheReadInputTokens"); present {
 			usage.CacheReadInputTokens = value
+			usage.upstreamCacheReadTokensPresent = true
+		}
+		if value, present := readKiroTokenField(tokenUsage, "cacheWriteInputTokens"); present {
+			usage.CacheCreationInputTokens = value
+			usage.upstreamCacheWriteTokensPresent = true
 		}
 		updateKiroCreditsFromMap(usage, tokenUsage)
 	}
@@ -4150,6 +4173,18 @@ func toInt(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func readKiroTokenField(values map[string]any, key string) (int, bool) {
+	raw, exists := values[key]
+	if !exists {
+		return 0, false
+	}
+	value, ok := toInt(raw)
+	if !ok || value < 0 {
+		return 0, false
+	}
+	return value, true
 }
 
 var kiroCreditUsageFieldNames = [...]string{

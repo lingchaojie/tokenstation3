@@ -537,6 +537,47 @@ func TestBuildKiroPayloadToolChoiceNoneOmitsTools(t *testing.T) {
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
 }
 
+func TestUpdateUsageFromOfficialMetadataEventTracksAllTokenFields(t *testing.T) {
+	var usage Usage
+	updateUsageFromEvent(&usage, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 12, "outputTokens": 7, "totalTokens": 24,
+			"cacheReadInputTokens": 3, "cacheWriteInputTokens": 2,
+		}},
+	})
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 7, usage.OutputTokens)
+	require.Equal(t, 24, usage.TotalTokens)
+	require.Equal(t, 3, usage.CacheReadInputTokens)
+	require.Equal(t, 2, usage.CacheCreationInputTokens)
+	require.True(t, usage.upstreamInputTokensPresent)
+	require.True(t, usage.upstreamOutputTokensPresent)
+	require.True(t, usage.upstreamTotalTokensPresent)
+	require.True(t, usage.upstreamCacheReadTokensPresent)
+	require.True(t, usage.upstreamCacheWriteTokensPresent)
+}
+
+func TestUpdateUsageFromEventDistinguishesAbsentAndExplicitZeroCacheFields(t *testing.T) {
+	var explicitZero Usage
+	updateUsageFromEvent(&explicitZero, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 10, "outputTokens": 1, "totalTokens": 11,
+			"cacheReadInputTokens": 0, "cacheWriteInputTokens": 0,
+		}},
+	})
+	require.True(t, explicitZero.upstreamCacheReadTokensPresent)
+	require.True(t, explicitZero.upstreamCacheWriteTokensPresent)
+
+	var absent Usage
+	updateUsageFromEvent(&absent, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 10, "outputTokens": 1, "totalTokens": 11,
+		}},
+	})
+	require.False(t, absent.upstreamCacheReadTokensPresent)
+	require.False(t, absent.upstreamCacheWriteTokensPresent)
+}
+
 func TestParseNonStreamingEventStream(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
