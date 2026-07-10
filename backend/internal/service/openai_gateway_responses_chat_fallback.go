@@ -126,13 +126,13 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
-	ccResp, usage, sawUsage, err := s.readCCUpstreamJSONResponse(c, resp, writeOpenAIResponsesFallbackError)
+	ccResp, parsedUsage, sawUsage, err := s.readCCUpstreamJSONResponse(c, resp, writeOpenAIResponsesFallbackError)
 	if err != nil {
 		return nil, err
 	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, toolSearch, namespaceTools)
 	if sawUsage {
-		responsesResp.Usage = responsesUsageFromCCUsage(usage, responsesResp.Usage)
+		responsesResp.Usage = responsesUsageFromCCUsage(parsedUsage.Usage, parsedUsage)
 	}
 
 	if s.responseHeaderFilter != nil {
@@ -142,7 +142,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 
 	return &OpenAIForwardResult{
 		RequestID:       requestID,
-		Usage:           usage,
+		Usage:           parsedUsage.Usage,
 		Model:           originalModel,
 		BillingModel:    billingModel,
 		UpstreamModel:   upstreamModel,
@@ -223,7 +223,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		// Keep response.completed aligned with the generic scanner used for
 		// billing, including compatible cache aliases and explicit nested zero
 		// precedence lost by the narrower ChatUsage structure.
-		state.Usage = responsesUsageFromCCUsage(scan.Usage, state.Usage)
+		state.Usage = responsesUsageFromCCUsage(scan.Usage, scan.UsageFields)
 	}
 
 	writeEvents(apicompat.FinalizeChatCompletionsResponsesStream(state))

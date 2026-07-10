@@ -372,8 +372,8 @@ func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {
 // chunks; a later empty/malformed/partial object must not erase an earlier
 // valid snapshot.
 func mergeCCStreamUsage(dst *OpenAIUsage, payload string) bool {
-	parsed, ok := parseCCUsageFromGJSON(gjson.Get(payload, "usage"))
-	if !ok {
+	parsed, sawUsageObject := parseCCUsageFromGJSON(gjson.Get(payload, "usage"))
+	if !sawUsageObject || !parsed.hasValidFields() {
 		return false
 	}
 	parsed.mergeInto(dst)
@@ -401,6 +401,17 @@ type parsedCCUsage struct {
 	cacheCreationTokensSet bool
 	imageOutputTokensSet   bool
 	kiroCreditsSet         bool
+
+	promptAudioTokens           int
+	promptAudioTokensSet        bool
+	outputAudioTokens           int
+	outputAudioTokensSet        bool
+	reasoningTokens             int
+	reasoningTokensSet          bool
+	acceptedPredictionTokens    int
+	acceptedPredictionTokensSet bool
+	rejectedPredictionTokens    int
+	rejectedPredictionTokensSet bool
 }
 
 func parseCCUsageFromGJSON(value gjson.Result) (parsedCCUsage, bool) {
@@ -437,8 +448,35 @@ func parseCCUsageFromGJSON(value gjson.Result) (parsedCCUsage, bool) {
 		value.Get("completion_tokens_details.image_tokens"),
 		value.Get("output_tokens_details.image_tokens"),
 	)
-	kiroCredits := kiroCreditsFromUsageGJSON(value)
-	kiroCreditsSet := kiroCredits > 0
+	promptAudioTokens, promptAudioTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.audio_tokens"),
+		value.Get("input_tokens_details.audio_tokens"),
+	)
+	outputAudioTokens, outputAudioTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.audio_tokens"),
+		value.Get("output_tokens_details.audio_tokens"),
+	)
+	reasoningTokens, reasoningTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.reasoning_tokens"),
+		value.Get("output_tokens_details.reasoning_tokens"),
+	)
+	acceptedPredictionTokens, acceptedPredictionTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.accepted_prediction_tokens"),
+		value.Get("output_tokens_details.accepted_prediction_tokens"),
+	)
+	rejectedPredictionTokens, rejectedPredictionTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.rejected_prediction_tokens"),
+		value.Get("output_tokens_details.rejected_prediction_tokens"),
+	)
+	kiroCredits, kiroCreditsSet := nonNegativeFirstValidGJSONFloat(
+		value.Get("_sub2api_kiro_credits"),
+		value.Get("kiro_credits"),
+		value.Get("kiroCredits"),
+		value.Get("credits"),
+		value.Get("creditsUsed"),
+		value.Get("creditUsage"),
+		value.Get("consumedCredits"),
+	)
 
 	parsed := parsedCCUsage{
 		Usage: OpenAIUsage{
@@ -449,15 +487,31 @@ func parseCCUsageFromGJSON(value gjson.Result) (parsedCCUsage, bool) {
 			ImageOutputTokens:        imageOutputTokens,
 			KiroCredits:              kiroCredits,
 		},
-		inputTokensSet:         inputTokensSet,
-		outputTokensSet:        outputTokensSet,
-		cacheReadTokensSet:     cacheReadTokensSet,
-		cacheCreationTokensSet: cacheCreationTokensSet,
-		imageOutputTokensSet:   imageOutputTokensSet,
-		kiroCreditsSet:         kiroCreditsSet,
+		inputTokensSet:              inputTokensSet,
+		outputTokensSet:             outputTokensSet,
+		cacheReadTokensSet:          cacheReadTokensSet,
+		cacheCreationTokensSet:      cacheCreationTokensSet,
+		imageOutputTokensSet:        imageOutputTokensSet,
+		kiroCreditsSet:              kiroCreditsSet,
+		promptAudioTokens:           promptAudioTokens,
+		promptAudioTokensSet:        promptAudioTokensSet,
+		outputAudioTokens:           outputAudioTokens,
+		outputAudioTokensSet:        outputAudioTokensSet,
+		reasoningTokens:             reasoningTokens,
+		reasoningTokensSet:          reasoningTokensSet,
+		acceptedPredictionTokens:    acceptedPredictionTokens,
+		acceptedPredictionTokensSet: acceptedPredictionTokensSet,
+		rejectedPredictionTokens:    rejectedPredictionTokens,
+		rejectedPredictionTokensSet: rejectedPredictionTokensSet,
 	}
-	return parsed, inputTokensSet || outputTokensSet || cacheReadTokensSet ||
-		cacheCreationTokensSet || imageOutputTokensSet || kiroCreditsSet
+	return parsed, true
+}
+
+func (parsed parsedCCUsage) hasValidFields() bool {
+	return parsed.inputTokensSet || parsed.outputTokensSet || parsed.cacheReadTokensSet ||
+		parsed.cacheCreationTokensSet || parsed.imageOutputTokensSet || parsed.kiroCreditsSet ||
+		parsed.promptAudioTokensSet || parsed.outputAudioTokensSet || parsed.reasoningTokensSet ||
+		parsed.acceptedPredictionTokensSet || parsed.rejectedPredictionTokensSet
 }
 
 func (parsed parsedCCUsage) mergeInto(dst *OpenAIUsage) {
@@ -484,12 +538,71 @@ func (parsed parsedCCUsage) mergeInto(dst *OpenAIUsage) {
 	}
 }
 
+func (parsed parsedCCUsage) mergeIntoParsed(dst *parsedCCUsage) {
+	if dst == nil {
+		return
+	}
+	parsed.mergeInto(&dst.Usage)
+	if parsed.inputTokensSet {
+		dst.inputTokensSet = true
+	}
+	if parsed.outputTokensSet {
+		dst.outputTokensSet = true
+	}
+	if parsed.cacheReadTokensSet {
+		dst.cacheReadTokensSet = true
+	}
+	if parsed.cacheCreationTokensSet {
+		dst.cacheCreationTokensSet = true
+	}
+	if parsed.imageOutputTokensSet {
+		dst.imageOutputTokensSet = true
+	}
+	if parsed.kiroCreditsSet {
+		dst.kiroCreditsSet = true
+	}
+	if parsed.promptAudioTokensSet {
+		dst.promptAudioTokens = parsed.promptAudioTokens
+		dst.promptAudioTokensSet = true
+	}
+	if parsed.outputAudioTokensSet {
+		dst.outputAudioTokens = parsed.outputAudioTokens
+		dst.outputAudioTokensSet = true
+	}
+	if parsed.reasoningTokensSet {
+		dst.reasoningTokens = parsed.reasoningTokens
+		dst.reasoningTokensSet = true
+	}
+	if parsed.acceptedPredictionTokensSet {
+		dst.acceptedPredictionTokens = parsed.acceptedPredictionTokens
+		dst.acceptedPredictionTokensSet = true
+	}
+	if parsed.rejectedPredictionTokensSet {
+		dst.rejectedPredictionTokens = parsed.rejectedPredictionTokens
+		dst.rejectedPredictionTokensSet = true
+	}
+}
+
 func nonNegativeFirstValidGJSONInt(values ...gjson.Result) (int, bool) {
 	for _, value := range values {
 		if !value.Exists() || value.Type != gjson.Number {
 			continue
 		}
 		n, err := strconv.Atoi(value.Raw)
+		if err != nil || n < 0 {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func nonNegativeFirstValidGJSONFloat(values ...gjson.Result) (float64, bool) {
+	for _, value := range values {
+		if !value.Exists() || value.Type != gjson.Number {
+			continue
+		}
+		n, err := strconv.ParseFloat(value.Raw, 64)
 		if err != nil || n < 0 {
 			continue
 		}

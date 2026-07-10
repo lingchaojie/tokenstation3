@@ -16,6 +16,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -208,9 +210,12 @@ type ccStreamScanState struct {
 	// 发送，后出现的有效字段覆盖同字段，空/畸形字段不清零已有值）；终态事件
 	// 中的用量由调用方在 finalize 阶段自行覆盖。
 	Usage OpenAIUsage
-	// SawUsage distinguishes a real all-zero usage object from a stream that
-	// never supplied usage at all.
+	// SawUsage distinguishes any upstream usage object (including an all-zero
+	// or malformed one that must be normalized) from a stream with no usage.
 	SawUsage bool
+	// UsageFields retains presence for every supported usage detail so repeated
+	// or partial chunks can be merged without losing earlier wire metadata.
+	UsageFields parsedCCUsage
 	// FirstTokenMs 为首个实际输出 chunk（排除 usage-only chunk）的到达时延。
 	FirstTokenMs *int
 	// SawDone 表示上游发出了 [DONE] 哨兵。
@@ -250,12 +255,28 @@ func (s *OpenAIGatewayService) scanCCStream(
 			break
 		}
 
-		if mergeCCStreamUsage(&st.Usage, payload) {
+		usageValue := gjson.Get(payload, "usage")
+		parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
+		if sawUsageObject {
+			parsedUsage.mergeInto(&st.Usage)
+			parsedUsage.mergeIntoParsed(&st.UsageFields)
 			st.SawUsage = true
 		}
 
+		decodePayload := payload
+		if usageValue.Exists() {
+			withoutUsage, err := sjson.Delete(payload, "usage")
+			if err != nil {
+				logger.L().Warn(logPrefix+": failed to isolate chat stream usage",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
+			}
+			decodePayload = withoutUsage
+		}
 		var chunk apicompat.ChatCompletionsChunk
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		if err := json.Unmarshal([]byte(decodePayload), &chunk); err != nil {
 			logger.L().Warn(logPrefix+": failed to parse chat stream chunk",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -286,43 +307,33 @@ func (s *OpenAIGatewayService) scanCCStream(
 // finalization. The raw parser is authoritative because it understands
 // top-level cache aliases and explicit nested zero values that ChatUsage's
 // narrower integer-only structure cannot preserve.
-func responsesUsageFromCCUsage(usage OpenAIUsage, base ...*apicompat.ResponsesUsage) *apicompat.ResponsesUsage {
-	out := &apicompat.ResponsesUsage{}
-	if len(base) > 0 && base[0] != nil {
-		*out = *base[0]
-		if base[0].InputTokensDetails != nil {
-			details := *base[0].InputTokensDetails
-			out.InputTokensDetails = &details
+func responsesUsageFromCCUsage(usage OpenAIUsage, parsedFields ...parsedCCUsage) *apicompat.ResponsesUsage {
+	out := &apicompat.ResponsesUsage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		TotalTokens:              usage.InputTokens + usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+	}
+	fields := parsedCCUsage{}
+	if len(parsedFields) > 0 {
+		fields = parsedFields[0]
+	}
+	if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 || fields.promptAudioTokens > 0 {
+		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{
+			CachedTokens:     usage.CacheReadInputTokens,
+			AudioTokens:      fields.promptAudioTokens,
+			CacheWriteTokens: usage.CacheCreationInputTokens,
 		}
-		if base[0].OutputTokensDetails != nil {
-			details := *base[0].OutputTokensDetails
-			out.OutputTokensDetails = &details
+	}
+	if usage.ImageOutputTokens > 0 || fields.outputAudioTokens > 0 || fields.reasoningTokens > 0 ||
+		fields.acceptedPredictionTokens > 0 || fields.rejectedPredictionTokens > 0 {
+		out.OutputTokensDetails = &apicompat.ResponsesOutputTokensDetails{
+			ReasoningTokens:          fields.reasoningTokens,
+			AudioTokens:              fields.outputAudioTokens,
+			ImageTokens:              usage.ImageOutputTokens,
+			AcceptedPredictionTokens: fields.acceptedPredictionTokens,
+			RejectedPredictionTokens: fields.rejectedPredictionTokens,
 		}
-	}
-	out.InputTokens = usage.InputTokens
-	out.OutputTokens = usage.OutputTokens
-	out.TotalTokens = usage.InputTokens + usage.OutputTokens
-	out.CacheCreationInputTokens = usage.CacheCreationInputTokens
-
-	if out.InputTokensDetails == nil {
-		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{}
-	}
-	out.InputTokensDetails.CachedTokens = usage.CacheReadInputTokens
-	out.InputTokensDetails.CacheCreationTokens = 0
-	out.InputTokensDetails.CacheWriteTokens = usage.CacheCreationInputTokens
-	if out.InputTokensDetails.CachedTokens == 0 && out.InputTokensDetails.AudioTokens == 0 &&
-		out.InputTokensDetails.CacheCreationTokens == 0 && out.InputTokensDetails.CacheWriteTokens == 0 {
-		out.InputTokensDetails = nil
-	}
-
-	if out.OutputTokensDetails == nil {
-		out.OutputTokensDetails = &apicompat.ResponsesOutputTokensDetails{}
-	}
-	out.OutputTokensDetails.ImageTokens = usage.ImageOutputTokens
-	if out.OutputTokensDetails.ReasoningTokens == 0 && out.OutputTokensDetails.AudioTokens == 0 &&
-		out.OutputTokensDetails.ImageTokens == 0 && out.OutputTokensDetails.AcceptedPredictionTokens == 0 &&
-		out.OutputTokensDetails.RejectedPredictionTokens == 0 {
-		out.OutputTokensDetails = nil
 	}
 	return out
 }
@@ -340,23 +351,32 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
 	writeError compatErrorWriter,
-) (*apicompat.ChatCompletionsResponse, OpenAIUsage, bool, error) {
+) (*apicompat.ChatCompletionsResponse, parsedCCUsage, bool, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		}
-		return nil, OpenAIUsage{}, false, fmt.Errorf("read upstream body: %w", err)
+		return nil, parsedCCUsage{}, false, fmt.Errorf("read upstream body: %w", err)
 	}
 
+	usageValue := gjson.GetBytes(respBody, "usage")
+	parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
+	decodeBody := respBody
+	if usageValue.Exists() {
+		decodeBody, err = sjson.DeleteBytes(respBody, "usage")
+		if err != nil {
+			writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
+			return nil, parsedCCUsage{}, false, fmt.Errorf("isolate chat completions usage: %w", err)
+		}
+	}
 	var ccResp apicompat.ChatCompletionsResponse
-	if err := json.Unmarshal(respBody, &ccResp); err != nil {
+	if err := json.Unmarshal(decodeBody, &ccResp); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
-		return nil, OpenAIUsage{}, false, fmt.Errorf("parse chat completions response: %w", err)
+		return nil, parsedCCUsage{}, false, fmt.Errorf("parse chat completions response: %w", err)
 	}
 
-	usage, sawUsage := extractCCUsageFromJSONBytes(respBody)
-	return &ccResp, usage, sawUsage, nil
+	return &ccResp, parsedUsage, sawUsageObject, nil
 }
 
 // writeOpenAIResponsesFallbackError 以 /v1/responses 回退路径的既有错误格式回写

@@ -175,15 +175,16 @@ func TestMergeCCStreamUsagePreservesValidFieldsAcrossPartialAndMalformedChunks(t
 	t.Parallel()
 
 	usage := OpenAIUsage{}
-	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_read_input_tokens":4}}`))
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`))
 	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{}}`))
 	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":null,"completion_tokens":false}}`))
-	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"completion_tokens":5,"cache_creation_input_tokens":6}}`))
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"completion_tokens":5,"cache_creation_input_tokens":6,"_sub2api_kiro_credits":0}}`))
 
 	require.Equal(t, 12, usage.InputTokens)
 	require.Equal(t, 5, usage.OutputTokens)
 	require.Equal(t, 4, usage.CacheReadInputTokens)
 	require.Equal(t, 6, usage.CacheCreationInputTokens)
+	require.Zero(t, usage.KiroCredits)
 }
 
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {

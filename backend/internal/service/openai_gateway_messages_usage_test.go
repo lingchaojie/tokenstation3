@@ -56,26 +56,28 @@ func TestResponsesUsageFromCCUsagePreservesCacheWriteDetails(t *testing.T) {
 	require.Equal(t, 5, got.OutputTokensDetails.ImageTokens)
 }
 
-func TestResponsesUsageFromCCUsagePreservesUnrelatedWireDetails(t *testing.T) {
+func TestResponsesUsageFromCCUsageProjectsAccumulatedWireDetails(t *testing.T) {
 	t.Parallel()
 
-	base := &apicompat.ResponsesUsage{
-		InputTokensDetails: &apicompat.ResponsesInputTokensDetails{AudioTokens: 2},
-		OutputTokensDetails: &apicompat.ResponsesOutputTokensDetails{
-			ReasoningTokens:          7,
-			AudioTokens:              3,
-			AcceptedPredictionTokens: 4,
-			RejectedPredictionTokens: 1,
-		},
+	fields := parsedCCUsage{
+		promptAudioTokens:           2,
+		promptAudioTokensSet:        true,
+		outputAudioTokens:           3,
+		outputAudioTokensSet:        true,
+		reasoningTokens:             7,
+		reasoningTokensSet:          true,
+		acceptedPredictionTokens:    4,
+		acceptedPredictionTokensSet: true,
+		rejectedPredictionTokens:    1,
+		rejectedPredictionTokensSet: true,
 	}
 	got := responsesUsageFromCCUsage(OpenAIUsage{
 		InputTokens:          12,
 		OutputTokens:         9,
 		ImageOutputTokens:    5,
 		CacheReadInputTokens: 4,
-	}, base)
+	}, fields)
 
-	require.NotSame(t, base, got)
 	require.Equal(t, 2, got.InputTokensDetails.AudioTokens)
 	require.Equal(t, 4, got.InputTokensDetails.CachedTokens)
 	require.Equal(t, 7, got.OutputTokensDetails.ReasoningTokens)
@@ -83,8 +85,6 @@ func TestResponsesUsageFromCCUsagePreservesUnrelatedWireDetails(t *testing.T) {
 	require.Equal(t, 5, got.OutputTokensDetails.ImageTokens)
 	require.Equal(t, 4, got.OutputTokensDetails.AcceptedPredictionTokens)
 	require.Equal(t, 1, got.OutputTokensDetails.RejectedPredictionTokens)
-	require.Zero(t, base.InputTokensDetails.CachedTokens)
-	require.Zero(t, base.OutputTokensDetails.ImageTokens)
 }
 
 func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(t *testing.T) {

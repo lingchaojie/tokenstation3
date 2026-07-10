@@ -136,13 +136,13 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
-	ccResp, usage, sawUsage, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
+	ccResp, parsedUsage, sawUsage, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
 	if err != nil {
 		return nil, err
 	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, nil, false, nil)
 	if sawUsage {
-		responsesResp.Usage = responsesUsageFromCCUsage(usage, responsesResp.Usage)
+		responsesResp.Usage = responsesUsageFromCCUsage(parsedUsage.Usage, parsedUsage)
 	}
 
 	anthropicResp := apicompat.ResponsesToAnthropic(responsesResp, originalModel)
@@ -154,7 +154,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 
 	return &OpenAIForwardResult{
 		RequestID:       requestID,
-		Usage:           usage,
+		Usage:           parsedUsage.Usage,
 		Model:           originalModel,
 		BillingModel:    billingModel,
 		UpstreamModel:   upstreamModel,
@@ -235,7 +235,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		// Use the raw scanner's canonical usage for both downstream Anthropic
 		// finalization and billing. ChatUsage cannot retain compatible top-level
 		// cache aliases, explicit nested zero precedence, or Kiro credits.
-		ccState.Usage = responsesUsageFromCCUsage(scan.Usage, ccState.Usage)
+		ccState.Usage = responsesUsageFromCCUsage(scan.Usage, scan.UsageFields)
 	}
 
 	// Finalize CC→Responses stream (emit response.completed)
