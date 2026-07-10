@@ -37,6 +37,45 @@ func TestBuildOpenAIEmbeddingsURL(t *testing.T) {
 	}
 }
 
+func TestExtractOpenAIEmbeddingsUsageUsesPromptFirstCacheDialect(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		usage        string
+		wantRead     int
+		wantCreation int
+	}{
+		{
+			name:         "explicit prompt zeros override input aliases",
+			usage:        `{"prompt_tokens":20,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":7,"cache_write_tokens":8}}`,
+			wantRead:     0,
+			wantCreation: 0,
+		},
+		{
+			name:         "input aliases are fallback when prompt details absent",
+			usage:        `{"prompt_tokens":20,"input_tokens_details":{"cached_tokens":7,"cache_write_tokens":8}}`,
+			wantRead:     7,
+			wantCreation: 8,
+		},
+		{
+			name:         "malformed and negative prompt details do not mask valid aliases",
+			usage:        `{"prompt_tokens":20,"prompt_tokens_details":{"cached_tokens":"invalid","cache_write_tokens":-1},"input_tokens_details":{"cached_tokens":7,"cache_write_tokens":8}}`,
+			wantRead:     7,
+			wantCreation: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractOpenAIEmbeddingsUsage([]byte(`{"usage":` + tt.usage + `}`))
+			require.Equal(t, tt.wantRead, got.CacheReadInputTokens)
+			require.Equal(t, tt.wantCreation, got.CacheCreationInputTokens)
+		})
+	}
+}
+
 func TestForwardEmbeddings_APIKeyPassthroughRecordsUsageAndBatchInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
