@@ -347,7 +347,7 @@ func normalizeResponsesRequestServiceTier(req *apicompat.ResponsesRequest) {
 
 func normalizeChatCompletionsResponsesImageRequest(body []byte, upstreamModel string) ([]byte, string, error) {
 	if !isOpenAIImageGenerationModel(upstreamModel) &&
-		!openAIRequestBodyHasImageGenerationTool(body) &&
+		!openAIRequestBodyHasImageGenerationDeclaration(body) &&
 		!openAIRequestBodyImageGenerationToolNeedsNormalization(body) {
 		return body, upstreamModel, nil
 	}

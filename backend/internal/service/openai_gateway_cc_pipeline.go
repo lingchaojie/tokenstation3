@@ -16,6 +16,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -204,9 +206,16 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 
 // ccStreamScanState 是 scanCCStream 返回的读取状态快照。
 type ccStreamScanState struct {
-	// Usage 为 include_usage chunk 中最近一次出现的用量（上游可能重复发送，
-	// 总是保留最新值）；终态事件中的用量由调用方在 finalize 阶段自行覆盖。
+	// Usage 为 include_usage chunk 中有效字段的累计快照（上游可能重复或拆分
+	// 发送，后出现的有效字段覆盖同字段，空/畸形字段不清零已有值）；终态事件
+	// 中的用量由调用方在 finalize 阶段自行覆盖。
 	Usage OpenAIUsage
+	// SawUsage distinguishes any upstream usage object (including an all-zero
+	// or malformed one that must be normalized) from a stream with no usage.
+	SawUsage bool
+	// UsageFields retains presence for every supported usage detail so repeated
+	// or partial chunks can be merged without losing earlier wire metadata.
+	UsageFields parsedCCUsage
 	// FirstTokenMs 为首个实际输出 chunk（排除 usage-only chunk）的到达时延。
 	FirstTokenMs *int
 	// SawDone 表示上游发出了 [DONE] 哨兵。
@@ -246,12 +255,28 @@ func (s *OpenAIGatewayService) scanCCStream(
 			break
 		}
 
-		if u := extractCCStreamUsage(payload); u != nil {
-			st.Usage = *u
+		usageValue := gjson.Get(payload, "usage")
+		parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
+		if sawUsageObject {
+			parsedUsage.mergeInto(&st.Usage)
+			parsedUsage.mergeIntoParsed(&st.UsageFields)
+			st.SawUsage = true
 		}
 
+		decodePayload := payload
+		if usageValue.Exists() {
+			withoutUsage, err := sjson.Delete(payload, "usage")
+			if err != nil {
+				logger.L().Warn(logPrefix+": failed to isolate chat stream usage",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
+			}
+			decodePayload = withoutUsage
+		}
 		var chunk apicompat.ChatCompletionsChunk
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		if err := json.Unmarshal([]byte(decodePayload), &chunk); err != nil {
 			logger.L().Warn(logPrefix+": failed to parse chat stream chunk",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -277,6 +302,42 @@ func (s *OpenAIGatewayService) scanCCStream(
 	return st
 }
 
+// responsesUsageFromCCUsage projects the CC/raw usage parser's canonical
+// result back into the Responses wire shape used by CC fallback responses and
+// finalization. The raw parser is authoritative because it understands
+// top-level cache aliases and explicit nested zero values that ChatUsage's
+// narrower integer-only structure cannot preserve.
+func responsesUsageFromCCUsage(usage OpenAIUsage, parsedFields ...parsedCCUsage) *apicompat.ResponsesUsage {
+	out := &apicompat.ResponsesUsage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		TotalTokens:              usage.InputTokens + usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+	}
+	fields := parsedCCUsage{}
+	if len(parsedFields) > 0 {
+		fields = parsedFields[0]
+	}
+	if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 || fields.promptAudioTokens > 0 {
+		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{
+			CachedTokens:     usage.CacheReadInputTokens,
+			AudioTokens:      fields.promptAudioTokens,
+			CacheWriteTokens: usage.CacheCreationInputTokens,
+		}
+	}
+	if usage.ImageOutputTokens > 0 || fields.outputAudioTokens > 0 || fields.reasoningTokens > 0 ||
+		fields.acceptedPredictionTokens > 0 || fields.rejectedPredictionTokens > 0 {
+		out.OutputTokensDetails = &apicompat.ResponsesOutputTokensDetails{
+			ReasoningTokens:          fields.reasoningTokens,
+			AudioTokens:              fields.outputAudioTokens,
+			ImageTokens:              usage.ImageOutputTokens,
+			AcceptedPredictionTokens: fields.acceptedPredictionTokens,
+			RejectedPredictionTokens: fields.rejectedPredictionTokens,
+		}
+	}
+	return out
+}
+
 // logCCStreamMissingDoneSentinel 记录"上游未发 [DONE] 哨兵即结束"的 debug 日志。
 func logCCStreamMissingDoneSentinel(logPrefix, requestID string) {
 	logger.L().Debug(logPrefix+": upstream stream ended without done sentinel",
@@ -290,26 +351,32 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
 	writeError compatErrorWriter,
-) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
+) (*apicompat.ChatCompletionsResponse, parsedCCUsage, bool, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		}
-		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
+		return nil, parsedCCUsage{}, false, fmt.Errorf("read upstream body: %w", err)
 	}
 
+	usageValue := gjson.GetBytes(respBody, "usage")
+	parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
+	decodeBody := respBody
+	if usageValue.Exists() {
+		decodeBody, err = sjson.DeleteBytes(respBody, "usage")
+		if err != nil {
+			writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
+			return nil, parsedCCUsage{}, false, fmt.Errorf("isolate chat completions usage: %w", err)
+		}
+	}
 	var ccResp apicompat.ChatCompletionsResponse
-	if err := json.Unmarshal(respBody, &ccResp); err != nil {
+	if err := json.Unmarshal(decodeBody, &ccResp); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
-		return nil, OpenAIUsage{}, fmt.Errorf("parse chat completions response: %w", err)
+		return nil, parsedCCUsage{}, false, fmt.Errorf("parse chat completions response: %w", err)
 	}
 
-	usage := OpenAIUsage{}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
-		usage = parsed
-	}
-	return &ccResp, usage, nil
+	return &ccResp, parsedUsage, sawUsageObject, nil
 }
 
 // writeOpenAIResponsesFallbackError 以 /v1/responses 回退路径的既有错误格式回写

@@ -30,7 +30,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_resp_chat_json"}},
 		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":1}}}`,
+			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":5}}}`,
 		)),
 	}}
 	svc := &OpenAIGatewayService{
@@ -47,9 +47,14 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.Equal(t, "response", gjson.Get(rec.Body.String(), "object").String())
 	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
-	require.Equal(t, 3, result.Usage.InputTokens)
-	require.Equal(t, 2, result.Usage.OutputTokens)
-	require.Equal(t, 1, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 4, int(gjson.Get(rec.Body.String(), "usage.input_tokens_details.cached_tokens").Int()))
+	require.Equal(t, 6, int(gjson.Get(rec.Body.String(), "usage.input_tokens_details.cache_write_tokens").Int()))
+	require.Equal(t, 5, int(gjson.Get(rec.Body.String(), "usage.output_tokens_details.image_tokens").Int()))
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 5, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
 }
 
@@ -65,13 +70,13 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		"",
-		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"he"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"he"},"finish_reason":null}],"usage":{"prompt_tokens":"invalid","input_tokens":12,"prompt_tokens_details":{"audio_tokens":2},"output_tokens_details":{"reasoning_tokens":7},"_sub2api_kiro_credits":0.17}}`,
 		"",
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"llo"},"finish_reason":null}]}`,
 		"",
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		"",
-		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"audio_tokens":3,"image_tokens":5,"accepted_prediction_tokens":4,"rejected_prediction_tokens":1},"_sub2api_kiro_credits":0}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -94,12 +99,57 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.Contains(t, rec.Body.String(), "event: response.output_text.delta")
 	require.Contains(t, rec.Body.String(), `"delta":"he"`)
 	require.Contains(t, rec.Body.String(), "event: response.completed")
-	require.Contains(t, rec.Body.String(), `"input_tokens":4`)
+	require.Contains(t, rec.Body.String(), `"input_tokens":12`)
+	require.Contains(t, rec.Body.String(), `"cached_tokens":4`)
+	require.Contains(t, rec.Body.String(), `"cache_write_tokens":6`)
+	require.Contains(t, rec.Body.String(), `"reasoning_tokens":7`)
+	require.Contains(t, rec.Body.String(), `"audio_tokens":3`)
+	require.Contains(t, rec.Body.String(), `"image_tokens":5`)
+	require.Contains(t, rec.Body.String(), `"accepted_prediction_tokens":4`)
+	require.Contains(t, rec.Body.String(), `"rejected_prediction_tokens":1`)
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
-	require.Equal(t, 4, result.Usage.InputTokens)
+	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 5, result.Usage.ImageOutputTokens)
+	require.Zero(t, result.Usage.KiroCredits)
 	require.True(t, result.Stream)
 	require.NotNil(t, result.FirstTokenMs)
+}
+
+func TestForwardResponses_ForceChatCompletionsNormalizesNegativeUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_negative","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":-1,"completion_tokens":-2,"completion_tokens_details":{"image_tokens":-3}}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Zero(t, gjson.Get(rec.Body.String(), "usage.input_tokens").Int())
+	require.Zero(t, gjson.Get(rec.Body.String(), "usage.output_tokens").Int())
+	require.Zero(t, gjson.Get(rec.Body.String(), "usage.total_tokens").Int())
+	require.False(t, gjson.Get(rec.Body.String(), "usage.output_tokens_details").Exists())
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Zero(t, result.Usage.ImageOutputTokens)
 }
 
 func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *testing.T) {

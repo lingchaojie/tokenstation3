@@ -109,8 +109,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
 
+	kiroDirectMode := isKiroDirectModeAccount(account)
 	var resp *http.Response
-	if isKiroDirectModeAccount(account) {
+	if kiroDirectMode {
 		var group *Group
 		if parsed != nil {
 			group = parsed.Group
@@ -217,9 +218,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleCCStreamingFromAnthropic(ctx, resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+		result, handleErr = s.handleCCStreamingFromAnthropic(ctx, resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage, kiroDirectMode)
 	} else {
-		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
 	}
 
 	return result, handleErr
@@ -252,6 +253,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -264,6 +266,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	hasKiroMarkedFinalUsage := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -288,13 +291,17 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
-			mergeAnthropicUsage(&usage, event.Message.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
+				hasKiroMarkedFinalUsage = true
+			}
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				mergeAnthropicUsage(&usage, *event.Usage)
+				if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
+					hasKiroMarkedFinalUsage = true
+				}
 			}
 			mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
@@ -334,7 +341,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	// Update usage from accumulated delta
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 {
 		finalResp.Usage = apicompat.AnthropicUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,
@@ -387,6 +394,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 	includeUsage bool,
+	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -450,7 +458,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return false
 	}
 
-	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent) bool {
+	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent, payload string) bool {
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
@@ -459,11 +467,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
-			mergeAnthropicUsage(&usage, *event.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
+				replaceAnthropicResponsesStateUsage(anthState, usage)
+			}
 		}
 		// Also capture usage from message_start (carries cache fields)
 		if event.Type == "message_start" && event.Message != nil {
-			mergeAnthropicUsage(&usage, event.Message.Usage)
+			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
+				replaceAnthropicResponsesStateUsage(anthState, usage)
+			}
 		}
 
 		// Chain: Anthropic event → Responses events → CC chunks
@@ -503,7 +515,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		}
 		mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 
-		if processAnthropicEvent(&event) {
+		if processAnthropicEvent(&event, payload) {
 			return resultWithUsage(), nil
 		}
 	}

@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -293,9 +292,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload != "[DONE]" {
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
-				if u := extractCCStreamUsage(payload); u != nil {
-					usage = *u
-				}
+				mergeCCStreamUsage(&usage, payload)
 				if firstTokenMs == nil && !usageOnlyChunk {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
@@ -370,22 +367,248 @@ func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {
 	return choices.Exists() && choices.IsArray() && len(choices.Array()) == 0
 }
 
-// extractCCStreamUsage 从单个 CC 流式 chunk 的 payload 中提取 usage 字段。
-// CC 协议中 usage 仅出现在末尾 chunk（且仅当 include_usage 生效时），
-// 但上游可能在多个 chunk 中重复——总是用最新值。
-func extractCCStreamUsage(payload string) *OpenAIUsage {
-	usageResult := gjson.Get(payload, "usage")
-	if !usageResult.Exists() || !usageResult.IsObject() {
-		return nil
+// mergeCCStreamUsage applies only fields that are valid and present in the
+// current chunk. Some compatibility providers repeat usage or split it across
+// chunks; a later empty/malformed/partial object must not erase an earlier
+// valid snapshot.
+func mergeCCStreamUsage(dst *OpenAIUsage, payload string) bool {
+	parsed, sawUsageObject := parseCCUsageFromGJSON(gjson.Get(payload, "usage"))
+	if !sawUsageObject || !parsed.hasValidFields() {
+		return false
 	}
-	u := OpenAIUsage{
-		InputTokens:  int(gjson.Get(payload, "usage.prompt_tokens").Int()),
-		OutputTokens: int(gjson.Get(payload, "usage.completion_tokens").Int()),
+	parsed.mergeInto(dst)
+	return true
+}
+
+// extractCCUsageFromJSONBytes extracts usage from a native Chat Completions
+// response. Keep this separate from the Responses parser: compatibility
+// providers occasionally return both naming dialects, and an explicitly
+// present CC value (including zero) is authoritative on a CC endpoint.
+func extractCCUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return OpenAIUsage{}, false
 	}
-	if cached := gjson.Get(payload, "usage.prompt_tokens_details.cached_tokens"); cached.Exists() {
-		u.CacheReadInputTokens = int(cached.Int())
+	parsed, ok := parseCCUsageFromGJSON(gjson.GetBytes(body, "usage"))
+	return parsed.Usage, ok
+}
+
+type parsedCCUsage struct {
+	Usage OpenAIUsage
+
+	inputTokensSet         bool
+	outputTokensSet        bool
+	cacheReadTokensSet     bool
+	cacheCreationTokensSet bool
+	imageOutputTokensSet   bool
+	kiroCreditsSet         bool
+
+	promptAudioTokens           int
+	promptAudioTokensSet        bool
+	outputAudioTokens           int
+	outputAudioTokensSet        bool
+	reasoningTokens             int
+	reasoningTokensSet          bool
+	acceptedPredictionTokens    int
+	acceptedPredictionTokensSet bool
+	rejectedPredictionTokens    int
+	rejectedPredictionTokensSet bool
+}
+
+func parseCCUsageFromGJSON(value gjson.Result) (parsedCCUsage, bool) {
+	if !value.Exists() || !value.IsObject() {
+		return parsedCCUsage{}, false
 	}
-	return &u
+
+	inputTokens, inputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens"),
+		value.Get("input_tokens"),
+	)
+	outputTokens, outputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens"),
+		value.Get("output_tokens"),
+	)
+	cacheReadTokens, cacheReadTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.cached_tokens"),
+		value.Get("input_tokens_details.cached_tokens"),
+		value.Get("cache_read_input_tokens"),
+		value.Get("cache_read_tokens"),
+		value.Get("cached_tokens"),
+	)
+	cacheCreationTokens, cacheCreationTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.cache_write_tokens"),
+		value.Get("prompt_tokens_details.cache_creation_tokens"),
+		value.Get("input_tokens_details.cache_write_tokens"),
+		value.Get("input_tokens_details.cache_creation_tokens"),
+		value.Get("cache_write_tokens"),
+		value.Get("cache_creation_input_tokens"),
+		value.Get("cache_write_input_tokens"),
+		value.Get("cache_creation_tokens"),
+	)
+	imageOutputTokens, imageOutputTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.image_tokens"),
+		value.Get("output_tokens_details.image_tokens"),
+	)
+	promptAudioTokens, promptAudioTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("prompt_tokens_details.audio_tokens"),
+		value.Get("input_tokens_details.audio_tokens"),
+	)
+	outputAudioTokens, outputAudioTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.audio_tokens"),
+		value.Get("output_tokens_details.audio_tokens"),
+	)
+	reasoningTokens, reasoningTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.reasoning_tokens"),
+		value.Get("output_tokens_details.reasoning_tokens"),
+	)
+	acceptedPredictionTokens, acceptedPredictionTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.accepted_prediction_tokens"),
+		value.Get("output_tokens_details.accepted_prediction_tokens"),
+	)
+	rejectedPredictionTokens, rejectedPredictionTokensSet := nonNegativeFirstValidGJSONInt(
+		value.Get("completion_tokens_details.rejected_prediction_tokens"),
+		value.Get("output_tokens_details.rejected_prediction_tokens"),
+	)
+	kiroCredits, kiroCreditsSet := nonNegativeFirstValidGJSONFloat(
+		value.Get("_sub2api_kiro_credits"),
+		value.Get("kiro_credits"),
+		value.Get("kiroCredits"),
+		value.Get("credits"),
+		value.Get("creditsUsed"),
+		value.Get("creditUsage"),
+		value.Get("consumedCredits"),
+	)
+
+	parsed := parsedCCUsage{
+		Usage: OpenAIUsage{
+			InputTokens:              inputTokens,
+			OutputTokens:             outputTokens,
+			CacheReadInputTokens:     cacheReadTokens,
+			CacheCreationInputTokens: cacheCreationTokens,
+			ImageOutputTokens:        imageOutputTokens,
+			KiroCredits:              kiroCredits,
+		},
+		inputTokensSet:              inputTokensSet,
+		outputTokensSet:             outputTokensSet,
+		cacheReadTokensSet:          cacheReadTokensSet,
+		cacheCreationTokensSet:      cacheCreationTokensSet,
+		imageOutputTokensSet:        imageOutputTokensSet,
+		kiroCreditsSet:              kiroCreditsSet,
+		promptAudioTokens:           promptAudioTokens,
+		promptAudioTokensSet:        promptAudioTokensSet,
+		outputAudioTokens:           outputAudioTokens,
+		outputAudioTokensSet:        outputAudioTokensSet,
+		reasoningTokens:             reasoningTokens,
+		reasoningTokensSet:          reasoningTokensSet,
+		acceptedPredictionTokens:    acceptedPredictionTokens,
+		acceptedPredictionTokensSet: acceptedPredictionTokensSet,
+		rejectedPredictionTokens:    rejectedPredictionTokens,
+		rejectedPredictionTokensSet: rejectedPredictionTokensSet,
+	}
+	return parsed, true
+}
+
+func (parsed parsedCCUsage) hasValidFields() bool {
+	return parsed.inputTokensSet || parsed.outputTokensSet || parsed.cacheReadTokensSet ||
+		parsed.cacheCreationTokensSet || parsed.imageOutputTokensSet || parsed.kiroCreditsSet ||
+		parsed.promptAudioTokensSet || parsed.outputAudioTokensSet || parsed.reasoningTokensSet ||
+		parsed.acceptedPredictionTokensSet || parsed.rejectedPredictionTokensSet
+}
+
+func (parsed parsedCCUsage) mergeInto(dst *OpenAIUsage) {
+	if dst == nil {
+		return
+	}
+	if parsed.inputTokensSet {
+		dst.InputTokens = parsed.Usage.InputTokens
+	}
+	if parsed.outputTokensSet {
+		dst.OutputTokens = parsed.Usage.OutputTokens
+	}
+	if parsed.cacheReadTokensSet {
+		dst.CacheReadInputTokens = parsed.Usage.CacheReadInputTokens
+	}
+	if parsed.cacheCreationTokensSet {
+		dst.CacheCreationInputTokens = parsed.Usage.CacheCreationInputTokens
+	}
+	if parsed.imageOutputTokensSet {
+		dst.ImageOutputTokens = parsed.Usage.ImageOutputTokens
+	}
+	if parsed.kiroCreditsSet {
+		dst.KiroCredits = parsed.Usage.KiroCredits
+	}
+}
+
+func (parsed parsedCCUsage) mergeIntoParsed(dst *parsedCCUsage) {
+	if dst == nil {
+		return
+	}
+	parsed.mergeInto(&dst.Usage)
+	if parsed.inputTokensSet {
+		dst.inputTokensSet = true
+	}
+	if parsed.outputTokensSet {
+		dst.outputTokensSet = true
+	}
+	if parsed.cacheReadTokensSet {
+		dst.cacheReadTokensSet = true
+	}
+	if parsed.cacheCreationTokensSet {
+		dst.cacheCreationTokensSet = true
+	}
+	if parsed.imageOutputTokensSet {
+		dst.imageOutputTokensSet = true
+	}
+	if parsed.kiroCreditsSet {
+		dst.kiroCreditsSet = true
+	}
+	if parsed.promptAudioTokensSet {
+		dst.promptAudioTokens = parsed.promptAudioTokens
+		dst.promptAudioTokensSet = true
+	}
+	if parsed.outputAudioTokensSet {
+		dst.outputAudioTokens = parsed.outputAudioTokens
+		dst.outputAudioTokensSet = true
+	}
+	if parsed.reasoningTokensSet {
+		dst.reasoningTokens = parsed.reasoningTokens
+		dst.reasoningTokensSet = true
+	}
+	if parsed.acceptedPredictionTokensSet {
+		dst.acceptedPredictionTokens = parsed.acceptedPredictionTokens
+		dst.acceptedPredictionTokensSet = true
+	}
+	if parsed.rejectedPredictionTokensSet {
+		dst.rejectedPredictionTokens = parsed.rejectedPredictionTokens
+		dst.rejectedPredictionTokensSet = true
+	}
+}
+
+func nonNegativeFirstValidGJSONInt(values ...gjson.Result) (int, bool) {
+	for _, value := range values {
+		if !value.Exists() || value.Type != gjson.Number {
+			continue
+		}
+		n, err := strconv.Atoi(value.Raw)
+		if err != nil || n < 0 {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func nonNegativeFirstValidGJSONFloat(values ...gjson.Result) (float64, bool) {
+	for _, value := range values {
+		if !value.Exists() || value.Type != gjson.Number {
+			continue
+		}
+		n, err := strconv.ParseFloat(value.Raw, 64)
+		if err != nil || n < 0 {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // bufferRawChatCompletions 透传上游 CC 非流式 JSON 响应。
@@ -409,16 +632,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
 
-	var ccResp apicompat.ChatCompletionsResponse
 	var usage OpenAIUsage
-	if err := json.Unmarshal(respBody, &ccResp); err == nil && ccResp.Usage != nil {
-		usage = OpenAIUsage{
-			InputTokens:  ccResp.Usage.PromptTokens,
-			OutputTokens: ccResp.Usage.CompletionTokens,
-		}
-		if ccResp.Usage.PromptTokensDetails != nil {
-			usage.CacheReadInputTokens = ccResp.Usage.PromptTokensDetails.CachedTokens
-		}
+	if parsedUsage, ok := extractCCUsageFromJSONBytes(respBody); ok {
+		usage = parsedUsage
 	}
 
 	if s.responseHeaderFilter != nil {

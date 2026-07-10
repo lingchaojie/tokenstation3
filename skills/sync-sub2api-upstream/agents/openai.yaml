@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync sub2api Upstream"
+  short_description: "Semantically merge and validate sub2api upstream updates"
+  default_prompt: "Use $sync-sub2api-upstream to semantically integrate the latest upstream changes into dev, run exhaustive review, and monitor CI to completion."

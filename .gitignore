@@ -149,9 +149,10 @@ output/
 # Playwright MCP browser snapshots (may contain secrets)
 .playwright-mcp/
 
-# graphify skill outputs (large AST/semantic caches — never commit)
-graphify-out/
+# Backend-local graphify outputs (large AST/semantic caches)
 backend/graphify-out/
+# graphify creates dated safety snapshots before rebuilding tracked root outputs.
+graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
 # superpowers runtime dir at repo root (docs/superpowers/ stays tracked, see above)
 /.superpowers/
 /.worktrees/

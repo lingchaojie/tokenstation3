@@ -5452,8 +5452,10 @@ func (s *SettingService) GetOpenAIFastPolicySettings(ctx context.Context) (*Open
 	return &settings, nil
 }
 
-// SetOpenAIFastPolicySettings 设置 OpenAI fast 策略配置
-func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settings *OpenAIFastPolicySettings) error {
+// ValidateOpenAIFastPolicySettings 在任何设置写入前校验并规范化 OpenAI fast 策略。
+// UpdateSettings 会同时写多个设置域，因此必须先做这一步，避免 fast policy 的
+// 确定性校验失败发生在通用设置已经落库之后。
+func (s *SettingService) ValidateOpenAIFastPolicySettings(settings *OpenAIFastPolicySettings) error {
 	if settings == nil {
 		return fmt.Errorf("settings cannot be nil")
 	}
@@ -5484,6 +5486,16 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		if !validScopes[rule.Scope] {
 			return fmt.Errorf("rule[%d]: invalid scope %q", i, rule.Scope)
 		}
+		seenUserIDs := make(map[int64]struct{}, len(rule.UserIDs))
+		for j, userID := range rule.UserIDs {
+			if userID <= 0 {
+				return fmt.Errorf("rule[%d]: user_ids[%d] must be positive", i, j)
+			}
+			if _, exists := seenUserIDs[userID]; exists {
+				return fmt.Errorf("rule[%d]: user_ids[%d] duplicates user_id %d", i, j, userID)
+			}
+			seenUserIDs[userID] = struct{}{}
+		}
 		for j, pattern := range rule.ModelWhitelist {
 			trimmed := strings.TrimSpace(pattern)
 			if trimmed == "" {
@@ -5494,6 +5506,14 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		if rule.FallbackAction != "" && !validActions[rule.FallbackAction] {
 			return fmt.Errorf("rule[%d]: invalid fallback_action %q", i, rule.FallbackAction)
 		}
+	}
+	return nil
+}
+
+// SetOpenAIFastPolicySettings 设置 OpenAI fast 策略配置
+func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settings *OpenAIFastPolicySettings) error {
+	if err := s.ValidateOpenAIFastPolicySettings(settings); err != nil {
+		return err
 	}
 
 	data, err := json.Marshal(settings)

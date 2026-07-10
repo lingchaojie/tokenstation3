@@ -703,6 +703,77 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it.each([
+    {
+      name: "non-positive user ID",
+      userIds: [0],
+      errorKey: "admin.settings.openaiFastPolicy.userIdPositiveError",
+    },
+    {
+      name: "duplicate user ID",
+      userIds: [42, 42],
+      errorKey: "admin.settings.openaiFastPolicy.userIdDuplicateError",
+    },
+  ])("blocks settings submission for $name", async ({ userIds, errorKey }) => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "priority",
+            action: "pass",
+            scope: "all",
+            user_ids: userIds,
+          },
+        ],
+      },
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(errorKey);
+  });
+
+  it("submits validated OpenAI fast policy user IDs", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "priority",
+            action: "pass",
+            scope: "all",
+            user_ids: [42, 43],
+          },
+        ],
+      },
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_fast_policy_settings: {
+          rules: [
+            expect.objectContaining({
+              user_ids: [42, 43],
+            }),
+          ],
+        },
+      }),
+    );
+  });
+
   it("submits global provider default group settings", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

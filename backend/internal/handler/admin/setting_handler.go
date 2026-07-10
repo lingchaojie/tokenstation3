@@ -804,6 +804,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	// Fast policy 与通用设置共用一个更新请求。先完成全部确定性校验，避免
+	// UpdateSettingsWithAuthSourceDefaults 成功后才因 policy 无效返回 400，
+	// 造成客户端看到失败但部分设置已经落库。
+	var openaiFastPolicySettings *service.OpenAIFastPolicySettings
+	if req.OpenAIFastPolicySettings != nil {
+		openaiFastPolicySettings = openaiFastPolicySettingsFromDTO(req.OpenAIFastPolicySettings)
+		if err := h.settingService.ValidateOpenAIFastPolicySettings(openaiFastPolicySettings); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
+
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -2111,8 +2123,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	// Update OpenAI fast policy (stored under dedicated key, only when provided).
-	if req.OpenAIFastPolicySettings != nil {
-		if err := h.settingService.SetOpenAIFastPolicySettings(c.Request.Context(), openaiFastPolicySettingsFromDTO(req.OpenAIFastPolicySettings)); err != nil {
+	if openaiFastPolicySettings != nil {
+		if err := h.settingService.SetOpenAIFastPolicySettings(c.Request.Context(), openaiFastPolicySettings); err != nil {
 			response.BadRequest(c, err.Error())
 			return
 		}

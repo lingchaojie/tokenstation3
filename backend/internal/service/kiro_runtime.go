@@ -243,7 +243,6 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 	}
 
-	inputTokens := estimateKiroInputTokens(body)
 	resp, requestCtx, err := s.executeKiroUpstreamWithParsed(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header)
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
@@ -268,6 +267,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		})
 		return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 	}
+	inputTokens := resolveKiroInputTokens(body, requestCtx)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, false)
@@ -360,6 +360,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
+	inputTokens = resolveKiroInputTokens(anthropicBody, requestCtx)
 	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
 	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
@@ -803,9 +804,16 @@ func estimateKiroInputTokens(body []byte) int {
 	return tokens
 }
 
+func resolveKiroInputTokens(body []byte, requestCtx kiropkg.KiroRequestContext) int {
+	if requestCtx.EstimatedInputTokens > 0 {
+		return requestCtx.EstimatedInputTokens
+	}
+	return estimateKiroInputTokens(body)
+}
+
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
 	inputTokens := usage.InputTokens
-	if inputTokens == 0 {
+	if inputTokens == 0 && !usage.HasResolvedInputTokens() {
 		inputTokens = fallbackInput
 	}
 	return ClaudeUsage{

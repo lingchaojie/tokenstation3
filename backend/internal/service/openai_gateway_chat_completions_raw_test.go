@@ -122,6 +122,71 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
 }
 
+func TestExtractCCStreamUsagePrefersExplicitCCFields(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"choices":[],"usage":{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"completion_tokens_details":{"image_tokens":0},"output_tokens_details":{"image_tokens":5},"_sub2api_kiro_credits":0.17}}`
+
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, payload))
+	require.Zero(t, usage.InputTokens)
+	require.Zero(t, usage.OutputTokens)
+	require.Zero(t, usage.CacheReadInputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Zero(t, usage.ImageOutputTokens)
+	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
+}
+
+func TestExtractCCStreamUsageFallsBackToResponsesFields(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"choices":[],"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"output_tokens_details":{"image_tokens":5}}}`
+
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, payload))
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 3, usage.OutputTokens)
+	require.Equal(t, 4, usage.CacheReadInputTokens)
+	require.Equal(t, 6, usage.CacheCreationInputTokens)
+	require.Equal(t, 5, usage.ImageOutputTokens)
+}
+
+func TestExtractCCStreamUsageSkipsMalformedCanonicalFields(t *testing.T) {
+	t.Parallel()
+
+	payloads := []string{
+		`{"usage":{"prompt_tokens":null,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":false,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":true,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":"invalid","input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":-1,"input_tokens":12}}`,
+		`{"usage":{"prompt_tokens":1.5,"input_tokens":12}}`,
+	}
+
+	for _, payload := range payloads {
+		usage := OpenAIUsage{}
+		require.True(t, mergeCCStreamUsage(&usage, payload), payload)
+		require.Equal(t, 12, usage.InputTokens, payload)
+	}
+	require.False(t, mergeCCStreamUsage(&OpenAIUsage{}, `{"usage":{}}`))
+}
+
+func TestMergeCCStreamUsagePreservesValidFieldsAcrossPartialAndMalformedChunks(t *testing.T) {
+	t.Parallel()
+
+	usage := OpenAIUsage{}
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`))
+	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{}}`))
+	require.False(t, mergeCCStreamUsage(&usage, `{"usage":{"prompt_tokens":null,"completion_tokens":false}}`))
+	require.True(t, mergeCCStreamUsage(&usage, `{"usage":{"completion_tokens":5,"cache_creation_input_tokens":6,"_sub2api_kiro_credits":0}}`))
+
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 5, usage.OutputTokens)
+	require.Equal(t, 4, usage.CacheReadInputTokens)
+	require.Equal(t, 6, usage.CacheCreationInputTokens)
+	require.Zero(t, usage.KiroCredits)
+}
+
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -153,6 +218,75 @@ func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T)
 	require.Equal(t, "max", gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
 	require.NotNil(t, result.ReasoningEffort)
 	require.Equal(t, "max", *result.ReasoningEffort)
+}
+
+func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		usageJSON  string
+		wantInput  int
+		wantOutput int
+		wantRead   int
+		wantWrite  int
+	}{
+		{
+			name:       "positive cache write",
+			usageJSON:  `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`,
+			wantInput:  12,
+			wantOutput: 3,
+			wantRead:   4,
+			wantWrite:  6,
+		},
+		{
+			name:       "nested zero overrides legacy alias",
+			usageJSON:  `{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_creation_input_tokens":19,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":0}}`,
+			wantInput:  12,
+			wantOutput: 3,
+			wantRead:   4,
+			wantWrite:  0,
+		},
+		{
+			name:       "explicit CC zeros override Responses dialect",
+			usageJSON:  `{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`,
+			wantInput:  0,
+			wantOutput: 0,
+			wantRead:   0,
+			wantWrite:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-5.6","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"chatcmpl_cache","object":"chat.completion","model":"gpt-5.6","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + tt.usageJSON + `}`,
+				)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg:          rawChatCompletionsTestConfig(),
+				httpUpstream: upstream,
+			}
+
+			result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tt.wantInput, result.Usage.InputTokens)
+			require.Equal(t, tt.wantOutput, result.Usage.OutputTokens)
+			require.Equal(t, tt.wantRead, result.Usage.CacheReadInputTokens)
+			require.Equal(t, tt.wantWrite, result.Usage.CacheCreationInputTokens)
+		})
+	}
 }
 
 func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentNonStreaming(t *testing.T) {

@@ -82,6 +82,19 @@ func TestParseSSEUsage_DeltaOverwritesWithNonZero(t *testing.T) {
 	require.Equal(t, 60, usage.CacheReadInputTokens)
 }
 
+func TestParseSSEUsage_KiroFinalUsageExplicitZerosOverwriteStart(t *testing.T) {
+	svc := newMinimalGatewayService()
+	usage := &ClaudeUsage{}
+
+	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":30,"output_tokens":0,"cache_creation_input_tokens":30,"cache_read_input_tokens":60}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":120,"_sub2api_kiro_final_usage":true}}`, usage)
+
+	require.Zero(t, usage.InputTokens)
+	require.Zero(t, usage.OutputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Equal(t, 120, usage.CacheReadInputTokens)
+}
+
 func TestParseSSEUsage_DeltaDoesNotResetCacheCreationBreakdown(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}

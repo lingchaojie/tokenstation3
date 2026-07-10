@@ -468,12 +468,13 @@ func countKiroInputTokensFromPayload(payload map[string]any) int {
 		tokens += countKiroSystemBlockTokens(block)
 	}
 	messages, _ := payload["messages"].([]any)
-	if len(messages) > 0 {
-		canonical, err := canonicalJSON(messages)
-		if err == nil {
-			tokens += anthropictokenizer.CountTokens(string(canonical))
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
 		}
-		tokens += len(messages) * kiroTokensPerMessage
+		tokens += kiroTokensPerMessage
+		tokens += countKiroMessageContentTokens(message["content"])
 	}
 	if tools, ok := payload["tools"].([]any); ok {
 		tokens += len(tools) * kiroTokensPerTool

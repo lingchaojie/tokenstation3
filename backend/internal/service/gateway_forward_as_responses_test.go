@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestExtractResponsesReasoningEffortFromBody(t *testing.T) {
@@ -52,7 +53,7 @@ func TestHandleResponsesBufferedStreamingResponse_PreservesMessageStartCacheUsag
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleResponsesBufferedStreamingResponse(resp, c, "claude-sonnet-4.5", "claude-sonnet-4.5", nil, time.Now())
+	result, err := svc.handleResponsesBufferedStreamingResponse(resp, c, "claude-sonnet-4.5", "claude-sonnet-4.5", nil, time.Now(), false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
@@ -90,7 +91,7 @@ func TestHandleResponsesStreamingResponse_PreservesMessageStartCacheUsage(t *tes
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleResponsesStreamingResponse(resp, c, "claude-sonnet-4.5", "claude-sonnet-4.5", nil, time.Now())
+	result, err := svc.handleResponsesStreamingResponse(resp, c, "claude-sonnet-4.5", "claude-sonnet-4.5", nil, time.Now(), false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 20, result.Usage.InputTokens)
@@ -100,6 +101,44 @@ func TestHandleResponsesStreamingResponse_PreservesMessageStartCacheUsage(t *tes
 	require.InDelta(t, 0.23, result.Usage.KiroCredits, 0.000001)
 	require.Contains(t, rec.Body.String(), `response.completed`)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestHandleResponsesBufferedStreamingResponse_KiroMarkedFinalUsageClearsProvisionalTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := markedKiroFinalUsageAnthropicResponse("msg_responses_buffered_final")
+
+	result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(
+		resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Equal(t, int64(120), gjson.Get(rec.Body.String(), "usage.input_tokens").Int())
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
+}
+
+func TestHandleResponsesStreamingResponse_KiroMarkedFinalUsageClearsProvisionalTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := markedKiroFinalUsageAnthropicResponse("msg_responses_stream_final")
+
+	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
+		resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
+	require.Contains(t, rec.Body.String(), `"input_tokens":120`)
+	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
 }
 
 func TestForwardAsResponsesKiroDirectUsesKiroEndpointMode(t *testing.T) {

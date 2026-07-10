@@ -84,6 +84,24 @@ type Usage struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
+
+	upstreamInputTokensPresent      bool
+	upstreamOutputTokensPresent     bool
+	upstreamTotalTokensPresent      bool
+	upstreamCacheReadTokensPresent  bool
+	upstreamCacheWriteTokensPresent bool
+	inputTokensResolved             bool
+}
+
+func (u Usage) hasUpstreamCacheUsage() bool {
+	return u.upstreamCacheReadTokensPresent || u.upstreamCacheWriteTokensPresent
+}
+
+// HasResolvedInputTokens reports whether InputTokens is a final value. It is
+// intentionally separate from the numeric value because a full cache hit has
+// a legitimate zero uncached-input bucket.
+func (u Usage) HasResolvedInputTokens() bool {
+	return u.inputTokensResolved || u.upstreamInputTokensPresent
 }
 
 type StreamResult struct {
@@ -102,6 +120,7 @@ type KiroRequestContext struct {
 	ToolNameMap              map[string]string
 	ThinkingEnabled          bool
 	CacheEmulationUsage      *Usage
+	EstimatedInputTokens     int
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
 	StopSequences            []string
@@ -490,6 +509,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		InferenceConfig:              inferenceConfig,
 		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
 	}
+	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -502,9 +522,8 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
-	}
+	usage = resolveKiroUsage(usage, requestCtx.EstimatedInputTokens)
+	usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
 		Usage:        usage,
@@ -1161,17 +1180,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := closeThinking(); err != nil {
 		return nil, err
 	}
-	if usage.OutputTokens == 0 {
+	if usage.OutputTokens == 0 && !usage.upstreamOutputTokensPresent {
 		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
 			usage.OutputTokens = est
 		}
 	}
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	}
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
-	}
+	usage = resolveKiroUsage(usage, inputTokens)
 	if stopReason == "" {
 		if len(emittedToolContents) > 0 {
 			stopReason = "tool_use"
@@ -1182,11 +1196,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := ensureMessageStart(); err != nil {
 		return nil, err
 	}
+	if requestCtx.CacheEmulationUsage != nil {
+		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
+	}
 	finalUsageMap := map[string]any{
 		"input_tokens":                usage.InputTokens,
 		"output_tokens":               usage.OutputTokens,
 		"cache_read_input_tokens":     usage.CacheReadInputTokens,
 		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"_sub2api_kiro_final_usage":   true,
 	}
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
@@ -2908,7 +2926,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)
 
-	if usage.OutputTokens == 0 {
+	if usage.OutputTokens == 0 && !usage.upstreamOutputTokensPresent {
 		var outputBuf strings.Builder
 		_, _ = outputBuf.WriteString(cleanText)
 		for _, tu := range toolUses {
@@ -2921,7 +2939,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 	}
 	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		if total, ok := addKiroTokenBuckets(usage.InputTokens, usage.OutputTokens); ok {
+			usage.TotalTokens = total
+		}
 	}
 	if stopReason == "" {
 		if hasUsableToolUses(toolUses) {
@@ -2950,7 +2970,9 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 				stopReason = "max_tokens"
 				if usage.OutputTokens > requestCtx.MaxOutputTokens {
 					usage.OutputTokens = requestCtx.MaxOutputTokens
-					usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+					if total, ok := addKiroTokenBuckets(usage.InputTokens, usage.OutputTokens); ok {
+						usage.TotalTokens = total
+					}
 				}
 			}
 		}
@@ -4047,39 +4069,47 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		meta = event
 	}
 	if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok {
-		if value, ok := toInt(tokenUsage["uncachedInputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "uncachedInputTokens"); present {
 			usage.InputTokens = value
+			usage.upstreamInputTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["outputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "outputTokens"); present {
 			usage.OutputTokens = value
+			usage.upstreamOutputTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["totalTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "totalTokens"); present {
 			usage.TotalTokens = value
+			usage.upstreamTotalTokensPresent = true
 		}
-		if value, ok := toInt(tokenUsage["cacheReadInputTokens"]); ok {
+		if value, present := readKiroTokenField(tokenUsage, "cacheReadInputTokens"); present {
 			usage.CacheReadInputTokens = value
+			usage.upstreamCacheReadTokensPresent = true
+		}
+		if value, present := readKiroTokenField(tokenUsage, "cacheWriteInputTokens"); present {
+			usage.CacheCreationInputTokens = value
+			usage.upstreamCacheWriteTokensPresent = true
 		}
 		updateKiroCreditsFromMap(usage, tokenUsage)
 	}
 	updateKiroCreditsFromMap(usage, event)
 	updateKiroCreditsFromMap(usage, meta)
-	if value, ok := toInt(event["inputTokens"]); ok && value > 0 {
-		usage.InputTokens = value
+	if !usage.upstreamInputTokensPresent {
+		if value, present := readKiroFlatTokenField(meta, event, "inputTokens"); present {
+			usage.InputTokens = value
+			usage.upstreamInputTokensPresent = true
+		}
 	}
-	if value, ok := toInt(event["outputTokens"]); ok && value > 0 {
-		usage.OutputTokens = value
+	if !usage.upstreamOutputTokensPresent {
+		if value, present := readKiroFlatTokenField(meta, event, "outputTokens"); present {
+			usage.OutputTokens = value
+			usage.upstreamOutputTokensPresent = true
+		}
 	}
-	if value, ok := toInt(event["totalTokens"]); ok && value > 0 {
-		usage.TotalTokens = value
-	}
-	if value, ok := toInt(meta["inputTokens"]); ok && value > 0 {
-		usage.InputTokens = value
-	}
-	if value, ok := toInt(meta["outputTokens"]); ok && value > 0 {
-		usage.OutputTokens = value
-	}
-	if value, ok := toInt(meta["totalTokens"]); ok && value > 0 {
-		usage.TotalTokens = value
+	if !usage.upstreamTotalTokensPresent {
+		if value, present := readKiroFlatTokenField(meta, event, "totalTokens"); present {
+			usage.TotalTokens = value
+			usage.upstreamTotalTokensPresent = true
+		}
 	}
 	if eventType == "meteringEvent" {
 		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok {
@@ -4136,20 +4166,42 @@ func readStopReason(m map[string]any) string {
 	return getString(m, "stopReason")
 }
 
-func toInt(value any) (int, bool) {
-	switch v := value.(type) {
+func readKiroTokenField(values map[string]any, key string) (int, bool) {
+	raw, exists := values[key]
+	if !exists {
+		return 0, false
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	switch value := raw.(type) {
 	case float64:
-		return int(v), true
+		upperExclusive := math.Exp2(strconv.IntSize - 1)
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= upperExclusive || math.Trunc(value) != value {
+			return 0, false
+		}
+		return int(value), true
 	case int:
-		return v, true
+		return value, value >= 0
 	case int64:
-		return int(v), true
+		if value < 0 || uint64(value) > maxInt {
+			return 0, false
+		}
+		return int(value), true
 	case json.Number:
-		n, err := v.Int64()
-		return int(n), err == nil
+		parsed, err := value.Int64()
+		if err != nil || parsed < 0 || uint64(parsed) > maxInt {
+			return 0, false
+		}
+		return int(parsed), true
 	default:
 		return 0, false
 	}
+}
+
+func readKiroFlatTokenField(primary, fallback map[string]any, key string) (int, bool) {
+	if value, present := readKiroTokenField(primary, key); present {
+		return value, true
+	}
+	return readKiroTokenField(fallback, key)
 }
 
 var kiroCreditUsageFieldNames = [...]string{
@@ -4206,19 +4258,137 @@ func toPositiveFiniteFloat(value any) (float64, bool) {
 	return out, true
 }
 
+func upstreamPromptTokenTotal(usage Usage) (int, bool) {
+	if usage.hasUpstreamCacheUsage() {
+		inputTokens := 0
+		if usage.upstreamInputTokensPresent {
+			inputTokens = usage.InputTokens
+		}
+		if total, ok := addKiroTokenBuckets(inputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens); ok {
+			return total, true
+		}
+	}
+	if usage.upstreamTotalTokensPresent && usage.upstreamOutputTokensPresent && usage.TotalTokens >= usage.OutputTokens {
+		return usage.TotalTokens - usage.OutputTokens, true
+	}
+	if usage.upstreamInputTokensPresent {
+		return usage.InputTokens, true
+	}
+	return 0, false
+}
+
+func addKiroTokenBuckets(values ...int) (int, bool) {
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	for _, value := range values {
+		if value < 0 || value > maxInt-total {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
+}
+
+func resolveKiroUsage(usage Usage, fallbackInputTokens int) Usage {
+	promptTotal, hasPromptTotal := upstreamPromptTokenTotal(usage)
+	switch {
+	case hasPromptTotal && usage.hasUpstreamCacheUsage():
+		// Explicit upstream cache categories are already partitioned and win.
+		if !usage.upstreamInputTokensPresent {
+			usage.InputTokens = 0
+		}
+		usage.inputTokensResolved = true
+	case hasPromptTotal:
+		usage.InputTokens = promptTotal
+		usage.inputTokensResolved = true
+	case fallbackInputTokens > 0:
+		usage.InputTokens = fallbackInputTokens
+		usage.inputTokensResolved = true
+		promptTotal = fallbackInputTokens
+		hasPromptTotal = true
+	}
+
+	if hasPromptTotal {
+		if total, ok := addKiroTokenBuckets(promptTotal, usage.OutputTokens); ok {
+			usage.TotalTokens = total
+		}
+	}
+	return usage
+}
+
+func scaleKiroUsageBucket(tokens, targetTotal, sourceTotal int) int {
+	if tokens <= 0 || targetTotal <= 0 || sourceTotal <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(tokens) * float64(targetTotal) / float64(sourceTotal)))
+}
+
 func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if simulated == nil {
 		return base
 	}
-	if base.CacheReadInputTokens > 0 || base.CacheCreationInputTokens > 0 || base.CacheCreation5mInputTokens > 0 || base.CacheCreation1hInputTokens > 0 {
+	if base.hasUpstreamCacheUsage() {
+		if total, ok := addKiroTokenBuckets(
+			base.InputTokens, base.CacheReadInputTokens, base.CacheCreationInputTokens, base.OutputTokens,
+		); ok {
+			base.TotalTokens = total
+		}
 		return base
 	}
-	base.InputTokens = simulated.InputTokens
-	base.CacheReadInputTokens = simulated.CacheReadInputTokens
-	base.CacheCreationInputTokens = simulated.CacheCreationInputTokens
-	base.CacheCreation5mInputTokens = simulated.CacheCreation5mInputTokens
-	base.CacheCreation1hInputTokens = simulated.CacheCreation1hInputTokens
-	base.TotalTokens = base.InputTokens + base.OutputTokens + base.CacheReadInputTokens + base.CacheCreationInputTokens
+
+	promptTotal, ok := upstreamPromptTokenTotal(base)
+	if !ok && base.InputTokens > 0 {
+		promptTotal, ok = base.InputTokens, true
+	}
+	sourceTotal, sourceTotalOK := addKiroTokenBuckets(
+		simulated.InputTokens, simulated.CacheReadInputTokens, simulated.CacheCreationInputTokens,
+	)
+	if !sourceTotalOK {
+		return base
+	}
+	if !ok {
+		promptTotal = sourceTotal
+	}
+	if promptTotal < 0 || sourceTotal <= 0 {
+		return base
+	}
+
+	readTokens := scaleKiroUsageBucket(simulated.CacheReadInputTokens, promptTotal, sourceTotal)
+	creationTokens := scaleKiroUsageBucket(simulated.CacheCreationInputTokens, promptTotal, sourceTotal)
+	partitionTotal, partitionTotalOK := addKiroTokenBuckets(readTokens, creationTokens)
+	if !partitionTotalOK {
+		return base
+	}
+	if overflow := partitionTotal - promptTotal; overflow > 0 {
+		reduceCreation := min(overflow, creationTokens)
+		creationTokens -= reduceCreation
+		readTokens = max(readTokens-(overflow-reduceCreation), 0)
+	}
+
+	base.InputTokens = promptTotal - readTokens - creationTokens
+	base.inputTokensResolved = true
+	base.CacheReadInputTokens = readTokens
+	base.CacheCreationInputTokens = creationTokens
+	base.CacheCreation5mInputTokens = scaleKiroUsageBucket(
+		simulated.CacheCreation5mInputTokens, creationTokens, simulated.CacheCreationInputTokens,
+	)
+	base.CacheCreation1hInputTokens = scaleKiroUsageBucket(
+		simulated.CacheCreation1hInputTokens, creationTokens, simulated.CacheCreationInputTokens,
+	)
+	creationTTLTotal, creationTTLTotalOK := addKiroTokenBuckets(
+		base.CacheCreation5mInputTokens, base.CacheCreation1hInputTokens,
+	)
+	if !creationTTLTotalOK {
+		base.CacheCreation5mInputTokens = 0
+		base.CacheCreation1hInputTokens = 0
+	} else if overflow := creationTTLTotal - creationTokens; overflow > 0 {
+		reduceOneHour := min(overflow, base.CacheCreation1hInputTokens)
+		base.CacheCreation1hInputTokens -= reduceOneHour
+		base.CacheCreation5mInputTokens = max(base.CacheCreation5mInputTokens-(overflow-reduceOneHour), 0)
+	}
+	if total, ok := addKiroTokenBuckets(promptTotal, base.OutputTokens); ok {
+		base.TotalTokens = total
+	}
 	return base
 }
 
