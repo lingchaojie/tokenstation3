@@ -228,11 +228,17 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 			ClientDisconnect: clientDisconnected,
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
+	if scan.SawUsage {
+		// Use the raw scanner's canonical usage for both downstream Anthropic
+		// finalization and billing. ChatUsage cannot retain compatible top-level
+		// cache aliases, explicit nested zero precedence, or Kiro credits.
+		ccState.Usage = responsesUsageFromCCStreamUsage(scan.Usage)
+	}
 
 	// Finalize CC→Responses stream (emit response.completed)
 	finalEvents := apicompat.FinalizeChatCompletionsResponsesStream(ccState)
 	for _, rEvent := range finalEvents {
-		if rEvent.Response != nil && rEvent.Response.Usage != nil {
+		if !scan.SawUsage && rEvent.Response != nil && rEvent.Response.Usage != nil {
 			usage = copyOpenAIUsageFromResponsesUsage(rEvent.Response.Usage)
 		}
 		if clientDisconnected {

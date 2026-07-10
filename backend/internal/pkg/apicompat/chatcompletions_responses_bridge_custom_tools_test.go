@@ -740,6 +740,67 @@ func TestResponsesToChatCompletionsRequest_DedupesIdenticalNamespaceChildren(t *
 	assert.Equal(t, "gmail__send", out.Tools[0].Function.Name)
 }
 
+func TestResponsesToChatCompletionsRequest_NamespaceToolChoice(t *testing.T) {
+	t.Run("single child maps to flattened function", func(t *testing.T) {
+		out, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+			Model: "glm-5.2",
+			Input: json.RawMessage(`"hi"`),
+			Tools: []ResponsesTool{{
+				Type: "namespace", Name: "code_tools",
+				Tools: []ResponsesTool{{Type: "function", Name: "run"}},
+			}},
+			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
+		})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"type":"function","function":{"name":"code_tools__run"}}`, string(out.ToolChoice))
+	})
+
+	t.Run("multiple children are rejected instead of degrading to auto", func(t *testing.T) {
+		_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+			Model: "glm-5.2",
+			Input: json.RawMessage(`"hi"`),
+			Tools: []ResponsesTool{{
+				Type: "namespace", Name: "code_tools",
+				Tools: []ResponsesTool{
+					{Type: "function", Name: "run"},
+					{Type: "function", Name: "wait"},
+				},
+			}},
+			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "contains 2 function children")
+	})
+
+	t.Run("duplicate identical namespace declarations remain one target", func(t *testing.T) {
+		out, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+			Model: "glm-5.2",
+			Input: json.RawMessage(`"hi"`),
+			Tools: []ResponsesTool{
+				{Type: "namespace", Name: "code_tools", Tools: []ResponsesTool{{Type: "function", Name: "run"}}},
+				{Type: "namespace", Name: "code_tools", Tools: []ResponsesTool{{Type: "function", Name: "run"}}},
+			},
+			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
+		})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"type":"function","function":{"name":"code_tools__run"}}`, string(out.ToolChoice))
+	})
+
+	t.Run("namespace without convertible child is rejected", func(t *testing.T) {
+		_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
+			Model: "glm-5.2",
+			Input: json.RawMessage(`"hi"`),
+			Tools: []ResponsesTool{{
+				Type: "namespace", Name: "code_tools",
+				Tools: []ResponsesTool{{Type: "custom", Name: "exec"}},
+			}},
+			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no convertible function child")
+	})
+}
+
 // codex 按 namespace+name 路由 namespace 子工具的调用：回程必须把摊平名还原为
 // 裸子工具名并带独立 namespace 字段，平铺名的 function_call 会被 codex 判为
 // unsupported call 拒绝执行。

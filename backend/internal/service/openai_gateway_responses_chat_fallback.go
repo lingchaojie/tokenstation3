@@ -216,6 +216,12 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			FirstTokenMs:    scan.FirstTokenMs,
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
+	if scan.SawUsage {
+		// Keep response.completed aligned with the generic scanner used for
+		// billing, including compatible cache aliases and explicit nested zero
+		// precedence lost by the narrower ChatUsage structure.
+		state.Usage = responsesUsageFromCCStreamUsage(scan.Usage)
+	}
 
 	writeEvents(apicompat.FinalizeChatCompletionsResponsesStream(state))
 	if !clientDisconnected {

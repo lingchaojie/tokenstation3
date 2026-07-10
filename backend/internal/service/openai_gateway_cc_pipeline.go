@@ -207,6 +207,9 @@ type ccStreamScanState struct {
 	// Usage 为 include_usage chunk 中最近一次出现的用量（上游可能重复发送，
 	// 总是保留最新值）；终态事件中的用量由调用方在 finalize 阶段自行覆盖。
 	Usage OpenAIUsage
+	// SawUsage distinguishes a real all-zero usage object from a stream that
+	// never supplied usage at all.
+	SawUsage bool
 	// FirstTokenMs 为首个实际输出 chunk（排除 usage-only chunk）的到达时延。
 	FirstTokenMs *int
 	// SawDone 表示上游发出了 [DONE] 哨兵。
@@ -248,6 +251,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 
 		if u := extractCCStreamUsage(payload); u != nil {
 			st.Usage = *u
+			st.SawUsage = true
 		}
 
 		var chunk apicompat.ChatCompletionsChunk
@@ -275,6 +279,26 @@ func (s *OpenAIGatewayService) scanCCStream(
 		st.Err = err
 	}
 	return st
+}
+
+// responsesUsageFromCCStreamUsage projects the generic/raw usage parser's
+// canonical result back into the Responses wire shape used by CC fallback
+// finalization. The raw parser is authoritative because it understands
+// top-level cache aliases and explicit nested zero values that ChatUsage's
+// narrower integer-only structure cannot preserve.
+func responsesUsageFromCCStreamUsage(usage OpenAIUsage) *apicompat.ResponsesUsage {
+	out := &apicompat.ResponsesUsage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		TotalTokens:              usage.InputTokens + usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+	}
+	if usage.CacheReadInputTokens > 0 {
+		out.InputTokensDetails = &apicompat.ResponsesInputTokensDetails{
+			CachedTokens: usage.CacheReadInputTokens,
+		}
+	}
+	return out
 }
 
 // logCCStreamMissingDoneSentinel 记录"上游未发 [DONE] 哨兵即结束"的 debug 日志。

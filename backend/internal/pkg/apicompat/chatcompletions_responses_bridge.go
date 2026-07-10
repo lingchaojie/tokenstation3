@@ -45,14 +45,20 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	// tools 全部被丢弃（如仅含 web_search/image_generation 等服务端工具）时不再转发
 	// tool_choice：上游会拒绝 "'tool_choice' is only allowed when 'tools' are specified"。
 	// 指向被丢弃工具的选择项同理（见 responsesToolChoiceToChatToolChoice）。
-	if len(out.Tools) > 0 && len(req.ToolChoice) > 0 {
+	if len(req.ToolChoice) > 0 {
 		declared := make(map[string]bool, len(out.Tools))
 		for _, tool := range out.Tools {
 			if tool.Function != nil {
 				declared[tool.Function.Name] = true
 			}
 		}
-		if tc := responsesToolChoiceToChatToolChoice(req.ToolChoice, declared); len(tc) > 0 {
+		tc, err := responsesToolChoiceToChatToolChoice(req.ToolChoice, declared, namespaceToolChoiceTargets(req.Tools))
+		if err != nil {
+			return nil, err
+		}
+		// A string choice such as "auto" is valid only when at least one tool
+		// survived conversion; otherwise forwarding it makes Chat upstreams 400.
+		if len(out.Tools) > 0 && len(tc) > 0 {
 			out.ToolChoice = tc
 		}
 	}
@@ -723,11 +729,11 @@ func flattenNamespaceToolName(namespace, name string) string {
 // declared 是转换后实际声明的 chat 工具名集合：具名选择项仅在目标工具幸存时转发，
 // 服务端工具（web_search 等）的选择项随工具本身丢弃——指向未声明工具的 tool_choice
 // 会被 chat 上游 400 拒绝。返回 nil 表示丢弃 tool_choice。
-func responsesToolChoiceToChatToolChoice(raw json.RawMessage, declared map[string]bool) json.RawMessage {
+func responsesToolChoiceToChatToolChoice(raw json.RawMessage, declared map[string]bool, namespaceTargets map[string][]string) (json.RawMessage, error) {
 	var choice map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &choice); err != nil {
 		// "auto"/"none"/"required" 等字符串形式原样转发。
-		return raw
+		return raw, nil
 	}
 	var name string
 	switch rawString(choice["type"]) {
@@ -743,13 +749,24 @@ func responsesToolChoiceToChatToolChoice(raw json.RawMessage, declared map[strin
 			name = rawNestedString(choice["function"], "name")
 		}
 		if name == "" {
-			return raw
+			return raw, nil
+		}
+	case "namespace":
+		namespace := rawString(choice["name"])
+		targets := namespaceTargets[namespace]
+		switch len(targets) {
+		case 1:
+			name = targets[0]
+		case 0:
+			return nil, fmt.Errorf("namespace tool_choice %q has no convertible function child; this upstream cannot preserve the forced choice", namespace)
+		default:
+			return nil, fmt.Errorf("namespace tool_choice %q contains %d function children; this upstream cannot represent choosing that namespace without changing which tool is forced", namespace, len(targets))
 		}
 	default:
-		return nil
+		return nil, nil
 	}
 	if !declared[name] {
-		return nil
+		return nil, nil
 	}
 	out, err := json.Marshal(map[string]any{
 		"type": "function",
@@ -758,7 +775,41 @@ func responsesToolChoiceToChatToolChoice(raw json.RawMessage, declared map[strin
 		},
 	})
 	if err != nil {
-		return raw
+		return raw, nil
+	}
+	return out, nil
+}
+
+// namespaceToolChoiceTargets records the flattened function names available
+// under each namespace. A namespace-level forced choice is losslessly
+// representable by Chat Completions only when exactly one child survives.
+func namespaceToolChoiceTargets(tools []ResponsesTool) map[string][]string {
+	out := make(map[string][]string)
+	seenByNamespace := make(map[string]map[string]bool)
+	for _, tool := range tools {
+		if tool.Type != "namespace" || tool.Name == "" {
+			continue
+		}
+		children := tool.Tools
+		if len(children) == 0 {
+			children = tool.Children
+		}
+		seen := seenByNamespace[tool.Name]
+		if seen == nil {
+			seen = make(map[string]bool)
+			seenByNamespace[tool.Name] = seen
+		}
+		for _, child := range children {
+			if child.Type != "function" || child.Name == "" {
+				continue
+			}
+			flattened := flattenNamespaceToolName(tool.Name, child.Name)
+			if seen[flattened] {
+				continue
+			}
+			seen[flattened] = true
+			out[tool.Name] = append(out[tool.Name], flattened)
+		}
 	}
 	return out
 }
