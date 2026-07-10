@@ -123,7 +123,11 @@ func (r *subscriptionExpiryRepoStub) ActivateWindows(context.Context, int64, tim
 	return nil
 }
 
-func (r *subscriptionExpiryRepoStub) ResetDailyUsage(context.Context, int64, time.Time) error {
+func (r *subscriptionExpiryRepoStub) ResetUsageWindows(context.Context, int64, bool, bool, bool, time.Time) error {
+	return nil
+}
+
+func (r *subscriptionExpiryRepoStub) ResetDailyUsage(context.Context, int64, *time.Time, time.Time) error {
 	return nil
 }
 
@@ -131,7 +135,7 @@ func (r *subscriptionExpiryRepoStub) ResetWeeklyUsage(context.Context, int64, *t
 	return nil
 }
 
-func (r *subscriptionExpiryRepoStub) ResetMonthlyUsage(context.Context, int64, time.Time) error {
+func (r *subscriptionExpiryRepoStub) ResetMonthlyUsage(context.Context, int64, *time.Time, time.Time) error {
 	return nil
 }
 

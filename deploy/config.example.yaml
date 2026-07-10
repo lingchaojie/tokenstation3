@@ -488,6 +488,41 @@ gateway:
     #   profile_2:
     #     name: "Custom Profile 2"
 
+  # ==========================================================================
+  # 上游模型调用全量归档（ClickHouse）
+  # 把每次上游调用的原始 request/response 逐字异步写入远端 ClickHouse，供离线
+  # 二次开发（训练轨迹采集、分析、审计）。默认关闭、关时零成本；与转发/计费完全
+  # 隔离的第三条异步通道，外部库故障绝不影响转发。
+  # ==========================================================================
+  capture:
+    enabled: false            # 总开关，默认关。关时整条链路不初始化
+    max_body_bytes: 8388608   # 单条原文上限(8MB)，超出停止累积并标 is_truncated
+    max_queue_bytes: 1073741824 # 在途 record 总字节上界(1GiB)，防大 body 突发打爆内存；0=不限，非0须 >= max_body_bytes
+    queue_size: 8192          # 有界内存队列容量（本期 A1，满即按策略丢弃）
+    worker_count: 4           # 抽取+写入 worker 数
+    overflow_policy: drop      # 队列满策略：drop（默认，绝不阻塞转发）/ sample
+    overflow_sample_percent: 0 # sample 策略下的采样百分比(1-100)
+    batch_max_size: 200        # 批量 INSERT 行数上限
+    batch_max_interval_ms: 1000 # 批量时间窗(ms)
+    clickhouse:
+      # 远端 ClickHouse（独立部署，勿与转发生产机争资源；勿裸暴露公网）。
+      # Docker: 另一台机填其 IP/域名；兄弟容器填 service 名；宿主机填 host.docker.internal
+      addr: ["clickhouse-host:9000"]  # 原生 TCP 端口 9000（TLS 用 9440）
+      database: llm_archive
+      table: model_call_archive
+      username: default
+      password: ""             # 生产用强密码；日志按 key 名引用、绝不回显 value
+      dial_timeout_ms: 2000
+      read_timeout_ms: 10000
+      compression: lz4          # 传输层压缩：lz4 / zstd / none
+      secure: false             # 跨不可信网络传输时开 TLS（端口 9440）
+      max_open_conns: 8
+    # ── 后续优化预留（本期未实现）──
+    # spool:                    # A2：本地落盘 spool + 后台 shipper，扛外部瞬断不丢
+    #   enabled: false
+    #   dir: /var/lib/sub2api/capture-spool
+    #   max_disk_bytes: 1073741824
+
 # =============================================================================
 # Logging Configuration
 # 日志配置

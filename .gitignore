@@ -137,6 +137,9 @@ docs/*
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/legal/
 !docs/legal/*.md
+!docs/superpowers/
+!docs/upstream-sync/
+!docs/upstream-sync/*.md
 .serena/
 .codex/
 frontend/coverage/
@@ -145,3 +148,9 @@ output/
 
 # Playwright MCP browser snapshots (may contain secrets)
 .playwright-mcp/
+
+# graphify skill outputs (large AST/semantic caches — never commit)
+graphify-out/
+backend/graphify-out/
+# superpowers runtime dir at repo root (docs/superpowers/ stays tracked, see above)
+/.superpowers/

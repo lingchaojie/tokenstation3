@@ -8,8 +8,8 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(currentDir, "../CreateAccountModal.vue"), "utf8");
 const editSource = readFileSync(resolve(currentDir, "../EditAccountModal.vue"), "utf8");
 const reauthSource = readFileSync(resolve(currentDir, "../../admin/account/ReAuthAccountModal.vue"), "utf8");
-const zhSource = readFileSync(resolve(currentDir, "../../../i18n/locales/zh.ts"), "utf8");
-const enSource = readFileSync(resolve(currentDir, "../../../i18n/locales/en.ts"), "utf8");
+const zhSource = readFileSync(resolve(currentDir, "../../../i18n/locales/zh/admin/accounts.ts"), "utf8");
+const enSource = readFileSync(resolve(currentDir, "../../../i18n/locales/en/admin/accounts.ts"), "utf8");
 
 describe("CreateAccountModal Kiro reference account modes", () => {
   it("exposes OAuth, direct API key, relay API key, and IDC organization sign-in controls", () => {

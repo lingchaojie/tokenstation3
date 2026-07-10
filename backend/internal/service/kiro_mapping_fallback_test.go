@@ -55,6 +55,7 @@ func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *te
 		nil,                         // resolver
 		nil,                         // balanceNotifyService
 		nil,                         // userPlatformQuotaRepo
+		nil,                         // capturePool
 	)
 
 	result := &ForwardResult{

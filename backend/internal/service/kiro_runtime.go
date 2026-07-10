@@ -118,7 +118,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	if parsed.Stream {
-		resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group)
+		resp, _, err := s.openKiroAnthropicStreamResponse(ctx, c, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group)
 		if err != nil {
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
@@ -153,7 +153,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode >= 400 {
-			return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
+			return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, true)
 		}
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
@@ -164,7 +164,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			streamResult.usage = &ClaudeUsage{}
 		}
 		requestID := buildKiroRequestID(resp)
-		return &ForwardResult{
+		result := &ForwardResult{
 			RequestID:        requestID,
 			Usage:            *streamResult.usage,
 			Model:            originalModel,
@@ -173,7 +173,19 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			Duration:         time.Since(startTime),
 			FirstTokenMs:     streamResult.firstTokenMs,
 			ClientDisconnect: streamResult.clientDisconnect,
-		}, nil
+		}
+		// 归档：tee 已在 handleStreamingResponse 内累积翻译后的 Anthropic SSE 并写入 gin.Context 桥；
+		// 此处取回填入 result，头用暂存的真实上游头（非 pipe 合成头）。汇入 gateway_handler submit 块统一提交。
+		if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+			if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+				reqHeaders, respHeaders := takeKiroCaptureHeaders(c)
+				result.CaptureResponse = bridge.Response
+				result.CaptureTruncated = bridge.Truncated
+				result.CaptureRequestHeaders = reqHeaders
+				result.CaptureResponseHeaders = respHeaders
+			}
+		}
+		return result, nil
 	}
 
 	token, tokenType, err := s.GetAccessToken(ctx, account)
@@ -205,7 +217,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		default:
 			var httpErr *kiroWebSearchHTTPError
 			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
-				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
+				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body, false)
 			}
 			var failoverErr *UpstreamFailoverError
 			if errors.As(webSearchErr, &failoverErr) {
@@ -258,7 +270,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
-		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
+		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, false)
 	}
 
 	cacheUsage := s.buildKiroCacheEmulationUsage(account, parsed.Group, body, mappedModel, inputTokens)
@@ -284,17 +296,28 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 
 	upstreamModel := resolveKiroUpstreamModel(mappedModel)
 
-	return &ForwardResult{
+	result := &ForwardResult{
 		RequestID:     requestID,
 		Usage:         kiroUsageToClaude(parseResult.Usage, inputTokens),
 		Model:         originalModel,
 		UpstreamModel: upstreamModel,
 		Stream:        false,
 		Duration:      time.Since(startTime),
-	}, nil
+	}
+	// 归档：非流式不走 handleNonStreamingResponse，此处直接快照组装好的 Anthropic JSON +
+	// 真实上游头（resp 即厂商响应）。汇入 gateway_handler submit 块统一提交。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		captured, truncated := captureWithLimit(parseResult.ResponseBody, s.cfg.Gateway.Capture.MaxBodyBytes)
+		result.CaptureResponse = captured
+		result.CaptureTruncated = truncated
+		headers := buildKiroCaptureHeaders(resp)
+		result.CaptureRequestHeaders = headers.RequestHeaders
+		result.CaptureResponseHeaders = headers.ResponseHeaders
+	}
+	return result, nil
 }
 
-func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
+func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, 0, err
@@ -336,6 +359,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
+	}
+	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
+	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		stashKiroCaptureHeaders(c, resp)
 	}
 	cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
@@ -812,7 +840,7 @@ func (s *GatewayService) markKiroInvalidModelRateLimited(ctx context.Context, ac
 	)
 }
 
-func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, mappedModel string, requestBody []byte) error {
+func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, mappedModel string, requestBody []byte, stream bool) error {
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -871,6 +899,14 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 		Kind:               "http_error",
 		Message:            upstreamMsg,
 	})
+	// 归档：终态错误响应（非 failover）。上面两处 UpstreamFailoverError 分支已提前返回，
+	// 不会到这里，故中间重试不归档。drop-safe，绝不影响转发。
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		limit := s.cfg.Gateway.Capture.MaxBodyBytes
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), mappedModel, mappedModel, "", stream, requestBody, respBody, limit); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
 	c.JSON(mapUpstreamStatusCode(resp.StatusCode), gin.H{
 		"type": "error",
 		"error": gin.H{

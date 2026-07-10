@@ -236,7 +236,7 @@ func TestMigration158MakesPlanEntitlementsGeneric(t *testing.T) {
 }
 
 func TestMigration165AddsGroupPeakRateMultiplier(t *testing.T) {
-	content, err := FS.ReadFile("165_add_group_peak_rate_multiplier.sql")
+	content, err := FS.ReadFile("178_add_group_peak_rate_multiplier.sql")
 	require.NoError(t, err)
 
 	sql := string(content)
@@ -247,7 +247,7 @@ func TestMigration165AddsGroupPeakRateMultiplier(t *testing.T) {
 }
 
 func TestMigration166BackfillsGrokMediaGenerationGroups(t *testing.T) {
-	content, err := FS.ReadFile("166_enable_grok_media_generation_groups.sql")
+	content, err := FS.ReadFile("179_enable_grok_media_generation_groups.sql")
 	require.NoError(t, err)
 
 	sql := string(content)

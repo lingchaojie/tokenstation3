@@ -349,6 +349,14 @@ func TestLoadDefaultIdempotencyConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultBatchImageQueueDisabled(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.BatchImage.QueueEnabled)
+}
+
 func TestLoadIdempotencyConfigFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("IDEMPOTENCY_OBSERVE_ONLY", "false")
@@ -2065,5 +2073,82 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.ImageStreamDataIntervalTimeout <= cfg.Gateway.StreamDataIntervalTimeout {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
+	}
+}
+
+func TestGatewayCaptureConfigDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Gateway.Capture.Enabled {
+		t.Fatal("capture must default to disabled")
+	}
+	if cfg.Gateway.Capture.OverflowPolicy != UsageRecordOverflowPolicyDrop {
+		t.Fatalf("default overflow=drop, got %q", cfg.Gateway.Capture.OverflowPolicy)
+	}
+	if cfg.Gateway.Capture.MaxBodyBytes <= 0 || cfg.Gateway.Capture.QueueSize <= 0 {
+		t.Fatal("defaults must be positive")
+	}
+	if cfg.Gateway.Capture.MaxQueueBytes != int64(1)<<30 {
+		t.Fatalf("default max_queue_bytes = 1GiB, got %d", cfg.Gateway.Capture.MaxQueueBytes)
+	}
+}
+
+func TestGatewayCaptureValidateMaxQueueBytes(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Gateway.Capture.Enabled = true
+		c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicyDrop
+		c.Gateway.Capture.MaxBodyBytes = 100
+		c.Gateway.Capture.QueueSize = 1
+		c.Gateway.Capture.WorkerCount = 1
+		c.Gateway.Capture.BatchMaxSize = 1
+		c.Gateway.Capture.ClickHouse.Addr = []string{"ch:9000"}
+		c.Gateway.Capture.ClickHouse.Database = "llm_archive"
+		return c
+	}
+	// 0 = 不限：放行
+	c := base()
+	c.Gateway.Capture.MaxQueueBytes = 0
+	if err := c.Gateway.Capture.validate(); err != nil {
+		t.Fatalf("max_queue_bytes=0 (unlimited) must pass: %v", err)
+	}
+	// 负数：拒绝
+	c = base()
+	c.Gateway.Capture.MaxQueueBytes = -1
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("negative max_queue_bytes must be rejected")
+	}
+	// < max_body_bytes：拒绝（单条大 record 永远进不去）
+	c = base()
+	c.Gateway.Capture.MaxQueueBytes = 50 // < 100
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("max_queue_bytes < max_body_bytes must be rejected")
+	}
+	// >= max_body_bytes：放行
+	c = base()
+	c.Gateway.Capture.MaxQueueBytes = 100
+	if err := c.Gateway.Capture.validate(); err != nil {
+		t.Fatalf("max_queue_bytes == max_body_bytes must pass: %v", err)
+	}
+}
+
+func TestGatewayCaptureValidateRejectsSyncAndEmptyAddr(t *testing.T) {
+	c := &Config{}
+	c.Gateway.Capture.Enabled = true
+	c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicySync
+	c.Gateway.Capture.MaxBodyBytes = 1
+	c.Gateway.Capture.QueueSize = 1
+	c.Gateway.Capture.WorkerCount = 1
+	c.Gateway.Capture.BatchMaxSize = 1
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("sync overflow must be rejected for capture")
+	}
+	c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicyDrop
+	if err := c.Gateway.Capture.validate(); err == nil {
+		t.Fatal("empty clickhouse addr/database must be rejected")
 	}
 }

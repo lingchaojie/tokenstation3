@@ -443,7 +443,7 @@ func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T
 	resp := newJSONResponse(http.StatusBadRequest, `{"error":{"message":"Invalid model. Please select a different model to continue.","type":"upstream_error"}}`)
 	resp.Header.Set("x-request-id", "req-invalid-model")
 
-	err := svc.handleKiroHTTPError(context.Background(), resp, c, account, "claude-opus-4.6", requestBody)
+	err := svc.handleKiroHTTPError(context.Background(), resp, c, account, "claude-opus-4.6", requestBody, false)
 	require.Error(t, err)
 
 	var failoverErr *UpstreamFailoverError
@@ -489,7 +489,7 @@ func TestHandleKiroHTTPErrorAPIKeyInvalidModelDoesNotFailover(t *testing.T) {
 	svc := &GatewayService{accountRepo: repo}
 	resp := newJSONResponse(http.StatusBadRequest, `{"message":"Invalid model. Please select a different model to continue."}`)
 
-	err := svc.handleKiroHTTPError(context.Background(), resp, c, account, "claude-opus-4.6", []byte(`{"model":"claude-opus-4-7"}`))
+	err := svc.handleKiroHTTPError(context.Background(), resp, c, account, "claude-opus-4.6", []byte(`{"model":"claude-opus-4-7"}`), false)
 	require.Error(t, err)
 
 	var failoverErr *UpstreamFailoverError
