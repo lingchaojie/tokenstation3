@@ -506,6 +506,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		InferenceConfig:              inferenceConfig,
 		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
 	}
+	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

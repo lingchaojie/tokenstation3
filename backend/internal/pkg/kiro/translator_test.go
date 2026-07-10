@@ -12,9 +12,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestEstimateKiroPayloadInputTokensIgnoresImageByteLength(t *testing.T) {
+	base := KiroPayload{ConversationState: KiroConversationState{
+		CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+			Content: "describe this image",
+			Images:  []KiroImage{{Format: "png", Source: KiroImageSource{Bytes: "small"}}},
+		}},
+	}}
+	large := base
+	large.ConversationState.CurrentMessage.UserInputMessage.Images = []KiroImage{{
+		Format: "png", Source: KiroImageSource{Bytes: strings.Repeat("A", 16<<20)},
+	}}
+	require.Equal(t, estimateKiroPayloadInputTokens(base), estimateKiroPayloadInputTokens(large))
+}
+
+func TestBuildKiroPayloadStoresPostTranslationInputEstimate(t *testing.T) {
+	body := []byte("{\"model\":\"claude-sonnet-4-6\",\"system\":\"system text\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}")
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Greater(t, result.Context.EstimatedInputTokens, 0)
+}
+
+func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
+	largeResult := strings.Repeat("large tool result line\n", 4000)
+	body := []byte(fmt.Sprintf(
+		"{\"model\":\"claude-sonnet-4-6\",\"messages\":["+
+			"{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"read_file\",\"input\":{\"path\":\"/tmp/a\"}}]},"+
+			"{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_01\",\"content\":%q},{\"type\":\"text\",\"text\":\"continue\"}]}]}",
+		largeResult,
+	))
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	translated := gjson.GetBytes(result.Payload,
+		"conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String()
+	require.Contains(t, translated, "[Output truncated for Kiro context:")
+	require.Less(t, result.Context.EstimatedInputTokens, anthropictokenizer.CountTokens(largeResult))
+}
 
 func TestBuildRuntimeUserAgentStable(t *testing.T) {
 	key := BuildAccountKey("client-id", "", "", "", 1)
