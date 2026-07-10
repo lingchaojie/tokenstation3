@@ -154,3 +154,4 @@ graphify-out/
 backend/graphify-out/
 # superpowers runtime dir at repo root (docs/superpowers/ stays tracked, see above)
 /.superpowers/
+/.worktrees/
