@@ -743,20 +743,38 @@ print()`
 function generateOpenAIImagen2PythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
   return {
     path: 'imagen2_client.py',
-    content: `from openai import OpenAI
+    content: `from base64 import b64decode
+from pathlib import Path
+
+from openai import OpenAI
 
 client = OpenAI(
     api_key="${apiKey}",
     base_url="${baseUrl}",
 )
 
-image = client.images.generate(
-    model="imagen-2",
+stream = client.images.generate(
+    model="gpt-image-2",
     prompt="A fox mascot using an AI gateway",
     size="1024x1024",
+    stream=True,
+    partial_images=2,
 )
 
-print(image.data[0].url)`
+for event in stream:
+    image_b64 = getattr(event, "b64_json", None)
+    if not image_b64:
+        continue
+
+    if event.type == "image_generation.partial_image":
+        output_path = Path(f"partial_{event.partial_image_index}.png")
+    elif event.type == "image_generation.completed":
+        output_path = Path("image.png")
+    else:
+        continue
+
+    output_path.write_bytes(b64decode(image_b64))
+    print(f"Wrote {output_path}")`
   }
 }
 

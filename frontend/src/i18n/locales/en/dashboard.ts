@@ -189,7 +189,7 @@ export default {
         workBuddy: 'WorkBuddy',
         anthropicPythonSdk: 'Python SDK',
         openaiPythonSdk: 'Python SDK',
-        openaiImagen2PythonSdk: 'Imagen 2 Python SDK',
+        openaiImagen2PythonSdk: 'GPT Image 2 Python SDK',
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
