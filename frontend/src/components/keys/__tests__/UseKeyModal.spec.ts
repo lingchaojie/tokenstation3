@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('vue-i18n', () => ({
@@ -15,6 +15,15 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
+
+function generatedFileContent(wrapper: VueWrapper, pathSuffix: string): string {
+  const panel = wrapper.findAll('.linx-code-panel').find((candidate) =>
+    candidate.find('span.font-mono').text().endsWith(pathSuffix)
+  )
+
+  expect(panel, `generated file ending in ${pathSuffix}`).toBeDefined()
+  return panel!.find('pre code').text()
+}
 
 describe('UseKeyModal', () => {
   it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
@@ -287,12 +296,15 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
   })
 
-  it('renders GPT-5.5 and goals feature in OpenAI Codex config', () => {
+  it.each([
+    ['https://example.com', 'https://example.com/v1'],
+    ['https://example.com/v1/', 'https://example.com/v1']
+  ])('renders a complete Codex config/auth contract for %s', (baseUrl, expectedBaseUrl) => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
         apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
+        baseUrl,
         platform: 'openai'
       },
       global: {
@@ -307,16 +319,19 @@ describe('UseKeyModal', () => {
       }
     })
 
-    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
+    const configToml = generatedFileContent(wrapper, 'config.toml')
+    const authJson = generatedFileContent(wrapper, 'auth.json')
 
-    expect(configToml).toBeDefined()
+    expect(configToml).toContain('model_provider = "OpenAI"')
     expect(configToml).toContain('model = "gpt-5.5"')
     expect(configToml).toContain('review_model = "gpt-5.5"')
-    expect(configToml).not.toContain('model = "gpt-5.4"')
-    expect(configToml).not.toContain('model_context_window')
-    expect(configToml).not.toContain('model_auto_compact_token_limit')
+    expect(configToml).toContain(`[model_providers.OpenAI]\nname = "OpenAI"\nbase_url = "${expectedBaseUrl}"`)
+    expect(configToml).toContain('wire_api = "responses"')
+    expect(configToml).toContain('requires_openai_auth = true')
     expect(configToml).toContain('[features]\ngoals = true')
+    expect(configToml).not.toContain('sk-test')
+    expect(configToml).not.toContain('env_key')
+    expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {

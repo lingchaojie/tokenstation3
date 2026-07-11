@@ -472,7 +472,7 @@ const currentFiles = computed((): FileConfig[] => {
         return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
       if (activeClientTab.value === 'codex') {
-        return generateOpenAIFiles(baseUrl, apiKey)
+        return generateOpenAIFiles(apiBase, apiKey)
       }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
@@ -490,7 +490,7 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
         return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
-      return generateOpenAIFiles(baseUrl, apiKey)
+      return generateOpenAIFiles(apiBase, apiKey)
     case 'gemini':
       // Gemini CLI appends /v1beta itself; GOOGLE_GEMINI_BASE_URL must be bare.
       return [generateGeminiCliContent(baseRoot, apiKey)]
