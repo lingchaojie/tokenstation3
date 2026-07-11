@@ -365,7 +365,7 @@ describe('UseKeyModal', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('keys.useKeyModal.openai.description')
-    expect(wrapper.text()).toContain('keys.useKeyModal.openai.note')
+    expect(wrapper.find('div.bg-blue-50 > p').text()).toBe('keys.useKeyModal.openai.note')
     expect(wrapper.text()).not.toContain('keys.useKeyModal.unified.note')
 
     const windowsTab = wrapper.findAll('nav[aria-label="Tabs"] button').find((button) =>
@@ -375,7 +375,7 @@ describe('UseKeyModal', () => {
     await windowsTab!.trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('keys.useKeyModal.openai.noteWindows')
+    expect(wrapper.find('div.bg-blue-50 > p').text()).toBe('keys.useKeyModal.openai.noteWindows')
   })
 
   it('documents safe Codex auth.json handling in Chinese and English', () => {
@@ -387,11 +387,17 @@ describe('UseKeyModal', () => {
     expect(zhOpenAI.note).toContain('OPENAI_API_KEY')
     expect(zhOpenAI.note).toContain('env_key')
     expect(zhOpenAI.note).toContain('重启 Codex')
+    expect(zhOpenAI.noteWindows).toContain('OPENAI_API_KEY')
+    expect(zhOpenAI.noteWindows).toContain('env_key')
+    expect(zhOpenAI.noteWindows).toContain('重启 Codex')
     expect(enOpenAI.description).toContain('config.toml')
     expect(enOpenAI.description).toContain('auth.json')
     expect(enOpenAI.note).toContain('OPENAI_API_KEY')
     expect(enOpenAI.note).toContain('env_key')
     expect(enOpenAI.note).toContain('restart Codex')
+    expect(enOpenAI.noteWindows).toContain('OPENAI_API_KEY')
+    expect(enOpenAI.noteWindows).toContain('env_key')
+    expect(enOpenAI.noteWindows).toContain('restart Codex')
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {
