@@ -6,7 +6,7 @@ Replace the existing non-streaming, incorrectly named image example in the user 
 
 ## Scope
 
-This change is limited to the existing OpenAI image Python SDK tab in `UseKeyModal.vue`, its Chinese and English tab labels, and the focused component tests.
+This change is limited to the existing OpenAI image Python SDK tab in `UseKeyModal.vue`, its availability for OpenAI and unified keys, the client-tab wrapping layout, its Chinese and English tab labels, and the focused component tests.
 
 The change does not alter gateway routes, backend streaming behavior, image model routing, pricing, or account configuration.
 
@@ -28,6 +28,18 @@ That example no longer matches the supported GPT Image 2 contract:
 Reuse the existing dedicated image SDK tab instead of mixing image generation into the general OpenAI Responses text-streaming example.
 
 Rename its visible Chinese and English label from `Imagen 2 Python SDK` to `GPT Image 2 Python SDK`. Keep the internal tab ID and locale key unchanged to avoid unnecessary component churn.
+
+Show the dedicated image SDK tab for both OpenAI keys and unified keys. The unified-key order will be:
+
+1. `Claude Code`
+2. `Codex CLI`
+3. `WorkBuddy`
+4. `OpenCode`
+5. `Anthropic Python SDK`
+6. `OpenAI Python SDK`
+7. `GPT Image 2 Python SDK`
+
+The client-tab navigation will wrap onto additional lines instead of scrolling horizontally. Use flex wrapping with horizontal and vertical gaps so a new row starts flush left without inheriting `space-x` margins. Existing tab order remains unchanged apart from appending GPT Image 2 to unified keys.
 
 ### Generated Python example
 
@@ -65,6 +77,12 @@ The focused `UseKeyModal.spec.ts` test will verify that the generated example co
 - base64 decoding;
 - partial and completed output paths.
 
+The tab-layout tests will verify:
+
+- OpenAI keys retain their existing order and end with `GPT Image 2 Python SDK`.
+- Unified keys retain both `Anthropic Python SDK` and `OpenAI Python SDK`, then append `GPT Image 2 Python SDK`.
+- The client navigation uses wrapping with horizontal and vertical gaps and does not use horizontal scrolling.
+
 The locale test will verify the Chinese and English tab labels both use `GPT Image 2 Python SDK`.
 
 The focused component suite will run before implementation to demonstrate failure, then again after implementation. Frontend type checking and the existing final verification workflow will cover the completed combined change.
@@ -74,5 +92,7 @@ The focused component suite will run before implementation to demonstrate failur
 - A user can copy the dedicated example and receive progressive GPT Image 2 output through this project’s gateway.
 - The example writes preview files while streaming and a stable final `image.png` on completion.
 - The public model name is `gpt-image-2` everywhere in the generated example and visible tab label.
+- Both OpenAI and unified keys expose the dedicated GPT Image 2 example.
+- Client tabs wrap onto additional rows when they do not fit, with each row left-aligned.
 - The general OpenAI text-streaming SDK example remains unchanged.
 - Focused tests and frontend static validation pass.
