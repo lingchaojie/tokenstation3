@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('vue-i18n', () => ({
@@ -15,6 +15,65 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
+import zhDashboard from '@/i18n/locales/zh/dashboard'
+import enDashboard from '@/i18n/locales/en/dashboard'
+
+function generatedFileContent(wrapper: VueWrapper, pathSuffix: string): string {
+  const panel = wrapper.findAll('.linx-code-panel').find((candidate) =>
+    candidate.find('span.font-mono').text().endsWith(pathSuffix)
+  )
+
+  expect(panel, `generated file ending in ${pathSuffix}`).toBeDefined()
+  return panel!.find('pre code').text()
+}
+
+async function mountCodexExample(platform: 'openai' | 'unified', baseUrl: string) {
+  const wrapper = mount(UseKeyModal, {
+    props: {
+      show: true,
+      apiKey: 'sk-test',
+      baseUrl,
+      platform
+    },
+    global: {
+      stubs: {
+        BaseDialog: {
+          template: '<div><slot /><slot name="footer" /></div>'
+        },
+        Icon: {
+          template: '<span />'
+        }
+      }
+    }
+  })
+
+  const codexTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+    button.text().includes('keys.useKeyModal.cliTabs.codexCli')
+  )
+
+  expect(codexTab).toBeDefined()
+  await codexTab!.trigger('click')
+  await nextTick()
+
+  return wrapper
+}
+
+function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
+  const configToml = generatedFileContent(wrapper, 'config.toml')
+  const authJson = generatedFileContent(wrapper, 'auth.json')
+
+  expect(configToml).toContain('model_provider = "OpenAI"')
+  expect(configToml).toContain('model = "gpt-5.5"')
+  expect(configToml).toContain('review_model = "gpt-5.5"')
+  expect(configToml).toContain(`[model_providers.OpenAI]\nname = "OpenAI"\nbase_url = "${expectedBaseUrl}"`)
+  expect(configToml).toContain('wire_api = "responses"')
+  expect(configToml).toContain('requires_openai_auth = true')
+  expect(configToml).toContain('[features]\ngoals = true')
+  expect(configToml).not.toContain('sk-test')
+  expect(configToml).not.toContain('env_key')
+  expect(configToml).not.toMatch(/^\s*(?:api_)?key\s*=/m)
+  expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
+}
 
 describe('UseKeyModal', () => {
   it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
@@ -49,6 +108,45 @@ describe('UseKeyModal', () => {
       'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
     ])
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
+  })
+
+  it('keeps both unified SDK tabs, appends GPT Image 2, and wraps client tabs', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'unified'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const clientNav = wrapper.find('nav[aria-label="Client"]')
+    const tabLabels = clientNav.findAll('button').map((button) => button.text())
+
+    expect(tabLabels).toEqual([
+      'keys.useKeyModal.cliTabs.claudeCode',
+      'keys.useKeyModal.cliTabs.codexCli',
+      'keys.useKeyModal.cliTabs.workBuddy',
+      'keys.useKeyModal.cliTabs.opencode',
+      'keys.keyTypes.anthropic keys.useKeyModal.cliTabs.anthropicPythonSdk',
+      'keys.keyTypes.openai keys.useKeyModal.cliTabs.openaiPythonSdk',
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+    ])
+    expect(clientNav.classes()).toEqual(
+      expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
+    )
+    expect(clientNav.classes()).not.toContain('space-x-6')
+    expect(clientNav.classes()).not.toContain('overflow-x-auto')
   })
 
   it('renders WorkBuddy models.json with gateway-supported model ids', async () => {
@@ -248,13 +346,87 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('print(event.delta, end="", flush=True)')
   })
 
-  it('renders OpenAI Imagen 2 Python SDK image generation config', async () => {
+  it.each(['openai', 'unified'] as const)(
+    'renders a streaming GPT Image 2 Python SDK example for %s keys',
+    async (platform) => {
+      const wrapper = mount(UseKeyModal, {
+        props: {
+          show: true,
+          apiKey: 'sk-test',
+          baseUrl: 'https://example.com',
+          platform
+        },
+        global: {
+          stubs: {
+            BaseDialog: {
+              template: '<div><slot /><slot name="footer" /></div>'
+            },
+            Icon: {
+              template: '<span />'
+            }
+          }
+        }
+      })
+
+      const imagenTab = wrapper.findAll('button').find((button) =>
+        button.text().includes('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk')
+      )
+
+      expect(imagenTab).toBeDefined()
+      await imagenTab!.trigger('click')
+      await nextTick()
+
+      const codeBlock = wrapper.find('pre code')
+      expect(codeBlock.exists()).toBe(true)
+      expect(codeBlock.text()).toContain('from base64 import b64decode')
+      expect(codeBlock.text()).toContain('from pathlib import Path')
+      expect(codeBlock.text()).toContain('from openai import OpenAI')
+      expect(codeBlock.text()).toContain('api_key="sk-test"')
+      expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+      expect(codeBlock.text()).toContain('stream = client.images.generate(')
+      expect(codeBlock.text()).toContain('model="gpt-image-2"')
+      expect(codeBlock.text()).not.toContain('model="imagen-2"')
+      expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
+      expect(codeBlock.text()).toContain('stream=True')
+      expect(codeBlock.text()).toContain('partial_images=2')
+      expect(codeBlock.text()).toContain('event.type == "image_generation.partial_image"')
+      expect(codeBlock.text()).toContain('event.type == "image_generation.completed"')
+      expect(codeBlock.text()).toContain('image_b64 = getattr(event, "b64_json", None)')
+      expect(codeBlock.text()).toContain('if not image_b64:\n        continue')
+      expect(codeBlock.text()).toContain('Path(f"partial_{event.partial_image_index}.png")')
+      expect(codeBlock.text()).toContain('Path("image.png")')
+      expect(codeBlock.text()).toContain('else:\n        continue')
+      expect(codeBlock.text()).toContain('output_path.write_bytes(b64decode(image_b64))')
+      expect(codeBlock.text()).toContain('print(f"Wrote {output_path}")')
+    }
+  )
+
+  it('labels the image SDK tab as GPT Image 2 in Chinese and English', () => {
+    expect(zhDashboard.keys.useKeyModal.cliTabs.openaiImagen2PythonSdk).toBe(
+      'GPT Image 2 Python SDK'
+    )
+    expect(enDashboard.keys.useKeyModal.cliTabs.openaiImagen2PythonSdk).toBe(
+      'GPT Image 2 Python SDK'
+    )
+  })
+
+  it.each([
+    ['openai' as const, 'https://example.com', 'https://example.com/v1'],
+    ['openai' as const, 'https://example.com/v1/', 'https://example.com/v1'],
+    ['unified' as const, 'https://example.com/v1/', 'https://example.com/v1']
+  ])('renders a complete %s Codex config/auth contract for %s', async (platform, baseUrl, expectedBaseUrl) => {
+    const wrapper = await mountCodexExample(platform, baseUrl)
+
+    expectCodexFileContract(wrapper, expectedBaseUrl)
+  })
+
+  it('shows Codex-specific guidance when a unified key selects Codex', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
         apiKey: 'sk-test',
         baseUrl: 'https://example.com',
-        platform: 'openai'
+        platform: 'unified'
       },
       global: {
         stubs: {
@@ -268,55 +440,48 @@ describe('UseKeyModal', () => {
       }
     })
 
-    const imagenTab = wrapper.findAll('button').find((button) =>
-      button.text().includes('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk')
+    const codexTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.codexCli')
     )
 
-    expect(imagenTab).toBeDefined()
-    await imagenTab!.trigger('click')
+    expect(codexTab).toBeDefined()
+    await codexTab!.trigger('click')
     await nextTick()
 
-    const codeBlock = wrapper.find('pre code')
-    expect(codeBlock.exists()).toBe(true)
-    expect(codeBlock.text()).toContain('from openai import OpenAI')
-    expect(codeBlock.text()).toContain('client = OpenAI(')
-    expect(codeBlock.text()).toContain('api_key="sk-test"')
-    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
-    expect(codeBlock.text()).toContain('image = client.images.generate(')
-    expect(codeBlock.text()).toContain('model="imagen-2"')
-    expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
+    expect(wrapper.text()).toContain('keys.useKeyModal.openai.description')
+    expect(wrapper.find('div.bg-blue-50 > p').text()).toBe('keys.useKeyModal.openai.note')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.unified.note')
+
+    const windowsTab = wrapper.findAll('nav[aria-label="Tabs"] button').find((button) =>
+      button.text().includes('Windows')
+    )
+    expect(windowsTab).toBeDefined()
+    await windowsTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('div.bg-blue-50 > p').text()).toBe('keys.useKeyModal.openai.noteWindows')
   })
 
-  it('renders GPT-5.5 and goals feature in OpenAI Codex config', () => {
-    const wrapper = mount(UseKeyModal, {
-      props: {
-        show: true,
-        apiKey: 'sk-test',
-        baseUrl: 'https://example.com/v1',
-        platform: 'openai'
-      },
-      global: {
-        stubs: {
-          BaseDialog: {
-            template: '<div><slot /><slot name="footer" /></div>'
-          },
-          Icon: {
-            template: '<span />'
-          }
-        }
-      }
-    })
+  it('documents safe Codex auth.json handling in Chinese and English', () => {
+    const zhOpenAI = zhDashboard.keys.useKeyModal.openai
+    const enOpenAI = enDashboard.keys.useKeyModal.openai
 
-    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
-
-    expect(configToml).toBeDefined()
-    expect(configToml).toContain('model = "gpt-5.5"')
-    expect(configToml).toContain('review_model = "gpt-5.5"')
-    expect(configToml).not.toContain('model = "gpt-5.4"')
-    expect(configToml).not.toContain('model_context_window')
-    expect(configToml).not.toContain('model_auto_compact_token_limit')
-    expect(configToml).toContain('[features]\ngoals = true')
+    expect(zhOpenAI.description).toContain('config.toml')
+    expect(zhOpenAI.description).toContain('auth.json')
+    expect(zhOpenAI.note).toContain('OPENAI_API_KEY')
+    expect(zhOpenAI.note).toContain('env_key')
+    expect(zhOpenAI.note).toContain('重启 Codex')
+    expect(zhOpenAI.noteWindows).toContain('OPENAI_API_KEY')
+    expect(zhOpenAI.noteWindows).toContain('env_key')
+    expect(zhOpenAI.noteWindows).toContain('重启 Codex')
+    expect(enOpenAI.description).toContain('config.toml')
+    expect(enOpenAI.description).toContain('auth.json')
+    expect(enOpenAI.note).toContain('OPENAI_API_KEY')
+    expect(enOpenAI.note).toContain('env_key')
+    expect(enOpenAI.note).toContain('restart Codex')
+    expect(enOpenAI.noteWindows).toContain('OPENAI_API_KEY')
+    expect(enOpenAI.noteWindows).toContain('env_key')
+    expect(enOpenAI.noteWindows).toContain('restart Codex')
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {

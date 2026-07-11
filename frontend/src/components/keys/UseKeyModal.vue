@@ -30,7 +30,7 @@
 
         <!-- Client Tabs -->
         <div v-if="clientTabs.length" class="border-b border-gray-200 dark:border-dark-700">
-          <nav class="-mb-px flex space-x-6" aria-label="Client">
+          <nav class="-mb-px flex flex-wrap gap-x-6 gap-y-1" aria-label="Client">
             <button
               v-for="tab in clientTabs"
               :key="tab.id"
@@ -275,6 +275,7 @@ const clientTabs = computed((): TabConfig[] => {
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
+        { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
       ]
     case 'openai': {
       const tabs: TabConfig[] = []
@@ -343,6 +344,9 @@ const platformDescription = computed(() => {
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.description')
   }
+  if (activeClientTab.value === 'codex') {
+    return t('keys.useKeyModal.openai.description')
+  }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.description')
   }
@@ -366,6 +370,11 @@ const platformDescription = computed(() => {
 const platformNote = computed(() => {
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.note')
+  }
+  if (activeClientTab.value === 'codex') {
+    return activeTab.value === 'windows'
+      ? t('keys.useKeyModal.openai.noteWindows')
+      : t('keys.useKeyModal.openai.note')
   }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.note')
@@ -472,10 +481,13 @@ const currentFiles = computed((): FileConfig[] => {
         return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
       if (activeClientTab.value === 'codex') {
-        return generateOpenAIFiles(baseUrl, apiKey)
+        return generateOpenAIFiles(apiBase, apiKey)
       }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
+      }
+      if (activeClientTab.value === 'openai-imagen2-python-sdk') {
+        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
       // default unified client is Claude Code; ANTHROPIC_BASE_URL must be bare.
       return generateAnthropicFiles(baseRoot, apiKey)
@@ -490,7 +502,7 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
         return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
-      return generateOpenAIFiles(baseUrl, apiKey)
+      return generateOpenAIFiles(apiBase, apiKey)
     case 'gemini':
       // Gemini CLI appends /v1beta itself; GOOGLE_GEMINI_BASE_URL must be bare.
       return [generateGeminiCliContent(baseRoot, apiKey)]
@@ -735,20 +747,38 @@ print()`
 function generateOpenAIImagen2PythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
   return {
     path: 'imagen2_client.py',
-    content: `from openai import OpenAI
+    content: `from base64 import b64decode
+from pathlib import Path
+
+from openai import OpenAI
 
 client = OpenAI(
     api_key="${apiKey}",
     base_url="${baseUrl}",
 )
 
-image = client.images.generate(
-    model="imagen-2",
+stream = client.images.generate(
+    model="gpt-image-2",
     prompt="A fox mascot using an AI gateway",
     size="1024x1024",
+    stream=True,
+    partial_images=2,
 )
 
-print(image.data[0].url)`
+for event in stream:
+    image_b64 = getattr(event, "b64_json", None)
+    if not image_b64:
+        continue
+
+    if event.type == "image_generation.partial_image":
+        output_path = Path(f"partial_{event.partial_image_index}.png")
+    elif event.type == "image_generation.completed":
+        output_path = Path("image.png")
+    else:
+        continue
+
+    output_path.write_bytes(b64decode(image_b64))
+    print(f"Wrote {output_path}")`
   }
 }
 
