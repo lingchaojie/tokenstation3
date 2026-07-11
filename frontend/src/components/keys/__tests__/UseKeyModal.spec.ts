@@ -27,6 +27,54 @@ function generatedFileContent(wrapper: VueWrapper, pathSuffix: string): string {
   return panel!.find('pre code').text()
 }
 
+async function mountCodexExample(platform: 'openai' | 'unified', baseUrl: string) {
+  const wrapper = mount(UseKeyModal, {
+    props: {
+      show: true,
+      apiKey: 'sk-test',
+      baseUrl,
+      platform
+    },
+    global: {
+      stubs: {
+        BaseDialog: {
+          template: '<div><slot /><slot name="footer" /></div>'
+        },
+        Icon: {
+          template: '<span />'
+        }
+      }
+    }
+  })
+
+  const codexTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+    button.text().includes('keys.useKeyModal.cliTabs.codexCli')
+  )
+
+  expect(codexTab).toBeDefined()
+  await codexTab!.trigger('click')
+  await nextTick()
+
+  return wrapper
+}
+
+function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
+  const configToml = generatedFileContent(wrapper, 'config.toml')
+  const authJson = generatedFileContent(wrapper, 'auth.json')
+
+  expect(configToml).toContain('model_provider = "OpenAI"')
+  expect(configToml).toContain('model = "gpt-5.5"')
+  expect(configToml).toContain('review_model = "gpt-5.5"')
+  expect(configToml).toContain(`[model_providers.OpenAI]\nname = "OpenAI"\nbase_url = "${expectedBaseUrl}"`)
+  expect(configToml).toContain('wire_api = "responses"')
+  expect(configToml).toContain('requires_openai_auth = true')
+  expect(configToml).toContain('[features]\ngoals = true')
+  expect(configToml).not.toContain('sk-test')
+  expect(configToml).not.toContain('env_key')
+  expect(configToml).not.toMatch(/^\s*(?:api_)?key\s*=/m)
+  expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
+}
+
 describe('UseKeyModal', () => {
   it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
     const wrapper = mount(UseKeyModal, {
@@ -302,9 +350,13 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('partial_images=2')
     expect(codeBlock.text()).toContain('event.type == "image_generation.partial_image"')
     expect(codeBlock.text()).toContain('event.type == "image_generation.completed"')
+    expect(codeBlock.text()).toContain('image_b64 = getattr(event, "b64_json", None)')
+    expect(codeBlock.text()).toContain('if not image_b64:\n        continue')
     expect(codeBlock.text()).toContain('Path(f"partial_{event.partial_image_index}.png")')
     expect(codeBlock.text()).toContain('Path("image.png")')
+    expect(codeBlock.text()).toContain('else:\n        continue')
     expect(codeBlock.text()).toContain('output_path.write_bytes(b64decode(image_b64))')
+    expect(codeBlock.text()).toContain('print(f"Wrote {output_path}")')
   })
 
   it('labels the image SDK tab as GPT Image 2 in Chinese and English', () => {
@@ -317,41 +369,13 @@ describe('UseKeyModal', () => {
   })
 
   it.each([
-    ['https://example.com', 'https://example.com/v1'],
-    ['https://example.com/v1/', 'https://example.com/v1']
-  ])('renders a complete Codex config/auth contract for %s', (baseUrl, expectedBaseUrl) => {
-    const wrapper = mount(UseKeyModal, {
-      props: {
-        show: true,
-        apiKey: 'sk-test',
-        baseUrl,
-        platform: 'openai'
-      },
-      global: {
-        stubs: {
-          BaseDialog: {
-            template: '<div><slot /><slot name="footer" /></div>'
-          },
-          Icon: {
-            template: '<span />'
-          }
-        }
-      }
-    })
+    ['openai' as const, 'https://example.com', 'https://example.com/v1'],
+    ['openai' as const, 'https://example.com/v1/', 'https://example.com/v1'],
+    ['unified' as const, 'https://example.com/v1/', 'https://example.com/v1']
+  ])('renders a complete %s Codex config/auth contract for %s', async (platform, baseUrl, expectedBaseUrl) => {
+    const wrapper = await mountCodexExample(platform, baseUrl)
 
-    const configToml = generatedFileContent(wrapper, 'config.toml')
-    const authJson = generatedFileContent(wrapper, 'auth.json')
-
-    expect(configToml).toContain('model_provider = "OpenAI"')
-    expect(configToml).toContain('model = "gpt-5.5"')
-    expect(configToml).toContain('review_model = "gpt-5.5"')
-    expect(configToml).toContain(`[model_providers.OpenAI]\nname = "OpenAI"\nbase_url = "${expectedBaseUrl}"`)
-    expect(configToml).toContain('wire_api = "responses"')
-    expect(configToml).toContain('requires_openai_auth = true')
-    expect(configToml).toContain('[features]\ngoals = true')
-    expect(configToml).not.toContain('sk-test')
-    expect(configToml).not.toContain('env_key')
-    expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
+    expectCodexFileContract(wrapper, expectedBaseUrl)
   })
 
   it('shows Codex-specific guidance when a unified key selects Codex', async () => {
