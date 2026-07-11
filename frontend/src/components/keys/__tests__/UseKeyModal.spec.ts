@@ -15,6 +15,8 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
+import zhDashboard from '@/i18n/locales/zh/dashboard'
+import enDashboard from '@/i18n/locales/en/dashboard'
 
 function generatedFileContent(wrapper: VueWrapper, pathSuffix: string): string {
   const panel = wrapper.findAll('.linx-code-panel').find((candidate) =>
@@ -332,6 +334,64 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('sk-test')
     expect(configToml).not.toContain('env_key')
     expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
+  })
+
+  it('shows Codex-specific guidance when a unified key selects Codex', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'unified'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const codexTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.codexCli')
+    )
+
+    expect(codexTab).toBeDefined()
+    await codexTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.openai.description')
+    expect(wrapper.text()).toContain('keys.useKeyModal.openai.note')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.unified.note')
+
+    const windowsTab = wrapper.findAll('nav[aria-label="Tabs"] button').find((button) =>
+      button.text().includes('Windows')
+    )
+    expect(windowsTab).toBeDefined()
+    await windowsTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.openai.noteWindows')
+  })
+
+  it('documents safe Codex auth.json handling in Chinese and English', () => {
+    const zhOpenAI = zhDashboard.keys.useKeyModal.openai
+    const enOpenAI = enDashboard.keys.useKeyModal.openai
+
+    expect(zhOpenAI.description).toContain('config.toml')
+    expect(zhOpenAI.description).toContain('auth.json')
+    expect(zhOpenAI.note).toContain('OPENAI_API_KEY')
+    expect(zhOpenAI.note).toContain('env_key')
+    expect(zhOpenAI.note).toContain('重启 Codex')
+    expect(enOpenAI.description).toContain('config.toml')
+    expect(enOpenAI.description).toContain('auth.json')
+    expect(enOpenAI.note).toContain('OPENAI_API_KEY')
+    expect(enOpenAI.note).toContain('env_key')
+    expect(enOpenAI.note).toContain('restart Codex')
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {

@@ -343,6 +343,9 @@ const platformDescription = computed(() => {
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.description')
   }
+  if (activeClientTab.value === 'codex') {
+    return t('keys.useKeyModal.openai.description')
+  }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.description')
   }
@@ -366,6 +369,11 @@ const platformDescription = computed(() => {
 const platformNote = computed(() => {
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.note')
+  }
+  if (activeClientTab.value === 'codex') {
+    return activeTab.value === 'windows'
+      ? t('keys.useKeyModal.openai.noteWindows')
+      : t('keys.useKeyModal.openai.note')
   }
   if (pythonSdkTabs.has(activeClientTab.value)) {
     return t('keys.useKeyModal.pythonSdk.note')
