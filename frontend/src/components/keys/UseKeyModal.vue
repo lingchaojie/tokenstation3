@@ -30,7 +30,7 @@
 
         <!-- Client Tabs -->
         <div v-if="clientTabs.length" class="border-b border-gray-200 dark:border-dark-700">
-          <nav class="-mb-px flex space-x-6" aria-label="Client">
+          <nav class="-mb-px flex flex-wrap gap-x-6 gap-y-1" aria-label="Client">
             <button
               v-for="tab in clientTabs"
               :key="tab.id"
@@ -275,6 +275,7 @@ const clientTabs = computed((): TabConfig[] => {
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
+        { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
       ]
     case 'openai': {
       const tabs: TabConfig[] = []
@@ -484,6 +485,9 @@ const currentFiles = computed((): FileConfig[] => {
       }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
+      }
+      if (activeClientTab.value === 'openai-imagen2-python-sdk') {
+        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
       // default unified client is Claude Code; ANTHROPIC_BASE_URL must be bare.
       return generateAnthropicFiles(baseRoot, apiKey)

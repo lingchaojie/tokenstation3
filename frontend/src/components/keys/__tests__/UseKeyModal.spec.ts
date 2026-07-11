@@ -110,6 +110,45 @@ describe('UseKeyModal', () => {
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
   })
 
+  it('keeps both unified SDK tabs, appends GPT Image 2, and wraps client tabs', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'unified'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const clientNav = wrapper.find('nav[aria-label="Client"]')
+    const tabLabels = clientNav.findAll('button').map((button) => button.text())
+
+    expect(tabLabels).toEqual([
+      'keys.useKeyModal.cliTabs.claudeCode',
+      'keys.useKeyModal.cliTabs.codexCli',
+      'keys.useKeyModal.cliTabs.workBuddy',
+      'keys.useKeyModal.cliTabs.opencode',
+      'keys.keyTypes.anthropic keys.useKeyModal.cliTabs.anthropicPythonSdk',
+      'keys.keyTypes.openai keys.useKeyModal.cliTabs.openaiPythonSdk',
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+    ])
+    expect(clientNav.classes()).toEqual(
+      expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
+    )
+    expect(clientNav.classes()).not.toContain('space-x-6')
+    expect(clientNav.classes()).not.toContain('overflow-x-auto')
+  })
+
   it('renders WorkBuddy models.json with gateway-supported model ids', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -307,57 +346,60 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('print(event.delta, end="", flush=True)')
   })
 
-  it('renders a streaming GPT Image 2 Python SDK example', async () => {
-    const wrapper = mount(UseKeyModal, {
-      props: {
-        show: true,
-        apiKey: 'sk-test',
-        baseUrl: 'https://example.com',
-        platform: 'openai'
-      },
-      global: {
-        stubs: {
-          BaseDialog: {
-            template: '<div><slot /><slot name="footer" /></div>'
-          },
-          Icon: {
-            template: '<span />'
+  it.each(['openai', 'unified'] as const)(
+    'renders a streaming GPT Image 2 Python SDK example for %s keys',
+    async (platform) => {
+      const wrapper = mount(UseKeyModal, {
+        props: {
+          show: true,
+          apiKey: 'sk-test',
+          baseUrl: 'https://example.com',
+          platform
+        },
+        global: {
+          stubs: {
+            BaseDialog: {
+              template: '<div><slot /><slot name="footer" /></div>'
+            },
+            Icon: {
+              template: '<span />'
+            }
           }
         }
-      }
-    })
+      })
 
-    const imagenTab = wrapper.findAll('button').find((button) =>
-      button.text().includes('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk')
-    )
+      const imagenTab = wrapper.findAll('button').find((button) =>
+        button.text().includes('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk')
+      )
 
-    expect(imagenTab).toBeDefined()
-    await imagenTab!.trigger('click')
-    await nextTick()
+      expect(imagenTab).toBeDefined()
+      await imagenTab!.trigger('click')
+      await nextTick()
 
-    const codeBlock = wrapper.find('pre code')
-    expect(codeBlock.exists()).toBe(true)
-    expect(codeBlock.text()).toContain('from base64 import b64decode')
-    expect(codeBlock.text()).toContain('from pathlib import Path')
-    expect(codeBlock.text()).toContain('from openai import OpenAI')
-    expect(codeBlock.text()).toContain('api_key="sk-test"')
-    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
-    expect(codeBlock.text()).toContain('stream = client.images.generate(')
-    expect(codeBlock.text()).toContain('model="gpt-image-2"')
-    expect(codeBlock.text()).not.toContain('model="imagen-2"')
-    expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
-    expect(codeBlock.text()).toContain('stream=True')
-    expect(codeBlock.text()).toContain('partial_images=2')
-    expect(codeBlock.text()).toContain('event.type == "image_generation.partial_image"')
-    expect(codeBlock.text()).toContain('event.type == "image_generation.completed"')
-    expect(codeBlock.text()).toContain('image_b64 = getattr(event, "b64_json", None)')
-    expect(codeBlock.text()).toContain('if not image_b64:\n        continue')
-    expect(codeBlock.text()).toContain('Path(f"partial_{event.partial_image_index}.png")')
-    expect(codeBlock.text()).toContain('Path("image.png")')
-    expect(codeBlock.text()).toContain('else:\n        continue')
-    expect(codeBlock.text()).toContain('output_path.write_bytes(b64decode(image_b64))')
-    expect(codeBlock.text()).toContain('print(f"Wrote {output_path}")')
-  })
+      const codeBlock = wrapper.find('pre code')
+      expect(codeBlock.exists()).toBe(true)
+      expect(codeBlock.text()).toContain('from base64 import b64decode')
+      expect(codeBlock.text()).toContain('from pathlib import Path')
+      expect(codeBlock.text()).toContain('from openai import OpenAI')
+      expect(codeBlock.text()).toContain('api_key="sk-test"')
+      expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+      expect(codeBlock.text()).toContain('stream = client.images.generate(')
+      expect(codeBlock.text()).toContain('model="gpt-image-2"')
+      expect(codeBlock.text()).not.toContain('model="imagen-2"')
+      expect(codeBlock.text()).toContain('prompt="A fox mascot using an AI gateway"')
+      expect(codeBlock.text()).toContain('stream=True')
+      expect(codeBlock.text()).toContain('partial_images=2')
+      expect(codeBlock.text()).toContain('event.type == "image_generation.partial_image"')
+      expect(codeBlock.text()).toContain('event.type == "image_generation.completed"')
+      expect(codeBlock.text()).toContain('image_b64 = getattr(event, "b64_json", None)')
+      expect(codeBlock.text()).toContain('if not image_b64:\n        continue')
+      expect(codeBlock.text()).toContain('Path(f"partial_{event.partial_image_index}.png")')
+      expect(codeBlock.text()).toContain('Path("image.png")')
+      expect(codeBlock.text()).toContain('else:\n        continue')
+      expect(codeBlock.text()).toContain('output_path.write_bytes(b64decode(image_b64))')
+      expect(codeBlock.text()).toContain('print(f"Wrote {output_path}")')
+    }
+  )
 
   it('labels the image SDK tab as GPT Image 2 in Chinese and English', () => {
     expect(zhDashboard.keys.useKeyModal.cliTabs.openaiImagen2PythonSdk).toBe(
