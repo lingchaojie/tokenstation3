@@ -4,7 +4,7 @@
 
 **Goal:** Replace the existing synchronous, incorrectly named image example with a copy-pasteable GPT Image 2 Python SDK streaming example that writes partial previews and a final PNG.
 
-**Architecture:** Reuse the dedicated OpenAI image SDK tab and its existing generator. Change only the generated Python content, the visible bilingual label, and focused component contract tests; the backend streaming gateway remains untouched.
+**Architecture:** Reuse the dedicated OpenAI image SDK tab and its existing generator. Expose the same tab for unified keys, let the client navigation wrap with gap-based spacing, and cover both key types in focused component contract tests; the backend streaming gateway remains untouched.
 
 **Tech Stack:** Vue 3 Composition API, TypeScript, Vue Test Utils, Vitest, vue-i18n, OpenAI Python SDK.
 
@@ -15,6 +15,9 @@
 - Use the dedicated Images API with `stream=True` and `partial_images=2`.
 - Decode `b64_json`, write partial previews as `partial_<index>.png`, and write the completion event as `image.png`.
 - Leave the general OpenAI Responses text-streaming example unchanged.
+- Expose `GPT Image 2 Python SDK` for both OpenAI and unified keys.
+- Preserve the unified order `Claude Code`, `Codex CLI`, `WorkBuddy`, `OpenCode`, `Anthropic Python SDK`, `OpenAI Python SDK`, `GPT Image 2 Python SDK`.
+- Wrap client tabs onto additional left-aligned rows; do not add horizontal scrolling.
 - Do not change backend routes, model routing, pricing, or account behavior.
 - Stage and commit only files named by this task; preserve unrelated workspace changes.
 
@@ -190,3 +193,152 @@ git commit -m "feat(keys): stream GPT Image 2 SDK example"
 ```
 
 Expected: one task-scoped commit containing only the component, focused test, and two locale files.
+
+---
+
+### Task 2: Expose GPT Image 2 for Unified Keys and Wrap Client Tabs
+
+**Files:**
+- Modify: `frontend/src/components/keys/__tests__/UseKeyModal.spec.ts:70-370`
+- Modify: `frontend/src/components/keys/UseKeyModal.vue:25-55,270-305,475-490`
+
+**Interfaces:**
+- Consumes: `clientTabs`, `currentFiles`, `pythonSdkTabs`, and `generateOpenAIImagen2PythonSdkFile(baseUrl: string, apiKey: string)`.
+- Produces: a unified-key `openai-imagen2-python-sdk` tab that renders `imagen2_client.py`, plus a wrapping `nav[aria-label="Client"]` layout.
+
+- [ ] **Step 1: Add a failing unified tab-order and wrapping-layout test**
+
+Add this test immediately after the existing OpenAI tab-order test:
+
+```ts
+it('keeps both unified SDK tabs, appends GPT Image 2, and wraps client tabs', () => {
+  const wrapper = mount(UseKeyModal, {
+    props: {
+      show: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://example.com',
+      platform: 'unified'
+    },
+    global: {
+      stubs: {
+        BaseDialog: {
+          template: '<div><slot /><slot name="footer" /></div>'
+        },
+        Icon: {
+          template: '<span />'
+        }
+      }
+    }
+  })
+
+  const clientNav = wrapper.find('nav[aria-label="Client"]')
+  const tabLabels = clientNav.findAll('button').map((button) => button.text())
+
+  expect(tabLabels).toEqual([
+    'keys.useKeyModal.cliTabs.claudeCode',
+    'keys.useKeyModal.cliTabs.codexCli',
+    'keys.useKeyModal.cliTabs.workBuddy',
+    'keys.useKeyModal.cliTabs.opencode',
+    'keys.keyTypes.anthropic keys.useKeyModal.cliTabs.anthropicPythonSdk',
+    'keys.keyTypes.openai keys.useKeyModal.cliTabs.openaiPythonSdk',
+    'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+  ])
+  expect(clientNav.classes()).toEqual(
+    expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
+  )
+  expect(clientNav.classes()).not.toContain('space-x-6')
+  expect(clientNav.classes()).not.toContain('overflow-x-auto')
+})
+```
+
+- [ ] **Step 2: Make the image generated-code contract run for both key types**
+
+Change the existing image test signature from:
+
+```ts
+it('renders a streaming GPT Image 2 Python SDK example', async () => {
+```
+
+to:
+
+```ts
+it.each(['openai', 'unified'] as const)(
+  'renders a streaming GPT Image 2 Python SDK example for %s keys',
+  async (platform) => {
+```
+
+Use `platform` in the mount props and close the table test with `})`. Keep every existing generated-code assertion unchanged.
+
+- [ ] **Step 3: Run the focused suite and verify the new cases fail**
+
+Run from the worktree `frontend` directory:
+
+```bash
+/home/alvin/tokenstation3/frontend/node_modules/.bin/vitest run src/components/keys/__tests__/UseKeyModal.spec.ts
+```
+
+Expected: FAIL because unified keys do not contain `openai-imagen2-python-sdk`, clicking that tab is impossible, and the client nav still uses `space-x-6` without `flex-wrap`.
+
+- [ ] **Step 4: Append the image tab to unified keys**
+
+Append this item after the unified OpenAI Python SDK item in `clientTabs`:
+
+```ts
+{ id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+```
+
+- [ ] **Step 5: Generate the image example for unified keys**
+
+Add this branch after the unified `openai-python-sdk` branch in `currentFiles`:
+
+```ts
+if (activeClientTab.value === 'openai-imagen2-python-sdk') {
+  return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
+}
+```
+
+- [ ] **Step 6: Replace margin-based tab spacing with wrapping gaps**
+
+Change the client navigation class from:
+
+```vue
+<nav class="-mb-px flex space-x-6" aria-label="Client">
+```
+
+to:
+
+```vue
+<nav class="-mb-px flex flex-wrap gap-x-6 gap-y-1" aria-label="Client">
+```
+
+Do not add overflow or scrolling classes.
+
+- [ ] **Step 7: Run focused and static validation**
+
+Run:
+
+```bash
+cd frontend
+/home/alvin/tokenstation3/frontend/node_modules/.bin/vitest run src/components/keys/__tests__/UseKeyModal.spec.ts
+/home/alvin/tokenstation3/frontend/node_modules/.bin/vue-tsc --noEmit
+/home/alvin/tokenstation3/frontend/node_modules/.bin/eslint \
+  src/components/keys/UseKeyModal.vue \
+  src/components/keys/__tests__/UseKeyModal.spec.ts
+```
+
+Expected: the focused suite passes with 19 tests; type checking and targeted ESLint exit zero.
+
+- [ ] **Step 8: Check scope and commit**
+
+Run:
+
+```bash
+git diff --check
+git diff -- frontend/src/components/keys/UseKeyModal.vue \
+  frontend/src/components/keys/__tests__/UseKeyModal.spec.ts
+git add frontend/src/components/keys/UseKeyModal.vue \
+  frontend/src/components/keys/__tests__/UseKeyModal.spec.ts
+git commit -m "feat(keys): expose image SDK for unified keys"
+```
+
+Expected: one task-scoped commit containing only the component and focused test.
