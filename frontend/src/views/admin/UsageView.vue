@@ -533,11 +533,9 @@ const applyFilters = () => {
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
   loadChartData()
-  errPage.value = 1
+  invalidateAdminErrors()
   if (activeTab.value === 'errors') {
     loadAdminErrors()
-  } else {
-    errRows.value = []
   }
 }
 const refreshData = () => {
@@ -812,6 +810,14 @@ const errSortOrder = ref<'asc' | 'desc'>('desc')
 const showErrorModal = ref(false)
 const selectedErrorId = ref<number | null>(null)
 
+const invalidateAdminErrors = () => {
+  adminErrorsReqSeq += 1
+  errLoading.value = false
+  errRows.value = []
+  errTotal.value = 0
+  errPage.value = 1
+}
+
 const errErrorTypeOptions = computed(() => [
   { value: '', label: t('common.all') },
   { value: 'rate_limit_error', label: 'rate_limit_error' },
@@ -849,7 +855,7 @@ const resetErrFilterValues = () => {
 }
 
 const onErrFilterChange = () => {
-  errPage.value = 1
+  invalidateAdminErrors()
   if (activeTab.value === 'errors') {
     loadAdminErrors()
   }

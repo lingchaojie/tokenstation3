@@ -562,6 +562,74 @@ describe('admin UsageView errors tab filter forwarding', () => {
     expect(vm.errLoading).toBe(false)
     expect(vm.errRows).toEqual([{ id: 22 }])
   })
+
+  it.each(['resolve', 'reject'] as const)(
+    'invalidates an in-flight Errors request when inactive filters change and the stale request %ss',
+    async (staleOutcome) => {
+      const stale = deferred<{ items: Array<{ id: number }>; total: number; pages: number }>()
+      const current = deferred<{ items: Array<{ id: number }>; total: number; pages: number }>()
+      listErrorLogs
+        .mockImplementationOnce(() => stale.promise)
+        .mockImplementationOnce(() => current.promise)
+
+      const wrapper = mount(UsageView, {
+        global: { stubs: {
+          AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+          UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+          UserBalanceHistoryModal: true, AuditLogModal: true, Pagination: true, Select: true,
+          DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+          ModelDistributionChart: true, GroupDistributionChart: true, EndpointDistributionChart: true,
+          UserTokenRanking: true, OpsErrorLogTable: true, OpsErrorDetailModal: true,
+        } },
+      })
+      vi.advanceTimersByTime(120)
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      const tabs = wrapper.findAll('[data-testid="usage-detail-tab"]')
+      await tabs[1].trigger('click')
+      await flushPromises()
+      expect(listErrorLogs).toHaveBeenCalledTimes(1)
+
+      await tabs[0].trigger('click')
+      vm.errPage = 3
+      vm.errTotal = 9
+      vm.filters.exclude_user_ids = [8]
+      vm.applyFilters()
+      await flushPromises()
+
+      expect(vm.errPage).toBe(1)
+      expect(vm.errRows).toEqual([])
+      expect(vm.errTotal).toBe(0)
+      expect(vm.errLoading).toBe(false)
+
+      if (staleOutcome === 'resolve') {
+        stale.resolve({ items: [{ id: 11 }], total: 99, pages: 1 })
+      } else {
+        stale.reject(new Error('stale inactive request failed'))
+      }
+      await flushPromises()
+
+      expect(vm.errRows).toEqual([])
+      expect(vm.errTotal).toBe(0)
+      expect(vm.errLoading).toBe(false)
+      expect(showError).not.toHaveBeenCalled()
+      expect(listErrorLogs).toHaveBeenCalledTimes(1)
+
+      await tabs[1].trigger('click')
+      await flushPromises()
+      expect(listErrorLogs).toHaveBeenCalledTimes(2)
+      expect(listErrorLogs).toHaveBeenLastCalledWith(expect.objectContaining({
+        exclude_user_ids: [8],
+      }))
+
+      current.resolve({ items: [{ id: 22 }], total: 1, pages: 1 })
+      await flushPromises()
+      expect(vm.errRows).toEqual([{ id: 22 }])
+      expect(vm.errTotal).toBe(1)
+      expect(vm.errLoading).toBe(false)
+    },
+  )
 })
 
 describe('admin UsageView ranking tab', () => {
