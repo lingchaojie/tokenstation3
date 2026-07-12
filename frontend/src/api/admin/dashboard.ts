@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from '../client'
+import { withEncodedExcludedUserIds } from '@/utils/excludedUserIds'
 import type {
   DashboardStats,
   TrendDataPoint,
@@ -49,6 +50,7 @@ export interface TrendParams {
   end_date?: string
   granularity?: 'day' | 'hour'
   user_id?: number
+  exclude_user_ids?: number[]
   api_key_id?: number
   model?: string
   account_id?: number
@@ -71,7 +73,9 @@ export interface TrendResponse {
  * @returns Usage trend data
  */
 export async function getUsageTrend(params?: TrendParams): Promise<TrendResponse> {
-  const { data } = await apiClient.get<TrendResponse>('/admin/dashboard/trend', { params })
+  const { data } = await apiClient.get<TrendResponse>('/admin/dashboard/trend', {
+    params: params ? withEncodedExcludedUserIds(params) : undefined
+  })
   return data
 }
 
@@ -79,6 +83,7 @@ export interface ModelStatsParams {
   start_date?: string
   end_date?: string
   user_id?: number
+  exclude_user_ids?: number[]
   api_key_id?: number
   model?: string
   model_source?: 'requested' | 'upstream' | 'mapping'
@@ -101,7 +106,9 @@ export interface ModelStatsResponse {
  * @returns Model usage statistics
  */
 export async function getModelStats(params?: ModelStatsParams): Promise<ModelStatsResponse> {
-  const { data } = await apiClient.get<ModelStatsResponse>('/admin/dashboard/models', { params })
+  const { data } = await apiClient.get<ModelStatsResponse>('/admin/dashboard/models', {
+    params: params ? withEncodedExcludedUserIds(params) : undefined
+  })
   return data
 }
 
@@ -109,6 +116,7 @@ export interface GroupStatsParams {
   start_date?: string
   end_date?: string
   user_id?: number
+  exclude_user_ids?: number[]
   api_key_id?: number
   account_id?: number
   group_id?: number
@@ -154,13 +162,16 @@ export interface DashboardSnapshotV2Response {
  * @returns Group usage statistics
  */
 export async function getGroupStats(params?: GroupStatsParams): Promise<GroupStatsResponse> {
-  const { data } = await apiClient.get<GroupStatsResponse>('/admin/dashboard/groups', { params })
+  const { data } = await apiClient.get<GroupStatsResponse>('/admin/dashboard/groups', {
+    params: params ? withEncodedExcludedUserIds(params) : undefined
+  })
   return data
 }
 
 export interface UserBreakdownParams {
   start_date?: string
   end_date?: string
+  exclude_user_ids?: number[]
   group_id?: number
   model?: string
   model_source?: 'requested' | 'upstream' | 'mapping'
@@ -186,7 +197,7 @@ export interface UserBreakdownResponse {
 
 export async function getUserBreakdown(params: UserBreakdownParams): Promise<UserBreakdownResponse> {
   const { data } = await apiClient.get<UserBreakdownResponse>('/admin/dashboard/user-breakdown', {
-    params
+    params: withEncodedExcludedUserIds(params)
   })
   return data
 }
@@ -196,7 +207,7 @@ export async function getUserBreakdown(params: UserBreakdownParams): Promise<Use
  */
 export async function getSnapshotV2(params?: DashboardSnapshotV2Params): Promise<DashboardSnapshotV2Response> {
   const { data } = await apiClient.get<DashboardSnapshotV2Response>('/admin/dashboard/snapshot-v2', {
-    params
+    params: params ? withEncodedExcludedUserIds(params) : undefined
   })
   return data
 }
