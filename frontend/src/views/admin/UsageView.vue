@@ -249,6 +249,7 @@ let abortController: AbortController | null = null; let exportAbortController: A
 let chartReqSeq = 0
 let statsReqSeq = 0
 let modelStatsReqSeq = 0
+let adminErrorsReqSeq = 0
 const exportProgress = reactive({ show: false, progress: 0, current: 0, total: 0, estimatedTime: '' })
 const cleanupDialogVisible = ref(false)
 // Balance history modal state
@@ -376,18 +377,20 @@ const onDateRangeChange = (range: { startDate: string; endDate: string; preset: 
 const buildUsageListParams = (
   page: number,
   pageSize: number,
-  exactTotal: boolean
+  exactTotal: boolean,
+  filterSnapshot: AdminUsageQueryParams = filters.value,
+  sortSnapshot: Pick<AdminUsageQueryParams, 'sort_by' | 'sort_order'> = sortState,
 ): AdminUsageQueryParams => {
-  const requestType = filters.value.request_type
-  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+  const requestType = filterSnapshot.request_type
+  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filterSnapshot.stream
   return {
     page,
     page_size: pageSize,
     exact_total: exactTotal,
-    ...filters.value,
+    ...filterSnapshot,
     stream: legacyStream === null ? undefined : legacyStream,
-    sort_by: sortState.sort_by,
-    sort_order: sortState.sort_order
+    sort_by: sortSnapshot.sort_by,
+    sort_order: sortSnapshot.sort_order
   }
 }
 
@@ -581,6 +584,11 @@ const getRequestTypeLabel = (log: AdminUsageLog): string => {
 const exportToExcel = async () => {
   if (exporting.value) return; exporting.value = true; exportProgress.show = true
   const c = new AbortController(); exportAbortController = c
+  const exportFilters: AdminUsageQueryParams = {
+    ...filters.value,
+    exclude_user_ids: filters.value.exclude_user_ids ? [...filters.value.exclude_user_ids] : undefined,
+  }
+  const exportSort = { sort_by: sortState.sort_by, sort_order: sortState.sort_order }
   try {
     let p = 1; let total = pagination.total; let exportedCount = 0
     const XLSX = await import('xlsx')
@@ -600,7 +608,7 @@ const exportToExcel = async () => {
     const ws = XLSX.utils.aoa_to_sheet([headers])
     while (true) {
       const res = await adminUsageAPI.list(
-        buildUsageListParams(p, 100, true),
+        buildUsageListParams(p, 100, true, exportFilters, exportSort),
         { signal: c.signal }
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
@@ -627,7 +635,7 @@ const exportToExcel = async () => {
     if(!c.signal.aborted) {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${exportFilters.start_date}_to_${exportFilters.end_date}.xlsx`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
   } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
@@ -857,6 +865,7 @@ const toRFC3339 = (d: string | undefined, endOfDay = false): string | undefined 
   d ? new Date(d + (endOfDay ? 'T23:59:59.999' : 'T00:00:00')).toISOString() : undefined
 
 const loadAdminErrors = async () => {
+  const seq = ++adminErrorsReqSeq
   errLoading.value = true
   try {
     const params: OpsErrorListQueryParams = {
@@ -883,13 +892,15 @@ const loadAdminErrors = async () => {
       params.exclude_user_ids = [...filters.value.exclude_user_ids]
     }
     const resp = await listErrorLogs(params)
+    if (seq !== adminErrorsReqSeq) return
     errRows.value = resp.items
     errTotal.value = resp.total
   } catch (error) {
+    if (seq !== adminErrorsReqSeq) return
     console.error('Failed to load admin errors:', error)
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
-    errLoading.value = false
+    if (seq === adminErrorsReqSeq) errLoading.value = false
   }
 }
 

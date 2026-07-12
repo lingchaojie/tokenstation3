@@ -221,6 +221,28 @@ describe('UsageFilters — excluded user multi-select', () => {
     expect(options[1].text()).toContain('#2')
   })
 
+  it('omits the positive user and already excluded IDs while retaining active-before-deleted order', async () => {
+    mockSearchUsers.mockResolvedValue([
+      { id: 4, email: 'positive@test.com', deleted: false },
+      { id: 2, email: 'gone@test.com', deleted: true },
+      { id: 3, email: 'excluded@test.com', deleted: false },
+      { id: 1, email: 'active@test.com', deleted: false },
+    ])
+    const wrapper = mountFilters({
+      ...defaultFilters(),
+      user_id: 4,
+      exclude_user_ids: [3],
+    })
+
+    await searchExcludedUsers(wrapper, 'test')
+
+    const options = wrapper.findAll('[data-testid="excluded-user-option"]')
+    expect(options.map((option) => option.text())).toEqual([
+      'active@test.com#1',
+      'gone@test.com（deleted）#2',
+    ])
+  })
+
   it('keeps the newest excluded-user results when an older request resolves later', async () => {
     const first = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
     const second = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
@@ -300,9 +322,9 @@ describe('UsageFilters — excluded user multi-select', () => {
     await searchExcludedUsers(wrapper, 'two')
     await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
     await searchExcludedUsers(wrapper, 'one')
-    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
 
     expect(wrapper.props('modelValue').exclude_user_ids).toEqual([1, 2])
+    expect(wrapper.find('[data-testid="excluded-user-option"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="excluded-user-chip"]').map((chip) => chip.text())).toEqual([
       'one@test.com ✕',
       'two@test.com ✕',
@@ -354,7 +376,7 @@ describe('UsageFilters — excluded user multi-select', () => {
     expect(wrapper.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
   })
 
-  it('rejects the positive user from exclusions and removes an excluded user selected positively later', async () => {
+  it('omits the positive user from exclusions and removes an excluded user selected positively later', async () => {
     const user = { id: 7, email: 'same@test.com', deleted: false }
     mockSearchUsers.mockResolvedValue([user])
 
@@ -367,7 +389,7 @@ describe('UsageFilters — excluded user multi-select', () => {
     const positiveOption = positiveFirst.findAll('.usage-filter-dropdown button').find((button) => button.text().includes('same@test.com'))
     await positiveOption!.trigger('click')
     await searchExcludedUsers(positiveFirst, 'same')
-    await positiveFirst.get('[data-testid="excluded-user-option"]').trigger('click')
+    expect(positiveFirst.find('[data-testid="excluded-user-option"]').exists()).toBe(false)
     expect(positiveFirst.props('modelValue').exclude_user_ids).toBeUndefined()
     expect(positiveFirst.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
 

@@ -406,7 +406,10 @@ const debounceExcludedUserSearch = () => {
     try {
       const results = await adminAPI.usage.searchUsers(keyword)
       if (searchGeneration !== excludedUserSearchGeneration) return
-      excludedUserResults.value = results.sort((a, b) => Number(a.deleted) - Number(b.deleted))
+      const excludedUserIds = new Set(normalizedExcludedUserIds())
+      excludedUserResults.value = results
+        .filter((user) => user.id !== filters.value.user_id && !excludedUserIds.has(user.id))
+        .sort((a, b) => Number(a.deleted) - Number(b.deleted))
     } catch {
       if (searchGeneration !== excludedUserSearchGeneration) return
       excludedUserResults.value = []

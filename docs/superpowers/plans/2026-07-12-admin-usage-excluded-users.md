@@ -527,4 +527,3 @@ git diff --cached --quiet || git commit -m "chore: refresh graphify after usage 
 - Placeholder scan: every implementation step names concrete behavior, files, commands, and expected results.
 - Type consistency: frontend uses exclude_user_ids?: number[]; HTTP encoding is isolated at API boundaries; Go uses ExcludedUserIDs []int64 in all three filter structs.
 - Scope: no persistent exclusion list and no exclusion support for API keys, accounts, or groups.
-
