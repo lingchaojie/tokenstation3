@@ -41,6 +41,64 @@
           </div>
         </div>
 
+        <!-- Excluded User Search -->
+        <div
+          v-if="showExcludedUsers"
+          ref="excludedUserSearchRef"
+          class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]"
+        >
+          <label class="input-label">{{ t('admin.usage.excludedUserFilter') }}</label>
+          <input
+            v-model="excludedUserKeyword"
+            data-testid="excluded-user-filter"
+            type="text"
+            class="input"
+            :placeholder="t('admin.usage.searchExcludedUserPlaceholder')"
+            @input="debounceExcludedUserSearch"
+            @focus="showExcludedUserDropdown = true"
+          />
+          <div
+            v-if="showExcludedUserDropdown && (excludedUserResults.length > 0 || excludedUserKeyword)"
+            class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
+          >
+            <button
+              v-for="u in excludedUserResults"
+              :key="u.id"
+              data-testid="excluded-user-option"
+              type="button"
+              class="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700"
+              @click="selectExcludedUser(u)"
+            >
+              <span>{{ u.email }}<span v-if="u.deleted" class="ml-1 text-xs text-gray-400">（{{ t('admin.usage.userDeletedBadge') }}）</span></span>
+              <span class="ml-2 text-xs text-gray-400">#{{ u.id }}</span>
+            </button>
+          </div>
+          <div v-if="selectedExcludedUsers.length" class="mt-2 flex max-w-[360px] flex-wrap gap-2">
+            <span
+              v-for="u in selectedExcludedUsers"
+              :key="u.id"
+              data-testid="excluded-user-chip"
+              class="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+            >
+              <span class="truncate">{{ u.email }}</span>
+              <button
+                type="button"
+                class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-100"
+                :aria-label="`Remove ${u.email}`"
+                @click="removeExcludedUser(u.id)"
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+          <p
+            v-if="(filters.exclude_user_ids?.length ?? 0) >= MAX_EXCLUDED_USERS"
+            class="mt-1 text-xs text-amber-600 dark:text-amber-400"
+          >
+            {{ t('admin.usage.excludedUserLimit') }}
+          </p>
+        </div>
+
         <!-- API Key Search -->
         <div ref="apiKeySearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
           <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
@@ -195,7 +253,9 @@ import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
 import type { SimpleApiKey, SimpleUser } from '@/api/admin/usage'
 
-type ModelValue = Record<string, any>
+interface ModelValue extends Record<string, any> {
+  exclude_user_ids?: number[]
+}
 
 interface Props {
   modelValue: ModelValue
@@ -203,6 +263,7 @@ interface Props {
   startDate: string
   endDate: string
   showActions?: boolean
+  showExcludedUsers?: boolean
   modelOptions?: string[]
   /**
    * errors 模式:隐藏用量专属字段/按钮,显示错误类型+状态码(错误请求 tab 用)
@@ -215,6 +276,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
+  showExcludedUsers: true,
   mode: 'usage',
   flat: false
 })
@@ -231,6 +293,7 @@ const { t } = useI18n()
 const filters = toRef(props, 'modelValue')
 
 const userSearchRef = ref<HTMLElement | null>(null)
+const excludedUserSearchRef = ref<HTMLElement | null>(null)
 const apiKeySearchRef = ref<HTMLElement | null>(null)
 const accountSearchRef = ref<HTMLElement | null>(null)
 
@@ -238,6 +301,13 @@ const userKeyword = ref('')
 const userResults = ref<SimpleUser[]>([])
 const showUserDropdown = ref(false)
 let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
+
+const excludedUserKeyword = ref('')
+const excludedUserResults = ref<SimpleUser[]>([])
+const selectedExcludedUsers = ref<SimpleUser[]>([])
+const showExcludedUserDropdown = ref(false)
+const MAX_EXCLUDED_USERS = 100
+let excludedUserSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 const apiKeyKeyword = ref('')
 const apiKeyResults = ref<SimpleApiKey[]>([])
@@ -322,6 +392,52 @@ const debounceUserSearch = () => {
   }, 300)
 }
 
+const debounceExcludedUserSearch = () => {
+  if (excludedUserSearchTimeout) clearTimeout(excludedUserSearchTimeout)
+  excludedUserSearchTimeout = setTimeout(async () => {
+    if (!excludedUserKeyword.value) {
+      excludedUserResults.value = []
+      return
+    }
+    try {
+      const results = await adminAPI.usage.searchUsers(excludedUserKeyword.value)
+      excludedUserResults.value = results.sort((a, b) => Number(a.deleted) - Number(b.deleted))
+    } catch {
+      excludedUserResults.value = []
+    }
+  }, 300)
+}
+
+const normalizedExcludedUserIds = () => [...new Set(
+  (filters.value.exclude_user_ids ?? []).filter((id: unknown): id is number => (
+    typeof id === 'number' && Number.isInteger(id) && id > 0
+  ))
+)].sort((a, b) => a - b)
+
+const selectExcludedUser = (u: SimpleUser) => {
+  const excludedUserIds = normalizedExcludedUserIds()
+  if (
+    u.id === filters.value.user_id
+    || excludedUserIds.includes(u.id)
+    || excludedUserIds.length >= MAX_EXCLUDED_USERS
+  ) {
+    return
+  }
+
+  filters.value.exclude_user_ids = [...excludedUserIds, u.id].sort((a, b) => a - b)
+  selectedExcludedUsers.value = [...selectedExcludedUsers.value, u]
+  excludedUserKeyword.value = ''
+  excludedUserResults.value = []
+  showExcludedUserDropdown.value = false
+  emitChange()
+}
+
+const removeExcludedUser = (userId: number) => {
+  selectedExcludedUsers.value = selectedExcludedUsers.value.filter((user) => user.id !== userId)
+  filters.value.exclude_user_ids = normalizedExcludedUserIds().filter((id) => id !== userId)
+  emitChange()
+}
+
 const debounceApiKeySearch = () => {
   if (apiKeySearchTimeout) clearTimeout(apiKeySearchTimeout)
   apiKeySearchTimeout = setTimeout(async () => {
@@ -339,6 +455,11 @@ const debounceApiKeySearch = () => {
 const selectUser = async (u: SimpleUser) => {
   userKeyword.value = u.email
   showUserDropdown.value = false
+  const excludedUserIds = normalizedExcludedUserIds()
+  if (excludedUserIds.includes(u.id)) {
+    selectedExcludedUsers.value = selectedExcludedUsers.value.filter((user) => user.id !== u.id)
+    filters.value.exclude_user_ids = excludedUserIds.filter((id) => id !== u.id)
+  }
   filters.value.user_id = u.id
   clearApiKey()
 
@@ -424,10 +545,12 @@ const onDocumentClick = (e: MouseEvent) => {
   if (!target) return
 
   const clickedInsideUser = userSearchRef.value?.contains(target) ?? false
+  const clickedInsideExcludedUser = excludedUserSearchRef.value?.contains(target) ?? false
   const clickedInsideApiKey = apiKeySearchRef.value?.contains(target) ?? false
   const clickedInsideAccount = accountSearchRef.value?.contains(target) ?? false
 
   if (!clickedInsideUser) showUserDropdown.value = false
+  if (!clickedInsideExcludedUser) showExcludedUserDropdown.value = false
   if (!clickedInsideApiKey) showApiKeyDropdown.value = false
   if (!clickedInsideAccount) showAccountDropdown.value = false
 }
@@ -456,6 +579,15 @@ watch(
       userResults.value = []
     }
   }
+)
+
+watch(
+  () => filters.value.exclude_user_ids,
+  (excludedUserIds) => {
+    const selectedIds = new Set(excludedUserIds ?? [])
+    selectedExcludedUsers.value = selectedExcludedUsers.value.filter((user) => selectedIds.has(user.id))
+  },
+  { deep: true }
 )
 
 watch(
@@ -490,6 +622,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  if (userSearchTimeout) clearTimeout(userSearchTimeout)
+  if (excludedUserSearchTimeout) clearTimeout(excludedUserSearchTimeout)
+  if (apiKeySearchTimeout) clearTimeout(apiKeySearchTimeout)
+  if (accountSearchTimeout) clearTimeout(accountSearchTimeout)
 })
 
 // 供外部(如用户排行下钻)在程序化设置 user_id 后回显选中的用户邮箱

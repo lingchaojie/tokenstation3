@@ -8,6 +8,9 @@ const messages: Record<string, string> = {
   'admin.usage.userDeletedBadge': 'deleted',
   'admin.usage.userFilter': 'User',
   'admin.usage.searchUserPlaceholder': 'Search user...',
+  'admin.usage.excludedUserFilter': 'Exclude users',
+  'admin.usage.searchExcludedUserPlaceholder': 'Search users to exclude...',
+  'admin.usage.excludedUserLimit': 'Up to 100 users can be excluded.',
   'usage.apiKeyFilter': 'API Key',
   'admin.usage.searchApiKeyPlaceholder': 'Search API key...',
   'usage.model': 'Model',
@@ -69,6 +72,7 @@ vi.mock('@/api/admin', () => ({
 // Default props helper
 const defaultFilters = () => ({
   user_id: undefined,
+  exclude_user_ids: undefined as number[] | undefined,
   api_key_id: undefined,
   account_id: undefined,
   model: null,
@@ -97,6 +101,14 @@ function mountFilters(filters = defaultFilters()) {
       },
     },
   })
+}
+
+async function searchExcludedUsers(wrapper: ReturnType<typeof mountFilters>, keyword: string) {
+  const input = wrapper.get('[data-testid="excluded-user-filter"]')
+  await input.trigger('focus')
+  await input.setValue(keyword)
+  vi.advanceTimersByTime(300)
+  await flushPromises()
 }
 
 describe('UsageFilters — user search dropdown', () => {
@@ -162,6 +174,166 @@ describe('UsageFilters — user search dropdown', () => {
     // Also confirm user_id was set by checking the emitted change came through
     // (the component uses toRef so modelValue is mutated in place and 'change' is emitted)
     expect(wrapper.props('modelValue').user_id).toBe(1)
+  })
+})
+
+describe('UsageFilters — excluded user multi-select', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mockSearchUsers.mockReset()
+    mockSearchApiKeys.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('searches users and sorts active results before deleted results with the deleted badge', async () => {
+    mockSearchUsers.mockResolvedValue([
+      { id: 2, email: 'gone@test.com', deleted: true },
+      { id: 1, email: 'active@test.com', deleted: false },
+    ])
+    const wrapper = mountFilters()
+
+    await searchExcludedUsers(wrapper, 'test')
+
+    expect(mockSearchUsers).toHaveBeenCalledWith('test')
+    const options = wrapper.findAll('[data-testid="excluded-user-option"]')
+    expect(options[0].text()).toContain('active@test.com')
+    expect(options[0].text()).toContain('#1')
+    expect(options[0].text()).not.toContain('deleted')
+    expect(options[1].text()).toContain('gone@test.com')
+    expect(options[1].text()).toContain('deleted')
+    expect(options[1].text()).toContain('#2')
+  })
+
+  it('selects two users as removable chips and prevents duplicate IDs', async () => {
+    mockSearchUsers.mockImplementation(async (keyword: string) => [{
+      id: keyword === 'one' ? 1 : 2,
+      email: `${keyword}@test.com`,
+      deleted: false,
+    }])
+    const wrapper = mountFilters()
+
+    await searchExcludedUsers(wrapper, 'one')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+    await searchExcludedUsers(wrapper, 'two')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+    await searchExcludedUsers(wrapper, 'one')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+
+    expect(wrapper.props('modelValue').exclude_user_ids).toEqual([1, 2])
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]').map((chip) => chip.text())).toEqual([
+      'one@test.com ✕',
+      'two@test.com ✕',
+    ])
+    expect(wrapper.emitted('change')).toHaveLength(2)
+  })
+
+  it('removes only the clicked chip and its ID', async () => {
+    mockSearchUsers.mockImplementation(async (keyword: string) => [{
+      id: keyword === 'one' ? 1 : 2,
+      email: `${keyword}@test.com`,
+      deleted: false,
+    }])
+    const wrapper = mountFilters()
+    await searchExcludedUsers(wrapper, 'one')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+    await searchExcludedUsers(wrapper, 'two')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+
+    await wrapper.findAll('[data-testid="excluded-user-chip"]')[0].get('button').trigger('click')
+
+    expect(wrapper.props('modelValue').exclude_user_ids).toEqual([2])
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="excluded-user-chip"]').text()).toContain('two@test.com')
+  })
+
+  it('reconciles locally stored chips when the exclusion IDs shrink or reset externally', async () => {
+    mockSearchUsers.mockImplementation(async (keyword: string) => [{
+      id: keyword === 'one' ? 1 : 2,
+      email: `${keyword}@test.com`,
+      deleted: false,
+    }])
+    const wrapper = mountFilters()
+    await searchExcludedUsers(wrapper, 'one')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+    await searchExcludedUsers(wrapper, 'two')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+
+    await wrapper.setProps({
+      modelValue: { ...wrapper.props('modelValue'), exclude_user_ids: [2] },
+    })
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="excluded-user-chip"]').text()).toContain('two@test.com')
+
+    await wrapper.setProps({
+      modelValue: { ...wrapper.props('modelValue'), exclude_user_ids: undefined },
+    })
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
+  })
+
+  it('rejects the positive user from exclusions and removes an excluded user selected positively later', async () => {
+    const user = { id: 7, email: 'same@test.com', deleted: false }
+    mockSearchUsers.mockResolvedValue([user])
+
+    const positiveFirst = mountFilters()
+    const positiveInput = positiveFirst.find('.usage-filter-dropdown input:not([data-testid="excluded-user-filter"])')
+    await positiveInput.trigger('focus')
+    await positiveInput.setValue('same')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const positiveOption = positiveFirst.findAll('.usage-filter-dropdown button').find((button) => button.text().includes('same@test.com'))
+    await positiveOption!.trigger('click')
+    await searchExcludedUsers(positiveFirst, 'same')
+    await positiveFirst.get('[data-testid="excluded-user-option"]').trigger('click')
+    expect(positiveFirst.props('modelValue').exclude_user_ids).toBeUndefined()
+    expect(positiveFirst.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
+
+    const excludedFirst = mountFilters()
+    await searchExcludedUsers(excludedFirst, 'same')
+    await excludedFirst.get('[data-testid="excluded-user-option"]').trigger('click')
+    const secondPositiveInput = excludedFirst.find('.usage-filter-dropdown input:not([data-testid="excluded-user-filter"])')
+    await secondPositiveInput.trigger('focus')
+    await secondPositiveInput.setValue('same')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const secondPositiveOption = excludedFirst.findAll('.usage-filter-dropdown button').find((button) => button.text().includes('same@test.com'))
+    await secondPositiveOption!.trigger('click')
+
+    expect(excludedFirst.props('modelValue').user_id).toBe(7)
+    expect(excludedFirst.props('modelValue').exclude_user_ids).toEqual([])
+    expect(excludedFirst.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
+  })
+
+  it('shows the limit message and rejects a 101st excluded user', async () => {
+    const existingIds = Array.from({ length: 100 }, (_, index) => index + 1)
+    mockSearchUsers.mockResolvedValue([{ id: 101, email: 'limit@test.com', deleted: false }])
+    const wrapper = mountFilters({ ...defaultFilters(), exclude_user_ids: existingIds })
+
+    expect(wrapper.text()).toContain('Up to 100 users can be excluded.')
+    await searchExcludedUsers(wrapper, 'limit')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+
+    expect(wrapper.props('modelValue').exclude_user_ids).toEqual(existingIds)
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]')).toHaveLength(0)
+    expect(wrapper.emitted('change')).toBeUndefined()
+  })
+
+  it('can hide the excluded user control for consumers that must not expose it', () => {
+    const wrapper = mount(UsageFilters, {
+      props: {
+        modelValue: defaultFilters(),
+        exporting: false,
+        startDate: '2026-05-01',
+        endDate: '2026-05-28',
+        showActions: false,
+        showExcludedUsers: false,
+      },
+      global: { stubs: { Select: true, Teleport: true } },
+    })
+
+    expect(wrapper.find('[data-testid="excluded-user-filter"]').exists()).toBe(false)
   })
 })
 
