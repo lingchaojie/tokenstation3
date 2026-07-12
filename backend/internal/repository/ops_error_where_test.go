@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildOpsErrorLogsWhere_UserScopedFilters(t *testing.T) {
@@ -18,6 +20,7 @@ func TestBuildOpsErrorLogsWhere_UserScopedFilters(t *testing.T) {
 		ErrorPhasesAny:     []string{"auth"},
 		ErrorTypesAny:      []string{"rate_limit_error"},
 		View:               "all",
+		ExcludedUserIDs:    []int64{7, 2, 7},
 	}
 	where, args := buildOpsErrorLogsWhere(filter)
 
@@ -28,14 +31,19 @@ func TestBuildOpsErrorLogsWhere_UserScopedFilters(t *testing.T) {
 		"COALESCE(e.is_count_tokens, false) = false",
 		"e.error_phase = ANY($",
 		"e.error_type = ANY($",
+		"(e.user_id IS NULL OR NOT (e.user_id = ANY($",
 	} {
 		if !strings.Contains(where, want) {
 			t.Fatalf("where missing %q\nfull: %s", want, where)
 		}
 	}
-	if len(args) != 5 {
-		t.Fatalf("expected 5 args, got %d", len(args))
+	if len(args) != 6 {
+		t.Fatalf("expected 6 args, got %d", len(args))
 	}
+	require.Contains(t, fmt.Sprint(args), "[2 7]")
+
+	emptyWhere, _ := buildOpsErrorLogsWhere(&service.OpsErrorLogFilter{ExcludedUserIDs: []int64{0, -1}})
+	require.NotContains(t, emptyWhere, "user_id = ANY(")
 }
 
 func TestBuildOpsErrorLogsWhere_ErrorTypeRequestTypeAndUpstreamKind(t *testing.T) {
