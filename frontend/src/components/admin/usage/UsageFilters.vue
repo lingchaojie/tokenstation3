@@ -47,8 +47,9 @@
           ref="excludedUserSearchRef"
           class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]"
         >
-          <label class="input-label">{{ t('admin.usage.excludedUserFilter') }}</label>
+          <label for="excluded-user-filter-input" class="input-label">{{ t('admin.usage.excludedUserFilter') }}</label>
           <input
+            id="excluded-user-filter-input"
             v-model="excludedUserKeyword"
             data-testid="excluded-user-filter"
             type="text"
@@ -84,7 +85,7 @@
               <button
                 type="button"
                 class="text-gray-400 hover:text-gray-700 dark:hover:text-gray-100"
-                :aria-label="`Remove ${u.email}`"
+                :aria-label="t('admin.usage.removeExcludedUser', { email: u.email })"
                 @click="removeExcludedUser(u.id)"
               >
                 ✕
@@ -308,6 +309,7 @@ const selectedExcludedUsers = ref<SimpleUser[]>([])
 const showExcludedUserDropdown = ref(false)
 const MAX_EXCLUDED_USERS = 100
 let excludedUserSearchTimeout: ReturnType<typeof setTimeout> | null = null
+let excludedUserSearchGeneration = 0
 
 const apiKeyKeyword = ref('')
 const apiKeyResults = ref<SimpleApiKey[]>([])
@@ -394,15 +396,19 @@ const debounceUserSearch = () => {
 
 const debounceExcludedUserSearch = () => {
   if (excludedUserSearchTimeout) clearTimeout(excludedUserSearchTimeout)
+  const searchGeneration = ++excludedUserSearchGeneration
+  const keyword = excludedUserKeyword.value
+  if (!keyword) {
+    excludedUserResults.value = []
+    return
+  }
   excludedUserSearchTimeout = setTimeout(async () => {
-    if (!excludedUserKeyword.value) {
-      excludedUserResults.value = []
-      return
-    }
     try {
-      const results = await adminAPI.usage.searchUsers(excludedUserKeyword.value)
+      const results = await adminAPI.usage.searchUsers(keyword)
+      if (searchGeneration !== excludedUserSearchGeneration) return
       excludedUserResults.value = results.sort((a, b) => Number(a.deleted) - Number(b.deleted))
     } catch {
+      if (searchGeneration !== excludedUserSearchGeneration) return
       excludedUserResults.value = []
     }
   }, 300)
@@ -622,6 +628,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  excludedUserSearchGeneration += 1
   if (userSearchTimeout) clearTimeout(userSearchTimeout)
   if (excludedUserSearchTimeout) clearTimeout(excludedUserSearchTimeout)
   if (apiKeySearchTimeout) clearTimeout(apiKeySearchTimeout)

@@ -11,6 +11,7 @@ const messages: Record<string, string> = {
   'admin.usage.excludedUserFilter': 'Exclude users',
   'admin.usage.searchExcludedUserPlaceholder': 'Search users to exclude...',
   'admin.usage.excludedUserLimit': 'Up to 100 users can be excluded.',
+  'admin.usage.removeExcludedUser': 'Remove excluded user {email}',
   'usage.apiKeyFilter': 'API Key',
   'admin.usage.searchApiKeyPlaceholder': 'Search API key...',
   'usage.model': 'Model',
@@ -45,7 +46,10 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => messages[key] ?? key,
+      t: (key: string, params?: Record<string, string>) => {
+        const message = messages[key] ?? key
+        return message.replace(/\{(\w+)\}/g, (_, name: string) => params?.[name] ?? `{${name}}`)
+      },
     }),
   }
 })
@@ -109,6 +113,16 @@ async function searchExcludedUsers(wrapper: ReturnType<typeof mountFilters>, key
   await input.setValue(keyword)
   vi.advanceTimersByTime(300)
   await flushPromises()
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 describe('UsageFilters — user search dropdown', () => {
@@ -207,6 +221,53 @@ describe('UsageFilters — excluded user multi-select', () => {
     expect(options[1].text()).toContain('#2')
   })
 
+  it('keeps the newest excluded-user results when an older request resolves later', async () => {
+    const first = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
+    const second = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
+    mockSearchUsers
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const wrapper = mountFilters()
+
+    await searchExcludedUsers(wrapper, 'first')
+    await searchExcludedUsers(wrapper, 'second')
+    second.resolve([{ id: 2, email: 'second@test.com', deleted: false }])
+    await flushPromises()
+    expect(wrapper.get('[data-testid="excluded-user-option"]').text()).toContain('second@test.com')
+
+    first.resolve([{ id: 1, email: 'first@test.com', deleted: false }])
+    await flushPromises()
+
+    const options = wrapper.findAll('[data-testid="excluded-user-option"]')
+    expect(options).toHaveLength(1)
+    expect(options[0].text()).toContain('second@test.com')
+  })
+
+  it('keeps the newest excluded-user results when an older request rejects later', async () => {
+    const first = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
+    mockSearchUsers
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce([{ id: 2, email: 'second@test.com', deleted: false }])
+    const wrapper = mountFilters()
+
+    await searchExcludedUsers(wrapper, 'first')
+    await searchExcludedUsers(wrapper, 'second')
+    expect(wrapper.get('[data-testid="excluded-user-option"]').text()).toContain('second@test.com')
+
+    first.reject(new Error('stale request failed'))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="excluded-user-option"]').text()).toContain('second@test.com')
+  })
+
+  it('associates the excluded-user label with its input', () => {
+    const wrapper = mountFilters()
+    const input = wrapper.get('[data-testid="excluded-user-filter"]')
+
+    expect(input.attributes('id')).toBe('excluded-user-filter-input')
+    expect(wrapper.get('label[for="excluded-user-filter-input"]').text()).toBe('Exclude users')
+  })
+
   it('selects two users as removable chips and prevents duplicate IDs', async () => {
     mockSearchUsers.mockImplementation(async (keyword: string) => [{
       id: keyword === 'one' ? 1 : 2,
@@ -227,6 +288,7 @@ describe('UsageFilters — excluded user multi-select', () => {
       'one@test.com ✕',
       'two@test.com ✕',
     ])
+    expect(wrapper.findAll('[data-testid="excluded-user-chip"]')[0].get('button').attributes('aria-label')).toBe('Remove excluded user one@test.com')
     expect(wrapper.emitted('change')).toHaveLength(2)
   })
 

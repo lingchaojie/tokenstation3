@@ -525,6 +525,7 @@ export default {
       excludedUserFilter: '排除用户',
       searchExcludedUserPlaceholder: '搜索要排除的用户...',
       excludedUserLimit: '最多可排除 100 个用户。',
+      removeExcludedUser: '移除排除用户 {email}',
       searchApiKeyPlaceholder: '按名称搜索 API 密钥...',
       searchAccountPlaceholder: '按名称搜索账号...',
       selectedUser: '已选择',

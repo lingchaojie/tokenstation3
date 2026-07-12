@@ -528,6 +528,7 @@ export default {
       excludedUserFilter: 'Exclude users',
       searchExcludedUserPlaceholder: 'Search users to exclude...',
       excludedUserLimit: 'Up to 100 users can be excluded.',
+      removeExcludedUser: 'Remove excluded user {email}',
       searchApiKeyPlaceholder: 'Search API key by name...',
       searchAccountPlaceholder: 'Search account by name...',
       selectedUser: 'Selected',
