@@ -1,7 +1,12 @@
 // Package usagestats provides types for usage statistics and reporting.
 package usagestats
 
-import "time"
+import (
+	"sort"
+	"time"
+)
+
+const MaxExcludedUserIDs = 100
 
 const (
 	ModelSourceRequested = "requested"
@@ -23,6 +28,24 @@ func NormalizeModelSource(source string) string {
 		return source
 	}
 	return ModelSourceRequested
+}
+
+// NormalizeExcludedUserIDs drops invalid and duplicate IDs and returns them in ascending order.
+func NormalizeExcludedUserIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // DashboardStats 仪表盘统计
@@ -184,12 +207,13 @@ type UserBreakdownDimension struct {
 	Endpoint     string // filter by endpoint value (non-empty to enable)
 	EndpointType string // "inbound", "upstream", or "path"
 	// Additional filter conditions
-	UserID      int64  // filter by user_id (>0 to enable)
-	APIKeyID    int64  // filter by api_key_id (>0 to enable)
-	AccountID   int64  // filter by account_id (>0 to enable)
-	RequestType *int16 // filter by request_type (non-nil to enable)
-	Stream      *bool  // filter by stream flag (non-nil to enable)
-	BillingType *int8  // filter by billing_type (non-nil to enable)
+	UserID          int64   // filter by user_id (>0 to enable)
+	ExcludedUserIDs []int64 // exclude matching user IDs when non-empty
+	APIKeyID        int64   // filter by api_key_id (>0 to enable)
+	AccountID       int64   // filter by account_id (>0 to enable)
+	RequestType     *int16  // filter by request_type (non-nil to enable)
+	Stream          *bool   // filter by stream flag (non-nil to enable)
+	BillingType     *int8   // filter by billing_type (non-nil to enable)
 	// SortBy 指定排序列(空 = 默认按 actual_cost)。合法值由 repo 层 allowlist 校验。
 	SortBy string
 }
@@ -266,11 +290,12 @@ type PlatformDashboardStats struct {
 
 // UsageLogFilters represents filters for usage log queries
 type UsageLogFilters struct {
-	UserID    int64
-	APIKeyID  int64
-	AccountID int64
-	GroupID   int64
-	Model     string
+	UserID          int64
+	ExcludedUserIDs []int64
+	APIKeyID        int64
+	AccountID       int64
+	GroupID         int64
+	Model           string
 	// ModelFilterSource controls how Model is matched. Empty preserves raw usage_logs.model semantics.
 	ModelFilterSource string
 	RequestType       *int16
