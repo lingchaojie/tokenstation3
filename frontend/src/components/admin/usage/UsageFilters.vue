@@ -430,6 +430,11 @@ const selectExcludedUser = (u: SimpleUser) => {
     return
   }
 
+  excludedUserSearchGeneration += 1
+  if (excludedUserSearchTimeout) {
+    clearTimeout(excludedUserSearchTimeout)
+    excludedUserSearchTimeout = null
+  }
   filters.value.exclude_user_ids = [...excludedUserIds, u.id].sort((a, b) => a - b)
   selectedExcludedUsers.value = [...selectedExcludedUsers.value, u]
   excludedUserKeyword.value = ''

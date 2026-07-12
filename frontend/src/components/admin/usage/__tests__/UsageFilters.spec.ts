@@ -260,6 +260,25 @@ describe('UsageFilters — excluded user multi-select', () => {
     expect(wrapper.get('[data-testid="excluded-user-option"]').text()).toContain('second@test.com')
   })
 
+  it('does not repopulate excluded-user results when an in-flight search finishes after selection', async () => {
+    const pending = deferred<Array<{ id: number; email: string; deleted: boolean }>>()
+    mockSearchUsers
+      .mockResolvedValueOnce([{ id: 1, email: 'selected@test.com', deleted: false }])
+      .mockImplementationOnce(() => pending.promise)
+    const wrapper = mountFilters()
+
+    await searchExcludedUsers(wrapper, 'selected')
+    await searchExcludedUsers(wrapper, 'pending')
+    await wrapper.get('[data-testid="excluded-user-option"]').trigger('click')
+    expect(wrapper.get('[data-testid="excluded-user-chip"]').text()).toContain('selected@test.com')
+
+    pending.resolve([{ id: 2, email: 'stale@test.com', deleted: false }])
+    await flushPromises()
+    await wrapper.get('[data-testid="excluded-user-filter"]').trigger('focus')
+
+    expect(wrapper.find('[data-testid="excluded-user-option"]').exists()).toBe(false)
+  })
+
   it('associates the excluded-user label with its input', () => {
     const wrapper = mountFilters()
     const input = wrapper.get('[data-testid="excluded-user-filter"]')
