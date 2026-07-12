@@ -216,7 +216,8 @@ import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryM
 import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
 import { listErrorLogs } from '@/api/admin/ops'
-import type { OpsErrorLog } from '@/api/admin/ops'
+import type { OpsErrorListQueryParams, OpsErrorLog } from '@/api/admin/ops'
+import type { DashboardSnapshotV2Params, ModelStatsParams } from '@/api/admin/dashboard'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -262,6 +263,9 @@ const breakdownFilters = computed(() => {
   if (filters.value.group_id) f.group_id = filters.value.group_id
   if (filters.value.request_type != null) f.request_type = filters.value.request_type
   if (filters.value.billing_type != null) f.billing_type = filters.value.billing_type
+  if (filters.value.exclude_user_ids?.length) {
+    f.exclude_user_ids = [...filters.value.exclude_user_ids]
+  }
   return f
 })
 
@@ -282,7 +286,12 @@ const handleUserClick = async (userId: number) => {
 // Drill down from the per-user token ranking: scope the whole usage view to
 // that user and jump to the usage-detail tab so the drill-down is visible.
 const handleRankingSelectUser = (userId: number, email: string) => {
-  filters.value = { ...filters.value, user_id: userId }
+  const excludeUserIds = filters.value.exclude_user_ids?.filter((id) => id !== userId)
+  filters.value = {
+    ...filters.value,
+    user_id: userId,
+    exclude_user_ids: excludeUserIds?.length ? excludeUserIds : undefined,
+  }
   usageFiltersRef.value?.setUserKeyword?.(email || '')
   activeTab.value = 'usage'
   applyFilters()
@@ -312,7 +321,7 @@ const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
 }
 const defaultRange = getLast24HoursRangeDates()
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
-const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
+const filters = ref<AdminUsageQueryParams>({ user_id: undefined, exclude_user_ids: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const sortState = reactive({
   sort_by: 'created_at',
@@ -436,7 +445,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
-    const baseParams = {
+    const baseParams: ModelStatsParams = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       user_id: filters.value.user_id,
@@ -447,6 +456,9 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       billing_type: filters.value.billing_type,
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      baseParams.exclude_user_ids = [...filters.value.exclude_user_ids]
     }
 
     const response = await adminAPI.dashboard.getModelStats({ ...baseParams, model_source: source })
@@ -484,7 +496,7 @@ const loadChartData = async () => {
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
-    const snapshot = await adminAPI.dashboard.getSnapshotV2({
+    const snapshotParams: DashboardSnapshotV2Params = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       granularity: granularity.value,
@@ -501,7 +513,11 @@ const loadChartData = async () => {
       include_model_stats: false,
       include_group_stats: true,
       include_users_trend: false
-    })
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      snapshotParams.exclude_user_ids = [...filters.value.exclude_user_ids]
+    }
+    const snapshot = await adminAPI.dashboard.getSnapshotV2(snapshotParams)
     if (seq !== chartReqSeq) return
     trendData.value = snapshot.trend || []
     groupStats.value = snapshot.groups || []
@@ -534,7 +550,7 @@ const resetFilters = () => {
   const range = getLast24HoursRangeDates()
   startDate.value = range.start
   endDate.value = range.end
-  filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
+  filters.value = { start_date: startDate.value, end_date: endDate.value, user_id: undefined, exclude_user_ids: undefined, request_type: undefined, billing_type: null, billing_mode: undefined }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
   resetErrFilterValues()
   applyFilters()
@@ -843,7 +859,7 @@ const toRFC3339 = (d: string | undefined, endOfDay = false): string | undefined 
 const loadAdminErrors = async () => {
   errLoading.value = true
   try {
-    const resp = await listErrorLogs({
+    const params: OpsErrorListQueryParams = {
       page: errPage.value,
       page_size: errPageSize.value,
       view: 'all',
@@ -862,7 +878,11 @@ const loadAdminErrors = async () => {
       status_codes: filters.value.status_code != null ? String(filters.value.status_code) : undefined,
       sort_by: errSortBy.value,
       sort_order: errSortOrder.value,
-    })
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      params.exclude_user_ids = [...filters.value.exclude_user_ids]
+    }
+    const resp = await listErrorLogs(params)
     errRows.value = resp.items
     errTotal.value = resp.total
   } catch (error) {

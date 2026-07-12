@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import UsageView from '../UsageView.vue'
 
-const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs } = vi.hoisted(() => {
+const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, adminUsageList, saveAs } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -17,6 +17,8 @@ const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs } =
     getById: vi.fn(),
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
+    adminUsageList: vi.fn(),
+    saveAs: vi.fn(),
   }
 })
 
@@ -54,7 +56,7 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/admin/usage', () => ({
   adminUsageAPI: {
-    list: vi.fn(),
+    list: adminUsageList,
   },
 }))
 
@@ -73,6 +75,18 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/utils/format', () => ({
   formatReasoningEffort: (value: string | null | undefined) => value ?? '-',
+}))
+
+vi.mock('file-saver', () => ({ saveAs }))
+
+vi.mock('xlsx', () => ({
+  utils: {
+    aoa_to_sheet: vi.fn(() => ({})),
+    sheet_add_aoa: vi.fn(),
+    book_new: vi.fn(() => ({})),
+    book_append_sheet: vi.fn(),
+  },
+  write: vi.fn(() => new Uint8Array()),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -439,7 +453,7 @@ describe('admin UsageView errors tab filter forwarding', () => {
     vm.errRequestErrorType = 'upstream'
     vm.errUpstreamErrorKind = 'failover'
 
-    const tabs = wrapper.findAll('button.tab')
+    const tabs = wrapper.findAll('[data-testid="usage-detail-tab"]')
     await tabs[1].trigger('click')
     await flushPromises()
 
@@ -496,13 +510,103 @@ describe('admin UsageView ranking tab', () => {
     await flushPromises()
     expect(wrapper.find('[data-test="ranking"]').exists()).toBe(true)
 
-    // 下钻:设置 user_id、切回用量明细 tab 并按新筛选重新拉取列表
+    // 下钻:设置 user_id、解决与排除列表的冲突、切回用量明细 tab 并按新筛选重新拉取列表
+    ;(wrapper.vm as any).filters.exclude_user_ids = [5, 8]
     list.mockClear()
     await wrapper.find('[data-test="ranking"] .pick-user').trigger('click')
     await flushPromises()
 
     expect((wrapper.vm as any).activeTab).toBe('usage')
     expect((wrapper.vm as any).filters.user_id).toBe(5)
+    expect((wrapper.vm as any).filters.exclude_user_ids).toEqual([8])
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ user_id: 5 }), expect.anything())
+  })
+})
+
+describe('admin UsageView excluded-user propagation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({
+      total_requests: 0, total_input_tokens: 0, total_output_tokens: 0,
+      total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0,
+    })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+    listErrorLogs.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    adminUsageList.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    saveAs.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('applies exclusions to every page request and the export list builder', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, AuditLogModal: true, Pagination: true, Select: true,
+        DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+        ModelDistributionChart: true, GroupDistributionChart: true, EndpointDistributionChart: true,
+        UserTokenRanking: true, OpsErrorLogTable: true, OpsErrorDetailModal: true,
+      } },
+    })
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+    listErrorLogs.mockClear()
+
+    const vm = wrapper.vm as any
+    vm.filters.exclude_user_ids = [8, 3]
+    expect(vm.breakdownFilters).toEqual(expect.objectContaining({ exclude_user_ids: [8, 3] }))
+    vm.activeTab = 'errors'
+    vm.applyFilters()
+    await flushPromises()
+
+    const excluded = { exclude_user_ids: [8, 3] }
+    expect(list).toHaveBeenCalledWith(expect.objectContaining(excluded), expect.anything())
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining(excluded))
+    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining(excluded))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining(excluded))
+    expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining(excluded))
+
+    await vm.exportToExcel()
+    expect(adminUsageList).toHaveBeenCalledWith(
+      expect.objectContaining({ ...excluded, page: 1, page_size: 100, exact_total: true }),
+      expect.anything(),
+    )
+  })
+
+  it('reset clears exclusions before reloading page requests', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, AuditLogModal: true, Pagination: true, Select: true,
+        DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+        ModelDistributionChart: true, GroupDistributionChart: true, EndpointDistributionChart: true,
+        UserTokenRanking: true, OpsErrorLogTable: true, OpsErrorDetailModal: true,
+      } },
+    })
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.filters.exclude_user_ids = [8, 3]
+    list.mockClear()
+    vm.resetFilters()
+    await flushPromises()
+
+    expect(vm.filters.exclude_user_ids).toBeUndefined()
+    expect(list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ exclude_user_ids: expect.anything() }),
+      expect.anything(),
+    )
   })
 })

@@ -7,6 +7,7 @@
         v-model:endDate="localEndDate"
         :exporting="false"
         :show-actions="false"
+        :show-excluded-users="false"
         @change="noop"
       />
 
@@ -159,7 +160,8 @@ let pollTimer: number | null = null
 const noop = () => {}
 
 const resetFilters = () => {
-  localFilters.value = { ...props.filters }
+  const { exclude_user_ids: _excludedUserIds, ...cleanupFilters } = props.filters
+  localFilters.value = { ...cleanupFilters }
   localStartDate.value = props.startDate
   localEndDate.value = props.endDate
   localFilters.value.start_date = localStartDate.value
