@@ -61,6 +61,12 @@ type CreateUsageCleanupTaskRequest struct {
 // List handles listing all usage records with filters
 // GET /api/v1/admin/usage
 func (h *UsageHandler) List(c *gin.Context) {
+	excludedUserIDs, err := parseExcludedUserIDs(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	page, pageSize := response.ParsePagination(c)
 	exactTotal := false
 	if exactTotalRaw := strings.TrimSpace(c.Query("exact_total")); exactTotalRaw != "" {
@@ -173,18 +179,19 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
-		UserID:      userID,
-		APIKeyID:    apiKeyID,
-		AccountID:   accountID,
-		GroupID:     groupID,
-		Model:       model,
-		RequestType: requestType,
-		Stream:      stream,
-		BillingType: billingType,
-		BillingMode: billingMode,
-		StartTime:   startTime,
-		EndTime:     endTime,
-		ExactTotal:  exactTotal,
+		UserID:          userID,
+		APIKeyID:        apiKeyID,
+		AccountID:       accountID,
+		GroupID:         groupID,
+		Model:           model,
+		RequestType:     requestType,
+		Stream:          stream,
+		BillingType:     billingType,
+		BillingMode:     billingMode,
+		StartTime:       startTime,
+		EndTime:         endTime,
+		ExactTotal:      exactTotal,
+		ExcludedUserIDs: excludedUserIDs,
 	}
 
 	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)
@@ -203,6 +210,12 @@ func (h *UsageHandler) List(c *gin.Context) {
 // Stats handles getting usage statistics with filters
 // GET /api/v1/admin/usage/stats
 func (h *UsageHandler) Stats(c *gin.Context) {
+	excludedUserIDs, err := parseExcludedUserIDs(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	// Parse filters - same as List endpoint
 	var userID, apiKeyID, accountID, groupID int64
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
@@ -313,17 +326,18 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
-		UserID:      userID,
-		APIKeyID:    apiKeyID,
-		AccountID:   accountID,
-		GroupID:     groupID,
-		Model:       model,
-		RequestType: requestType,
-		Stream:      stream,
-		BillingType: billingType,
-		BillingMode: billingMode,
-		StartTime:   &startTime,
-		EndTime:     &endTime,
+		UserID:          userID,
+		APIKeyID:        apiKeyID,
+		AccountID:       accountID,
+		GroupID:         groupID,
+		Model:           model,
+		RequestType:     requestType,
+		Stream:          stream,
+		BillingType:     billingType,
+		BillingMode:     billingMode,
+		StartTime:       &startTime,
+		EndTime:         &endTime,
+		ExcludedUserIDs: excludedUserIDs,
 	}
 
 	var stats *usagestats.UsageStats

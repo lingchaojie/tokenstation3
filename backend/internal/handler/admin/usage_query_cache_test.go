@@ -25,4 +25,11 @@ func TestUsageStatsCacheKey_StableAndDistinct(t *testing.T) {
 	withUser := base
 	withUser.UserID = 7
 	require.NotEqual(t, k1, usageStatsCacheKey(withUser), "different user must change key")
+
+	withExcluded := base
+	withExcluded.ExcludedUserIDs = []int64{9, 3}
+	sameSet := base
+	sameSet.ExcludedUserIDs = []int64{3, 9, 3}
+	require.NotEqual(t, usageStatsCacheKey(base), usageStatsCacheKey(withExcluded))
+	require.Equal(t, usageStatsCacheKey(withExcluded), usageStatsCacheKey(sameSet))
 }

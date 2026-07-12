@@ -61,7 +61,16 @@ func (s *userUsageRepoCapture) GetUsageTrendWithFilters(ctx context.Context, sta
 	return []usagestats.TrendDataPoint{}, nil
 }
 
+func (s *userUsageRepoCapture) GetUsageTrendWithUsageFilters(_ context.Context, _, _ time.Time, _ string, filters usagestats.UsageLogFilters) ([]usagestats.TrendDataPoint, error) {
+	s.trendFilters = filters
+	return []usagestats.TrendDataPoint{}, nil
+}
+
 func (s *userUsageRepoCapture) GetModelStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8) ([]usagestats.ModelStat, error) {
+	return s.modelStats, nil
+}
+
+func (s *userUsageRepoCapture) GetModelStatsWithUsageFiltersBySource(_ context.Context, _, _ time.Time, _ usagestats.UsageLogFilters, _ string) ([]usagestats.ModelStat, error) {
 	return s.modelStats, nil
 }
 
@@ -75,6 +84,11 @@ func (s *userUsageRepoCapture) GetGroupStatsWithFilters(ctx context.Context, sta
 		Stream:      stream,
 		BillingType: billingType,
 	}
+	return s.groupStats, nil
+}
+
+func (s *userUsageRepoCapture) GetGroupStatsWithUsageFilters(_ context.Context, _, _ time.Time, filters usagestats.UsageLogFilters) ([]usagestats.GroupStat, error) {
+	s.groupFilters = filters
 	return s.groupStats, nil
 }
 

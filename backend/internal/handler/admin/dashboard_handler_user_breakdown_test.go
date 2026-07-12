@@ -35,6 +35,20 @@ func (r *userBreakdownRepoCapture) GetUserBreakdownStats(
 	return []usagestats.UserBreakdownItem{}, nil
 }
 
+func (r *userBreakdownRepoCapture) GetModelStatsWithFilters(
+	_ context.Context, _, _ time.Time,
+	_, _, _, _ int64, _ *int16, _ *bool, _ *int8,
+) ([]usagestats.ModelStat, error) {
+	return []usagestats.ModelStat{}, nil
+}
+
+func (r *userBreakdownRepoCapture) GetModelStatsWithUsageFiltersBySource(
+	_ context.Context, _, _ time.Time,
+	_ usagestats.UsageLogFilters, _ string,
+) ([]usagestats.ModelStat, error) {
+	return []usagestats.ModelStat{}, nil
+}
+
 func newUserBreakdownRouter(repo *userBreakdownRepoCapture) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	svc := service.NewDashboardService(repo, nil, nil, nil)
@@ -42,6 +56,38 @@ func newUserBreakdownRouter(repo *userBreakdownRepoCapture) *gin.Engine {
 	router := gin.New()
 	router.GET("/admin/dashboard/user-breakdown", h.GetUserBreakdown)
 	return router
+}
+
+func TestExcludedUserIDs_RejectsMalformedQueries(t *testing.T) {
+	usageRouter := newAdminUsageRequestTypeTestRouter(&adminUsageRepoCapture{})
+	dashboardRouter := newUserBreakdownRouter(&userBreakdownRepoCapture{})
+	dashboardHandler := NewDashboardHandler(service.NewDashboardService(&userBreakdownRepoCapture{}, nil, nil, nil), nil)
+	dashboardRouter.GET("/admin/dashboard/models", dashboardHandler.GetModelStats)
+	dashboardRouter.GET("/admin/dashboard/snapshot-v2", dashboardHandler.GetSnapshotV2)
+	opsRouter := gin.New()
+	opsRouter.GET("/admin/ops/errors", NewOpsHandler(nil).GetErrorLogs)
+
+	tests := []struct {
+		name   string
+		router http.Handler
+		path   string
+	}{
+		{name: "usage list", router: usageRouter, path: "/admin/usage?exclude_user_ids=bad"},
+		{name: "usage stats", router: usageRouter, path: "/admin/usage/stats?exclude_user_ids=bad"},
+		{name: "dashboard model", router: dashboardRouter, path: "/admin/dashboard/models?exclude_user_ids=bad"},
+		{name: "dashboard snapshot", router: dashboardRouter, path: "/admin/dashboard/snapshot-v2?exclude_user_ids=bad&include_stats=false&include_trend=false&include_model_stats=false"},
+		{name: "dashboard ranking", router: dashboardRouter, path: "/admin/dashboard/user-breakdown?exclude_user_ids=bad"},
+		{name: "ops errors", router: opsRouter, path: "/admin/ops/errors?exclude_user_ids=bad"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			tt.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
 }
 
 // --- tests ---
@@ -61,6 +107,19 @@ func TestGetUserBreakdown_GroupIDFilter(t *testing.T) {
 	require.Empty(t, repo.capturedDim.Endpoint)
 	require.Equal(t, 50, repo.capturedLimit)  // default limit
 	require.Empty(t, repo.capturedDim.SortBy) // no sort_by => empty (repo falls back to default)
+}
+
+func TestGetUserBreakdown_ExcludedUserIDs(t *testing.T) {
+	repo := &userBreakdownRepoCapture{}
+	router := newUserBreakdownRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/admin/dashboard/user-breakdown?exclude_user_ids=9%2C3%2C9", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, []int64{3, 9}, repo.capturedDim.ExcludedUserIDs)
 }
 
 func TestGetUserBreakdown_SortBy(t *testing.T) {
