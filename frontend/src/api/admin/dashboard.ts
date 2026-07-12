@@ -212,7 +212,7 @@ export async function getSnapshotV2(params?: DashboardSnapshotV2Params): Promise
   return data
 }
 
-export interface ApiKeyTrendParams extends TrendParams {
+export interface ApiKeyTrendParams extends Omit<TrendParams, 'exclude_user_ids'> {
   limit?: number
 }
 
@@ -237,7 +237,7 @@ export async function getApiKeyUsageTrend(
   return data
 }
 
-export interface UserTrendParams extends TrendParams {
+export interface UserTrendParams extends Omit<TrendParams, 'exclude_user_ids'> {
   limit?: number
 }
 

@@ -8,7 +8,9 @@ export const encodeExcludedUserIds = (ids?: number[]): string | undefined => {
   return normalized.length ? normalized.join(',') : undefined
 }
 
-export const withEncodedExcludedUserIds = <T extends { exclude_user_ids?: number[] }>(params: T) => ({
+export const withEncodedExcludedUserIds = <T extends { exclude_user_ids?: number[] }>(
+  params: T
+): Omit<T, 'exclude_user_ids'> & { exclude_user_ids: string | undefined } => ({
   ...params,
   exclude_user_ids: encodeExcludedUserIds(params.exclude_user_ids)
 })
