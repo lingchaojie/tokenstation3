@@ -890,13 +890,13 @@ func (s *UsageLogRepoSuite) TestGetEndpointStatsWithFilters_WebChatAPIKeyFilter(
 	s.Require().NoError(err, "GetUpstreamEndpointStatsWithFilters hidden web chat apiKey")
 	s.Require().Empty(upstreamEndpoints)
 
-	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", "", nil, nil, nil, "")
+	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", "", nil, nil, nil, nil, "")
 	s.Require().NoError(err, "getEndpointPathStatsWithFilters user includes web chat usage")
 	s.Require().Len(endpointPaths, 1)
 	s.Require().Equal(inboundEndpoint+" -> "+upstreamEndpoint, endpointPaths[0].Endpoint)
 	s.Require().Equal(int64(2), endpointPaths[0].Requests)
 
-	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", "", nil, nil, nil, "")
+	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", "", nil, nil, nil, nil, "")
 	s.Require().NoError(err, "getEndpointPathStatsWithFilters hidden web chat apiKey")
 	s.Require().Empty(endpointPaths)
 }
