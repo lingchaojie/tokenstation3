@@ -68,7 +68,7 @@ func TestParseExcludedUserIDs_RejectsInvalidInput(t *testing.T) {
 
 			got, err := parseExcludedUserIDs(c)
 
-			require.ErrorContains(t, err, "Invalid exclude_user_ids")
+			require.ErrorContains(t, err, "invalid exclude_user_ids")
 			require.Nil(t, got)
 		})
 	}
@@ -88,7 +88,7 @@ func TestParseExcludedUserIDs_RejectsMoreThan100UniqueIDs(t *testing.T) {
 
 	got, err := parseExcludedUserIDs(c)
 
-	require.ErrorContains(t, err, "Invalid exclude_user_ids")
+	require.ErrorContains(t, err, "invalid exclude_user_ids")
 	require.Nil(t, got)
 }
 

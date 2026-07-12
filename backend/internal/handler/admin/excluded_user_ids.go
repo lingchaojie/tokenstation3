@@ -21,14 +21,14 @@ func parseExcludedUserIDs(c *gin.Context) ([]int64, error) {
 		part = strings.TrimSpace(part)
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil || id <= 0 {
-			return nil, fmt.Errorf("Invalid exclude_user_ids: %q", part)
+			return nil, fmt.Errorf("invalid exclude_user_ids: %q", part)
 		}
 		ids = append(ids, id)
 	}
 
 	ids = usagestats.NormalizeExcludedUserIDs(ids)
 	if len(ids) > usagestats.MaxExcludedUserIDs {
-		return nil, fmt.Errorf("Invalid exclude_user_ids: maximum is %d", usagestats.MaxExcludedUserIDs)
+		return nil, fmt.Errorf("invalid exclude_user_ids: maximum is %d", usagestats.MaxExcludedUserIDs)
 	}
 	return ids, nil
 }
