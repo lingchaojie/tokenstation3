@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// MaxExcludedUserIDs is the maximum number of unique user IDs an exclusion filter accepts.
 const MaxExcludedUserIDs = 100
 
 const (
