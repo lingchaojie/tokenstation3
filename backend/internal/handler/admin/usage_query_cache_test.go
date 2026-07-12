@@ -33,3 +33,15 @@ func TestUsageStatsCacheKey_StableAndDistinct(t *testing.T) {
 	require.NotEqual(t, usageStatsCacheKey(base), usageStatsCacheKey(withExcluded))
 	require.Equal(t, usageStatsCacheKey(withExcluded), usageStatsCacheKey(sameSet))
 }
+
+func TestUsageStatsCacheKey_PreservesRawModelFilterSource(t *testing.T) {
+	raw := usagestats.UsageLogFilters{
+		Model:           "claude-opus-4-6",
+		ExcludedUserIDs: []int64{9, 3},
+	}
+	requested := raw
+	requested.ModelFilterSource = usagestats.ModelSourceRequested
+	requested.ExcludedUserIDs = []int64{3, 9, 3}
+
+	require.NotEqual(t, usageStatsCacheKey(raw), usageStatsCacheKey(requested))
+}

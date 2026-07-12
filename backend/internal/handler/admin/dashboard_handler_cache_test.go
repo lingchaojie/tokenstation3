@@ -175,3 +175,53 @@ func TestDashboardHandler_SnapshotModelAndGroupCachesIncludeModelFilter(t *testi
 	require.Equal(t, int32(2), repo.modelCalls.Load())
 	require.Equal(t, int32(2), repo.groupCalls.Load())
 }
+
+func TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	raw := usagestats.UsageLogFilters{
+		Model:           "claude-opus-4-6",
+		ExcludedUserIDs: []int64{9, 3},
+	}
+	requested := raw
+	requested.ModelFilterSource = usagestats.ModelSourceRequested
+	requested.ExcludedUserIDs = []int64{3, 9, 3}
+	sameRequested := requested
+	sameRequested.ExcludedUserIDs = []int64{9, 3}
+
+	t.Run("trend", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+
+		_, firstHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", raw)
+		require.NoError(t, err)
+		require.False(t, firstHit)
+		_, secondHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", requested)
+		require.NoError(t, err)
+		require.False(t, secondHit)
+		_, normalizedHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", sameRequested)
+		require.NoError(t, err)
+		require.True(t, normalizedHit)
+		require.Equal(t, int32(2), repo.trendCalls.Load())
+	})
+
+	t.Run("group", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+
+		_, firstHit, err := handler.getGroupStatsCached(context.Background(), start, end, raw)
+		require.NoError(t, err)
+		require.False(t, firstHit)
+		_, secondHit, err := handler.getGroupStatsCached(context.Background(), start, end, requested)
+		require.NoError(t, err)
+		require.False(t, secondHit)
+		_, normalizedHit, err := handler.getGroupStatsCached(context.Background(), start, end, sameRequested)
+		require.NoError(t, err)
+		require.True(t, normalizedHit)
+		require.Equal(t, int32(2), repo.groupCalls.Load())
+	})
+}
