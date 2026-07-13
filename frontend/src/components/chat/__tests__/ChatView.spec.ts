@@ -571,6 +571,9 @@ describe('ConversationRail reference layout', () => {
 
     await rail.get('input[type="search"]').setValue('Haiku 4.5')
     expect(rail.text()).toContain('Haiku research')
+
+    await rail.get('input[type="search"]').setValue('claude-haiku-4-5-20251001')
+    expect(rail.text()).toContain('Haiku research')
   })
 
   it('shows a workspace rail with model-grouped conversations', () => {
