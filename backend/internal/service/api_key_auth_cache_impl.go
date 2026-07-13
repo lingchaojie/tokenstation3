@@ -14,8 +14,8 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-// v18: union of dev peak-rate + Kiro/WebChat snapshot fields (v17) and upstream group video pricing fields (v14).
-const apiKeyAuthSnapshotVersion = 18
+// v19: union of dev peak-rate + Kiro/WebChat snapshot fields (v18) and upstream group web-search pricing.
+const apiKeyAuthSnapshotVersion = 19
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -287,6 +287,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			VideoPrice480P:                  apiKey.Group.VideoPrice480P,
 			VideoPrice720P:                  apiKey.Group.VideoPrice720P,
 			VideoPrice1080P:                 apiKey.Group.VideoPrice1080P,
+			WebSearchPricePerCall:           apiKey.Group.WebSearchPricePerCall,
 			ClaudeCodeOnly:                  apiKey.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 apiKey.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: apiKey.Group.FallbackGroupIDOnInvalidRequest,
@@ -393,6 +394,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			VideoPrice480P:                  snapshot.Group.VideoPrice480P,
 			VideoPrice720P:                  snapshot.Group.VideoPrice720P,
 			VideoPrice1080P:                 snapshot.Group.VideoPrice1080P,
+			WebSearchPricePerCall:           snapshot.Group.WebSearchPricePerCall,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,
