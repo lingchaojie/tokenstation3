@@ -3350,8 +3350,8 @@
     "semantic_hash": ""
   },
   "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go": {
-    "mtime": 1783961161.081665,
-    "ast_hash": "fa09c3370e27fc09276cc48598378af0",
+    "mtime": 1783963811.653351,
+    "ast_hash": "14f56add32c3951db1235f9831ffdeaa",
     "semantic_hash": ""
   },
   "backend/internal/pkg/apicompat/chatcompletions_responses_bridge_test.go": {
@@ -14690,8 +14690,8 @@
     "semantic_hash": "ec37a76b8f967036bce73b8717094cd3"
   },
   "docs/upstream-sync/README.md": {
-    "mtime": 1783954307.4759839,
-    "ast_hash": "094ecf6100a335e6648a7b9e1c44bf1f",
+    "mtime": 1783963178.2339895,
+    "ast_hash": "d8f71c34fee9e34c8623e56377088a9b",
     "semantic_hash": ""
   },
   "docs/web-chat.md": {
@@ -14955,8 +14955,8 @@
     "semantic_hash": ""
   },
   "backend/internal/pkg/apicompat/chatcompletions_responses_bridge_custom_tools_test.go": {
-    "mtime": 1783961161.085664,
-    "ast_hash": "7e546f7125ef624b1bd1399740819dec",
+    "mtime": 1783963796.1092672,
+    "ast_hash": "94ecb21c3dc25d6bdc0d52f4e617c0b2",
     "semantic_hash": ""
   },
   "backend/internal/pkg/apicompat/responses_anthropic_cache_creation_test.go": {
@@ -15257,6 +15257,11 @@
   "docs/superpowers/specs/2026-07-12-admin-usage-excluded-users-design.md": {
     "mtime": 1783954307.4721735,
     "ast_hash": "3cd8d0c8712d5440e7921c0bdcddeee0",
+    "semantic_hash": ""
+  },
+  "docs/upstream-sync/2026-07-14-sub2api-0.1.153.md": {
+    "mtime": 1783963178.2339895,
+    "ast_hash": "eb3610965da4af75624d53f2ae0bb266",
     "semantic_hash": ""
   }
 }
