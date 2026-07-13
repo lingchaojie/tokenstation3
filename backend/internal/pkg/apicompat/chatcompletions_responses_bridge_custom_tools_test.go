@@ -68,6 +68,25 @@ func TestResponsesToChatCompletionsRequest_AdditionalToolsItem(t *testing.T) {
 	assert.Equal(t, "user", out.Messages[0].Role)
 }
 
+func TestResponsesToChatCompletionsRequest_AdditionalToolsNamespaceToolChoice(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "gpt-test",
+		Input: json.RawMessage(`[
+			{"type":"additional_tools","tools":[
+				{"type":"namespace","name":"collaboration","tools":[
+					{"type":"function","name":"send_message","parameters":{"type":"object","properties":{}}}
+				]}
+			]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"send it"}]}
+		]`),
+		ToolChoice: json.RawMessage(`{"type":"namespace","name":"collaboration"}`),
+	}
+
+	out, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"function","function":{"name":"collaboration__send_message"}}`, string(out.ToolChoice))
+}
+
 func TestEffectiveResponsesTools_SkipsStringInputItems(t *testing.T) {
 	req := &ResponsesRequest{
 		Input: json.RawMessage(`["plain input",{"type":"additional_tools","tools":[{"type":"custom","name":"exec"}]}]`),
