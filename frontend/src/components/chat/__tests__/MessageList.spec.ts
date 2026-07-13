@@ -313,6 +313,32 @@ describe('MessageList', () => {
     expect(wrapper.get('[data-testid="chat-artifact-bubble-101"]').find('[data-testid="chat-artifact-image-44"]').exists()).toBe(true)
   })
 
+  it('formats the assistant model label from historical routing fields', () => {
+    const store = useChatStore()
+    store.currentConversation = {
+      conversation: {
+        ...conversation,
+        default_provider: 'anthropic',
+        last_provider: 'anthropic',
+        default_model: 'claude-sonnet-4-5-20250929-thinking',
+        last_model: 'claude-sonnet-4-5-20250929-thinking',
+      },
+      messages: [{
+        ...assistantMessage([]),
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929-thinking',
+      }],
+    }
+
+    const wrapper = mount(MessageList, {
+      global: { stubs: { Icon: true } },
+    })
+
+    expect(wrapper.get('[data-testid="chat-assistant-open-message"]').text()).toContain('Claude Sonnet 4.5')
+    expect(wrapper.text()).not.toContain('20250929')
+    expect(wrapper.text()).not.toContain('-thinking')
+  })
+
   it('shows stale historical streaming messages as interrupted instead of thinking forever', () => {
     const store = useChatStore()
     store.currentConversation = {

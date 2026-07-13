@@ -542,6 +542,37 @@ describe('ConversationRail reference layout', () => {
     setActivePinia(createPinia())
   })
 
+  it('formats and searches historical conversation model labels', async () => {
+    const haikuConversation: WebChatConversation = {
+      ...historicalConversation,
+      id: 10,
+      title: 'Haiku research',
+      default_provider: 'anthropic',
+      last_provider: 'anthropic',
+      default_model: datedHaikuModel.model,
+      last_model: datedHaikuModel.model,
+    }
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+    store.conversations = [haikuConversation]
+
+    const wrapper = mount(ChatShell, {
+      global: {
+        stubs: {
+          Icon: true,
+          ModelIcon: true,
+        },
+      },
+    })
+
+    const rail = wrapper.get('[data-testid="chat-conversation-rail"]')
+    expect(rail.text()).toContain('Claude Haiku 4.5')
+    expect(rail.text()).not.toContain('20251001')
+
+    await rail.get('input[type="search"]').setValue('Haiku 4.5')
+    expect(rail.text()).toContain('Haiku research')
+  })
+
   it('shows a workspace rail with model-grouped conversations', () => {
     const store = useChatStore()
     store.models = [imageModel, chatModel]
