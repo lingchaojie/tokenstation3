@@ -1005,7 +1005,6 @@ const allColumns = computed<Column[]>(() => [
   ...(hasNonUnifiedKey.value
     ? [{ key: 'key_type', label: t('keys.keyTypeLabel'), sortable: false }]
     : []),
-  { key: 'group', label: t('keys.group'), sortable: false },
   { key: 'current_concurrency', label: t('keys.currentConcurrency'), sortable: true },
   { key: 'usage', label: t('keys.usage'), sortable: false },
   { key: 'rate_limit', label: t('keys.rateLimitColumn'), sortable: false },
