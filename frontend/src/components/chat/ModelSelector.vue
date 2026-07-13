@@ -33,7 +33,7 @@ import { useI18n } from 'vue-i18n'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -46,7 +46,7 @@ const conversationTitle = computed(() => {
 const modelLabel = computed(() => {
   const model = chatStore.selectedModel
   if (!model) return t('chat.selectModel')
-  return model.display_name || displayModelName(model.model) || t('chat.selectModel')
+  return chatStore.getModelDisplayName(model.provider, model.model, model.display_name) || t('chat.selectModel')
 })
 
 const subtitle = computed(() => {

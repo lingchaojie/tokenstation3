@@ -77,7 +77,7 @@
                 data-testid="chat-model-select"
               >
                 <option v-for="model in modelOptions" :key="modelKey(model)" :value="modelKey(model)">
-                  {{ model.display_name || displayModelName(model.model) }}
+                  {{ chatStore.getModelDisplayName(model.provider, model.model, model.display_name) }}
                 </option>
               </select>
             </label>
@@ -338,7 +338,7 @@ import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -385,7 +385,7 @@ const selectedModelKey = computed({
 const selectedModelLabel = computed(() => {
   const model = chatStore.selectedModel
   if (!model) return t('chat.selectModel')
-  return model.display_name || displayModelName(model.model) || t('chat.selectModel')
+  return chatStore.getModelDisplayName(model.provider, model.model, model.display_name) || t('chat.selectModel')
 })
 
 const hasDraft = computed(() => draft.value.trim().length > 0 || chatStore.pendingAttachments.length > 0)

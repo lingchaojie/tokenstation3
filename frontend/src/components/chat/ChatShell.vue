@@ -22,7 +22,7 @@
             <Icon name="chevronLeft" size="sm" />
             <span>{{ t('chat.viewChats') }}</span>
           </button>
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-linear-ink">
+          <span class="min-w-0 flex-1 truncate text-sm font-medium text-linear-ink" data-testid="chat-mobile-title">
             {{ mobileTitle }}
           </span>
         </div>
@@ -58,7 +58,19 @@ const mobilePanel = ref<'list' | 'chat'>(props.initialMobilePanel)
 
 const mobileTitle = computed(() => {
   const conversation = chatStore.currentConversation?.conversation
-  return conversation?.title || conversation?.last_model || chatStore.selectedModel?.display_name || t('chat.chatFallbackTitle')
+  if (conversation?.title) return conversation.title
+
+  const conversationModel = conversation?.last_model || conversation?.default_model || ''
+  const conversationProvider = conversation?.last_provider || conversation?.default_provider || ''
+  if (conversationModel) {
+    return chatStore.getModelDisplayName(conversationProvider, conversationModel)
+  }
+
+  const selected = chatStore.selectedModel
+  if (selected) {
+    return chatStore.getModelDisplayName(selected.provider, selected.model, selected.display_name)
+  }
+  return t('chat.chatFallbackTitle')
 })
 
 function showChatPanel(): void {
