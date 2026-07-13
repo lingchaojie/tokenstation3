@@ -37,6 +37,15 @@ const textOnlyModel: WebChatModel = {
   price_status: 'confirmed',
 }
 
+const datedHaikuModel: WebChatModel = {
+  ...textOnlyModel,
+  provider: 'anthropic',
+  platform: 'anthropic',
+  key_type: 'anthropic',
+  model: 'claude-haiku-4-5-20251001',
+  display_name: 'claude-haiku-4-5',
+}
+
 const thinkingModel: WebChatModel = {
   ...textOnlyModel,
   model: 'gpt-reasoning',
@@ -99,6 +108,40 @@ describe('useChatStore', () => {
     vi.useRealTimers()
     localStorage.clear()
     sessionStorage.clear()
+  })
+
+  it('resolves known WebChat models to human-readable names without mutating routing ids', () => {
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+
+    expect(store.getModelDisplayName(
+      datedHaikuModel.provider,
+      datedHaikuModel.model,
+      datedHaikuModel.display_name,
+    )).toBe('Claude Haiku 4.5')
+    expect(store.models[0].model).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('prefers a provider-exact catalog display name for unknown model families', () => {
+    const openAIShared: WebChatModel = {
+      ...textOnlyModel,
+      model: 'shared-model',
+      display_name: 'OpenAI Shared',
+    }
+    const anthropicShared: WebChatModel = {
+      ...textOnlyModel,
+      provider: 'anthropic',
+      platform: 'anthropic',
+      key_type: 'anthropic',
+      model: 'shared-model',
+      display_name: 'Anthropic Shared',
+    }
+    const store = useChatStore()
+    store.models = [openAIShared, anthropicShared]
+
+    expect(store.getModelDisplayName('anthropic', 'shared-model')).toBe('Anthropic Shared')
+    expect(store.getModelDisplayName('missing-provider', 'shared-model')).toBe('OpenAI Shared')
+    expect(store.getModelDisplayName('vendor', 'historical-model', 'Historical Prime')).toBe('Historical Prime')
   })
 
   it('appends streamed assistant chunks without replacing prior text', () => {

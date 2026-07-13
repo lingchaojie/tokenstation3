@@ -139,7 +139,7 @@ import type { WebChatConversation } from '@/api/chat'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
-import { displayModelName, providerIconModel } from '@/utils/modelCatalog'
+import { providerIconModel } from '@/utils/modelCatalog'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -153,13 +153,26 @@ const emit = defineEmits<{
   (event: 'open-conversation'): void
 }>()
 
+function conversationModel(conversation: WebChatConversation): { provider: string; model: string } {
+  return {
+    provider: conversation.last_provider || conversation.default_provider || '',
+    model: conversation.last_model || conversation.default_model || '',
+  }
+}
+
+function conversationModelLabel(conversation: WebChatConversation): string {
+  const { provider, model } = conversationModel(conversation)
+  return chatStore.getModelDisplayName(provider, model)
+}
+
 const filteredConversations = computed(() => {
   const term = query.value.trim().toLowerCase()
   if (!term) return chatStore.conversations
   return chatStore.conversations.filter((conversation) =>
     conversationTitle(conversation).toLowerCase().includes(term) ||
     conversation.last_model.toLowerCase().includes(term) ||
-    conversation.default_model.toLowerCase().includes(term)
+    conversation.default_model.toLowerCase().includes(term) ||
+    conversationModelLabel(conversation).toLowerCase().includes(term)
   )
 })
 
@@ -172,10 +185,7 @@ const groupedConversations = computed(() => {
   }>()
 
   for (const conversation of filteredConversations.value) {
-    const model = conversation.last_model || conversation.default_model || 'unknown'
-    const provider = conversation.last_provider || conversation.default_provider || ''
-    const modelConfig = chatStore.models.find((item) => item.model === model && item.provider === provider) ||
-      chatStore.models.find((item) => item.model === model)
+    const { provider, model } = conversationModel(conversation)
     const existing = groups.get(model)
     if (existing) {
       existing.conversations.push(conversation)
@@ -183,7 +193,7 @@ const groupedConversations = computed(() => {
       groups.set(model, {
         model,
         provider,
-        label: modelConfig?.display_name || displayModelName(model) || model,
+        label: chatStore.getModelDisplayName(provider, model) || model,
         conversations: [conversation],
       })
     }
@@ -223,7 +233,7 @@ const ConversationRow = defineComponent({
         }, conversationTitle(props.conversation)),
         h('span', {
           class: 'mt-0.5 block truncate text-xs text-linear-ink-tertiary',
-        }, props.conversation.last_model || props.conversation.default_model || t('chat.noModel')),
+        }, conversationModelLabel(props.conversation) || t('chat.noModel')),
       ]),
       h('button', {
         class: 'hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink group-hover:inline-flex',

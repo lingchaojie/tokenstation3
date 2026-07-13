@@ -198,7 +198,7 @@ interface SourceLink {
 }
 
 function assistantLabel(message: WebChatMessage): string {
-  return message.model || t('chat.assistant')
+  return chatStore.getModelDisplayName(message.provider, message.model) || t('chat.assistant')
 }
 
 function isStreamingStatus(message: WebChatMessage): boolean {

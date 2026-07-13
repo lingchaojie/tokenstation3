@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend build-datamanagementd check-generate test test-backend test-frontend test-frontend-critical test-datamanagementd secret-scan
+.PHONY: build build-backend build-frontend build-datamanagementd check-generate test test-backend test-frontend test-frontend-critical test-frontend-webchat test-datamanagementd secret-scan
 
 FRONTEND_CRITICAL_VITEST := \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
@@ -14,7 +14,15 @@ FRONTEND_CRITICAL_VITEST := \
 	src/views/admin/orders/__tests__/AdminPaymentPlansView.spec.ts \
 	src/views/admin/orders/__tests__/PlanEditDialog.spec.ts \
 	src/router/__tests__/admin-my-account-dashboard-route.spec.ts \
+	src/components/account/__tests__/AccountUsageCell.spec.ts \
+	src/views/user/__tests__/KeysView.spec.ts \
 	src/utils/__tests__/analytics51la.spec.ts
+
+FRONTEND_WEBCHAT_VITEST := \
+	src/utils/__tests__/webChatModelName.spec.ts \
+	src/components/chat/__tests__/chatStore.spec.ts \
+	src/components/chat/__tests__/ChatView.spec.ts \
+	src/components/chat/__tests__/MessageList.spec.ts
 
 # 一键编译前后端
 build: build-backend build-frontend
@@ -45,6 +53,10 @@ test-frontend:
 	@pnpm --dir frontend run lint:check
 	@pnpm --dir frontend run typecheck
 	@$(MAKE) test-frontend-critical
+	@$(MAKE) test-frontend-webchat
 
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
+
+test-frontend-webchat:
+	@pnpm --dir frontend exec vitest run $(FRONTEND_WEBCHAT_VITEST)

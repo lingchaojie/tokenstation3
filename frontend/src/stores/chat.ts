@@ -16,6 +16,7 @@ import {
   type WebChatModel,
   type WebChatThinkingEffort,
 } from '@/api/chat'
+import { formatWebChatModelName } from '@/utils/webChatModelName'
 
 interface StartAssistantStreamInput {
   conversationId: number
@@ -490,6 +491,21 @@ export const useChatStore = defineStore('chat', () => {
     const provider = conversation.last_provider || conversation.default_provider
     const model = conversation.last_model || conversation.default_model
     selectModel(provider, model)
+  }
+
+  function getModelDisplayName(provider: string, model: string, displayName = ''): string {
+    const normalizedProvider = provider.trim().toLowerCase()
+    const normalizedModel = model.trim()
+    const exactMatch = models.value.find((item) =>
+      item.provider.trim().toLowerCase() === normalizedProvider && item.model === normalizedModel
+    )
+    const modelMatch = exactMatch ?? models.value.find((item) => item.model === normalizedModel)
+
+    return formatWebChatModelName({
+      provider: normalizedProvider || modelMatch?.provider,
+      model: normalizedModel,
+      displayName: displayName.trim() || modelMatch?.display_name,
+    })
   }
 
   function selectModel(provider: string, model: string): boolean {
@@ -1020,6 +1036,7 @@ export const useChatStore = defineStore('chat', () => {
     capabilityWarning,
     loadModels,
     loadConversations,
+    getModelDisplayName,
     selectModel,
     openConversation,
     createConversation,

@@ -42,24 +42,6 @@ export function formatContextWindow(value?: number): string {
   return value.toString()
 }
 
-export function displayModelName(model: string): string {
-  const value = model.trim()
-  if (!value) return ''
-
-  return value
-    .split('-')
-    .filter((part) => part.length > 0)
-    .map((part) => {
-      const lower = part.toLowerCase()
-      if (['api', 'glm', 'gpt'].includes(lower)) return lower.toUpperCase()
-      if (['claude', 'codex', 'gemini', 'haiku', 'image', 'mini', 'openai', 'opus', 'qwen', 'sonnet'].includes(lower)) {
-        return lower.charAt(0).toUpperCase() + lower.slice(1)
-      }
-      return part
-    })
-    .join('-')
-}
-
 export function filterModelCatalog(
   models: PublicModelCatalogModel[],
   filters: ModelCatalogFilters,

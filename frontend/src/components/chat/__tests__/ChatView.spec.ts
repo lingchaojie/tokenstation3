@@ -85,6 +85,12 @@ const anthropicModel: WebChatModel = {
   price_status: 'confirmed',
 }
 
+const datedHaikuModel: WebChatModel = {
+  ...anthropicModel,
+  model: 'claude-haiku-4-5-20251001',
+  display_name: 'claude-haiku-4-5',
+}
+
 const imageModel: WebChatModel = {
   provider: 'openai',
   platform: 'openai',
@@ -300,6 +306,18 @@ describe('Composer', () => {
     })
   })
 
+  it('shows a human-readable dated Claude model without changing its routing value', async () => {
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+    store.selectedModel = datedHaikuModel
+
+    const wrapper = mount(Composer)
+
+    expect(wrapper.get('[data-testid="chat-model-menu-toggle"]').text()).toContain('Claude Haiku 4.5')
+    expect(wrapper.text()).not.toContain('20251001')
+    expect(store.selectedModel.model).toBe('claude-haiku-4-5-20251001')
+  })
+
   it('omits secondary status text for thinking and web search toggles', async () => {
     const store = useChatStore()
     store.selectedModel = chatModel
@@ -373,6 +391,30 @@ describe('ChatShell', () => {
     expect(wrapper.get('[data-testid="chat-conversation-rail"]').classes()).toContain('hidden')
     expect(wrapper.get('[data-testid="chat-main-panel"]').classes()).not.toContain('hidden')
   })
+
+  it('formats the model fallback used by the mobile conversation title', () => {
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+    store.selectedModel = datedHaikuModel
+    store.currentConversation = {
+      conversation: {
+        ...historicalConversation,
+        title: '',
+        default_provider: 'anthropic',
+        last_provider: 'anthropic',
+        default_model: datedHaikuModel.model,
+        last_model: datedHaikuModel.model,
+      },
+      messages: [],
+    }
+
+    const wrapper = mount(ChatShell, {
+      props: { initialMobilePanel: 'chat' },
+      global: { stubs: { Icon: true, ModelIcon: true } },
+    })
+
+    expect(wrapper.get('[data-testid="chat-mobile-title"]').text()).toBe('Claude Haiku 4.5')
+  })
 })
 
 describe('ModelSelector', () => {
@@ -395,6 +437,17 @@ describe('ModelSelector', () => {
     expect(wrapper.text()).toContain('GPT-5.4')
     expect(wrapper.find('[data-testid="chat-provider-trigger"]').exists()).toBe(false)
     expect(wrapper.find('select[aria-label="Model"]').exists()).toBe(false)
+  })
+
+  it('uses the same human-readable name in the compact model chip', () => {
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+    store.selectedModel = datedHaikuModel
+
+    const wrapper = mount(ModelSelector)
+
+    expect(wrapper.get('[data-testid="chat-current-model-chip"]').text()).toContain('Claude Haiku 4.5')
+    expect(wrapper.text()).not.toContain('20251001')
   })
 
   it('exposes deep thinking as one composer option without model effort controls', async () => {
@@ -487,6 +540,40 @@ describe('ModelSelector', () => {
 describe('ConversationRail reference layout', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+  })
+
+  it('formats and searches historical conversation model labels', async () => {
+    const haikuConversation: WebChatConversation = {
+      ...historicalConversation,
+      id: 10,
+      title: 'Haiku research',
+      default_provider: 'anthropic',
+      last_provider: 'anthropic',
+      default_model: datedHaikuModel.model,
+      last_model: datedHaikuModel.model,
+    }
+    const store = useChatStore()
+    store.models = [datedHaikuModel]
+    store.conversations = [haikuConversation]
+
+    const wrapper = mount(ChatShell, {
+      global: {
+        stubs: {
+          Icon: true,
+          ModelIcon: true,
+        },
+      },
+    })
+
+    const rail = wrapper.get('[data-testid="chat-conversation-rail"]')
+    expect(rail.text()).toContain('Claude Haiku 4.5')
+    expect(rail.text()).not.toContain('20251001')
+
+    await rail.get('input[type="search"]').setValue('Haiku 4.5')
+    expect(rail.text()).toContain('Haiku research')
+
+    await rail.get('input[type="search"]').setValue('claude-haiku-4-5-20251001')
+    expect(rail.text()).toContain('Haiku research')
   })
 
   it('shows a workspace rail with model-grouped conversations', () => {

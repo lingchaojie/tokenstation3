@@ -284,7 +284,6 @@ describe('user KeysView column settings', () => {
     expect(visibleColumnKeys(wrapper)).toEqual([
       'name',
       'key',
-      'group',
       'current_concurrency',
       'usage',
       'expires_at',
@@ -347,7 +346,7 @@ describe('user KeysView column settings', () => {
       'actions',
     ])
     expect(localStorage.getItem('api-key-hidden-columns')).toBe(
-      JSON.stringify(['group', 'created_at', 'last_used_ip'])
+      JSON.stringify(['created_at', 'last_used_ip'])
     )
     expect(localStorage.getItem('api-key-column-settings-version')).toBe('2')
   })
