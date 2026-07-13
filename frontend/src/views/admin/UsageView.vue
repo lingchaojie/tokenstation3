@@ -216,7 +216,8 @@ import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryM
 import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
 import { listErrorLogs } from '@/api/admin/ops'
-import type { OpsErrorLog } from '@/api/admin/ops'
+import type { OpsErrorListQueryParams, OpsErrorLog } from '@/api/admin/ops'
+import type { DashboardSnapshotV2Params, ModelStatsParams } from '@/api/admin/dashboard'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -248,6 +249,7 @@ let abortController: AbortController | null = null; let exportAbortController: A
 let chartReqSeq = 0
 let statsReqSeq = 0
 let modelStatsReqSeq = 0
+let adminErrorsReqSeq = 0
 const exportProgress = reactive({ show: false, progress: 0, current: 0, total: 0, estimatedTime: '' })
 const cleanupDialogVisible = ref(false)
 // Balance history modal state
@@ -262,6 +264,9 @@ const breakdownFilters = computed(() => {
   if (filters.value.group_id) f.group_id = filters.value.group_id
   if (filters.value.request_type != null) f.request_type = filters.value.request_type
   if (filters.value.billing_type != null) f.billing_type = filters.value.billing_type
+  if (filters.value.exclude_user_ids?.length) {
+    f.exclude_user_ids = [...filters.value.exclude_user_ids]
+  }
   return f
 })
 
@@ -282,7 +287,12 @@ const handleUserClick = async (userId: number) => {
 // Drill down from the per-user token ranking: scope the whole usage view to
 // that user and jump to the usage-detail tab so the drill-down is visible.
 const handleRankingSelectUser = (userId: number, email: string) => {
-  filters.value = { ...filters.value, user_id: userId }
+  const excludeUserIds = filters.value.exclude_user_ids?.filter((id) => id !== userId)
+  filters.value = {
+    ...filters.value,
+    user_id: userId,
+    exclude_user_ids: excludeUserIds?.length ? excludeUserIds : undefined,
+  }
   usageFiltersRef.value?.setUserKeyword?.(email || '')
   activeTab.value = 'usage'
   applyFilters()
@@ -312,7 +322,7 @@ const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
 }
 const defaultRange = getLast24HoursRangeDates()
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
-const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
+const filters = ref<AdminUsageQueryParams>({ user_id: undefined, exclude_user_ids: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const sortState = reactive({
   sort_by: 'created_at',
@@ -367,18 +377,20 @@ const onDateRangeChange = (range: { startDate: string; endDate: string; preset: 
 const buildUsageListParams = (
   page: number,
   pageSize: number,
-  exactTotal: boolean
+  exactTotal: boolean,
+  filterSnapshot: AdminUsageQueryParams = filters.value,
+  sortSnapshot: Pick<AdminUsageQueryParams, 'sort_by' | 'sort_order'> = sortState,
 ): AdminUsageQueryParams => {
-  const requestType = filters.value.request_type
-  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+  const requestType = filterSnapshot.request_type
+  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filterSnapshot.stream
   return {
     page,
     page_size: pageSize,
     exact_total: exactTotal,
-    ...filters.value,
+    ...filterSnapshot,
     stream: legacyStream === null ? undefined : legacyStream,
-    sort_by: sortState.sort_by,
-    sort_order: sortState.sort_order
+    sort_by: sortSnapshot.sort_by,
+    sort_order: sortSnapshot.sort_order
   }
 }
 
@@ -436,7 +448,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
-    const baseParams = {
+    const baseParams: ModelStatsParams = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       user_id: filters.value.user_id,
@@ -447,6 +459,9 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       billing_type: filters.value.billing_type,
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      baseParams.exclude_user_ids = [...filters.value.exclude_user_ids]
     }
 
     const response = await adminAPI.dashboard.getModelStats({ ...baseParams, model_source: source })
@@ -484,7 +499,7 @@ const loadChartData = async () => {
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
-    const snapshot = await adminAPI.dashboard.getSnapshotV2({
+    const snapshotParams: DashboardSnapshotV2Params = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       granularity: granularity.value,
@@ -501,7 +516,11 @@ const loadChartData = async () => {
       include_model_stats: false,
       include_group_stats: true,
       include_users_trend: false
-    })
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      snapshotParams.exclude_user_ids = [...filters.value.exclude_user_ids]
+    }
+    const snapshot = await adminAPI.dashboard.getSnapshotV2(snapshotParams)
     if (seq !== chartReqSeq) return
     trendData.value = snapshot.trend || []
     groupStats.value = snapshot.groups || []
@@ -514,11 +533,9 @@ const applyFilters = () => {
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
   loadChartData()
-  errPage.value = 1
+  invalidateAdminErrors()
   if (activeTab.value === 'errors') {
     loadAdminErrors()
-  } else {
-    errRows.value = []
   }
 }
 const refreshData = () => {
@@ -534,7 +551,7 @@ const resetFilters = () => {
   const range = getLast24HoursRangeDates()
   startDate.value = range.start
   endDate.value = range.end
-  filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
+  filters.value = { start_date: startDate.value, end_date: endDate.value, user_id: undefined, exclude_user_ids: undefined, request_type: undefined, billing_type: null, billing_mode: undefined }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
   resetErrFilterValues()
   applyFilters()
@@ -565,6 +582,11 @@ const getRequestTypeLabel = (log: AdminUsageLog): string => {
 const exportToExcel = async () => {
   if (exporting.value) return; exporting.value = true; exportProgress.show = true
   const c = new AbortController(); exportAbortController = c
+  const exportFilters: AdminUsageQueryParams = {
+    ...filters.value,
+    exclude_user_ids: filters.value.exclude_user_ids ? [...filters.value.exclude_user_ids] : undefined,
+  }
+  const exportSort = { sort_by: sortState.sort_by, sort_order: sortState.sort_order }
   try {
     let p = 1; let total = pagination.total; let exportedCount = 0
     const XLSX = await import('xlsx')
@@ -584,7 +606,7 @@ const exportToExcel = async () => {
     const ws = XLSX.utils.aoa_to_sheet([headers])
     while (true) {
       const res = await adminUsageAPI.list(
-        buildUsageListParams(p, 100, true),
+        buildUsageListParams(p, 100, true, exportFilters, exportSort),
         { signal: c.signal }
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
@@ -611,7 +633,7 @@ const exportToExcel = async () => {
     if(!c.signal.aborted) {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${exportFilters.start_date}_to_${exportFilters.end_date}.xlsx`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
   } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
@@ -788,6 +810,14 @@ const errSortOrder = ref<'asc' | 'desc'>('desc')
 const showErrorModal = ref(false)
 const selectedErrorId = ref<number | null>(null)
 
+const invalidateAdminErrors = () => {
+  adminErrorsReqSeq += 1
+  errLoading.value = false
+  errRows.value = []
+  errTotal.value = 0
+  errPage.value = 1
+}
+
 const errErrorTypeOptions = computed(() => [
   { value: '', label: t('common.all') },
   { value: 'rate_limit_error', label: 'rate_limit_error' },
@@ -825,7 +855,7 @@ const resetErrFilterValues = () => {
 }
 
 const onErrFilterChange = () => {
-  errPage.value = 1
+  invalidateAdminErrors()
   if (activeTab.value === 'errors') {
     loadAdminErrors()
   }
@@ -841,9 +871,10 @@ const toRFC3339 = (d: string | undefined, endOfDay = false): string | undefined 
   d ? new Date(d + (endOfDay ? 'T23:59:59.999' : 'T00:00:00')).toISOString() : undefined
 
 const loadAdminErrors = async () => {
+  const seq = ++adminErrorsReqSeq
   errLoading.value = true
   try {
-    const resp = await listErrorLogs({
+    const params: OpsErrorListQueryParams = {
       page: errPage.value,
       page_size: errPageSize.value,
       view: 'all',
@@ -862,14 +893,20 @@ const loadAdminErrors = async () => {
       status_codes: filters.value.status_code != null ? String(filters.value.status_code) : undefined,
       sort_by: errSortBy.value,
       sort_order: errSortOrder.value,
-    })
+    }
+    if (filters.value.exclude_user_ids?.length) {
+      params.exclude_user_ids = [...filters.value.exclude_user_ids]
+    }
+    const resp = await listErrorLogs(params)
+    if (seq !== adminErrorsReqSeq) return
     errRows.value = resp.items
     errTotal.value = resp.total
   } catch (error) {
+    if (seq !== adminErrorsReqSeq) return
     console.error('Failed to load admin errors:', error)
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
-    errLoading.value = false
+    if (seq === adminErrorsReqSeq) errLoading.value = false
   }
 }
 

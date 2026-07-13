@@ -93,6 +93,12 @@ func applyOpsErrorSortParams(c *gin.Context, filter *service.OpsErrorLogFilter) 
 
 // GET /api/v1/admin/ops/errors
 func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
+	excludedUserIDs, err := parseExcludedUserIDs(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	if h.opsService == nil {
 		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
 		return
@@ -114,7 +120,11 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	filter := &service.OpsErrorLogFilter{
+		Page:            page,
+		PageSize:        pageSize,
+		ExcludedUserIDs: excludedUserIDs,
+	}
 
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime

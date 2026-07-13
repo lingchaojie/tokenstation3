@@ -816,6 +816,50 @@ func (s *UsageLogRepoSuite) TestListWithFilters() {
 	s.Require().Equal(int64(1), page.Total)
 }
 
+func (s *UsageLogRepoSuite) TestExcludedUserFilters_ListAndStats() {
+	// usage_logs.user_id is NOT NULL in migrations/001_init.sql. Assert the
+	// migrated PostgreSQL schema too, so the missing NULL fixture is concrete
+	// schema evidence rather than an untested assumption.
+	var isNullable string
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `
+		SELECT is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'usage_logs'
+		  AND column_name = 'user_id'
+	`, nil, &isNullable))
+	s.Require().Equal("NO", isNullable, "usage_logs.user_id must remain NOT NULL")
+
+	excludedUser := mustCreateUser(s.T(), s.client, &service.User{Email: "filters-excluded@test.com"})
+	retainedUser := mustCreateUser(s.T(), s.client, &service.User{Email: "filters-retained@test.com"})
+	excludedKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: excludedUser.ID, Key: "sk-filters-excluded", Name: "excluded"})
+	retainedKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: retainedUser.ID, Key: "sk-filters-retained", Name: "retained"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-filters-excluded"})
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(excludedUser, excludedKey, account, 10, 20, 0.5, base)
+	s.createUsageLog(retainedUser, retainedKey, account, 100, 200, 1.5, base.Add(time.Minute))
+	startTime := base.Add(-time.Hour)
+	endTime := base.Add(time.Hour)
+	filters := usagestats.UsageLogFilters{
+		ExcludedUserIDs: []int64{excludedUser.ID},
+		StartTime:       &startTime,
+		EndTime:         &endTime,
+		ExactTotal:      true,
+	}
+
+	logs, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, filters)
+	s.Require().NoError(err, "ListWithFilters excluded user")
+	s.Require().Len(logs, 1)
+	s.Require().Equal(retainedUser.ID, logs[0].UserID)
+	s.Require().Equal(int64(1), page.Total)
+
+	stats, err := s.repo.GetStatsWithFilters(s.ctx, filters)
+	s.Require().NoError(err, "GetStatsWithFilters excluded user")
+	s.Require().Equal(int64(1), stats.TotalRequests)
+	s.Require().Equal(int64(300), stats.TotalTokens)
+	s.Require().InDelta(1.5, stats.TotalActualCost, 0.0001)
+}
+
 // --- GetStatsWithFilters ---
 
 func (s *UsageLogRepoSuite) TestGetStatsWithFilters() {
@@ -890,13 +934,13 @@ func (s *UsageLogRepoSuite) TestGetEndpointStatsWithFilters_WebChatAPIKeyFilter(
 	s.Require().NoError(err, "GetUpstreamEndpointStatsWithFilters hidden web chat apiKey")
 	s.Require().Empty(upstreamEndpoints)
 
-	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", "", nil, nil, nil, "")
+	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", "", nil, nil, nil, nil, "")
 	s.Require().NoError(err, "getEndpointPathStatsWithFilters user includes web chat usage")
 	s.Require().Len(endpointPaths, 1)
 	s.Require().Equal(inboundEndpoint+" -> "+upstreamEndpoint, endpointPaths[0].Endpoint)
 	s.Require().Equal(int64(2), endpointPaths[0].Requests)
 
-	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", "", nil, nil, nil, "")
+	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", "", nil, nil, nil, nil, "")
 	s.Require().NoError(err, "getEndpointPathStatsWithFilters hidden web chat apiKey")
 	s.Require().Empty(endpointPaths)
 }

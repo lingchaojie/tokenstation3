@@ -1120,6 +1120,7 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 			clauses = append(clauses, "e.user_id = $"+n)
 		}
 	}
+	clauses, args = appendExcludedUserIDsCondition(clauses, args, "e.user_id", filter.ExcludedUserIDs)
 	if filter.APIKeyID != nil && *filter.APIKeyID > 0 {
 		args = append(args, *filter.APIKeyID)
 		clauses = append(clauses, "e.api_key_id = $"+itoa(len(args)))

@@ -136,8 +136,9 @@ type OpsErrorLogFilter struct {
 
 	// User-scoped filters (used by the user-facing error requests endpoint and
 	// by admin drill-down from the usage page).
-	UserID   *int64
-	APIKeyID *int64
+	UserID          *int64
+	ExcludedUserIDs []int64
+	APIKeyID        *int64
 
 	// MatchDeletedKeyOwner: 用户侧专用。UserID 设置且为 true 时,归属从 user_id=UserID
 	// 放宽为 (user_id=UserID OR deleted_key_owner_user_id=UserID),使原所有者能看到

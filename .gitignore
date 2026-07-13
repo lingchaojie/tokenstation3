@@ -155,4 +155,5 @@ backend/graphify-out/
 graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
 # superpowers runtime dir at repo root (docs/superpowers/ stays tracked, see above)
 /.superpowers/
+# Local feature worktrees.
 /.worktrees/

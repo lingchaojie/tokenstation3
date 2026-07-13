@@ -39,6 +39,17 @@ func (s *dashboardUsageRepoCapture) GetUsageTrendWithFilters(
 	return []usagestats.TrendDataPoint{}, nil
 }
 
+func (s *dashboardUsageRepoCapture) GetUsageTrendWithUsageFilters(
+	_ context.Context,
+	_, _ time.Time,
+	_ string,
+	filters usagestats.UsageLogFilters,
+) ([]usagestats.TrendDataPoint, error) {
+	s.trendRequestType = filters.RequestType
+	s.trendStream = filters.Stream
+	return []usagestats.TrendDataPoint{}, nil
+}
+
 func (s *dashboardUsageRepoCapture) GetModelStatsWithFilters(
 	ctx context.Context,
 	startTime, endTime time.Time,
@@ -49,6 +60,17 @@ func (s *dashboardUsageRepoCapture) GetModelStatsWithFilters(
 ) ([]usagestats.ModelStat, error) {
 	s.modelRequestType = requestType
 	s.modelStream = stream
+	return []usagestats.ModelStat{}, nil
+}
+
+func (s *dashboardUsageRepoCapture) GetModelStatsWithUsageFiltersBySource(
+	_ context.Context,
+	_, _ time.Time,
+	filters usagestats.UsageLogFilters,
+	_ string,
+) ([]usagestats.ModelStat, error) {
+	s.modelRequestType = filters.RequestType
+	s.modelStream = filters.Stream
 	return []usagestats.ModelStat{}, nil
 }
 

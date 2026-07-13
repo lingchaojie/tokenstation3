@@ -17,6 +17,8 @@ import (
 type dashboardUsageRepoCacheProbe struct {
 	service.UsageLogRepository
 	trendCalls      atomic.Int32
+	modelCalls      atomic.Int32
+	groupCalls      atomic.Int32
 	usersTrendCalls atomic.Int32
 }
 
@@ -40,6 +42,19 @@ func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithFilters(
 	}}, nil
 }
 
+func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithUsageFilters(
+	ctx context.Context,
+	startTime, endTime time.Time,
+	granularity string,
+	filters usagestats.UsageLogFilters,
+) ([]usagestats.TrendDataPoint, error) {
+	return r.GetUsageTrendWithFilters(
+		ctx, startTime, endTime, granularity,
+		filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID,
+		filters.Model, filters.RequestType, filters.Stream, filters.BillingType,
+	)
+}
+
 func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 	ctx context.Context,
 	startTime, endTime time.Time,
@@ -56,6 +71,25 @@ func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 		Cost:       2,
 		ActualCost: 1,
 	}}, nil
+}
+
+func (r *dashboardUsageRepoCacheProbe) GetModelStatsWithUsageFiltersBySource(
+	_ context.Context,
+	_, _ time.Time,
+	_ usagestats.UsageLogFilters,
+	_ string,
+) ([]usagestats.ModelStat, error) {
+	r.modelCalls.Add(1)
+	return []usagestats.ModelStat{}, nil
+}
+
+func (r *dashboardUsageRepoCacheProbe) GetGroupStatsWithUsageFilters(
+	_ context.Context,
+	_, _ time.Time,
+	_ usagestats.UsageLogFilters,
+) ([]usagestats.GroupStat, error) {
+	r.groupCalls.Add(1)
+	return []usagestats.GroupStat{}, nil
 }
 
 func resetDashboardReadCachesForTest() {
@@ -115,4 +149,79 @@ func TestDashboardHandler_GetUserUsageTrend_UsesCache(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec2.Code)
 	require.Equal(t, "hit", rec2.Header().Get("X-Snapshot-Cache"))
 	require.Equal(t, int32(1), repo.usersTrendCalls.Load())
+}
+
+func TestDashboardHandler_SnapshotModelAndGroupCachesIncludeModelFilter(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	for _, model := range []string{"claude-opus-4-6", "gpt-5.4"} {
+		req := httptest.NewRequest(http.MethodGet,
+			"/admin/dashboard/snapshot-v2?include_stats=false&include_trend=false&include_model_stats=true&include_group_stats=true&model="+model,
+			nil,
+		)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	require.Equal(t, int32(2), repo.modelCalls.Load())
+	require.Equal(t, int32(2), repo.groupCalls.Load())
+}
+
+func TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	raw := usagestats.UsageLogFilters{
+		Model:           "claude-opus-4-6",
+		ExcludedUserIDs: []int64{9, 3},
+	}
+	requested := raw
+	requested.ModelFilterSource = usagestats.ModelSourceRequested
+	requested.ExcludedUserIDs = []int64{3, 9, 3}
+	sameRequested := requested
+	sameRequested.ExcludedUserIDs = []int64{9, 3}
+
+	t.Run("trend", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+
+		_, firstHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", raw)
+		require.NoError(t, err)
+		require.False(t, firstHit)
+		_, secondHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", requested)
+		require.NoError(t, err)
+		require.False(t, secondHit)
+		_, normalizedHit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", sameRequested)
+		require.NoError(t, err)
+		require.True(t, normalizedHit)
+		require.Equal(t, int32(2), repo.trendCalls.Load())
+	})
+
+	t.Run("group", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+
+		_, firstHit, err := handler.getGroupStatsCached(context.Background(), start, end, raw)
+		require.NoError(t, err)
+		require.False(t, firstHit)
+		_, secondHit, err := handler.getGroupStatsCached(context.Background(), start, end, requested)
+		require.NoError(t, err)
+		require.False(t, secondHit)
+		_, normalizedHit, err := handler.getGroupStatsCached(context.Background(), start, end, sameRequested)
+		require.NoError(t, err)
+		require.True(t, normalizedHit)
+		require.Equal(t, int32(2), repo.groupCalls.Load())
+	})
 }

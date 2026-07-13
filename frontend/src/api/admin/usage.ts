@@ -6,6 +6,7 @@
 import { apiClient } from '../client'
 import type { AdminUsageLog, UsageQueryParams, PaginatedResponse, UsageRequestType } from '@/types'
 import type { EndpointStat } from '@/types'
+import { withEncodedExcludedUserIds } from '@/utils/excludedUserIds'
 
 // ==================== Types ====================
 
@@ -82,6 +83,7 @@ export interface CreateUsageCleanupTaskRequest {
 
 export interface AdminUsageQueryParams extends UsageQueryParams {
   user_id?: number
+  exclude_user_ids?: number[]
   exact_total?: boolean
   billing_mode?: string
   sort_by?: string
@@ -104,7 +106,7 @@ export async function list(
   options?: { signal?: AbortSignal }
 ): Promise<PaginatedResponse<AdminUsageLog>> {
   const { data } = await apiClient.get<PaginatedResponse<AdminUsageLog>>('/admin/usage', {
-    params,
+    params: withEncodedExcludedUserIds(params),
     signal: options?.signal
   })
   return data
@@ -117,6 +119,7 @@ export async function list(
  */
 export async function getStats(params: {
   user_id?: number
+  exclude_user_ids?: number[]
   api_key_id?: number
   account_id?: number
   group_id?: number
@@ -130,7 +133,7 @@ export async function getStats(params: {
   nocache?: number
 }): Promise<AdminUsageStatsResponse> {
   const { data } = await apiClient.get<AdminUsageStatsResponse>('/admin/usage/stats', {
-    params
+    params: withEncodedExcludedUserIds(params)
   })
   return data
 }

@@ -48,11 +48,12 @@ describe('UserTokenRanking', () => {
   })
 
   it('loads on mount with shared filters and emits select-user with id + email on row click', async () => {
-    const wrapper = mountRanking({ filters: { group_id: 3 }, model: 'claude-fable-5' })
+    const wrapper = mountRanking({ filters: { group_id: 3, exclude_user_ids: [8, 3] }, model: 'claude-fable-5' })
     await flushPromises()
 
     expect(getUserBreakdown).toHaveBeenCalledWith(expect.objectContaining({
       group_id: 3,
+      exclude_user_ids: [8, 3],
       model: 'claude-fable-5',
       start_date: '2026-07-01',
       end_date: '2026-07-08',

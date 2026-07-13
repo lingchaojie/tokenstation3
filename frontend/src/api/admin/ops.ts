@@ -6,6 +6,7 @@
 
 import { apiClient, buildGatewayUrl } from '../client'
 import type { PaginatedResponse } from '@/types'
+import { withEncodedExcludedUserIds } from '@/utils/excludedUserIds'
 
 export type OpsQueryMode = 'auto' | 'raw' | 'preagg'
 
@@ -1097,6 +1098,7 @@ export type OpsErrorListQueryParams = {
   group_id?: number | null
   account_id?: number | null
   user_id?: number
+  exclude_user_ids?: number[]
   api_key_id?: number
   // 模型过滤：后端以 COALESCE(requested_model, model) 精确匹配（admin 路径）。
   model?: string
@@ -1123,7 +1125,9 @@ export type OpsErrorListQueryParams = {
 
 // Legacy unified endpoints
 export async function listErrorLogs(params: OpsErrorListQueryParams): Promise<OpsErrorLogsResponse> {
-  const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/errors', { params })
+  const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/errors', {
+    params: withEncodedExcludedUserIds(params)
+  })
   return data
 }
 
