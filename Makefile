@@ -14,6 +14,8 @@ FRONTEND_CRITICAL_VITEST := \
 	src/views/admin/orders/__tests__/AdminPaymentPlansView.spec.ts \
 	src/views/admin/orders/__tests__/PlanEditDialog.spec.ts \
 	src/router/__tests__/admin-my-account-dashboard-route.spec.ts \
+	src/components/account/__tests__/AccountUsageCell.spec.ts \
+	src/views/user/__tests__/KeysView.spec.ts \
 	src/utils/__tests__/analytics51la.spec.ts
 
 # 一键编译前后端
