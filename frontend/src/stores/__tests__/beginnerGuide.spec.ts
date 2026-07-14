@@ -327,14 +327,16 @@ describe('useBeginnerGuideStore', () => {
     expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
   })
 
-  it('hides failed suppression locally and retries its account-scoped marker on next initialization', async () => {
+  it('returns false after a failed suppression while hiding locally and retrying the account-scoped marker', async () => {
     getBeginnerGuideStateMock.mockResolvedValueOnce(state())
     patchBeginnerGuideStateMock.mockRejectedValueOnce(new Error('offline'))
     const store = useBeginnerGuideStore()
     await store.initialize({ authenticated: true, userId: 42 })
     expect(store.showPrompt).toBe(true)
 
-    await expect(store.suppressPrompt()).resolves.toBeUndefined()
+    const suppression = store.suppressPrompt()
+    expect(localStorage.getItem(retryKey(42))).toBe('1')
+    await expect(suppression).resolves.toBe(false)
 
     expect(store.showPrompt).toBe(false)
     expect(store.promptState).toBe('suppressed')
@@ -353,6 +355,35 @@ describe('useBeginnerGuideStore', () => {
     })
     expect(localStorage.getItem(retryKey(42))).toBeNull()
     expect(retriedStore.showPrompt).toBe(false)
+  })
+
+  it('returns true after suppression is confirmed by the account API', async () => {
+    getBeginnerGuideStateMock.mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({ prompt_state: 'suppressed' })
+    )
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 42 })
+
+    await expect(store.suppressPrompt()).resolves.toBe(true)
+
+    expect(store.showPrompt).toBe(false)
+    expect(store.promptState).toBe('suppressed')
+    expect(localStorage.getItem(retryKey(42))).toBeNull()
+  })
+
+  it('returns false and schedules retry when suppression succeeds with malformed state', async () => {
+    getBeginnerGuideStateMock.mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock.mockResolvedValueOnce(
+      null as unknown as BeginnerGuideState
+    )
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 42 })
+
+    await expect(store.suppressPrompt()).resolves.toBe(false)
+
+    expect(store.showPrompt).toBe(false)
+    expect(localStorage.getItem(retryKey(42))).toBe('1')
   })
 
   it('suppresses an eligible prompt when an authenticated user enters the guide without anonymous progress', async () => {
@@ -526,11 +557,79 @@ describe('useBeginnerGuideStore', () => {
     expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
     await store.initialize({ authenticated: true, userId: 'user-b' })
     suppressionResponse.reject(new Error('offline'))
-    await pendingSuppression
+    await expect(pendingSuppression).resolves.toBe(true)
 
     expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
     expect(localStorage.getItem(retryKey('user-b'))).toBeNull()
     expect(store.promptState).toBe('suppressed')
+  })
+
+  it('retries on immediate same-owner initialization without letting the older success clear the newer attempt', async () => {
+    const firstSuppression = deferred<BeginnerGuideState>()
+    const retrySuppression = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(state())
+      .mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock
+      .mockReturnValueOnce(firstSuppression.promise)
+      .mockReturnValueOnce(retrySuppression.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingSuppression = store.suppressPrompt()
+    await flushMicrotasks()
+    const pendingReinitialize = store.initialize({ authenticated: true, userId: 'user-a' })
+    await flushMicrotasks()
+
+    expect(store.showPrompt).toBe(false)
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+
+    firstSuppression.resolve(state({ prompt_state: 'suppressed' }))
+    await expect(pendingSuppression).resolves.toBe(true)
+    await flushMicrotasks()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(2)
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+
+    retrySuppression.resolve(state({ prompt_state: 'suppressed' }))
+    await pendingReinitialize
+    expect(localStorage.getItem(retryKey('user-a'))).toBeNull()
+    expect(store.showPrompt).toBe(false)
+  })
+
+  it('does not reopen on A-B-A and an older success cannot clear the returning owner retry', async () => {
+    const firstSuppression = deferred<BeginnerGuideState>()
+    const retrySuppression = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(state())
+      .mockResolvedValueOnce(state({ prompt_state: 'suppressed' }))
+      .mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock
+      .mockReturnValueOnce(firstSuppression.promise)
+      .mockReturnValueOnce(retrySuppression.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingSuppression = store.suppressPrompt()
+    await flushMicrotasks()
+    await store.initialize({ authenticated: true, userId: 'user-b' })
+    const pendingReturn = store.initialize({ authenticated: true, userId: 'user-a' })
+    await flushMicrotasks()
+
+    expect(store.showPrompt).toBe(false)
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+
+    firstSuppression.resolve(state({ prompt_state: 'suppressed' }))
+    await expect(pendingSuppression).resolves.toBe(true)
+    await flushMicrotasks()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(2)
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+
+    retrySuppression.reject(new Error('offline'))
+    await pendingReturn
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+    expect(store.showPrompt).toBe(false)
   })
 
   it('does not let pending user-A completion mutate user B or clear B retry state', async () => {

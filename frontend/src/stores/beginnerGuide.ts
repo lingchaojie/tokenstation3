@@ -270,6 +270,8 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
   let localProgressRevision = 0
   let localPromptRevision = 0
   const remoteWriteTails = new Map<string, Promise<void>>()
+  const latestPromptSuppressionAttempt = new Map<string, number>()
+  let promptSuppressionAttemptCounter = 0
 
   function isCurrent(context: OwnerContext): boolean {
     return (
@@ -279,6 +281,26 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
 
   function isCurrentInitialization(context: OwnerContext, requestEpoch: number): boolean {
     return isCurrent(context) && initializationRequestEpoch === requestEpoch
+  }
+
+  function beginPromptSuppressionAttempt(
+    context: Extract<OwnerContext, { authenticated: true }>
+  ): number {
+    const attempt = ++promptSuppressionAttemptCounter
+    latestPromptSuppressionAttempt.set(context.owner, attempt)
+    setPromptRetry(context.userId)
+    return attempt
+  }
+
+  function clearPromptSuppressionAttempt(
+    context: Extract<OwnerContext, { authenticated: true }>,
+    attempt: number
+  ): void {
+    if (latestPromptSuppressionAttempt.get(context.owner) !== attempt) {
+      return
+    }
+    latestPromptSuppressionAttempt.delete(context.owner)
+    clearPromptRetry(context.userId)
   }
 
   function replaceProgress(next: BeginnerGuideProgressV1): void {
@@ -386,7 +408,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     }
   }
 
-  async function persistSuppression(context: OwnerContext = currentContext): Promise<void> {
+  async function persistSuppression(context: OwnerContext = currentContext): Promise<boolean> {
     if (isCurrent(context)) {
       showPrompt.value = false
     }
@@ -394,15 +416,16 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
       if (context.authenticated) {
         clearPromptRetry(context.userId)
       }
-      return
+      return true
     }
     if (isCurrent(context)) {
       replacePromptState('suppressed')
     }
     if (!context.authenticated) {
-      return
+      return true
     }
 
+    const suppressionAttempt = beginPromptSuppressionAttempt(context)
     const fallbackProgress = canonicalProgress(progress.value)
     const progressRevision = localProgressRevision
     const promptRevision = localPromptRevision
@@ -410,14 +433,14 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
       if (remote !== null) {
-        clearPromptRetry(context.userId)
+        clearPromptSuppressionAttempt(context, suppressionAttempt)
         if (isCurrent(context)) {
           applyRemoteState(remote, fallbackProgress, progressRevision, promptRevision)
         }
-        return
+        return true
       }
     }
-    setPromptRetry(context.userId)
+    return outcome.status === 'stale' || !isCurrent(context)
   }
 
   async function initialize(input: BeginnerGuideInitialization): Promise<void> {
@@ -624,8 +647,8 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     await syncProgress()
   }
 
-  async function suppressPrompt(): Promise<void> {
-    await persistSuppression(currentContext)
+  async function suppressPrompt(): Promise<boolean> {
+    return persistSuppression(currentContext)
   }
 
   async function completeGuide(): Promise<void> {

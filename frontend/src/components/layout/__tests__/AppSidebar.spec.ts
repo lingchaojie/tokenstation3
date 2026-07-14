@@ -89,6 +89,42 @@ describe('AppSidebar admin personal dashboard navigation', () => {
   })
 })
 
+describe('AppSidebar beginner guide navigation', () => {
+  const selfNavBuilder = componentSource.match(
+    /function buildSelfNavItems\(withDashboard: boolean\): NavItem\[] \{[\s\S]*?\n\}/,
+  )?.[0]
+  const adminPersonalBuilder = componentSource.match(
+    /function buildAdminPersonalNavItems\(\): NavItem\[] \{[\s\S]*?\n\}/,
+  )?.[0]
+  const adminOperationsBuilder = componentSource.match(
+    /const adminNavItems = computed\(\(\): NavItem\[] => \{[\s\S]*?const visible/,
+  )?.[0]
+
+  it('keeps the canonical public route in regular-user self navigation near API keys', () => {
+    expect(selfNavBuilder).toContain("path: '/getting-started'")
+    expect(selfNavBuilder).toContain("t('gettingStarted.dashboard.sidebarLabel')")
+    expect(selfNavBuilder!.indexOf("path: '/getting-started'")).toBeLessThan(
+      selfNavBuilder!.indexOf("path: '/keys'")
+    )
+  })
+
+  it('naturally includes the same public route in admin My Account without remapping it', () => {
+    expect(adminPersonalBuilder).toContain('buildSelfNavItems(true)')
+    expect(adminPersonalBuilder).not.toContain("'/getting-started':")
+    expect(adminOperationsBuilder).not.toContain("path: '/getting-started'")
+  })
+
+  it('does not hide the guide from simple-mode self navigation', () => {
+    const guideItem = selfNavBuilder?.match(/\{ path: '\/getting-started'[^\n]+\}/)?.[0]
+
+    expect(guideItem).toBeDefined()
+    expect(guideItem).not.toContain('hideInSimpleMode')
+    expect(componentSource).toContain(
+      'authStore.isSimpleMode ? visible.filter(item => !item.hideInSimpleMode) : visible'
+    )
+  })
+})
+
 describe('AppSidebar model marketplace navigation', () => {
   it('keeps the model marketplace route in self navigation for authenticated users', () => {
     expect(componentSource).not.toContain('管理员灰度入口')
