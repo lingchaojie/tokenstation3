@@ -150,6 +150,8 @@ export default {
     chat: '对话',
     modelMarketplace: '模型广场',
     dashboard: '仪表盘',
+    overview: '概览',
+    dailyCheckIn: '签到领Token',
     announcements: '公告',
     apiKeys: 'API 密钥',
     batchImage: '批量生图',

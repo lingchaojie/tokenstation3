@@ -83,9 +83,25 @@ describe('AppSidebar admin personal dashboard navigation', () => {
       /function buildAdminPersonalNavItems\(\): NavItem\[] \{[\s\S]*?\n\}/,
     )?.[0]
 
-    expect(adminPersonalBuilder).toContain('buildSelfNavItems(true)')
+    expect(adminPersonalBuilder).toContain("buildSelfNavItems(true, t('nav.dashboard'))")
     expect(adminPersonalBuilder).toContain("'/dashboard': '/admin/my-account/dashboard'")
     expect(componentSource).toContain('finalizeNav(buildAdminPersonalNavItems())')
+  })
+})
+
+describe('AppSidebar regular-user daily check-in navigation', () => {
+  it('renames only the regular-user dashboard item to overview', () => {
+    expect(componentSource).toContain("buildSelfNavItems(true, t('nav.overview'), dailyCheckInActive.value)")
+    expect(componentSource).toContain("buildSelfNavItems(true, t('nav.dashboard'))")
+  })
+
+  it('inserts the check-in entry directly after the dashboard only while active', () => {
+    expect(componentSource).toContain('if (includeDailyCheckIn)')
+    expect(componentSource).toContain("path: '/check-in'")
+    expect(componentSource).toContain("label: t('nav.dailyCheckIn')")
+    expect(componentSource.indexOf("path: '/check-in'")).toBeLessThan(
+      componentSource.indexOf("path: '/dashboard/models'"),
+    )
   })
 })
 

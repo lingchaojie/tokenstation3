@@ -150,6 +150,8 @@ export default {
     chat: 'Chat',
     modelMarketplace: 'Models',
     dashboard: 'Dashboard',
+    overview: 'Overview',
+    dailyCheckIn: 'Check in for Token',
     announcements: 'Announcements',
     apiKeys: 'API Keys',
     batchImage: 'Batch Images',

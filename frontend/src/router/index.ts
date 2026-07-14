@@ -206,6 +206,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/check-in',
+    name: 'DailyCheckIn',
+    component: () => import('@/views/user/CheckInView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Daily Check-in',
+      titleKey: 'checkIn.title',
+      descriptionKey: 'checkIn.description'
+    }
+  },
+  {
     path: '/dashboard/models',
     name: 'ModelMarketplace',
     component: () => import('@/views/user/ModelCatalogView.vue'),

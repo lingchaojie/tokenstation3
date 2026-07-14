@@ -199,6 +199,7 @@ import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import { useDailyCheckInActivity } from '@/composables/useDailyCheckInActivity'
 
 interface NavItem {
   path: string
@@ -245,6 +246,7 @@ const authStore = useAuthStore()
 const onboardingStore = useOnboardingStore()
 const adminSettingsStore = useAdminSettingsStore()
 const { canUseBatchImage, refreshBatchImageAccess } = useBatchImageAccess()
+const { active: dailyCheckInActive } = useDailyCheckInActivity()
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
@@ -724,14 +726,21 @@ const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
-// withDashboard=true 时包含仪表盘。
+// withDashboard=true 时包含仪表盘；普通用户可传入“概览”文案，并在活动期插入签到入口。
 //
-// 条目顺序：仪表盘（可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
+// 条目顺序：仪表盘（可选）→ 签到（活动期可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
 // 可用渠道紧挨渠道状态之上，让用户"先看自己能用什么、再看对应状态"。
-function buildSelfNavItems(withDashboard: boolean): NavItem[] {
+function buildSelfNavItems(
+  withDashboard: boolean,
+  dashboardLabel: string,
+  includeDailyCheckIn = false,
+): NavItem[] {
   const items: NavItem[] = []
   if (withDashboard) {
-    items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon })
+    items.push({ path: '/dashboard', label: dashboardLabel, icon: DashboardIcon })
+  }
+  if (includeDailyCheckIn) {
+    items.push({ path: '/check-in', label: t('nav.dailyCheckIn'), icon: GiftIcon })
   }
   items.push(
     { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
@@ -765,7 +774,7 @@ function remapNavPaths(items: NavItem[], pathMap: Record<string, string>): NavIt
 }
 
 function buildAdminPersonalNavItems(): NavItem[] {
-  return remapNavPaths(buildSelfNavItems(true), {
+  return remapNavPaths(buildSelfNavItems(true, t('nav.dashboard')), {
     '/dashboard': '/admin/my-account/dashboard',
   })
 }
@@ -777,7 +786,9 @@ function finalizeNav(items: NavItem[]): NavItem[] {
 }
 
 // User navigation items (for regular users)
-const userNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(true)))
+const userNavItems = computed((): NavItem[] =>
+  finalizeNav(buildSelfNavItems(true, t('nav.overview'), dailyCheckInActive.value)),
+)
 
 // Personal navigation items (for admin's "My Account" section).
 // The dashboard item is the same user dashboard declaration, remapped into the
