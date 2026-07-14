@@ -53,6 +53,13 @@
         <div data-testid="homepage-header-actions" class="ml-auto flex items-center gap-2 sm:gap-3">
           <div class="hidden items-center gap-6 text-sm font-medium text-linear-ink-subtle md:flex">
             <a href="#capabilities" class="transition-colors hover:text-linear-ink">{{ copy.nav.capabilities }}</a>
+            <router-link
+              to="/getting-started"
+              data-testid="beginner-guide-nav-link"
+              class="transition-colors hover:text-linear-ink"
+            >
+              {{ t('gettingStarted.discovery.navLabel') }}
+            </router-link>
             <router-link v-if="isAuthenticated" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
             <router-link v-if="isAuthenticated" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>
@@ -109,7 +116,7 @@
           <p class="mx-auto mt-6 max-w-2xl text-base leading-7 tracking-[-0.01em] text-linear-ink-subtle sm:text-lg sm:leading-8">
             {{ copy.heroDescription }}
           </p>
-          <div class="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+          <div data-testid="homepage-hero-actions" class="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
             <router-link
               :to="isAuthenticated ? dashboardPath : '/login'"
               class="inline-flex items-center justify-center rounded-lg bg-primary-500 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-primary-400"
@@ -127,6 +134,8 @@
             </a>
           </div>
         </div>
+
+        <BeginnerGuideCard />
 
         <div
           v-if="isAuthenticated"
@@ -714,6 +723,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import BeginnerGuideCard from '@/components/getting-started/BeginnerGuideCard.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'

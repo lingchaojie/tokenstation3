@@ -87,6 +87,15 @@ vi.mock('@/api/chat', () => ({
 }))
 
 const messages: Record<string, string> = {
+  'gettingStarted.discovery.navLabel': '新手教程',
+  'gettingStarted.discovery.eyebrow': '第一次使用 AI 工具？',
+  'gettingStarted.discovery.title': '完全不懂也没关系，我们一步一步带你完成',
+  'gettingStarted.discovery.description': '选择工具、安装客户端、连接本站，再完成你的第一次 AI 任务。',
+  'gettingStarted.discovery.homeCta': '开始新手教程',
+  'gettingStarted.discovery.stages.choose': '选择工具',
+  'gettingStarted.discovery.stages.install': '安装客户端',
+  'gettingStarted.discovery.stages.connect': '连接本站',
+  'gettingStarted.discovery.stages.firstTask': '完成第一次任务',
   'home.docs': '文档',
   'home.footer.allRightsReserved': '保留所有权利。',
   'home.getStarted': '立即开始',
@@ -587,6 +596,46 @@ describe('HomeView landing page', () => {
     expect(wrapper.get('header a[href="#pricing"]').text()).toContain('价格')
   })
 
+  it('discovers the localized beginner guide after the hero actions on the built-in homepage', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const headerLink = wrapper.get('[data-testid="beginner-guide-nav-link"]')
+    expect(headerLink.attributes('href')).toBe('/getting-started')
+    expect(headerLink.text()).toBe('新手教程')
+
+    const heroActions = wrapper.get('[data-testid="homepage-hero-actions"]')
+    const guideCard = wrapper.get('[data-testid="beginner-guide-card"]')
+    const productConsole = wrapper.get('[data-testid="linear-product-console"]')
+
+    expect(guideCard.text()).toContain('第一次使用 AI 工具？')
+    expect(guideCard.text()).toContain('完全不懂也没关系，我们一步一步带你完成')
+    expect(guideCard.text()).toContain('选择工具、安装客户端、连接本站，再完成你的第一次 AI 任务。')
+    expect(guideCard.findAll('[data-testid="beginner-guide-stage"]').map(stage => stage.text())).toEqual([
+      '选择工具',
+      '安装客户端',
+      '连接本站',
+      '完成第一次任务',
+    ])
+    expect(guideCard.get('[data-testid="beginner-guide-card-cta"]').attributes('href')).toBe('/getting-started')
+    expect(heroActions.element.compareDocumentPosition(guideCard.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(guideCard.element.compareDocumentPosition(productConsole.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the beginner guide CTA before authenticated chat content', async () => {
+    authState.isAuthenticated = true
+    authState.user = { email: 'user@example.com' }
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const guideCard = wrapper.get('[data-testid="beginner-guide-card"]')
+    const chatEntry = wrapper.get('[data-testid="homepage-chat-entry"]')
+
+    expect(guideCard.get('[data-testid="beginner-guide-card-cta"]').attributes('href')).toBe('/getting-started')
+    expect(guideCard.element.compareDocumentPosition(chatEntry.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('renders homepage limited-seat ribbons from public subscription plans', async () => {
     getPublicPlansMock.mockResolvedValue([
       {
@@ -790,6 +839,8 @@ describe('HomeView landing page', () => {
     const iframe = wrapper.get('iframe')
     expect(iframe.attributes('src')).toBe('https://landing.example.test')
     expect(iframe.attributes('title')).toBe('Fuse API custom home content')
+    expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
@@ -803,6 +854,8 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.get('h1').text()).toBe('Custom Home')
     expect(wrapper.html()).toContain('<strong>custom</strong>')
+    expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
@@ -816,6 +869,8 @@ describe('HomeView landing page', () => {
 
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
+    expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
 
