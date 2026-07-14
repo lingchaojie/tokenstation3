@@ -146,6 +146,19 @@ function recursiveLeafPaths(value: unknown, prefix = ''): string[] {
   )
 }
 
+function recursiveStringValues(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return [value]
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(recursiveStringValues)
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.values(value).flatMap(recursiveStringValues)
+  }
+  return []
+}
+
 describe('beginner guide curriculum contract', () => {
   it('reuses the canonical approved eight-step order', () => {
     expect(GUIDE_STEP_IDS).toBe(BEGINNER_GUIDE_STEP_ORDER)
@@ -228,10 +241,46 @@ describe('beginner guide locales', () => {
     expect(enPaths).toEqual([...REQUIRED_LOCALE_PATHS].sort())
   })
 
-  it('keeps commands, source metadata, and markup out of translated prose', () => {
+  it('keeps every structured command and official source out of translated string values', () => {
+    const localeValues = [enLocale, zhLocale].flatMap(recursiveStringValues)
+    const commandValues = [
+      ...new Set(
+        GUIDE_VARIANTS.flatMap((variant) => [
+          variant.installCommand,
+          variant.verifyCommand,
+          variant.launchCommand,
+          ...variant.diagnosticCommands
+        ])
+      )
+    ]
+    const officialSourceUrls = [
+      ...new Set(GUIDE_VARIANTS.map(({ officialSourceUrl }) => officialSourceUrl))
+    ]
+
+    for (const structuredValue of [...commandValues, ...officialSourceUrls]) {
+      expect(
+        localeValues,
+        `structured value must not be an entire translated string: ${structuredValue}`
+      ).not.toContain(structuredValue)
+    }
+
+    const distinctiveStructuredValues = [
+      ...commandValues.filter((command) => /\s|\|/.test(command)),
+      ...officialSourceUrls
+    ]
+    for (const localeValue of localeValues) {
+      for (const structuredValue of distinctiveStructuredValues) {
+        expect(
+          localeValue,
+          `translated prose must not embed structured value: ${structuredValue}`
+        ).not.toContain(structuredValue)
+      }
+    }
+  })
+
+  it('keeps source metadata field names and markup out of translated prose', () => {
     for (const locale of [enLocale, zhLocale]) {
       const serialized = JSON.stringify(locale)
-      expect(serialized).not.toMatch(/curl -fsSL|\birm https:\/\//)
       expect(serialized).not.toContain('verifiedAt')
       expect(serialized).not.toContain('officialSourceUrl')
       expect(serialized).not.toMatch(/<\/?[a-z][^>]*>/i)
