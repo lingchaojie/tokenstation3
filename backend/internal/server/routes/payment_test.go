@@ -21,7 +21,7 @@ func TestRegisterPaymentRoutesDoesNotExposeUserSelfServiceRefund(t *testing.T) {
 
 	RegisterPaymentRoutes(
 		v1,
-		dbhandler.NewPaymentHandler(nil, nil, nil),
+		dbhandler.NewPaymentHandler(nil, nil),
 		&dbhandler.PaymentWebhookHandler{},
 		adminhandler.NewPaymentHandler(nil, nil),
 		middleware.JWTAuthMiddleware(noopAuth),

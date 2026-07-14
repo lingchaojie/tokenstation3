@@ -57,7 +57,7 @@ func TestPaymentRoutesPublicPlansIsRegisteredWithoutAuth(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	configSvc := service.NewPaymentConfigService(client, paymentRoutesSettingRepo{}, nil)
-	paymentHandler := handler.NewPaymentHandler(nil, configSvc, nil)
+	paymentHandler := handler.NewPaymentHandler(nil, configSvc)
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	RegisterPaymentRoutes(

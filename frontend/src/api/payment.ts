@@ -7,7 +7,6 @@ import { apiClient } from './client'
 import type {
   PaymentConfig,
   SubscriptionPlan,
-  PaymentChannel,
   MethodLimitsResponse,
   CheckoutInfoResponse,
   CreateOrderRequest,
@@ -40,12 +39,6 @@ export const paymentAPI = {
     const response = await apiClient.get<SubscriptionPlan[]>('/payment/public/plans')
     return response.data
   },
-
-  /** Get available payment channels */
-  getChannels() {
-    return apiClient.get<PaymentChannel[]>('/payment/channels')
-  },
-
   /** Get all checkout page data in a single call */
   getCheckoutInfo() {
     return apiClient.get<CheckoutInfoResponse>('/payment/checkout-info')

@@ -113,7 +113,7 @@ func TestPaymentGetPlansIncludesSeatSummaryFields(t *testing.T) {
 	client := newPaymentHandlerSeatClient(t)
 	plan := seedPaymentHandlerSeatPlan(t, ctx, client, 2, 1)
 	configSvc := service.NewPaymentConfigService(client, paymentHandlerSeatSettingRepo{}, nil)
-	h := NewPaymentHandler(nil, configSvc, nil)
+	h := NewPaymentHandler(nil, configSvc)
 
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
@@ -158,7 +158,7 @@ func TestPaymentCheckoutInfoIncludesSeatSummaryFields(t *testing.T) {
 	client := newPaymentHandlerSeatClient(t)
 	seedPaymentHandlerSeatPlan(t, ctx, client, 1, 1)
 	configSvc := service.NewPaymentConfigService(client, paymentHandlerSeatSettingRepo{}, nil)
-	h := NewPaymentHandler(nil, configSvc, nil)
+	h := NewPaymentHandler(nil, configSvc)
 
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
@@ -205,7 +205,7 @@ func TestPaymentGetPublicPlansReturnsSaleableDisplayFieldsAndSeatSummary(t *test
 	client := newPaymentHandlerSeatClient(t)
 	plan := seedPaymentHandlerSeatPlan(t, ctx, client, 1, 1)
 	configSvc := service.NewPaymentConfigService(client, paymentHandlerSeatSettingRepo{}, nil)
-	h := NewPaymentHandler(nil, configSvc, nil)
+	h := NewPaymentHandler(nil, configSvc)
 
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
