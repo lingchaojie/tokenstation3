@@ -347,6 +347,7 @@ import {
   resolveAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
 import type { LoginAgreementDocument } from '@/types'
+import { resolvePostAuthRedirect } from '@/router/authRedirect'
 
 const { t, locale } = useI18n()
 const LOGIN_AGREEMENT_STORAGE_KEY = 'sub2api_login_agreement_consent'
@@ -891,6 +892,7 @@ async function handleRegister(): Promise<void> {
           turnstile_token: turnstileToken.value,
           promo_code: formData.promo_code || undefined,
           invitation_code: formData.invitation_code || undefined,
+          pending_redirect: resolvePostAuthRedirect(route.query.redirect),
           ...(affCode ? { aff_code: affCode } : {})
         })
       )
@@ -914,8 +916,8 @@ async function handleRegister(): Promise<void> {
     // Show success toast
     appStore.showSuccess(t('auth.accountCreatedSuccess', { siteName: siteName.value }))
 
-    // Redirect to dashboard
-    await router.push('/dashboard')
+    // Redirect to dashboard or the validated internal route that initiated registration
+    await router.push(resolvePostAuthRedirect(route.query.redirect))
   } catch (error: unknown) {
     // Reset Turnstile on error
     if (turnstileRef.value) {

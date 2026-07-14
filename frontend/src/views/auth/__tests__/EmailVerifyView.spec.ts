@@ -453,4 +453,66 @@ describe('EmailVerifyView', () => {
     expect(apiClientPostMock).not.toHaveBeenCalled()
     expect(pushMock).toHaveBeenCalledWith('/dashboard')
   })
+
+  it('returns verified email registration to the beginner guide', async () => {
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'guide@example.com',
+        password: 'secret-456',
+        pending_redirect: '/getting-started',
+      })
+    )
+    registerMock.mockResolvedValue({})
+
+    const wrapper = mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('#code').setValue('654321')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(registerMock).toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith('/getting-started')
+  })
+
+  it('rejects an encoded protocol-relative redirect after verified registration', async () => {
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'guide@example.com',
+        password: 'secret-456',
+        pending_redirect: '/%252Fevil.example',
+      })
+    )
+    registerMock.mockResolvedValue({})
+
+    const wrapper = mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('#code').setValue('654321')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(registerMock).toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith('/dashboard')
+  })
 })
