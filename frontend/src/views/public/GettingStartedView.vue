@@ -16,13 +16,15 @@
             type="button"
             :data-client-option="client"
             :aria-pressed="guideStore.progress.client === client"
+            :disabled="nextPending"
+            :aria-disabled="nextPending || undefined"
             class="rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors"
             :class="
               guideStore.progress.client === client
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                 : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-linear-hairline dark:text-linear-ink-subtle dark:hover:bg-linear-surface-2'
             "
-            @click="guideStore.selectClient(client)"
+            @click="selectClient(client)"
           >
             {{ t(`gettingStarted.clients.${client}`) }}
           </button>
@@ -40,6 +42,8 @@
             type="button"
             :data-os-option="os"
             :aria-pressed="guideStore.progress.os === os"
+            :disabled="nextPending"
+            :aria-disabled="nextPending || undefined"
             class="rounded-lg border px-2 py-2.5 text-sm font-medium transition-colors"
             :class="
               guideStore.progress.os === os
@@ -213,6 +217,7 @@ import {
 } from '@/components/getting-started/curriculum'
 import { useAppStore, useAuthStore, useBeginnerGuideStore } from '@/stores'
 import type {
+  BeginnerGuideClient,
   BeginnerGuideOS,
   BeginnerGuideStepId
 } from '@/api/beginnerGuide'
@@ -297,7 +302,13 @@ async function handleSelectStep(step: BeginnerGuideStepId): Promise<void> {
   await guideStore.goToStep(step)
 }
 
+async function selectClient(client: BeginnerGuideClient): Promise<void> {
+  if (nextPending.value) return
+  await guideStore.selectClient(client)
+}
+
 async function selectOS(os: BeginnerGuideOS): Promise<void> {
+  if (nextPending.value) return
   manualOSSelected.value = true
   await guideStore.selectOS(os)
 }
@@ -312,6 +323,8 @@ async function handleNext(): Promise<void> {
 
   const initiatingStep = activeStep.value
   const initiatingIndex = GUIDE_STEP_IDS.indexOf(initiatingStep)
+  const initiatingClient = guideStore.progress.client
+  const initiatingOS = guideStore.progress.os
   const initiatingOwner =
     authStore.isAuthenticated && authStore.user?.id !== undefined
       ? `user:${String(authStore.user.id)}`
@@ -327,7 +340,13 @@ async function handleNext(): Promise<void> {
       authStore.isAuthenticated && authStore.user?.id !== undefined
         ? `user:${String(authStore.user.id)}`
         : 'anonymous'
-    if (currentOwner !== initiatingOwner || activeStep.value !== initiatingStep) {
+    if (
+      currentOwner !== initiatingOwner ||
+      activeStep.value !== initiatingStep ||
+      guideStore.progress.client !== initiatingClient ||
+      guideStore.progress.os !== initiatingOS ||
+      !guideStore.progress.completedSteps.includes(initiatingStep)
+    ) {
       return
     }
 

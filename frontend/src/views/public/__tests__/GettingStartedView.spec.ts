@@ -259,6 +259,116 @@ describe('GettingStartedView', () => {
     expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
   })
 
+  it('keeps terminal first incomplete when the client changes during a pending Next', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progress({
+        currentStep: 'terminal',
+        completedSteps: ['understand', 'choose']
+      }),
+      completed_at: null
+    })
+    const pendingPatch = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => pendingPatch.promise)
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+
+    const next = wrapper.get('[data-testid="step-primary-action"]')
+    const codexOption = wrapper.get('[data-client-option="codex"]')
+    await next.trigger('click')
+
+    expect.soft(codexOption.attributes('disabled')).toBeDefined()
+    expect.soft(codexOption.attributes('aria-disabled')).toBe('true')
+    await codexOption.trigger('click')
+    expect.soft(guideStore.progress.client).toBe('claude_code')
+    expect.soft(patchGuideState).toHaveBeenCalledOnce()
+
+    const externalChange = guideStore.selectClient('codex')
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
+
+    pendingPatch.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({
+        currentStep: 'terminal',
+        completedSteps: ['understand', 'choose', 'terminal']
+      }),
+      completed_at: null
+    })
+    await externalChange
+    await settle()
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
+    expect(next.attributes('disabled')).toBeUndefined()
+    expect(next.attributes('aria-busy')).toBeUndefined()
+    expect(codexOption.attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-client-option="claude_code"]').trigger('click')
+    await settle()
+    expect(guideStore.progress.client).toBe('claude_code')
+  })
+
+  it('keeps terminal first incomplete when the OS changes during a pending Next', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progress({
+        currentStep: 'terminal',
+        completedSteps: ['understand', 'choose']
+      }),
+      completed_at: null
+    })
+    const pendingPatch = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => pendingPatch.promise)
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+
+    const next = wrapper.get('[data-testid="step-primary-action"]')
+    const linuxOption = wrapper.get('[data-os-option="linux"]')
+    await next.trigger('click')
+
+    expect.soft(linuxOption.attributes('disabled')).toBeDefined()
+    expect.soft(linuxOption.attributes('aria-disabled')).toBe('true')
+    await linuxOption.trigger('click')
+    expect.soft(guideStore.progress.os).toBe('macos')
+    expect.soft(patchGuideState).toHaveBeenCalledOnce()
+
+    const externalChange = guideStore.selectOS('linux')
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
+
+    pendingPatch.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({
+        currentStep: 'terminal',
+        completedSteps: ['understand', 'choose', 'terminal']
+      }),
+      completed_at: null
+    })
+    await externalChange
+    await settle()
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
+    expect(next.attributes('disabled')).toBeUndefined()
+    expect(next.attributes('aria-busy')).toBeUndefined()
+    expect(linuxOption.attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-os-option="macos"]').trigger('click')
+    await settle()
+    expect(guideStore.progress.os).toBe('macos')
+  })
+
   it('offers exactly the approved clients and operating systems', async () => {
     const { wrapper } = mountView()
     await settle()
