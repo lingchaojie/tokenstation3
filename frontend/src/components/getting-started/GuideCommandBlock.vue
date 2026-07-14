@@ -6,7 +6,7 @@
     <div class="flex items-center justify-end border-b border-gray-800 px-3 py-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+        class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-300 outline-none transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-primary-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 motion-reduce:transition-none disabled:cursor-wait disabled:opacity-60"
         :disabled="copying"
         @click="copyCommand"
       >

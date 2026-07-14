@@ -11,14 +11,14 @@
         <router-link
           to="/login?redirect=/getting-started"
           data-testid="api-key-login"
-          class="inline-flex items-center rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-400"
+          class="inline-flex items-center rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
         >
           {{ t('gettingStarted.apiKey.login') }}
         </router-link>
         <router-link
           to="/register?redirect=/getting-started"
           data-testid="api-key-register"
-          class="inline-flex items-center rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-linear-hairline dark:text-linear-ink dark:hover:bg-linear-surface-2"
+          class="inline-flex items-center rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:border-linear-hairline dark:text-linear-ink dark:hover:bg-linear-surface-2 dark:focus-visible:ring-offset-linear-canvas"
         >
           {{ t('gettingStarted.apiKey.register') }}
         </router-link>
@@ -59,7 +59,7 @@
         <button
           type="button"
           data-testid="api-key-retry"
-          class="rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white hover:bg-primary-400"
+          class="rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
           @click="loadKeys"
         >
           {{ t('gettingStarted.troubleshooting.retry') }}
@@ -67,7 +67,7 @@
         <router-link
           to="/keys"
           data-testid="api-key-fallback"
-          class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-linear-hairline dark:text-linear-ink"
+          class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:border-linear-hairline dark:text-linear-ink dark:focus-visible:ring-offset-linear-canvas"
         >
           {{ t('gettingStarted.completion.keys') }}
         </router-link>
@@ -90,7 +90,7 @@
               :data-key-id="apiKey.id"
               :disabled="keyExplanation(apiKey) !== null"
               :aria-pressed="selectedKey?.id === apiKey.id"
-              class="flex w-full items-center justify-between gap-3 rounded-lg text-left disabled:cursor-not-allowed disabled:opacity-55"
+              class="flex w-full items-center justify-between gap-3 rounded-lg text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-55 dark:focus-visible:ring-offset-linear-surface-1"
               @click="selectKey(apiKey)"
             >
               <span class="min-w-0">
@@ -144,14 +144,14 @@
             type="text"
             required
             autocomplete="off"
-            class="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-950 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-linear-hairline dark:bg-linear-canvas dark:text-linear-ink"
+            class="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-950 outline-none transition-colors focus-visible:border-primary-500 focus-visible:ring-2 focus-visible:ring-primary-500/30 motion-reduce:transition-none dark:border-linear-hairline dark:bg-linear-canvas dark:text-linear-ink"
           />
           <button
             type="submit"
             data-testid="api-key-create"
             :disabled="creating || createName.trim().length === 0"
             :aria-busy="creating || undefined"
-            class="rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-400 disabled:cursor-not-allowed disabled:opacity-55"
+            class="rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-55 dark:focus-visible:ring-offset-linear-canvas"
           >
             {{ creating ? t('keys.saving') : t('gettingStarted.apiKey.create') }}
           </button>

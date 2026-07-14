@@ -51,10 +51,14 @@ describe('GuideCommandBlock', () => {
   it('uses the Clipboard API and announces successful copying', async () => {
     const wrapper = mountCommand()
 
+    expect(wrapper.get('button').attributes('type')).toBe('button')
+    expect(wrapper.get('button').classes()).toContain('focus-visible:ring-2')
+
     await wrapper.get('button').trigger('click')
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('claude --version')
     expect(wrapper.get('[aria-live="polite"]').text()).toBe('Copied')
+    expect(wrapper.get('[aria-live="polite"]').attributes('aria-atomic')).toBe('true')
   })
 
   it('shows manual-copy guidance without hiding the command when copying fails', async () => {

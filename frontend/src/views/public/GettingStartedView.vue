@@ -4,7 +4,7 @@
     :completed-steps="guideStore.progress.completedSteps"
     @select-step="handleSelectStep"
   >
-    <div class="mb-5 grid gap-4 sm:grid-cols-2">
+    <div class="mb-5 grid min-w-0 gap-4 sm:grid-cols-2">
       <fieldset class="linx-panel min-w-0 p-4">
         <legend class="px-1 text-sm font-semibold text-gray-950 dark:text-linear-ink">
           {{ t('gettingStarted.chrome.clientSelector') }}
@@ -18,7 +18,7 @@
             :aria-pressed="guideStore.progress.client === client"
             :disabled="nextPending"
             :aria-disabled="nextPending || undefined"
-            class="rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors"
+            class="rounded-lg border px-3 py-2.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
             :class="
               guideStore.progress.client === client
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
@@ -44,7 +44,7 @@
             :aria-pressed="guideStore.progress.os === os"
             :disabled="nextPending"
             :aria-disabled="nextPending || undefined"
-            class="rounded-lg border px-2 py-2.5 text-sm font-medium transition-colors"
+            class="rounded-lg border px-2 py-2.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
             :class="
               guideStore.progress.os === os
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
@@ -120,7 +120,7 @@
         </p>
         <GuideCommandBlock :command="selectedVariant.installCommand" />
         <details class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-linear-hairline dark:bg-linear-canvas">
-          <summary class="cursor-pointer text-sm font-semibold text-gray-950 dark:text-linear-ink">
+          <summary class="cursor-pointer rounded-md text-sm font-semibold text-gray-950 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:text-linear-ink dark:focus-visible:ring-offset-linear-canvas">
             {{ t('gettingStarted.installation.expectedResult') }}
           </summary>
           <p class="mt-3 text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle">
@@ -131,7 +131,7 @@
           :href="selectedVariant.officialSourceUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-500 dark:text-primary-300"
+          class="inline-flex items-center gap-2 rounded-md text-sm font-medium text-primary-600 outline-none transition-colors hover:text-primary-500 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:text-primary-300 dark:focus-visible:ring-offset-linear-canvas"
         >
           {{ t('gettingStarted.installation.officialSource') }}
           <Icon name="externalLink" size="sm" aria-hidden="true" />
@@ -210,7 +210,7 @@
             :key="destination.path"
             :to="destination.path"
             data-testid="completion-link"
-            class="inline-flex items-center rounded-lg border border-emerald-500/30 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
+            class="inline-flex items-center rounded-lg border border-emerald-500/30 px-3 py-2 text-sm font-medium text-emerald-700 outline-none transition-colors hover:bg-emerald-500/10 focus-visible:ring-2 focus-visible:ring-emerald-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:text-emerald-300 dark:focus-visible:ring-offset-linear-canvas"
           >
             {{ t(destination.labelKey) }}
           </router-link>

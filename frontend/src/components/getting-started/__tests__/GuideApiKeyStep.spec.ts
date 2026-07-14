@@ -215,6 +215,22 @@ describe('GuideApiKeyStep', () => {
     )
   })
 
+  it('labels native key controls and gives every interactive control a visible focus ring', async () => {
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(page([keyFixture()]))
+    const { wrapper } = mountStep({ authenticated: true })
+    await settle()
+
+    const fieldset = wrapper.get('fieldset')
+    expect(fieldset.get('legend').text()).toBe('Choose an active API key')
+    expect(fieldset.get('[data-key-id="701"]').element.tagName).toBe('BUTTON')
+    expect(fieldset.get('[data-key-id="701"]').attributes('type')).toBe('button')
+    expect(wrapper.get('label[for="guide-api-key-name"]').text()).toBe('Name')
+
+    for (const control of wrapper.findAll('button, input, a')) {
+      expect.soft(control.classes().join(' ')).toContain('focus-visible:ring-2')
+    }
+  })
+
   it('keeps a list failure retryable and offers the API Keys page fallback', async () => {
     vi.mocked(keysAPI.list)
       .mockRejectedValueOnce(new Error('list failed'))

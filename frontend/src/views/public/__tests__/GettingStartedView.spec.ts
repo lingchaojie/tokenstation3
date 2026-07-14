@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -5,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { keysAPI } from '@/api/keys'
 import type { BeginnerGuideProgressV1, BeginnerGuideStepId } from '@/api/beginnerGuide'
+import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useBeginnerGuideStore } from '@/stores/beginnerGuide'
 import type { ApiKey } from '@/types'
@@ -12,6 +17,13 @@ import enMessages from '@/i18n/locales/en/gettingStarted'
 import zhMessages from '@/i18n/locales/zh/gettingStarted'
 
 import GettingStartedView from '../GettingStartedView.vue'
+
+const publicViewDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const gettingStartedDir = resolve(publicViewDir, '..', '..', 'components', 'getting-started')
+
+function readSource(path: string): string {
+  return readFileSync(path, 'utf8')
+}
 
 const { getGuideState, patchGuideState } = vi.hoisted(() => ({
   getGuideState: vi.fn(),
@@ -103,6 +115,13 @@ function keyPage(items: ApiKey[]) {
   return { items, total: items.length, page: 1, page_size: 100, pages: items.length ? 1 : 0 }
 }
 
+function storageValues(storage: Storage): string[] {
+  return Array.from({ length: storage.length }, (_, index) => {
+    const key = storage.key(index)
+    return key === null ? '' : (storage.getItem(key) ?? '')
+  })
+}
+
 function progressAt(step: BeginnerGuideStepId): BeginnerGuideProgressV1 {
   const order: BeginnerGuideStepId[] = [
     'understand',
@@ -172,7 +191,7 @@ function localeMessages(messages: typeof enMessages) {
   }) as Record<string, unknown>
 }
 
-function mountView(locale: 'en' | 'zh' = 'en') {
+function mountView(locale: 'en' | 'zh' = 'en', attachTo?: Element) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const i18n = createI18n({
@@ -185,6 +204,7 @@ function mountView(locale: 'en' | 'zh' = 'en') {
     }
   })
   const wrapper = mount(GettingStartedView, {
+    ...(attachTo ? { attachTo } : {}),
     global: {
       plugins: [pinia, i18n],
       stubs: { RouterLink: RouterLinkStub, LocaleSwitcher: true }
@@ -488,6 +508,100 @@ describe('GettingStartedView', () => {
       .toEqual(['macos', 'windows', 'linux'])
   })
 
+  it('labels selector groups and exposes keyboard-operable native buttons', async () => {
+    const { wrapper } = mountView()
+    await settle()
+
+    const selectorGroups = wrapper.findAll('fieldset')
+    expect(selectorGroups).toHaveLength(2)
+    expect(selectorGroups.map((group) => group.get('legend').text())).toEqual([
+      'Choose your client',
+      'Choose your operating system'
+    ])
+
+    const options = wrapper.findAll('[data-client-option], [data-os-option]')
+    expect(options).toHaveLength(5)
+    for (const option of options) {
+      expect(option.element.tagName).toBe('BUTTON')
+      expect(option.attributes('type')).toBe('button')
+    }
+  })
+
+  it('marks the current step and closes the mobile dialog with Escape while restoring focus', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const { wrapper } = mountView('en', host)
+    try {
+      await settle()
+
+      const currentSteps = wrapper.findAll('[data-guide-step][aria-current="step"]')
+      expect(currentSteps).toHaveLength(1)
+      expect(currentSteps[0].attributes('data-guide-step')).toBe('understand')
+
+      const trigger = wrapper.get('[data-testid="mobile-step-menu-button"]')
+      trigger.element.focus()
+      expect(trigger.attributes('aria-expanded')).toBe('false')
+      await trigger.trigger('click')
+
+      expect(trigger.attributes('aria-expanded')).toBe('true')
+      const drawer = wrapper.get('[data-testid="mobile-step-drawer"]')
+      expect(drawer.attributes('role')).toBe('dialog')
+      expect(drawer.attributes('aria-modal')).toBe('true')
+      expect(document.activeElement).toBe(
+        wrapper.get('[data-testid="mobile-step-menu-close"]').element
+      )
+
+      const close = wrapper.get('[data-testid="mobile-step-menu-close"]')
+      const reachableSteps = wrapper
+        .findAll('[data-testid="mobile-step-drawer"] [data-guide-step]')
+        .filter((step) => step.attributes('disabled') === undefined)
+      const lastStep = reachableSteps.at(-1)
+      expect(lastStep).toBeDefined()
+      lastStep!.element.focus()
+      await lastStep!.trigger('keydown', { key: 'Tab' })
+      expect(document.activeElement).toBe(close.element)
+
+      close.element.focus()
+      await close.trigger('keydown', { key: 'Tab', shiftKey: true })
+      expect(document.activeElement).toBe(lastStep!.element)
+
+      await drawer.trigger('keydown', { key: 'Escape' })
+
+      expect(wrapper.find('[data-testid="mobile-step-drawer"]').exists()).toBe(false)
+      expect(trigger.attributes('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(trigger.element)
+    } finally {
+      wrapper.unmount()
+      host.remove()
+    }
+  })
+
+  it('keeps focus, overflow, reduced-motion, and escaped-rendering contracts in guide sources', () => {
+    const sources = {
+      view: readSource(resolve(publicViewDir, 'GettingStartedView.vue')),
+      shell: readSource(resolve(gettingStartedDir, 'GuideShell.vue')),
+      progress: readSource(resolve(gettingStartedDir, 'GuideProgressNav.vue')),
+      command: readSource(resolve(gettingStartedDir, 'GuideCommandBlock.vue')),
+      apiKey: readSource(resolve(gettingStartedDir, 'GuideApiKeyStep.vue'))
+    }
+
+    for (const [name, source] of Object.entries(sources)) {
+      expect.soft(source, `${name} has a visible keyboard focus ring`).toContain(
+        'focus-visible:ring-2'
+      )
+      expect.soft(source, `${name} disables nonessential reduced-motion transitions`).toContain(
+        'motion-reduce:transition-none'
+      )
+      expect.soft(source, `${name} never renders trusted HTML`).not.toContain('v-html')
+    }
+
+    expect(sources.command).toContain('overflow-x-auto')
+    expect(sources.command).toContain('min-w-0')
+    expect(sources.view).toContain('min-w-0')
+    expect(sources.shell).toContain('min-w-0')
+    expect(sources.shell).not.toMatch(/min-h-screen[^"\n]*overflow-x-(?:auto|hidden|scroll)/)
+  })
+
   it('uses browser OS only as an initial suggestion and keeps every manual choice enabled', async () => {
     Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' })
     const { wrapper, guideStore } = mountView()
@@ -646,6 +760,94 @@ describe('GettingStartedView', () => {
     expect(JSON.stringify(window.history.state)).not.toContain(secret)
     expect(Object.values(localStorage).join('\n')).not.toContain(secret)
     expect(Object.values(sessionStorage).join('\n')).not.toContain(secret)
+  })
+
+  it('keeps one hostile secret only in active Claude and Codex configuration memory', async () => {
+    const secret = 'sk-guide-secret-DO-NOT-PERSIST'
+    const key = keyFixture({ key: secret })
+    let accountProgress = progressAt('api_key')
+    let accountPromptState: 'suppressed' | 'completed' = 'suppressed'
+
+    getGuideState.mockImplementation(async () => ({
+      prompt_state: accountPromptState,
+      progress: structuredClone(accountProgress),
+      completed_at: accountPromptState === 'completed' ? '2026-07-15T00:00:00Z' : null
+    }))
+    patchGuideState.mockImplementation(async (patch) => {
+      if (patch.progress) accountProgress = structuredClone(patch.progress)
+      if (patch.prompt_state) accountPromptState = patch.prompt_state
+      return {
+        prompt_state: accountPromptState,
+        progress: structuredClone(accountProgress),
+        completed_at: accountPromptState === 'completed' ? '2026-07-15T00:00:00Z' : null
+      }
+    })
+    vi.mocked(keysAPI.list).mockResolvedValue(keyPage([key]))
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const appStore = useAppStore()
+    const warningCalls = vi.spyOn(appStore, 'showWarning')
+    const errorCalls = vi.spyOn(appStore, 'showError')
+    const first = mountAuthenticatedView(42, pinia)
+    await settle()
+
+    await first.wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await first.wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+
+    const claudeFiles = first.wrapper.findAll('[data-testid="guide-config-file"]')
+    expect(claudeFiles).toHaveLength(2)
+    expect(claudeFiles.every((file) => file.text().includes(secret))).toBe(true)
+
+    await first.wrapper.get('[data-active-step="configure"] footer button').trigger('click')
+    await settle()
+    await first.wrapper.get('[data-client-option="codex"]').trigger('click')
+    await settle()
+    await first.wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await first.wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+
+    const codexFiles = first.wrapper.findAll('[data-testid="guide-config-file"]')
+    expect(codexFiles).toHaveLength(2)
+    expect(codexFiles.find((file) => file.text().includes('config.toml'))?.text()).not.toContain(
+      secret
+    )
+    expect(codexFiles.find((file) => file.text().includes('auth.json'))?.text()).toContain(secret)
+
+    first.wrapper.unmount()
+
+    expect(window.location.href).not.toContain(secret)
+    expect(storageValues(localStorage)).not.toContainEqual(expect.stringContaining(secret))
+    expect(storageValues(sessionStorage)).not.toContainEqual(expect.stringContaining(secret))
+    for (const [patch] of patchGuideState.mock.calls) {
+      expect(JSON.stringify(patch)).not.toContain(secret)
+    }
+    for (const call of [...warningCalls.mock.calls, ...errorCalls.mock.calls]) {
+      expect(JSON.stringify(call)).not.toContain(secret)
+    }
+    expect(JSON.stringify(appStore.toasts)).not.toContain(secret)
+
+    const secondPinia = createPinia()
+    setActivePinia(secondPinia)
+    const secondAppStore = useAppStore()
+    const secondWarningCalls = vi.spyOn(secondAppStore, 'showWarning')
+    const secondErrorCalls = vi.spyOn(secondAppStore, 'showError')
+    const second = mountAuthenticatedView(42, secondPinia)
+    await settle()
+    await settle()
+
+    expect(JSON.stringify(second.guideStore.progress)).not.toContain(secret)
+    expect(second.wrapper.text()).not.toContain(secret)
+    expect(storageValues(localStorage)).not.toContainEqual(expect.stringContaining(secret))
+    expect(storageValues(sessionStorage)).not.toContainEqual(expect.stringContaining(secret))
+    for (const [patch] of patchGuideState.mock.calls) {
+      expect(JSON.stringify(patch)).not.toContain(secret)
+    }
+    for (const call of [...secondWarningCalls.mock.calls, ...secondErrorCalls.mock.calls]) {
+      expect(JSON.stringify(call)).not.toContain(secret)
+    }
+    expect(JSON.stringify(secondAppStore.toasts)).not.toContain(secret)
   })
 
   it('replaces prior generated files when a different key is selected', async () => {

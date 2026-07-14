@@ -1,9 +1,13 @@
 <template>
-  <div class="min-h-screen overflow-x-hidden bg-gray-50 text-gray-950 dark:bg-linear-canvas dark:text-linear-ink">
+  <div class="min-h-screen min-w-0 bg-gray-50 text-gray-950 dark:bg-linear-canvas dark:text-linear-ink">
     <header class="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-xl dark:border-linear-hairline dark:bg-linear-canvas/90">
       <nav class="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        <router-link to="/home" class="group flex min-w-0 items-center gap-3" :aria-label="siteName">
-          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-gray-200 transition-colors group-hover:ring-gray-300 dark:ring-linear-hairline">
+        <router-link
+          to="/home"
+          class="group flex min-w-0 items-center gap-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
+          :aria-label="siteName"
+        >
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-gray-200 transition-colors group-hover:ring-gray-300 motion-reduce:transition-none dark:ring-linear-hairline">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
           <span class="min-w-0 leading-tight">
@@ -21,7 +25,7 @@
           <LocaleSwitcher />
           <button
             type="button"
-            class="ui-theme-toggle"
+            class="ui-theme-toggle outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
             @click="toggleTheme"
           >
@@ -30,7 +34,7 @@
           </button>
           <router-link
             :to="accountRoute"
-            class="inline-flex h-10 items-center justify-center rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400 sm:px-4"
+            class="inline-flex h-10 items-center justify-center rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas sm:px-4"
           >
             {{ accountLabel }}
           </router-link>
