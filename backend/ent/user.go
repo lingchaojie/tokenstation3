@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ type User struct {
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	// LastActiveAt holds the value of the "last_active_at" field.
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
+	// BeginnerGuidePromptState holds the value of the "beginner_guide_prompt_state" field.
+	BeginnerGuidePromptState string `json:"beginner_guide_prompt_state,omitempty"`
+	// BeginnerGuideProgress holds the value of the "beginner_guide_progress" field.
+	BeginnerGuideProgress json.RawMessage `json:"beginner_guide_progress,omitempty"`
+	// BeginnerGuideCompletedAt holds the value of the "beginner_guide_completed_at" field.
+	BeginnerGuideCompletedAt *time.Time `json:"beginner_guide_completed_at,omitempty"`
 	// BalanceNotifyEnabled holds the value of the "balance_notify_enabled" field.
 	BalanceNotifyEnabled bool `json:"balance_notify_enabled,omitempty"`
 	// SubscriptionBalanceFallbackEnabled holds the value of the "subscription_balance_fallback_enabled" field.
@@ -250,15 +257,17 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case user.FieldBeginnerGuideProgress:
+			values[i] = new([]byte)
 		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldFrozenBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
 		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
+		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBeginnerGuidePromptState, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
 			values[i] = new(sql.NullString)
-		case user.FieldCreatedAt, user.FieldUpdatedAt, user.FieldDeletedAt, user.FieldTotpEnabledAt, user.FieldLastLoginAt, user.FieldLastActiveAt:
+		case user.FieldCreatedAt, user.FieldUpdatedAt, user.FieldDeletedAt, user.FieldTotpEnabledAt, user.FieldLastLoginAt, user.FieldLastActiveAt, user.FieldBeginnerGuideCompletedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -393,6 +402,27 @@ func (_m *User) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.LastActiveAt = new(time.Time)
 				*_m.LastActiveAt = value.Time
+			}
+		case user.FieldBeginnerGuidePromptState:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_prompt_state", values[i])
+			} else if value.Valid {
+				_m.BeginnerGuidePromptState = value.String
+			}
+		case user.FieldBeginnerGuideProgress:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_progress", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.BeginnerGuideProgress); err != nil {
+					return fmt.Errorf("unmarshal field beginner_guide_progress: %w", err)
+				}
+			}
+		case user.FieldBeginnerGuideCompletedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_completed_at", values[i])
+			} else if value.Valid {
+				_m.BeginnerGuideCompletedAt = new(time.Time)
+				*_m.BeginnerGuideCompletedAt = value.Time
 			}
 		case user.FieldBalanceNotifyEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -609,6 +639,17 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	if v := _m.LastActiveAt; v != nil {
 		builder.WriteString("last_active_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("beginner_guide_prompt_state=")
+	builder.WriteString(_m.BeginnerGuidePromptState)
+	builder.WriteString(", ")
+	builder.WriteString("beginner_guide_progress=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BeginnerGuideProgress))
+	builder.WriteString(", ")
+	if v := _m.BeginnerGuideCompletedAt; v != nil {
+		builder.WriteString("beginner_guide_completed_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")

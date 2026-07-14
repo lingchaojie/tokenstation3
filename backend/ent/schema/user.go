@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
@@ -92,6 +93,24 @@ func (User) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 		field.Time("last_active_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+		field.String("beginner_guide_prompt_state").
+			MaxLen(20).
+			Default("eligible").
+			Validate(func(value string) error {
+				switch value {
+				case "eligible", "suppressed", "completed":
+					return nil
+				default:
+					return fmt.Errorf("must be eligible, suppressed, or completed")
+				}
+			}),
+		field.JSON("beginner_guide_progress", json.RawMessage{}).
+			Optional().
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.Time("beginner_guide_completed_at").
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),

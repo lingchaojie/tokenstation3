@@ -4,12 +4,14 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
@@ -319,6 +321,58 @@ func (_u *UserUpdate) SetNillableLastActiveAt(v *time.Time) *UserUpdate {
 // ClearLastActiveAt clears the value of the "last_active_at" field.
 func (_u *UserUpdate) ClearLastActiveAt() *UserUpdate {
 	_u.mutation.ClearLastActiveAt()
+	return _u
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (_u *UserUpdate) SetBeginnerGuidePromptState(v string) *UserUpdate {
+	_u.mutation.SetBeginnerGuidePromptState(v)
+	return _u
+}
+
+// SetNillableBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableBeginnerGuidePromptState(v *string) *UserUpdate {
+	if v != nil {
+		_u.SetBeginnerGuidePromptState(*v)
+	}
+	return _u
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (_u *UserUpdate) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+	_u.mutation.SetBeginnerGuideProgress(v)
+	return _u
+}
+
+// AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
+func (_u *UserUpdate) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+	_u.mutation.AppendBeginnerGuideProgress(v)
+	return _u
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (_u *UserUpdate) ClearBeginnerGuideProgress() *UserUpdate {
+	_u.mutation.ClearBeginnerGuideProgress()
+	return _u
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (_u *UserUpdate) SetBeginnerGuideCompletedAt(v time.Time) *UserUpdate {
+	_u.mutation.SetBeginnerGuideCompletedAt(v)
+	return _u
+}
+
+// SetNillableBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserUpdate {
+	if v != nil {
+		_u.SetBeginnerGuideCompletedAt(*v)
+	}
+	return _u
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (_u *UserUpdate) ClearBeginnerGuideCompletedAt() *UserUpdate {
+	_u.mutation.ClearBeginnerGuideCompletedAt()
 	return _u
 }
 
@@ -1030,6 +1084,11 @@ func (_u *UserUpdate) check() error {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
+			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -1119,6 +1178,26 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.LastActiveAtCleared() {
 		_spec.ClearField(user.FieldLastActiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		_spec.SetField(user.FieldBeginnerGuidePromptState, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BeginnerGuideProgress(); ok {
+		_spec.SetField(user.FieldBeginnerGuideProgress, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBeginnerGuideProgress(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldBeginnerGuideProgress, value)
+		})
+	}
+	if _u.mutation.BeginnerGuideProgressCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideProgress, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BeginnerGuideCompletedAt(); ok {
+		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BeginnerGuideCompletedAtCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -2096,6 +2175,58 @@ func (_u *UserUpdateOne) ClearLastActiveAt() *UserUpdateOne {
 	return _u
 }
 
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (_u *UserUpdateOne) SetBeginnerGuidePromptState(v string) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuidePromptState(v)
+	return _u
+}
+
+// SetNillableBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableBeginnerGuidePromptState(v *string) *UserUpdateOne {
+	if v != nil {
+		_u.SetBeginnerGuidePromptState(*v)
+	}
+	return _u
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuideProgress(v)
+	return _u
+}
+
+// AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+	_u.mutation.AppendBeginnerGuideProgress(v)
+	return _u
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) ClearBeginnerGuideProgress() *UserUpdateOne {
+	_u.mutation.ClearBeginnerGuideProgress()
+	return _u
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (_u *UserUpdateOne) SetBeginnerGuideCompletedAt(v time.Time) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuideCompletedAt(v)
+	return _u
+}
+
+// SetNillableBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserUpdateOne {
+	if v != nil {
+		_u.SetBeginnerGuideCompletedAt(*v)
+	}
+	return _u
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (_u *UserUpdateOne) ClearBeginnerGuideCompletedAt() *UserUpdateOne {
+	_u.mutation.ClearBeginnerGuideCompletedAt()
+	return _u
+}
+
 // SetBalanceNotifyEnabled sets the "balance_notify_enabled" field.
 func (_u *UserUpdateOne) SetBalanceNotifyEnabled(v bool) *UserUpdateOne {
 	_u.mutation.SetBalanceNotifyEnabled(v)
@@ -2817,6 +2948,11 @@ func (_u *UserUpdateOne) check() error {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
+			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -2923,6 +3059,26 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if _u.mutation.LastActiveAtCleared() {
 		_spec.ClearField(user.FieldLastActiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		_spec.SetField(user.FieldBeginnerGuidePromptState, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BeginnerGuideProgress(); ok {
+		_spec.SetField(user.FieldBeginnerGuideProgress, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBeginnerGuideProgress(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldBeginnerGuideProgress, value)
+		})
+	}
+	if _u.mutation.BeginnerGuideProgressCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideProgress, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BeginnerGuideCompletedAt(); ok {
+		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BeginnerGuideCompletedAtCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)

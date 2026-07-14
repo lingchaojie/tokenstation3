@@ -46975,6 +46975,10 @@ type UserMutation struct {
 	signup_source                         *string
 	last_login_at                         *time.Time
 	last_active_at                        *time.Time
+	beginner_guide_prompt_state           *string
+	beginner_guide_progress               *json.RawMessage
+	appendbeginner_guide_progress         json.RawMessage
+	beginner_guide_completed_at           *time.Time
 	balance_notify_enabled                *bool
 	subscription_balance_fallback_enabled *bool
 	balance_notify_threshold_type         *string
@@ -47902,6 +47906,156 @@ func (m *UserMutation) LastActiveAtCleared() bool {
 func (m *UserMutation) ResetLastActiveAt() {
 	m.last_active_at = nil
 	delete(m.clearedFields, user.FieldLastActiveAt)
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (m *UserMutation) SetBeginnerGuidePromptState(s string) {
+	m.beginner_guide_prompt_state = &s
+}
+
+// BeginnerGuidePromptState returns the value of the "beginner_guide_prompt_state" field in the mutation.
+func (m *UserMutation) BeginnerGuidePromptState() (r string, exists bool) {
+	v := m.beginner_guide_prompt_state
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBeginnerGuidePromptState returns the old "beginner_guide_prompt_state" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldBeginnerGuidePromptState(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBeginnerGuidePromptState is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBeginnerGuidePromptState requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBeginnerGuidePromptState: %w", err)
+	}
+	return oldValue.BeginnerGuidePromptState, nil
+}
+
+// ResetBeginnerGuidePromptState resets all changes to the "beginner_guide_prompt_state" field.
+func (m *UserMutation) ResetBeginnerGuidePromptState() {
+	m.beginner_guide_prompt_state = nil
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (m *UserMutation) SetBeginnerGuideProgress(jm json.RawMessage) {
+	m.beginner_guide_progress = &jm
+	m.appendbeginner_guide_progress = nil
+}
+
+// BeginnerGuideProgress returns the value of the "beginner_guide_progress" field in the mutation.
+func (m *UserMutation) BeginnerGuideProgress() (r json.RawMessage, exists bool) {
+	v := m.beginner_guide_progress
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBeginnerGuideProgress returns the old "beginner_guide_progress" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldBeginnerGuideProgress(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBeginnerGuideProgress is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBeginnerGuideProgress requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBeginnerGuideProgress: %w", err)
+	}
+	return oldValue.BeginnerGuideProgress, nil
+}
+
+// AppendBeginnerGuideProgress adds jm to the "beginner_guide_progress" field.
+func (m *UserMutation) AppendBeginnerGuideProgress(jm json.RawMessage) {
+	m.appendbeginner_guide_progress = append(m.appendbeginner_guide_progress, jm...)
+}
+
+// AppendedBeginnerGuideProgress returns the list of values that were appended to the "beginner_guide_progress" field in this mutation.
+func (m *UserMutation) AppendedBeginnerGuideProgress() (json.RawMessage, bool) {
+	if len(m.appendbeginner_guide_progress) == 0 {
+		return nil, false
+	}
+	return m.appendbeginner_guide_progress, true
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (m *UserMutation) ClearBeginnerGuideProgress() {
+	m.beginner_guide_progress = nil
+	m.appendbeginner_guide_progress = nil
+	m.clearedFields[user.FieldBeginnerGuideProgress] = struct{}{}
+}
+
+// BeginnerGuideProgressCleared returns if the "beginner_guide_progress" field was cleared in this mutation.
+func (m *UserMutation) BeginnerGuideProgressCleared() bool {
+	_, ok := m.clearedFields[user.FieldBeginnerGuideProgress]
+	return ok
+}
+
+// ResetBeginnerGuideProgress resets all changes to the "beginner_guide_progress" field.
+func (m *UserMutation) ResetBeginnerGuideProgress() {
+	m.beginner_guide_progress = nil
+	m.appendbeginner_guide_progress = nil
+	delete(m.clearedFields, user.FieldBeginnerGuideProgress)
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (m *UserMutation) SetBeginnerGuideCompletedAt(t time.Time) {
+	m.beginner_guide_completed_at = &t
+}
+
+// BeginnerGuideCompletedAt returns the value of the "beginner_guide_completed_at" field in the mutation.
+func (m *UserMutation) BeginnerGuideCompletedAt() (r time.Time, exists bool) {
+	v := m.beginner_guide_completed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBeginnerGuideCompletedAt returns the old "beginner_guide_completed_at" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldBeginnerGuideCompletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBeginnerGuideCompletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBeginnerGuideCompletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBeginnerGuideCompletedAt: %w", err)
+	}
+	return oldValue.BeginnerGuideCompletedAt, nil
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (m *UserMutation) ClearBeginnerGuideCompletedAt() {
+	m.beginner_guide_completed_at = nil
+	m.clearedFields[user.FieldBeginnerGuideCompletedAt] = struct{}{}
+}
+
+// BeginnerGuideCompletedAtCleared returns if the "beginner_guide_completed_at" field was cleared in this mutation.
+func (m *UserMutation) BeginnerGuideCompletedAtCleared() bool {
+	_, ok := m.clearedFields[user.FieldBeginnerGuideCompletedAt]
+	return ok
+}
+
+// ResetBeginnerGuideCompletedAt resets all changes to the "beginner_guide_completed_at" field.
+func (m *UserMutation) ResetBeginnerGuideCompletedAt() {
+	m.beginner_guide_completed_at = nil
+	delete(m.clearedFields, user.FieldBeginnerGuideCompletedAt)
 }
 
 // SetBalanceNotifyEnabled sets the "balance_notify_enabled" field.
@@ -49020,7 +49174,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 28)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -49074,6 +49228,15 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.last_active_at != nil {
 		fields = append(fields, user.FieldLastActiveAt)
+	}
+	if m.beginner_guide_prompt_state != nil {
+		fields = append(fields, user.FieldBeginnerGuidePromptState)
+	}
+	if m.beginner_guide_progress != nil {
+		fields = append(fields, user.FieldBeginnerGuideProgress)
+	}
+	if m.beginner_guide_completed_at != nil {
+		fields = append(fields, user.FieldBeginnerGuideCompletedAt)
 	}
 	if m.balance_notify_enabled != nil {
 		fields = append(fields, user.FieldBalanceNotifyEnabled)
@@ -49140,6 +49303,12 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.LastLoginAt()
 	case user.FieldLastActiveAt:
 		return m.LastActiveAt()
+	case user.FieldBeginnerGuidePromptState:
+		return m.BeginnerGuidePromptState()
+	case user.FieldBeginnerGuideProgress:
+		return m.BeginnerGuideProgress()
+	case user.FieldBeginnerGuideCompletedAt:
+		return m.BeginnerGuideCompletedAt()
 	case user.FieldBalanceNotifyEnabled:
 		return m.BalanceNotifyEnabled()
 	case user.FieldSubscriptionBalanceFallbackEnabled:
@@ -49199,6 +49368,12 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldLastLoginAt(ctx)
 	case user.FieldLastActiveAt:
 		return m.OldLastActiveAt(ctx)
+	case user.FieldBeginnerGuidePromptState:
+		return m.OldBeginnerGuidePromptState(ctx)
+	case user.FieldBeginnerGuideProgress:
+		return m.OldBeginnerGuideProgress(ctx)
+	case user.FieldBeginnerGuideCompletedAt:
+		return m.OldBeginnerGuideCompletedAt(ctx)
 	case user.FieldBalanceNotifyEnabled:
 		return m.OldBalanceNotifyEnabled(ctx)
 	case user.FieldSubscriptionBalanceFallbackEnabled:
@@ -49347,6 +49522,27 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetLastActiveAt(v)
+		return nil
+	case user.FieldBeginnerGuidePromptState:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBeginnerGuidePromptState(v)
+		return nil
+	case user.FieldBeginnerGuideProgress:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBeginnerGuideProgress(v)
+		return nil
+	case user.FieldBeginnerGuideCompletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBeginnerGuideCompletedAt(v)
 		return nil
 	case user.FieldBalanceNotifyEnabled:
 		v, ok := value.(bool)
@@ -49517,6 +49713,12 @@ func (m *UserMutation) ClearedFields() []string {
 	if m.FieldCleared(user.FieldLastActiveAt) {
 		fields = append(fields, user.FieldLastActiveAt)
 	}
+	if m.FieldCleared(user.FieldBeginnerGuideProgress) {
+		fields = append(fields, user.FieldBeginnerGuideProgress)
+	}
+	if m.FieldCleared(user.FieldBeginnerGuideCompletedAt) {
+		fields = append(fields, user.FieldBeginnerGuideCompletedAt)
+	}
 	if m.FieldCleared(user.FieldBalanceNotifyThreshold) {
 		fields = append(fields, user.FieldBalanceNotifyThreshold)
 	}
@@ -49548,6 +49750,12 @@ func (m *UserMutation) ClearField(name string) error {
 		return nil
 	case user.FieldLastActiveAt:
 		m.ClearLastActiveAt()
+		return nil
+	case user.FieldBeginnerGuideProgress:
+		m.ClearBeginnerGuideProgress()
+		return nil
+	case user.FieldBeginnerGuideCompletedAt:
+		m.ClearBeginnerGuideCompletedAt()
 		return nil
 	case user.FieldBalanceNotifyThreshold:
 		m.ClearBalanceNotifyThreshold()
@@ -49613,6 +49821,15 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldLastActiveAt:
 		m.ResetLastActiveAt()
+		return nil
+	case user.FieldBeginnerGuidePromptState:
+		m.ResetBeginnerGuidePromptState()
+		return nil
+	case user.FieldBeginnerGuideProgress:
+		m.ResetBeginnerGuideProgress()
+		return nil
+	case user.FieldBeginnerGuideCompletedAt:
+		m.ResetBeginnerGuideCompletedAt()
 		return nil
 	case user.FieldBalanceNotifyEnabled:
 		m.ResetBalanceNotifyEnabled()

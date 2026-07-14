@@ -51,6 +51,12 @@ const (
 	FieldLastLoginAt = "last_login_at"
 	// FieldLastActiveAt holds the string denoting the last_active_at field in the database.
 	FieldLastActiveAt = "last_active_at"
+	// FieldBeginnerGuidePromptState holds the string denoting the beginner_guide_prompt_state field in the database.
+	FieldBeginnerGuidePromptState = "beginner_guide_prompt_state"
+	// FieldBeginnerGuideProgress holds the string denoting the beginner_guide_progress field in the database.
+	FieldBeginnerGuideProgress = "beginner_guide_progress"
+	// FieldBeginnerGuideCompletedAt holds the string denoting the beginner_guide_completed_at field in the database.
+	FieldBeginnerGuideCompletedAt = "beginner_guide_completed_at"
 	// FieldBalanceNotifyEnabled holds the string denoting the balance_notify_enabled field in the database.
 	FieldBalanceNotifyEnabled = "balance_notify_enabled"
 	// FieldSubscriptionBalanceFallbackEnabled holds the string denoting the subscription_balance_fallback_enabled field in the database.
@@ -223,6 +229,9 @@ var Columns = []string{
 	FieldSignupSource,
 	FieldLastLoginAt,
 	FieldLastActiveAt,
+	FieldBeginnerGuidePromptState,
+	FieldBeginnerGuideProgress,
+	FieldBeginnerGuideCompletedAt,
 	FieldBalanceNotifyEnabled,
 	FieldSubscriptionBalanceFallbackEnabled,
 	FieldBalanceNotifyThresholdType,
@@ -292,6 +301,10 @@ var (
 	DefaultSignupSource string
 	// SignupSourceValidator is a validator for the "signup_source" field. It is called by the builders before save.
 	SignupSourceValidator func(string) error
+	// DefaultBeginnerGuidePromptState holds the default value on creation for the "beginner_guide_prompt_state" field.
+	DefaultBeginnerGuidePromptState string
+	// BeginnerGuidePromptStateValidator is a validator for the "beginner_guide_prompt_state" field. It is called by the builders before save.
+	BeginnerGuidePromptStateValidator func(string) error
 	// DefaultBalanceNotifyEnabled holds the default value on creation for the "balance_notify_enabled" field.
 	DefaultBalanceNotifyEnabled bool
 	// DefaultSubscriptionBalanceFallbackEnabled holds the default value on creation for the "subscription_balance_fallback_enabled" field.
@@ -402,6 +415,16 @@ func ByLastLoginAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLastActiveAt orders the results by the last_active_at field.
 func ByLastActiveAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastActiveAt, opts...).ToFunc()
+}
+
+// ByBeginnerGuidePromptState orders the results by the beginner_guide_prompt_state field.
+func ByBeginnerGuidePromptState(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBeginnerGuidePromptState, opts...).ToFunc()
+}
+
+// ByBeginnerGuideCompletedAt orders the results by the beginner_guide_completed_at field.
+func ByBeginnerGuideCompletedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBeginnerGuideCompletedAt, opts...).ToFunc()
 }
 
 // ByBalanceNotifyEnabled orders the results by the balance_notify_enabled field.
