@@ -20,6 +20,8 @@ type beginnerGuideRepositoryStub struct {
 	updates     []BeginnerGuideState
 }
 
+var _ BeginnerGuideRepository = (*beginnerGuideRepositoryStub)(nil)
+
 func (r *beginnerGuideRepositoryStub) GetBeginnerGuideState(_ context.Context, _ int64) (*BeginnerGuideState, error) {
 	r.getCalls++
 	if r.getErr != nil {
@@ -32,14 +34,24 @@ func (r *beginnerGuideRepositoryStub) GetBeginnerGuideState(_ context.Context, _
 	return &state, nil
 }
 
-func (r *beginnerGuideRepositoryStub) UpdateBeginnerGuideState(_ context.Context, _ int64, state BeginnerGuideState) (*BeginnerGuideState, error) {
+func (r *beginnerGuideRepositoryStub) WithBeginnerGuideStateForUpdate(
+	_ context.Context,
+	_ int64,
+	update func(BeginnerGuideState) (BeginnerGuideState, error),
+) (*BeginnerGuideState, error) {
 	r.updateCalls++
-	r.updates = append(r.updates, state)
 	if r.updateErr != nil {
 		return nil, r.updateErr
 	}
-	r.state = &state
-	stored := state
+	if r.state == nil {
+		return nil, nil
+	}
+	stored, err := update(*r.state)
+	if err != nil {
+		return nil, err
+	}
+	r.updates = append(r.updates, stored)
+	r.state = &stored
 	return &stored, nil
 }
 
@@ -180,7 +192,7 @@ func TestPatchBeginnerGuideStateTransitions(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Equal(t, test.want, got.PromptState)
-			require.Equal(t, 1, repo.getCalls)
+			require.Equal(t, 0, repo.getCalls)
 			require.Equal(t, 1, repo.updateCalls)
 			if test.wantCompleted {
 				require.NotNil(t, got.CompletedAt)
@@ -233,7 +245,7 @@ func TestPatchBeginnerGuideStateValidatesProgressBeforePersistence(t *testing.T)
 	})
 
 	require.ErrorIs(t, err, ErrBeginnerGuideProgressInvalid)
-	require.Equal(t, 1, repo.getCalls)
+	require.Equal(t, 0, repo.getCalls)
 	require.Equal(t, 0, repo.updateCalls)
 }
 

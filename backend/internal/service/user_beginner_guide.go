@@ -59,7 +59,11 @@ type BeginnerGuideState struct {
 
 type BeginnerGuideRepository interface {
 	GetBeginnerGuideState(context.Context, int64) (*BeginnerGuideState, error)
-	UpdateBeginnerGuideState(context.Context, int64, BeginnerGuideState) (*BeginnerGuideState, error)
+	WithBeginnerGuideStateForUpdate(
+		context.Context,
+		int64,
+		func(BeginnerGuideState) (BeginnerGuideState, error),
+	) (*BeginnerGuideState, error)
 }
 
 type PatchBeginnerGuideStateRequest struct {
@@ -121,39 +125,47 @@ func (s *UserService) PatchBeginnerGuideState(ctx context.Context, userID int64,
 	if s == nil || s.beginnerGuideRepo == nil {
 		return nil, ErrBeginnerGuideUnavailable
 	}
-
-	current, err := s.beginnerGuideRepo.GetBeginnerGuideState(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if current == nil {
-		return nil, ErrBeginnerGuideUnavailable
-	}
 	if err := validateBeginnerGuideProgress(request.Progress); err != nil {
 		return nil, err
 	}
-
-	next := *current
-	if request.Progress != nil {
-		next.Progress = request.Progress
+	if request.PromptState != nil &&
+		*request.PromptState != BeginnerGuidePromptStateSuppressed &&
+		*request.PromptState != BeginnerGuidePromptStateCompleted {
+		return nil, ErrBeginnerGuidePromptStateInvalid
 	}
-	if request.PromptState != nil {
-		switch *request.PromptState {
-		case BeginnerGuidePromptStateSuppressed:
-			if current.PromptState != BeginnerGuidePromptStateCompleted {
-				next.PromptState = BeginnerGuidePromptStateSuppressed
+
+	updated, err := s.beginnerGuideRepo.WithBeginnerGuideStateForUpdate(
+		ctx,
+		userID,
+		func(current BeginnerGuideState) (BeginnerGuideState, error) {
+			next := current
+			if request.Progress != nil {
+				next.Progress = request.Progress
 			}
-		case BeginnerGuidePromptStateCompleted:
-			next.PromptState = BeginnerGuidePromptStateCompleted
-		default:
-			return nil, ErrBeginnerGuidePromptStateInvalid
-		}
-	}
+			if request.PromptState != nil {
+				switch *request.PromptState {
+				case BeginnerGuidePromptStateSuppressed:
+					if current.PromptState != BeginnerGuidePromptStateCompleted {
+						next.PromptState = BeginnerGuidePromptStateSuppressed
+					}
+				case BeginnerGuidePromptStateCompleted:
+					next.PromptState = BeginnerGuidePromptStateCompleted
+				}
+			}
 
-	if next.PromptState == BeginnerGuidePromptStateCompleted && next.CompletedAt == nil {
-		completedAt := time.Now().UTC()
-		next.CompletedAt = &completedAt
-	}
+			if next.PromptState == BeginnerGuidePromptStateCompleted && next.CompletedAt == nil {
+				completedAt := time.Now().UTC()
+				next.CompletedAt = &completedAt
+			}
 
-	return s.beginnerGuideRepo.UpdateBeginnerGuideState(ctx, userID, next)
+			return next, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, ErrBeginnerGuideUnavailable
+	}
+	return updated, nil
 }
