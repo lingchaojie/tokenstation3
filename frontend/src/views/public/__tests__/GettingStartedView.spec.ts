@@ -7,6 +7,7 @@ import { keysAPI } from '@/api/keys'
 import type { BeginnerGuideProgressV1, BeginnerGuideStepId } from '@/api/beginnerGuide'
 import { useAuthStore } from '@/stores/auth'
 import { useBeginnerGuideStore } from '@/stores/beginnerGuide'
+import type { ApiKey } from '@/types'
 import enMessages from '@/i18n/locales/en/gettingStarted'
 import zhMessages from '@/i18n/locales/zh/gettingStarted'
 
@@ -62,6 +63,63 @@ function userFixture(id = 42) {
   }
 }
 
+function keyFixture(overrides: Partial<ApiKey> = {}): ApiKey {
+  return {
+    id: 987654321,
+    user_id: 42,
+    key: 'sk-guide-secret-DO-NOT-PERSIST',
+    name: 'Guide key',
+    group_id: null,
+    key_type: 'unified',
+    group_binding_mode: 'auto',
+    status: 'active',
+    ip_whitelist: [],
+    ip_blacklist: [],
+    last_used_at: null,
+    last_used_ip: null,
+    quota: 0,
+    quota_used: 0,
+    expires_at: null,
+    created_at: '2026-07-15T00:00:00Z',
+    updated_at: '2026-07-15T00:00:00Z',
+    current_concurrency: 0,
+    rate_limit_5h: 0,
+    rate_limit_1d: 0,
+    rate_limit_7d: 0,
+    usage_5h: 0,
+    usage_1d: 0,
+    usage_7d: 0,
+    window_5h_start: null,
+    window_1d_start: null,
+    window_7d_start: null,
+    reset_5h_at: null,
+    reset_1d_at: null,
+    reset_7d_at: null,
+    ...overrides
+  }
+}
+
+function keyPage(items: ApiKey[]) {
+  return { items, total: items.length, page: 1, page_size: 100, pages: items.length ? 1 : 0 }
+}
+
+function progressAt(step: BeginnerGuideStepId): BeginnerGuideProgressV1 {
+  const order: BeginnerGuideStepId[] = [
+    'understand',
+    'choose',
+    'terminal',
+    'install',
+    'api_key',
+    'configure',
+    'first_run',
+    'troubleshoot'
+  ]
+  return progress({
+    currentStep: step,
+    completedSteps: order.slice(0, order.indexOf(step))
+  })
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((resolvePromise) => {
@@ -92,6 +150,24 @@ function localeMessages(messages: typeof enMessages) {
       switchToLight: 'Switch to light mode',
       login: 'Sign in',
       goToDashboard: 'Go to Dashboard'
+    },
+    keys: {
+      nameLabel: 'Name',
+      namePlaceholder: 'My API Key',
+      saving: 'Saving...',
+      failedToLoad: 'Failed to load API keys',
+      failedToSave: 'Failed to save API key',
+      status: {
+        active: 'Active',
+        inactive: 'Inactive',
+        quota_exhausted: 'Quota Exhausted',
+        expired: 'Expired'
+      },
+      useKeyModal: {
+        openai: {
+          configTomlHint: 'Keep this content at the beginning of config.toml.'
+        }
+      }
     }
   }) as Record<string, unknown>
 }
@@ -149,6 +225,8 @@ async function settle(): Promise<void> {
 describe('GettingStartedView', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
+    window.history.replaceState(null, '', '/getting-started')
     vi.clearAllMocks()
     Object.defineProperty(navigator, 'platform', { configurable: true, value: 'MacIntel' })
     getGuideState.mockResolvedValue({
@@ -162,6 +240,7 @@ describe('GettingStartedView', () => {
       completed_at: patch.prompt_state === 'completed' ? '2026-07-15T00:00:00Z' : null
     }))
     vi.spyOn(keysAPI, 'list').mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100, pages: 0 })
+    vi.spyOn(keysAPI, 'create').mockResolvedValue(keyFixture())
   })
 
   it('mounts anonymously at understand without guide-account or key API calls', async () => {
@@ -483,17 +562,207 @@ describe('GettingStartedView', () => {
     )
   })
 
-  it('keeps Task 8 key and configuration interactions as API-free placeholders', async () => {
-    for (const step of ['api_key', 'configure'] satisfies BeginnerGuideStepId[]) {
-      setAnonymousProgress(progress({ currentStep: step, completedSteps: ['understand', 'choose', 'terminal', 'install'] }))
-      const { wrapper } = mountView()
-      await settle()
+  it('keeps anonymous visitors at an API-free authentication checkpoint', async () => {
+    setAnonymousProgress(progressAt('api_key'))
+    const { wrapper } = mountView()
+    await settle()
 
-      expect(wrapper.get(`[data-active-step="${step}"] [data-testid="task-8-placeholder"]`).exists())
-        .toBe(true)
-      wrapper.unmount()
-    }
+    expect(wrapper.getComponent('[data-testid="api-key-login"]').props('to')).toBe(
+      '/login?redirect=/getting-started'
+    )
+    expect(wrapper.getComponent('[data-testid="api-key-register"]').props('to')).toBe(
+      '/register?redirect=/getting-started'
+    )
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeDefined()
     expect(keysAPI.list).not.toHaveBeenCalled()
+  })
+
+  it('gates API-key completion on an in-memory selection and renders shared configuration', async () => {
+    const secret = 'sk-guide-secret-DO-NOT-PERSIST'
+    const key = keyFixture({ key: secret })
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(keyPage([key]))
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+
+    const next = wrapper.get('[data-testid="step-primary-action"]')
+    expect(next.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-key-id="987654321"]').trigger('click')
+    expect(next.attributes('disabled')).toBeUndefined()
+
+    await next.trigger('click')
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('configure')
+    expect(wrapper.findAll('[data-testid="guide-config-file"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('Terminal')
+    expect(wrapper.text()).toContain('~/.claude/settings.json')
+    expect(wrapper.text()).toContain('merge these settings')
+    expect(wrapper.text()).toContain('fully close the client')
+    expect(wrapper.text()).toContain(secret)
+
+    for (const [patch] of patchGuideState.mock.calls) {
+      const serialized = JSON.stringify(patch)
+      expect(serialized).not.toContain(secret)
+      expect(serialized).not.toContain('987654321')
+      expect(serialized).not.toContain('selectedKey')
+      expect(serialized).not.toContain('generatedFiles')
+    }
+    expect(window.location.href).not.toContain(secret)
+    expect(JSON.stringify(window.history.state)).not.toContain(secret)
+    expect(Object.values(localStorage).join('\n')).not.toContain(secret)
+    expect(Object.values(sessionStorage).join('\n')).not.toContain(secret)
+  })
+
+  it('replaces prior generated files when a different key is selected', async () => {
+    const first = keyFixture({ id: 1, key: 'sk-first-memory-only', name: 'First key' })
+    const second = keyFixture({ id: 2, key: 'sk-second-memory-only', name: 'Second key' })
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValue(keyPage([first, second]))
+    const { wrapper } = mountAuthenticatedView()
+    await settle()
+
+    await wrapper.get('[data-key-id="1"]').trigger('click')
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain(first.key)
+
+    await wrapper.get('[data-active-step="configure"] footer button').trigger('click')
+    await settle()
+    await wrapper.get('[data-key-id="2"]').trigger('click')
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+
+    expect(wrapper.text()).toContain(second.key)
+    expect(wrapper.text()).not.toContain(first.key)
+  })
+
+  it('clears selection on client changes and requires another explicit selection', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(keyPage([keyFixture()]))
+    const { wrapper } = mountAuthenticatedView()
+    await settle()
+
+    await wrapper.get('[data-key-id="987654321"]').trigger('click')
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-client-option="codex"]').trigger('click')
+    await settle()
+
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('clears secret-bearing configuration when the authenticated owner logs out', async () => {
+    const secret = 'sk-guide-secret-DO-NOT-PERSIST'
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(keyPage([keyFixture({ key: secret })]))
+    const { wrapper, authStore } = mountAuthenticatedView()
+    await settle()
+
+    await wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain(secret)
+
+    authStore.token = null
+    await settle()
+
+    expect(wrapper.text()).not.toContain(secret)
+    expect(Object.values(localStorage).join('\n')).not.toContain(secret)
+    expect(Object.values(sessionStorage).join('\n')).not.toContain(secret)
+  })
+
+  it('returns a refreshed configure step to key selection without recovering a secret', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('configure'),
+      completed_at: null
+    })
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('api_key')
+    expect(wrapper.get('[data-testid="api-key-reselect"]').text()).toContain(
+      'selected key is not saved'
+    )
+    expect(wrapper.text()).not.toContain('sk-guide-secret-DO-NOT-PERSIST')
+  })
+
+  it('still requires reselection for a new owner while the previous owner redirect save is pending', async () => {
+    getGuideState
+      .mockResolvedValueOnce({
+        prompt_state: 'suppressed',
+        progress: progressAt('configure'),
+        completed_at: null
+      })
+      .mockResolvedValueOnce({
+        prompt_state: 'suppressed',
+        progress: progressAt('configure'),
+        completed_at: null
+      })
+    const accountARedirect = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => accountARedirect.promise)
+    const { wrapper, guideStore, authStore } = mountAuthenticatedView(42)
+    await settle()
+    expect(guideStore.progress.currentStep).toBe('api_key')
+
+    authStore.user = userFixture(43)
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('api_key')
+    expect(wrapper.get('[data-testid="api-key-reselect"]').exists()).toBe(true)
+
+    accountARedirect.resolve({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    await settle()
+    expect(guideStore.progress.currentStep).toBe('api_key')
+  })
+
+  it('does not recover a prior selected key or configuration after unmounting', async () => {
+    const secret = 'sk-guide-secret-DO-NOT-PERSIST'
+    getGuideState.mockResolvedValue({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValue(keyPage([keyFixture({ key: secret })]))
+    const first = mountAuthenticatedView()
+    await settle()
+    await first.wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await first.wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+    expect(first.wrapper.text()).toContain(secret)
+    first.wrapper.unmount()
+
+    const second = mountAuthenticatedView()
+    await settle()
+
+    expect(second.wrapper.text()).not.toContain(secret)
+    expect(second.wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeDefined()
   })
 
   it('marks troubleshooting complete explicitly and shows the three destination links', async () => {

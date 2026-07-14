@@ -65,7 +65,7 @@
       :title="t(`gettingStarted.steps.${activeStep}.title`)"
       :description="t(`gettingStarted.steps.${activeStep}.description`)"
       :back-disabled="activeStepIndex === 0"
-      :next-disabled="taskEightPlaceholder"
+      :next-disabled="taskEightBlocked"
       :next-loading="nextPending"
       :next-label="activeStep === 'first_run' ? t('gettingStarted.firstRun.confirmSuccess') : undefined"
       @back="handleBack"
@@ -138,19 +138,37 @@
         </a>
       </div>
 
-      <section
-        v-else-if="activeStep === 'api_key' || activeStep === 'configure'"
-        data-testid="task-8-placeholder"
-        class="rounded-xl border border-amber-400/30 bg-amber-500/10 p-4"
-      >
-        <p class="text-sm leading-6 text-gray-700 dark:text-linear-ink-subtle">
-          {{
-            activeStep === 'api_key'
-              ? t('gettingStarted.apiKey.secretWarning')
-              : t('gettingStarted.configuration.mergeWarning')
-          }}
+      <GuideApiKeyStep
+        v-else-if="activeStep === 'api_key'"
+        :client="guideStore.progress.client"
+        :selected-key="selectedKey"
+        :reselect-required="reselectRequired"
+        @select="handleSelectKey"
+      />
+
+      <div v-else-if="activeStep === 'configure'" class="space-y-5">
+        <p class="rounded-xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm leading-6 text-gray-700 dark:text-linear-ink-subtle">
+          {{ t('gettingStarted.configuration.mergeWarning') }}
         </p>
-      </section>
+        <article
+          v-for="file in generatedFiles"
+          :key="file.path"
+          data-testid="guide-config-file"
+          class="min-w-0 space-y-3"
+        >
+          <h2 class="break-all text-sm font-semibold text-gray-950 dark:text-linear-ink" v-text="file.path"></h2>
+          <p
+            v-if="file.hintKey || file.hint"
+            class="text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle"
+          >
+            {{ file.hintKey ? t(file.hintKey) : file.hint }}
+          </p>
+          <GuideCommandBlock :command="file.content" />
+        </article>
+        <p class="rounded-xl border border-primary-500/20 bg-primary-500/5 p-4 text-sm leading-6 text-gray-700 dark:text-linear-ink-subtle">
+          {{ t('gettingStarted.configuration.restartInstruction') }}
+        </p>
+      </div>
 
       <div v-else-if="activeStep === 'first_run'" class="space-y-5">
         <p class="text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle">
@@ -202,13 +220,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import GuideShell from '@/components/getting-started/GuideShell.vue'
 import GuideStepPanel from '@/components/getting-started/GuideStepPanel.vue'
 import GuideCommandBlock from '@/components/getting-started/GuideCommandBlock.vue'
+import GuideApiKeyStep from '@/components/getting-started/GuideApiKeyStep.vue'
 import GuideTroubleshooting from '@/components/getting-started/GuideTroubleshooting.vue'
+import { buildClientConfigFiles } from '@/components/keys/clientConfigFiles'
 import {
   GUIDE_CLIENT_IDS,
   GUIDE_OS_IDS,
@@ -221,6 +241,7 @@ import type {
   BeginnerGuideOS,
   BeginnerGuideStepId
 } from '@/api/beginnerGuide'
+import type { ApiKey, GroupPlatform } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -228,7 +249,11 @@ const authStore = useAuthStore()
 const guideStore = useBeginnerGuideStore()
 const nextPending = ref(false)
 const manualOSSelected = ref(false)
+const selectedKey = shallowRef<ApiKey | null>(null)
+const reselectRequired = ref(false)
 let guideOwnerGeneration = 0
+let redirectingConfigure = false
+let disposed = false
 
 const definitionIds = ['model', 'agent', 'terminal', 'gateway', 'apiKey'] as const
 const activeStep = computed(() => guideStore.progress.currentStep)
@@ -243,10 +268,23 @@ const selectedVariant = computed(() => {
   }
   return variant
 })
-const taskEightPlaceholder = computed(
-  () => activeStep.value === 'api_key' || activeStep.value === 'configure'
+const taskEightBlocked = computed(
+  () =>
+    (activeStep.value === 'api_key' || activeStep.value === 'configure') &&
+    selectedKey.value === null
 )
 const displayBaseUrl = computed(() => appStore.apiBaseUrl || window.location.origin)
+const generatedFiles = computed(() => {
+  if (!selectedKey.value) return []
+  return buildClientConfigFiles({
+    client: guideStore.progress.client,
+    os: guideStore.progress.os,
+    platform: resolveConfigPlatform(selectedKey.value),
+    apiKey: selectedKey.value.key,
+    baseUrl: appStore.apiBaseUrl || window.location.origin,
+    allowMessagesDispatch: selectedKey.value.group?.allow_messages_dispatch ?? false
+  })
+})
 const completionDestinations = computed(() => [
   {
     path: authStore.isAdmin ? '/admin/my-account/dashboard' : '/dashboard',
@@ -272,11 +310,30 @@ function hasPersistedAnonymousProgress(): boolean | null {
   }
 }
 
+function resolveConfigPlatform(key: ApiKey): GroupPlatform | 'unified' {
+  if (key.key_type === 'unified') return 'unified'
+  if (key.group?.platform) return key.group.platform
+  if (key.key_type === 'anthropic' || key.key_type === 'openai') return key.key_type
+  return 'unified'
+}
+
+function clearEphemeralConfiguration(): void {
+  selectedKey.value = null
+}
+
+function handleSelectKey(key: ApiKey): void {
+  selectedKey.value = key
+  reselectRequired.value = false
+}
+
 watch(
   [() => authStore.isAuthenticated, () => authStore.user?.id],
   async ([authenticated, userId]) => {
     guideOwnerGeneration += 1
     nextPending.value = false
+    redirectingConfigure = false
+    clearEphemeralConfiguration()
+    reselectRequired.value = false
     if (authenticated && userId !== undefined) {
       await guideStore.initialize({ authenticated: true, userId, enteringGuide: true })
       return
@@ -288,6 +345,39 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  [() => guideStore.progress.client, () => guideStore.progress.os],
+  ([client, os], previous) => {
+    if (previous && (client !== previous[0] || os !== previous[1])) {
+      clearEphemeralConfiguration()
+    }
+  }
+)
+
+watch(
+  activeStep,
+  async (step) => {
+    if (
+      step !== 'configure' ||
+      selectedKey.value !== null ||
+      redirectingConfigure ||
+      disposed
+    ) {
+      return
+    }
+    const ownerGeneration = guideOwnerGeneration
+    redirectingConfigure = true
+    reselectRequired.value = true
+    try {
+      await guideStore.goToStep('api_key')
+    } finally {
+      if (guideOwnerGeneration === ownerGeneration) {
+        redirectingConfigure = false
+      }
+    }
+  }
 )
 
 function canNavigateTo(step: BeginnerGuideStepId): boolean {
@@ -319,7 +409,7 @@ async function handleBack(): Promise<void> {
 }
 
 async function handleNext(): Promise<void> {
-  if (taskEightPlaceholder.value || nextPending.value) return
+  if (taskEightBlocked.value || nextPending.value) return
 
   const initiatingStep = activeStep.value
   const initiatingIndex = GUIDE_STEP_IDS.indexOf(initiatingStep)
@@ -364,4 +454,11 @@ async function handleNext(): Promise<void> {
     }
   }
 }
+
+onBeforeUnmount(() => {
+  disposed = true
+  guideOwnerGeneration += 1
+  nextPending.value = false
+  clearEphemeralConfiguration()
+})
 </script>
