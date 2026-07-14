@@ -130,6 +130,12 @@ describe('resolvePostAuthRedirect', () => {
     ['/docs/100%25', '/docs/100%25'],
     ['/profile#progress-100%25', '/profile#progress-100%25'],
     ['/profile?query=%', '/profile?query=%'],
+    ['/%25', '/%25'],
+    ['/%25complete', '/%25complete'],
+    ['/%25/section', '/%25/section'],
+    ['/%25done?x=1#f', '/%25done?x=1#f'],
+    ['/%41%2Ffoo', '/%41%2Ffoo'],
+    [`/%${'25'.repeat(8)}complete`, `/%${'25'.repeat(8)}complete`],
     ['  /getting-started?from=register  ', '/getting-started?from=register'],
   ])('keeps internal absolute redirect %j', (value, expected) => {
     expect(resolvePostAuthRedirect(value)).toBe(expected)
@@ -178,6 +184,7 @@ describe('resolvePostAuthRedirect', () => {
     '/%7F/evil.example',
     '/%',
     '/%E0%A4%A',
+    `/%${'25'.repeat(9)}complete`,
   ])('uses the dashboard for unsafe redirect %j', (value) => {
     expect(resolvePostAuthRedirect(value)).toBe('/dashboard')
   })
@@ -196,6 +203,12 @@ describe('resolvePostAuthRedirect', () => {
       '/getting-started',
       '/profile?next=%2Fkeys#security',
       '/profile?q=100%25',
+      '/%25',
+      '/%25complete',
+      '/%25/section',
+      '/%25done?x=1#f',
+      '/%41%2Ffoo',
+      `/%${'25'.repeat(8)}complete`,
       '//post-auth.invalid/escape',
       '/\\post-auth.invalid/escape',
       '//POST-AUTH.INVALID:443/escape',
