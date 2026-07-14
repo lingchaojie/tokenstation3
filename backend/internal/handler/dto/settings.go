@@ -373,6 +373,10 @@ type PublicSettings struct {
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
+	DailyCheckInEnabled bool   `json:"daily_check_in_enabled"`
+	DailyCheckInStartAt string `json:"daily_check_in_start_at"`
+	DailyCheckInEndAt   string `json:"daily_check_in_end_at"`
+
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`

@@ -838,6 +838,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyAffiliateEnabled,
+		SettingKeyDailyCheckInEnabled,
+		SettingKeyDailyCheckInStartAt,
+		SettingKeyDailyCheckInDurationDays,
+		SettingKeyDailyCheckInRewardAmount,
 		SettingKeyRiskControlEnabled,
 		SettingKeyAllowUserViewErrorRequests,
 	}
@@ -896,6 +900,31 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
 		balanceLowNotifyThreshold = v
 	}
+	dailyCheckInConfig := DailyCheckInConfig{RewardAmount: DailyCheckInRewardDefault}
+	if enabled, parseErr := strconv.ParseBool(strings.TrimSpace(settings[SettingKeyDailyCheckInEnabled])); parseErr == nil {
+		dailyCheckInConfig.Enabled = enabled
+	}
+	if startAt, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(settings[SettingKeyDailyCheckInStartAt])); parseErr == nil {
+		startAt = startAt.UTC()
+		dailyCheckInConfig.StartAt = &startAt
+	}
+	if durationDays, parseErr := strconv.Atoi(strings.TrimSpace(settings[SettingKeyDailyCheckInDurationDays])); parseErr == nil {
+		dailyCheckInConfig.DurationDays = durationDays
+	}
+	if rewardAmount, parseErr := strconv.ParseFloat(strings.TrimSpace(settings[SettingKeyDailyCheckInRewardAmount]), 64); parseErr == nil {
+		dailyCheckInConfig.RewardAmount = rewardAmount
+	}
+	if ValidateDailyCheckInConfig(dailyCheckInConfig) != nil {
+		dailyCheckInConfig.Enabled = false
+	}
+	dailyCheckInStartAt := ""
+	dailyCheckInEndAt := ""
+	if dailyCheckInConfig.StartAt != nil {
+		dailyCheckInStartAt = dailyCheckInConfig.StartAt.UTC().Format(time.RFC3339)
+	}
+	if endAt := dailyCheckInConfig.EndAt(); endAt != nil {
+		dailyCheckInEndAt = endAt.UTC().Format(time.RFC3339)
+	}
 
 	return &PublicSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
@@ -952,6 +981,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
+
+		DailyCheckInEnabled: dailyCheckInConfig.Enabled,
+		DailyCheckInStartAt: dailyCheckInStartAt,
+		DailyCheckInEndAt:   dailyCheckInEndAt,
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
@@ -1487,12 +1520,15 @@ type PublicSettingsInjectionPayload struct {
 	// Feature flags — MUST match the opt-in/opt-out registry in
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
 	// that hid the "可用渠道" menu on page refresh.
-	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
-	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
-	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
-	AffiliateEnabled                     bool `json:"affiliate_enabled"`
-	RiskControlEnabled                   bool `json:"risk_control_enabled"`
-	AllowUserViewErrorRequests           bool `json:"allow_user_view_error_requests"`
+	ChannelMonitorEnabled                bool   `json:"channel_monitor_enabled"`
+	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
+	AvailableChannelsEnabled             bool   `json:"available_channels_enabled"`
+	AffiliateEnabled                     bool   `json:"affiliate_enabled"`
+	DailyCheckInEnabled                  bool   `json:"daily_check_in_enabled"`
+	DailyCheckInStartAt                  string `json:"daily_check_in_start_at"`
+	DailyCheckInEndAt                    string `json:"daily_check_in_end_at"`
+	RiskControlEnabled                   bool   `json:"risk_control_enabled"`
+	AllowUserViewErrorRequests           bool   `json:"allow_user_view_error_requests"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -1558,6 +1594,9 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
+		DailyCheckInEnabled:                  settings.DailyCheckInEnabled,
+		DailyCheckInStartAt:                  settings.DailyCheckInStartAt,
+		DailyCheckInEndAt:                    settings.DailyCheckInEndAt,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,
 	}, nil
@@ -3272,6 +3311,12 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
+
+		// Daily check-in reward activity (default disabled; opt-in)
+		SettingKeyDailyCheckInEnabled:      "false",
+		SettingKeyDailyCheckInStartAt:      "",
+		SettingKeyDailyCheckInDurationDays: "0",
+		SettingKeyDailyCheckInRewardAmount: "10.00000000",
 
 		// 风控中心功能（默认关闭，显式启用）
 		SettingKeyRiskControlEnabled: "false",

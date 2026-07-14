@@ -333,6 +333,10 @@ type PublicSettings struct {
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
+	DailyCheckInEnabled bool   `json:"daily_check_in_enabled"`
+	DailyCheckInStartAt string `json:"daily_check_in_start_at"`
+	DailyCheckInEndAt   string `json:"daily_check_in_end_at"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 

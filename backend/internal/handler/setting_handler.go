@@ -109,6 +109,10 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
+		DailyCheckInEnabled: settings.DailyCheckInEnabled,
+		DailyCheckInStartAt: settings.DailyCheckInStartAt,
+		DailyCheckInEndAt:   settings.DailyCheckInEndAt,
+
 		RiskControlEnabled: settings.RiskControlEnabled,
 
 		AllowUserViewErrorRequests: settings.AllowUserViewErrorRequests,
