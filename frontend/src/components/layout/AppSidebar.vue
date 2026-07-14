@@ -102,8 +102,8 @@
           </template>
         </div>
 
-        <!-- Personal Section for Admin (hidden in simple mode) -->
-        <div v-if="!authStore.isSimpleMode" class="sidebar-section">
+        <!-- Personal Section for Admin -->
+        <div v-if="visiblePersonalNavItems.length" class="sidebar-section">
           <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
             <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
               {{ t('nav.myAccount') }}
@@ -111,7 +111,7 @@
           </div>
 
           <router-link
-            v-for="item in personalNavItems"
+            v-for="item in visiblePersonalNavItems"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -799,6 +799,12 @@ const userNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(tru
 // The dashboard item is the same user dashboard declaration, remapped into the
 // admin route namespace so admins stay inside the admin panel while viewing it.
 const personalNavItems = computed((): NavItem[] => finalizeNav(buildAdminPersonalNavItems()))
+
+const visiblePersonalNavItems = computed((): NavItem[] =>
+  authStore.isSimpleMode
+    ? personalNavItems.value.filter((item) => item.path === '/getting-started')
+    : personalNavItems.value,
+)
 
 // Custom menu items filtered by visibility
 const customMenuItemsForUser = computed(() => {

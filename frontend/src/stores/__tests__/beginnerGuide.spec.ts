@@ -386,6 +386,35 @@ describe('useBeginnerGuideStore', () => {
     expect(localStorage.getItem(retryKey(42))).toBe('1')
   })
 
+  it('treats an eligible suppression response as unconfirmed and retries after reload without reopening', async () => {
+    getBeginnerGuideStateMock.mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock.mockResolvedValueOnce(state())
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 42 })
+
+    await expect(store.suppressPrompt()).resolves.toBe(false)
+
+    expect(store.promptState).toBe('suppressed')
+    expect(store.showPrompt).toBe(false)
+    expect(localStorage.getItem(retryKey(42))).toBe('1')
+
+    setActivePinia(createPinia())
+    getBeginnerGuideStateMock.mockResolvedValueOnce(state())
+    patchBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({ prompt_state: 'suppressed' })
+    )
+    const reloadedStore = useBeginnerGuideStore()
+
+    await reloadedStore.initialize({ authenticated: true, userId: 42 })
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+      prompt_state: 'suppressed'
+    })
+    expect(reloadedStore.promptState).toBe('suppressed')
+    expect(reloadedStore.showPrompt).toBe(false)
+    expect(localStorage.getItem(retryKey(42))).toBeNull()
+  })
+
   it('suppresses an eligible prompt when an authenticated user enters the guide without anonymous progress', async () => {
     getBeginnerGuideStateMock.mockResolvedValueOnce(state())
     patchBeginnerGuideStateMock.mockResolvedValueOnce(state({ prompt_state: 'suppressed' }))

@@ -432,7 +432,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     const outcome = await enqueueRemoteWrite(context, { prompt_state: 'suppressed' })
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
-      if (remote !== null) {
+      if (remote !== null && remote.promptState !== 'eligible') {
         clearPromptSuppressionAttempt(context, suppressionAttempt)
         if (isCurrent(context)) {
           applyRemoteState(remote, fallbackProgress, progressRevision, promptRevision)

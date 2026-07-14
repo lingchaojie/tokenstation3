@@ -2,7 +2,144 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { defineComponent } from 'vue'
+import { enableAutoUnmount, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import AppSidebar from '../AppSidebar.vue'
+
+interface SidebarAuthState {
+  isAdmin: boolean
+  isSimpleMode: boolean
+}
+
+interface SidebarAppState {
+  sidebarCollapsed: boolean
+  mobileOpen: boolean
+  sidebarScrollTop: number
+  backendModeEnabled: boolean
+  cachedPublicSettings: { custom_menu_items: unknown[] }
+  siteName: string
+  siteLogo: string
+  siteVersion: string
+  publicSettingsLoaded: boolean
+  toggleSidebar: () => void
+  setMobileOpen: (open: boolean) => void
+}
+
+const sidebarStores = vi.hoisted(() => ({
+  app: null as SidebarAppState | null,
+  auth: null as SidebarAuthState | null,
+}))
+
+const sidebarRoute = vi.hoisted(() => ({ path: '/dashboard' }))
+
+vi.mock('@/stores', async () => {
+  const { reactive } = await vi.importActual<typeof import('vue')>('vue')
+  const app = reactive<SidebarAppState>({
+    sidebarCollapsed: false,
+    mobileOpen: false,
+    sidebarScrollTop: 0,
+    backendModeEnabled: false,
+    cachedPublicSettings: { custom_menu_items: [] },
+    siteName: 'LINX2.AI',
+    siteLogo: '',
+    siteVersion: 'test',
+    publicSettingsLoaded: true,
+    toggleSidebar: vi.fn(),
+    setMobileOpen: vi.fn(),
+  })
+  const auth = reactive<SidebarAuthState>({ isAdmin: false, isSimpleMode: false })
+  sidebarStores.app = app
+  sidebarStores.auth = auth
+
+  return {
+    useAppStore: () => app,
+    useAuthStore: () => auth,
+    useOnboardingStore: () => ({
+      isCurrentStep: () => false,
+      nextStep: vi.fn(),
+    }),
+    useAdminSettingsStore: () => ({
+      fetch: vi.fn(),
+      opsMonitoringEnabled: false,
+      paymentEnabled: false,
+      customMenuItems: [],
+    }),
+  }
+})
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => sidebarStores.app,
+}))
+
+vi.mock('vue-router', async () => {
+  const { reactive } = await vi.importActual<typeof import('vue')>('vue')
+  const route = reactive(sidebarRoute)
+  return {
+    useRoute: () => route,
+    useRouter: () => ({ push: vi.fn() }),
+  }
+})
+
+vi.mock('vue-i18n', async () => {
+  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+  return {
+    ...actual,
+    useI18n: () => ({ t: (key: string) => key }),
+  }
+})
+
+vi.mock('@/components/common/VersionBadge.vue', () => ({
+  default: { name: 'VersionBadge', template: '<span />' },
+}))
+
+vi.mock('@/components/common/LinxWordmark.vue', () => ({
+  default: { name: 'LinxWordmark', template: '<span>LINX2.AI</span>' },
+}))
+
+vi.mock('@/composables/useBatchImageAccess', () => ({
+  useBatchImageAccess: () => ({
+    canUseBatchImage: { value: false },
+    refreshBatchImageAccess: vi.fn(),
+  }),
+}))
+
+enableAutoUnmount(afterEach)
+
+const RouterLinkStub = defineComponent({
+  name: 'RouterLink',
+  inheritAttrs: false,
+  props: { to: { type: String, required: true } },
+  template: '<a v-bind="$attrs" :data-route="to"><slot /></a>',
+})
+
+function mountSidebar(options: { admin: boolean; simple: boolean }) {
+  sidebarStores.auth!.isAdmin = options.admin
+  sidebarStores.auth!.isSimpleMode = options.simple
+  sidebarRoute.path = options.admin ? '/admin/dashboard' : '/dashboard'
+
+  return mount(AppSidebar, {
+    global: {
+      stubs: {
+        RouterLink: RouterLinkStub,
+        VersionBadge: true,
+        LinxWordmark: true,
+      },
+    },
+  })
+}
+
+beforeEach(() => {
+  sidebarStores.app!.sidebarCollapsed = false
+  sidebarStores.app!.mobileOpen = false
+  sidebarStores.app!.sidebarScrollTop = 0
+  sidebarStores.app!.backendModeEnabled = false
+  sidebarStores.app!.cachedPublicSettings = { custom_menu_items: [] }
+  sidebarStores.auth!.isAdmin = false
+  sidebarStores.auth!.isSimpleMode = false
+  sidebarRoute.path = '/dashboard'
+})
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), '../AppSidebar.vue')
 const componentSource = readFileSync(componentPath, 'utf8')
@@ -123,6 +260,27 @@ describe('AppSidebar beginner guide navigation', () => {
       'authStore.isSimpleMode ? visible.filter(item => !item.hideInSimpleMode) : visible'
     )
   })
+
+  it.each([
+    ['regular simple user', { admin: false, simple: true }, false],
+    ['standard admin', { admin: true, simple: false }, true],
+    ['simple-mode admin', { admin: true, simple: true }, true],
+  ] as const)(
+    'mounts exactly one canonical guide link for %s in the expected self scope',
+    (_label, options, expectsPersonalScope) => {
+      const wrapper = mountSidebar(options)
+      const guideLinks = wrapper.findAll('[data-route="/getting-started"]')
+
+      expect(guideLinks).toHaveLength(1)
+      const section = guideLinks[0].element.closest('.sidebar-section')
+      expect(section).not.toBeNull()
+      if (expectsPersonalScope) {
+        expect(section?.textContent).toContain('nav.myAccount')
+      } else {
+        expect(section?.textContent).not.toContain('nav.myAccount')
+      }
+    }
+  )
 })
 
 describe('AppSidebar model marketplace navigation', () => {
