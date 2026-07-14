@@ -687,6 +687,18 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'admin.affiliates.transfersDescription'
     }
   },
+  {
+    path: '/admin/affiliates/check-in',
+    name: 'AdminDailyCheckInConfig',
+    component: () => import('@/views/admin/affiliates/AdminCheckInConfigView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Daily Check-in Configuration',
+      titleKey: 'admin.affiliates.checkIn.title',
+      descriptionKey: 'admin.affiliates.checkIn.description'
+    }
+  },
 
 
   // ==================== Payment Admin Routes ====================

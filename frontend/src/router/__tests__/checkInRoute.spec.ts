@@ -15,4 +15,12 @@ describe('daily check-in user route', () => {
     expect(route).toContain('requiresAuth: true')
     expect(route).toContain('requiresAdmin: false')
   })
+
+  it('registers check-in configuration under the admin affiliates route namespace', () => {
+    const route = routerSource.match(/path: '\/admin\/affiliates\/check-in',[\s\S]*?\n  \},/)?.[0]
+
+    expect(route).toContain("name: 'AdminDailyCheckInConfig'")
+    expect(route).toContain("import('@/views/admin/affiliates/AdminCheckInConfigView.vue')")
+    expect(route).toContain('requiresAdmin: true')
+  })
 })

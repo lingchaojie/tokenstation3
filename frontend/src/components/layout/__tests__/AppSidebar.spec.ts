@@ -105,6 +105,28 @@ describe('AppSidebar regular-user daily check-in navigation', () => {
   })
 })
 
+describe('AppSidebar benefits-center navigation', () => {
+  const benefitsGroup = componentSource.slice(
+    componentSource.indexOf("path: '/admin/affiliates'"),
+    componentSource.indexOf("path: '/admin/orders'"),
+  )
+
+  it('keeps the admin benefits center available independently of the affiliate feature flag', () => {
+    expect(benefitsGroup).toContain("label: t('nav.affiliateManagement')")
+    expect(benefitsGroup).not.toContain('featureFlag: flagAffiliate')
+    expect(componentSource).toContain("path: '/affiliate', label: t('nav.affiliate')")
+    expect(componentSource).toContain("featureFlag: flagAffiliate")
+  })
+
+  it('adds check-in configuration as the fourth benefits-center child', () => {
+    expect(benefitsGroup).toContain("path: '/admin/affiliates/check-in'")
+    expect(benefitsGroup).toContain("label: t('nav.dailyCheckInConfig')")
+    expect(benefitsGroup.indexOf("path: '/admin/affiliates/transfers'")).toBeLessThan(
+      benefitsGroup.indexOf("path: '/admin/affiliates/check-in'"),
+    )
+  })
+})
+
 describe('AppSidebar model marketplace navigation', () => {
   it('keeps the model marketplace route in self navigation for authenticated users', () => {
     expect(componentSource).not.toContain('管理员灰度入口')

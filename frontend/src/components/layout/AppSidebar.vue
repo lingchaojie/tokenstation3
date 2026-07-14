@@ -840,11 +840,11 @@ const adminNavItems = computed((): NavItem[] => {
       icon: UsersIcon,
       hideInSimpleMode: true,
       expandOnly: true,
-      featureFlag: flagAffiliate,
       children: [
         { path: '/admin/affiliates/invites', label: t('nav.affiliateInviteRecords'), icon: UsersIcon },
         { path: '/admin/affiliates/rebates', label: t('nav.affiliateRebateRecords'), icon: OrderIcon },
         { path: '/admin/affiliates/transfers', label: t('nav.affiliateTransferRecords'), icon: CreditCardIcon },
+        { path: '/admin/affiliates/check-in', label: t('nav.dailyCheckInConfig'), icon: GiftIcon },
       ],
     },
     {
