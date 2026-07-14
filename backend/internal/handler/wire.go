@@ -41,6 +41,7 @@ func ProvideAdminHandlers(
 	contentModerationHandler *admin.ContentModerationHandler,
 	paymentHandler *admin.PaymentHandler,
 	affiliateHandler *admin.AffiliateHandler,
+	checkInHandler *admin.CheckInHandler,
 	complianceHandler *admin.ComplianceHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
@@ -76,6 +77,7 @@ func ProvideAdminHandlers(
 		ContentModeration:      contentModerationHandler,
 		Payment:                paymentHandler,
 		Affiliate:              affiliateHandler,
+		CheckIn:                checkInHandler,
 		Compliance:             complianceHandler,
 	}
 }
@@ -124,6 +126,7 @@ func ProvideHandlers(
 	availableChannelHandler *AvailableChannelHandler,
 	webChatHandler *WebChatHandler,
 	batchImageHandler *BatchImageHandler,
+	checkInHandler *CheckInHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -146,6 +149,7 @@ func ProvideHandlers(
 		AvailableChannel: availableChannelHandler,
 		WebChat:          webChatHandler,
 		BatchImage:       batchImageHandler,
+		CheckIn:          checkInHandler,
 	}
 }
 
@@ -169,6 +173,7 @@ var ProviderSet = wire.NewSet(
 	NewAvailableChannelHandler,
 	ProvideWebChatHandler,
 	NewBatchImageHandler,
+	NewCheckInHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -203,6 +208,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewContentModerationHandler,
 	admin.NewPaymentHandler,
 	admin.NewAffiliateHandler,
+	admin.NewCheckInHandler,
 	admin.NewComplianceHandler,
 
 	// AdminHandlers and Handlers constructors

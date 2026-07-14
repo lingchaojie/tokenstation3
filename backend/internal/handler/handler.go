@@ -38,6 +38,7 @@ type AdminHandlers struct {
 	ContentModeration      *admin.ContentModerationHandler
 	Payment                *admin.PaymentHandler
 	Affiliate              *admin.AffiliateHandler
+	CheckIn                *admin.CheckInHandler
 	Compliance             *admin.ComplianceHandler
 }
 
@@ -61,6 +62,7 @@ type Handlers struct {
 	AvailableChannel *AvailableChannelHandler
 	WebChat          *WebChatHandler
 	BatchImage       *BatchImageHandler
+	CheckIn          *CheckInHandler
 }
 
 // BuildInfo contains build-time information

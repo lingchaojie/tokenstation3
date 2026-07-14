@@ -109,6 +109,17 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+
+		// 每日签到奖励配置
+		registerAdminCheckInRoutes(admin, h)
+	}
+}
+
+func registerAdminCheckInRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	checkIn := admin.Group("/check-in")
+	{
+		checkIn.GET("/config", h.Admin.CheckIn.GetConfig)
+		checkIn.PUT("/config", h.Admin.CheckIn.UpdateConfig)
 	}
 }
 
