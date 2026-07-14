@@ -124,6 +124,8 @@ describe('resolvePostAuthRedirect', () => {
   it.each([
     ['/getting-started', '/getting-started'],
     ['/profile?tab=security', '/profile?tab=security'],
+    ['/profile?tab=security#sessions', '/profile?tab=security#sessions'],
+    ['/profile?next=%2Fkeys#security', '/profile?next=%2Fkeys#security'],
     ['  /getting-started?from=register  ', '/getting-started?from=register'],
   ])('keeps internal absolute redirect %j', (value, expected) => {
     expect(resolvePostAuthRedirect(value)).toBe(expected)
@@ -143,12 +145,53 @@ describe('resolvePostAuthRedirect', () => {
     '/%5Cevil.example',
     '/%252Fevil.example',
     '/%255Cevil.example',
+    '/\t/evil.example',
+    '/\n/evil.example',
+    '/\r/evil.example',
+    '/\t\\evil.example',
+    '/\u0000/evil.example',
+    '/\u000b/evil.example',
+    '/\u001f/evil.example',
+    '/\u007f/evil.example',
+    '/%09/evil.example',
+    '/%0A/evil.example',
+    '/%0D/evil.example',
+    '/%09\\evil.example',
+    '/%09%5Cevil.example',
+    '/%2509%255Cevil.example',
+    '/%00/evil.example',
+    '/%1F/evil.example',
+    '/%7F/evil.example',
+    '/%',
+    '/%E0%A4%A',
+    '/profile?query=%',
   ])('uses the dashboard for unsafe redirect %j', (value) => {
     expect(resolvePostAuthRedirect(value)).toBe('/dashboard')
   })
 
   it('keeps an existing internal fallback for callers with a different default', () => {
     expect(resolvePostAuthRedirect('javascript:alert(1)', '/home')).toBe('/home')
+  })
+
+  it('keeps every resolved redirect on the sentinel origin after WHATWG normalization', () => {
+    const sentinelOrigin = 'https://post-auth.invalid'
+    const values = [
+      '/getting-started',
+      '/profile?next=%2Fkeys#security',
+      '/\t/evil.example',
+      '/\n/evil.example',
+      '/\r/evil.example',
+      '/\t\\evil.example',
+      '/%09/evil.example',
+      '/%0A/evil.example',
+      '/%0D/evil.example',
+      '/%2509%255Cevil.example',
+    ]
+
+    for (const value of values) {
+      const resolved = resolvePostAuthRedirect(value)
+      expect(new URL(resolved, sentinelOrigin).origin, value).toBe(sentinelOrigin)
+    }
   })
 })
 
