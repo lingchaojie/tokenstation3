@@ -159,6 +159,11 @@ function recursiveStringValues(value: unknown): string[] {
   return []
 }
 
+function containsCaseSensitiveAsciiToken(value: string, token: string): boolean {
+  const escapedToken = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?:^|[^A-Za-z0-9_])${escapedToken}(?=$|[^A-Za-z0-9_])`).test(value)
+}
+
 describe('beginner guide curriculum contract', () => {
   it('reuses the canonical approved eight-step order', () => {
     expect(GUIDE_STEP_IDS).toBe(BEGINNER_GUIDE_STEP_ORDER)
@@ -241,6 +246,14 @@ describe('beginner guide locales', () => {
     expect(enPaths).toEqual([...REQUIRED_LOCALE_PATHS].sort())
   })
 
+  it('uses case-sensitive ASCII token boundaries for short launch commands', () => {
+    expect(containsCaseSensitiveAsciiToken('Run codex now.', 'codex')).toBe(true)
+    expect(containsCaseSensitiveAsciiToken('Run Codex now.', 'codex')).toBe(false)
+    expect(containsCaseSensitiveAsciiToken('A microcodexical example.', 'codex')).toBe(false)
+    expect(containsCaseSensitiveAsciiToken('Use claude_helper.', 'claude')).toBe(false)
+    expect(containsCaseSensitiveAsciiToken('Launch (claude).', 'claude')).toBe(true)
+  })
+
   it('keeps every structured command and official source out of translated string values', () => {
     const localeValues = [enLocale, zhLocale].flatMap(recursiveStringValues)
     const commandValues = [
@@ -255,6 +268,9 @@ describe('beginner guide locales', () => {
     ]
     const officialSourceUrls = [
       ...new Set(GUIDE_VARIANTS.map(({ officialSourceUrl }) => officialSourceUrl))
+    ]
+    const launchCommands = [
+      ...new Set(GUIDE_VARIANTS.map(({ launchCommand }) => launchCommand))
     ]
 
     for (const structuredValue of [...commandValues, ...officialSourceUrls]) {
@@ -274,6 +290,12 @@ describe('beginner guide locales', () => {
           localeValue,
           `translated prose must not embed structured value: ${structuredValue}`
         ).not.toContain(structuredValue)
+      }
+      for (const launchCommand of launchCommands) {
+        expect(
+          containsCaseSensitiveAsciiToken(localeValue, launchCommand),
+          `translated prose must not contain launch-command token: ${launchCommand}`
+        ).toBe(false)
       }
     }
   })
