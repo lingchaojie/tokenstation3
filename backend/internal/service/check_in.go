@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -22,6 +23,17 @@ var ErrDailyCheckInConfigInvalid = infraerrors.BadRequest(
 var ErrDailyCheckInAlreadyClaimed = infraerrors.Conflict(
 	"DAILY_CHECK_IN_ALREADY_CLAIMED",
 	"daily check-in reward already claimed",
+)
+
+var (
+	ErrDailyCheckInInactive = infraerrors.Conflict(
+		"DAILY_CHECK_IN_INACTIVE",
+		"daily check-in activity is not active",
+	)
+	ErrDailyCheckInUserOnly = infraerrors.Forbidden(
+		"DAILY_CHECK_IN_USER_ONLY",
+		"daily check-in is only available to ordinary users",
+	)
 )
 
 type DailyCheckInActivityState string
@@ -61,6 +73,47 @@ type DailyCheckInClaimInput struct {
 type CheckInRepository interface {
 	FindClaim(ctx context.Context, userID int64, activityStartAt, checkInDate time.Time) (*DailyCheckInClaim, error)
 	CreateClaim(ctx context.Context, input DailyCheckInClaimInput) (*DailyCheckInClaim, error)
+}
+
+type DailyCheckInStatus struct {
+	State        DailyCheckInActivityState
+	StartAt      *time.Time
+	EndAt        *time.Time
+	RewardAmount float64
+	CheckInDate  string
+	ClaimedToday bool
+	Claim        *DailyCheckInClaim
+	NextResetAt  time.Time
+}
+
+type DailyCheckInClaimResult struct {
+	RewardAmount float64
+	BalanceAfter float64
+	CheckInDate  string
+	ClaimedAt    time.Time
+}
+
+type CheckInService struct {
+	repo                 CheckInRepository
+	settings             *SettingService
+	authCacheInvalidator APIKeyAuthCacheInvalidator
+	billingCache         BillingCache
+	now                  func() time.Time
+}
+
+func NewCheckInService(
+	repo CheckInRepository,
+	settings *SettingService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	billingCache BillingCache,
+) *CheckInService {
+	return &CheckInService{
+		repo:                 repo,
+		settings:             settings,
+		authCacheInvalidator: authCacheInvalidator,
+		billingCache:         billingCache,
+		now:                  time.Now,
+	}
 }
 
 func (c DailyCheckInConfig) EndAt() *time.Time {
@@ -154,4 +207,123 @@ func (s *SettingService) UpdateDailyCheckInConfig(ctx context.Context, cfg Daily
 		s.onUpdate()
 	}
 	return nil
+}
+
+var utcPlus8 = time.FixedZone("UTC+8", 8*60*60)
+
+func evaluateDailyCheckInActivity(
+	cfg DailyCheckInConfig,
+	now time.Time,
+) (DailyCheckInActivityState, *time.Time) {
+	if !cfg.Enabled {
+		return DailyCheckInStateDisabled, cfg.EndAt()
+	}
+	if ValidateDailyCheckInConfig(cfg) != nil {
+		return DailyCheckInStateDisabled, nil
+	}
+	endAt := cfg.EndAt()
+	if now.Before(cfg.StartAt.UTC()) {
+		return DailyCheckInStateUpcoming, endAt
+	}
+	if !now.Before(endAt.UTC()) {
+		return DailyCheckInStateEnded, endAt
+	}
+	return DailyCheckInStateActive, endAt
+}
+
+func dailyCheckInDate(now time.Time) (time.Time, string, time.Time) {
+	local := now.In(utcPlus8)
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+	nextResetAt := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, utcPlus8)
+	return date, local.Format("2006-01-02"), nextResetAt
+}
+
+func (s *CheckInService) GetStatus(ctx context.Context, userID int64) (DailyCheckInStatus, error) {
+	cfg, err := s.settings.GetDailyCheckInConfig(ctx)
+	if err != nil {
+		return DailyCheckInStatus{}, err
+	}
+	now := s.now()
+	state, endAt := evaluateDailyCheckInActivity(cfg, now)
+	checkInDate, checkInDateText, nextResetAt := dailyCheckInDate(now)
+	status := DailyCheckInStatus{
+		State:        state,
+		StartAt:      cfg.StartAt,
+		EndAt:        endAt,
+		RewardAmount: cfg.RewardAmount,
+		CheckInDate:  checkInDateText,
+		NextResetAt:  nextResetAt,
+	}
+	if state != DailyCheckInStateActive || cfg.StartAt == nil {
+		return status, nil
+	}
+	claim, err := s.repo.FindClaim(ctx, userID, cfg.StartAt.UTC(), checkInDate)
+	if err != nil {
+		return DailyCheckInStatus{}, err
+	}
+	status.Claim = claim
+	status.ClaimedToday = claim != nil
+	return status, nil
+}
+
+func (s *CheckInService) Claim(ctx context.Context, userID int64, role string) (DailyCheckInClaimResult, error) {
+	if role != RoleUser {
+		return DailyCheckInClaimResult{}, ErrDailyCheckInUserOnly
+	}
+	cfg, err := s.settings.GetDailyCheckInConfig(ctx)
+	if err != nil {
+		return DailyCheckInClaimResult{}, err
+	}
+	now := s.now()
+	state, _ := evaluateDailyCheckInActivity(cfg, now)
+	if state != DailyCheckInStateActive || cfg.StartAt == nil {
+		return DailyCheckInClaimResult{}, ErrDailyCheckInInactive
+	}
+	checkInDate, checkInDateText, _ := dailyCheckInDate(now)
+	claim, err := s.repo.CreateClaim(ctx, DailyCheckInClaimInput{
+		UserID:          userID,
+		ActivityStartAt: cfg.StartAt.UTC(),
+		CheckInDate:     checkInDate,
+		RewardAmount:    cfg.RewardAmount,
+		ClaimedAt:       now.UTC(),
+	})
+	if err != nil {
+		return DailyCheckInClaimResult{}, err
+	}
+
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	if s.billingCache != nil {
+		if invalidateErr := s.billingCache.InvalidateUserBalance(ctx, userID); invalidateErr != nil {
+			slog.WarnContext(ctx, "failed to invalidate balance cache after daily check-in", "user_id", userID, "error", invalidateErr)
+		}
+	}
+	return DailyCheckInClaimResult{
+		RewardAmount: claim.RewardAmount,
+		BalanceAfter: claim.BalanceAfter,
+		CheckInDate:  checkInDateText,
+		ClaimedAt:    claim.ClaimedAt,
+	}, nil
+}
+
+func (s *CheckInService) GetAdminConfig(
+	ctx context.Context,
+) (DailyCheckInConfig, DailyCheckInActivityState, *time.Time, error) {
+	cfg, err := s.settings.GetDailyCheckInConfig(ctx)
+	if err != nil {
+		return DailyCheckInConfig{}, "", nil, err
+	}
+	state, endAt := evaluateDailyCheckInActivity(cfg, s.now())
+	return cfg, state, endAt, nil
+}
+
+func (s *CheckInService) UpdateAdminConfig(
+	ctx context.Context,
+	cfg DailyCheckInConfig,
+) (DailyCheckInConfig, DailyCheckInActivityState, *time.Time, error) {
+	if err := s.settings.UpdateDailyCheckInConfig(ctx, cfg); err != nil {
+		return DailyCheckInConfig{}, "", nil, err
+	}
+	return s.GetAdminConfig(ctx)
 }
