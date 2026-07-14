@@ -901,20 +901,41 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		balanceLowNotifyThreshold = v
 	}
 	dailyCheckInConfig := DailyCheckInConfig{RewardAmount: DailyCheckInRewardDefault}
-	if enabled, parseErr := strconv.ParseBool(strings.TrimSpace(settings[SettingKeyDailyCheckInEnabled])); parseErr == nil {
-		dailyCheckInConfig.Enabled = enabled
+	dailyCheckInConfigValid := true
+	if raw, ok := settings[SettingKeyDailyCheckInEnabled]; ok {
+		enabled, parseErr := strconv.ParseBool(strings.TrimSpace(raw))
+		if parseErr != nil {
+			dailyCheckInConfigValid = false
+		} else {
+			dailyCheckInConfig.Enabled = enabled
+		}
 	}
-	if startAt, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(settings[SettingKeyDailyCheckInStartAt])); parseErr == nil {
-		startAt = startAt.UTC()
-		dailyCheckInConfig.StartAt = &startAt
+	if raw := strings.TrimSpace(settings[SettingKeyDailyCheckInStartAt]); raw != "" {
+		startAt, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			dailyCheckInConfigValid = false
+		} else {
+			startAt = startAt.UTC()
+			dailyCheckInConfig.StartAt = &startAt
+		}
 	}
-	if durationDays, parseErr := strconv.Atoi(strings.TrimSpace(settings[SettingKeyDailyCheckInDurationDays])); parseErr == nil {
-		dailyCheckInConfig.DurationDays = durationDays
+	if raw := strings.TrimSpace(settings[SettingKeyDailyCheckInDurationDays]); raw != "" {
+		durationDays, parseErr := strconv.Atoi(raw)
+		if parseErr != nil {
+			dailyCheckInConfigValid = false
+		} else {
+			dailyCheckInConfig.DurationDays = durationDays
+		}
 	}
-	if rewardAmount, parseErr := strconv.ParseFloat(strings.TrimSpace(settings[SettingKeyDailyCheckInRewardAmount]), 64); parseErr == nil {
-		dailyCheckInConfig.RewardAmount = rewardAmount
+	if raw := strings.TrimSpace(settings[SettingKeyDailyCheckInRewardAmount]); raw != "" {
+		rewardAmount, parseErr := strconv.ParseFloat(raw, 64)
+		if parseErr != nil {
+			dailyCheckInConfigValid = false
+		} else {
+			dailyCheckInConfig.RewardAmount = rewardAmount
+		}
 	}
-	if ValidateDailyCheckInConfig(dailyCheckInConfig) != nil {
+	if !dailyCheckInConfigValid || ValidateDailyCheckInConfig(dailyCheckInConfig) != nil {
 		dailyCheckInConfig.Enabled = false
 	}
 	dailyCheckInStartAt := ""

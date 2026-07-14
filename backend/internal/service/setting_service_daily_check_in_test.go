@@ -140,6 +140,21 @@ func TestGetPublicSettings_IncludesDailyCheckInWindow(t *testing.T) {
 	require.Equal(t, "2026-07-26T16:00:00Z", got.DailyCheckInEndAt)
 }
 
+func TestGetPublicSettings_InvalidDailyCheckInRewardFailsClosed(t *testing.T) {
+	repo := newDailyCheckInSettingRepo(map[string]string{
+		SettingKeyDailyCheckInEnabled:      "true",
+		SettingKeyDailyCheckInStartAt:      "2026-07-19T16:00:00Z",
+		SettingKeyDailyCheckInDurationDays: "7",
+		SettingKeyDailyCheckInRewardAmount: "not-a-number",
+	})
+	svc := NewSettingService(repo, &config.Config{})
+
+	got, err := svc.GetPublicSettings(context.Background())
+
+	require.NoError(t, err)
+	require.False(t, got.DailyCheckInEnabled)
+}
+
 func TestInitializeDefaultSettings_PersistsDailyCheckInDefaults(t *testing.T) {
 	repo := newDailyCheckInSettingRepo(nil)
 	svc := NewSettingService(repo, &config.Config{})
