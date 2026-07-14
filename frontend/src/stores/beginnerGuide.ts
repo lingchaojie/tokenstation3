@@ -8,8 +8,8 @@ import {
   type BeginnerGuideOS,
   type BeginnerGuideProgressV1,
   type BeginnerGuidePromptState,
-  type BeginnerGuideState,
-  type BeginnerGuideStepId
+  type BeginnerGuideStepId,
+  type PatchBeginnerGuideStateRequest
 } from '@/api/beginnerGuide'
 
 const ANONYMOUS_PROGRESS_KEY = 'beginner_guide_progress_v1'
@@ -206,16 +206,80 @@ function mergeProgress(
   }
 }
 
+interface NormalizedBeginnerGuideState {
+  promptState: BeginnerGuidePromptState
+  progress: BeginnerGuideProgressV1 | null
+  completedAt: string | null
+}
+
+function normalizeRemoteState(value: unknown): NormalizedBeginnerGuideState | null {
+  if (!isRecord(value)) {
+    return null
+  }
+  const remotePrompt = normalizePromptState(value.prompt_state)
+  if (remotePrompt === null) {
+    return null
+  }
+  if (value.progress !== null && normalizeProgress(value.progress) === null) {
+    return null
+  }
+  if (value.completed_at !== null && typeof value.completed_at !== 'string') {
+    return null
+  }
+  return {
+    promptState: remotePrompt,
+    progress: value.progress === null ? null : normalizeProgress(value.progress),
+    completedAt: value.completed_at
+  }
+}
+
+type OwnerContext =
+  | {
+      authenticated: false
+      owner: 'anonymous'
+      generation: number
+      userId: null
+    }
+  | {
+      authenticated: true
+      owner: string
+      generation: number
+      userId: number | string
+    }
+
+type RemoteWriteOutcome =
+  | { status: 'success'; remote: unknown }
+  | { status: 'failure' }
+  | { status: 'stale' }
+
 export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
   const progress = ref<BeginnerGuideProgressV1>(defaultProgress())
   const promptState = ref<BeginnerGuidePromptState>('suppressed')
   const completedAt = ref<string | null>(null)
   const showPrompt = ref(false)
 
-  let authenticated = false
-  let accountUserId: number | string | null = null
+  let generation = 0
+  let currentContext: OwnerContext = {
+    authenticated: false,
+    owner: 'anonymous',
+    generation,
+    userId: null
+  }
   let hasAnonymousProgress = false
-  let stateOwner: string | null = null
+  let localProgressRevision = 0
+  let localPromptRevision = 0
+  const remoteWriteTails = new Map<string, Promise<void>>()
+
+  function isCurrent(context: OwnerContext): boolean {
+    return (
+      currentContext.generation === context.generation && currentContext.owner === context.owner
+    )
+  }
+
+  function replaceProgress(next: BeginnerGuideProgressV1): void {
+    progress.value = canonicalProgress(next)
+    localProgressRevision += 1
+  }
 
   function setPromptState(next: BeginnerGuidePromptState): void {
     if (promptState.value === 'completed' && next !== 'completed') {
@@ -224,140 +288,245 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     promptState.value = next
   }
 
-  function applyRemoteState(remote: unknown, fallback: BeginnerGuideProgressV1): void {
-    if (!isRecord(remote)) {
-      return
+  function replacePromptState(next: BeginnerGuidePromptState): void {
+    setPromptState(next)
+    localPromptRevision += 1
+  }
+
+  function applyRemoteState(
+    remote: NormalizedBeginnerGuideState,
+    fallback: BeginnerGuideProgressV1,
+    expectedProgressRevision: number,
+    expectedPromptRevision: number
+  ): void {
+    if (
+      remote.promptState === 'completed' ||
+      localPromptRevision === expectedPromptRevision
+    ) {
+      setPromptState(remote.promptState)
     }
-    const remotePrompt = normalizePromptState(remote.prompt_state)
-    if (remotePrompt !== null) {
-      setPromptState(remotePrompt)
+    if (localProgressRevision === expectedProgressRevision) {
+      progress.value = remote.progress ?? canonicalProgress(fallback)
     }
-    const remoteProgress = normalizeProgress(remote.progress)
-    progress.value = remoteProgress ?? canonicalProgress(fallback)
-    if (typeof remote.completed_at === 'string') {
-      completedAt.value = remote.completed_at
+    if (remote.completedAt !== null) {
+      completedAt.value = remote.completedAt
     } else if (promptState.value !== 'completed') {
       completedAt.value = null
     }
+  }
+
+  function enqueueRemoteWrite(
+    context: Extract<OwnerContext, { authenticated: true }>,
+    patch: PatchBeginnerGuideStateRequest
+  ): Promise<RemoteWriteOutcome> {
+    const previous = remoteWriteTails.get(context.owner) ?? Promise.resolve()
+    const operation = previous.then(async (): Promise<RemoteWriteOutcome> => {
+      if (!isCurrent(context)) {
+        return { status: 'stale' }
+      }
+      try {
+        return {
+          status: 'success',
+          remote: await patchBeginnerGuideState(patch)
+        }
+      } catch {
+        return { status: 'failure' }
+      }
+    })
+    const tail = operation.then(() => undefined)
+    remoteWriteTails.set(context.owner, tail)
+    void tail.then(() => {
+      if (remoteWriteTails.get(context.owner) === tail) {
+        remoteWriteTails.delete(context.owner)
+      }
+    })
+    return operation
   }
 
   async function syncProgress(): Promise<void> {
     const safeProgress = canonicalProgress(progress.value)
     progress.value = safeProgress
-    if (!authenticated) {
+    const context = currentContext
+    const progressRevision = localProgressRevision
+    const promptRevision = localPromptRevision
+    const hadAnonymousProgress = hasAnonymousProgress
+    if (!context.authenticated) {
       writeAnonymousProgress(safeProgress)
       hasAnonymousProgress = true
       return
     }
 
-    try {
-      const remote = await patchBeginnerGuideState({ progress: safeProgress })
-      applyRemoteState(remote, safeProgress)
-      if (hasAnonymousProgress) {
-        removeAnonymousProgress()
-        hasAnonymousProgress = false
+    const outcome = await enqueueRemoteWrite(context, { progress: safeProgress })
+    if (outcome.status === 'success') {
+      const remote = normalizeRemoteState(outcome.remote)
+      if (remote !== null && isCurrent(context)) {
+        applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
+        if (
+          hadAnonymousProgress &&
+          localProgressRevision === progressRevision
+        ) {
+          removeAnonymousProgress()
+          hasAnonymousProgress = false
+        }
+        return
       }
-    } catch {
-      if (hasAnonymousProgress) {
-        writeAnonymousProgress(safeProgress)
-      }
+    }
+    if (
+      outcome.status !== 'stale' &&
+      isCurrent(context) &&
+      hadAnonymousProgress &&
+      localProgressRevision === progressRevision
+    ) {
+      writeAnonymousProgress(safeProgress)
     }
   }
 
-  async function persistSuppression(): Promise<void> {
-    showPrompt.value = false
+  async function persistSuppression(context: OwnerContext = currentContext): Promise<void> {
+    if (isCurrent(context)) {
+      showPrompt.value = false
+    }
     if (promptState.value === 'completed') {
-      if (accountUserId !== null) {
-        clearPromptRetry(accountUserId)
+      if (context.authenticated) {
+        clearPromptRetry(context.userId)
       }
       return
     }
-    setPromptState('suppressed')
-    if (!authenticated || accountUserId === null) {
+    if (isCurrent(context)) {
+      replacePromptState('suppressed')
+    }
+    if (!context.authenticated) {
       return
     }
 
-    try {
-      const remote = await patchBeginnerGuideState({ prompt_state: 'suppressed' })
-      applyRemoteState(remote, progress.value)
-      clearPromptRetry(accountUserId)
-    } catch {
-      setPromptRetry(accountUserId)
+    const fallbackProgress = canonicalProgress(progress.value)
+    const progressRevision = localProgressRevision
+    const promptRevision = localPromptRevision
+    const outcome = await enqueueRemoteWrite(context, { prompt_state: 'suppressed' })
+    if (outcome.status === 'success') {
+      const remote = normalizeRemoteState(outcome.remote)
+      if (remote !== null) {
+        clearPromptRetry(context.userId)
+        if (isCurrent(context)) {
+          applyRemoteState(remote, fallbackProgress, progressRevision, promptRevision)
+        }
+        return
+      }
     }
+    setPromptRetry(context.userId)
   }
 
   async function initialize(input: BeginnerGuideInitialization): Promise<void> {
     const nextOwner = input.authenticated ? `user:${String(input.userId)}` : 'anonymous'
-    const preserveCompleted = stateOwner === nextOwner && promptState.value === 'completed'
-    stateOwner = nextOwner
-    authenticated = input.authenticated
-    accountUserId = input.authenticated ? input.userId : null
+    const preserveCompleted =
+      currentContext.owner === nextOwner && promptState.value === 'completed'
+    generation += 1
+    const context: OwnerContext = input.authenticated
+      ? {
+          authenticated: true,
+          owner: nextOwner,
+          generation,
+          userId: input.userId
+        }
+      : {
+          authenticated: false,
+          owner: 'anonymous',
+          generation,
+          userId: null
+        }
+    currentContext = context
     showPrompt.value = false
     if (!preserveCompleted) {
       promptState.value = 'suppressed'
+      localPromptRevision += 1
       completedAt.value = null
     }
 
     const anonymous = readAnonymousProgress()
     hasAnonymousProgress = anonymous !== null
-    progress.value = anonymous ?? defaultProgress()
-    if (!input.authenticated) {
+    replaceProgress(anonymous ?? defaultProgress())
+    const initializationRevision = localProgressRevision
+    const initializationPromptRevision = localPromptRevision
+    if (!context.authenticated) {
       return
     }
 
-    let remote: BeginnerGuideState
+    let response: unknown
     try {
-      remote = await getBeginnerGuideState()
+      response = await getBeginnerGuideState()
     } catch {
       return
     }
-
-    const remotePrompt = normalizePromptState(remote.prompt_state)
-    const remoteProgress = normalizeProgress(remote.progress)
-    if (remoteProgress !== null && anonymous === null) {
-      progress.value = remoteProgress
-    }
-    if (remotePrompt === null) {
+    if (!isCurrent(context)) {
       return
     }
-    setPromptState(remotePrompt)
-    if (typeof remote.completed_at === 'string') {
-      completedAt.value = remote.completed_at
+    const remote = normalizeRemoteState(response)
+    if (remote === null) {
+      return
+    }
+
+    if (
+      remote.progress !== null &&
+      anonymous === null &&
+      localProgressRevision === initializationRevision
+    ) {
+      progress.value = remote.progress
+    }
+    if (
+      remote.promptState === 'completed' ||
+      localPromptRevision === initializationPromptRevision
+    ) {
+      setPromptState(remote.promptState)
+    }
+    if (remote.completedAt !== null) {
+      completedAt.value = remote.completedAt
     } else if (promptState.value !== 'completed') {
       completedAt.value = null
     }
 
     if (anonymous !== null) {
-      const merged = mergeProgress(remoteProgress, anonymous)
-      progress.value = merged
+      const activeAnonymous =
+        localProgressRevision === initializationRevision
+          ? anonymous
+          : canonicalProgress(progress.value)
+      const merged = mergeProgress(remote.progress, activeAnonymous)
+      replaceProgress(merged)
+      const mergeRevision = localProgressRevision
       showPrompt.value = false
-      if (remotePrompt !== 'completed') {
-        setPromptState('suppressed')
+      if (remote.promptState !== 'completed') {
+        replacePromptState('suppressed')
       }
-      try {
-        const saved = await patchBeginnerGuideState({
-          prompt_state: 'suppressed',
-          progress: merged
-        })
-        applyRemoteState(saved, merged)
-        removeAnonymousProgress()
-        hasAnonymousProgress = false
-        clearPromptRetry(input.userId)
-      } catch {
-        if (remotePrompt === 'eligible') {
-          setPromptRetry(input.userId)
+      const mergePromptRevision = localPromptRevision
+      const outcome = await enqueueRemoteWrite(context, {
+        prompt_state: 'suppressed',
+        progress: merged
+      })
+      if (outcome.status === 'success') {
+        const saved = normalizeRemoteState(outcome.remote)
+        if (saved !== null) {
+          clearPromptRetry(context.userId)
+          if (isCurrent(context)) {
+            applyRemoteState(saved, merged, mergeRevision, mergePromptRevision)
+            if (localProgressRevision === mergeRevision) {
+              removeAnonymousProgress()
+              hasAnonymousProgress = false
+            }
+          }
+          return
         }
+      }
+      if (remote.promptState === 'eligible') {
+        setPromptRetry(context.userId)
       }
       return
     }
 
-    const retrySuppression = hasPromptRetry(input.userId)
+    const retrySuppression = hasPromptRetry(context.userId)
     if (retrySuppression || input.enteringGuide === true) {
       showPrompt.value = false
-      if (remotePrompt === 'eligible') {
-        await persistSuppression()
+      if (remote.promptState === 'eligible') {
+        await persistSuppression(context)
       } else {
-        clearPromptRetry(input.userId)
+        clearPromptRetry(context.userId)
       }
       return
     }
@@ -366,7 +535,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
   }
 
   function invalidateSelectionSpecificProgress(): void {
-    progress.value = {
+    replaceProgress({
       version: 1,
       client: progress.value.client,
       os: progress.value.os,
@@ -377,7 +546,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         (step) =>
           SELECTION_INVARIANT_STEPS.has(step) && progress.value.completedSteps.includes(step)
       )
-    }
+    })
   }
 
   async function selectClient(client: BeginnerGuideClient): Promise<void> {
@@ -414,13 +583,13 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     if (!isStepId(step)) {
       return
     }
-    progress.value = {
+    replaceProgress({
       version: 1,
       client: progress.value.client,
       os: progress.value.os,
       currentStep: step,
       completedSteps: [...progress.value.completedSteps]
-    }
+    })
     await syncProgress()
   }
 
@@ -430,48 +599,63 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     }
     const completed = new Set<BeginnerGuideStepId>(progress.value.completedSteps)
     completed.add(step)
-    progress.value = {
+    replaceProgress({
       version: 1,
       client: progress.value.client,
       os: progress.value.os,
       currentStep: progress.value.currentStep,
       completedSteps: BEGINNER_GUIDE_STEP_ORDER.filter((candidate) => completed.has(candidate))
-    }
+    })
     await syncProgress()
   }
 
   async function suppressPrompt(): Promise<void> {
-    await persistSuppression()
+    await persistSuppression(currentContext)
   }
 
   async function completeGuide(): Promise<void> {
+    const context = currentContext
     const safeProgress = canonicalProgress(progress.value)
     progress.value = safeProgress
+    const progressRevision = localProgressRevision
+    const hadAnonymousProgress = hasAnonymousProgress
     showPrompt.value = false
-    setPromptState('completed')
-    if (!authenticated) {
+    replacePromptState('completed')
+    const promptRevision = localPromptRevision
+    if (!context.authenticated) {
       writeAnonymousProgress(safeProgress)
       hasAnonymousProgress = true
       return
     }
 
-    try {
-      const remote = await patchBeginnerGuideState({
-        prompt_state: 'completed',
-        progress: safeProgress
-      })
-      applyRemoteState(remote, safeProgress)
-      if (hasAnonymousProgress) {
-        removeAnonymousProgress()
-        hasAnonymousProgress = false
+    const outcome = await enqueueRemoteWrite(context, {
+      prompt_state: 'completed',
+      progress: safeProgress
+    })
+    if (outcome.status === 'success') {
+      const remote = normalizeRemoteState(outcome.remote)
+      if (remote !== null) {
+        clearPromptRetry(context.userId)
+        if (isCurrent(context)) {
+          applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
+          if (
+            hadAnonymousProgress &&
+            localProgressRevision === progressRevision
+          ) {
+            removeAnonymousProgress()
+            hasAnonymousProgress = false
+          }
+        }
+        return
       }
-      if (accountUserId !== null) {
-        clearPromptRetry(accountUserId)
-      }
-    } catch {
-      if (hasAnonymousProgress) {
-        writeAnonymousProgress(safeProgress)
-      }
+    }
+    if (
+      outcome.status !== 'stale' &&
+      isCurrent(context) &&
+      hadAnonymousProgress &&
+      localProgressRevision === progressRevision
+    ) {
+      writeAnonymousProgress(safeProgress)
     }
   }
 

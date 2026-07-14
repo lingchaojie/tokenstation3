@@ -40,6 +40,22 @@ vi.mock('@/api/beginnerGuide', async () => {
 const ANONYMOUS_PROGRESS_KEY = 'beginner_guide_progress_v1'
 const retryKey = (userId: number | string) => `beginner_guide_prompt_retry_v1:${userId}`
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 const defaultProgress = (): BeginnerGuideProgressV1 => ({
   version: 1,
   client: 'claude_code',
@@ -427,4 +443,235 @@ describe('useBeginnerGuideStore', () => {
     expect(store.promptState).toBe('completed')
     expect(store.showPrompt).toBe(false)
   })
+
+  it('discards a delayed user-A initialization after user B becomes current', async () => {
+    const userAResponse = deferred<BeginnerGuideState>()
+    const userBProgress = progress({
+      client: 'codex',
+      os: 'linux',
+      currentStep: 'install',
+      completedSteps: ['understand', 'terminal']
+    })
+    getBeginnerGuideStateMock
+      .mockReturnValueOnce(userAResponse.promise)
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: userBProgress })
+      )
+    const store = useBeginnerGuideStore()
+
+    const initializeA = store.initialize({ authenticated: true, userId: 'user-a' })
+    await store.initialize({ authenticated: true, userId: 'user-b' })
+    userAResponse.resolve(
+      state({
+        prompt_state: 'completed',
+        progress: progress({
+          os: 'windows',
+          currentStep: 'troubleshoot',
+          completedSteps: ['troubleshoot']
+        }),
+        completed_at: '2026-07-15T00:00:00Z'
+      })
+    )
+    await initializeA
+
+    expect(store.progress).toEqual(userBProgress)
+    expect(store.promptState).toBe('suppressed')
+    expect(store.completedAt).toBeNull()
+  })
+
+  it('does not let a pending user-A progress save overwrite logout state or remove a new anonymous copy', async () => {
+    const userAProgress = progress({ currentStep: 'terminal' })
+    const anonymous = progress({
+      client: 'codex',
+      os: 'windows',
+      currentStep: 'api_key',
+      completedSteps: ['understand', 'choose']
+    })
+    const saveResponse = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({ prompt_state: 'suppressed', progress: userAProgress })
+    )
+    patchBeginnerGuideStateMock.mockReturnValueOnce(saveResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingSave = store.completeStep('understand')
+    await flushMicrotasks()
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
+    localStorage.setItem(ANONYMOUS_PROGRESS_KEY, JSON.stringify(anonymous))
+    await store.initialize({ authenticated: false, userId: null })
+    saveResponse.resolve(
+      state({
+        prompt_state: 'suppressed',
+        progress: progress({ currentStep: 'terminal', completedSteps: ['understand'] })
+      })
+    )
+    await pendingSave
+
+    expect(store.progress).toEqual(anonymous)
+    expect(JSON.parse(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)!)).toEqual(anonymous)
+  })
+
+  it('records a failed pending suppression only for its initiating account', async () => {
+    const suppressionResponse = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(state())
+      .mockResolvedValueOnce(state({ prompt_state: 'suppressed' }))
+    patchBeginnerGuideStateMock.mockReturnValueOnce(suppressionResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingSuppression = store.suppressPrompt()
+    await flushMicrotasks()
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
+    await store.initialize({ authenticated: true, userId: 'user-b' })
+    suppressionResponse.reject(new Error('offline'))
+    await pendingSuppression
+
+    expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
+    expect(localStorage.getItem(retryKey('user-b'))).toBeNull()
+    expect(store.promptState).toBe('suppressed')
+  })
+
+  it('does not let pending user-A completion mutate user B or clear B retry state', async () => {
+    const completionResponse = deferred<BeginnerGuideState>()
+    const userBProgress = progress({
+      client: 'codex',
+      currentStep: 'choose',
+      completedSteps: ['understand']
+    })
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: progress({ currentStep: 'first_run' }) })
+      )
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: userBProgress })
+      )
+    patchBeginnerGuideStateMock.mockReturnValueOnce(completionResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingCompletion = store.completeGuide()
+    await flushMicrotasks()
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
+    await store.initialize({ authenticated: true, userId: 'user-b' })
+    localStorage.setItem(retryKey('user-b'), '1')
+    completionResponse.resolve(
+      state({
+        prompt_state: 'completed',
+        progress: progress({
+          currentStep: 'first_run',
+          completedSteps: ['understand', 'first_run']
+        }),
+        completed_at: '2026-07-15T00:00:00Z'
+      })
+    )
+    await pendingCompletion
+
+    expect(store.progress).toEqual(userBProgress)
+    expect(store.promptState).toBe('suppressed')
+    expect(localStorage.getItem(retryKey('user-b'))).toBe('1')
+  })
+
+  it('serializes same-account snapshots and keeps newer optimistic progress while the older save finishes', async () => {
+    const firstSaveResponse = deferred<BeginnerGuideState>()
+    const secondSaveResponse = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({ prompt_state: 'suppressed', progress: progress() })
+    )
+    patchBeginnerGuideStateMock
+      .mockReturnValueOnce(firstSaveResponse.promise)
+      .mockReturnValueOnce(secondSaveResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const firstSave = store.completeStep('understand')
+    const secondSave = store.completeStep('choose')
+    await flushMicrotasks()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
+    expect(patchBeginnerGuideStateMock).toHaveBeenNthCalledWith(1, {
+      progress: progress({ completedSteps: ['understand'] })
+    })
+
+    firstSaveResponse.resolve(
+      state({
+        prompt_state: 'suppressed',
+        progress: progress({ completedSteps: ['understand'] })
+      })
+    )
+    await firstSave
+    await flushMicrotasks()
+
+    expect(store.progress.completedSteps).toEqual(['understand', 'choose'])
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(2)
+    expect(patchBeginnerGuideStateMock).toHaveBeenNthCalledWith(2, {
+      progress: progress({ completedSteps: ['understand', 'choose'] })
+    })
+
+    secondSaveResponse.resolve(
+      state({
+        prompt_state: 'suppressed',
+        progress: progress({ completedSteps: ['understand', 'choose'] })
+      })
+    )
+    await secondSave
+
+    expect(store.progress.completedSteps).toEqual(['understand', 'choose'])
+  })
+
+  it('does not let an older progress acknowledgement undo newer optimistic suppression', async () => {
+    const progressResponse = deferred<BeginnerGuideState>()
+    const suppressionResponse = deferred<BeginnerGuideState>()
+    getBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({ prompt_state: 'eligible', progress: progress() })
+    )
+    patchBeginnerGuideStateMock
+      .mockReturnValueOnce(progressResponse.promise)
+      .mockReturnValueOnce(suppressionResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingProgress = store.completeStep('understand')
+    await flushMicrotasks()
+    const pendingSuppression = store.suppressPrompt()
+    expect(store.promptState).toBe('suppressed')
+
+    progressResponse.resolve(
+      state({
+        prompt_state: 'eligible',
+        progress: progress({ completedSteps: ['understand'] })
+      })
+    )
+    await pendingProgress
+    await flushMicrotasks()
+
+    expect(store.promptState).toBe('suppressed')
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(2)
+
+    suppressionResponse.resolve(
+      state({
+        prompt_state: 'suppressed',
+        progress: progress({ completedSteps: ['understand'] })
+      })
+    )
+    await pendingSuppression
+  })
+
+  it.each([null, undefined])(
+    'fails closed when a successful guide GET returns malformed top-level data: %s',
+    async (malformed) => {
+      getBeginnerGuideStateMock.mockResolvedValueOnce(
+        malformed as unknown as BeginnerGuideState
+      )
+      const store = useBeginnerGuideStore()
+
+      await expect(
+        store.initialize({ authenticated: true, userId: 'user-a' })
+      ).resolves.toBeUndefined()
+
+      expect(store.showPrompt).toBe(false)
+      expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
+    }
+  )
 })
