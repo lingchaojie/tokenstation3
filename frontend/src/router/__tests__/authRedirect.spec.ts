@@ -126,6 +126,10 @@ describe('resolvePostAuthRedirect', () => {
     ['/profile?tab=security', '/profile?tab=security'],
     ['/profile?tab=security#sessions', '/profile?tab=security#sessions'],
     ['/profile?next=%2Fkeys#security', '/profile?next=%2Fkeys#security'],
+    ['/profile?q=100%25', '/profile?q=100%25'],
+    ['/docs/100%25', '/docs/100%25'],
+    ['/profile#progress-100%25', '/profile#progress-100%25'],
+    ['/profile?query=%', '/profile?query=%'],
     ['  /getting-started?from=register  ', '/getting-started?from=register'],
   ])('keeps internal absolute redirect %j', (value, expected) => {
     expect(resolvePostAuthRedirect(value)).toBe(expected)
@@ -140,11 +144,21 @@ describe('resolvePostAuthRedirect', () => {
     'https://evil.example',
     '//evil.example',
     '/\\evil.example',
+    '//post-auth.invalid/escape',
+    '/\\post-auth.invalid/escape',
+    '//POST-AUTH.INVALID/escape',
+    '//post-auth.invalid:443/escape',
+    '//POST-AUTH.INVALID:443/escape',
     '%2F%2Fevil.example',
     '/%2Fevil.example',
     '/%5Cevil.example',
     '/%252Fevil.example',
     '/%255Cevil.example',
+    '/%2Fpost-auth.invalid/escape',
+    '/%5Cpost-auth.invalid/escape',
+    '/%252Fpost-auth.invalid/escape',
+    '/%255Cpost-auth.invalid/escape',
+    '/%2FPOST-AUTH.INVALID:443/escape',
     '/\t/evil.example',
     '/\n/evil.example',
     '/\r/evil.example',
@@ -164,7 +178,6 @@ describe('resolvePostAuthRedirect', () => {
     '/%7F/evil.example',
     '/%',
     '/%E0%A4%A',
-    '/profile?query=%',
   ])('uses the dashboard for unsafe redirect %j', (value) => {
     expect(resolvePostAuthRedirect(value)).toBe('/dashboard')
   })
@@ -173,11 +186,23 @@ describe('resolvePostAuthRedirect', () => {
     expect(resolvePostAuthRedirect('javascript:alert(1)', '/home')).toBe('/home')
   })
 
-  it('keeps every resolved redirect on the sentinel origin after WHATWG normalization', () => {
-    const sentinelOrigin = 'https://post-auth.invalid'
+  it('keeps every resolved redirect on each application origin after WHATWG normalization', () => {
+    const appOrigins = [
+      'https://app.example',
+      'https://tenant.example:8443',
+      'http://localhost:5173',
+    ]
     const values = [
       '/getting-started',
       '/profile?next=%2Fkeys#security',
+      '/profile?q=100%25',
+      '//post-auth.invalid/escape',
+      '/\\post-auth.invalid/escape',
+      '//POST-AUTH.INVALID:443/escape',
+      '/%2Fpost-auth.invalid/escape',
+      '/%5Cpost-auth.invalid/escape',
+      '/%252Fpost-auth.invalid/escape',
+      '/%255Cpost-auth.invalid/escape',
       '/\t/evil.example',
       '/\n/evil.example',
       '/\r/evil.example',
@@ -188,9 +213,11 @@ describe('resolvePostAuthRedirect', () => {
       '/%2509%255Cevil.example',
     ]
 
-    for (const value of values) {
-      const resolved = resolvePostAuthRedirect(value)
-      expect(new URL(resolved, sentinelOrigin).origin, value).toBe(sentinelOrigin)
+    for (const appOrigin of appOrigins) {
+      for (const value of values) {
+        const resolved = resolvePostAuthRedirect(value)
+        expect(new URL(resolved, appOrigin).origin, `${appOrigin} <- ${value}`).toBe(appOrigin)
+      }
     }
   })
 })
