@@ -43,9 +43,9 @@ function setAnonymousProgress(value: BeginnerGuideProgressV1): void {
   localStorage.setItem('beginner_guide_progress_v1', JSON.stringify(value))
 }
 
-function userFixture() {
+function userFixture(id = 42) {
   return {
-    id: 42,
+    id,
     username: 'beginner',
     email: 'beginner@example.test',
     role: 'user' as const,
@@ -60,6 +60,14 @@ function userFixture() {
     created_at: '2026-07-15T00:00:00Z',
     updated_at: '2026-07-15T00:00:00Z'
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 function runtimeMessages(value: unknown): unknown {
@@ -109,6 +117,30 @@ function mountView(locale: 'en' | 'zh' = 'en') {
   return { wrapper, i18n, guideStore: useBeginnerGuideStore(), authStore: useAuthStore() }
 }
 
+function mountAuthenticatedView(userId = 42) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const authStore = useAuthStore()
+  authStore.user = userFixture(userId)
+  authStore.token = 'test-session-token'
+  const i18n = createI18n({
+    legacy: false,
+    locale: 'en',
+    fallbackLocale: 'en',
+    messages: {
+      en: localeMessages(enMessages),
+      zh: localeMessages(zhMessages)
+    }
+  })
+  const wrapper = mount(GettingStartedView, {
+    global: {
+      plugins: [pinia, i18n],
+      stubs: { RouterLink: RouterLinkStub, LocaleSwitcher: true }
+    }
+  })
+  return { wrapper, guideStore: useBeginnerGuideStore(), authStore }
+}
+
 async function settle(): Promise<void> {
   await flushPromises()
   await flushPromises()
@@ -142,30 +174,89 @@ describe('GettingStartedView', () => {
   })
 
   it('initializes account-scoped progress for an authenticated visitor', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const authStore = useAuthStore()
-    authStore.user = userFixture()
-    authStore.token = 'test-session-token'
-    const i18n = createI18n({
-      legacy: false,
-      locale: 'en',
-      messages: {
-        en: localeMessages(enMessages),
-        zh: localeMessages(zhMessages)
-      }
-    })
-
-    mount(GettingStartedView, {
-      global: {
-        plugins: [pinia, i18n],
-        stubs: { RouterLink: RouterLinkStub, LocaleSwitcher: true }
-      }
-    })
+    mountAuthenticatedView()
     await settle()
 
     expect(getGuideState).toHaveBeenCalledOnce()
     expect(keysAPI.list).not.toHaveBeenCalled()
+  })
+
+  it('serializes a double-click while authenticated progress persistence is pending', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progress(),
+      completed_at: null
+    })
+    const pendingPatch = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => pendingPatch.promise)
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+
+    const next = wrapper.get('[data-testid="step-primary-action"]')
+    await next.trigger('click')
+    await next.trigger('click')
+
+    expect.soft(next.attributes('disabled')).toBeDefined()
+    expect.soft(next.attributes('aria-busy')).toBe('true')
+    expect.soft(patchGuideState).toHaveBeenCalledOnce()
+
+    pendingPatch.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({ completedSteps: ['understand'] }),
+      completed_at: null
+    })
+    await settle()
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('choose')
+    expect(guideStore.progress.completedSteps).toEqual(['understand'])
+  })
+
+  it('does not let a delayed Next continuation advance a newly active account', async () => {
+    getGuideState
+      .mockResolvedValueOnce({
+        prompt_state: 'suppressed',
+        progress: progress(),
+        completed_at: null
+      })
+      .mockResolvedValueOnce({
+        prompt_state: 'suppressed',
+        progress: progress({
+          currentStep: 'terminal',
+          completedSteps: ['understand', 'choose']
+        }),
+        completed_at: null
+      })
+    const pendingPatch = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => pendingPatch.promise)
+    const { wrapper, guideStore, authStore } = mountAuthenticatedView(42)
+    await settle()
+
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    authStore.user = userFixture(43)
+    await settle()
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('aria-busy')).toBeUndefined()
+
+    pendingPatch.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({ completedSteps: ['understand'] }),
+      completed_at: null
+    })
+    await settle()
+    await settle()
+
+    expect(guideStore.progress.currentStep).toBe('terminal')
+    expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
   })
 
   it('offers exactly the approved clients and operating systems', async () => {
@@ -188,6 +279,32 @@ describe('GettingStartedView', () => {
 
     await wrapper.get('[data-os-option="linux"]').trigger('click')
     await settle()
+    expect(guideStore.progress.os).toBe('linux')
+  })
+
+  it.each([
+    ['corrupt JSON', '{not-json'],
+    [
+      'obsolete progress',
+      JSON.stringify({ ...progress({ os: 'linux' }), version: 2 })
+    ]
+  ])('uses browser OS after discarding %s from anonymous storage', async (_label, stored) => {
+    localStorage.setItem('beginner_guide_progress_v1', stored)
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' })
+
+    const { guideStore } = mountView()
+    await settle()
+
+    expect(guideStore.progress.os).toBe('windows')
+  })
+
+  it('does not override a valid persisted manual OS with browser detection', async () => {
+    setAnonymousProgress(progress({ os: 'linux' }))
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' })
+
+    const { guideStore } = mountView()
+    await settle()
+
     expect(guideStore.progress.os).toBe('linux')
   })
 

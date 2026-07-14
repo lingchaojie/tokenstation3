@@ -38,11 +38,17 @@
         type="button"
         data-testid="step-primary-action"
         class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-400 disabled:cursor-not-allowed disabled:opacity-45"
-        :disabled="nextDisabled"
+        :disabled="nextDisabled || nextLoading"
+        :aria-busy="nextLoading || undefined"
         @click="emit('next')"
       >
         {{ nextLabel || t('gettingStarted.chrome.next') }}
-        <Icon name="arrowRight" size="sm" aria-hidden="true" />
+        <Icon
+          :name="nextLoading ? 'refresh' : 'arrowRight'"
+          size="sm"
+          :class="nextLoading ? 'animate-spin motion-reduce:animate-none' : ''"
+          aria-hidden="true"
+        />
       </button>
     </footer>
   </article>
@@ -62,6 +68,7 @@ defineProps<{
   details?: string[]
   backDisabled?: boolean
   nextDisabled?: boolean
+  nextLoading?: boolean
   nextLabel?: string
 }>()
 

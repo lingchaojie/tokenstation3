@@ -46,7 +46,7 @@
                 ? 'border-primary-500 bg-primary-500/10 text-primary-700 dark:text-primary-300'
                 : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-linear-hairline dark:text-linear-ink-subtle dark:hover:bg-linear-surface-2'
             "
-            @click="guideStore.selectOS(os)"
+            @click="selectOS(os)"
           >
             {{ t(`gettingStarted.operatingSystems.${os}`) }}
           </button>
@@ -62,6 +62,7 @@
       :description="t(`gettingStarted.steps.${activeStep}.description`)"
       :back-disabled="activeStepIndex === 0"
       :next-disabled="taskEightPlaceholder"
+      :next-loading="nextPending"
       :next-label="activeStep === 'first_run' ? t('gettingStarted.firstRun.confirmSuccess') : undefined"
       @back="handleBack"
       @next="handleNext"
@@ -197,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import GuideShell from '@/components/getting-started/GuideShell.vue'
@@ -220,6 +221,9 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const guideStore = useBeginnerGuideStore()
+const nextPending = ref(false)
+const manualOSSelected = ref(false)
+let guideOwnerGeneration = 0
 
 const definitionIds = ['model', 'agent', 'terminal', 'gateway', 'apiKey'] as const
 const activeStep = computed(() => guideStore.progress.currentStep)
@@ -255,25 +259,26 @@ function detectBrowserOS(): BeginnerGuideOS {
   return 'macos'
 }
 
-function hasAnonymousProgress(): boolean {
+function hasPersistedAnonymousProgress(): boolean | null {
   try {
     return localStorage.getItem('beginner_guide_progress_v1') !== null
   } catch {
-    return false
+    return null
   }
 }
 
 watch(
   [() => authStore.isAuthenticated, () => authStore.user?.id],
   async ([authenticated, userId]) => {
-    const hadAnonymousProgress = hasAnonymousProgress()
+    guideOwnerGeneration += 1
+    nextPending.value = false
     if (authenticated && userId !== undefined) {
       await guideStore.initialize({ authenticated: true, userId, enteringGuide: true })
       return
     }
 
     await guideStore.initialize({ authenticated: false, userId: null, enteringGuide: true })
-    if (!hadAnonymousProgress) {
+    if (!manualOSSelected.value && hasPersistedAnonymousProgress() === false) {
       await guideStore.selectOS(detectBrowserOS())
     }
   },
@@ -292,22 +297,52 @@ async function handleSelectStep(step: BeginnerGuideStepId): Promise<void> {
   await guideStore.goToStep(step)
 }
 
+async function selectOS(os: BeginnerGuideOS): Promise<void> {
+  manualOSSelected.value = true
+  await guideStore.selectOS(os)
+}
+
 async function handleBack(): Promise<void> {
   if (activeStepIndex.value <= 0) return
   await guideStore.goToStep(GUIDE_STEP_IDS[activeStepIndex.value - 1])
 }
 
 async function handleNext(): Promise<void> {
-  if (taskEightPlaceholder.value) return
-  const step = activeStep.value
-  await guideStore.completeStep(step)
-  if (step === 'troubleshoot') {
-    await guideStore.completeGuide()
-    return
-  }
-  const next = GUIDE_STEP_IDS[activeStepIndex.value + 1]
-  if (next) {
-    await guideStore.goToStep(next)
+  if (taskEightPlaceholder.value || nextPending.value) return
+
+  const initiatingStep = activeStep.value
+  const initiatingIndex = GUIDE_STEP_IDS.indexOf(initiatingStep)
+  const initiatingOwner =
+    authStore.isAuthenticated && authStore.user?.id !== undefined
+      ? `user:${String(authStore.user.id)}`
+      : 'anonymous'
+  const initiatingOwnerGeneration = guideOwnerGeneration
+  if (initiatingIndex === -1) return
+
+  nextPending.value = true
+  try {
+    await guideStore.completeStep(initiatingStep)
+
+    const currentOwner =
+      authStore.isAuthenticated && authStore.user?.id !== undefined
+        ? `user:${String(authStore.user.id)}`
+        : 'anonymous'
+    if (currentOwner !== initiatingOwner || activeStep.value !== initiatingStep) {
+      return
+    }
+
+    if (initiatingStep === 'troubleshoot') {
+      await guideStore.completeGuide()
+      return
+    }
+    const next = GUIDE_STEP_IDS[initiatingIndex + 1]
+    if (next) {
+      await guideStore.goToStep(next)
+    }
+  } finally {
+    if (guideOwnerGeneration === initiatingOwnerGeneration) {
+      nextPending.value = false
+    }
   }
 }
 </script>
