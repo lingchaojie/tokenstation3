@@ -674,4 +674,67 @@ describe('useBeginnerGuideStore', () => {
       expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
     }
   )
+
+  it('keeps a queued same-account mutation persistable across reinitialization', async () => {
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: progress({ currentStep: 'terminal' }) })
+      )
+      .mockRejectedValueOnce(new Error('refresh failed'))
+    patchBeginnerGuideStateMock.mockImplementationOnce(
+      async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+    )
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const pendingSave = store.completeStep('understand')
+    const pendingReinitialize = store.initialize({ authenticated: true, userId: 'user-a' })
+    await Promise.all([pendingSave, pendingReinitialize])
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenCalledWith({
+      progress: progress({ currentStep: 'terminal', completedSteps: ['understand'] })
+    })
+    expect(store.progress).toEqual(
+      progress({ currentStep: 'terminal', completedSteps: ['understand'] })
+    )
+  })
+
+  it.each(['failed', 'malformed'] as const)(
+    'preserves same-account progress through a %s repeated-initialize GET before the next save',
+    async (responseKind) => {
+      const existingProgress = progress({
+        client: 'codex',
+        os: 'linux',
+        currentStep: 'install',
+        completedSteps: ['understand', 'terminal']
+      })
+      getBeginnerGuideStateMock.mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: existingProgress })
+      )
+      if (responseKind === 'failed') {
+        getBeginnerGuideStateMock.mockRejectedValueOnce(new Error('refresh failed'))
+      } else {
+        getBeginnerGuideStateMock.mockResolvedValueOnce(null as unknown as BeginnerGuideState)
+      }
+      patchBeginnerGuideStateMock.mockImplementationOnce(
+        async (patch: PatchBeginnerGuideStateRequest) =>
+          state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+      )
+      const store = useBeginnerGuideStore()
+      await store.initialize({ authenticated: true, userId: 'user-a' })
+
+      await store.initialize({ authenticated: true, userId: 'user-a' })
+      await store.completeStep('choose')
+
+      const expected = progress({
+        client: 'codex',
+        os: 'linux',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+      expect(patchBeginnerGuideStateMock).toHaveBeenCalledWith({ progress: expected })
+      expect(store.progress).toEqual(expected)
+    }
+  )
 })

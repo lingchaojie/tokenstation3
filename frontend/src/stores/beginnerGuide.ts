@@ -265,6 +265,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     generation,
     userId: null
   }
+  let initializationRequestEpoch = 0
   let hasAnonymousProgress = false
   let localProgressRevision = 0
   let localPromptRevision = 0
@@ -274,6 +275,10 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     return (
       currentContext.generation === context.generation && currentContext.owner === context.owner
     )
+  }
+
+  function isCurrentInitialization(context: OwnerContext, requestEpoch: number): boolean {
+    return isCurrent(context) && initializationRequestEpoch === requestEpoch
   }
 
   function replaceProgress(next: BeginnerGuideProgressV1): void {
@@ -417,9 +422,13 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
 
   async function initialize(input: BeginnerGuideInitialization): Promise<void> {
     const nextOwner = input.authenticated ? `user:${String(input.userId)}` : 'anonymous'
-    const preserveCompleted =
-      currentContext.owner === nextOwner && promptState.value === 'completed'
-    generation += 1
+    const sameOwner = currentContext.owner === nextOwner
+    const preserveCompleted = sameOwner && promptState.value === 'completed'
+    if (!sameOwner) {
+      generation += 1
+    }
+    initializationRequestEpoch += 1
+    const requestEpoch = initializationRequestEpoch
     const context: OwnerContext = input.authenticated
       ? {
           authenticated: true,
@@ -443,9 +452,14 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
 
     const anonymous = readAnonymousProgress()
     hasAnonymousProgress = anonymous !== null
-    replaceProgress(anonymous ?? defaultProgress())
+    if (anonymous !== null) {
+      replaceProgress(anonymous)
+    } else if (!sameOwner) {
+      replaceProgress(defaultProgress())
+    }
     const initializationRevision = localProgressRevision
     const initializationPromptRevision = localPromptRevision
+    const hadPendingWriteAtStart = remoteWriteTails.has(context.owner)
     if (!context.authenticated) {
       return
     }
@@ -456,7 +470,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     } catch {
       return
     }
-    if (!isCurrent(context)) {
+    if (!isCurrentInitialization(context, requestEpoch)) {
       return
     }
     const remote = normalizeRemoteState(response)
@@ -467,6 +481,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     if (
       remote.progress !== null &&
       anonymous === null &&
+      !hadPendingWriteAtStart &&
       localProgressRevision === initializationRevision
     ) {
       progress.value = remote.progress
@@ -504,7 +519,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         const saved = normalizeRemoteState(outcome.remote)
         if (saved !== null) {
           clearPromptRetry(context.userId)
-          if (isCurrent(context)) {
+          if (isCurrentInitialization(context, requestEpoch)) {
             applyRemoteState(saved, merged, mergeRevision, mergePromptRevision)
             if (localProgressRevision === mergeRevision) {
               removeAnonymousProgress()
