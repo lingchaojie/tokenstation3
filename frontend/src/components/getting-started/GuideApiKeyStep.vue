@@ -91,7 +91,7 @@
               :disabled="keyExplanation(apiKey) !== null"
               :aria-pressed="selectedKey?.id === apiKey.id"
               class="flex w-full items-center justify-between gap-3 rounded-lg text-left disabled:cursor-not-allowed disabled:opacity-55"
-              @click="emit('select', apiKey)"
+              @click="selectKey(apiKey)"
             >
               <span class="min-w-0">
                 <span class="block truncate text-sm font-semibold text-gray-950 dark:text-linear-ink">
@@ -166,11 +166,12 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { keysAPI } from '@/api/keys'
 import { useAppStore, useAuthStore } from '@/stores'
-import type { BeginnerGuideClient } from '@/api/beginnerGuide'
+import type { BeginnerGuideClient, BeginnerGuideOS } from '@/api/beginnerGuide'
 import type { ApiKey } from '@/types'
 
 const props = defineProps<{
   client: BeginnerGuideClient
+  os: BeginnerGuideOS
   selectedKey: ApiKey | null
   reselectRequired?: boolean
 }>()
@@ -198,6 +199,7 @@ const compatibleKeyCount = computed(
 
 let listEpoch = 0
 let createEpoch = 0
+let selectionIntentEpoch = 0
 let disposed = false
 
 function isCompatible(apiKey: ApiKey): boolean {
@@ -218,6 +220,11 @@ function keyExplanation(apiKey: ApiKey): string | null {
     return t('gettingStarted.apiKey.incompatible')
   }
   return null
+}
+
+function selectKey(apiKey: ApiKey): void {
+  selectionIntentEpoch += 1
+  emit('select', apiKey)
 }
 
 async function loadKeys(): Promise<void> {
@@ -258,10 +265,16 @@ async function createKey(): Promise<void> {
   const name = createName.value.trim()
   if (initiatingOwner === null || creating.value || !name) return
   const epoch = ++createEpoch
+  const initiatingSelectionIntent = selectionIntentEpoch
   creating.value = true
   try {
     const created = await keysAPI.create(name)
-    if (!disposed && epoch === createEpoch && owner.value === initiatingOwner) {
+    if (
+      !disposed &&
+      epoch === createEpoch &&
+      selectionIntentEpoch === initiatingSelectionIntent &&
+      owner.value === initiatingOwner
+    ) {
       apiKeys.value = [created, ...apiKeys.value.filter((apiKey) => apiKey.id !== created.id)]
       emit('select', created)
     }
@@ -281,6 +294,7 @@ watch(
   (nextOwner) => {
     listEpoch += 1
     createEpoch += 1
+    selectionIntentEpoch += 1
     apiKeys.value = []
     loading.value = false
     loadFailed.value = false
@@ -292,10 +306,20 @@ watch(
   { immediate: true }
 )
 
+watch(
+  [() => props.client, () => props.os],
+  ([client, os], previous) => {
+    if (previous && (client !== previous[0] || os !== previous[1])) {
+      selectionIntentEpoch += 1
+    }
+  }
+)
+
 onBeforeUnmount(() => {
   disposed = true
   listEpoch += 1
   createEpoch += 1
+  selectionIntentEpoch += 1
   apiKeys.value = []
   creating.value = false
 })

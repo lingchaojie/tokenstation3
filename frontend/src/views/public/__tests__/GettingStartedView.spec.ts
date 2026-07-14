@@ -193,8 +193,7 @@ function mountView(locale: 'en' | 'zh' = 'en') {
   return { wrapper, i18n, guideStore: useBeginnerGuideStore(), authStore: useAuthStore() }
 }
 
-function mountAuthenticatedView(userId = 42) {
-  const pinia = createPinia()
+function mountAuthenticatedView(userId = 42, pinia = createPinia()) {
   setActivePinia(pinia)
   const authStore = useAuthStore()
   authStore.user = userFixture(userId)
@@ -214,7 +213,7 @@ function mountAuthenticatedView(userId = 42) {
       stubs: { RouterLink: RouterLinkStub, LocaleSwitcher: true }
     }
   })
-  return { wrapper, guideStore: useBeginnerGuideStore(), authStore }
+  return { wrapper, guideStore: useBeginnerGuideStore(), authStore, pinia }
 }
 
 async function settle(): Promise<void> {
@@ -336,6 +335,37 @@ describe('GettingStartedView', () => {
 
     expect(guideStore.progress.currentStep).toBe('terminal')
     expect(guideStore.progress.completedSteps).toEqual(['understand', 'choose'])
+  })
+
+  it('does not continue a deferred Next transition after the view unmounts', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progress(),
+      completed_at: null
+    })
+    const pendingPatch = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    patchGuideState.mockImplementationOnce(() => pendingPatch.promise)
+    const { wrapper, guideStore } = mountAuthenticatedView()
+    await settle()
+
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    expect(patchGuideState).toHaveBeenCalledOnce()
+    wrapper.unmount()
+
+    pendingPatch.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({ completedSteps: ['understand'] }),
+      completed_at: null
+    })
+    await settle()
+    await settle()
+
+    expect(patchGuideState).toHaveBeenCalledOnce()
+    expect(guideStore.progress.currentStep).toBe('understand')
   })
 
   it('keeps terminal first incomplete when the client changes during a pending Next', async () => {
@@ -763,6 +793,35 @@ describe('GettingStartedView', () => {
 
     expect(second.wrapper.text()).not.toContain(secret)
     expect(second.wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('reconciles configure immediately when remounting with the same Pinia instance', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('api_key'),
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValue(keyPage([keyFixture()]))
+    const first = mountAuthenticatedView()
+    await settle()
+    await first.wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await first.wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+    expect(first.guideStore.progress.currentStep).toBe('configure')
+    first.wrapper.unmount()
+
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progressAt('configure'),
+      completed_at: null
+    })
+    const second = mountAuthenticatedView(42, first.pinia)
+    await settle()
+    await settle()
+
+    expect(second.guideStore.progress.currentStep).toBe('api_key')
+    expect(second.wrapper.get('[data-testid="api-key-reselect"]').exists()).toBe(true)
+    expect(second.wrapper.text()).not.toContain('sk-guide-secret-DO-NOT-PERSIST')
   })
 
   it('marks troubleshooting complete explicitly and shows the three destination links', async () => {

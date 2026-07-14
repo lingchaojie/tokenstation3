@@ -138,6 +138,7 @@ function mountStep(options: {
   authenticated?: boolean
   userId?: number
   client?: 'claude_code' | 'codex'
+  os?: 'macos' | 'windows' | 'linux'
   selectedKey?: ApiKey | null
   reselectRequired?: boolean
 } = {}) {
@@ -156,6 +157,7 @@ function mountStep(options: {
   const wrapper = mount(GuideApiKeyStep, {
     props: {
       client: options.client ?? 'claude_code',
+      os: options.os ?? 'macos',
       selectedKey: options.selectedKey ?? null,
       reselectRequired: options.reselectRequired ?? false
     },
@@ -308,6 +310,45 @@ describe('GuideApiKeyStep', () => {
     await settle()
 
     expect(wrapper.emitted<ApiKey[]>('select')?.at(-1)).toEqual([created])
+  })
+
+  it('does not let a delayed create override a later explicit existing-key selection', async () => {
+    const existing = keyFixture({ id: 71, key: 'sk-existing', name: 'Existing key' })
+    const created = keyFixture({ id: 72, key: 'sk-created', name: 'Created key' })
+    const pending = deferred<ApiKey>()
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(page([existing]))
+    vi.mocked(keysAPI.create).mockReturnValueOnce(pending.promise)
+    const { wrapper } = mountStep({ authenticated: true })
+    await settle()
+
+    await wrapper.get('form').trigger('submit')
+    await wrapper.get('[data-key-id="71"]').trigger('click')
+    pending.resolve(created)
+    await settle()
+
+    expect(wrapper.emitted<ApiKey[]>('select')).toEqual([[existing]])
+    expect(wrapper.text()).not.toContain('Created key')
+    expect(wrapper.get('[data-testid="api-key-create"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each([
+    ['client', { client: 'codex' as const }],
+    ['OS', { os: 'windows' as const }]
+  ])('does not auto-select or repopulate a delayed create after a %s change', async (_label, variant) => {
+    const created = keyFixture({ id: 73, key: 'sk-created', name: 'Stale created key' })
+    const pending = deferred<ApiKey>()
+    vi.mocked(keysAPI.create).mockReturnValueOnce(pending.promise)
+    const { wrapper } = mountStep({ authenticated: true })
+    await settle()
+
+    await wrapper.get('form').trigger('submit')
+    await wrapper.setProps(variant)
+    pending.resolve(created)
+    await settle()
+
+    expect(wrapper.emitted('select')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('Stale created key')
+    expect(wrapper.get('[data-testid="api-key-create"]').attributes('disabled')).toBeUndefined()
   })
 
   it('preserves an entered name and reports the existing API detail through the app toast', async () => {

@@ -141,6 +141,7 @@
       <GuideApiKeyStep
         v-else-if="activeStep === 'api_key'"
         :client="guideStore.progress.client"
+        :os="guideStore.progress.os"
         :selected-key="selectedKey"
         :reselect-required="reselectRequired"
         @select="handleSelectKey"
@@ -377,7 +378,8 @@ watch(
         redirectingConfigure = false
       }
     }
-  }
+  },
+  { immediate: true }
 )
 
 function canNavigateTo(step: BeginnerGuideStepId): boolean {
@@ -425,6 +427,10 @@ async function handleNext(): Promise<void> {
   nextPending.value = true
   try {
     await guideStore.completeStep(initiatingStep)
+
+    if (disposed || guideOwnerGeneration !== initiatingOwnerGeneration) {
+      return
+    }
 
     const currentOwner =
       authStore.isAuthenticated && authStore.user?.id !== undefined
