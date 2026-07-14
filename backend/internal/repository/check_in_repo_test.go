@@ -9,6 +9,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 
@@ -133,4 +134,19 @@ func TestCheckInRepository_FindClaim_ReturnsMatchingAuditRecord(t *testing.T) {
 	require.Equal(t, created.ID, got.ID)
 	require.Equal(t, user.ID, got.UserID)
 	require.InDelta(t, 10, got.RewardAmount, 1e-9)
+}
+
+func TestCheckInRepository_HardUserDeletionCascadesClaims(t *testing.T) {
+	repo, client, _ := newCheckInRepoSQLite(t)
+	ctx := context.Background()
+	user := mustCreateCheckInUser(t, client, 0, 0)
+	_, err := repo.CreateClaim(ctx, checkInClaimInput(user.ID))
+	require.NoError(t, err)
+
+	err = client.User.DeleteOneID(user.ID).Exec(mixins.SkipSoftDelete(ctx))
+
+	require.NoError(t, err)
+	count, err := client.DailyCheckInClaim.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count)
 }

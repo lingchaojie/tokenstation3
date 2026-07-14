@@ -816,7 +816,7 @@ var (
 				Symbol:     "daily_check_in_claims_users_daily_check_in_claims",
 				Columns:    []*schema.Column{DailyCheckInClaimsColumns[7]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.Cascade,
 			},
 		},
 		Indexes: []*schema.Index{

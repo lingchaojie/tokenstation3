@@ -48,7 +48,8 @@ func (DailyCheckInClaim) Edges() []ent.Edge {
 			Ref("daily_check_in_claims").
 			Field("user_id").
 			Required().
-			Unique(),
+			Unique().
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
 

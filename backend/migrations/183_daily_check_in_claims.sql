@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS daily_check_in_claims (
     id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     activity_start_at TIMESTAMPTZ NOT NULL,
     check_in_date DATE NOT NULL,
     reward_amount DECIMAL(20,8) NOT NULL CHECK (reward_amount > 0),
