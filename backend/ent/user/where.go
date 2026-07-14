@@ -1722,6 +1722,29 @@ func HasAPIKeyRoutesWith(preds ...predicate.UserAPIKeyRoute) predicate.User {
 	})
 }
 
+// HasDailyCheckInClaims applies the HasEdge predicate on the "daily_check_in_claims" edge.
+func HasDailyCheckInClaims() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, DailyCheckInClaimsTable, DailyCheckInClaimsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDailyCheckInClaimsWith applies the HasEdge predicate on the "daily_check_in_claims" edge with a given conditions (other predicates).
+func HasDailyCheckInClaimsWith(preds ...predicate.DailyCheckInClaim) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newDailyCheckInClaimsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasUserAllowedGroups applies the HasEdge predicate on the "user_allowed_groups" edge.
 func HasUserAllowedGroups() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

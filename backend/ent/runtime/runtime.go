@@ -19,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -880,6 +881,20 @@ func init() {
 	channelmonitorrequesttemplate.DefaultBodyOverrideMode = channelmonitorrequesttemplateDescBodyOverrideMode.Default.(string)
 	// channelmonitorrequesttemplate.BodyOverrideModeValidator is a validator for the "body_override_mode" field. It is called by the builders before save.
 	channelmonitorrequesttemplate.BodyOverrideModeValidator = channelmonitorrequesttemplateDescBodyOverrideMode.Validators[0].(func(string) error)
+	dailycheckinclaimFields := schema.DailyCheckInClaim{}.Fields()
+	_ = dailycheckinclaimFields
+	// dailycheckinclaimDescRewardAmount is the schema descriptor for reward_amount field.
+	dailycheckinclaimDescRewardAmount := dailycheckinclaimFields[3].Descriptor()
+	// dailycheckinclaim.RewardAmountValidator is a validator for the "reward_amount" field. It is called by the builders before save.
+	dailycheckinclaim.RewardAmountValidator = dailycheckinclaimDescRewardAmount.Validators[0].(func(float64) error)
+	// dailycheckinclaimDescClaimedAt is the schema descriptor for claimed_at field.
+	dailycheckinclaimDescClaimedAt := dailycheckinclaimFields[5].Descriptor()
+	// dailycheckinclaim.DefaultClaimedAt holds the default value on creation for the claimed_at field.
+	dailycheckinclaim.DefaultClaimedAt = dailycheckinclaimDescClaimedAt.Default.(func() time.Time)
+	// dailycheckinclaimDescCreatedAt is the schema descriptor for created_at field.
+	dailycheckinclaimDescCreatedAt := dailycheckinclaimFields[6].Descriptor()
+	// dailycheckinclaim.DefaultCreatedAt holds the default value on creation for the created_at field.
+	dailycheckinclaim.DefaultCreatedAt = dailycheckinclaimDescCreatedAt.Default.(func() time.Time)
 	errorpassthroughruleMixin := schema.ErrorPassthroughRule{}.Mixin()
 	errorpassthroughruleMixinFields0 := errorpassthroughruleMixin[0].Fields()
 	_ = errorpassthroughruleMixinFields0

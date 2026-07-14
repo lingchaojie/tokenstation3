@@ -103,11 +103,13 @@ type UserEdges struct {
 	PlatformQuotas []*UserPlatformQuota `json:"platform_quotas,omitempty"`
 	// APIKeyRoutes holds the value of the api_key_routes edge.
 	APIKeyRoutes []*UserAPIKeyRoute `json:"api_key_routes,omitempty"`
+	// DailyCheckInClaims holds the value of the daily_check_in_claims edge.
+	DailyCheckInClaims []*DailyCheckInClaim `json:"daily_check_in_claims,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [15]bool
+	loadedTypes [16]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -236,10 +238,19 @@ func (e UserEdges) APIKeyRoutesOrErr() ([]*UserAPIKeyRoute, error) {
 	return nil, &NotLoadedError{edge: "api_key_routes"}
 }
 
+// DailyCheckInClaimsOrErr returns the DailyCheckInClaims value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) DailyCheckInClaimsOrErr() ([]*DailyCheckInClaim, error) {
+	if e.loadedTypes[14] {
+		return e.DailyCheckInClaims, nil
+	}
+	return nil, &NotLoadedError{edge: "daily_check_in_claims"}
+}
+
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[14] {
+	if e.loadedTypes[15] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -518,6 +529,11 @@ func (_m *User) QueryPlatformQuotas() *UserPlatformQuotaQuery {
 // QueryAPIKeyRoutes queries the "api_key_routes" edge of the User entity.
 func (_m *User) QueryAPIKeyRoutes() *UserAPIKeyRouteQuery {
 	return NewUserClient(_m.config).QueryAPIKeyRoutes(_m)
+}
+
+// QueryDailyCheckInClaims queries the "daily_check_in_claims" edge of the User entity.
+func (_m *User) QueryDailyCheckInClaims() *DailyCheckInClaimQuery {
+	return NewUserClient(_m.config).QueryDailyCheckInClaims(_m)
 }
 
 // QueryUserAllowedGroups queries the "user_allowed_groups" edge of the User entity.

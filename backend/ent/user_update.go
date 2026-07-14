@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -657,6 +658,21 @@ func (_u *UserUpdate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
 	return _u.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_u *UserUpdate) AddDailyCheckInClaimIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdate) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdate) Mutation() *UserMutation {
 	return _u.mutation
@@ -954,6 +970,27 @@ func (_u *UserUpdate) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyRouteIDs(ids...)
+}
+
+// ClearDailyCheckInClaims clears all "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdate) ClearDailyCheckInClaims() *UserUpdate {
+	_u.mutation.ClearDailyCheckInClaims()
+	return _u
+}
+
+// RemoveDailyCheckInClaimIDs removes the "daily_check_in_claims" edge to DailyCheckInClaim entities by IDs.
+func (_u *UserUpdate) RemoveDailyCheckInClaimIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// RemoveDailyCheckInClaims removes "daily_check_in_claims" edges to DailyCheckInClaim entities.
+func (_u *UserUpdate) RemoveDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDailyCheckInClaimIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -1795,6 +1832,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDailyCheckInClaimsIDs(); len(nodes) > 0 && !_u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{user.Label}
@@ -2431,6 +2513,21 @@ func (_u *UserUpdateOne) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOne {
 	return _u.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_u *UserUpdateOne) AddDailyCheckInClaimIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdateOne) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdateOne) Mutation() *UserMutation {
 	return _u.mutation
@@ -2728,6 +2825,27 @@ func (_u *UserUpdateOne) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOn
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyRouteIDs(ids...)
+}
+
+// ClearDailyCheckInClaims clears all "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdateOne) ClearDailyCheckInClaims() *UserUpdateOne {
+	_u.mutation.ClearDailyCheckInClaims()
+	return _u
+}
+
+// RemoveDailyCheckInClaimIDs removes the "daily_check_in_claims" edge to DailyCheckInClaim entities by IDs.
+func (_u *UserUpdateOne) RemoveDailyCheckInClaimIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// RemoveDailyCheckInClaims removes "daily_check_in_claims" edges to DailyCheckInClaim entities.
+func (_u *UserUpdateOne) RemoveDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDailyCheckInClaimIDs(ids...)
 }
 
 // Where appends a list predicates to the UserUpdate builder.
@@ -3592,6 +3710,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDailyCheckInClaimsIDs(); len(nodes) > 0 && !_u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

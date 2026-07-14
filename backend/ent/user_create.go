@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -579,6 +580,21 @@ func (_c *UserCreate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserCreate {
 	return _c.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_c *UserCreate) AddDailyCheckInClaimIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _c
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_c *UserCreate) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_c *UserCreate) Mutation() *UserMutation {
 	return _c.mutation
@@ -1130,6 +1146,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

@@ -19,6 +19,11 @@ var ErrDailyCheckInConfigInvalid = infraerrors.BadRequest(
 	"daily check-in config is invalid",
 )
 
+var ErrDailyCheckInAlreadyClaimed = infraerrors.Conflict(
+	"DAILY_CHECK_IN_ALREADY_CLAIMED",
+	"daily check-in reward already claimed",
+)
+
 type DailyCheckInActivityState string
 
 const (
@@ -33,6 +38,29 @@ type DailyCheckInConfig struct {
 	StartAt      *time.Time `json:"start_at"`
 	DurationDays int        `json:"duration_days"`
 	RewardAmount float64    `json:"reward_amount"`
+}
+
+type DailyCheckInClaim struct {
+	ID              int64
+	UserID          int64
+	ActivityStartAt time.Time
+	CheckInDate     time.Time
+	RewardAmount    float64
+	BalanceAfter    float64
+	ClaimedAt       time.Time
+}
+
+type DailyCheckInClaimInput struct {
+	UserID          int64
+	ActivityStartAt time.Time
+	CheckInDate     time.Time
+	RewardAmount    float64
+	ClaimedAt       time.Time
+}
+
+type CheckInRepository interface {
+	FindClaim(ctx context.Context, userID int64, activityStartAt, checkInDate time.Time) (*DailyCheckInClaim, error)
+	CreateClaim(ctx context.Context, input DailyCheckInClaimInput) (*DailyCheckInClaim, error)
 }
 
 func (c DailyCheckInConfig) EndAt() *time.Time {

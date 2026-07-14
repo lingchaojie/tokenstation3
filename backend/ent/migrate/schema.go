@@ -795,6 +795,43 @@ var (
 			},
 		},
 	}
+	// DailyCheckInClaimsColumns holds the columns for the "daily_check_in_claims" table.
+	DailyCheckInClaimsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "activity_start_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "check_in_date", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "date"}},
+		{Name: "reward_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "balance_after", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "claimed_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// DailyCheckInClaimsTable holds the schema information for the "daily_check_in_claims" table.
+	DailyCheckInClaimsTable = &schema.Table{
+		Name:       "daily_check_in_claims",
+		Columns:    DailyCheckInClaimsColumns,
+		PrimaryKey: []*schema.Column{DailyCheckInClaimsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "daily_check_in_claims_users_daily_check_in_claims",
+				Columns:    []*schema.Column{DailyCheckInClaimsColumns[7]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "dailycheckinclaim_user_id_activity_start_at_check_in_date",
+				Unique:  true,
+				Columns: []*schema.Column{DailyCheckInClaimsColumns[7], DailyCheckInClaimsColumns[1], DailyCheckInClaimsColumns[2]},
+			},
+			{
+				Name:    "dailycheckinclaim_claimed_at",
+				Unique:  false,
+				Columns: []*schema.Column{DailyCheckInClaimsColumns[5]},
+			},
+		},
+	}
 	// ErrorPassthroughRulesColumns holds the columns for the "error_passthrough_rules" table.
 	ErrorPassthroughRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2231,6 +2268,7 @@ var (
 		ChannelMonitorDailyRollupsTable,
 		ChannelMonitorHistoriesTable,
 		ChannelMonitorRequestTemplatesTable,
+		DailyCheckInClaimsTable,
 		ErrorPassthroughRulesTable,
 		GroupsTable,
 		IdempotencyRecordsTable,
@@ -2318,6 +2356,10 @@ func init() {
 	}
 	ChannelMonitorRequestTemplatesTable.Annotation = &entsql.Annotation{
 		Table: "channel_monitor_request_templates",
+	}
+	DailyCheckInClaimsTable.ForeignKeys[0].RefTable = UsersTable
+	DailyCheckInClaimsTable.Annotation = &entsql.Annotation{
+		Table: "daily_check_in_claims",
 	}
 	ErrorPassthroughRulesTable.Annotation = &entsql.Annotation{
 		Table: "error_passthrough_rules",

@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -52,6 +53,7 @@ type UserQuery struct {
 	withPendingAuthSessions   *PendingAuthSessionQuery
 	withPlatformQuotas        *UserPlatformQuotaQuery
 	withAPIKeyRoutes          *UserAPIKeyRouteQuery
+	withDailyCheckInClaims    *DailyCheckInClaimQuery
 	withUserAllowedGroups     *UserAllowedGroupQuery
 	modifiers                 []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
@@ -398,6 +400,28 @@ func (_q *UserQuery) QueryAPIKeyRoutes() *UserAPIKeyRouteQuery {
 	return query
 }
 
+// QueryDailyCheckInClaims chains the current query on the "daily_check_in_claims" edge.
+func (_q *UserQuery) QueryDailyCheckInClaims() *DailyCheckInClaimQuery {
+	query := (&DailyCheckInClaimClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(dailycheckinclaim.Table, dailycheckinclaim.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.DailyCheckInClaimsTable, user.DailyCheckInClaimsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
 // QueryUserAllowedGroups chains the current query on the "user_allowed_groups" edge.
 func (_q *UserQuery) QueryUserAllowedGroups() *UserAllowedGroupQuery {
 	query := (&UserAllowedGroupClient{config: _q.config}).Query()
@@ -626,6 +650,7 @@ func (_q *UserQuery) Clone() *UserQuery {
 		withPendingAuthSessions:   _q.withPendingAuthSessions.Clone(),
 		withPlatformQuotas:        _q.withPlatformQuotas.Clone(),
 		withAPIKeyRoutes:          _q.withAPIKeyRoutes.Clone(),
+		withDailyCheckInClaims:    _q.withDailyCheckInClaims.Clone(),
 		withUserAllowedGroups:     _q.withUserAllowedGroups.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
@@ -787,6 +812,17 @@ func (_q *UserQuery) WithAPIKeyRoutes(opts ...func(*UserAPIKeyRouteQuery)) *User
 	return _q
 }
 
+// WithDailyCheckInClaims tells the query-builder to eager-load the nodes that are connected to
+// the "daily_check_in_claims" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithDailyCheckInClaims(opts ...func(*DailyCheckInClaimQuery)) *UserQuery {
+	query := (&DailyCheckInClaimClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withDailyCheckInClaims = query
+	return _q
+}
+
 // WithUserAllowedGroups tells the query-builder to eager-load the nodes that are connected to
 // the "user_allowed_groups" edge. The optional arguments are used to configure the query builder of the edge.
 func (_q *UserQuery) WithUserAllowedGroups(opts ...func(*UserAllowedGroupQuery)) *UserQuery {
@@ -876,7 +912,7 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [15]bool{
+		loadedTypes = [16]bool{
 			_q.withAPIKeys != nil,
 			_q.withRedeemCodes != nil,
 			_q.withSubscriptions != nil,
@@ -891,6 +927,7 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 			_q.withPendingAuthSessions != nil,
 			_q.withPlatformQuotas != nil,
 			_q.withAPIKeyRoutes != nil,
+			_q.withDailyCheckInClaims != nil,
 			_q.withUserAllowedGroups != nil,
 		}
 	)
@@ -1014,6 +1051,15 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadAPIKeyRoutes(ctx, query, nodes,
 			func(n *User) { n.Edges.APIKeyRoutes = []*UserAPIKeyRoute{} },
 			func(n *User, e *UserAPIKeyRoute) { n.Edges.APIKeyRoutes = append(n.Edges.APIKeyRoutes, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withDailyCheckInClaims; query != nil {
+		if err := _q.loadDailyCheckInClaims(ctx, query, nodes,
+			func(n *User) { n.Edges.DailyCheckInClaims = []*DailyCheckInClaim{} },
+			func(n *User, e *DailyCheckInClaim) {
+				n.Edges.DailyCheckInClaims = append(n.Edges.DailyCheckInClaims, e)
+			}); err != nil {
 			return nil, err
 		}
 	}
@@ -1472,6 +1518,36 @@ func (_q *UserQuery) loadAPIKeyRoutes(ctx context.Context, query *UserAPIKeyRout
 	}
 	query.Where(predicate.UserAPIKeyRoute(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.APIKeyRoutesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadDailyCheckInClaims(ctx context.Context, query *DailyCheckInClaimQuery, nodes []*User, init func(*User), assign func(*User, *DailyCheckInClaim)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(dailycheckinclaim.FieldUserID)
+	}
+	query.Where(predicate.DailyCheckInClaim(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.DailyCheckInClaimsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

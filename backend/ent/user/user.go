@@ -93,6 +93,8 @@ const (
 	EdgePlatformQuotas = "platform_quotas"
 	// EdgeAPIKeyRoutes holds the string denoting the api_key_routes edge name in mutations.
 	EdgeAPIKeyRoutes = "api_key_routes"
+	// EdgeDailyCheckInClaims holds the string denoting the daily_check_in_claims edge name in mutations.
+	EdgeDailyCheckInClaims = "daily_check_in_claims"
 	// EdgeUserAllowedGroups holds the string denoting the user_allowed_groups edge name in mutations.
 	EdgeUserAllowedGroups = "user_allowed_groups"
 	// Table holds the table name of the user in the database.
@@ -193,6 +195,13 @@ const (
 	APIKeyRoutesInverseTable = "user_api_key_routes"
 	// APIKeyRoutesColumn is the table column denoting the api_key_routes relation/edge.
 	APIKeyRoutesColumn = "user_id"
+	// DailyCheckInClaimsTable is the table that holds the daily_check_in_claims relation/edge.
+	DailyCheckInClaimsTable = "daily_check_in_claims"
+	// DailyCheckInClaimsInverseTable is the table name for the DailyCheckInClaim entity.
+	// It exists in this package in order to avoid circular dependency with the "dailycheckinclaim" package.
+	DailyCheckInClaimsInverseTable = "daily_check_in_claims"
+	// DailyCheckInClaimsColumn is the table column denoting the daily_check_in_claims relation/edge.
+	DailyCheckInClaimsColumn = "user_id"
 	// UserAllowedGroupsTable is the table that holds the user_allowed_groups relation/edge.
 	UserAllowedGroupsTable = "user_allowed_groups"
 	// UserAllowedGroupsInverseTable is the table name for the UserAllowedGroup entity.
@@ -635,6 +644,20 @@ func ByAPIKeyRoutes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByDailyCheckInClaimsCount orders the results by daily_check_in_claims count.
+func ByDailyCheckInClaimsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDailyCheckInClaimsStep(), opts...)
+	}
+}
+
+// ByDailyCheckInClaims orders the results by daily_check_in_claims terms.
+func ByDailyCheckInClaims(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDailyCheckInClaimsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByUserAllowedGroupsCount orders the results by user_allowed_groups count.
 func ByUserAllowedGroupsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -744,6 +767,13 @@ func newAPIKeyRoutesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(APIKeyRoutesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, APIKeyRoutesTable, APIKeyRoutesColumn),
+	)
+}
+func newDailyCheckInClaimsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DailyCheckInClaimsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DailyCheckInClaimsTable, DailyCheckInClaimsColumn),
 	)
 }
 func newUserAllowedGroupsStep() *sqlgraph.Step {
