@@ -138,6 +138,6 @@ useIntersectionObserver(
       activeHeadingId.value = firstVisible.target.id
     }
   },
-  { rootMargin: '-7.5rem 0px -65% 0px' }
+  { rootMargin: '-120px 0px -65% 0px' }
 )
 </script>

@@ -11,17 +11,20 @@ import ApiDocsShell from '../ApiDocsShell.vue'
 
 const intersectionObserverState = vi.hoisted(() => ({
   callback: undefined as IntersectionObserverCallback | undefined,
-  targets: undefined as { value: HTMLElement[] } | undefined
+  targets: undefined as { value: HTMLElement[] } | undefined,
+  options: undefined as IntersectionObserverInit | undefined
 }))
 
 vi.mock('@vueuse/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@vueuse/core')>()),
   useIntersectionObserver: (
     targets: { value: HTMLElement[] },
-    callback: IntersectionObserverCallback
+    callback: IntersectionObserverCallback,
+    options?: IntersectionObserverInit
   ) => {
     intersectionObserverState.targets = targets
     intersectionObserverState.callback = callback
+    intersectionObserverState.options = options
     return { isSupported: { value: true }, pause: vi.fn(), resume: vi.fn(), stop: vi.fn() }
   }
 }))
@@ -75,6 +78,37 @@ const headings = [
   { id: 'authentication', label: 'Authentication' }
 ]
 
+function stubDesktopBreakpoint(initialMatches = false) {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>()
+  let matches = initialMatches
+  const media = '(min-width: 1024px)'
+  const mediaQuery = {
+    get matches() {
+      return matches
+    },
+    media,
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+      listeners.add(listener)
+    },
+    removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+      listeners.delete(listener)
+    },
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn()
+  } as unknown as MediaQueryList
+  vi.spyOn(window, 'matchMedia').mockReturnValue(mediaQuery)
+
+  return {
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches
+      const event = { matches, media } as MediaQueryListEvent
+      listeners.forEach((listener) => listener.call(mediaQuery, event))
+    }
+  }
+}
+
 async function mountShell() {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -108,6 +142,7 @@ beforeEach(() => {
   localStorage.clear()
   intersectionObserverState.callback = undefined
   intersectionObserverState.targets = undefined
+  intersectionObserverState.options = undefined
 })
 
 describe('ApiDocsShell', () => {
@@ -194,6 +229,28 @@ describe('ApiDocsShell', () => {
     expect(document.activeElement).toBe(menuButton.element)
   })
 
+  it('closes an open mobile drawer when the viewport crosses the desktop breakpoint', async () => {
+    const breakpoint = stubDesktopBreakpoint()
+    const { wrapper } = await mountShell()
+    const menuButton = wrapper.get<HTMLButtonElement>('[data-testid="api-docs-mobile-menu"]')
+
+    menuButton.element.focus()
+    await menuButton.trigger('click')
+    expect(wrapper.get('[data-testid="api-docs-mobile-drawer"]').exists()).toBe(true)
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(wrapper.get('[data-testid="api-docs-header"]').attributes()).toHaveProperty('inert')
+
+    breakpoint.setMatches(true)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="api-docs-mobile-drawer"]').exists()).toBe(false)
+    expect(menuButton.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-testid="api-docs-header"]').attributes()).not.toHaveProperty('inert')
+    expect(wrapper.get('[data-testid="api-docs-header"]').attributes('aria-hidden')).toBeUndefined()
+    expect(document.body.style.overflow).toBe('')
+    expect(document.activeElement).toBe(menuButton.element)
+  })
+
   it('uses native anchors and marks the active table-of-contents location', async () => {
     const { wrapper } = await mountShell()
     const toc = wrapper.get('[data-testid="api-docs-toc"]')
@@ -226,6 +283,17 @@ describe('ApiDocsShell', () => {
     await wrapper.setProps({ headings: [headings[0]] })
     await nextTick()
     expect(intersectionObserverState.targets?.value.map(({ id }) => id)).toEqual(['overview'])
+  })
+
+  it('constructs heading observation with browser-supported root-margin units', async () => {
+    await mountShell()
+
+    expect(intersectionObserverState.options?.rootMargin).toBe('-120px 0px -65% 0px')
+    expect(
+      intersectionObserverState.options?.rootMargin
+        ?.split(/\s+/)
+        .every((token) => /^-?(?:\d+\.?\d*|\.\d+)(?:px|%)$/.test(token))
+    ).toBe(true)
   })
 
   it('emits search, persists theme changes, and sends anonymous users back to this page', async () => {

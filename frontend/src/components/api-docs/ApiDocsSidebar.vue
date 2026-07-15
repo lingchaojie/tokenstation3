@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import Icon from '@/components/icons/Icon.vue'
@@ -142,6 +142,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const drawer = ref<HTMLElement | null>(null)
 const closeButton = ref<HTMLButtonElement | null>(null)
+const desktopBreakpoint = window.matchMedia('(min-width: 1024px)')
 let bodyScrollLocked = false
 let previousBodyOverflow = ''
 const navGroups = computed(() =>
@@ -167,7 +168,15 @@ watch(
   { immediate: true }
 )
 
-onBeforeUnmount(unlockBodyScroll)
+onMounted(() => {
+  desktopBreakpoint.addEventListener('change', handleDesktopBreakpointChange)
+  if (desktopBreakpoint.matches && props.mobileOpen) closeDrawer()
+})
+
+onBeforeUnmount(() => {
+  desktopBreakpoint.removeEventListener('change', handleDesktopBreakpointChange)
+  unlockBodyScroll()
+})
 
 function lockBodyScroll(): void {
   if (bodyScrollLocked) return
@@ -190,6 +199,10 @@ function closeDrawer(): void {
 function handleNavigate(path: string): void {
   emit('navigate', path)
   if (props.mobileOpen) closeDrawer()
+}
+
+function handleDesktopBreakpointChange(event: MediaQueryListEvent): void {
+  if (event.matches && props.mobileOpen) closeDrawer()
 }
 
 function handleDrawerKeydown(event: KeyboardEvent): void {
