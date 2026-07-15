@@ -250,16 +250,6 @@ async function loadKeys(): Promise<void> {
   }
 }
 
-function errorDetail(error: unknown): string {
-  if (typeof error !== 'object' || error === null) return t('keys.failedToSave')
-  const response = (error as Record<string, unknown>).response
-  if (typeof response !== 'object' || response === null) return t('keys.failedToSave')
-  const data = (response as Record<string, unknown>).data
-  if (typeof data !== 'object' || data === null) return t('keys.failedToSave')
-  const detail = (data as Record<string, unknown>).detail
-  return typeof detail === 'string' && detail.trim() ? detail : t('keys.failedToSave')
-}
-
 async function createKey(): Promise<void> {
   const initiatingOwner = owner.value
   const name = createName.value.trim()
@@ -278,9 +268,9 @@ async function createKey(): Promise<void> {
       apiKeys.value = [created, ...apiKeys.value.filter((apiKey) => apiKey.id !== created.id)]
       emit('select', created)
     }
-  } catch (error: unknown) {
+  } catch {
     if (!disposed && epoch === createEpoch && owner.value === initiatingOwner) {
-      appStore.showError(errorDetail(error))
+      appStore.showError(t('keys.failedToSave'))
     }
   } finally {
     if (!disposed && epoch === createEpoch && owner.value === initiatingOwner) {

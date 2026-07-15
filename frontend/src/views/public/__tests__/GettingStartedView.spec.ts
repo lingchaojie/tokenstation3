@@ -524,6 +524,13 @@ describe('GettingStartedView', () => {
     for (const option of options) {
       expect(option.element.tagName).toBe('BUTTON')
       expect(option.attributes('type')).toBe('button')
+      expect(option.classes()).toContain('focus-visible:ring-2')
+      expect(option.classes()).toContain('motion-reduce:transition-none')
+    }
+
+    for (const control of wrapper.findAll('header a, header button')) {
+      expect(control.classes()).toContain('focus-visible:ring-2')
+      expect(control.classes()).toContain('motion-reduce:transition-none')
     }
   })
 
@@ -539,6 +546,8 @@ describe('GettingStartedView', () => {
       expect(currentSteps[0].attributes('data-guide-step')).toBe('understand')
 
       const trigger = wrapper.get('[data-testid="mobile-step-menu-button"]')
+      expect(trigger.classes()).toContain('focus-visible:ring-2')
+      expect(trigger.classes()).toContain('motion-reduce:transition-none')
       trigger.element.focus()
       expect(trigger.attributes('aria-expanded')).toBe('false')
       await trigger.trigger('click')
@@ -552,11 +561,15 @@ describe('GettingStartedView', () => {
       )
 
       const close = wrapper.get('[data-testid="mobile-step-menu-close"]')
+      expect(close.classes()).toContain('focus-visible:ring-2')
+      expect(close.classes()).toContain('motion-reduce:transition-none')
       const reachableSteps = wrapper
         .findAll('[data-testid="mobile-step-drawer"] [data-guide-step]')
         .filter((step) => step.attributes('disabled') === undefined)
       const lastStep = reachableSteps.at(-1)
       expect(lastStep).toBeDefined()
+      expect(lastStep!.classes()).toContain('focus-visible:ring-2')
+      expect(lastStep!.classes()).toContain('motion-reduce:transition-none')
       lastStep!.element.focus()
       await lastStep!.trigger('keydown', { key: 'Tab' })
       expect(document.activeElement).toBe(close.element)
@@ -570,13 +583,25 @@ describe('GettingStartedView', () => {
       expect(wrapper.find('[data-testid="mobile-step-drawer"]').exists()).toBe(false)
       expect(trigger.attributes('aria-expanded')).toBe('false')
       expect(document.activeElement).toBe(trigger.element)
+
+      await trigger.trigger('click')
+      await wrapper.get('[data-testid="mobile-step-drawer"]').trigger('click')
+      expect(wrapper.find('[data-testid="mobile-step-drawer"]').exists()).toBe(false)
+      expect(document.activeElement).toBe(trigger.element)
+
+      await trigger.trigger('click')
+      await wrapper
+        .get('[data-testid="mobile-step-drawer"] [data-guide-step="understand"]')
+        .trigger('click')
+      expect(wrapper.find('[data-testid="mobile-step-drawer"]').exists()).toBe(false)
+      expect(document.activeElement).toBe(trigger.element)
     } finally {
       wrapper.unmount()
       host.remove()
     }
   })
 
-  it('keeps focus, overflow, reduced-motion, and escaped-rendering contracts in guide sources', () => {
+  it('keeps overflow scoped and all guide rendering escaped in source', () => {
     const sources = {
       view: readSource(resolve(publicViewDir, 'GettingStartedView.vue')),
       shell: readSource(resolve(gettingStartedDir, 'GuideShell.vue')),
@@ -586,12 +611,6 @@ describe('GettingStartedView', () => {
     }
 
     for (const [name, source] of Object.entries(sources)) {
-      expect.soft(source, `${name} has a visible keyboard focus ring`).toContain(
-        'focus-visible:ring-2'
-      )
-      expect.soft(source, `${name} disables nonessential reduced-motion transitions`).toContain(
-        'motion-reduce:transition-none'
-      )
       expect.soft(source, `${name} never renders trusted HTML`).not.toContain('v-html')
     }
 
@@ -792,6 +811,15 @@ describe('GettingStartedView', () => {
     const first = mountAuthenticatedView(42, pinia)
     await settle()
 
+    vi.mocked(keysAPI.create).mockRejectedValueOnce({
+      response: { data: { detail: `provider leaked ${secret}` } }
+    })
+    await first.wrapper.get('[data-testid="api-key-name"]').setValue('Rejected key')
+    await first.wrapper.get('form').trigger('submit')
+    await settle()
+    expect(errorCalls).toHaveBeenCalledWith('Failed to save API key')
+    expect(JSON.stringify(errorCalls.mock.calls)).not.toContain(secret)
+
     await first.wrapper.get('[data-key-id="987654321"]').trigger('click')
     await first.wrapper.get('[data-testid="step-primary-action"]').trigger('click')
     await settle()
@@ -826,6 +854,13 @@ describe('GettingStartedView', () => {
     for (const call of [...warningCalls.mock.calls, ...errorCalls.mock.calls]) {
       expect(JSON.stringify(call)).not.toContain(secret)
     }
+    expect(warningCalls).not.toHaveBeenCalled()
+    expect(readSource(resolve(publicViewDir, 'GettingStartedView.vue'))).not.toContain(
+      'showWarning'
+    )
+    expect(readSource(resolve(gettingStartedDir, 'GuideApiKeyStep.vue'))).not.toContain(
+      'showWarning'
+    )
     expect(JSON.stringify(appStore.toasts)).not.toContain(secret)
 
     const secondPinia = createPinia()
@@ -847,6 +882,7 @@ describe('GettingStartedView', () => {
     for (const call of [...secondWarningCalls.mock.calls, ...secondErrorCalls.mock.calls]) {
       expect(JSON.stringify(call)).not.toContain(secret)
     }
+    expect(secondWarningCalls).not.toHaveBeenCalled()
     expect(JSON.stringify(secondAppStore.toasts)).not.toContain(secret)
   })
 

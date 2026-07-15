@@ -30,7 +30,7 @@
       target="_blank"
       rel="noopener noreferrer"
       data-troubleshooting-branch="official-source"
-      class="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-500 dark:text-primary-300"
+      class="inline-flex items-center gap-2 rounded-md text-sm font-medium text-primary-600 outline-none transition-colors hover:text-primary-500 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:text-primary-300 dark:focus-visible:ring-offset-linear-canvas"
     >
       {{ t('gettingStarted.troubleshooting.officialSource') }}
       <Icon name="externalLink" size="sm" aria-hidden="true" />

@@ -367,9 +367,10 @@ describe('GuideApiKeyStep', () => {
     expect(wrapper.get('[data-testid="api-key-create"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('preserves an entered name and reports the existing API detail through the app toast', async () => {
+  it('preserves an entered name and reports only the generic localized error', async () => {
+    const secret = 'sk-guide-secret-DO-NOT-PERSIST'
     vi.mocked(keysAPI.create).mockRejectedValueOnce({
-      response: { data: { detail: 'Name is already in use' } }
+      response: { data: { detail: `upstream rejected ${secret}` } }
     })
     const { wrapper, appStore } = mountStep({ authenticated: true })
     await settle()
@@ -383,8 +384,9 @@ describe('GuideApiKeyStep', () => {
     )
     expect(appStore.toasts.at(-1)).toMatchObject({
       type: 'error',
-      message: 'Name is already in use'
+      message: 'Failed to save API key'
     })
+    expect(JSON.stringify(appStore.toasts)).not.toContain(secret)
   })
 
   it('discards a previous account response after the authenticated owner changes', async () => {

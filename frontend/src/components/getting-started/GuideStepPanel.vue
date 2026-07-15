@@ -27,7 +27,7 @@
     <footer class="sticky bottom-0 flex items-center justify-between gap-3 border-t border-gray-200 bg-white/95 px-5 py-4 backdrop-blur dark:border-linear-hairline dark:bg-linear-surface-2/95 sm:px-7">
       <button
         type="button"
-        class="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-linear-hairline dark:text-linear-ink dark:hover:bg-linear-surface-1"
+        class="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40 dark:border-linear-hairline dark:text-linear-ink dark:hover:bg-linear-surface-1 dark:focus-visible:ring-offset-linear-surface-2"
         :disabled="backDisabled"
         @click="emit('back')"
       >
@@ -37,7 +37,7 @@
       <button
         type="button"
         data-testid="step-primary-action"
-        class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-400 disabled:cursor-not-allowed disabled:opacity-45"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-45 dark:focus-visible:ring-offset-linear-surface-2"
         :disabled="nextDisabled || nextLoading"
         :aria-busy="nextLoading || undefined"
         @click="emit('next')"
