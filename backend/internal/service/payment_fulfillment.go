@@ -763,28 +763,6 @@ func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID in
 	return false
 }
 
-// countPriorSucceededRecharges 统计用户在 excludeOrderID 之外的成功充值订单数
-// （order_type ∈ {balance, subscription}，status ∈ {PAID, RECHARGING, COMPLETED}）。
-// 返回 0 表示当前订单为首充。必须在履约事务上下文内调用（ctx 携带 tx）。
-func (s *PaymentService) countPriorSucceededRecharges(ctx context.Context, userID, excludeOrderID int64) (int, error) {
-	client := s.entClient
-	if tx := dbent.TxFromContext(ctx); tx != nil {
-		client = tx.Client()
-	}
-	n, err := client.PaymentOrder.Query().
-		Where(
-			paymentorder.UserIDEQ(userID),
-			paymentorder.IDNEQ(excludeOrderID),
-			paymentorder.OrderTypeIn(payment.OrderTypeBalance, payment.OrderTypeSubscription),
-			paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted),
-		).
-		Count(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("count prior recharges: %w", err)
-	}
-	return n, nil
-}
-
 func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *dbent.PaymentOrder) error {
 	if o == nil {
 		return nil
