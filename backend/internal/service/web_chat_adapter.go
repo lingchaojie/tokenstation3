@@ -252,9 +252,7 @@ func validateWebChatAdapterContext(caps WebChatModelCapability, messages []WebCh
 			case WebChatAttachmentKindImage:
 				summary.ImageAttachmentCount++
 			case WebChatAttachmentKindFile:
-				if attachment.TextPreview != nil && strings.TrimSpace(*attachment.TextPreview) != "" {
-					summary.FileAttachmentCount++
-				}
+				summary.FileAttachmentCount++
 			}
 		}
 	}

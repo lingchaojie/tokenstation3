@@ -227,8 +227,9 @@ func TestBuildWebChatCompletionsPayload_OmitsBinaryFilesAndStreamOptionsWhenNotS
 	storage := fakeWebChatStorageWithoutOpens(t)
 
 	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
-		Model:        "gpt-5",
-		SupportsText: true,
+		Model:               "gpt-5",
+		SupportsText:        true,
+		SupportsFileContext: true,
 	}, messages, false)
 
 	require.NoError(t, err)
