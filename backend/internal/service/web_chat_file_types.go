@@ -200,15 +200,15 @@ func (fileType webChatUploadType) acceptsContentType(contentType string) bool {
 }
 
 func webChatAttachmentAllowedForProvider(provider string, attachment WebChatAttachment) bool {
-	if attachment.Kind == WebChatAttachmentKindImage {
-		return true
-	}
-	if attachment.Kind != WebChatAttachmentKindFile {
+	if attachment.Kind != WebChatAttachmentKindImage && attachment.Kind != WebChatAttachmentKindFile {
 		return false
 	}
 	fileType, ok := webChatUploadTypeForFilename(attachment.Filename)
-	if !ok || !fileType.acceptsContentType(strings.ToLower(strings.TrimSpace(attachment.ContentType))) {
+	if !ok || fileType.Kind != attachment.Kind || !fileType.acceptsContentType(strings.ToLower(strings.TrimSpace(attachment.ContentType))) {
 		return false
+	}
+	if attachment.Kind == WebChatAttachmentKindImage {
+		return true
 	}
 	if strings.EqualFold(strings.TrimSpace(provider), "openai") {
 		return true

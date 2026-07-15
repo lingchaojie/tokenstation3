@@ -346,6 +346,34 @@ func TestBuildWebChatCompletionsPayload_KeepsLegacyDOCXForAnthropic(t *testing.T
 	storage.requireOpened()
 }
 
+func TestBuildWebChatCompletionsPayload_RejectsUnknownAttachmentKindBeforeStorage(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsText: true, SupportsImageInput: true, SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "Analyze this", Attachments: []WebChatAttachment{{
+		Kind: "audio", Filename: "recording.mp3", ContentType: "audio/mpeg",
+	}}}}, false)
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.Nil(t, payload)
+	storage.requireOpened()
+}
+
+func TestBuildWebChatCompletionsPayload_RejectsFileKindWithImageRegistryMetadataBeforeStorage(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsText: true, SupportsImageInput: true, SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "Analyze this", Attachments: []WebChatAttachment{{
+		Kind: WebChatAttachmentKindFile, Filename: "photo.png", ContentType: "image/png",
+	}}}}, false)
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.Nil(t, payload)
+	storage.requireOpened()
+}
+
 func fakeWebChatStorageWithoutOpens(t *testing.T) *fakeWebChatStorage {
 	t.Helper()
 	return &fakeWebChatStorage{t: t, files: map[string][]byte{}}

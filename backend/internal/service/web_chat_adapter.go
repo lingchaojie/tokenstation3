@@ -256,6 +256,8 @@ func validateWebChatAdapterContext(caps WebChatModelCapability, messages []WebCh
 					return fmt.Errorf("%w: file %s is not supported by provider %s", ErrWebChatUnsupportedContext, webChatAttachmentDisplayName(attachment), caps.Provider)
 				}
 				summary.FileAttachmentCount++
+			default:
+				return fmt.Errorf("%w: attachment %s has unsupported kind %s", ErrWebChatUnsupportedContext, webChatAttachmentDisplayName(attachment), attachment.Kind)
 			}
 		}
 	}
