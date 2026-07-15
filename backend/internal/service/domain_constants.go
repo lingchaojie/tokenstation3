@@ -29,10 +29,14 @@ const (
 	AffiliateRebateFreezeHoursMax     = 720   // 最大 30 天
 
 	// 首充固定奖励模型（替代旧的按比例返现）
-	AffiliateFirstRechargeThresholdDefault = 20.0      // 首充达标阈值（USD，订阅无条件达标）
-	AffiliateInviterRewardDefault          = 5.0       // 邀请方奖励（进返利余额 aff_quota）
-	AffiliateInviteeRewardDefault          = 5.0       // 被邀请方奖励（进账户余额）
+	AffiliateFirstRechargeThresholdDefault = 0.0       // 0 = 注册后立即发放奖励
+	AffiliateInviterRewardDefault          = 10.0      // 邀请方奖励
+	AffiliateInviteeRewardDefault          = 5.0       // 被邀请方奖励
 	AffiliateRewardMax                     = 1000000.0 // 奖励/阈值上限，防误配
+	AffiliateRewardValidityDaysDefault     = 7         // 奖励到账后有效天数
+	AffiliateRewardValidityDaysMax         = 3650      // 最长 10 年
+	AffiliateInviterRewardLimitDefault     = 0         // 0 = 不限制邀请方获奖次数
+	AffiliateInviterRewardLimitMax         = 1000000   // 防误配
 )
 
 // Platform constants
@@ -171,6 +175,8 @@ const (
 	SettingKeyAffiliateFirstRechargeThreshold  = "affiliate_first_recharge_threshold"  // 首充达标阈值（USD）
 	SettingKeyAffiliateInviterReward           = "affiliate_inviter_reward"            // 邀请方奖励（进返利余额）
 	SettingKeyAffiliateInviteeReward           = "affiliate_invitee_reward"            // 被邀请方奖励（进账户余额）
+	SettingKeyAffiliateRewardValidityDays      = "affiliate_reward_validity_days"      // 邀请奖励到账后的有效天数
+	SettingKeyAffiliateInviterRewardLimit      = "affiliate_inviter_reward_limit"      // 每个邀请方最多获奖次数（0=不限）
 	SettingKeyDailyCheckInEnabled              = "daily_check_in_enabled"              // 每日签到活动总开关
 	SettingKeyDailyCheckInStartAt              = "daily_check_in_start_at"             // 每日签到活动开始时间（UTC RFC3339）
 	SettingKeyDailyCheckInDurationDays         = "daily_check_in_duration_days"        // 每日签到活动持续天数
