@@ -199,6 +199,23 @@ func (fileType webChatUploadType) acceptsContentType(contentType string) bool {
 	return false
 }
 
+func webChatAttachmentAllowedForProvider(provider string, attachment WebChatAttachment) bool {
+	if attachment.Kind == WebChatAttachmentKindImage {
+		return true
+	}
+	if attachment.Kind != WebChatAttachmentKindFile {
+		return false
+	}
+	fileType, ok := webChatUploadTypeForFilename(attachment.Filename)
+	if !ok || !fileType.acceptsContentType(strings.ToLower(strings.TrimSpace(attachment.ContentType))) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "openai") {
+		return true
+	}
+	return fileType.AcceptsLegacyProvider
+}
+
 func isGenericWebChatUploadContentType(contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
 	case "", "application/octet-stream", "binary/octet-stream", "application/x-binary":

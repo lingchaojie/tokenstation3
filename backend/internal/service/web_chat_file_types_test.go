@@ -65,6 +65,35 @@ func TestWebChatUploadRegistryExposesCanonicalAliasesAndLegacyMetadata(t *testin
 	}
 }
 
+func TestWebChatAttachmentAllowedForProvider(t *testing.T) {
+	cases := []struct {
+		name, provider string
+		attachment     WebChatAttachment
+		want           bool
+	}{
+		{"legacy image for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindImage, Filename: "photo.png", ContentType: "image/png"}, true},
+		{"legacy pdf for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf"}, true},
+		{"legacy docx for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "notes.docx", ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}, true},
+		{"legacy text for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "notes.txt", ContentType: "text/plain"}, true},
+		{"legacy markdown for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "notes.md", ContentType: "text/markdown"}, true},
+		{"legacy json for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "data.json", ContentType: "application/json"}, true},
+		{"legacy csv for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "data.csv", ContentType: "text/csv"}, true},
+		{"pptx for openai", " OpenAI ", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "slides.pptx", ContentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"}, true},
+		{"python for openai", "openai", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "script.py", ContentType: "text/x-python"}, true},
+		{"pptx for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "slides.pptx", ContentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"}, false},
+		{"python for anthropic", "anthropic", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "script.py", ContentType: "text/x-python"}, false},
+		{"mismatched content type", "openai", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "slides.pptx", ContentType: "application/pdf"}, false},
+		{"unknown extension", "openai", WebChatAttachment{Kind: WebChatAttachmentKindFile, Filename: "archive.zip", ContentType: "application/zip"}, false},
+		{"unknown kind", "openai", WebChatAttachment{Kind: "audio", Filename: "audio.mp3", ContentType: "audio/mpeg"}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, webChatAttachmentAllowedForProvider(tc.provider, tc.attachment))
+		})
+	}
+}
+
 func TestClassifyWebChatUploadContentType_AcceptsSupportedContainersAndCode(t *testing.T) {
 	ole := append(append([]byte(nil), webChatOLEMagic...), []byte("payload")...)
 	cases := []struct {

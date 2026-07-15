@@ -252,6 +252,9 @@ func validateWebChatAdapterContext(caps WebChatModelCapability, messages []WebCh
 			case WebChatAttachmentKindImage:
 				summary.ImageAttachmentCount++
 			case WebChatAttachmentKindFile:
+				if !webChatAttachmentAllowedForProvider(caps.Provider, attachment) {
+					return fmt.Errorf("%w: file %s is not supported by provider %s", ErrWebChatUnsupportedContext, webChatAttachmentDisplayName(attachment), caps.Provider)
+				}
 				summary.FileAttachmentCount++
 			}
 		}

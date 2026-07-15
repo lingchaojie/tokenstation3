@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,52 @@ func TestBuildOpenAIWebChatResponsesPayload_DOCXOmitsDetail(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "input_file", gjson.GetBytes(payload, "input.0.content.0.type").String())
 	require.False(t, gjson.GetBytes(payload, "input.0.content.0.detail").Exists())
+}
+
+func TestBuildOpenAIWebChatResponsesPayload_OpenAIOnlyFilesUseNativeInput(t *testing.T) {
+	cases := []struct {
+		name, filename, contentType, dataURLPrefix string
+		data                                       []byte
+	}{
+		{
+			name:          "pptx",
+			filename:      "slides.pptx",
+			contentType:   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+			dataURLPrefix: "data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,",
+			data: testWebChatZIP(t, map[string]string{
+				"[Content_Types].xml":  "<Types/>",
+				"ppt/presentation.xml": "<p:presentation/>",
+			}),
+		},
+		{
+			name:          "python",
+			filename:      "script.py",
+			contentType:   "text/x-python",
+			dataURLPrefix: "data:text/x-python;base64,",
+			data:          []byte("print('ok')\n"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := fakeWebChatStorageWithFile(t, tc.filename, tc.data)
+			payload, err := BuildOpenAIWebChatResponsesPayload(context.Background(), storage, WebChatModelCapability{
+				Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5",
+				SupportsFileContext: true,
+			}, []WebChatMessage{{Role: WebChatRoleUser, Attachments: []WebChatAttachment{{
+				Kind: WebChatAttachmentKindFile, Filename: tc.filename,
+				ContentType: tc.contentType, StorageKey: tc.filename,
+			}}}}, false)
+
+			require.NoError(t, err)
+			require.Equal(t, "input_file", gjson.GetBytes(payload, "input.0.content.0.type").String())
+			require.False(t, gjson.GetBytes(payload, "input.0.content.0.detail").Exists())
+			fileData := gjson.GetBytes(payload, "input.0.content.0.file_data").String()
+			require.NotEmpty(t, fileData)
+			require.True(t, strings.HasPrefix(fileData, tc.dataURLPrefix))
+			storage.requireOpened(tc.filename)
+		})
+	}
 }
 
 func TestBuildOpenAIWebChatResponsesPayload_RejectsMoreThanFiftyMiBOfFiles(t *testing.T) {
