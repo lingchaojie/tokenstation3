@@ -119,6 +119,11 @@ func (h *AuthHandler) DingTalkOAuthStart(c *gin.Context) {
 		redirectOAuthError(c, frontendCB, "dingtalk_not_enabled", "", "")
 		return
 	}
+	cfg.RedirectURL, err = h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/dingtalk/callback")
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured").WithCause(err))
+		return
+	}
 
 	state, err := oauth.GenerateState()
 	if err != nil {
@@ -296,10 +301,7 @@ func (h *AuthHandler) DingTalkOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	frontendCallback := strings.TrimSpace(cfg.FrontendRedirectURL)
-	if frontendCallback == "" {
-		frontendCallback = dingTalkOAuthDefaultFrontendCB
-	}
+	frontendCallback := h.resolveOAuthFrontendCallbackURL(c, cfg.FrontendRedirectURL, dingTalkOAuthDefaultFrontendCB)
 
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))

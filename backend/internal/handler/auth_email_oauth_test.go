@@ -227,6 +227,39 @@ func TestEmailOAuthStartPreservesPromoCodeInPendingSession(t *testing.T) {
 	require.Equal(t, "WELCOME2024", pendingOAuthPromoCode(session))
 }
 
+func TestEmailOAuthStartUsesAllowedRequestHostForRedirectURI(t *testing.T) {
+	handler, _ := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		settingValues: map[string]string{
+			service.SettingKeyGitHubOAuthEnabled:      "true",
+			service.SettingKeyGitHubOAuthClientID:     "github-client",
+			service.SettingKeyGitHubOAuthClientSecret: "github-secret",
+			service.SettingKeyGitHubOAuthRedirectURL:  "https://www.linx2.ai/api/v1/auth/oauth/github/callback",
+		},
+	})
+	handler.cfg = &config.Config{
+		Security: config.SecurityConfig{
+			OAuthRedirect: config.OAuthRedirectConfig{
+				AllowedHosts: []string{"www.linx2.ai", "english.example.com"},
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "http://english.example.com/api/v1/auth/oauth/github/start", nil)
+	req.Host = "english.example.com"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	c.Request = req
+
+	handler.GitHubOAuthStart(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	parsed, err := url.Parse(location)
+	require.NoError(t, err)
+	require.Equal(t, "https://english.example.com/api/v1/auth/oauth/github/callback", parsed.Query().Get("redirect_uri"))
+}
+
 func TestCompleteEmailOAuthRegistrationUsesAffiliateCodeFromPendingSession(t *testing.T) {
 	affiliateRepo := newOAuthEmailAffiliateRepoStub(map[string]int64{"AFF456": 2002})
 	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{

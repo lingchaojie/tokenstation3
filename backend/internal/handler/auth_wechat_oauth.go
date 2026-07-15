@@ -151,7 +151,7 @@ func (h *AuthHandler) WeChatOAuthStart(c *gin.Context) {
 // WeChatOAuthCallback exchanges the code with WeChat, resolves openid/unionid,
 // and stores the result in the unified pending-auth flow.
 func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
-	frontendCallback := h.wechatOAuthFrontendCallback(c.Request.Context())
+	frontendCallback := h.wechatOAuthFrontendCallback(c.Request.Context(), c)
 
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
@@ -996,12 +996,21 @@ func (h *AuthHandler) getWeChatOAuthConfig(ctx context.Context, rawMode string, 
 		return wechatOAuthConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "wechat oauth is disabled")
 	}
 
+	redirectURI, err := h.resolveOAuthProviderCallbackURL(
+		c,
+		firstNonEmpty(strings.TrimSpace(effective.RedirectURL), resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/callback")),
+		"/api/v1/auth/oauth/wechat/callback",
+	)
+	if err != nil {
+		return wechatOAuthConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "wechat oauth redirect url not configured").WithCause(err)
+	}
+
 	cfg := wechatOAuthConfig{
 		mode:             mode,
 		appID:            strings.TrimSpace(effective.AppIDForMode(mode)),
 		appSecret:        strings.TrimSpace(effective.AppSecretForMode(mode)),
-		redirectURI:      firstNonEmpty(strings.TrimSpace(effective.RedirectURL), resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/callback")),
-		frontendCallback: firstNonEmpty(strings.TrimSpace(effective.FrontendRedirectURL), wechatOAuthDefaultFrontendCB),
+		redirectURI:      redirectURI,
+		frontendCallback: h.resolveOAuthFrontendCallbackURL(c, effective.FrontendRedirectURL, wechatOAuthDefaultFrontendCB),
 		scope:            effective.ScopeForMode(mode),
 		openEnabled:      effective.OpenEnabled,
 		mpEnabled:        effective.MPEnabled,
@@ -1024,14 +1033,14 @@ func (cfg wechatOAuthConfig) requiresUnionID() bool {
 	return cfg.openEnabled && cfg.mpEnabled
 }
 
-func (h *AuthHandler) wechatOAuthFrontendCallback(ctx context.Context) string {
+func (h *AuthHandler) wechatOAuthFrontendCallback(ctx context.Context, c *gin.Context) string {
 	if h != nil && h.settingSvc != nil {
 		cfg, err := h.settingSvc.GetWeChatConnectOAuthConfig(ctx)
 		if err == nil && strings.TrimSpace(cfg.FrontendRedirectURL) != "" {
-			return strings.TrimSpace(cfg.FrontendRedirectURL)
+			return h.resolveOAuthFrontendCallbackURL(c, cfg.FrontendRedirectURL, wechatOAuthDefaultFrontendCB)
 		}
 	}
-	return wechatOAuthDefaultFrontendCB
+	return h.resolveOAuthFrontendCallbackURL(c, "", wechatOAuthDefaultFrontendCB)
 }
 
 func resolveWeChatOAuthMode(rawMode string, c *gin.Context) (string, error) {
@@ -1307,7 +1316,15 @@ func (h *AuthHandler) resolveWeChatPaymentOAuthCallbackURL(ctx context.Context, 
 			apiBaseURL = strings.TrimSpace(settings.APIBaseURL)
 		}
 	}
-	return resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/payment/callback")
+	resolved, err := h.resolveOAuthProviderCallbackURL(
+		c,
+		resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/payment/callback"),
+		"/api/v1/auth/oauth/wechat/payment/callback",
+	)
+	if err != nil {
+		return ""
+	}
+	return resolved
 }
 
 func encodeWeChatPaymentOAuthContext(ctx wechatPaymentOAuthContext) (string, error) {

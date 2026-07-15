@@ -632,6 +632,7 @@ type SecurityConfig struct {
 	URLAllowlist                     URLAllowlistConfig   `mapstructure:"url_allowlist"`
 	ResponseHeaders                  ResponseHeaderConfig `mapstructure:"response_headers"`
 	CSP                              CSPConfig            `mapstructure:"csp"`
+	OAuthRedirect                    OAuthRedirectConfig  `mapstructure:"oauth_redirect"`
 	ProxyFallback                    ProxyFallbackConfig  `mapstructure:"proxy_fallback"`
 	ProxyProbe                       ProxyProbeConfig     `mapstructure:"proxy_probe"`
 	TrustForwardedIPForAPIKeyACL     bool                 `mapstructure:"trust_forwarded_ip_for_api_key_acl"`
@@ -668,6 +669,12 @@ type URLAllowlistConfig struct {
 	AllowPrivateHosts bool     `mapstructure:"allow_private_hosts"`
 	// 关闭 URL 白名单校验时，是否允许 http URL（默认只允许 https）
 	AllowInsecureHTTP bool `mapstructure:"allow_insecure_http"`
+}
+
+type OAuthRedirectConfig struct {
+	// AllowedHosts lists public hosts that may be used to derive OAuth callback
+	// URLs from the current request Host for multi-domain frontend deployments.
+	AllowedHosts []string `mapstructure:"allowed_hosts"`
 }
 
 type ResponseHeaderConfig struct {
@@ -1599,6 +1606,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.OIDC.ValidateIDTokenExplicit = hasExplicitConfigOrEnv("oidc_connect.validate_id_token", "OIDC_CONNECT_VALIDATE_ID_TOKEN")
 	cfg.Dashboard.KeyPrefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
 	cfg.CORS.AllowedOrigins = normalizeStringSlice(cfg.CORS.AllowedOrigins)
+	cfg.Security.OAuthRedirect.AllowedHosts = normalizeStringSlice(cfg.Security.OAuthRedirect.AllowedHosts)
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
 	cfg.Security.CSP.Policy = strings.TrimSpace(cfg.Security.CSP.Policy)
@@ -1748,6 +1756,7 @@ func setDefaults() {
 	viper.SetDefault("security.response_headers.enabled", true)
 	viper.SetDefault("security.response_headers.additional_allowed", []string{})
 	viper.SetDefault("security.response_headers.force_remove", []string{})
+	viper.SetDefault("security.oauth_redirect.allowed_hosts", []string{})
 	viper.SetDefault("security.csp.enabled", true)
 	viper.SetDefault("security.csp.policy", DefaultCSPPolicy)
 	viper.SetDefault("security.proxy_probe.insecure_skip_verify", false)

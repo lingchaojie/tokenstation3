@@ -135,8 +135,8 @@ func (h *AuthHandler) LinuxDoOAuthStart(c *gin.Context) {
 		setCookie(c, linuxDoOAuthVerifierCookie, encodeCookieValue(verifier), linuxDoOAuthCookieMaxAgeSec, secureCookie)
 	}
 
-	redirectURI := strings.TrimSpace(cfg.RedirectURL)
-	if redirectURI == "" {
+	redirectURI, err := h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/linuxdo/callback")
+	if err != nil {
 		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured"))
 		return
 	}
@@ -159,10 +159,7 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	frontendCallback := strings.TrimSpace(cfg.FrontendRedirectURL)
-	if frontendCallback == "" {
-		frontendCallback = linuxDoOAuthDefaultFrontendCB
-	}
+	frontendCallback := h.resolveOAuthFrontendCallbackURL(c, cfg.FrontendRedirectURL, linuxDoOAuthDefaultFrontendCB)
 
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
@@ -214,8 +211,8 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		}
 	}
 
-	redirectURI := strings.TrimSpace(cfg.RedirectURL)
-	if redirectURI == "" {
+	redirectURI, err := h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/linuxdo/callback")
+	if err != nil {
 		redirectOAuthError(c, frontendCallback, "config_error", "oauth redirect url not configured", "")
 		return
 	}

@@ -178,8 +178,8 @@ func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
 		oidcSetCookie(c, oidcOAuthNonceCookie, encodeCookieValue(nonce), oidcOAuthCookieMaxAgeSec, secureCookie)
 	}
 
-	redirectURI := strings.TrimSpace(cfg.RedirectURL)
-	if redirectURI == "" {
+	redirectURI, err := h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/oidc/callback")
+	if err != nil {
 		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured"))
 		return
 	}
@@ -202,10 +202,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	frontendCallback := strings.TrimSpace(cfg.FrontendRedirectURL)
-	if frontendCallback == "" {
-		frontendCallback = oidcOAuthDefaultFrontendCB
-	}
+	frontendCallback := h.resolveOAuthFrontendCallbackURL(c, cfg.FrontendRedirectURL, oidcOAuthDefaultFrontendCB)
 
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
@@ -267,8 +264,8 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		}
 	}
 
-	redirectURI := strings.TrimSpace(cfg.RedirectURL)
-	if redirectURI == "" {
+	redirectURI, err := h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/oidc/callback")
+	if err != nil {
 		redirectOAuthError(c, frontendCallback, "config_error", "oauth redirect url not configured", "")
 		return
 	}

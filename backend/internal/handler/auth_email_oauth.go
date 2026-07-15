@@ -64,6 +64,11 @@ func (h *AuthHandler) emailOAuthStart(c *gin.Context, provider string) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	cfg.RedirectURL, err = h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/"+provider+"/callback")
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured").WithCause(err))
+		return
+	}
 	state, err := oauth.GenerateState()
 	if err != nil {
 		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_STATE_GEN_FAILED", "failed to generate oauth state").WithCause(err))
@@ -99,10 +104,12 @@ func (h *AuthHandler) emailOAuthCallback(c *gin.Context, provider string) {
 		response.ErrorFrom(c, cfgErr)
 		return
 	}
-	frontendCallback := strings.TrimSpace(cfg.FrontendRedirectURL)
-	if frontendCallback == "" {
-		frontendCallback = "/auth/oauth/callback"
+	cfg.RedirectURL, cfgErr = h.resolveOAuthProviderCallbackURL(c, cfg.RedirectURL, "/api/v1/auth/oauth/"+provider+"/callback")
+	if cfgErr != nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured").WithCause(cfgErr))
+		return
 	}
+	frontendCallback := h.resolveOAuthFrontendCallbackURL(c, cfg.FrontendRedirectURL, "/auth/oauth/callback")
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
 		return

@@ -83,6 +83,15 @@ cors:
 # 安全配置
 # =============================================================================
 security:
+  oauth_redirect:
+    # Allowed public hosts that may derive OAuth callback URLs from the current request Host.
+    # 用于多域名前端的 OAuth 回调域名白名单。只有列在这里的 Host 才会按当前域名生成 redirect_uri。
+    # Example:
+    # allowed_hosts:
+    #   - "www.example.com"
+    #   - "english.example.com"
+    allowed_hosts: []
+
   url_allowlist:
     # Enable URL allowlist validation (disable to skip all URL checks)
     # 启用 URL 白名单验证（禁用则跳过所有 URL 检查）

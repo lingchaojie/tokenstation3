@@ -62,6 +62,27 @@ func TestDefaultCSPPolicyAllowsBlobImages(t *testing.T) {
 	}
 }
 
+func TestLoadOAuthRedirectAllowedHosts(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	viper.Set("security.oauth_redirect.allowed_hosts", []string{" www.linx2.ai ", "", "english.example.com"})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	got := cfg.Security.OAuthRedirect.AllowedHosts
+	want := []string{"www.linx2.ai", "english.example.com"}
+	if len(got) != len(want) {
+		t.Fatalf("AllowedHosts = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("AllowedHosts = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func cspDirectiveContains(policy, directive, value string) bool {
 	for _, rawDirective := range strings.Split(policy, ";") {
 		fields := strings.Fields(strings.TrimSpace(rawDirective))
