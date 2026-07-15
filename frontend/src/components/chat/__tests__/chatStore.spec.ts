@@ -7,6 +7,7 @@ import {
   sendChatMessageStream,
   type WebChatStreamSendResult,
   type WebChatAttachment,
+  type WebChatConversationDetail,
   type WebChatImageGenerationAspectRatio,
   type WebChatImageGenerationBackground,
   type WebChatImageGenerationOutputFormat,
@@ -94,6 +95,38 @@ const fileAttachment: WebChatAttachment = {
   filename: 'notes.txt',
   content_type: 'text/plain',
   storage_key: 'web-chat/notes.txt',
+}
+
+function emptyWebSearchConversation(model: WebChatModel): WebChatConversationDetail {
+  return {
+    conversation: {
+      id: 7,
+      title: 'Search',
+      default_model: model.model,
+      default_provider: model.provider,
+      last_model: model.model,
+      last_provider: model.provider,
+      status: 'active',
+      message_count: 0,
+      created_at: '2026-06-22T00:00:00Z',
+      updated_at: '2026-06-22T00:00:00Z',
+    },
+    messages: [],
+  }
+}
+
+function mockCompletedWebChatStream() {
+  return vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
+    response: new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: {
+        'X-Web-Chat-User-Message-ID': '100',
+        'X-Web-Chat-Assistant-Message-ID': '101',
+      },
+    }),
+    userMessageId: 100,
+    assistantMessageId: 101,
+  })
 }
 
 describe('useChatStore', () => {
@@ -438,54 +471,40 @@ describe('useChatStore', () => {
     }), expect.any(AbortSignal))
   })
 
-  it('keeps web search off by default and only sends config when enabled', async () => {
-    const streamSpy = vi.spyOn(chatAPI, 'sendMessageStream').mockResolvedValue({
-      response: new Response('data: [DONE]\n\n', {
-        status: 200,
-        headers: {
-          'X-Web-Chat-User-Message-ID': '100',
-          'X-Web-Chat-Assistant-Message-ID': '101',
-        },
-      }),
-      userMessageId: 100,
-      assistantMessageId: 101,
-    })
+  it('never sends a frontend search config for OpenAI', async () => {
+    const streamSpy = mockCompletedWebChatStream()
     const store = useChatStore()
     store.selectedModel = webSearchModel
-    store.currentConversation = {
-      conversation: {
-        id: 7,
-        title: 'Search',
-        default_model: webSearchModel.model,
-        default_provider: webSearchModel.provider,
-        last_model: webSearchModel.model,
-        last_provider: webSearchModel.provider,
-        status: 'active',
-        message_count: 0,
-        created_at: '2026-06-22T00:00:00Z',
-        updated_at: '2026-06-22T00:00:00Z',
-      },
-      messages: [],
-    }
-
+    store.currentConversation = emptyWebSearchConversation(webSearchModel)
     store.webSearchEnabled = true
-    await store.sendMessage('Search today')
 
-    store.webSearchEnabled = false
-    await store.sendMessage('Answer from model context')
+    await store.sendMessage('Use server-managed search')
 
-    expect(streamSpy).toHaveBeenNthCalledWith(1, 7, expect.objectContaining({
-      model: 'gpt-5.5',
-      provider: 'openai',
-      content: 'Search today',
+    expect(streamSpy.mock.calls[0][1]).not.toHaveProperty('web_search')
+  })
+
+  it('keeps configurable search for a non-OpenAI model', async () => {
+    const model: WebChatModel = {
+      ...webSearchModel,
+      provider: 'anthropic',
+      platform: 'anthropic',
+      key_type: 'anthropic',
+      model: 'claude-sonnet-4',
+      display_name: 'Claude Sonnet 4',
+    }
+    const streamSpy = mockCompletedWebChatStream()
+    const store = useChatStore()
+    store.selectedModel = model
+    store.currentConversation = emptyWebSearchConversation(model)
+    store.webSearchEnabled = true
+
+    await store.sendMessage('Search with Claude')
+
+    expect(streamSpy.mock.calls[0][1]).toMatchObject({
+      model: 'claude-sonnet-4',
+      provider: 'anthropic',
       web_search: { enabled: true },
-    }), expect.any(AbortSignal))
-    expect(streamSpy).toHaveBeenNthCalledWith(2, 7, expect.objectContaining({
-      model: 'gpt-5.5',
-      provider: 'openai',
-      content: 'Answer from model context',
-    }), expect.any(AbortSignal))
-    expect(streamSpy.mock.calls[1][1]).not.toHaveProperty('web_search')
+    })
   })
 
   it('streams reasoning and tool call events into assistant process blocks', async () => {

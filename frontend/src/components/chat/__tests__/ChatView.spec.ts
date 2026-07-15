@@ -38,7 +38,14 @@ import ChatShell from '@/components/chat/ChatShell.vue'
 import Composer from '@/components/chat/Composer.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
-import { chatAPI, type WebChatConversation, type WebChatMessage, type WebChatModel } from '@/api/chat'
+import Icon from '@/components/icons/Icon.vue'
+import {
+  chatAPI,
+  type WebChatAttachment,
+  type WebChatConversation,
+  type WebChatMessage,
+  type WebChatModel,
+} from '@/api/chat'
 import { useChatStore } from '@/stores/chat'
 
 const chatModel: WebChatModel = {
@@ -210,6 +217,71 @@ describe('Composer', () => {
     setActivePinia(createPinia())
   })
 
+  it('renders one upload entry with the upload icon for GPT', () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+
+    const wrapper = mount(Composer)
+    const button = wrapper.get('[data-testid="chat-attachment-upload"]')
+
+    expect(wrapper.findAll('[data-testid="chat-attachment-upload"]')).toHaveLength(1)
+    expect(button.findComponent(Icon).props('name')).toBe('upload')
+    expect(button.attributes('aria-label')).toBe('Upload file')
+    expect(wrapper.findAll('input[type="file"]')).toHaveLength(1)
+  })
+
+  it('uses provider-aware attachment accept hints', async () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+    const wrapper = mount(Composer)
+    const input = wrapper.get('[data-testid="chat-attachment-input"]')
+
+    expect(input.attributes('accept')).toContain('.pptx')
+    expect(input.attributes('accept')).toContain('.py')
+
+    store.selectedModel = anthropicModel
+    await wrapper.vm.$nextTick()
+
+    expect(input.attributes('accept')).toContain('.docx')
+    expect(input.attributes('accept')).not.toContain('.pptx')
+    expect(input.attributes('accept')).not.toContain('.py')
+  })
+
+  it.each([
+    ['image', 'diagram.png', 'image/png'],
+    ['document', 'slides.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ])('uploads a selected %s through the single attachment input', async (_kind, filename, contentType) => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+    const uploadSpy = vi.spyOn(store, 'uploadAttachment').mockResolvedValue({} as WebChatAttachment)
+    const wrapper = mount(Composer)
+    const input = wrapper.get('[data-testid="chat-attachment-input"]')
+    const file = new File(['content'], filename, { type: contentType })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+
+    await input.trigger('change')
+
+    expect(uploadSpy).toHaveBeenCalledWith(file)
+  })
+
+  it('does not render a web search control or explanation for GPT', async () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+    const wrapper = mount(Composer)
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="chat-web-search-toggle"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Web search')
+    expect(wrapper.text()).not.toContain('联网')
+  })
+
+  it('keeps the web search control for a searchable non-OpenAI model', async () => {
+    const store = useChatStore()
+    store.selectedModel = { ...anthropicModel, supports_web_search: true }
+    const wrapper = mount(Composer)
+    await wrapper.get('[data-testid="chat-options-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="chat-web-search-toggle"]').exists()).toBe(true)
+  })
+
   it('disables send while streaming and exposes a stop control', () => {
     const store = useChatStore()
     store.selectedModel = chatModel
@@ -320,7 +392,7 @@ describe('Composer', () => {
 
   it('omits secondary status text for thinking and web search toggles', async () => {
     const store = useChatStore()
-    store.selectedModel = chatModel
+    store.selectedModel = { ...anthropicModel, supports_web_search: true }
 
     const wrapper = mount(Composer)
 

@@ -24,6 +24,7 @@ FRONTEND_CRITICAL_VITEST := \
 
 FRONTEND_WEBCHAT_VITEST := \
 	src/utils/__tests__/webChatModelName.spec.ts \
+	src/utils/__tests__/webChatAttachmentAccept.spec.ts \
 	src/components/chat/__tests__/chatStore.spec.ts \
 	src/components/chat/__tests__/ChatView.spec.ts \
 	src/components/chat/__tests__/MessageList.spec.ts

@@ -89,7 +89,7 @@
           class="mb-2 grid w-full gap-2 rounded-lg border border-linear-hairline bg-linear-surface-0 p-3 shadow-sm sm:grid-cols-2"
           data-testid="chat-options-panel"
         >
-          <div v-if="chatStore.selectedModelSupportsWebSearch" class="flex min-w-0 items-center gap-2">
+          <div v-if="chatStore.selectedModelHasConfigurableWebSearch" class="flex min-w-0 items-center gap-2">
             <button
               type="button"
               class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-sm font-medium outline-none transition-colors"
@@ -261,22 +261,13 @@
             <button
               class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
-              :title="t('chat.attachImage')"
-              :aria-label="t('chat.attachImage')"
-              :disabled="chatStore.streaming || uploading"
-              @click="imageInput?.click()"
-            >
-              <Icon name="upload" size="sm" />
-            </button>
-            <button
-              class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-linear-ink-muted transition-colors hover:bg-linear-surface-1 hover:text-linear-ink disabled:cursor-not-allowed disabled:opacity-50"
-              type="button"
               :title="t('chat.attachFile')"
               :aria-label="t('chat.attachFile')"
+              data-testid="chat-attachment-upload"
               :disabled="chatStore.streaming || uploading"
-              @click="fileInput?.click()"
+              @click="attachmentInput?.click()"
             >
-              <Icon name="document" size="sm" />
+              <Icon name="upload" size="sm" />
             </button>
           </div>
 
@@ -314,16 +305,11 @@
     </div>
 
     <input
-      ref="imageInput"
+      ref="attachmentInput"
       class="hidden"
       type="file"
-      accept="image/*"
-      @change="handleFileInput"
-    />
-    <input
-      ref="fileInput"
-      class="hidden"
-      type="file"
+      :accept="attachmentAccept"
+      data-testid="chat-attachment-input"
       @change="handleFileInput"
     />
   </footer>
@@ -338,6 +324,7 @@ import AttachmentChip from '@/components/chat/AttachmentChip.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
+import { webChatAttachmentAccept } from '@/utils/webChatAttachmentAccept'
 import { providerIconModel } from '@/utils/modelCatalog'
 
 const { t } = useI18n()
@@ -349,8 +336,8 @@ const modelMenuOpen = ref(false)
 const providerMenuOpen = ref(false)
 const modelMenuRef = ref<HTMLElement | null>(null)
 const providerMenuRef = ref<HTMLElement | null>(null)
-const imageInput = ref<HTMLInputElement | null>(null)
-const fileInput = ref<HTMLInputElement | null>(null)
+const attachmentInput = ref<HTMLInputElement | null>(null)
+const attachmentAccept = computed(() => webChatAttachmentAccept(chatStore.selectedModel?.provider))
 
 const providers = computed(() => Array.from(new Set(chatStore.models.map((model) => model.provider))).sort())
 
@@ -391,7 +378,7 @@ const selectedModelLabel = computed(() => {
 const hasDraft = computed(() => draft.value.trim().length > 0 || chatStore.pendingAttachments.length > 0)
 const hasModelOptions = computed(() =>
   chatStore.selectedModelSupportsThinking ||
-  chatStore.selectedModelSupportsWebSearch ||
+  chatStore.selectedModelHasConfigurableWebSearch ||
   chatStore.selectedModelSupportsImageGeneration
 )
 const sendDisabled = computed(() =>
@@ -470,7 +457,7 @@ function toggleThinking(): void {
 }
 
 function toggleWebSearch(): void {
-  if (!chatStore.selectedModelSupportsWebSearch) return
+  if (!chatStore.selectedModelHasConfigurableWebSearch) return
   chatStore.webSearchEnabled = !chatStore.webSearchEnabled
 }
 
