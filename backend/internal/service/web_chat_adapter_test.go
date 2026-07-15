@@ -15,7 +15,7 @@ func TestBuildWebChatCompletionsPayload_IncludesTextImageAndFilePreview(t *testi
 		Role:        WebChatRoleUser,
 		ContentText: "Explain this image and notes",
 		Attachments: []WebChatAttachment{
-			{Kind: WebChatAttachmentKindImage, ContentType: "image/png", StorageKey: "u/1/image.png"},
+			{Kind: WebChatAttachmentKindImage, Filename: "image.png", ContentType: "image/png", StorageKey: "u/1/image.png"},
 			{Kind: WebChatAttachmentKindFile, ContentType: "text/plain", TextPreview: webChatStringPtr("notes")},
 		},
 	}}
@@ -186,6 +186,7 @@ type fakeWebChatStorage struct {
 	t            *testing.T
 	files        map[string][]byte
 	metaSizes    map[string]int64
+	openErrors   map[string]error
 	expectedKeys []string
 	openedKeys   []string
 }
@@ -196,6 +197,7 @@ func TestBuildWebChatCompletionsPayload_UnsupportedImageContextDoesNotOpenStorag
 		ContentText: "Explain this image",
 		Attachments: []WebChatAttachment{{
 			Kind:        WebChatAttachmentKindImage,
+			Filename:    "image.png",
 			ContentType: "image/png",
 			StorageKey:  "u/1/image.png",
 		}},
@@ -271,6 +273,7 @@ func TestBuildWebChatCompletionsPayload_RejectsOversizedImageRead(t *testing.T) 
 		Role: WebChatRoleUser,
 		Attachments: []WebChatAttachment{{
 			Kind:        WebChatAttachmentKindImage,
+			Filename:    "large.png",
 			ContentType: "image/png",
 			StorageKey:  "u/1/large.png",
 		}},
@@ -360,9 +363,12 @@ func (s *fakeWebChatStorage) Open(_ context.Context, key string) (io.ReadCloser,
 	}
 	expectedKey := s.expectedKeys[len(s.openedKeys)]
 	require.Equal(s.t, expectedKey, key)
+	s.openedKeys = append(s.openedKeys, key)
+	if openErr := s.openErrors[key]; openErr != nil {
+		return nil, WebChatStoredFileMeta{}, openErr
+	}
 	data, ok := s.files[key]
 	require.Truef(s.t, ok, "missing fake storage data for key %q", key)
-	s.openedKeys = append(s.openedKeys, key)
 	return io.NopCloser(bytes.NewReader(data)), WebChatStoredFileMeta{
 		StorageKey: key,
 		SizeBytes:  s.metaSizes[key],

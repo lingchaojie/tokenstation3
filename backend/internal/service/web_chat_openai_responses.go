@@ -1,14 +1,11 @@
 package service
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -167,41 +164,11 @@ func readWebChatStoredAttachment(ctx context.Context, storage WebChatStorage, at
 		return nil, "", ErrWebChatUploadRejected
 	}
 
-	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.ContentType, data)
-	if err != nil || kind != attachment.Kind || !webChatStoredContentMatchesType(contentType, data) {
+	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.Filename, attachment.ContentType, data)
+	if err != nil || kind != attachment.Kind {
 		return nil, "", ErrWebChatUploadRejected
 	}
 	return data, contentType, nil
-}
-
-func webChatStoredContentMatchesType(contentType string, data []byte) bool {
-	switch contentType {
-	case "image/png", "image/jpeg", "image/webp", "image/gif":
-		detected := strings.ToLower(strings.TrimSpace(strings.SplitN(http.DetectContentType(data), ";", 2)[0]))
-		return detected == contentType
-	case "application/pdf":
-		return bytes.HasPrefix(data, []byte("%PDF-"))
-	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return false
-		}
-		hasContentTypes := false
-		hasDocument := false
-		for _, file := range archive.File {
-			if file.Name == "[Content_Types].xml" {
-				hasContentTypes = true
-			}
-			if file.Name == "word/document.xml" {
-				hasDocument = true
-			}
-		}
-		return hasContentTypes && hasDocument
-	case "text/plain", "text/markdown", "application/json", "text/csv":
-		return webChatBodyLooksText(data)
-	default:
-		return false
-	}
 }
 
 func webChatAttachmentDataURL(contentType string, data []byte) string {

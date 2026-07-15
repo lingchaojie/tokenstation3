@@ -1169,7 +1169,8 @@ func (s webChatStorageStub) Save(_ context.Context, in WebChatStorageSaveInput) 
 }
 
 func (webChatStorageStub) Open(context.Context, string) (io.ReadCloser, WebChatStoredFileMeta, error) {
-	return io.NopCloser(strings.NewReader("image")), WebChatStoredFileMeta{SizeBytes: 5}, nil
+	png := string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	return io.NopCloser(strings.NewReader(png)), WebChatStoredFileMeta{SizeBytes: int64(len(png))}, nil
 }
 
 func (webChatStorageStub) Delete(context.Context, string) error {

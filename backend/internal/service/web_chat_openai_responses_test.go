@@ -1,9 +1,9 @@
 package service
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -162,7 +162,7 @@ func TestReadWebChatStoredAttachmentAcceptsPDFAndDOCX(t *testing.T) {
 	}
 
 	gotPDF, pdfType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
-		Kind: WebChatAttachmentKindFile, ContentType: "application/pdf", StorageKey: "paper.pdf",
+		Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
 	})
 	require.NoError(t, err)
 	require.Equal(t, pdf, gotPDF)
@@ -170,6 +170,7 @@ func TestReadWebChatStoredAttachmentAcceptsPDFAndDOCX(t *testing.T) {
 
 	gotDOCX, docxType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
 		Kind:        WebChatAttachmentKindFile,
+		Filename:    "notes.docx",
 		ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		StorageKey:  "notes.docx",
 	})
@@ -182,7 +183,7 @@ func TestReadWebChatStoredAttachmentRejectsDeclaredPDFWithNonPDFBytes(t *testing
 	storage := fakeWebChatStorageWithFile(t, "paper.pdf", []byte("not a pdf"))
 
 	data, contentType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
-		Kind: WebChatAttachmentKindFile, ContentType: "application/pdf", StorageKey: "paper.pdf",
+		Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
 	})
 
 	require.ErrorIs(t, err, ErrWebChatUploadRejected)
@@ -190,19 +191,63 @@ func TestReadWebChatStoredAttachmentRejectsDeclaredPDFWithNonPDFBytes(t *testing
 	require.Empty(t, contentType)
 }
 
+func TestReadWebChatStoredAttachmentRejectsDeclaredSizeBeforeOpen(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	data, contentType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
+		Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf",
+		SizeBytes: webChatMaxUploadBytes + 1, StorageKey: "paper.pdf",
+	})
+	require.ErrorIs(t, err, ErrWebChatUploadRejected)
+	require.Nil(t, data)
+	require.Empty(t, contentType)
+	storage.requireOpened()
+}
+
+func TestReadWebChatStoredAttachmentRejectsMetadataAndActualSize(t *testing.T) {
+	pdf := []byte("%PDF-1.7\n%%EOF")
+	actualOversize := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte{'x'}, webChatMaxUploadBytes)...)
+	cases := []struct {
+		name     string
+		data     []byte
+		metaSize int64
+	}{
+		{"metadata", pdf, webChatMaxUploadBytes + 1},
+		{"actual", actualOversize, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := fakeWebChatStorageWithFileMeta(t, "paper.pdf", tc.data, tc.metaSize)
+			data, contentType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
+				Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
+			})
+			require.ErrorIs(t, err, ErrWebChatUploadRejected)
+			require.Nil(t, data)
+			require.Empty(t, contentType)
+			storage.requireOpened("paper.pdf")
+		})
+	}
+}
+
+func TestReadWebChatStoredAttachmentWrapsOpenError(t *testing.T) {
+	storageErr := errors.New("storage unavailable")
+	storage := &fakeWebChatStorage{
+		t: t, expectedKeys: []string{"paper.pdf"},
+		openErrors: map[string]error{"paper.pdf": storageErr},
+	}
+	data, contentType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
+		Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
+	})
+	require.ErrorIs(t, err, ErrWebChatUploadRejected)
+	require.ErrorContains(t, err, storageErr.Error())
+	require.Nil(t, data)
+	require.Empty(t, contentType)
+	storage.requireOpened("paper.pdf")
+}
+
 func testWebChatDOCX(t *testing.T) []byte {
 	t.Helper()
-	var buffer bytes.Buffer
-	writer := zip.NewWriter(&buffer)
-	for name, body := range map[string]string{
+	return testWebChatZIP(t, map[string]string{
 		"[Content_Types].xml": "<Types/>",
 		"word/document.xml":   "<w:document/>",
-	} {
-		entry, err := writer.Create(name)
-		require.NoError(t, err)
-		_, err = entry.Write([]byte(body))
-		require.NoError(t, err)
-	}
-	require.NoError(t, writer.Close())
-	return buffer.Bytes()
+	})
 }

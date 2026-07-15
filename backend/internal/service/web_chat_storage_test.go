@@ -80,7 +80,7 @@ func TestWebChatService_UploadAttachmentStoresImageKind(t *testing.T) {
 		UserID:      42,
 		Filename:    "photo.png",
 		ContentType: "image/png",
-		Reader:      strings.NewReader("png-data"),
+		Reader:      strings.NewReader(string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, attachment)
@@ -109,16 +109,16 @@ func TestWebChatService_UploadAttachmentStoresTextPreview(t *testing.T) {
 	require.Equal(t, "text/markdown", attachment.ContentType)
 }
 
-func TestWebChatService_UploadAttachmentRejectsUnsupportedMIME(t *testing.T) {
+func TestWebChatService_UploadAttachmentRejectsUnknownArchive(t *testing.T) {
 	repo := &webChatUploadRepoStub{}
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
 
 	_, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
 		UserID:      42,
-		Filename:    "script.sh",
-		ContentType: "application/x-sh",
-		Reader:      strings.NewReader("echo bad"),
+		Filename:    "archive.zip",
+		ContentType: "application/zip",
+		Reader:      strings.NewReader("PK\x03\x04"),
 	})
 	require.ErrorIs(t, err, ErrWebChatUploadRejected)
 	require.Empty(t, repo.created)
@@ -204,7 +204,7 @@ func TestWebChatService_UploadAttachmentNormalizesMIMECase(t *testing.T) {
 		UserID:      42,
 		Filename:    "photo.png",
 		ContentType: "IMAGE/PNG; charset=binary",
-		Reader:      strings.NewReader("png"),
+		Reader:      strings.NewReader(string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "image/png", attachment.ContentType)
@@ -231,7 +231,7 @@ func TestWebChatService_UploadAttachmentSniffsMissingContentTypeImage(t *testing
 	repo := &webChatUploadRepoStub{}
 	storage := NewLocalWebChatStorage(t.TempDir())
 	svc := &WebChatService{attachmentRepo: repo, storage: storage}
-	png := string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0})
+	png := string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
 	file := webChatMultipartFile{Reader: strings.NewReader(png)}
 	header := &multipart.FileHeader{Filename: "photo.png"}
 
@@ -240,6 +240,21 @@ func TestWebChatService_UploadAttachmentSniffsMissingContentTypeImage(t *testing
 	require.NoError(t, err)
 	require.Equal(t, "image/png", attachment.ContentType)
 	require.Equal(t, WebChatAttachmentKindImage, attachment.Kind)
+}
+
+func TestWebChatService_UploadAttachmentUsesExtensionForGenericCodeMIME(t *testing.T) {
+	repo := &webChatUploadRepoStub{}
+	storage := NewLocalWebChatStorage(t.TempDir())
+	svc := &WebChatService{attachmentRepo: repo, storage: storage}
+	attachment, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
+		UserID: 42, Filename: "script.py", ContentType: "application/octet-stream",
+		Reader: strings.NewReader("print('ok')\n"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "text/x-python", attachment.ContentType)
+	require.NotNil(t, attachment.TextPreview)
+	require.Len(t, repo.created, 1)
+	require.Equal(t, attachment.ID, repo.created[0].ID)
 }
 
 func TestWebChatService_UploadAttachmentRejectsMissingContentTypeBinary(t *testing.T) {
