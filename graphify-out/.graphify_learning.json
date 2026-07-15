@@ -1,5 +1,134 @@
 {
-  "generated_at": "2026-07-15T00:48:34.743831+00:00",
-  "nodes": {},
+  "generated_at": "2026-07-15T02:58:20.047540+00:00",
+  "nodes": {
+    "frontend_src_api_keys_keysapi": {
+      "code_fingerprint": "267ba22b5a9591b8459bb05557325ef03e9947d06bf133fad2ecc999487f1b7c",
+      "label": "keysAPI",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/api/keys.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_components_getting_started_beginnerguidecard": {
+      "code_fingerprint": "6d789c6ed7085c867611f6aad888fb0368ee009227e9ef34a633322a2c16db6c",
+      "label": "BeginnerGuideCard.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/components/getting-started/BeginnerGuideCard.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_components_getting_started_beginnerwelcomedialog": {
+      "code_fingerprint": "a7d579ee5b36b698135ee374f79365668c1392fa365d048492fb417a353f1f69",
+      "label": "BeginnerWelcomeDialog.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/components/getting-started/BeginnerWelcomeDialog.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_components_getting_started_guideapikeystep": {
+      "code_fingerprint": "4cc7ba8184fd0044608ee5f532287e45ea746bdce035baaa209c40fb67e545f8",
+      "label": "GuideApiKeyStep.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/components/getting-started/GuideApiKeyStep.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_components_layout_appsidebar": {
+      "code_fingerprint": "0f1b7a949b6ed56ad3453e5e88f4364b1d0ba8b6e8bffa80e285f2c9526ff3b0",
+      "label": "AppSidebar.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/components/layout/AppSidebar.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_components_user_dashboard_userdashboardcontent": {
+      "code_fingerprint": "3681ce0772c1ac6b0b29b36f3d113ac75370cef0d1d9728afde3a10962615183",
+      "label": "UserDashboardContent.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/components/user/dashboard/UserDashboardContent.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_views_homeview": {
+      "code_fingerprint": "35e27560c7ef18dec06bc569df9dff6da2610d9bf2791bfd9380c0ddbc4b8570",
+      "label": "HomeView.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/views/HomeView.vue",
+      "status": "tentative",
+      "uses": 1
+    },
+    "frontend_src_views_public_gettingstartedview": {
+      "code_fingerprint": "fa47cdca2fe2cc0a089c96d2c00f31d3d35abb5c29d6f1c69ace0d9a9bec0f42",
+      "label": "GettingStartedView.vue",
+      "last": "2026-07-15T00:53:09.440074+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-15T00:53:09.440074+00:00",
+          "outcome": "useful",
+          "q": "How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?"
+        }
+      ],
+      "score": 0.997993545,
+      "source_file": "frontend/src/views/public/GettingStartedView.vue",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
   "version": 1
 }
