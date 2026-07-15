@@ -155,6 +155,181 @@ func TestOpenAIGatewayService_ResponsesPreservesNativeFileForAPIKeyAndOAuth(t *t
 	}
 }
 
+func TestOpenAIGatewayService_ResponsesStreamingImageResultsSurviveNativeAndOAuthPassthrough(t *testing.T) {
+	const imageBase64 = "aW1hZ2UtYnl0ZXM="
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_image","output":[{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station","output_format":"webp","size":"2048x1152","quality":"high"}],"usage":{"input_tokens":8,"output_tokens":5,"output_tokens_details":{"image_tokens":4}}}}`,
+		"",
+	}, "\n\n")
+	body := []byte(`{"model":"gpt-5.5","stream":true,"store":false,"input":"draw","tools":[{"type":"image_generation","model":"gpt-image-2","size":"2048x1152","output_format":"webp"}],"tool_choice":{"type":"image_generation"}}`)
+	cases := []struct {
+		name    string
+		account *Account
+	}{
+		{
+			name: "api key native",
+			account: &Account{
+				ID: 711, Name: "openai-apikey", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+				Extra: map[string]any{
+					openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+					openai_compat.ExtraKeyResponsesSupported: true,
+				},
+				Status: StatusActive, Schedulable: true,
+			},
+		},
+		{
+			name: "oauth passthrough",
+			account: &Account{
+				ID: 712, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+				Extra: map[string]any{
+					"openai_passthrough":                        true,
+					"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
+				},
+				Status: StatusActive, Schedulable: true,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_image"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+					Enabled: false, AllowInsecureHTTP: true,
+				}}},
+				httpUpstream: upstream,
+			}
+
+			result, err := svc.Forward(context.Background(), c, tc.account, body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, 1, result.ImageCount)
+			require.Equal(t, []string{"2048x1152"}, result.ImageOutputSizes)
+			require.Len(t, result.imageResults, 1)
+			require.Equal(t, imageBase64, result.imageResults[0].Result)
+			require.Equal(t, "draw a blue station", result.imageResults[0].RevisedPrompt)
+			require.Equal(t, "webp", result.imageResults[0].OutputFormat)
+			require.Equal(t, "2048x1152", result.imageResults[0].Size)
+			require.Equal(t, "high", result.imageResults[0].Quality)
+		})
+	}
+}
+
+func TestOpenAIGatewayService_ResponsesNonStreamingImageResultsSurviveNativeAndPassthrough(t *testing.T) {
+	const imageBase64 = "bm9uLXN0cmVhbS1pbWFnZQ=="
+	body := []byte(`{"model":"gpt-5.5","stream":false,"store":false,"input":"draw","tools":[{"type":"image_generation","model":"gpt-image-2","size":"1024x1024","output_format":"png"}],"tool_choice":{"type":"image_generation"}}`)
+	cases := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{
+			name: "native",
+			extra: map[string]any{
+				openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+				openai_compat.ExtraKeyResponsesSupported: true,
+			},
+		},
+		{name: "passthrough", extra: map[string]any{"openai_passthrough": true}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_image_json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"id":"resp_image_json","output":[{"id":"ig_json","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a still image","output_format":"png","size":"1024x1024","quality":"medium"}],"usage":{"input_tokens":6,"output_tokens":3,"output_tokens_details":{"image_tokens":2}}}`)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+					Enabled: false, AllowInsecureHTTP: true,
+				}}},
+				httpUpstream: upstream,
+			}
+			account := &Account{
+				ID: 713, Name: "openai-apikey", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+				Extra:       tc.extra,
+				Status:      StatusActive, Schedulable: true,
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, 1, result.ImageCount)
+			require.Equal(t, []string{"1024x1024"}, result.ImageOutputSizes)
+			require.Len(t, result.imageResults, 1)
+			require.Equal(t, imageBase64, result.imageResults[0].Result)
+			require.Equal(t, "png", result.imageResults[0].OutputFormat)
+			require.Equal(t, "1024x1024", result.imageResults[0].Size)
+		})
+	}
+}
+
+func TestOpenAIGatewayService_WebChatCodexPayloadReachesOAuthPassthrough(t *testing.T) {
+	pdf := []byte("%PDF-1.7\n%%EOF")
+	payload, err := BuildOpenAIWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithFile(t, "paper.pdf", pdf), WebChatModelCapability{
+		Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.1-codex",
+		SupportsText: true, SupportsFileContext: true, SupportsWebSearch: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "review", Attachments: []WebChatAttachment{{
+		Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
+	}}}}, true)
+	require.NoError(t, err)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_codex_webchat"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"id":"resp_codex","output":[],"usage":{"input_tokens":3,"output_tokens":1}}}`,
+			"",
+		}, "\n\n"))),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID: 714, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+		Extra: map[string]any{
+			"openai_passthrough":                        true,
+			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	result, err := svc.Forward(context.Background(), c, account, payload)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "input_file", gjson.GetBytes(upstream.lastBody, "input.0.content.1.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "input.0.content.1.detail").String())
+	require.Equal(t, "web_search", gjson.GetBytes(upstream.lastBody, "tools.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
+	require.NotEmpty(t, strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
+}
+
 func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

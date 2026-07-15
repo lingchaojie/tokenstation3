@@ -28,6 +28,7 @@ type openaiStreamingResult struct {
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
+	imageResults     []openAIResponsesImageResult
 }
 
 type openaiNonStreamingResult struct {
@@ -36,6 +37,7 @@ type openaiNonStreamingResult struct {
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
+	imageResults     []openAIResponsesImageResult
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
@@ -70,6 +72,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
+	imageResults := make([]openAIResponsesImageResult, 0, 1)
+	imageResultSeen := make(map[string]struct{})
 	var firstTokenMs *int
 	responseID := ""
 	scanner := bufio.NewScanner(resp.Body)
@@ -158,6 +162,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			responseID:       responseID,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
+			imageResults:     append([]openAIResponsesImageResult(nil), imageResults...),
 		}
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
@@ -282,6 +287,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				sawFailedEvent = true
 			}
 			imageCounter.AddSSEData(dataBytes)
+			collectOpenAIResponsesImageResultsFromEventPayload(dataBytes, &imageResults, imageResultSeen)
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
@@ -892,6 +898,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
+		imageResults:     collectOpenAIResponsesImageResultsFromJSONResponse(body),
 	}, nil
 }
 
@@ -980,6 +987,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
+		imageResults:     collectOpenAIResponsesImageResultsFromSSEBody(bodyText),
 	}, nil
 }
 

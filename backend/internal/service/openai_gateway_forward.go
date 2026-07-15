@@ -796,6 +796,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		responseID := ""
 		imageCount := 0
 		var imageOutputSizes []string
+		var imageResults []openAIResponsesImageResult
 		if reqStream {
 			stopCompactKeepalive()
 			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
@@ -807,6 +808,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseID = strings.TrimSpace(streamResult.responseID)
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
+			imageResults = streamResult.imageResults
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel, stopCompactKeepalive)
 			if err != nil {
@@ -816,6 +818,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseID = strings.TrimSpace(nonStreamResult.responseID)
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
+			imageResults = nonStreamResult.imageResults
+		}
+		if len(imageResults) > 0 {
+			imageCount = len(imageResults)
+			if resultSizes := openAIResponsesImageResultSizes(imageResults); len(resultSizes) > 0 {
+				imageOutputSizes = resultSizes
+			}
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
@@ -844,6 +853,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			OpenAIWSMode:    false,
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    firstTokenMs,
+			imageResults:    append([]openAIResponsesImageResult(nil), imageResults...),
 		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount

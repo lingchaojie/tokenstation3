@@ -495,6 +495,74 @@ func extractOpenAIImageFromResponsesOutputItemDone(payload []byte) (openAIRespon
 	return entry, strings.TrimSpace(item.Get("id").String()), true, nil
 }
 
+func appendOrMergeOpenAIResponsesImageResult(results *[]openAIResponsesImageResult, seen map[string]struct{}, itemID string, result openAIResponsesImageResult) {
+	if results == nil {
+		return
+	}
+	resultValue := strings.TrimSpace(result.Result)
+	if resultValue != "" {
+		for i := range *results {
+			if strings.TrimSpace((*results)[i].Result) != resultValue {
+				continue
+			}
+			if revisedPrompt := strings.TrimSpace(result.RevisedPrompt); revisedPrompt != "" {
+				(*results)[i].RevisedPrompt = revisedPrompt
+			}
+			mergeOpenAIResponsesImageMeta(&(*results)[i], result)
+			seen[openAIResponsesImageResultKey(itemID, (*results)[i])] = struct{}{}
+			return
+		}
+	}
+	appendOpenAIResponsesImageResultDedup(results, seen, itemID, result)
+}
+
+func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}) {
+	if len(payload) == 0 || results == nil || !gjson.ValidBytes(payload) {
+		return
+	}
+	responseMeta, _, hasResponseMeta := extractOpenAIResponsesImageMetaFromLifecycleEvent(payload)
+	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
+	case "response.output_item.done":
+		result, itemID, ok, err := extractOpenAIImageFromResponsesOutputItemDone(payload)
+		if err == nil && ok {
+			appendOrMergeOpenAIResponsesImageResult(results, seen, itemID, result)
+		}
+	case "response.completed":
+		completedResults, _, _, _, err := extractOpenAIImagesFromResponsesCompleted(payload)
+		if err != nil {
+			return
+		}
+		for _, result := range completedResults {
+			if hasResponseMeta {
+				mergeOpenAIResponsesImageMeta(&result, responseMeta)
+			}
+			appendOrMergeOpenAIResponsesImageResult(results, seen, "", result)
+		}
+	}
+}
+
+func collectOpenAIResponsesImageResultsFromSSEBody(body string) []openAIResponsesImageResult {
+	results := make([]openAIResponsesImageResult, 0, 1)
+	seen := make(map[string]struct{})
+	forEachOpenAISSEDataPayload(body, func(payload []byte) {
+		collectOpenAIResponsesImageResultsFromEventPayload(payload, &results, seen)
+	})
+	return results
+}
+
+func collectOpenAIResponsesImageResultsFromJSONResponse(body []byte) []openAIResponsesImageResult {
+	if !gjson.ValidBytes(body) || !gjson.GetBytes(body, "output").IsArray() {
+		return nil
+	}
+	payload := make([]byte, 0, len(body)+42)
+	payload = append(payload, `{"type":"response.completed","response":`...)
+	payload = append(payload, body...)
+	payload = append(payload, '}')
+	results := make([]openAIResponsesImageResult, 0, 1)
+	collectOpenAIResponsesImageResultsFromEventPayload(payload, &results, make(map[string]struct{}))
+	return results
+}
+
 func collectOpenAIImagesFromResponsesBody(body []byte) ([]openAIResponsesImageResult, int64, []byte, openAIResponsesImageResult, bool, error) {
 	var (
 		fallbackResults []openAIResponsesImageResult

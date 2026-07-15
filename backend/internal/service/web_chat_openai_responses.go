@@ -107,6 +107,9 @@ func BuildOpenAIWebChatResponsesPayload(ctx context.Context, storage WebChatStor
 		Include: []string{"reasoning.encrypted_content"},
 		Store:   &store,
 	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(caps.Model)), "codex") {
+		request.Instructions = defaultCodexSynthInstructions(caps.Model)
+	}
 	payloadOptions := firstWebChatPayloadOptions(options)
 	if effort, ok := normalizeWebChatThinkingEffort(caps, payloadOptions.Thinking); ok {
 		request.Reasoning = &apicompat.ResponsesReasoning{Effort: effort, Summary: "auto"}

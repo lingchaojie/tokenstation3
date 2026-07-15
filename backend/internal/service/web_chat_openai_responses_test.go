@@ -49,6 +49,16 @@ func TestBuildOpenAIWebChatResponsesPayload_MixedInputsAndAutomaticSearch(t *tes
 	require.Equal(t, "auto", gjson.GetBytes(payload, "input.0.content.2.detail").String())
 	require.Equal(t, "web_search", gjson.GetBytes(payload, "tools.0.type").String())
 	require.Equal(t, "auto", gjson.GetBytes(payload, "tool_choice").String())
+	require.False(t, gjson.GetBytes(payload, "instructions").Exists())
+}
+
+func TestBuildOpenAIWebChatResponsesPayload_CodexAddsDefaultInstructions(t *testing.T) {
+	payload, err := BuildOpenAIWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), WebChatModelCapability{
+		Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.1-codex", SupportsText: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "review this"}}, true)
+
+	require.NoError(t, err)
+	require.Equal(t, defaultCodexSynthInstructions("gpt-5.1-codex"), gjson.GetBytes(payload, "instructions").String())
 }
 
 func TestBuildOpenAIWebChatResponsesPayload_DOCXOmitsDetail(t *testing.T) {

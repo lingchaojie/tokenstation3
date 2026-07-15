@@ -17,7 +17,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -708,27 +707,6 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.Duration("interval", streamInterval),
 			)
 			return nil, usage, acc, imageResults, fmt.Errorf("stream data interval timeout")
-		}
-	}
-}
-
-func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}) {
-	if len(payload) == 0 || results == nil || !gjson.ValidBytes(payload) {
-		return
-	}
-	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
-	case "response.output_item.done":
-		result, itemID, ok, err := extractOpenAIImageFromResponsesOutputItemDone(payload)
-		if err == nil && ok {
-			appendOpenAIResponsesImageResultDedup(results, seen, itemID, result)
-		}
-	case "response.completed":
-		completedResults, _, _, _, err := extractOpenAIImagesFromResponsesCompleted(payload)
-		if err != nil {
-			return
-		}
-		for _, result := range completedResults {
-			appendOpenAIResponsesImageResultDedup(results, seen, "", result)
 		}
 	}
 }

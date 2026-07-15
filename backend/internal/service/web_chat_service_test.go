@@ -136,6 +136,9 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 		UpstreamModel: openAIImagesResponsesMainModel,
 		Stream:        true,
 		ImageCount:    1,
+		// Gateway producer coverage is exercised by
+		// TestOpenAIGatewayService_ResponsesStreamingImageResultsSurviveNativeAndOAuthPassthrough.
+		// This stub isolates the WebChat artifact consumer and persistence path.
 		imageResults: []openAIResponsesImageResult{{
 			Result:        "aGVsbG8=",
 			RevisedPrompt: "draw a small icon",
@@ -231,6 +234,72 @@ func TestWebChatSend_OpenAIIgnoresLegacyDisabledSearchConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
 	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+}
+
+func TestWebChatDispatch_OpenAIFileOnlyAndMixedInputsUseNativeResponses(t *testing.T) {
+	pdf := []byte("%PDF-1.7\n%%EOF")
+	png := []byte("\x89PNG\r\n\x1a\n")
+	cases := []struct {
+		name     string
+		messages []WebChatMessage
+		files    map[string][]byte
+		keys     []string
+		assert   func(*testing.T, []byte)
+	}{
+		{
+			name: "file only",
+			messages: []WebChatMessage{{Role: WebChatRoleUser, Attachments: []WebChatAttachment{{
+				Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
+			}}}},
+			files: map[string][]byte{"paper.pdf": pdf},
+			keys:  []string{"paper.pdf"},
+			assert: func(t *testing.T, body []byte) {
+				require.Equal(t, "input_file", gjson.GetBytes(body, "input.0.content.0.type").String())
+				require.Equal(t, "auto", gjson.GetBytes(body, "input.0.content.0.detail").String())
+			},
+		},
+		{
+			name: "mixed",
+			messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "compare", Attachments: []WebChatAttachment{
+				{Kind: WebChatAttachmentKindImage, Filename: "diagram.png", ContentType: "image/png", StorageKey: "diagram.png"},
+				{Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf"},
+			}}},
+			files: map[string][]byte{"diagram.png": png, "paper.pdf": pdf},
+			keys:  []string{"diagram.png", "paper.pdf"},
+			assert: func(t *testing.T, body []byte) {
+				require.Equal(t, "input_text", gjson.GetBytes(body, "input.0.content.0.type").String())
+				require.Equal(t, "input_image", gjson.GetBytes(body, "input.0.content.1.type").String())
+				require.Equal(t, "input_file", gjson.GetBytes(body, "input.0.content.2.type").String())
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+			metaSizes := make(map[string]int64, len(tc.files))
+			for key, data := range tc.files {
+				metaSizes[key] = int64(len(data))
+			}
+			svc.storage = &fakeWebChatStorage{t: t, files: tc.files, metaSizes: metaSizes, expectedKeys: tc.keys}
+
+			_, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: "gpt-5.5", Provider: "openai",
+				Capabilities: WebChatModelCapability{
+					Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5",
+					SupportsText: true, SupportsImageInput: true, SupportsFileContext: true, SupportsWebSearch: true,
+				},
+				Messages: tc.messages, Stream: true,
+			})
+
+			require.NoError(t, err)
+			requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
+			require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
+			tc.assert(t, svc.forwardedBody)
+		})
+	}
 }
 
 func TestWebChatSend_AnthropicWebSearchAutoUsesResponsesAPI(t *testing.T) {
