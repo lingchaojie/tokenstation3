@@ -226,6 +226,7 @@ type ChangePasswordRequest struct {
 // UserService 用户服务
 type UserService struct {
 	userRepo             UserRepository
+	beginnerGuideRepo    BeginnerGuideRepository
 	settingRepo          SettingRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	billingCache         BillingCache
@@ -235,8 +236,10 @@ type UserService struct {
 
 // NewUserService 创建用户服务实例
 func NewUserService(userRepo UserRepository, settingRepo SettingRepository, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCache BillingCache) *UserService {
+	beginnerGuideRepo, _ := userRepo.(BeginnerGuideRepository)
 	return &UserService{
 		userRepo:             userRepo,
+		beginnerGuideRepo:    beginnerGuideRepo,
 		settingRepo:          settingRepo,
 		authCacheInvalidator: authCacheInvalidator,
 		billingCache:         billingCache,

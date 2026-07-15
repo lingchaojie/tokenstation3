@@ -102,8 +102,8 @@
           </template>
         </div>
 
-        <!-- Personal Section for Admin (hidden in simple mode) -->
-        <div v-if="!authStore.isSimpleMode" class="sidebar-section">
+        <!-- Personal Section for Admin -->
+        <div v-if="visiblePersonalNavItems.length" class="sidebar-section">
           <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
             <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
               {{ t('nav.myAccount') }}
@@ -111,7 +111,7 @@
           </div>
 
           <router-link
-            v-for="item in personalNavItems"
+            v-for="item in visiblePersonalNavItems"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -323,6 +323,21 @@ const KeyIcon = {
           'stroke-linecap': 'round',
           'stroke-linejoin': 'round',
           d: 'M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z'
+        })
+      ]
+    )
+}
+
+const BeginnerGuideIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25'
         })
       ]
     )
@@ -745,6 +760,7 @@ function buildSelfNavItems(
   items.push(
     { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
     { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
+    { path: '/getting-started', label: t('gettingStarted.dashboard.sidebarLabel'), icon: BeginnerGuideIcon },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
@@ -794,6 +810,12 @@ const userNavItems = computed((): NavItem[] =>
 // The dashboard item is the same user dashboard declaration, remapped into the
 // admin route namespace so admins stay inside the admin panel while viewing it.
 const personalNavItems = computed((): NavItem[] => finalizeNav(buildAdminPersonalNavItems()))
+
+const visiblePersonalNavItems = computed((): NavItem[] =>
+  authStore.isSimpleMode
+    ? personalNavItems.value.filter((item) => item.path === '/getting-started')
+    : personalNavItems.value,
+)
 
 // Custom menu items filtered by visibility
 const customMenuItemsForUser = computed(() => {

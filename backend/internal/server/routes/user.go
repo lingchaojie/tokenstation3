@@ -22,6 +22,8 @@ func RegisterUserRoutes(
 		// 用户接口
 		user := authenticated.Group("/user")
 		{
+			user.GET("/beginner-guide", h.User.GetBeginnerGuide)
+			user.PATCH("/beginner-guide", h.User.PatchBeginnerGuide)
 			user.GET("/profile", h.User.GetProfile)
 			user.PUT("/password", h.User.ChangePassword)
 			user.PUT("", h.User.UpdateProfile)

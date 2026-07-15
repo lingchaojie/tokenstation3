@@ -2155,28 +2155,48 @@ func init() {
 	user.DefaultSignupSource = userDescSignupSource.Default.(string)
 	// user.SignupSourceValidator is a validator for the "signup_source" field. It is called by the builders before save.
 	user.SignupSourceValidator = userDescSignupSource.Validators[0].(func(string) error)
+	// userDescBeginnerGuidePromptState is the schema descriptor for beginner_guide_prompt_state field.
+	userDescBeginnerGuidePromptState := userFields[15].Descriptor()
+	// user.DefaultBeginnerGuidePromptState holds the default value on creation for the beginner_guide_prompt_state field.
+	user.DefaultBeginnerGuidePromptState = userDescBeginnerGuidePromptState.Default.(string)
+	// user.BeginnerGuidePromptStateValidator is a validator for the "beginner_guide_prompt_state" field. It is called by the builders before save.
+	user.BeginnerGuidePromptStateValidator = func() func(string) error {
+		validators := userDescBeginnerGuidePromptState.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(beginner_guide_prompt_state string) error {
+			for _, fn := range fns {
+				if err := fn(beginner_guide_prompt_state); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
 	// userDescBalanceNotifyEnabled is the schema descriptor for balance_notify_enabled field.
-	userDescBalanceNotifyEnabled := userFields[15].Descriptor()
+	userDescBalanceNotifyEnabled := userFields[18].Descriptor()
 	// user.DefaultBalanceNotifyEnabled holds the default value on creation for the balance_notify_enabled field.
 	user.DefaultBalanceNotifyEnabled = userDescBalanceNotifyEnabled.Default.(bool)
 	// userDescSubscriptionBalanceFallbackEnabled is the schema descriptor for subscription_balance_fallback_enabled field.
-	userDescSubscriptionBalanceFallbackEnabled := userFields[16].Descriptor()
+	userDescSubscriptionBalanceFallbackEnabled := userFields[19].Descriptor()
 	// user.DefaultSubscriptionBalanceFallbackEnabled holds the default value on creation for the subscription_balance_fallback_enabled field.
 	user.DefaultSubscriptionBalanceFallbackEnabled = userDescSubscriptionBalanceFallbackEnabled.Default.(bool)
 	// userDescBalanceNotifyThresholdType is the schema descriptor for balance_notify_threshold_type field.
-	userDescBalanceNotifyThresholdType := userFields[17].Descriptor()
+	userDescBalanceNotifyThresholdType := userFields[20].Descriptor()
 	// user.DefaultBalanceNotifyThresholdType holds the default value on creation for the balance_notify_threshold_type field.
 	user.DefaultBalanceNotifyThresholdType = userDescBalanceNotifyThresholdType.Default.(string)
 	// userDescBalanceNotifyExtraEmails is the schema descriptor for balance_notify_extra_emails field.
-	userDescBalanceNotifyExtraEmails := userFields[19].Descriptor()
+	userDescBalanceNotifyExtraEmails := userFields[22].Descriptor()
 	// user.DefaultBalanceNotifyExtraEmails holds the default value on creation for the balance_notify_extra_emails field.
 	user.DefaultBalanceNotifyExtraEmails = userDescBalanceNotifyExtraEmails.Default.(string)
 	// userDescTotalRecharged is the schema descriptor for total_recharged field.
-	userDescTotalRecharged := userFields[20].Descriptor()
+	userDescTotalRecharged := userFields[23].Descriptor()
 	// user.DefaultTotalRecharged holds the default value on creation for the total_recharged field.
 	user.DefaultTotalRecharged = userDescTotalRecharged.Default.(float64)
 	// userDescRpmLimit is the schema descriptor for rpm_limit field.
-	userDescRpmLimit := userFields[21].Descriptor()
+	userDescRpmLimit := userFields[24].Descriptor()
 	// user.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	user.DefaultRpmLimit = userDescRpmLimit.Default.(int)
 	userapikeyrouteMixin := schema.UserAPIKeyRoute{}.Mixin()

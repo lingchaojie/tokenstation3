@@ -15,8 +15,30 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
+import {
+  buildClientConfigFiles,
+  type SupportedGuideClient,
+  type SupportedGuideOS,
+  type WindowsGuideShell
+} from '../clientConfigFiles'
 import zhDashboard from '@/i18n/locales/zh/dashboard'
 import enDashboard from '@/i18n/locales/en/dashboard'
+
+const modalStubs = {
+  BaseDialog: {
+    template: '<div><slot /><slot name="footer" /></div>'
+  },
+  Icon: {
+    template: '<span />'
+  }
+}
+
+function generatedFiles(wrapper: VueWrapper): Array<{ path: string; content: string }> {
+  return wrapper.findAll('.linx-code-panel').map((panel) => ({
+    path: panel.find('span.font-mono').text(),
+    content: panel.find('pre code').text()
+  }))
+}
 
 function generatedFileContent(wrapper: VueWrapper, pathSuffix: string): string {
   const panel = wrapper.findAll('.linx-code-panel').find((candidate) =>
@@ -76,6 +98,94 @@ function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
 }
 
 describe('UseKeyModal', () => {
+  it.each([
+    {
+      name: 'Claude Unix',
+      client: 'claude_code' as SupportedGuideClient,
+      os: 'macos' as SupportedGuideOS,
+      clientLabel: null,
+      shellLabel: null,
+      windowsShell: undefined
+    },
+    {
+      name: 'Claude PowerShell',
+      client: 'claude_code' as SupportedGuideClient,
+      os: 'windows' as SupportedGuideOS,
+      clientLabel: null,
+      shellLabel: 'PowerShell',
+      windowsShell: 'powershell' as WindowsGuideShell
+    },
+    {
+      name: 'Claude CMD',
+      client: 'claude_code' as SupportedGuideClient,
+      os: 'windows' as SupportedGuideOS,
+      clientLabel: null,
+      shellLabel: 'Windows CMD',
+      windowsShell: 'cmd' as WindowsGuideShell
+    },
+    {
+      name: 'Codex Unix',
+      client: 'codex' as SupportedGuideClient,
+      os: 'macos' as SupportedGuideOS,
+      clientLabel: 'keys.useKeyModal.cliTabs.codexCli',
+      shellLabel: null,
+      windowsShell: undefined
+    },
+    {
+      name: 'Codex Windows',
+      client: 'codex' as SupportedGuideClient,
+      os: 'windows' as SupportedGuideOS,
+      clientLabel: 'keys.useKeyModal.cliTabs.codexCli',
+      shellLabel: 'Windows',
+      windowsShell: undefined
+    }
+  ])('matches shared configuration paths and contents for $name', async ({
+    client,
+    os,
+    clientLabel,
+    shellLabel,
+    windowsShell
+  }) => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://gateway.example.com/v1/',
+        platform: 'unified'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    if (clientLabel) {
+      const clientTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+        button.text().includes(clientLabel)
+      )
+      expect(clientTab).toBeDefined()
+      await clientTab!.trigger('click')
+      await nextTick()
+    }
+
+    if (shellLabel) {
+      const shellTab = wrapper.findAll('nav[aria-label="Tabs"] button').find((button) =>
+        button.text().trim() === shellLabel
+      )
+      expect(shellTab).toBeDefined()
+      await shellTab!.trigger('click')
+      await nextTick()
+    }
+
+    const expected = buildClientConfigFiles({
+      client,
+      os,
+      platform: 'unified',
+      apiKey: 'sk-test',
+      baseUrl: 'https://gateway.example.com/v1/',
+      windowsShell
+    }).map(({ path, content }) => ({ path, content }))
+
+    expect(generatedFiles(wrapper)).toEqual(expected)
+  })
+
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {

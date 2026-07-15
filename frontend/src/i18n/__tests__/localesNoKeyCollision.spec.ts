@@ -8,6 +8,8 @@ import enAdminResources from '../locales/en/admin/resources'
 import enAdminSettings from '../locales/en/admin/settings'
 import enCommon from '../locales/en/common'
 import enDashboard from '../locales/en/dashboard'
+import enGettingStarted from '../locales/en/gettingStarted'
+import enRoot from '../locales/en/index'
 import enLanding from '../locales/en/landing'
 import enMisc from '../locales/en/misc'
 import enWebchat from '../locales/en/webchat'
@@ -19,6 +21,8 @@ import zhAdminResources from '../locales/zh/admin/resources'
 import zhAdminSettings from '../locales/zh/admin/settings'
 import zhCommon from '../locales/zh/common'
 import zhDashboard from '../locales/zh/dashboard'
+import zhGettingStarted from '../locales/zh/gettingStarted'
+import zhRoot from '../locales/zh/index'
 import zhLanding from '../locales/zh/landing'
 import zhMisc from '../locales/zh/misc'
 import zhWebchat from '../locales/zh/webchat'
@@ -44,8 +48,27 @@ function collisions(modules: Modules): string[] {
 }
 
 const roots: Record<string, Modules> = {
-  zh: { landing: zhLanding, common: zhCommon, dashboard: zhDashboard, misc: zhMisc, webchat: zhWebchat },
-  en: { landing: enLanding, common: enCommon, dashboard: enDashboard, misc: enMisc, webchat: enWebchat }
+  zh: {
+    landing: zhLanding,
+    common: zhCommon,
+    dashboard: zhDashboard,
+    gettingStarted: zhGettingStarted,
+    misc: zhMisc,
+    webchat: zhWebchat
+  },
+  en: {
+    landing: enLanding,
+    common: enCommon,
+    dashboard: enDashboard,
+    gettingStarted: enGettingStarted,
+    misc: enMisc,
+    webchat: enWebchat
+  }
+}
+
+const assembledRoots: Record<string, Record<string, unknown>> = {
+  zh: zhRoot,
+  en: enRoot
 }
 
 const admins: Record<string, Modules> = {
@@ -76,6 +99,12 @@ describe.each(Object.keys(roots))('locale %s spread assembly', (locale) => {
     for (const [name, mod] of Object.entries(roots[locale])) {
       expect(Object.keys(mod), `module ${name} must not define "admin"`).not.toContain('admin')
     }
+  })
+
+  it('registers the getting-started module in the root locale', () => {
+    expect(assembledRoots[locale].gettingStarted).toBe(
+      roots[locale].gettingStarted.gettingStarted
+    )
   })
 
   it('admin modules have no overlapping top-level keys', () => {

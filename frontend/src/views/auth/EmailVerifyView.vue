@@ -172,6 +172,7 @@ import {
   clearAllAffiliateReferralCodes,
   loadAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
+import { resolvePostAuthRedirect } from '@/router/authRedirect'
 
 const { t, locale } = useI18n()
 
@@ -551,8 +552,8 @@ async function handleVerify(): Promise<void> {
     // Show success toast
     appStore.showSuccess(t('auth.accountCreatedSuccess', { siteName: siteName.value }))
 
-    // Redirect to dashboard
-    await router.push(pendingRedirect.value || '/dashboard')
+    // Redirect to the validated internal destination captured before verification
+    await router.push(resolvePostAuthRedirect(pendingRedirect.value))
   } catch (error: unknown) {
     errorMessage.value = buildAuthErrorMessage(error, {
       fallback: t('auth.verifyFailed')

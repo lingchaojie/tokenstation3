@@ -20,9 +20,12 @@ import (
 )
 
 type userHandlerRepoStub struct {
-	user       *service.User
-	identities []service.UserAuthIdentityRecord
-	unbound    []string
+	user                      *service.User
+	identities                []service.UserAuthIdentityRecord
+	unbound                   []string
+	beginnerGuideState        service.BeginnerGuideState
+	beginnerGuideGetUserID    int64
+	beginnerGuideUpdateUserID int64
 }
 
 func (s *userHandlerRepoStub) Create(context.Context, *service.User) error { return nil }
@@ -137,6 +140,26 @@ func (s *userHandlerRepoStub) UnbindUserAuthProvider(_ context.Context, _ int64,
 	}
 	s.identities = append([]service.UserAuthIdentityRecord(nil), filtered...)
 	return nil
+}
+
+func (s *userHandlerRepoStub) GetBeginnerGuideState(_ context.Context, userID int64) (*service.BeginnerGuideState, error) {
+	s.beginnerGuideGetUserID = userID
+	state := s.beginnerGuideState
+	return &state, nil
+}
+
+func (s *userHandlerRepoStub) WithBeginnerGuideStateForUpdate(
+	_ context.Context,
+	userID int64,
+	update func(service.BeginnerGuideState) (service.BeginnerGuideState, error),
+) (*service.BeginnerGuideState, error) {
+	s.beginnerGuideUpdateUserID = userID
+	state, err := update(s.beginnerGuideState)
+	if err != nil {
+		return nil, err
+	}
+	s.beginnerGuideState = state
+	return &state, nil
 }
 
 func TestUserHandlerUpdateProfileReturnsAvatarURL(t *testing.T) {
