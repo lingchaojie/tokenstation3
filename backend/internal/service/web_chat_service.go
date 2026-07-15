@@ -669,7 +669,8 @@ func (s *WebChatService) uploadAttachmentFromReader(ctx context.Context, in Uplo
 		return nil, ErrWebChatUploadRejected
 	}
 
-	contentType, kind, textPreviewEnabled, err := classifyWebChatUploadContentType(in.Filename, in.ContentType, body)
+	filename := sanitizeWebChatDisplayFilename(in.Filename)
+	contentType, kind, textPreviewEnabled, err := classifyWebChatUploadContentType(filename, in.ContentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +683,7 @@ func (s *WebChatService) uploadAttachmentFromReader(ctx context.Context, in Uplo
 
 	saved, err := s.storage.Save(ctx, WebChatStorageSaveInput{
 		UserID:      in.UserID,
-		Filename:    in.Filename,
+		Filename:    filename,
 		ContentType: contentType,
 		Reader:      bytes.NewReader(body),
 		MaxBytes:    webChatMaxUploadBytes,

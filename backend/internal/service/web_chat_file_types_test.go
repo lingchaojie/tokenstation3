@@ -73,6 +73,7 @@ func TestClassifyWebChatUploadContentType_AcceptsSupportedContainersAndCode(t *t
 	}{
 		{"png", "photo.png", "IMAGE/PNG; charset=binary", "image/png", []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}},
 		{"pdf", "paper.pdf", "application/pdf", "application/pdf", []byte("%PDF-1.7\n%%EOF")},
+		{"pdf x-binary", "paper.pdf", "application/x-binary", "application/pdf", []byte("%PDF-1.7\n%%EOF")},
 		{"docx", "notes.docx", "application/octet-stream", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", testWebChatZIP(t, map[string]string{"[Content_Types].xml": "<Types/>", "word/document.xml": "<w:document/>"})},
 		{"pptx", "slides.pptx", "application/octet-stream", "application/vnd.openxmlformats-officedocument.presentationml.presentation", testWebChatZIP(t, map[string]string{"[Content_Types].xml": "<Types/>", "ppt/presentation.xml": "<p:presentation/>"})},
 		{"xlsx", "sheet.xlsx", "", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", testWebChatZIP(t, map[string]string{"[Content_Types].xml": "<Types/>", "xl/workbook.xml": "<workbook/>"})},

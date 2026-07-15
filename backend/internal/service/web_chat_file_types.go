@@ -201,7 +201,7 @@ func (fileType webChatUploadType) acceptsContentType(contentType string) bool {
 
 func isGenericWebChatUploadContentType(contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
-	case "", "application/octet-stream", "binary/octet-stream":
+	case "", "application/octet-stream", "binary/octet-stream", "application/x-binary":
 		return true
 	default:
 		return false

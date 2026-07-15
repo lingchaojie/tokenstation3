@@ -124,6 +124,24 @@ func TestWebChatService_UploadAttachmentRejectsUnknownArchive(t *testing.T) {
 	require.Empty(t, repo.created)
 }
 
+func TestWebChatService_UploadAttachmentRejectsFilenameThatLosesExtensionWhenSanitized(t *testing.T) {
+	repo := &webChatUploadRepoStub{}
+	root := t.TempDir()
+	storage := NewLocalWebChatStorage(root)
+	svc := &WebChatService{attachmentRepo: repo, storage: storage}
+
+	_, err := svc.uploadAttachmentFromReader(context.Background(), UploadWebChatAttachmentInput{
+		UserID:      42,
+		Filename:    ".pdf",
+		ContentType: "application/pdf",
+		Reader:      strings.NewReader("%PDF-1.7\n%%EOF"),
+	})
+
+	require.ErrorIs(t, err, ErrWebChatUploadRejected)
+	require.Empty(t, repo.created)
+	require.Equal(t, 0, countRegularFiles(t, root))
+}
+
 func TestWebChatService_UploadAttachmentRejectsTooLargeFile(t *testing.T) {
 	repo := &webChatUploadRepoStub{}
 	storage := NewLocalWebChatStorage(t.TempDir())
