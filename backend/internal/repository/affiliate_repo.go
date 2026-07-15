@@ -76,42 +76,263 @@ func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code strin
 	return queryAffiliateByCode(ctx, client, code)
 }
 
-func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID int64) (bool, error) {
-	var bound bool
+func (r *affiliateRepository) BindInviter(ctx context.Context, input service.AffiliateBindInput) (service.AffiliateRewardResult, error) {
+	var result service.AffiliateRewardResult
+	if err := validateAffiliateBindInput(input); err != nil {
+		return result, err
+	}
 	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
-		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, userID); err != nil {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviteeUserID); err != nil {
 			return err
 		}
-		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, inviterID); err != nil {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviterUserID); err != nil {
 			return err
 		}
 
-		res, err := txClient.ExecContext(txCtx,
-			"UPDATE user_affiliates SET inviter_id = $1, updated_at = NOW() WHERE user_id = $2 AND inviter_id IS NULL",
-			inviterID, userID,
-		)
+		relationship, err := lockAffiliateRelationship(txCtx, txClient, input.InviteeUserID)
 		if err != nil {
-			return fmt.Errorf("bind inviter: %w", err)
+			return err
 		}
-		affected, _ := res.RowsAffected()
-		if affected == 0 {
-			bound = false
+		if relationship.inviterID.Valid {
 			return nil
 		}
 
-		if _, err = txClient.ExecContext(txCtx,
-			"UPDATE user_affiliates SET aff_count = aff_count + 1, updated_at = NOW() WHERE user_id = $1",
-			inviterID,
-		); err != nil {
+		status := "pending"
+		var resolvedAt any
+		if input.RewardMode == service.AffiliateRewardModeImmediate {
+			status = "resolved"
+			resolvedAt = input.GrantedAt
+		}
+		if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET inviter_id = $1,
+    reward_mode = $2,
+    reward_status = $3,
+    reward_resolved_at = $4,
+    reward_source_order_id = NULL,
+    inviter_rewarded = FALSE,
+    invitee_rewarded = FALSE,
+    updated_at = $5
+WHERE user_id = $6`, input.InviterUserID, input.RewardMode, status, resolvedAt, input.GrantedAt, input.InviteeUserID); err != nil {
+			return fmt.Errorf("bind inviter: %w", err)
+		}
+
+		if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_count = aff_count + 1, updated_at = $1
+WHERE user_id = $2`, input.GrantedAt, input.InviterUserID); err != nil {
 			return fmt.Errorf("increment inviter aff_count: %w", err)
 		}
-		bound = true
+
+		result.Bound = true
+		result.InviterID = input.InviterUserID
+		if input.RewardMode == service.AffiliateRewardModeImmediate {
+			result.Resolved = true
+			result.Qualified = true
+			if err := grantAffiliateRelationshipRewardsTx(txCtx, txClient, input.InviterUserID, input.InviteeUserID, input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt, &result); err != nil {
+				return err
+			}
+			if err := updateAffiliateRelationshipRewardFlags(txCtx, txClient, input.InviteeUserID, result, input.GrantedAt); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return service.AffiliateRewardResult{}, err
 	}
-	return bound, nil
+	return result, nil
+}
+
+func (r *affiliateRepository) ResolveFirstRecharge(ctx context.Context, input service.AffiliateSettlementInput) (service.AffiliateRewardResult, error) {
+	var result service.AffiliateRewardResult
+	if err := validateAffiliateSettlementInput(input); err != nil {
+		return result, err
+	}
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviteeUserID); err != nil {
+			return err
+		}
+		relationship, err := lockAffiliateRelationship(txCtx, txClient, input.InviteeUserID)
+		if err != nil {
+			return err
+		}
+		if !relationship.inviterID.Valid ||
+			relationship.rewardMode.String != string(service.AffiliateRewardModeFirstRecharge) ||
+			relationship.rewardStatus.String != "pending" {
+			return nil
+		}
+
+		inviterID := relationship.inviterID.Int64
+		result.Resolved = true
+		result.Qualified = input.Qualified
+		result.InviterID = inviterID
+		if input.Qualified {
+			if err := grantAffiliateRelationshipRewardsTx(txCtx, txClient, inviterID, input.InviteeUserID, input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt, &result); err != nil {
+				return err
+			}
+		}
+
+		var sourceOrderID any
+		if input.SourceOrderID > 0 {
+			sourceOrderID = input.SourceOrderID
+		}
+		if _, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET reward_status = 'resolved',
+    reward_resolved_at = $1,
+    reward_source_order_id = $2,
+    inviter_rewarded = $3,
+    invitee_rewarded = $4,
+    updated_at = $1
+WHERE user_id = $5`, input.GrantedAt, sourceOrderID, result.InviterRewarded, result.InviteeRewarded, input.InviteeUserID); err != nil {
+			return fmt.Errorf("resolve affiliate first recharge: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return service.AffiliateRewardResult{}, err
+	}
+	return result, nil
+}
+
+type lockedAffiliateRelationship struct {
+	inviterID    sql.NullInt64
+	rewardMode   sql.NullString
+	rewardStatus sql.NullString
+}
+
+func lockAffiliateRelationship(ctx context.Context, q affiliateQueryExecer, inviteeUserID int64) (lockedAffiliateRelationship, error) {
+	var relationship lockedAffiliateRelationship
+	rows, err := q.QueryContext(ctx, `
+SELECT inviter_id, reward_mode, reward_status
+FROM user_affiliates
+WHERE user_id = $1
+FOR UPDATE`, inviteeUserID)
+	if err != nil {
+		return relationship, fmt.Errorf("lock affiliate relationship: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return relationship, service.ErrAffiliateProfileNotFound
+	}
+	if err := rows.Scan(&relationship.inviterID, &relationship.rewardMode, &relationship.rewardStatus); err != nil {
+		return relationship, err
+	}
+	return relationship, rows.Err()
+}
+
+func grantAffiliateRelationshipRewardsTx(
+	ctx context.Context,
+	q affiliateQueryExecer,
+	inviterID, inviteeUserID int64,
+	inviterReward, inviteeReward float64,
+	validityDays, inviterRewardLimit int,
+	grantedAt time.Time,
+	result *service.AffiliateRewardResult,
+) error {
+	var inviterRewardCount int
+	rows, err := q.QueryContext(ctx, `
+SELECT inviter_reward_count
+FROM user_affiliates
+WHERE user_id = $1
+FOR UPDATE`, inviterID)
+	if err != nil {
+		return fmt.Errorf("lock inviter reward count: %w", err)
+	}
+	if !rows.Next() {
+		_ = rows.Close()
+		return service.ErrAffiliateProfileNotFound
+	}
+	if err := rows.Scan(&inviterRewardCount); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	result.InviterLimitReached = inviterRewardLimit > 0 && inviterRewardCount >= inviterRewardLimit
+	expiresAt := grantedAt.Add(time.Duration(validityDays) * 24 * time.Hour)
+	sourceKey := fmt.Sprintf("affiliate:%d:%d", inviterID, inviteeUserID)
+	if inviterReward > 0 && !result.InviterLimitReached {
+		grant, err := grantRewardCreditTx(ctx, q, service.RewardCreditGrant{
+			UserID:     inviterID,
+			CreditType: service.RewardCreditAffiliateInviter,
+			SourceKey:  sourceKey,
+			Amount:     inviterReward,
+			GrantedAt:  grantedAt,
+			ExpiresAt:  expiresAt,
+		})
+		if err != nil {
+			return fmt.Errorf("grant inviter reward credit: %w", err)
+		}
+		if grant.Applied {
+			if _, err := q.ExecContext(ctx, `
+UPDATE user_affiliates
+SET inviter_reward_count = inviter_reward_count + 1, updated_at = $1
+WHERE user_id = $2`, grantedAt, inviterID); err != nil {
+				return fmt.Errorf("increment inviter reward count: %w", err)
+			}
+			result.InviterRewarded = true
+			result.InviterReward = inviterReward
+			inviterRewardCount++
+			result.InviterLimitReached = inviterRewardLimit > 0 && inviterRewardCount >= inviterRewardLimit
+		}
+	}
+	if inviteeReward > 0 {
+		grant, err := grantRewardCreditTx(ctx, q, service.RewardCreditGrant{
+			UserID:     inviteeUserID,
+			CreditType: service.RewardCreditAffiliateInvitee,
+			SourceKey:  sourceKey,
+			Amount:     inviteeReward,
+			GrantedAt:  grantedAt,
+			ExpiresAt:  expiresAt,
+		})
+		if err != nil {
+			return fmt.Errorf("grant invitee reward credit: %w", err)
+		}
+		if grant.Applied {
+			result.InviteeRewarded = true
+			result.InviteeReward = inviteeReward
+		}
+	}
+	return nil
+}
+
+func updateAffiliateRelationshipRewardFlags(ctx context.Context, q affiliateQueryExecer, inviteeUserID int64, result service.AffiliateRewardResult, now time.Time) error {
+	_, err := q.ExecContext(ctx, `
+UPDATE user_affiliates
+SET inviter_rewarded = $1, invitee_rewarded = $2, updated_at = $3
+WHERE user_id = $4`, result.InviterRewarded, result.InviteeRewarded, now, inviteeUserID)
+	if err != nil {
+		return fmt.Errorf("update affiliate reward flags: %w", err)
+	}
+	return nil
+}
+
+func validateAffiliateBindInput(input service.AffiliateBindInput) error {
+	if input.InviteeUserID <= 0 || input.InviterUserID <= 0 || input.InviteeUserID == input.InviterUserID {
+		return service.ErrAffiliateCodeInvalid
+	}
+	if input.RewardMode != service.AffiliateRewardModeImmediate && input.RewardMode != service.AffiliateRewardModeFirstRecharge {
+		return fmt.Errorf("invalid affiliate reward mode %q", input.RewardMode)
+	}
+	return validateAffiliateRewardInputs(input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt)
+}
+
+func validateAffiliateSettlementInput(input service.AffiliateSettlementInput) error {
+	if input.InviteeUserID <= 0 {
+		return service.ErrUserNotFound
+	}
+	return validateAffiliateRewardInputs(input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt)
+}
+
+func validateAffiliateRewardInputs(inviterReward, inviteeReward float64, validityDays, inviterRewardLimit int, grantedAt time.Time) error {
+	if inviterReward < 0 || inviteeReward < 0 || validityDays < 1 || inviterRewardLimit < 0 || grantedAt.IsZero() {
+		return service.ErrAffiliateRewardConfigInvalid
+	}
+	return nil
 }
 
 func (r *affiliateRepository) AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error) {

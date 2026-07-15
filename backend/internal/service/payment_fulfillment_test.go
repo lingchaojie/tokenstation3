@@ -640,18 +640,11 @@ func createPaidSeatSubscriptionOrder(t *testing.T, ctx context.Context, client *
 		SaveX(ctx)
 }
 
-type paymentFulfillmentAffiliateAccrueCall struct {
-	inviterID     int64
-	inviteeUserID int64
-	amount        float64
-	freezeHours   int
-	sourceOrderID *int64
-}
-
 type paymentFulfillmentAffiliateRepoStub struct {
-	inviteeSummary *AffiliateSummary
-	inviterSummary *AffiliateSummary
-	accrueCalls    []paymentFulfillmentAffiliateAccrueCall
+	inviteeSummary  *AffiliateSummary
+	inviterSummary  *AffiliateSummary
+	settlementCalls []AffiliateSettlementInput
+	resolved        bool
 }
 
 func (r *paymentFulfillmentAffiliateRepoStub) EnsureUserAffiliate(_ context.Context, userID int64) (*AffiliateSummary, error) {
@@ -671,28 +664,28 @@ func (r *paymentFulfillmentAffiliateRepoStub) GetAffiliateByCode(context.Context
 	panic("unexpected GetAffiliateByCode call")
 }
 
-func (r *paymentFulfillmentAffiliateRepoStub) BindInviter(context.Context, int64, int64) (bool, error) {
+func (r *paymentFulfillmentAffiliateRepoStub) BindInviter(context.Context, AffiliateBindInput) (AffiliateRewardResult, error) {
 	panic("unexpected BindInviter call")
 }
 
-func (r *paymentFulfillmentAffiliateRepoStub) AccrueQuota(_ context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error) {
-	var sourceCopy *int64
-	if sourceOrderID != nil {
-		v := *sourceOrderID
-		sourceCopy = &v
+func (r *paymentFulfillmentAffiliateRepoStub) ResolveFirstRecharge(_ context.Context, input AffiliateSettlementInput) (AffiliateRewardResult, error) {
+	r.settlementCalls = append(r.settlementCalls, input)
+	if r.resolved {
+		return AffiliateRewardResult{}, nil
 	}
-	r.accrueCalls = append(r.accrueCalls, paymentFulfillmentAffiliateAccrueCall{
-		inviterID:     inviterID,
-		inviteeUserID: inviteeUserID,
-		amount:        amount,
-		freezeHours:   freezeHours,
-		sourceOrderID: sourceCopy,
-	})
-	return true, nil
-}
-
-func (r *paymentFulfillmentAffiliateRepoStub) LockUserAffiliateForUpdate(context.Context, int64) error {
-	return nil
+	r.resolved = true
+	if !input.Qualified || r.inviteeSummary == nil || r.inviteeSummary.InviterID == nil {
+		return AffiliateRewardResult{Resolved: true}, nil
+	}
+	return AffiliateRewardResult{
+		Resolved:        true,
+		Qualified:       true,
+		InviterID:       *r.inviteeSummary.InviterID,
+		InviterReward:   input.InviterReward,
+		InviteeReward:   input.InviteeReward,
+		InviterRewarded: input.InviterReward > 0,
+		InviteeRewarded: input.InviteeReward > 0,
+	}, nil
 }
 
 func (r *paymentFulfillmentAffiliateRepoStub) GetAccruedRebateFromInvitee(context.Context, int64, int64) (float64, error) {
@@ -1529,17 +1522,7 @@ func TestExecuteSubscriptionFulfillmentAppliesFirstRechargeReward(t *testing.T) 
 	svc.groupRepo = groupRepo
 	svc.subscriptionSvc = NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
 
-	var balanceCredits []struct {
-		userID int64
-		amount float64
-	}
-	userRepo.updateBalanceFn = func(_ context.Context, id int64, amount float64) error {
-		balanceCredits = append(balanceCredits, struct {
-			userID int64
-			amount float64
-		}{id, amount})
-		return nil
-	}
+	_ = userRepo
 
 	order := createFirstRechargeSubscriptionOrder(t, ctx, client, inviteeID, groupID, 9.99, "PAY-SUB-FIRST", "sub2_subscription_first_reward")
 
@@ -1550,16 +1533,12 @@ func TestExecuteSubscriptionFulfillmentAppliesFirstRechargeReward(t *testing.T) 
 	require.Equal(t, OrderStatusCompleted, reloaded.Status)
 	require.Equal(t, 1, subRepo.createCalls)
 
-	require.Len(t, affiliateRepo.accrueCalls, 1)
-	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
-	require.Equal(t, inviteeID, affiliateRepo.accrueCalls[0].inviteeUserID)
-	require.Equal(t, 5.0, affiliateRepo.accrueCalls[0].amount)
-	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
-	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
-
-	require.Len(t, balanceCredits, 1)
-	require.Equal(t, inviteeID, balanceCredits[0].userID)
-	require.Equal(t, 5.0, balanceCredits[0].amount)
+	require.Len(t, affiliateRepo.settlementCalls, 1)
+	require.Equal(t, inviteeID, affiliateRepo.settlementCalls[0].InviteeUserID)
+	require.Equal(t, order.ID, affiliateRepo.settlementCalls[0].SourceOrderID)
+	require.True(t, affiliateRepo.settlementCalls[0].Qualified)
+	require.Equal(t, 5.0, affiliateRepo.settlementCalls[0].InviterReward)
+	require.Equal(t, 5.0, affiliateRepo.settlementCalls[0].InviteeReward)
 
 	applied, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
@@ -1569,6 +1548,9 @@ func TestExecuteSubscriptionFulfillmentAppliesFirstRechargeReward(t *testing.T) 
 	require.Contains(t, applied.Detail, `"baseAmount":9.99`)
 	require.Contains(t, applied.Detail, `"inviterReward":5`)
 	require.Contains(t, applied.Detail, `"inviteeReward":5`)
+	require.Contains(t, applied.Detail, `"inviter_rewarded":true`)
+	require.Contains(t, applied.Detail, `"invitee_rewarded":true`)
+	require.Contains(t, applied.Detail, `"inviter_limit_reached":false`)
 	require.Contains(t, applied.Detail, `"isSubscription":true`)
 }
 
@@ -1580,34 +1562,16 @@ func TestApplyAffiliateRebate_FirstRechargeApplied(t *testing.T) {
 	const inviterID = int64(6001)
 	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
 
-	var balanceCredits []struct {
-		userID int64
-		amount float64
-	}
-	userRepo.updateBalanceFn = func(_ context.Context, id int64, amount float64) error {
-		balanceCredits = append(balanceCredits, struct {
-			userID int64
-			amount float64
-		}{id, amount})
-		return nil
-	}
+	_ = userRepo
 
 	order := createFirstRechargeBalanceOrder(t, ctx, client, inviteeID, 20, OrderStatusRecharging, "PAY-FIRST-APPLIED", "sub2_first_applied")
 
 	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, order))
 
-	// Inviter side → aff_quota via AccrueQuota.
-	require.Len(t, affiliateRepo.accrueCalls, 1)
-	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
-	require.Equal(t, inviteeID, affiliateRepo.accrueCalls[0].inviteeUserID)
-	require.Equal(t, 5.0, affiliateRepo.accrueCalls[0].amount)
-	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
-	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
-
-	// Invitee side → account balance via UpdateBalance.
-	require.Len(t, balanceCredits, 1)
-	require.Equal(t, inviteeID, balanceCredits[0].userID)
-	require.Equal(t, 5.0, balanceCredits[0].amount)
+	require.Len(t, affiliateRepo.settlementCalls, 1)
+	require.Equal(t, inviteeID, affiliateRepo.settlementCalls[0].InviteeUserID)
+	require.Equal(t, order.ID, affiliateRepo.settlementCalls[0].SourceOrderID)
+	require.True(t, affiliateRepo.settlementCalls[0].Qualified)
 
 	applied, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
@@ -1616,16 +1580,18 @@ func TestApplyAffiliateRebate_FirstRechargeApplied(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, applied.Detail, `"inviterReward":5`)
 	require.Contains(t, applied.Detail, `"inviteeReward":5`)
+	require.Contains(t, applied.Detail, `"inviter_rewarded":true`)
+	require.Contains(t, applied.Detail, `"invitee_rewarded":true`)
 }
 
 // TestApplyAffiliateRebate_SecondRechargeSkipped verifies that once the invitee
-// already has a prior succeeded recharge, a subsequent recharge is treated as
-// non-first (countPriorSucceededRecharges > 0) and skips the reward, recording
-// AFFILIATE_REBATE_SKIPPED with isFirstRecharge:false.
+// already has a resolved affiliate relationship, a subsequent recharge is
+// skipped by the repository state machine.
 func TestApplyAffiliateRebate_SecondRechargeSkipped(t *testing.T) {
 	ctx := context.Background()
 	const inviterID = int64(6002)
 	svc, client, affiliateRepo, userRepo, inviteeID := newFirstRechargeRewardEnv(t, inviterID)
+	affiliateRepo.resolved = true
 
 	userRepo.updateBalanceFn = func(context.Context, int64, float64) error {
 		t.Fatalf("UpdateBalance should not be called for a skipped (non-first) recharge")
@@ -1638,14 +1604,14 @@ func TestApplyAffiliateRebate_SecondRechargeSkipped(t *testing.T) {
 
 	require.NoError(t, svc.applyAffiliateRebateForOrder(ctx, secondOrder))
 
-	require.Empty(t, affiliateRepo.accrueCalls, "non-first recharge must not accrue inviter reward")
+	require.Len(t, affiliateRepo.settlementCalls, 1)
 
 	skipped, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(secondOrder.ID, 10)),
 			paymentauditlog.ActionEQ("AFFILIATE_REBATE_SKIPPED")).
 		Only(ctx)
 	require.NoError(t, err)
-	require.Contains(t, skipped.Detail, `"isFirstRecharge":false`)
+	require.Contains(t, skipped.Detail, `"resolved":false`)
 }
 
 var _ AffiliateRepository = (*paymentFulfillmentAffiliateRepoStub)(nil)
