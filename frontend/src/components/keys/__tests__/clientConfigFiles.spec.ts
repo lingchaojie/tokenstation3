@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildClientConfigFiles, type ClientConfigInput } from '../clientConfigFiles'
+import {
+  DOCS_API_KEY_PLACEHOLDER,
+  EXAMPLE_MODELS,
+  buildClientConfigFiles,
+  resolveGatewayEndpoints,
+  type ClientConfigInput
+} from '../clientConfigFiles'
 
 const CLAUDE_SETTINGS = `{
   "env": {
@@ -38,6 +44,37 @@ function input(overrides: Partial<ClientConfigInput> = {}): ClientConfigInput {
     ...overrides
   }
 }
+
+describe('resolveGatewayEndpoints', () => {
+  it.each([
+    ['https://gateway.example.com', 'https://gateway.example.com', 'https://gateway.example.com/v1'],
+    ['https://gateway.example.com/', 'https://gateway.example.com', 'https://gateway.example.com/v1'],
+    ['https://gateway.example.com/v1', 'https://gateway.example.com', 'https://gateway.example.com/v1'],
+    ['https://gateway.example.com/v1/', 'https://gateway.example.com', 'https://gateway.example.com/v1']
+  ])('normalizes %s once', (input, bare, v1) => {
+    expect(resolveGatewayEndpoints(input)).toEqual({
+      bare,
+      v1,
+      messages: `${v1}/messages`,
+      countTokens: `${v1}/messages/count_tokens`,
+      responses: `${v1}/responses`,
+      chatCompletions: `${v1}/chat/completions`,
+      models: `${v1}/models`,
+      imageGenerations: `${v1}/images/generations`,
+      imageEdits: `${v1}/images/edits`
+    })
+  })
+
+  it('exports one obvious docs placeholder and the existing displayed models', () => {
+    expect(DOCS_API_KEY_PLACEHOLDER).toBe('$LINX2_API_KEY')
+    expect(EXAMPLE_MODELS).toEqual({
+      anthropic: 'claude-opus-4-8',
+      anthropicOpenCode: 'claude-fable-5',
+      openai: 'gpt-5.5',
+      image: 'gpt-image-2'
+    })
+  })
+})
 
 describe('buildClientConfigFiles', () => {
   it.each(['macos', 'linux'] as const)(

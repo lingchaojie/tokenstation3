@@ -1,7 +1,21 @@
 import type { GroupPlatform } from '@/types'
+import {
+  EXAMPLE_MODELS,
+  resolveGatewayEndpoints,
+  type ClientConfigFile,
+  type SupportedGuideOS
+} from './clientConfigContract'
+
+export {
+  DOCS_API_KEY_PLACEHOLDER,
+  EXAMPLE_MODELS,
+  resolveGatewayEndpoints,
+  type ClientConfigFile,
+  type GatewayEndpoints,
+  type SupportedGuideOS
+} from './clientConfigContract'
 
 export type SupportedGuideClient = 'claude_code' | 'codex' | 'opencode' | 'cc_switch'
-export type SupportedGuideOS = 'macos' | 'windows' | 'linux'
 export type WindowsGuideShell = 'powershell' | 'cmd'
 
 export interface ClientConfigInput {
@@ -12,18 +26,6 @@ export interface ClientConfigInput {
   baseUrl: string
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
-}
-
-export interface ClientConfigFile {
-  path: string
-  content: string
-  hintKey?: string
-  hint?: string
-}
-
-function gatewayRoots(baseUrl: string): { bare: string; v1: string } {
-  const bare = baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
-  return { bare, v1: `${bare}/v1` }
 }
 
 function openCodePath(os: SupportedGuideOS): string {
@@ -39,7 +41,7 @@ function buildOpenCodeFile(
   pathSuffix?: string
 ): ClientConfigFile {
   const isAnthropic = provider === 'anthropic'
-  const model = isAnthropic ? 'claude-fable-5' : 'gpt-5.5'
+  const model = isAnthropic ? EXAMPLE_MODELS.anthropicOpenCode : EXAMPLE_MODELS.openai
   const content = JSON.stringify(
     {
       $schema: 'https://opencode.ai/config.json',
@@ -98,14 +100,14 @@ Preset: Custom
 Name: TokenStation
 Endpoint: ${endpoint}
 API Key: ${apiKey}
-Model: gpt-5.5
+Model: ${EXAMPLE_MODELS.openai}
 Wire API: responses`,
     hintKey: 'keys.useKeyModal.ccSwitch.hint'
   }
 }
 
 export function buildClientConfigFiles(input: ClientConfigInput): ClientConfigFile[] {
-  const { bare, v1 } = gatewayRoots(input.baseUrl)
+  const { bare, v1 } = resolveGatewayEndpoints(input.baseUrl)
 
   if (input.client === 'claude_code') {
     const isWindows = input.os === 'windows'
@@ -182,8 +184,8 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
 
   const configDir = input.os === 'windows' ? '%userprofile%\\.codex' : '~/.codex'
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+model = "${EXAMPLE_MODELS.openai}"
+review_model = "${EXAMPLE_MODELS.openai}"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
