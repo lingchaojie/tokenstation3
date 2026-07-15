@@ -190,6 +190,7 @@ func buildBatchImageBalanceHoldFingerprint(c *BatchImageBalanceHoldCommand) stri
 
 type BatchImageBalanceHoldResult struct {
 	Applied       bool
+	FundingSource UsageFundingSource
 	NewBalance    *float64
 	FrozenBalance *float64
 }

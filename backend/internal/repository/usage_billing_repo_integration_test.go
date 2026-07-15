@@ -832,6 +832,182 @@ func TestUsageBillingRepositoryApply_RewardsPrecedeSubscriptionAndFallbackHonors
 	})
 }
 
+func TestUsageBillingRepositoryBatchImage_RewardHoldCaptureAndExpiry(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	usageRepo := NewUsageBillingRepository(client, integrationDB)
+	rewardRepo := NewRewardCreditRepository(client, integrationDB)
+	now := time.Now().UTC()
+
+	newFixture := func(t *testing.T) (*service.User, *service.APIKey, int64, int64, int64) {
+		t.Helper()
+		user := mustCreateUser(t, client, &service.User{
+			Email: fmt.Sprintf("batch-reward-%d-%s@example.com", time.Now().UnixNano(), uuid.NewString()), PasswordHash: "hash", Balance: 100,
+		})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-batch-reward-" + uuid.NewString(), Name: "batch-reward"})
+		grant := func(creditType service.RewardCreditType, amount float64, expiry time.Time) int64 {
+			result, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+				UserID: user.ID, CreditType: creditType, SourceKey: "batch:" + uuid.NewString(), Amount: amount,
+				GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: expiry,
+			})
+			require.NoError(t, err)
+			return result.CreditID
+		}
+		dailyID := grant(service.RewardCreditDailyCheckIn, 3, now.Add(time.Hour))
+		firstAffiliateID := grant(service.RewardCreditAffiliateInvitee, 5, now.Add(2*time.Hour))
+		secondAffiliateID := grant(service.RewardCreditAffiliateInviter, 5, now.Add(3*time.Hour))
+		return user, apiKey, dailyID, firstAffiliateID, secondAffiliateID
+	}
+
+	creditAmounts := func(t *testing.T, creditID int64) (float64, float64) {
+		t.Helper()
+		var remaining, reserved float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT remaining_amount, reserved_amount FROM user_reward_credits WHERE id = $1`, creditID).Scan(&remaining, &reserved))
+		return remaining, reserved
+	}
+
+	userAmounts := func(t *testing.T, userID int64) (float64, float64) {
+		t.Helper()
+		var balance, frozen float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT balance, frozen_balance FROM users WHERE id = $1`, userID).Scan(&balance, &frozen))
+		return balance, frozen
+	}
+
+	t.Run("affiliate lots reserve FIFO and capture returns unexpired remainder", func(t *testing.T) {
+		user, apiKey, dailyID, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-" + uuid.NewString()
+		hold := &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		}
+		reserved, err := usageRepo.ReserveBatchImageBalance(ctx, hold)
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, reserved.FundingSource)
+
+		dailyRemaining, dailyReserved := creditAmounts(t, dailyID)
+		require.InDelta(t, 3, dailyRemaining, 0.000001)
+		require.InDelta(t, 0, dailyReserved, 0.000001)
+		firstRemaining, firstReserved := creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved := creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 0, firstRemaining, 0.000001)
+		require.InDelta(t, 5, firstReserved, 0.000001)
+		require.InDelta(t, 2, secondRemaining, 0.000001)
+		require.InDelta(t, 3, secondReserved, 0.000001)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 105, balance, 0.000001)
+		require.InDelta(t, 8, frozen, 0.000001)
+
+		captured, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, captured.FundingSource)
+		firstRemaining, firstReserved = creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved = creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 0, firstRemaining, 0.000001)
+		require.InDelta(t, 0, firstReserved, 0.000001)
+		require.InDelta(t, 4, secondRemaining, 0.000001)
+		require.InDelta(t, 0, secondReserved, 0.000001)
+		balance, frozen = userAmounts(t, user.ID)
+		require.InDelta(t, 107, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		replay, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.False(t, replay.Applied)
+	})
+
+	t.Run("expired reserved remainder is not restored on capture", func(t *testing.T) {
+		user, apiKey, _, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-expired-" + uuid.NewString()
+		_, err := usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE user_reward_credits SET expires_at = $1 WHERE id IN ($2, $3)`,
+			now.Add(-time.Hour), firstAffiliateID, secondAffiliateID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE batch_image_reward_allocations SET expires_at_snapshot = $1 WHERE hold_key = $2`,
+			now.Add(-time.Hour), service.BatchImageHoldRequestID(batchID))
+		require.NoError(t, err)
+
+		result, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, result.FundingSource)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 103, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		var expiredEvents float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM user_reward_credit_events
+			WHERE batch_id = $1 AND event_type = 'expire'`, batchID).Scan(&expiredEvents))
+		require.InDelta(t, 2, expiredEvents, 0.000001)
+	})
+
+	t.Run("expired reward hold is discarded on release", func(t *testing.T) {
+		user, apiKey, _, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-release-expired-" + uuid.NewString()
+		_, err := usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE user_reward_credits SET expires_at = $1 WHERE id IN ($2, $3)`,
+			now.Add(-time.Hour), firstAffiliateID, secondAffiliateID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE batch_image_reward_allocations SET expires_at_snapshot = $1 WHERE hold_key = $2`,
+			now.Add(-time.Hour), service.BatchImageHoldRequestID(batchID))
+		require.NoError(t, err)
+
+		released, err := usageRepo.ReleaseBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageReleaseRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, released.FundingSource)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 103, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		var expiredEvents float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM user_reward_credit_events
+			WHERE batch_id = $1 AND event_type = 'expire'`, batchID).Scan(&expiredEvents))
+		require.InDelta(t, 8, expiredEvents, 0.000001)
+	})
+
+	t.Run("reserve never combines daily affiliate and account layers", func(t *testing.T) {
+		user, apiKey, dailyID, firstAffiliateID, secondAffiliateID := newFixture(t)
+		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET balance = balance - 100 WHERE id = $1`, user.ID)
+		require.NoError(t, err)
+		batchID := "imgbatch-reward-no-cross-layer-" + uuid.NewString()
+		_, err = usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 12,
+		})
+		require.ErrorIs(t, err, service.ErrBatchImageInsufficientBalance)
+
+		dailyRemaining, dailyReserved := creditAmounts(t, dailyID)
+		firstRemaining, firstReserved := creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved := creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 3, dailyRemaining, 0.000001)
+		require.InDelta(t, 0, dailyReserved, 0.000001)
+		require.InDelta(t, 5, firstRemaining, 0.000001)
+		require.InDelta(t, 0, firstReserved, 0.000001)
+		require.InDelta(t, 5, secondRemaining, 0.000001)
+		require.InDelta(t, 0, secondReserved, 0.000001)
+	})
+}
+
 func TestUsageBillingRepositoryApply_UpdatesAccountQuota(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
