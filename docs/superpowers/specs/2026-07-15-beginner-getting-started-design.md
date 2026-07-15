@@ -203,6 +203,17 @@ For the chosen client and OS:
 
 Installation commands must be verified against official Claude Code and official OpenAI Codex documentation during implementation. Each client content definition records its official source URL and last verification date.
 
+#### Minimal platform-specific installation presentation
+
+Keep the existing client and operating-system selectors as the only choices. Do not add an installation-mode selector or a generic installation-options framework.
+
+- macOS and Linux show one copyable official CLI installation command for the selected client.
+- Windows shows the selected client's official desktop-app download link as the primary action and the official CLI installation command as a secondary fallback.
+- Claude Code Windows uses Anthropic's official x64 desktop installer redirect and the official PowerShell native-install command.
+- Codex Windows uses OpenAI's official Microsoft installer link and `npm install -g @openai/codex` as the CLI fallback.
+- A warning at the top of the guide says `操作可能需要魔法梯子。` in Chinese, with an equivalent English translation.
+- Tests assert the rendered commands, links, and warning only. They must never execute an installer or download a client binary.
+
 ### Step 5: Create or select an API key
 
 Anonymous users encounter an authentication checkpoint here, not at route entry.
