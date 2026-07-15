@@ -145,7 +145,10 @@
             {{ t('gettingStarted.terminal.normalOutput') }}
           </p>
         </section>
-        <GuideCommandBlock :command="selectedVariant.verifyCommand" />
+        <GuideCommandBlock
+          v-if="selectedVariant.verifyCommand"
+          :command="selectedVariant.verifyCommand"
+        />
       </div>
 
       <div v-else-if="activeStep === 'install'" class="space-y-5">
@@ -164,13 +167,16 @@
           <Icon name="externalLink" size="sm" aria-hidden="true" />
         </a>
         <p
-          v-if="selectedVariant.desktopDownloadUrl"
+          v-if="selectedVariant.desktopDownloadUrl && selectedVariant.installCommand"
           data-testid="guide-cli-fallback"
           class="text-sm font-medium text-gray-700 dark:text-linear-ink-subtle"
         >
           {{ t('gettingStarted.installation.cliFallback') }}
         </p>
-        <GuideCommandBlock :command="selectedVariant.installCommand" />
+        <GuideCommandBlock
+          v-if="selectedVariant.installCommand"
+          :command="selectedVariant.installCommand"
+        />
         <details class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-linear-hairline dark:bg-linear-canvas">
           <summary class="cursor-pointer rounded-md text-sm font-semibold text-gray-950 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:text-linear-ink dark:focus-visible:ring-offset-linear-canvas">
             {{ t('gettingStarted.installation.expectedResult') }}
@@ -227,7 +233,10 @@
         <p class="text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle">
           {{ t('gettingStarted.firstRun.restartInstruction') }}
         </p>
-        <GuideCommandBlock :command="selectedVariant.launchCommand" />
+        <GuideCommandBlock
+          v-if="selectedVariant.launchCommand"
+          :command="selectedVariant.launchCommand"
+        />
         <div>
           <h2 class="mb-2 text-sm font-semibold text-gray-950 dark:text-linear-ink">
             {{ t('gettingStarted.firstRun.promptLabel') }}

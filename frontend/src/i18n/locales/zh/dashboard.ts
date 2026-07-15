@@ -193,6 +193,11 @@ export default {
         note: 'WorkBuddy 使用 OpenAI 兼容的 Chat Completions 接口；请保持 url 以 /chat/completions 结尾，并避免把 name 改成展示名。',
         hint: '配置文件路径：macOS/Linux 为 ~/.workbuddy/models.json，Windows 为 %userprofile%\\.workbuddy\\models.json。保存后如未出现模型，请重启 WorkBuddy。',
       },
+      ccSwitch: {
+        description: '在 CC Switch 中选择对应应用，点击右上角 +，添加 Custom 供应商，并粘贴下方字段。',
+        note: '保存后点击“启用”。除 Claude Code 外，通常需要完全退出并重启目标客户端才能生效。',
+        hint: '请把各字段填入 CC Switch 的供应商表单；不要直接修改 ~/.cc-switch/cc-switch.db。',
+      },
       title: '使用 API 密钥',
       description: '将以下环境变量添加到您的终端配置文件或直接在终端中运行。',
       copy: '复制',
@@ -218,7 +223,8 @@ export default {
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
-        opencode: 'OpenCode'
+        opencode: 'OpenCode',
+        ccSwitch: 'CC Switch'
       },
       antigravity: {
         description: '为 Antigravity 分组配置 API 访问。请根据您使用的客户端选择对应的配置方式。',

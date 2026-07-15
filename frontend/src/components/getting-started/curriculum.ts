@@ -8,10 +8,10 @@ export interface GuideVariant {
   client: BeginnerGuideClient
   os: BeginnerGuideOS
   shell: 'terminal' | 'powershell'
-  installCommand: string
+  installCommand?: string
   desktopDownloadUrl?: string
-  verifyCommand: string
-  launchCommand: string
+  verifyCommand?: string
+  launchCommand?: string
   diagnosticCommands: string[]
   officialSourceUrl: string
   verifiedAt: '2026-07-15'
@@ -88,6 +88,70 @@ export const GUIDE_VARIANTS: GuideVariant[] = [
     launchCommand: 'codex',
     diagnosticCommands: ['codex login status', 'codex doctor'],
     officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'opencode',
+    os: 'macos',
+    shell: 'terminal',
+    installCommand: 'curl -fsSL https://opencode.ai/install | bash',
+    desktopDownloadUrl: 'https://opencode.ai/download',
+    verifyCommand: 'opencode --version',
+    launchCommand: 'opencode',
+    diagnosticCommands: ['opencode auth list'],
+    officialSourceUrl: 'https://opencode.ai/docs',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'opencode',
+    os: 'windows',
+    shell: 'powershell',
+    installCommand: 'npm install -g opencode-ai',
+    desktopDownloadUrl: 'https://opencode.ai/download',
+    verifyCommand: 'opencode --version',
+    launchCommand: 'opencode',
+    diagnosticCommands: ['opencode auth list'],
+    officialSourceUrl: 'https://opencode.ai/docs',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'opencode',
+    os: 'linux',
+    shell: 'terminal',
+    installCommand: 'curl -fsSL https://opencode.ai/install | bash',
+    desktopDownloadUrl: 'https://opencode.ai/download',
+    verifyCommand: 'opencode --version',
+    launchCommand: 'opencode',
+    diagnosticCommands: ['opencode auth list'],
+    officialSourceUrl: 'https://opencode.ai/docs',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'cc_switch',
+    os: 'macos',
+    shell: 'terminal',
+    installCommand: 'brew install --cask cc-switch',
+    desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest',
+    diagnosticCommands: [],
+    officialSourceUrl: 'https://github.com/farion1231/cc-switch#download--installation',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'cc_switch',
+    os: 'windows',
+    shell: 'powershell',
+    desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest',
+    diagnosticCommands: [],
+    officialSourceUrl: 'https://github.com/farion1231/cc-switch#download--installation',
+    verifiedAt: '2026-07-15'
+  },
+  {
+    client: 'cc_switch',
+    os: 'linux',
+    shell: 'terminal',
+    desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest',
+    diagnosticCommands: [],
+    officialSourceUrl: 'https://github.com/farion1231/cc-switch#download--installation',
     verifiedAt: '2026-07-15'
   }
 ]

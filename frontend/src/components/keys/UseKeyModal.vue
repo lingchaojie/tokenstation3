@@ -274,11 +274,12 @@ const clientTabs = computed((): TabConfig[] => {
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
       ]
     case 'openai': {
       const tabs: TabConfig[] = []
@@ -287,10 +288,11 @@ const clientTabs = computed((): TabConfig[] => {
       }
       tabs.push(
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
         { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
       )
       return tabs
     }
@@ -313,9 +315,10 @@ const clientTabs = computed((): TabConfig[] => {
     default:
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: t('keys.useKeyModal.cliTabs.anthropicPythonSdk'), icon: TerminalIcon },
-        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon }
       ]
   }
 })
@@ -335,7 +338,11 @@ const openaiTabs: TabConfig[] = [
 
 const pythonSdkTabs = new Set(['anthropic-python-sdk', 'openai-python-sdk', 'openai-imagen2-python-sdk'])
 
-const showShellTabs = computed(() => activeClientTab.value !== 'opencode' && !pythonSdkTabs.has(activeClientTab.value))
+const showShellTabs = computed(() =>
+  activeClientTab.value !== 'opencode' &&
+  activeClientTab.value !== 'cc_switch' &&
+  !pythonSdkTabs.has(activeClientTab.value)
+)
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
@@ -348,6 +355,9 @@ const currentTabs = computed(() => {
 const platformDescription = computed(() => {
   if (activeClientTab.value === 'opencode') {
     return t('keys.useKeyModal.opencode.description')
+  }
+  if (activeClientTab.value === 'cc_switch') {
+    return t('keys.useKeyModal.ccSwitch.description')
   }
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.description')
@@ -378,6 +388,9 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (activeClientTab.value === 'cc_switch') {
+    return t('keys.useKeyModal.ccSwitch.note')
+  }
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.note')
   }
@@ -506,6 +519,18 @@ const currentFiles = computed((): FileConfig[] => {
       default:
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
     }
+  }
+
+  if (activeClientTab.value === 'cc_switch' && props.platform) {
+    return buildClientConfigFiles({
+      client: 'cc_switch',
+      os: 'macos',
+      platform: props.platform,
+      apiKey,
+      baseUrl
+    }).map(({ hintKey, ...file }) => hintKey
+      ? { ...file, hint: t(hintKey) }
+      : file)
   }
 
   if (activeClientTab.value === 'workbuddy') {

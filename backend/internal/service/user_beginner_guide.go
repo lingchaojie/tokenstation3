@@ -78,7 +78,10 @@ func validateBeginnerGuideProgress(progress *BeginnerGuideProgress) error {
 	if progress.Version != BeginnerGuideProgressVersion {
 		return ErrBeginnerGuideProgressInvalid
 	}
-	if progress.Client != "claude_code" && progress.Client != "codex" {
+	if progress.Client != "claude_code" &&
+		progress.Client != "codex" &&
+		progress.Client != "opencode" &&
+		progress.Client != "cc_switch" {
 		return ErrBeginnerGuideProgressInvalid
 	}
 	if progress.OS != "macos" && progress.OS != "windows" && progress.OS != "linux" {

@@ -154,4 +154,80 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     expect(config?.content).not.toContain('env_key')
     expect(JSON.parse(auth?.content ?? '')).toEqual({ OPENAI_API_KEY: 'sk-test' })
   })
+
+  it.each([
+    ['macos', '~/.config/opencode/opencode.json'],
+    ['linux', '~/.config/opencode/opencode.json'],
+    ['windows', '%userprofile%\\.config\\opencode\\opencode.json']
+  ] as const)('builds an official OpenCode provider config for %s', (os, expectedPath) => {
+    const [file] = buildClientConfigFiles(input({
+      client: 'opencode',
+      os,
+      platform: 'openai'
+    }))
+
+    expect(file?.path).toBe(expectedPath)
+    expect(file?.hintKey).toBe('keys.useKeyModal.opencode.hint')
+    const parsed = JSON.parse(file?.content ?? '')
+    expect(parsed.$schema).toBe('https://opencode.ai/config.json')
+    expect(parsed.provider.openai.options).toEqual({
+      baseURL: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test'
+    })
+  })
+
+  it('builds both OpenCode alternatives for a unified key', () => {
+    const files = buildClientConfigFiles(input({ client: 'opencode' }))
+
+    expect(files).toHaveLength(2)
+    expect(files.map((file) => file.path)).toEqual([
+      '~/.config/opencode/opencode.json (Claude)',
+      '~/.config/opencode/opencode.json (OpenAI)'
+    ])
+    expect(JSON.parse(files[0]?.content ?? '').provider.anthropic.options).toEqual({
+      baseURL: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test'
+    })
+    expect(JSON.parse(files[1]?.content ?? '').provider.openai.options).toEqual({
+      baseURL: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test'
+    })
+  })
+
+  it('builds copyable CC Switch fields for a unified key', () => {
+    expect(buildClientConfigFiles(input({ client: 'cc_switch' }))).toEqual([
+      {
+        path: 'CC Switch → Claude Code → Custom',
+        content: `App: Claude Code
+Preset: Custom
+Name: TokenStation
+Endpoint: https://gateway.example.com
+API Key: sk-test`,
+        hintKey: 'keys.useKeyModal.ccSwitch.hint'
+      },
+      {
+        path: 'CC Switch → Codex → Custom',
+        content: `App: Codex
+Preset: Custom
+Name: TokenStation
+Endpoint: https://gateway.example.com/v1
+API Key: sk-test
+Model: gpt-5.5
+Wire API: responses`,
+        hintKey: 'keys.useKeyModal.ccSwitch.hint'
+      }
+    ])
+  })
+
+  it('builds only the compatible CC Switch target for typed keys', () => {
+    expect(buildClientConfigFiles(input({
+      client: 'cc_switch',
+      platform: 'anthropic'
+    })).map((file) => file.path)).toEqual(['CC Switch → Claude Code → Custom'])
+
+    expect(buildClientConfigFiles(input({
+      client: 'cc_switch',
+      platform: 'openai'
+    })).map((file) => file.path)).toEqual(['CC Switch → Codex → Custom'])
+  })
 })

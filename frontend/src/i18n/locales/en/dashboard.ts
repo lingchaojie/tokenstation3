@@ -193,6 +193,11 @@ export default {
         note: 'WorkBuddy uses the OpenAI-compatible Chat Completions API. Keep url ending in /chat/completions, and do not change name to a display label.',
         hint: 'Config path: ~/.workbuddy/models.json on macOS/Linux, or %userprofile%\\.workbuddy\\models.json on Windows. Restart WorkBuddy if the models do not appear after saving.',
       },
+      ccSwitch: {
+        description: 'In CC Switch, choose the target app, click +, add a Custom provider, and paste the fields below.',
+        note: 'Save and click Enable. Except for Claude Code, fully quit and restart the target client for the change to take effect.',
+        hint: 'Enter these fields in the CC Switch provider form; do not edit ~/.cc-switch/cc-switch.db directly.',
+      },
       title: 'Use API Key',
       description:
         'Add the following environment variables to your terminal profile or run directly in terminal to configure API access.',
@@ -218,6 +223,7 @@ export default {
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
         opencode: 'OpenCode',
+        ccSwitch: 'CC Switch',
       },
       antigravity: {
         description: 'Configure API access for Antigravity group. Select the configuration method based on your client.',

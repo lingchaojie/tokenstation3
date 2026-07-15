@@ -11,7 +11,7 @@ export const BEGINNER_GUIDE_STEP_ORDER = [
   'troubleshoot'
 ] as const
 
-export type BeginnerGuideClient = 'claude_code' | 'codex'
+export type BeginnerGuideClient = 'claude_code' | 'codex' | 'opencode' | 'cc_switch'
 export type BeginnerGuideOS = 'macos' | 'windows' | 'linux'
 export type BeginnerGuideStepId = (typeof BEGINNER_GUIDE_STEP_ORDER)[number]
 export type BeginnerGuidePromptState = 'eligible' | 'suppressed' | 'completed'

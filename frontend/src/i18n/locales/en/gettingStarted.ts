@@ -17,7 +17,8 @@ export default {
     },
     dashboard: {
       quickActionTitle: 'Beginner Guide',
-      quickActionDescription: 'Set up Claude Code or Codex and complete your first task.',
+      quickActionDescription:
+        'Set up Claude Code, Codex CLI, OpenCode, or CC Switch and complete your first task.',
       sidebarLabel: 'Beginner Guide'
     },
     welcome: {
@@ -44,7 +45,9 @@ export default {
     },
     clients: {
       claude_code: 'Claude Code',
-      codex: 'Codex'
+      codex: 'Codex CLI',
+      opencode: 'OpenCode',
+      cc_switch: 'CC Switch'
     },
     operatingSystems: {
       macos: 'macOS',

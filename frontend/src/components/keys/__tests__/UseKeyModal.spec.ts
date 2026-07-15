@@ -247,7 +247,7 @@ describe('UseKeyModal', () => {
     expect(parsed.provider.grok.models['gpt-5.6']).toBeUndefined()
   })
 
-  it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
+  it('orders OpenAI usage tabs with primary clients first and WorkBuddy last among them', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -273,10 +273,11 @@ describe('UseKeyModal', () => {
     expect(tabLabels).toEqual([
       'keys.useKeyModal.cliTabs.claudeCode',
       'keys.useKeyModal.cliTabs.codexCli',
-      'keys.useKeyModal.cliTabs.workBuddy',
       'keys.useKeyModal.cliTabs.opencode',
+      'keys.useKeyModal.cliTabs.ccSwitch',
       'keys.useKeyModal.cliTabs.openaiPythonSdk',
-      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk',
+      'keys.useKeyModal.cliTabs.workBuddy'
     ])
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
   })
@@ -307,17 +308,51 @@ describe('UseKeyModal', () => {
     expect(tabLabels).toEqual([
       'keys.useKeyModal.cliTabs.claudeCode',
       'keys.useKeyModal.cliTabs.codexCli',
-      'keys.useKeyModal.cliTabs.workBuddy',
       'keys.useKeyModal.cliTabs.opencode',
+      'keys.useKeyModal.cliTabs.ccSwitch',
       'keys.keyTypes.anthropic keys.useKeyModal.cliTabs.anthropicPythonSdk',
       'keys.keyTypes.openai keys.useKeyModal.cliTabs.openaiPythonSdk',
-      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk',
+      'keys.useKeyModal.cliTabs.workBuddy'
     ])
     expect(clientNav.classes()).toEqual(
       expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
     )
     expect(clientNav.classes()).not.toContain('space-x-6')
     expect(clientNav.classes()).not.toContain('overflow-x-auto')
+  })
+
+  it('renders official manual CC Switch provider fields without shell tabs', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1/',
+        platform: 'unified'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const ccSwitchTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.ccSwitch')
+    )
+    expect(ccSwitchTab).toBeDefined()
+    await ccSwitchTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('nav[aria-label="Tabs"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('keys.useKeyModal.ccSwitch.description')
+    expect(wrapper.text()).toContain('keys.useKeyModal.ccSwitch.note')
+    expect(generatedFiles(wrapper)).toEqual([
+      {
+        path: 'CC Switch → Claude Code → Custom',
+        content: expect.stringContaining('Endpoint: https://example.com')
+      },
+      {
+        path: 'CC Switch → Codex → Custom',
+        content: expect.stringContaining('Wire API: responses')
+      }
+    ])
   })
 
   it('renders WorkBuddy models.json with gateway-supported model ids', async () => {

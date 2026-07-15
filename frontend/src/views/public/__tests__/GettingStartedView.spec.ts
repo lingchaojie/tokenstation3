@@ -328,6 +328,25 @@ describe('GettingStartedView', () => {
     )
   })
 
+  it('shows the official CC Switch desktop release without a fabricated CLI fallback', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'cc_switch',
+        os: 'windows',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    expect(wrapper.get('[data-testid="guide-desktop-download"]').attributes('href')).toBe(
+      'https://github.com/farion1231/cc-switch/releases/latest'
+    )
+    expect(wrapper.find('[data-testid="guide-cli-fallback"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="guide-command-block"]').exists()).toBe(false)
+  })
+
   it('initializes account-scoped progress for an authenticated visitor', async () => {
     mountAuthenticatedView()
     await settle()
@@ -646,7 +665,7 @@ describe('GettingStartedView', () => {
     await settle()
 
     expect(wrapper.findAll('[data-client-option]').map((node) => node.attributes('data-client-option')))
-      .toEqual(['claude_code', 'codex'])
+      .toEqual(['claude_code', 'codex', 'opencode', 'cc_switch'])
     expect(wrapper.findAll('[data-os-option]').map((node) => node.attributes('data-os-option')))
       .toEqual(['macos', 'windows', 'linux'])
   })
@@ -663,7 +682,7 @@ describe('GettingStartedView', () => {
     ])
 
     const options = wrapper.findAll('[data-client-option], [data-os-option]')
-    expect(options).toHaveLength(5)
+    expect(options).toHaveLength(7)
     for (const option of options) {
       expect(option.element.tagName).toBe('BUTTON')
       expect(option.attributes('type')).toBe('button')

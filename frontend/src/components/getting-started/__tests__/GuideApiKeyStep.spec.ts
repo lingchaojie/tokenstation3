@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { keysAPI } from '@/api/keys'
+import type { BeginnerGuideClient } from '@/api/beginnerGuide'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiKey, User } from '@/types'
@@ -137,7 +138,7 @@ const messages = runtimeMessages({
 function mountStep(options: {
   authenticated?: boolean
   userId?: number
-  client?: 'claude_code' | 'codex'
+  client?: BeginnerGuideClient
   os?: 'macos' | 'windows' | 'linux'
   selectedKey?: ApiKey | null
   reselectRequired?: boolean
@@ -292,6 +293,22 @@ describe('GuideApiKeyStep', () => {
     expect(wrapper.get('[data-key-id="5"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-key-id="6"]').attributes('disabled')).toBeUndefined()
   })
+
+  it.each(['opencode', 'cc_switch'] as const)(
+    'allows unified, Anthropic, and OpenAI keys for %s',
+    async (client) => {
+      const unified = keyFixture({ id: 7, name: 'Unified' })
+      const anthropic = keyFixture({ id: 8, name: 'Anthropic', key_type: 'anthropic' })
+      const openai = keyFixture({ id: 9, name: 'OpenAI', key_type: 'openai' })
+      vi.mocked(keysAPI.list).mockResolvedValueOnce(page([unified, anthropic, openai]))
+      const { wrapper } = mountStep({ authenticated: true, client })
+      await settle()
+
+      for (const id of [7, 8, 9]) {
+        expect(wrapper.get(`[data-key-id="${id}"]`).attributes('disabled')).toBeUndefined()
+      }
+    }
+  )
 
   it.each([
     ['inactive', 'Inactive'],

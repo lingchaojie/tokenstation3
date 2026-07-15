@@ -16,7 +16,7 @@ export default {
     },
     dashboard: {
       quickActionTitle: '新手教程',
-      quickActionDescription: '配置 Claude Code 或 Codex，并完成你的第一次任务。',
+      quickActionDescription: '配置 Claude Code、Codex CLI、OpenCode 或 CC Switch，并完成你的第一次任务。',
       sidebarLabel: '新手教程'
     },
     welcome: {
@@ -42,7 +42,9 @@ export default {
     },
     clients: {
       claude_code: 'Claude Code',
-      codex: 'Codex'
+      codex: 'Codex CLI',
+      opencode: 'OpenCode',
+      cc_switch: 'CC Switch'
     },
     operatingSystems: {
       macos: 'macOS',

@@ -27,7 +27,7 @@ const SELECTION_SPECIFIC_STEPS = new Set<BeginnerGuideStepId>([
   'troubleshoot'
 ])
 const STEP_IDS = new Set<string>(BEGINNER_GUIDE_STEP_ORDER)
-const CLIENT_IDS = new Set<string>(['claude_code', 'codex'])
+const CLIENT_IDS = new Set<string>(['claude_code', 'codex', 'opencode', 'cc_switch'])
 const OS_IDS = new Set<string>(['macos', 'windows', 'linux'])
 
 export type BeginnerGuideInitialization =
