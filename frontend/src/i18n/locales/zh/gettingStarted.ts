@@ -126,6 +126,8 @@ export default {
       expectedResult: '安装过程没有报错，并且版本检查命令会显示版本号。',
       restartShell:
         '如果安装后提示找不到命令，请关闭当前终端，重新打开一个终端，再次运行版本检查。你的文件不会受到影响。',
+      downloadDesktop: '下载桌面 App',
+      cliFallback: '更习惯命令行？也可以使用下面的 CLI 命令：',
       officialSource: '打开官方安装说明'
     },
     apiKey: {
@@ -176,6 +178,7 @@ export default {
       usage: '查看使用记录'
     },
     warnings: {
+      networkAccess: '操作可能需要魔法梯子。',
       progressUnavailable: '无法读取已保存的教程进度。你仍可继续使用教程，稍后再重试。',
       progressSaveFailed: '最新进度无法保存到账号。教程仍可使用，请稍后重试。',
       promptSaveFailed: '无法把欢迎提示偏好保存到账号。当前已隐藏，系统稍后会重试。'

@@ -94,6 +94,8 @@ const REQUIRED_LOCALE_PATHS = [
   'gettingStarted.installation.explanation',
   'gettingStarted.installation.expectedResult',
   'gettingStarted.installation.restartShell',
+  'gettingStarted.installation.downloadDesktop',
+  'gettingStarted.installation.cliFallback',
   'gettingStarted.installation.officialSource',
   'gettingStarted.apiKey.anonymousTitle',
   'gettingStarted.apiKey.anonymousDescription',
@@ -133,7 +135,8 @@ const REQUIRED_LOCALE_PATHS = [
   'gettingStarted.completion.usage',
   'gettingStarted.warnings.progressUnavailable',
   'gettingStarted.warnings.progressSaveFailed',
-  'gettingStarted.warnings.promptSaveFailed'
+  'gettingStarted.warnings.promptSaveFailed',
+  'gettingStarted.warnings.networkAccess'
 ] as const
 
 function recursiveLeafPaths(value: unknown, prefix = ''): string[] {

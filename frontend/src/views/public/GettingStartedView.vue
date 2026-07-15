@@ -5,6 +5,14 @@
     @select-step="handleSelectStep"
   >
     <section
+      data-testid="guide-network-warning"
+      role="note"
+      class="mb-5 rounded-xl border border-amber-400/35 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-900 dark:text-amber-200"
+    >
+      {{ t('gettingStarted.warnings.networkAccess') }}
+    </section>
+
+    <section
       v-if="persistenceWarningKey"
       data-testid="guide-persistence-warning"
       role="status"
@@ -143,6 +151,24 @@
       <div v-else-if="activeStep === 'install'" class="space-y-5">
         <p class="text-sm leading-6 text-gray-600 dark:text-linear-ink-subtle">
           {{ t('gettingStarted.installation.explanation') }}
+        </p>
+        <a
+          v-if="selectedVariant.desktopDownloadUrl"
+          data-testid="guide-desktop-download"
+          :href="selectedVariant.desktopDownloadUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white outline-none transition-colors hover:bg-primary-400 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:focus-visible:ring-offset-linear-canvas"
+        >
+          {{ t('gettingStarted.installation.downloadDesktop') }}
+          <Icon name="externalLink" size="sm" aria-hidden="true" />
+        </a>
+        <p
+          v-if="selectedVariant.desktopDownloadUrl"
+          data-testid="guide-cli-fallback"
+          class="text-sm font-medium text-gray-700 dark:text-linear-ink-subtle"
+        >
+          {{ t('gettingStarted.installation.cliFallback') }}
         </p>
         <GuideCommandBlock :command="selectedVariant.installCommand" />
         <details class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-linear-hairline dark:bg-linear-canvas">

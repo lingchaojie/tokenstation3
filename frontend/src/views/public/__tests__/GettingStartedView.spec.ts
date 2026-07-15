@@ -275,6 +275,59 @@ describe('GettingStartedView', () => {
     expect(keysAPI.list).not.toHaveBeenCalled()
   })
 
+  it('shows the network-access warning at the top of the Chinese guide', async () => {
+    const { wrapper } = mountView('zh')
+    await settle()
+
+    expect(wrapper.get('[data-testid="guide-network-warning"]').text()).toContain(
+      '操作可能需要魔法梯子。'
+    )
+  })
+
+  it('shows the official Windows desktop download before the Codex CLI fallback', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'codex',
+        os: 'windows',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    const download = wrapper.get('[data-testid="guide-desktop-download"]')
+    expect(download.attributes('href')).toBe(
+      'https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi'
+    )
+    expect(download.text()).toContain('Download the desktop app')
+    expect(wrapper.get('[data-testid="guide-cli-fallback"]').text()).toContain(
+      'Prefer the command line? Use this CLI fallback:'
+    )
+    expect(wrapper.get('[data-testid="guide-command-block"]').text()).toContain(
+      'npm install -g @openai/codex'
+    )
+  })
+
+  it('shows only the official CLI command for a macOS installation', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'claude_code',
+        os: 'macos',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="guide-desktop-download"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="guide-cli-fallback"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="guide-command-block"]').text()).toContain(
+      'curl -fsSL https://claude.ai/install.sh | bash'
+    )
+  })
+
   it('initializes account-scoped progress for an authenticated visitor', async () => {
     mountAuthenticatedView()
     await settle()
