@@ -23,9 +23,9 @@ const componentSource = readFileSync(
   'utf8'
 )
 
-function mountSwitcher() {
+function mountSwitcher(attachTo?: Element) {
   const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: {}, zh: {} } })
-  return mount(LocaleSwitcher, { global: { plugins: [i18n] } })
+  return mount(LocaleSwitcher, { attachTo, global: { plugins: [i18n] } })
 }
 
 describe('LocaleSwitcher', () => {
@@ -34,13 +34,14 @@ describe('LocaleSwitcher', () => {
     setLocaleMock.mockResolvedValue(undefined)
   })
 
-  it('uses real focus-visible and reduced-motion controls for the trigger and options', async () => {
+  it('uses native disclosure controls with real focus-visible and reduced-motion states', async () => {
     const wrapper = mountSwitcher()
     const trigger = wrapper.get('[data-testid="locale-switcher-trigger"]')
 
     expect(trigger.element.tagName).toBe('BUTTON')
     expect(trigger.attributes('type')).toBe('button')
     expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(trigger.attributes('aria-haspopup')).toBeUndefined()
     expect(trigger.classes()).toContain('focus-visible:ring-2')
     expect(trigger.classes()).toContain('motion-reduce:transition-none')
     const chevron = wrapper.get('[data-testid="locale-switcher-chevron"]')
@@ -50,19 +51,60 @@ describe('LocaleSwitcher', () => {
     await trigger.trigger('click')
 
     expect(trigger.attributes('aria-expanded')).toBe('true')
+    const dropdown = wrapper.get('[data-testid="locale-switcher-dropdown"]')
+    expect(dropdown.attributes('role')).toBeUndefined()
     const options = wrapper.findAll('[data-locale-option]')
     expect(options).toHaveLength(2)
     for (const option of options) {
       expect(option.element.tagName).toBe('BUTTON')
       expect(option.attributes('type')).toBe('button')
+      expect(option.attributes('role')).toBeUndefined()
+      expect(option.attributes('aria-checked')).toBeUndefined()
       expect(option.classes()).toContain('focus-visible:ring-2')
       expect(option.classes()).toContain('motion-reduce:transition-none')
     }
 
-    await wrapper.get('[data-locale-option="zh"]').trigger('click')
+    const englishOption = wrapper.get('[data-locale-option="en"]')
+    const chineseOption = wrapper.get('[data-locale-option="zh"]')
+    expect(englishOption.attributes('aria-pressed')).toBe('true')
+    expect(chineseOption.attributes('aria-pressed')).toBe('false')
+
+    const enterEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true
+    })
+    expect(chineseOption.element.dispatchEvent(enterEvent)).toBe(true)
+    expect(enterEvent.defaultPrevented).toBe(false)
+
+    await chineseOption.trigger('click')
     await flushPromises()
     expect(setLocaleMock).toHaveBeenCalledWith('zh')
     expect(trigger.attributes('aria-expanded')).toBe('false')
+  })
+
+  it('closes on Escape from an option and restores focus to the trigger', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const wrapper = mountSwitcher(host)
+
+    try {
+      const trigger = wrapper.get('[data-testid="locale-switcher-trigger"]')
+      await trigger.trigger('click')
+
+      const option = wrapper.get('[data-locale-option="zh"]')
+      ;(option.element as HTMLButtonElement).focus()
+      expect(document.activeElement).toBe(option.element)
+
+      await option.trigger('keydown', { key: 'Escape' })
+      await wrapper.vm.$nextTick()
+
+      expect(trigger.attributes('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(trigger.element)
+    } finally {
+      wrapper.unmount()
+      host.remove()
+    }
   })
 
   it('disables dropdown transition and transform under reduced motion', () => {
