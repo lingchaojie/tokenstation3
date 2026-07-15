@@ -265,23 +265,41 @@ describe('useBeginnerGuideStore', () => {
     )
   })
 
-  it('retains anonymous progress and remains usable when account merge persistence fails', async () => {
+  it('retains anonymous progress and retries the current merged snapshot after account merge persistence fails', async () => {
     const anonymous = progress({ currentStep: 'api_key', completedSteps: ['understand'] })
     localStorage.setItem(ANONYMOUS_PROGRESS_KEY, JSON.stringify(anonymous))
     getBeginnerGuideStateMock.mockResolvedValueOnce(
       state({ progress: progress({ completedSteps: ['choose'] }) })
     )
-    patchBeginnerGuideStateMock.mockRejectedValue(new Error('offline'))
+    patchBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+      )
 
     const store = useBeginnerGuideStore()
     await expect(
       store.initialize({ authenticated: true, userId: 42 })
     ).resolves.toBeUndefined()
-    await expect(store.completeStep('api_key')).resolves.toBeUndefined()
 
-    expect(store.progress.completedSteps).toEqual(['understand', 'choose', 'api_key'])
+    expect(store.progress.completedSteps).toEqual(['understand', 'choose'])
     expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).not.toBeNull()
     expect(localStorage.getItem(retryKey(42))).toBe('1')
+    expect(store.persistenceIssue).toBe('save')
+
+    await store.retryPersistence()
+
+    const current = progress({
+      currentStep: 'api_key',
+      completedSteps: ['understand', 'choose']
+    })
+    expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+      prompt_state: 'suppressed',
+      progress: current
+    })
+    expect(store.progress).toEqual(current)
+    expect(store.persistenceIssue).toBeNull()
+    expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).toBeNull()
   })
 
   it('keeps in-memory progress usable when browser persistence throws', async () => {
@@ -324,6 +342,85 @@ describe('useBeginnerGuideStore', () => {
     ).resolves.toBeUndefined()
 
     expect(store.showPrompt).toBe(false)
+    expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
+    expect(store.persistenceIssue).toBe('load')
+  })
+
+  it.each(['rejected', 'malformed'] as const)(
+    'recovers a %s guide GET on explicit retry without replacing the local snapshot',
+    async (failureKind) => {
+      const remoteProgress = progress({
+        client: 'claude_code',
+        os: 'windows',
+        currentStep: 'install',
+        completedSteps: ['choose']
+      })
+      if (failureKind === 'rejected') {
+        getBeginnerGuideStateMock.mockRejectedValueOnce(new Error('offline'))
+      } else {
+        getBeginnerGuideStateMock.mockResolvedValueOnce(null as unknown as BeginnerGuideState)
+      }
+      getBeginnerGuideStateMock.mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: remoteProgress })
+      )
+      patchBeginnerGuideStateMock.mockImplementation(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+      )
+      const store = useBeginnerGuideStore()
+
+      await store.initialize({ authenticated: true, userId: 'user-a' })
+      await store.selectClient('codex')
+      await store.selectOS('linux')
+      await store.goToStep('terminal')
+      await store.completeStep('understand')
+      const localBeforeRetry = progress({
+        client: 'codex',
+        os: 'linux',
+        currentStep: 'terminal',
+        completedSteps: ['understand']
+      })
+      expect(store.progress).toEqual(localBeforeRetry)
+      expect(store.persistenceIssue).toBe('load')
+
+      await store.retryPersistence()
+
+      const merged = progress({
+        client: 'codex',
+        os: 'linux',
+        currentStep: 'terminal',
+        completedSteps: ['understand', 'choose']
+      })
+      expect(store.progress).toEqual(merged)
+      expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({ progress: merged })
+      expect(store.persistenceIssue).toBeNull()
+      expect(store.persistenceRetrying).toBe(false)
+    }
+  )
+
+  it('exposes retrying while a failed GET retry is pending and applies remote progress when local state is unchanged', async () => {
+    const retryResponse = deferred<BeginnerGuideState>()
+    const remoteProgress = progress({
+      client: 'codex',
+      os: 'windows',
+      currentStep: 'install',
+      completedSteps: ['understand', 'choose', 'terminal']
+    })
+    getBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(retryResponse.promise)
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+
+    const retry = store.retryPersistence()
+    await flushMicrotasks()
+    expect(store.persistenceRetrying).toBe(true)
+
+    retryResponse.resolve(state({ prompt_state: 'suppressed', progress: remoteProgress }))
+    await retry
+
+    expect(store.progress).toEqual(remoteProgress)
+    expect(store.persistenceIssue).toBeNull()
+    expect(store.persistenceRetrying).toBe(false)
     expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
   })
 
@@ -448,6 +545,44 @@ describe('useBeginnerGuideStore', () => {
     })
   })
 
+  it.each(['rejected', 'malformed'] as const)(
+    'preserves local progress and retries the current canonical snapshot after a %s progress PATCH',
+    async (failureKind) => {
+      getBeginnerGuideStateMock.mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: progress() })
+      )
+      if (failureKind === 'rejected') {
+        patchBeginnerGuideStateMock.mockRejectedValueOnce(new Error('offline'))
+      } else {
+        patchBeginnerGuideStateMock.mockResolvedValueOnce(null as unknown as BeginnerGuideState)
+      }
+      const retryResponse = deferred<BeginnerGuideState>()
+      patchBeginnerGuideStateMock.mockReturnValueOnce(retryResponse.promise)
+      const store = useBeginnerGuideStore()
+      await store.initialize({ authenticated: true, userId: 'user-a' })
+
+      await store.completeStep('understand')
+
+      const expected = progress({ completedSteps: ['understand'] })
+      expect(store.progress).toEqual(expected)
+      expect(store.persistenceIssue).toBe('save')
+
+      const retry = store.retryPersistence()
+      await flushMicrotasks()
+      expect(store.persistenceRetrying).toBe(true)
+      expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({ progress: expected })
+
+      retryResponse.resolve(
+        state({ prompt_state: 'suppressed', progress: expected })
+      )
+      await retry
+
+      expect(store.progress).toEqual(expected)
+      expect(store.persistenceIssue).toBeNull()
+      expect(store.persistenceRetrying).toBe(false)
+    }
+  )
+
   it('marks completion locally, sends only normalized progress, and never downgrades completed', async () => {
     const accountProgress = progress({
       currentStep: 'troubleshoot',
@@ -483,6 +618,92 @@ describe('useBeginnerGuideStore', () => {
     await store.suppressPrompt()
     expect(store.promptState).toBe('completed')
     expect(patchBeginnerGuideStateMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'malformed'] as const)(
+    'keeps completion local and retries its completed intent after a %s completion PATCH',
+    async (failureKind) => {
+      const accountProgress = progress({
+        currentStep: 'troubleshoot',
+        completedSteps: ['understand', 'troubleshoot']
+      })
+      getBeginnerGuideStateMock.mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: accountProgress })
+      )
+      if (failureKind === 'rejected') {
+        patchBeginnerGuideStateMock.mockRejectedValueOnce(new Error('offline'))
+      } else {
+        patchBeginnerGuideStateMock.mockResolvedValueOnce(null as unknown as BeginnerGuideState)
+      }
+      patchBeginnerGuideStateMock.mockResolvedValueOnce(
+        state({
+          prompt_state: 'completed',
+          progress: accountProgress,
+          completed_at: '2026-07-15T00:00:00Z'
+        })
+      )
+      const store = useBeginnerGuideStore()
+      await store.initialize({ authenticated: true, userId: 'user-a' })
+
+      await store.completeGuide()
+
+      expect(store.promptState).toBe('completed')
+      expect(store.progress).toEqual(accountProgress)
+      expect(store.persistenceIssue).toBe('save')
+
+      await store.retryPersistence()
+
+      expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+        prompt_state: 'completed',
+        progress: accountProgress
+      })
+      expect(store.promptState).toBe('completed')
+      expect(store.completedAt).toBe('2026-07-15T00:00:00Z')
+      expect(store.persistenceIssue).toBeNull()
+    }
+  )
+
+  it('preserves a failed completion intent when a same-owner refresh also fails before retry', async () => {
+    const accountProgress = progress({
+      currentStep: 'troubleshoot',
+      completedSteps: ['understand', 'troubleshoot']
+    })
+    getBeginnerGuideStateMock
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: accountProgress })
+      )
+      .mockRejectedValueOnce(new Error('refresh offline'))
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: accountProgress })
+      )
+    patchBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('completion offline'))
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({
+          prompt_state: patch.prompt_state ?? 'suppressed',
+          progress: patch.progress ?? null,
+          completed_at:
+            patch.prompt_state === 'completed' ? '2026-07-15T00:00:00Z' : null
+        })
+      )
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+    await store.completeGuide()
+    expect(store.persistenceIssue).toBe('save')
+
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+    expect(store.persistenceIssue).toBe('load')
+    expect(store.promptState).toBe('completed')
+
+    await store.retryPersistence()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+      prompt_state: 'completed',
+      progress: accountProgress
+    })
+    expect(store.promptState).toBe('completed')
+    expect(store.completedAt).toBe('2026-07-15T00:00:00Z')
+    expect(store.persistenceIssue).toBeNull()
   })
 
   it('does not downgrade completed during repeated initialization for the same account', async () => {
@@ -539,6 +760,41 @@ describe('useBeginnerGuideStore', () => {
     expect(store.completedAt).toBeNull()
   })
 
+  it('clears an owner warning on account switch and ignores the stale owner retry result', async () => {
+    const userARetry = deferred<BeginnerGuideState>()
+    const userBProgress = progress({
+      client: 'codex',
+      os: 'linux',
+      currentStep: 'terminal',
+      completedSteps: ['understand', 'choose']
+    })
+    getBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('user A offline'))
+      .mockReturnValueOnce(userARetry.promise)
+      .mockResolvedValueOnce(
+        state({ prompt_state: 'suppressed', progress: userBProgress })
+      )
+    const store = useBeginnerGuideStore()
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+    expect(store.persistenceIssue).toBe('load')
+
+    const retryA = store.retryPersistence()
+    await flushMicrotasks()
+    expect(store.persistenceRetrying).toBe(true)
+
+    await store.initialize({ authenticated: true, userId: 'user-b' })
+    expect(store.progress).toEqual(userBProgress)
+    expect(store.persistenceIssue).toBeNull()
+    expect(store.persistenceRetrying).toBe(false)
+
+    userARetry.reject(new Error('still offline'))
+    await retryA
+
+    expect(store.progress).toEqual(userBProgress)
+    expect(store.persistenceIssue).toBeNull()
+    expect(store.persistenceRetrying).toBe(false)
+  })
+
   it('does not let a pending user-A progress save overwrite logout state or remove a new anonymous copy', async () => {
     const userAProgress = progress({ currentStep: 'terminal' })
     const anonymous = progress({
@@ -560,16 +816,12 @@ describe('useBeginnerGuideStore', () => {
     expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
     localStorage.setItem(ANONYMOUS_PROGRESS_KEY, JSON.stringify(anonymous))
     await store.initialize({ authenticated: false, userId: null })
-    saveResponse.resolve(
-      state({
-        prompt_state: 'suppressed',
-        progress: progress({ currentStep: 'terminal', completedSteps: ['understand'] })
-      })
-    )
+    saveResponse.reject(new Error('user A save failed'))
     await pendingSave
 
     expect(store.progress).toEqual(anonymous)
     expect(JSON.parse(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)!)).toEqual(anonymous)
+    expect(store.persistenceIssue).toBeNull()
   })
 
   it('records a failed pending suppression only for its initiating account', async () => {
@@ -591,6 +843,7 @@ describe('useBeginnerGuideStore', () => {
     expect(localStorage.getItem(retryKey('user-a'))).toBe('1')
     expect(localStorage.getItem(retryKey('user-b'))).toBeNull()
     expect(store.promptState).toBe('suppressed')
+    expect(store.persistenceIssue).toBeNull()
   })
 
   it('retries on immediate same-owner initialization without letting the older success clear the newer attempt', async () => {
@@ -684,21 +937,13 @@ describe('useBeginnerGuideStore', () => {
     expect(patchBeginnerGuideStateMock).toHaveBeenCalledTimes(1)
     await store.initialize({ authenticated: true, userId: 'user-b' })
     localStorage.setItem(retryKey('user-b'), '1')
-    completionResponse.resolve(
-      state({
-        prompt_state: 'completed',
-        progress: progress({
-          currentStep: 'first_run',
-          completedSteps: ['understand', 'first_run']
-        }),
-        completed_at: '2026-07-15T00:00:00Z'
-      })
-    )
+    completionResponse.reject(new Error('user A completion failed'))
     await pendingCompletion
 
     expect(store.progress).toEqual(userBProgress)
     expect(store.promptState).toBe('suppressed')
     expect(localStorage.getItem(retryKey('user-b'))).toBe('1')
+    expect(store.persistenceIssue).toBeNull()
   })
 
   it('serializes same-account snapshots and keeps newer optimistic progress while the older save finishes', async () => {

@@ -213,14 +213,18 @@ function mountView(locale: 'en' | 'zh' = 'en', attachTo?: Element) {
   return { wrapper, i18n, guideStore: useBeginnerGuideStore(), authStore: useAuthStore() }
 }
 
-function mountAuthenticatedView(userId = 42, pinia = createPinia()) {
+function mountAuthenticatedView(
+  userId = 42,
+  pinia = createPinia(),
+  locale: 'en' | 'zh' = 'en'
+) {
   setActivePinia(pinia)
   const authStore = useAuthStore()
   authStore.user = userFixture(userId)
   authStore.token = 'test-session-token'
   const i18n = createI18n({
     legacy: false,
-    locale: 'en',
+    locale,
     fallbackLocale: 'en',
     messages: {
       en: localeMessages(enMessages),
@@ -277,6 +281,92 @@ describe('GettingStartedView', () => {
 
     expect(getGuideState).toHaveBeenCalledOnce()
     expect(keysAPI.list).not.toHaveBeenCalled()
+  })
+
+  it('renders an accessible localized load warning and clears it after explicit retry', async () => {
+    const retryResponse = deferred<{
+      prompt_state: 'suppressed'
+      progress: BeginnerGuideProgressV1
+      completed_at: null
+    }>()
+    getGuideState
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(retryResponse.promise)
+    const { wrapper } = mountAuthenticatedView()
+    await settle()
+
+    const warning = wrapper.get('[data-testid="guide-persistence-warning"]')
+    expect(warning.attributes('role')).toBe('status')
+    expect(warning.attributes('aria-live')).toBe('polite')
+    expect(warning.text()).toContain(
+      'The saved guide progress could not be loaded. You can keep using the guide and retry later.'
+    )
+    expect(warning.find('img').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeUndefined()
+
+    const retryButton = wrapper.get('[data-testid="guide-persistence-retry"]')
+    expect(retryButton.text()).toContain('Try again')
+    await retryButton.trigger('click')
+    await flushPromises()
+
+    expect(retryButton.attributes('disabled')).toBeDefined()
+    expect(retryButton.attributes('aria-busy')).toBe('true')
+    expect(retryButton.text()).toContain('Trying again…')
+
+    retryResponse.resolve({
+      prompt_state: 'suppressed',
+      progress: progress({ currentStep: 'terminal', completedSteps: ['understand', 'choose'] }),
+      completed_at: null
+    })
+    await settle()
+
+    expect(wrapper.find('[data-testid="guide-persistence-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[data-active-step="terminal"]').exists()).toBe(true)
+  })
+
+  it('renders the progress warning copy in Chinese', async () => {
+    getGuideState.mockRejectedValueOnce(new Error('offline'))
+    const { wrapper } = mountAuthenticatedView(42, createPinia(), 'zh')
+    await settle()
+
+    expect(wrapper.get('[data-testid="guide-persistence-warning"]').text()).toContain(
+      '无法读取已保存的教程进度。你仍可继续使用教程，稍后再重试。'
+    )
+  })
+
+  it('keeps navigation usable after save failure and retries the latest canonical snapshot', async () => {
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: progress(),
+      completed_at: null
+    })
+    patchGuideState.mockRejectedValue(new Error('offline'))
+    const { wrapper } = mountAuthenticatedView()
+    await settle()
+
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+
+    expect(wrapper.get('[data-active-step="choose"]').exists()).toBe(true)
+    const warning = wrapper.get('[data-testid="guide-persistence-warning"]')
+    expect(warning.text()).toContain(
+      'Your latest progress could not be saved to your account. The guide remains usable; please retry later.'
+    )
+    expect(wrapper.get('[data-testid="step-primary-action"]').attributes('disabled')).toBeUndefined()
+
+    patchGuideState.mockImplementation(async (patch) => ({
+      prompt_state: patch.prompt_state ?? 'suppressed',
+      progress: patch.progress ?? null,
+      completed_at: null
+    }))
+    await wrapper.get('[data-testid="guide-persistence-retry"]').trigger('click')
+    await settle()
+
+    expect(patchGuideState).toHaveBeenLastCalledWith({
+      progress: progress({ currentStep: 'choose', completedSteps: ['understand'] })
+    })
+    expect(wrapper.find('[data-testid="guide-persistence-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[data-active-step="choose"]').exists()).toBe(true)
   })
 
   it('serializes a double-click while authenticated progress persistence is pending', async () => {

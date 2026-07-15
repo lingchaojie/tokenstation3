@@ -252,11 +252,34 @@ type RemoteWriteOutcome =
   | { status: 'failure' }
   | { status: 'stale' }
 
+export type BeginnerGuidePersistenceIssue = 'load' | 'save'
+
+type SavePromptIntent = Extract<BeginnerGuidePromptState, 'suppressed' | 'completed'>
+
+type PersistenceIssueRecord =
+  | {
+      kind: 'load'
+      context: OwnerContext
+      epoch: number
+      progressRevision: number
+      promptRevision: number
+      enteringGuide: boolean
+      hadPendingWriteAtStart: boolean
+    }
+  | {
+      kind: 'save'
+      context: Extract<OwnerContext, { authenticated: true }>
+      epoch: number
+      promptIntent?: SavePromptIntent
+    }
+
 export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
   const progress = ref<BeginnerGuideProgressV1>(defaultProgress())
   const promptState = ref<BeginnerGuidePromptState>('suppressed')
   const completedAt = ref<string | null>(null)
   const showPrompt = ref(false)
+  const persistenceIssue = ref<BeginnerGuidePersistenceIssue | null>(null)
+  const persistenceRetrying = ref(false)
 
   let generation = 0
   let currentContext: OwnerContext = {
@@ -272,6 +295,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
   const remoteWriteTails = new Map<string, Promise<void>>()
   const latestPromptSuppressionAttempt = new Map<string, number>()
   let promptSuppressionAttemptCounter = 0
+  let persistenceOperationEpoch = 0
+  let persistenceRetryEpoch = 0
+  let persistenceIssueRecord: PersistenceIssueRecord | null = null
 
   function isCurrent(context: OwnerContext): boolean {
     return (
@@ -281,6 +307,76 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
 
   function isCurrentInitialization(context: OwnerContext, requestEpoch: number): boolean {
     return isCurrent(context) && initializationRequestEpoch === requestEpoch
+  }
+
+  function sameContext(left: OwnerContext, right: OwnerContext): boolean {
+    return left.owner === right.owner && left.generation === right.generation
+  }
+
+  function nextPersistenceOperationEpoch(): number {
+    persistenceOperationEpoch += 1
+    return persistenceOperationEpoch
+  }
+
+  function resetPersistenceRecovery(): void {
+    persistenceIssueRecord = null
+    persistenceIssue.value = null
+    persistenceRetryEpoch += 1
+    persistenceRetrying.value = false
+  }
+
+  function reportLoadIssue(
+    context: OwnerContext,
+    epoch: number,
+    details: Omit<Extract<PersistenceIssueRecord, { kind: 'load' }>, 'kind' | 'context' | 'epoch'>
+  ): void {
+    if (!context.authenticated || !isCurrent(context)) {
+      return
+    }
+    if (persistenceIssueRecord && persistenceIssueRecord.epoch > epoch) {
+      return
+    }
+    persistenceIssueRecord = { kind: 'load', context, epoch, ...details }
+    persistenceIssue.value = 'load'
+  }
+
+  function reportSaveIssue(
+    context: Extract<OwnerContext, { authenticated: true }>,
+    epoch: number,
+    promptIntent?: SavePromptIntent
+  ): void {
+    if (!isCurrent(context)) {
+      return
+    }
+    if (persistenceIssueRecord && persistenceIssueRecord.epoch > epoch) {
+      return
+    }
+    persistenceIssueRecord = {
+      kind: 'save',
+      context,
+      epoch,
+      ...(promptIntent ? { promptIntent } : {})
+    }
+    persistenceIssue.value = 'save'
+  }
+
+  function clearPersistenceIssue(
+    context: OwnerContext,
+    kind: BeginnerGuidePersistenceIssue,
+    epoch: number
+  ): void {
+    const issue = persistenceIssueRecord
+    if (
+      !isCurrent(context) ||
+      issue === null ||
+      issue.kind !== kind ||
+      !sameContext(issue.context, context) ||
+      issue.epoch > epoch
+    ) {
+      return
+    }
+    persistenceIssueRecord = null
+    persistenceIssue.value = null
   }
 
   function beginPromptSuppressionAttempt(
@@ -383,10 +479,12 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
       return
     }
 
+    const persistenceEpoch = nextPersistenceOperationEpoch()
     const outcome = await enqueueRemoteWrite(context, { progress: safeProgress })
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
       if (remote !== null && isCurrent(context)) {
+        clearPersistenceIssue(context, 'save', persistenceEpoch)
         applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
         if (
           hadAnonymousProgress &&
@@ -397,6 +495,13 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         }
         return
       }
+    }
+    if (outcome.status !== 'stale' && isCurrent(context)) {
+      reportSaveIssue(
+        context,
+        persistenceEpoch,
+        promptState.value === 'completed' ? 'completed' : undefined
+      )
     }
     if (
       outcome.status !== 'stale' &&
@@ -466,6 +571,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
           userId: null
         }
     currentContext = context
+    if (!sameOwner) {
+      resetPersistenceRecovery()
+    }
     showPrompt.value = false
     if (!preserveCompleted) {
       promptState.value = 'suppressed'
@@ -483,14 +591,27 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     const initializationRevision = localProgressRevision
     const initializationPromptRevision = localPromptRevision
     const hadPendingWriteAtStart = remoteWriteTails.has(context.owner)
+    const hadPendingSaveAtStart =
+      persistenceIssueRecord?.kind === 'save' &&
+      sameContext(persistenceIssueRecord.context, context)
     if (!context.authenticated) {
       return
     }
 
+    const loadEpoch = nextPersistenceOperationEpoch()
+    const loadIssueDetails = {
+      progressRevision: initializationRevision,
+      promptRevision: initializationPromptRevision,
+      enteringGuide: input.enteringGuide === true,
+      hadPendingWriteAtStart: hadPendingWriteAtStart || hadPendingSaveAtStart
+    }
     let response: unknown
     try {
       response = await getBeginnerGuideState()
     } catch {
+      if (isCurrentInitialization(context, requestEpoch)) {
+        reportLoadIssue(context, loadEpoch, loadIssueDetails)
+      }
       return
     }
     if (!isCurrentInitialization(context, requestEpoch)) {
@@ -498,13 +619,16 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     }
     const remote = normalizeRemoteState(response)
     if (remote === null) {
+      reportLoadIssue(context, loadEpoch, loadIssueDetails)
       return
     }
+    clearPersistenceIssue(context, 'load', loadEpoch)
 
     if (
       remote.progress !== null &&
       anonymous === null &&
       !hadPendingWriteAtStart &&
+      !hadPendingSaveAtStart &&
       localProgressRevision === initializationRevision
     ) {
       progress.value = remote.progress
@@ -534,13 +658,15 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         replacePromptState('suppressed')
       }
       const mergePromptRevision = localPromptRevision
+      const mergePersistenceEpoch = nextPersistenceOperationEpoch()
       const outcome = await enqueueRemoteWrite(context, {
         prompt_state: 'suppressed',
         progress: merged
       })
       if (outcome.status === 'success') {
         const saved = normalizeRemoteState(outcome.remote)
-        if (saved !== null) {
+        if (saved !== null && saved.promptState !== 'eligible') {
+          clearPersistenceIssue(context, 'save', mergePersistenceEpoch)
           clearPromptRetry(context.userId)
           if (isCurrentInitialization(context, requestEpoch)) {
             applyRemoteState(saved, merged, mergeRevision, mergePromptRevision)
@@ -551,6 +677,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
           }
           return
         }
+      }
+      if (outcome.status !== 'stale' && isCurrent(context)) {
+        reportSaveIssue(context, mergePersistenceEpoch, 'suppressed')
       }
       if (remote.promptState === 'eligible') {
         setPromptRetry(context.userId)
@@ -666,13 +795,15 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
       return
     }
 
+    const persistenceEpoch = nextPersistenceOperationEpoch()
     const outcome = await enqueueRemoteWrite(context, {
       prompt_state: 'completed',
       progress: safeProgress
     })
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
-      if (remote !== null) {
+      if (remote !== null && remote.promptState === 'completed') {
+        clearPersistenceIssue(context, 'save', persistenceEpoch)
         clearPromptRetry(context.userId)
         if (isCurrent(context)) {
           applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
@@ -687,6 +818,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         return
       }
     }
+    if (outcome.status !== 'stale' && isCurrent(context)) {
+      reportSaveIssue(context, persistenceEpoch, 'completed')
+    }
     if (
       outcome.status !== 'stale' &&
       isCurrent(context) &&
@@ -697,17 +831,202 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     }
   }
 
+  async function retryLoadPersistence(
+    issue: Extract<PersistenceIssueRecord, { kind: 'load' }>
+  ): Promise<void> {
+    const { context } = issue
+    if (!context.authenticated) {
+      return
+    }
+    const loadEpoch = nextPersistenceOperationEpoch()
+    let response: unknown
+    try {
+      response = await getBeginnerGuideState()
+    } catch {
+      reportLoadIssue(context, loadEpoch, {
+        progressRevision: issue.progressRevision,
+        promptRevision: issue.promptRevision,
+        enteringGuide: issue.enteringGuide,
+        hadPendingWriteAtStart: issue.hadPendingWriteAtStart
+      })
+      return
+    }
+    if (!isCurrent(context) || persistenceIssueRecord !== issue) {
+      return
+    }
+    const remote = normalizeRemoteState(response)
+    if (remote === null) {
+      reportLoadIssue(context, loadEpoch, {
+        progressRevision: issue.progressRevision,
+        promptRevision: issue.promptRevision,
+        enteringGuide: issue.enteringGuide,
+        hadPendingWriteAtStart: issue.hadPendingWriteAtStart
+      })
+      return
+    }
+
+    const localChanged =
+      issue.hadPendingWriteAtStart ||
+      hasAnonymousProgress ||
+      localProgressRevision !== issue.progressRevision
+    if (!localChanged) {
+      applyRemoteState(
+        remote,
+        canonicalProgress(progress.value),
+        issue.progressRevision,
+        issue.promptRevision
+      )
+      clearPersistenceIssue(context, 'load', loadEpoch)
+      const retrySuppression = hasPromptRetry(context.userId)
+      if ((retrySuppression || issue.enteringGuide) && remote.promptState === 'eligible') {
+        await persistSuppression(context)
+      } else if (retrySuppression && remote.promptState !== 'eligible') {
+        clearPromptRetry(context.userId)
+      }
+      return
+    }
+
+    const merged = mergeProgress(remote.progress, canonicalProgress(progress.value))
+    replaceProgress(merged)
+    if (remote.promptState === 'completed') {
+      setPromptState('completed')
+    }
+    if (remote.completedAt !== null) {
+      completedAt.value = remote.completedAt
+    }
+    const promptIntent: SavePromptIntent | undefined =
+      remote.promptState === 'completed'
+        ? undefined
+        : promptState.value === 'completed'
+          ? 'completed'
+          : hasAnonymousProgress || (issue.enteringGuide && remote.promptState === 'eligible')
+            ? 'suppressed'
+            : undefined
+    if (promptIntent === 'suppressed') {
+      replacePromptState('suppressed')
+    }
+    const progressRevision = localProgressRevision
+    const promptRevision = localPromptRevision
+    const hadAnonymousProgress = hasAnonymousProgress
+    const saveEpoch = nextPersistenceOperationEpoch()
+    const patch: PatchBeginnerGuideStateRequest = {
+      ...(promptIntent ? { prompt_state: promptIntent } : {}),
+      progress: merged
+    }
+    const outcome = await enqueueRemoteWrite(context, patch)
+    if (outcome.status === 'success') {
+      const saved = normalizeRemoteState(outcome.remote)
+      const promptConfirmed =
+        saved !== null &&
+        (promptIntent === undefined ||
+          (promptIntent === 'completed'
+            ? saved.promptState === 'completed'
+            : saved.promptState !== 'eligible'))
+      if (saved !== null && promptConfirmed && isCurrent(context)) {
+        applyRemoteState(saved, merged, progressRevision, promptRevision)
+        clearPersistenceIssue(context, 'load', saveEpoch)
+        if (promptIntent === 'suppressed') {
+          clearPromptRetry(context.userId)
+        }
+        if (hadAnonymousProgress && localProgressRevision === progressRevision) {
+          removeAnonymousProgress()
+          hasAnonymousProgress = false
+        }
+        return
+      }
+    }
+    if (outcome.status !== 'stale' && isCurrent(context)) {
+      reportSaveIssue(context, saveEpoch, promptIntent)
+      if (promptIntent === 'suppressed') {
+        setPromptRetry(context.userId)
+      }
+    }
+  }
+
+  async function retrySavePersistence(
+    issue: Extract<PersistenceIssueRecord, { kind: 'save' }>
+  ): Promise<void> {
+    const { context } = issue
+    if (!isCurrent(context)) {
+      return
+    }
+    const safeProgress = canonicalProgress(progress.value)
+    progress.value = safeProgress
+    const promptIntent: SavePromptIntent | undefined =
+      promptState.value === 'completed' ? 'completed' : issue.promptIntent
+    const patch: PatchBeginnerGuideStateRequest = {
+      ...(promptIntent ? { prompt_state: promptIntent } : {}),
+      progress: safeProgress
+    }
+    const progressRevision = localProgressRevision
+    const promptRevision = localPromptRevision
+    const hadAnonymousProgress = hasAnonymousProgress
+    const saveEpoch = nextPersistenceOperationEpoch()
+    const outcome = await enqueueRemoteWrite(context, patch)
+    if (outcome.status === 'success') {
+      const remote = normalizeRemoteState(outcome.remote)
+      const promptConfirmed =
+        remote !== null &&
+        (promptIntent === undefined ||
+          (promptIntent === 'completed'
+            ? remote.promptState === 'completed'
+            : remote.promptState !== 'eligible'))
+      if (remote !== null && promptConfirmed && isCurrent(context)) {
+        applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
+        clearPersistenceIssue(context, 'save', saveEpoch)
+        if (promptIntent) {
+          clearPromptRetry(context.userId)
+        }
+        if (hadAnonymousProgress && localProgressRevision === progressRevision) {
+          removeAnonymousProgress()
+          hasAnonymousProgress = false
+        }
+        return
+      }
+    }
+    if (outcome.status !== 'stale' && isCurrent(context)) {
+      reportSaveIssue(context, saveEpoch, promptIntent)
+      if (promptIntent === 'suppressed') {
+        setPromptRetry(context.userId)
+      }
+    }
+  }
+
+  async function retryPersistence(): Promise<void> {
+    const issue = persistenceIssueRecord
+    if (persistenceRetrying.value || issue === null || !isCurrent(issue.context)) {
+      return
+    }
+    persistenceRetryEpoch += 1
+    const retryEpoch = persistenceRetryEpoch
+    persistenceRetrying.value = true
+    try {
+      if (issue.kind === 'load') {
+        await retryLoadPersistence(issue)
+      } else {
+        await retrySavePersistence(issue)
+      }
+    } finally {
+      if (persistenceRetryEpoch === retryEpoch && isCurrent(issue.context)) {
+        persistenceRetrying.value = false
+      }
+    }
+  }
+
   return {
     progress,
     promptState,
     completedAt,
     showPrompt,
+    persistenceIssue,
+    persistenceRetrying,
     initialize,
     selectClient,
     selectOS,
     goToStep,
     completeStep,
     suppressPrompt,
-    completeGuide
+    completeGuide,
+    retryPersistence
   }
 })

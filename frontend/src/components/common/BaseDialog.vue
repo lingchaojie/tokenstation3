@@ -11,7 +11,7 @@
         @click.self="handleClose"
       >
         <!-- Modal panel -->
-        <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
+        <div ref="dialogRef" :class="['modal-content', widthClasses]" tabindex="-1" @click.stop>
           <!-- Header -->
           <div class="modal-header">
             <h3 :id="dialogId" class="modal-title">
@@ -53,6 +53,20 @@ const dialogId = `modal-title-${++dialogIdCounter}`
 // 焦点管理
 const dialogRef = ref<HTMLElement | null>(null)
 let previousActiveElement: HTMLElement | null = null
+
+const TABBABLE_SELECTOR = [
+  'a[href]',
+  'area[href]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'iframe',
+  'object',
+  'embed',
+  '[contenteditable="true"]',
+  '[tabindex]'
+].join(', ')
 
 type DialogWidth = 'narrow' | 'normal' | 'wide' | 'extra-wide' | 'full'
 
@@ -107,9 +121,71 @@ const handleClose = () => {
   }
 }
 
-const handleEscape = (event: KeyboardEvent) => {
+function isVisible(element: HTMLElement): boolean {
+  let candidate: HTMLElement | null = element
+  while (candidate) {
+    if (
+      candidate.hidden ||
+      candidate.hasAttribute('inert') ||
+      candidate.getAttribute('aria-hidden') === 'true'
+    ) {
+      return false
+    }
+    const style = window.getComputedStyle(candidate)
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      return false
+    }
+    if (candidate === dialogRef.value) {
+      break
+    }
+    candidate = candidate.parentElement
+  }
+  return true
+}
+
+function getTabbableElements(): HTMLElement[] {
+  if (!dialogRef.value) {
+    return []
+  }
+  return Array.from(dialogRef.value.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
+    (element) =>
+      !element.matches(':disabled') &&
+      element.tabIndex >= 0 &&
+      isVisible(element)
+  )
+}
+
+function focusDialogStart(): void {
+  const target = getTabbableElements()[0] ?? dialogRef.value
+  target?.focus()
+}
+
+const handleKeydown = (event: KeyboardEvent) => {
   if (props.show && props.closeOnEscape && event.key === 'Escape') {
     emit('close')
+    return
+  }
+  if (!props.show || event.key !== 'Tab' || !dialogRef.value) {
+    return
+  }
+
+  const tabbable = getTabbableElements()
+  if (tabbable.length === 0) {
+    event.preventDefault()
+    dialogRef.value.focus()
+    return
+  }
+
+  const first = tabbable[0]
+  const last = tabbable[tabbable.length - 1]
+  const active = document.activeElement
+  const focusLeftDialog = active === null || !dialogRef.value.contains(active)
+  if (event.shiftKey && (active === first || focusLeftDialog)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (active === last || focusLeftDialog)) {
+    event.preventDefault()
+    first.focus()
   }
 }
 
@@ -125,12 +201,7 @@ watch(
 
       // 等待DOM更新后设置焦点到对话框
       await nextTick()
-      if (dialogRef.value) {
-        const firstFocusable = dialogRef.value.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        )
-        firstFocusable?.focus()
-      }
+      focusDialogStart()
     } else {
       document.body.classList.remove('modal-open')
       // 恢复之前的焦点
@@ -144,11 +215,11 @@ watch(
 )
 
 onMounted(() => {
-  document.addEventListener('keydown', handleEscape)
+  document.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', handleEscape)
+  document.removeEventListener('keydown', handleKeydown)
   // 确保组件卸载时移除滚动锁定
   document.body.classList.remove('modal-open')
 })

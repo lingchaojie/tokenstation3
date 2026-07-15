@@ -4,6 +4,32 @@
     :completed-steps="guideStore.progress.completedSteps"
     @select-step="handleSelectStep"
   >
+    <section
+      v-if="persistenceWarningKey"
+      data-testid="guide-persistence-warning"
+      role="status"
+      aria-live="polite"
+      class="mb-5 flex min-w-0 flex-col gap-3 rounded-xl border border-amber-400/35 bg-amber-500/10 p-4 text-sm text-gray-700 dark:text-linear-ink-subtle sm:flex-row sm:items-center sm:justify-between"
+    >
+      <p>{{ t(persistenceWarningKey) }}</p>
+      <button
+        type="button"
+        data-testid="guide-persistence-retry"
+        :disabled="guideStore.persistenceRetrying"
+        :aria-busy="guideStore.persistenceRetrying || undefined"
+        class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-500/40 px-3 py-2 font-medium text-amber-800 outline-none transition-colors hover:bg-amber-500/10 focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-200 dark:focus-visible:ring-offset-linear-canvas"
+        @click="guideStore.retryPersistence"
+      >
+        {{
+          t(
+            guideStore.persistenceRetrying
+              ? 'gettingStarted.troubleshooting.retryLoading'
+              : 'gettingStarted.troubleshooting.retry'
+          )
+        }}
+      </button>
+    </section>
+
     <div class="mb-5 grid min-w-0 gap-4 sm:grid-cols-2">
       <fieldset class="linx-panel min-w-0 p-4">
         <legend class="px-1 text-sm font-semibold text-gray-950 dark:text-linear-ink">
@@ -294,6 +320,15 @@ const completionDestinations = computed(() => [
   { path: '/keys', labelKey: 'gettingStarted.completion.keys' },
   { path: '/usage', labelKey: 'gettingStarted.completion.usage' }
 ])
+const persistenceWarningKey = computed(() => {
+  if (guideStore.persistenceIssue === 'load') {
+    return 'gettingStarted.warnings.progressUnavailable'
+  }
+  if (guideStore.persistenceIssue === 'save') {
+    return 'gettingStarted.warnings.progressSaveFailed'
+  }
+  return null
+})
 
 function detectBrowserOS(): BeginnerGuideOS {
   const platform = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
