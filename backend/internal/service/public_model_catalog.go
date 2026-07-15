@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-07-03"
+const PublicModelCatalogUpdatedAt = "2026-07-15"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -129,6 +129,9 @@ var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
 	"claude-opus-4-5":          {ReleasedAt: "2026-03-01", ReleaseStatus: "unverified"},
 	"claude-sonnet-4-5":        {ReleasedAt: "2025-09-29", ReleaseStatus: "confirmed"},
 	"claude-sonnet-4-20250514": {ReleasedAt: "2025-05-14", ReleaseStatus: "confirmed"},
+	"gpt-5.6-sol":              {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
+	"gpt-5.6-terra":            {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
+	"gpt-5.6-luna":             {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
 	"gpt-5.5":                  {ReleasedAt: "2026-06-21", ReleaseStatus: "unverified"},
 	"gpt-image-2":              {ReleasedAt: "2026-06-15", ReleaseStatus: "unverified"},
 	"gpt-5.4":                  {ReleasedAt: "2026-05-01", ReleaseStatus: "unverified"},
@@ -189,6 +192,9 @@ var publicModelCatalogModels = []PublicModelCatalogModel{
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", textModalities(), "Balanced Claude Sonnet model with strong coding and agent performance.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-5", "Claude Sonnet 5", textModalities(), "Best combination of speed and intelligence in the Claude model family, with a 1M-token context window.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(2, 10, 0.2), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", textModalities(), "Balanced Claude Sonnet model for production coding and agent workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
+	catalogModel("openai", "OpenAI", "gpt-5.6-sol", "GPT-5.6 Sol", textModalities(), "Highest-capability GPT-5.6 tier for complex reasoning, coding, and long-context agent workflows.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(5, 30, 0.5), "confirmed", sourceOpenAI),
+	catalogModel("openai", "OpenAI", "gpt-5.6-terra", "GPT-5.6 Terra", textModalities(), "Balanced GPT-5.6 tier for production reasoning, coding, and agent workloads.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(2.5, 15, 0.25), "confirmed", sourceOpenAI),
+	catalogModel("openai", "OpenAI", "gpt-5.6-luna", "GPT-5.6 Luna", textModalities(), "Lower-cost GPT-5.6 tier for efficient reasoning, coding, and high-throughput agent workloads.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(1, 6, 0.1), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.5", "GPT-5.5", textModalities(), "OpenAI frontier text model for complex reasoning and agentic work.", 1050000, contextSourceOpenAI, textFeatures("tool use", "prompt caching"), usdWithCache(5, 30, 0.5), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.4", "GPT-5.4", textModalities(), "OpenAI flagship text model for advanced reasoning, coding, and multimodal-adjacent workflows.", 1050000, contextSourceOpenAI, textFeatures("tool use", "prompt caching"), usdWithCache(2.5, 15, 0.25), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.4-mini", "GPT-5.4 Mini", textModalities(), "Lower-cost OpenAI model for fast production text and agent tasks.", 400000, contextSourceOpenAI, textFeatures("tool use", "prompt caching"), usdWithCache(0.75, 4.5, 0.075), "confirmed", sourceOpenAI),
