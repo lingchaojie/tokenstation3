@@ -186,6 +186,41 @@ describe('UseKeyModal', () => {
     expect(generatedFiles(wrapper)).toEqual(expected)
   })
 
+  it('matches shared unified OpenCode contents while preserving modal path labels', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://gateway.example.com/v1/',
+        platform: 'unified'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const opencodeTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const expected = buildClientConfigFiles({
+      client: 'opencode',
+      os: 'macos',
+      platform: 'unified',
+      apiKey: 'sk-test',
+      baseUrl: 'https://gateway.example.com/v1/'
+    })
+
+    expect(generatedFiles(wrapper).map((file) => file.content)).toEqual(
+      expected.map((file) => file.content)
+    )
+    expect(generatedFiles(wrapper).map((file) => file.path)).toEqual([
+      'opencode.json (Claude)',
+      'opencode.json (OpenAI)'
+    ])
+  })
+
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {

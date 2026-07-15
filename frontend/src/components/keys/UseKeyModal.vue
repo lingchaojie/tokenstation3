@@ -140,7 +140,13 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import type { GroupPlatform } from '@/types'
+import {
+  buildOpenCodeConfigFile,
+  buildPythonSdkExample,
+  buildWorkBuddyConfigFile
+} from './clientExampleFiles'
 import { buildClientConfigFiles } from './clientConfigFiles'
+import { resolveGatewayEndpoints, type ClientConfigFile } from './clientConfigContract'
 
 interface Props {
   show: boolean
@@ -167,6 +173,9 @@ interface FileConfig {
   hint?: string  // Optional hint message for this file
   highlighted?: string
 }
+
+const localizeFiles = (files: ClientConfigFile[]): FileConfig[] =>
+  files.map(({ hintKey, ...file }) => hintKey ? { ...file, hint: t(hintKey) } : file)
 
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
@@ -449,22 +458,11 @@ const comment = (value: string) => wrapToken('text-slate-500', value)
 // Generate file configs based on platform and active tab
 const currentFiles = computed((): FileConfig[] => {
   const baseUrl = props.baseUrl || window.location.origin
+  const endpoints = resolveGatewayEndpoints(baseUrl)
   const apiKey = props.apiKey
-  const baseRoot = baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '')
-  const ensureV1 = (value: string) => {
-    const trimmed = value.replace(/\/+$/, '')
-    return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
-  }
-  const ensureChatCompletions = (value: string) => {
-    const trimmed = value.replace(/\/+$/, '')
-    if (trimmed.endsWith('/chat/completions')) {
-      return trimmed
-    }
-    return `${ensureV1(trimmed)}/chat/completions`
-  }
-  const apiBase = ensureV1(baseRoot)
-  const chatCompletionsUrl = ensureChatCompletions(apiBase)
-  const antigravityBase = ensureV1(`${baseRoot}/antigravity`)
+  const baseRoot = endpoints.bare
+  const apiBase = endpoints.v1
+  const antigravityBase = `${baseRoot}/antigravity/v1`
   const antigravityGeminiBase = (() => {
     const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
@@ -483,7 +481,7 @@ const currentFiles = computed((): FileConfig[] => {
       ? `${baseRoot}/antigravity`
       : baseUrl
 
-    return buildClientConfigFiles({
+    return localizeFiles(buildClientConfigFiles({
       client: activeClientTab.value === 'claude' ? 'claude_code' : 'codex',
       os: selectedOS,
       platform: props.platform,
@@ -491,71 +489,72 @@ const currentFiles = computed((): FileConfig[] => {
       baseUrl: sharedBaseUrl,
       allowMessagesDispatch: props.allowMessagesDispatch,
       windowsShell
-    }).map(({ hintKey, ...file }) => hintKey
-      ? { ...file, hint: t(hintKey) }
-      : file)
+    }))
   }
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
       case 'unified':
-        return [
-          generateOpenCodeConfig('anthropic', apiBase, apiKey, 'opencode.json (Claude)'),
-          generateOpenCodeConfig('openai', apiBase, apiKey, 'opencode.json (OpenAI)')
-        ]
+        return localizeFiles([
+          buildOpenCodeConfigFile({ platform: 'anthropic', baseUrl: apiBase, apiKey, path: 'opencode.json (Claude)' }),
+          buildOpenCodeConfigFile({ platform: 'openai', baseUrl: apiBase, apiKey, path: 'opencode.json (OpenAI)' })
+        ])
       case 'anthropic':
-        return [generateOpenCodeConfig('anthropic', apiBase, apiKey)]
+        return localizeFiles([buildOpenCodeConfigFile({ platform: 'anthropic', baseUrl: apiBase, apiKey, path: 'opencode.json' })])
       case 'openai':
-        return [generateOpenCodeConfig('openai', apiBase, apiKey)]
+        return localizeFiles([buildOpenCodeConfigFile({ platform: 'openai', baseUrl: apiBase, apiKey, path: 'opencode.json' })])
       case 'gemini':
-        return [generateOpenCodeConfig('gemini', geminiBase, apiKey)]
+        return localizeFiles([buildOpenCodeConfigFile({ platform: 'gemini', baseUrl: geminiBase, apiKey, path: 'opencode.json' })])
       case 'antigravity':
-        return [
-          generateOpenCodeConfig('antigravity-claude', antigravityBase, apiKey, 'opencode.json (Claude)'),
-          generateOpenCodeConfig('antigravity-gemini', antigravityGeminiBase, apiKey, 'opencode.json (Gemini)')
-        ]
+        return localizeFiles([
+          buildOpenCodeConfigFile({ platform: 'antigravity-claude', baseUrl: antigravityBase, apiKey, path: 'opencode.json (Claude)' }),
+          buildOpenCodeConfigFile({ platform: 'antigravity-gemini', baseUrl: antigravityGeminiBase, apiKey, path: 'opencode.json (Gemini)' })
+        ])
       case 'grok':
-        return [generateOpenCodeConfig('grok', apiBase, apiKey)]
+        return localizeFiles([buildOpenCodeConfigFile({ platform: 'grok', baseUrl: apiBase, apiKey, path: 'opencode.json' })])
       default:
-        return [generateOpenCodeConfig('openai', apiBase, apiKey)]
+        return localizeFiles([buildOpenCodeConfigFile({ platform: 'openai', baseUrl: apiBase, apiKey, path: 'opencode.json' })])
     }
   }
 
   if (activeClientTab.value === 'cc_switch' && props.platform) {
-    return buildClientConfigFiles({
+    return localizeFiles(buildClientConfigFiles({
       client: 'cc_switch',
       os: 'macos',
       platform: props.platform,
       apiKey,
       baseUrl
-    }).map(({ hintKey, ...file }) => hintKey
-      ? { ...file, hint: t(hintKey) }
-      : file)
+    }))
   }
 
   if (activeClientTab.value === 'workbuddy') {
-    return [generateWorkBuddyConfigFile(chatCompletionsUrl, apiKey, props.platform)]
+    return localizeFiles([buildWorkBuddyConfigFile({
+      os: activeTab.value === 'unix' ? 'macos' : 'windows',
+      platform: props.platform ?? 'anthropic',
+      endpoints,
+      apiKey
+    })])
   }
 
   switch (props.platform) {
     case 'unified':
       // Anthropic Python SDK appends /v1/messages itself, so base_url must be bare.
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
+        return [buildPythonSdkExample({ kind: 'anthropic', endpoints, apiKey })]
       }
       if (activeClientTab.value === 'openai-python-sdk') {
-        return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
+        return [buildPythonSdkExample({ kind: 'openai', endpoints, apiKey })]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
-        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
+        return [buildPythonSdkExample({ kind: 'image', endpoints, apiKey })]
       }
       return []
     case 'openai':
       if (activeClientTab.value === 'openai-python-sdk') {
-        return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
+        return [buildPythonSdkExample({ kind: 'openai', endpoints, apiKey })]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
-        return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
+        return [buildPythonSdkExample({ kind: 'image', endpoints, apiKey })]
       }
       return []
     case 'gemini':
@@ -573,114 +572,11 @@ const currentFiles = computed((): FileConfig[] => {
     default:
       // Anthropic Python SDK posts to /v1/messages itself; base_url must be bare.
       if (activeClientTab.value === 'anthropic-python-sdk') {
-        return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
+        return [buildPythonSdkExample({ kind: 'anthropic', endpoints, apiKey })]
       }
       return []
   }
 })
-
-interface WorkBuddyModelConfig {
-  id: string
-  maxInputTokens: number
-  maxOutputTokens: number
-  supportsImages: boolean
-  supportsReasoning: boolean
-}
-
-function workBuddyModelsForPlatform(platform: Props['platform']): WorkBuddyModelConfig[] {
-  const openAIModels: WorkBuddyModelConfig[] = [
-    {
-      id: 'gpt-5.5',
-      maxInputTokens: 1050000,
-      maxOutputTokens: 128000,
-      supportsImages: true,
-      supportsReasoning: true
-    }
-  ]
-  const claudeModels: WorkBuddyModelConfig[] = [
-    {
-      id: 'claude-sonnet-5',
-      maxInputTokens: 1000000,
-      maxOutputTokens: 128000,
-      supportsImages: true,
-      supportsReasoning: true
-    },
-    {
-      id: 'claude-opus-4-8',
-      maxInputTokens: 1000000,
-      maxOutputTokens: 128000,
-      supportsImages: true,
-      supportsReasoning: true
-    }
-  ]
-
-  if (platform === 'openai') {
-    return openAIModels
-  }
-  if (platform === 'unified') {
-    return [...openAIModels, ...claudeModels]
-  }
-  return claudeModels
-}
-
-function generateWorkBuddyConfigFile(
-  chatCompletionsUrl: string,
-  apiKey: string,
-  platform: Props['platform']
-): FileConfig {
-  const models = workBuddyModelsForPlatform(platform).map((model) => ({
-    id: model.id,
-    // WorkBuddy integrations can send the displayed model name as `model`, so
-    // keep `name` identical to the gateway-supported id.
-    name: model.id,
-    vendor: 'Custom',
-    url: chatCompletionsUrl,
-    apiKey,
-    maxInputTokens: model.maxInputTokens,
-    maxOutputTokens: model.maxOutputTokens,
-    supportsToolCall: true,
-    supportsImages: model.supportsImages,
-    supportsReasoning: model.supportsReasoning
-  }))
-  const content = JSON.stringify(
-    {
-      models,
-      availableModels: models.map((model) => model.id)
-    },
-    null,
-    2
-  )
-  const path = activeTab.value === 'unix'
-    ? '~/.workbuddy/models.json'
-    : '%userprofile%\\.workbuddy\\models.json'
-
-  return {
-    path,
-    content,
-    hint: t('keys.useKeyModal.workBuddy.hint')
-  }
-}
-
-function generateAnthropicPythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
-  return {
-    path: 'anthropic_client.py',
-    content: `from anthropic import Anthropic
-
-client = Anthropic(
-    api_key="${apiKey}",
-    base_url="${baseUrl}",
-)
-
-with client.messages.stream(
-    model="claude-opus-4-8",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Hello, Claude"}],
-) as stream:
-    for text in stream.text_stream:
-        print(text, end="", flush=True)
-print()`
-  }
-}
 
 function generateGeminiCliContent(baseUrl: string, apiKey: string): FileConfig {
   const model = 'gemini-2.0-flash'
@@ -727,67 +623,6 @@ ${keyword('$env:')}${variable('GEMINI_MODEL')}${operator('=')}${string(`"${model
   return { path, content, highlighted }
 }
 
-function generateOpenAIPythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
-  return {
-    path: 'openai_client.py',
-    content: `from openai import OpenAI
-
-client = OpenAI(
-    api_key="${apiKey}",
-    base_url="${baseUrl}",
-)
-
-stream = client.responses.create(
-    model="gpt-5.5",
-    input="Hello, GPT",
-    stream=True,
-)
-
-for event in stream:
-    if event.type == "response.output_text.delta":
-        print(event.delta, end="", flush=True)
-print()`
-  }
-}
-
-function generateOpenAIImagen2PythonSdkFile(baseUrl: string, apiKey: string): FileConfig {
-  return {
-    path: 'imagen2_client.py',
-    content: `from base64 import b64decode
-from pathlib import Path
-
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="${apiKey}",
-    base_url="${baseUrl}",
-)
-
-stream = client.images.generate(
-    model="gpt-image-2",
-    prompt="A fox mascot using an AI gateway",
-    size="1024x1024",
-    stream=True,
-    partial_images=2,
-)
-
-for event in stream:
-    image_b64 = getattr(event, "b64_json", None)
-    if not image_b64:
-        continue
-
-    if event.type == "image_generation.partial_image":
-        output_path = Path(f"partial_{event.partial_image_index}.png")
-    elif event.type == "image_generation.completed":
-        output_path = Path("image.png")
-    else:
-        continue
-
-    output_path.write_bytes(b64decode(image_b64))
-    print(f"Wrote {output_path}")`
-  }
-}
-
 function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.grok' : '~/.grok'
@@ -811,440 +646,6 @@ supports_backend_search = true`
     hint: t('keys.useKeyModal.grok.configTomlHint')
   }]
 }
-function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {
-  const provider: Record<string, any> = {
-    [platform]: {
-      options: {
-        baseURL: baseUrl,
-        apiKey
-      }
-    }
-  }
-  const reasoningVariants = {
-    low: {},
-    medium: {},
-    high: {},
-    xhigh: {}
-  }
-  const maxReasoningVariants = {
-    ...reasoningVariants,
-    max: {}
-  }
-  const openaiModel = (name: string, context: number, output = 128000, variants = reasoningVariants) => ({
-    name,
-    limit: {
-      context,
-      output
-    },
-    options: {
-      store: false
-    },
-    variants
-  })
-  const openaiModels = {
-    'gpt-5.6': openaiModel('GPT-5.6 (Sol)', 1050000, 128000, maxReasoningVariants),
-    'gpt-5.6-sol': openaiModel('GPT-5.6 Sol', 1050000, 128000, maxReasoningVariants),
-    'gpt-5.6-terra': openaiModel('GPT-5.6 Terra', 1050000, 128000, maxReasoningVariants),
-    'gpt-5.6-luna': openaiModel('GPT-5.6 Luna', 1050000, 128000, maxReasoningVariants),
-    'gpt-5.5': openaiModel('GPT-5.5', 1050000),
-    'gpt-5.4': openaiModel('GPT-5.4', 1050000),
-    'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),
-    'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
-    'gpt-5.2': openaiModel('GPT-5.2', 400000),
-    'codex-mini-latest': {
-      name: 'Codex Mini',
-      limit: {
-        context: 200000,
-        output: 100000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {}
-      }
-    }
-  }
-  const geminiModels = {
-    'gemini-2.0-flash': {
-      name: 'Gemini 2.0 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-2.5-flash': {
-      name: 'Gemini 2.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-2.5-pro': {
-      name: 'Gemini 2.5 Pro',
-      limit: {
-        context: 2097152,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.5-flash': {
-      name: 'Gemini 3.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-3-flash-preview': {
-      name: 'Gemini 3 Flash Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-3-pro-preview': {
-      name: 'Gemini 3 Pro Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-preview': {
-      name: 'Gemini 3.1 Pro Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
-  }
-
-  const antigravityGeminiModels = {
-    'gemini-2.5-flash': {
-      name: 'Gemini 2.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'disable'
-        }
-      }
-    },
-    'gemini-2.5-flash-lite': {
-      name: 'Gemini 2.5 Flash Lite',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-2.5-flash-thinking': {
-      name: 'Gemini 2.5 Flash (Thinking)',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3-flash': {
-      name: 'Gemini 3 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-low': {
-      name: 'Gemini 3.1 Pro Low',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-high': {
-      name: 'Gemini 3.1 Pro High',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-2.5-flash-image': {
-      name: 'Gemini 2.5 Flash Image',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image'],
-        output: ['image']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-flash-image': {
-      name: 'Gemini 3.1 Flash Image',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image'],
-        output: ['image']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
-  }
-  const claudeModel = (
-    name: string,
-    context: number,
-    output: number,
-    thinking?: { type: 'adaptive' } | { type: 'enabled'; budgetTokens: number }
-  ) => ({
-    name,
-    limit: {
-      context,
-      output
-    },
-    modalities: {
-      input: ['text', 'image', 'pdf'],
-      output: ['text']
-    },
-    ...(thinking ? { options: { thinking } } : {})
-  })
-  const claudeAdaptive = (name: string) => claudeModel(name, 1048576, 128000, { type: 'adaptive' })
-  const claudeThinking = (name: string, output = 128000) =>
-    claudeModel(name, 200000, output, { budgetTokens: 24576, type: 'enabled' })
-  const claudeModels = {
-    'claude-fable-5': claudeAdaptive('Claude Fable 5'),
-    'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
-    'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
-    'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),
-    'claude-opus-4-6': claudeModel('Claude Opus 4.6', 200000, 128000),
-    'claude-opus-4-5-20251101': claudeModel('Claude Opus 4.5', 200000, 128000),
-    'claude-sonnet-4-6': claudeThinking('Claude Sonnet 4.6', 64000),
-    'claude-sonnet-4-5-20250929': claudeModel('Claude Sonnet 4.5', 200000, 64000),
-    'claude-haiku-4-5-20251001': claudeModel('Claude Haiku 4.5', 200000, 64000),
-    'claude-sonnet-4-20250514': claudeModel('Claude Sonnet 4', 200000, 64000),
-    'claude-opus-4-20250514': claudeModel('Claude Opus 4', 200000, 128000),
-    'claude-opus-4-1-20250805': claudeModel('Claude Opus 4.1', 200000, 128000),
-    'claude-3-7-sonnet-20250219': claudeModel('Claude Sonnet 3.7', 200000, 64000),
-    'claude-3-5-sonnet-20241022': claudeModel('Claude Sonnet 3.5 20241022', 200000, 8192),
-    'claude-3-5-sonnet-20240620': claudeModel('Claude Sonnet 3.5 20240620', 200000, 8192),
-    'claude-3-5-haiku-20241022': claudeModel('Claude Haiku 3.5', 200000, 8192)
-  }
-  const antigravityClaudeModels = {
-    'claude-fable-5': claudeAdaptive('Claude Fable 5'),
-    'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
-    'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
-    'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),
-    'claude-opus-4-6': claudeModel('Claude Opus 4.6', 200000, 128000),
-    'claude-opus-4-6-thinking': claudeThinking('Claude Opus 4.6 Thinking'),
-    'claude-opus-4-5-thinking': claudeThinking('Claude Opus 4.5 Thinking'),
-    'claude-sonnet-4-6': claudeThinking('Claude Sonnet 4.6', 64000),
-    'claude-sonnet-4-5': claudeModel('Claude Sonnet 4.5', 200000, 64000),
-    'claude-sonnet-4-5-thinking': claudeThinking('Claude Sonnet 4.5 Thinking', 64000)
-  }
-  const grokModels = {
-    'grok-4.5': {
-      name: 'Grok 4.5',
-      limit: { context: 1000000, output: 128000 }
-    },
-    'grok-4.3': {
-      name: 'Grok 4.3',
-      limit: { context: 1000000, output: 128000 }
-    },
-    'grok-build-0.1': {
-      name: 'Grok Build 0.1',
-      limit: { context: 256000, output: 128000 }
-    },
-    'grok-composer-2.5-fast': {
-      name: 'Grok Composer 2.5 Fast',
-      limit: { context: 500000, output: 128000 }
-    }
-  }
-
-  if (platform === 'gemini') {
-    provider[platform].npm = '@ai-sdk/google'
-    provider[platform].models = geminiModels
-  } else if (platform === 'anthropic') {
-    provider[platform].npm = '@ai-sdk/anthropic'
-    provider[platform].models = claudeModels
-  } else if (platform === 'antigravity-claude') {
-    provider[platform].npm = '@ai-sdk/anthropic'
-    provider[platform].name = 'Antigravity (Claude)'
-    provider[platform].models = antigravityClaudeModels
-  } else if (platform === 'antigravity-gemini') {
-    provider[platform].npm = '@ai-sdk/google'
-    provider[platform].name = 'Antigravity (Gemini)'
-    provider[platform].models = antigravityGeminiModels
-  } else if (platform === 'openai') {
-    provider[platform].models = openaiModels
-  } else if (platform === 'grok') {
-    provider[platform].npm = '@ai-sdk/openai'
-    provider[platform].name = 'Grok via Sub2API'
-    provider[platform].models = grokModels
-  }
-
-  const agent =
-    platform === 'openai'
-      ? {
-          build: {
-            options: {
-              store: false
-            }
-          },
-          plan: {
-            options: {
-              store: false
-            }
-          }
-        }
-      : undefined
-  const defaultModelByPlatform: Record<string, string> = {
-    anthropic: 'anthropic/claude-fable-5',
-    openai: 'openai/gpt-5.5',
-    gemini: 'gemini/gemini-2.5-flash',
-    'antigravity-claude': 'antigravity-claude/claude-fable-5',
-    'antigravity-gemini': 'antigravity-gemini/gemini-2.5-flash'
-  }
-  const smallModelByPlatform: Record<string, string> = {
-    anthropic: 'anthropic/claude-haiku-4-5-20251001',
-    openai: 'openai/gpt-5.3-codex-spark',
-    gemini: 'gemini/gemini-2.0-flash',
-    'antigravity-claude': 'antigravity-claude/claude-sonnet-4-5',
-    'antigravity-gemini': 'antigravity-gemini/gemini-2.5-flash-lite'
-  }
-  const defaultModel = defaultModelByPlatform[platform]
-  const smallModel = smallModelByPlatform[platform]
-
-  const content = JSON.stringify(
-    {
-      $schema: 'https://opencode.ai/config.json',
-      ...(defaultModel ? { model: defaultModel } : {}),
-      ...(smallModel ? { small_model: smallModel } : {}),
-      provider,
-      ...(agent ? { agent } : {})
-    },
-    null,
-    2
-  )
-
-  return {
-    path: pathLabel ?? 'opencode.json',
-    content,
-    hint: t('keys.useKeyModal.opencode.hint')
-  }
-}
-
 const copyContent = async (content: string, index: number) => {
   const success = await clipboardCopy(content, t('keys.copied'))
   if (success) {

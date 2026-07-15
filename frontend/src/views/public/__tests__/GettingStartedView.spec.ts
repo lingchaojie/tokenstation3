@@ -15,6 +15,8 @@ import { useBeginnerGuideStore } from '@/stores/beginnerGuide'
 import type { ApiKey } from '@/types'
 import enMessages from '@/i18n/locales/en/gettingStarted'
 import zhMessages from '@/i18n/locales/zh/gettingStarted'
+import { buildOpenCodeConfigFile } from '@/components/keys/clientExampleFiles'
+import { resolveGatewayEndpoints } from '@/components/keys/clientConfigFiles'
 
 import GettingStartedView from '../GettingStartedView.vue'
 
@@ -185,6 +187,9 @@ function localeMessages(messages: typeof enMessages) {
       useKeyModal: {
         openai: {
           configTomlHint: 'Keep this content at the beginning of config.toml.'
+        },
+        opencode: {
+          hint: 'Save this OpenCode configuration file.'
         }
       }
     }
@@ -941,6 +946,36 @@ describe('GettingStartedView', () => {
     expect(JSON.stringify(window.history.state)).not.toContain(secret)
     expect(Object.values(localStorage).join('\n')).not.toContain(secret)
     expect(Object.values(sessionStorage).join('\n')).not.toContain(secret)
+  })
+
+  it('renders the rich shared OpenCode catalog and default model', async () => {
+    const key = keyFixture({ key_type: 'openai' })
+    const baseUrl = 'https://gateway.example.com/v1/'
+    getGuideState.mockResolvedValueOnce({
+      prompt_state: 'suppressed',
+      progress: { ...progressAt('api_key'), client: 'opencode' },
+      completed_at: null
+    })
+    vi.mocked(keysAPI.list).mockResolvedValueOnce(keyPage([key]))
+    const { wrapper } = mountAuthenticatedView()
+    useAppStore().apiBaseUrl = baseUrl
+    await settle()
+
+    await wrapper.get('[data-key-id="987654321"]').trigger('click')
+    await wrapper.get('[data-testid="step-primary-action"]').trigger('click')
+    await settle()
+
+    const endpoints = resolveGatewayEndpoints(baseUrl)
+    const shared = JSON.parse(buildOpenCodeConfigFile({
+      platform: 'openai',
+      baseUrl: endpoints.v1,
+      apiKey: key.key,
+      path: 'opencode.json'
+    }).content)
+    const rendered = wrapper.get('[data-testid="guide-config-file"] pre').text()
+
+    expect(rendered).toContain('gpt-5.4-mini')
+    expect(rendered).toContain(`"model": "${shared.model}"`)
   })
 
   it('keeps one hostile secret only in active Claude and Codex configuration memory', async () => {

@@ -5,6 +5,7 @@ import {
   type ClientConfigFile,
   type SupportedGuideOS
 } from './clientConfigContract'
+import { buildOpenCodeConfigFile } from './clientExampleFiles'
 
 export {
   DOCS_API_KEY_PLACEHOLDER,
@@ -34,52 +35,6 @@ function openCodePath(os: SupportedGuideOS): string {
     : '~/.config/opencode/opencode.json'
 }
 
-function buildOpenCodeFile(
-  input: ClientConfigInput,
-  provider: 'anthropic' | 'openai',
-  baseUrl: string,
-  pathSuffix?: string
-): ClientConfigFile {
-  const isAnthropic = provider === 'anthropic'
-  const model = isAnthropic ? EXAMPLE_MODELS.anthropicOpenCode : EXAMPLE_MODELS.openai
-  const content = JSON.stringify(
-    {
-      $schema: 'https://opencode.ai/config.json',
-      model: `${provider}/${model}`,
-      provider: {
-        [provider]: {
-          npm: isAnthropic ? '@ai-sdk/anthropic' : '@ai-sdk/openai',
-          options: {
-            baseURL: baseUrl,
-            apiKey: input.apiKey
-          },
-          models: {
-            [model]: {
-              name: isAnthropic ? 'Claude Fable 5' : 'GPT-5.5'
-            }
-          }
-        }
-      },
-      ...(!isAnthropic
-        ? {
-            agent: {
-              build: { options: { store: false } },
-              plan: { options: { store: false } }
-            }
-          }
-        : {})
-    },
-    null,
-    2
-  )
-
-  return {
-    path: `${openCodePath(input.os)}${pathSuffix ? ` (${pathSuffix})` : ''}`,
-    content,
-    hintKey: 'keys.useKeyModal.opencode.hint'
-  }
-}
-
 function buildCcSwitchClaudeFile(endpoint: string, apiKey: string): ClientConfigFile {
   return {
     path: 'CC Switch → Claude Code → Custom',
@@ -107,7 +62,8 @@ Wire API: responses`,
 }
 
 export function buildClientConfigFiles(input: ClientConfigInput): ClientConfigFile[] {
-  const { bare, v1 } = resolveGatewayEndpoints(input.baseUrl)
+  const endpoints = resolveGatewayEndpoints(input.baseUrl)
+  const { bare, v1 } = endpoints
 
   if (input.client === 'claude_code') {
     const isWindows = input.os === 'windows'
@@ -157,15 +113,35 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   if (input.client === 'opencode') {
     if (input.platform === 'unified') {
       return [
-        buildOpenCodeFile(input, 'anthropic', v1, 'Claude'),
-        buildOpenCodeFile(input, 'openai', v1, 'OpenAI')
+        buildOpenCodeConfigFile({
+          platform: 'anthropic',
+          baseUrl: v1,
+          apiKey: input.apiKey,
+          path: `${openCodePath(input.os)} (Claude)`
+        }),
+        buildOpenCodeConfigFile({
+          platform: 'openai',
+          baseUrl: v1,
+          apiKey: input.apiKey,
+          path: `${openCodePath(input.os)} (OpenAI)`
+        })
       ]
     }
     if (input.platform === 'anthropic' || input.platform === 'antigravity') {
       const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity/v1` : v1
-      return [buildOpenCodeFile(input, 'anthropic', endpoint)]
+      return [buildOpenCodeConfigFile({
+        platform: 'anthropic',
+        baseUrl: endpoint,
+        apiKey: input.apiKey,
+        path: openCodePath(input.os)
+      })]
     }
-    return [buildOpenCodeFile(input, 'openai', v1)]
+    return [buildOpenCodeConfigFile({
+      platform: 'openai',
+      baseUrl: v1,
+      apiKey: input.apiKey,
+      path: openCodePath(input.os)
+    })]
   }
 
   if (input.client === 'cc_switch') {

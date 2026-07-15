@@ -207,10 +207,12 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     expect(file?.hintKey).toBe('keys.useKeyModal.opencode.hint')
     const parsed = JSON.parse(file?.content ?? '')
     expect(parsed.$schema).toBe('https://opencode.ai/config.json')
+    expect(parsed.model).toBe('openai/gpt-5.5')
     expect(parsed.provider.openai.options).toEqual({
       baseURL: 'https://gateway.example.com/v1',
       apiKey: 'sk-test'
     })
+    expect(parsed.provider.openai.models['gpt-5.4-mini'].limit.context).toBe(400000)
   })
 
   it('builds both OpenCode alternatives for a unified key', () => {
