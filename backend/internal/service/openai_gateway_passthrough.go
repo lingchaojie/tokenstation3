@@ -1024,8 +1024,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
-	imageResults := make([]openAIResponsesImageResult, 0, 1)
-	imageResultSeen := make(map[string]struct{})
+	retainImageResults := hasWebChatStreamCapture(ctx)
+	var imageResults []openAIResponsesImageResult
+	var imageResultSeen map[string]struct{}
+	if retainImageResults {
+		imageResults = make([]openAIResponsesImageResult, 0, 1)
+		imageResultSeen = make(map[string]struct{})
+	}
 	var firstTokenMs *int
 	responseID := ""
 	clientDisconnected := false
@@ -1141,7 +1146,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
 			imageCounter.AddSSEData(dataBytes)
-			collectOpenAIResponsesImageResultsFromEventPayload(dataBytes, &imageResults, imageResultSeen)
+			if retainImageResults {
+				collectOpenAIResponsesImageResultsFromEventPayloadBounded(dataBytes, &imageResults, imageResultSeen, webChatMaxUploadBytes)
+			}
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
 				eventType,
@@ -1260,7 +1267,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	// stream=false was requested. Without this conversion the client would
 	// receive raw SSE text or a terminal event with empty output.
 	if isEventStreamResponse(resp.Header) {
-		return s.handlePassthroughSSEToJSON(resp, c, body, originalModel, mappedModel, stop)
+		return s.handlePassthroughSSEToJSONWithWebChatCapture(ctx, resp, c, body, originalModel, mappedModel, stop)
 	}
 
 	usage := &OpenAIUsage{}
@@ -1289,14 +1296,22 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		stop()
 		c.Data(resp.StatusCode, contentType, body)
 	}
+	var imageResults []openAIResponsesImageResult
+	if hasWebChatStreamCapture(ctx) {
+		imageResults = collectOpenAIResponsesImageResultsFromJSONResponseBounded(body, webChatMaxUploadBytes)
+	}
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
-		imageResults:     collectOpenAIResponsesImageResultsFromJSONResponse(body),
+		imageResults:     imageResults,
 	}, nil
+}
+
+func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithWebChatCapture(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
+	return s.handlePassthroughSSEToJSONWithContext(ctx, resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
 }
 
 // handlePassthroughSSEToJSON converts an SSE response body into a JSON
@@ -1304,6 +1319,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 // preserving passthrough payloads, except compact-only model remapping may
 // rewrite model fields back to the original requested model.
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
+	return s.handlePassthroughSSEToJSONWithContext(context.Background(), resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
+}
+
+func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithContext(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
 	stop := compactStopFunc(stopBeforeWrite...)
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
@@ -1360,13 +1379,17 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
+	var imageResults []openAIResponsesImageResult
+	if hasWebChatStreamCapture(ctx) {
+		imageResults = collectOpenAIResponsesImageResultsFromSSEBodyBounded(bodyText, webChatMaxUploadBytes)
+	}
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
-		imageResults:     collectOpenAIResponsesImageResultsFromSSEBody(bodyText),
+		imageResults:     imageResults,
 	}, nil
 }
 

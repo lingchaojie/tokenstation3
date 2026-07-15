@@ -72,8 +72,13 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
-	imageResults := make([]openAIResponsesImageResult, 0, 1)
-	imageResultSeen := make(map[string]struct{})
+	retainImageResults := hasWebChatStreamCapture(ctx)
+	var imageResults []openAIResponsesImageResult
+	var imageResultSeen map[string]struct{}
+	if retainImageResults {
+		imageResults = make([]openAIResponsesImageResult, 0, 1)
+		imageResultSeen = make(map[string]struct{})
+	}
 	var firstTokenMs *int
 	responseID := ""
 	scanner := bufio.NewScanner(resp.Body)
@@ -287,7 +292,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				sawFailedEvent = true
 			}
 			imageCounter.AddSSEData(dataBytes)
-			collectOpenAIResponsesImageResultsFromEventPayload(dataBytes, &imageResults, imageResultSeen)
+			if retainImageResults {
+				collectOpenAIResponsesImageResultsFromEventPayloadBounded(dataBytes, &imageResults, imageResultSeen, webChatMaxUploadBytes)
+			}
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
@@ -844,7 +851,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, stop)
+		return s.handleSSEToJSONWithWebChatCapture(ctx, resp, c, body, originalModel, mappedModel, stop)
 	}
 	// bodyLooksLikeSSE is a line-level heuristic: real SSE framing requires
 	// "data:"/"event:" field names at the very start of a physical line. A
@@ -860,13 +867,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, stop)
+		return s.handleSSEToJSONWithWebChatCapture(ctx, resp, c, body, originalModel, mappedModel, stop)
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, stop)
+			return s.handleSSEToJSONWithWebChatCapture(ctx, resp, c, body, originalModel, mappedModel, stop)
 		}
 		stop()
 		return nil, fmt.Errorf("parse response: invalid json response")
@@ -892,14 +899,22 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
+	var imageResults []openAIResponsesImageResult
+	if hasWebChatStreamCapture(ctx) {
+		imageResults = collectOpenAIResponsesImageResultsFromJSONResponseBounded(body, webChatMaxUploadBytes)
+	}
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
-		imageResults:     collectOpenAIResponsesImageResultsFromJSONResponse(body),
+		imageResults:     imageResults,
 	}, nil
+}
+
+func (s *OpenAIGatewayService) handleSSEToJSONWithWebChatCapture(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResult, error) {
+	return s.handleSSEToJSONWithContext(ctx, resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
 }
 
 func isEventStreamResponse(header http.Header) bool {
@@ -924,6 +939,10 @@ func bodyHasSSEFraming(body []byte) bool {
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResult, error) {
+	return s.handleSSEToJSONWithContext(context.Background(), resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
+}
+
+func (s *OpenAIGatewayService) handleSSEToJSONWithContext(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResult, error) {
 	stop := compactStopFunc(stopBeforeWrite...)
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
@@ -981,13 +1000,17 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
+	var imageResults []openAIResponsesImageResult
+	if hasWebChatStreamCapture(ctx) {
+		imageResults = collectOpenAIResponsesImageResultsFromSSEBodyBounded(bodyText, webChatMaxUploadBytes)
+	}
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
-		imageResults:     collectOpenAIResponsesImageResultsFromSSEBody(bodyText),
+		imageResults:     imageResults,
 	}, nil
 }
 

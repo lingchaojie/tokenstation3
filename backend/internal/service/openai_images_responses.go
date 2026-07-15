@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +30,9 @@ type openAIResponsesImageResult struct {
 	Background    string
 	Quality       string
 	Model         string
+	itemID        string
+	dedupKey      string
+	resultHash    string
 }
 
 type OpenAIImagesUpstreamError struct {
@@ -141,10 +146,16 @@ func openAIImagesUpstreamErrorResponseBody(err *OpenAIImagesUpstreamError) []byt
 }
 
 func openAIResponsesImageResultKey(itemID string, result openAIResponsesImageResult) string {
-	if strings.TrimSpace(result.Result) != "" {
-		return strings.TrimSpace(result.OutputFormat) + "|" + strings.TrimSpace(result.Result)
+	if trimmed := strings.TrimSpace(itemID); trimmed != "" && len(trimmed) <= 256 {
+		return "item:" + trimmed
 	}
-	return "item:" + strings.TrimSpace(itemID)
+	if trimmed := strings.TrimSpace(result.itemID); trimmed != "" && len(trimmed) <= 256 {
+		return "item:" + trimmed
+	}
+	if hash := openAIResponsesImageResultHash(result.Result); hash != "" {
+		return "sha256:" + hash
+	}
+	return ""
 }
 
 func appendOpenAIResponsesImageResultDedup(results *[]openAIResponsesImageResult, seen map[string]struct{}, itemID string, result openAIResponsesImageResult) bool {
@@ -158,8 +169,98 @@ func appendOpenAIResponsesImageResultDedup(results *[]openAIResponsesImageResult
 		}
 		seen[key] = struct{}{}
 	}
+	if trimmed := strings.TrimSpace(itemID); trimmed != "" {
+		result.itemID = trimmed
+	}
+	result.dedupKey = key
+	result.resultHash = openAIResponsesImageResultHash(result.Result)
 	*results = append(*results, result)
 	return true
+}
+
+func openAIResponsesImageResultHash(raw string) string {
+	payload, _, ok := parseOpenAIResponsesImageResultBase64(raw)
+	if !ok {
+		payload = strings.TrimSpace(raw)
+	}
+	if payload == "" {
+		return ""
+	}
+	h := sha256.New()
+	_, _ = io.Copy(h, strings.NewReader(payload))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func parseOpenAIResponsesImageResultBase64(raw string) (payload string, contentType string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	if !strings.HasPrefix(raw, "data:") {
+		return raw, "", true
+	}
+	header, payload, found := strings.Cut(raw, ",")
+	if !found || !strings.Contains(strings.ToLower(header), ";base64") {
+		return "", "", false
+	}
+	mediaType := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:"))
+	return strings.TrimSpace(payload), mediaType, true
+}
+
+func openAIResponsesImageResultFitsDecodedLimit(raw string, maxDecodedBytes int) bool {
+	if maxDecodedBytes <= 0 {
+		return true
+	}
+	payload, _, ok := parseOpenAIResponsesImageResultBase64(raw)
+	if !ok {
+		return false
+	}
+	decodedBytes, ok := openAIBase64DecodedSize(payload)
+	return ok && decodedBytes <= int64(maxDecodedBytes)
+}
+
+func openAIBase64DecodedSize(payload string) (int64, bool) {
+	var encodedBytes, padding int64
+	sawPadding := false
+	for i := 0; i < len(payload); i++ {
+		ch := payload[i]
+		switch {
+		case ch == '\r' || ch == '\n':
+			continue
+		case ch == '=':
+			sawPadding = true
+			padding++
+			if padding > 2 {
+				return 0, false
+			}
+		case ch >= 'A' && ch <= 'Z', ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '+', ch == '/':
+			if sawPadding {
+				return 0, false
+			}
+		default:
+			return 0, false
+		}
+		encodedBytes++
+	}
+	if encodedBytes == 0 {
+		return 0, false
+	}
+	if padding > 0 {
+		if encodedBytes%4 != 0 {
+			return 0, false
+		}
+		return encodedBytes/4*3 - padding, true
+	}
+	switch encodedBytes % 4 {
+	case 0:
+		return encodedBytes / 4 * 3, true
+	case 2:
+		return encodedBytes/4*3 + 1, true
+	case 3:
+		return encodedBytes/4*3 + 2, true
+	default:
+		return 0, false
+	}
 }
 
 func mergeOpenAIResponsesImageMeta(dst *openAIResponsesImageResult, src openAIResponsesImageResult) {
@@ -454,6 +555,7 @@ func extractOpenAIImagesFromResponsesCompleted(payload []byte) ([]openAIResponse
 				Size:          strings.TrimSpace(item.Get("size").String()),
 				Background:    strings.TrimSpace(item.Get("background").String()),
 				Quality:       strings.TrimSpace(item.Get("quality").String()),
+				itemID:        strings.TrimSpace(item.Get("id").String()),
 			}
 			if len(results) == 0 {
 				firstMeta = entry
@@ -491,6 +593,7 @@ func extractOpenAIImageFromResponsesOutputItemDone(payload []byte) (openAIRespon
 		Size:          strings.TrimSpace(item.Get("size").String()),
 		Background:    strings.TrimSpace(item.Get("background").String()),
 		Quality:       strings.TrimSpace(item.Get("quality").String()),
+		itemID:        strings.TrimSpace(item.Get("id").String()),
 	}
 	return entry, strings.TrimSpace(item.Get("id").String()), true, nil
 }
@@ -499,24 +602,27 @@ func appendOrMergeOpenAIResponsesImageResult(results *[]openAIResponsesImageResu
 	if results == nil {
 		return
 	}
-	resultValue := strings.TrimSpace(result.Result)
-	if resultValue != "" {
-		for i := range *results {
-			if strings.TrimSpace((*results)[i].Result) != resultValue {
-				continue
-			}
-			if revisedPrompt := strings.TrimSpace(result.RevisedPrompt); revisedPrompt != "" {
-				(*results)[i].RevisedPrompt = revisedPrompt
-			}
-			mergeOpenAIResponsesImageMeta(&(*results)[i], result)
-			seen[openAIResponsesImageResultKey(itemID, (*results)[i])] = struct{}{}
-			return
+	key := openAIResponsesImageResultKey(itemID, result)
+	resultHash := openAIResponsesImageResultHash(result.Result)
+	for i := range *results {
+		existing := &(*results)[i]
+		if (key == "" || existing.dedupKey != key) && (resultHash == "" || existing.resultHash != resultHash) {
+			continue
 		}
+		if revisedPrompt := strings.TrimSpace(result.RevisedPrompt); revisedPrompt != "" {
+			existing.RevisedPrompt = revisedPrompt
+		}
+		mergeOpenAIResponsesImageMeta(existing, result)
+		return
 	}
 	appendOpenAIResponsesImageResultDedup(results, seen, itemID, result)
 }
 
 func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}) {
+	collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload, results, seen, 0)
+}
+
+func collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}, maxDecodedBytes int) {
 	if len(payload) == 0 || results == nil || !gjson.ValidBytes(payload) {
 		return
 	}
@@ -524,7 +630,7 @@ func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results 
 	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
 	case "response.output_item.done":
 		result, itemID, ok, err := extractOpenAIImageFromResponsesOutputItemDone(payload)
-		if err == nil && ok {
+		if err == nil && ok && openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
 			appendOrMergeOpenAIResponsesImageResult(results, seen, itemID, result)
 		}
 	case "response.completed":
@@ -533,33 +639,66 @@ func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results 
 			return
 		}
 		for _, result := range completedResults {
+			if !openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
+				continue
+			}
 			if hasResponseMeta {
 				mergeOpenAIResponsesImageMeta(&result, responseMeta)
 			}
-			appendOrMergeOpenAIResponsesImageResult(results, seen, "", result)
+			appendOrMergeOpenAIResponsesImageResult(results, seen, result.itemID, result)
 		}
 	}
 }
 
 func collectOpenAIResponsesImageResultsFromSSEBody(body string) []openAIResponsesImageResult {
+	return collectOpenAIResponsesImageResultsFromSSEBodyBounded(body, 0)
+}
+
+func collectOpenAIResponsesImageResultsFromSSEBodyBounded(body string, maxDecodedBytes int) []openAIResponsesImageResult {
 	results := make([]openAIResponsesImageResult, 0, 1)
 	seen := make(map[string]struct{})
 	forEachOpenAISSEDataPayload(body, func(payload []byte) {
-		collectOpenAIResponsesImageResultsFromEventPayload(payload, &results, seen)
+		collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload, &results, seen, maxDecodedBytes)
 	})
 	return results
 }
 
 func collectOpenAIResponsesImageResultsFromJSONResponse(body []byte) []openAIResponsesImageResult {
+	return collectOpenAIResponsesImageResultsFromJSONResponseBounded(body, 0)
+}
+
+func collectOpenAIResponsesImageResultsFromJSONResponseBounded(body []byte, maxDecodedBytes int) []openAIResponsesImageResult {
 	if !gjson.ValidBytes(body) || !gjson.GetBytes(body, "output").IsArray() {
 		return nil
 	}
-	payload := make([]byte, 0, len(body)+42)
-	payload = append(payload, `{"type":"response.completed","response":`...)
-	payload = append(payload, body...)
-	payload = append(payload, '}')
 	results := make([]openAIResponsesImageResult, 0, 1)
-	collectOpenAIResponsesImageResultsFromEventPayload(payload, &results, make(map[string]struct{}))
+	seen := make(map[string]struct{})
+	responseMeta := openAIResponsesImageResult{
+		OutputFormat: strings.TrimSpace(gjson.GetBytes(body, "tools.0.output_format").String()),
+		Size:         strings.TrimSpace(gjson.GetBytes(body, "tools.0.size").String()),
+		Background:   strings.TrimSpace(gjson.GetBytes(body, "tools.0.background").String()),
+		Quality:      strings.TrimSpace(gjson.GetBytes(body, "tools.0.quality").String()),
+		Model:        strings.TrimSpace(gjson.GetBytes(body, "tools.0.model").String()),
+	}
+	for _, item := range gjson.GetBytes(body, "output").Array() {
+		if item.Get("type").String() != "image_generation_call" {
+			continue
+		}
+		result := openAIResponsesImageResult{
+			Result:        strings.TrimSpace(item.Get("result").String()),
+			RevisedPrompt: strings.TrimSpace(item.Get("revised_prompt").String()),
+			OutputFormat:  strings.TrimSpace(item.Get("output_format").String()),
+			Size:          strings.TrimSpace(item.Get("size").String()),
+			Background:    strings.TrimSpace(item.Get("background").String()),
+			Quality:       strings.TrimSpace(item.Get("quality").String()),
+			itemID:        strings.TrimSpace(item.Get("id").String()),
+		}
+		if result.Result == "" || !openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
+			continue
+		}
+		mergeOpenAIResponsesImageMeta(&result, responseMeta)
+		appendOrMergeOpenAIResponsesImageResult(&results, seen, result.itemID, result)
+	}
 	return results
 }
 

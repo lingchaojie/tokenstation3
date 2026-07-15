@@ -31,28 +31,32 @@ func webChatArtifactCandidatesFromOpenAIImageResults(results []openAIResponsesIm
 }
 
 func decodeWebChatOpenAIImageResult(result openAIResponsesImageResult) ([]byte, string, bool) {
-	raw := strings.TrimSpace(result.Result)
-	if raw == "" {
+	if !openAIResponsesImageResultFitsDecodedLimit(result.Result, webChatMaxUploadBytes) {
+		return nil, "", false
+	}
+	raw, dataURLContentType, ok := parseOpenAIResponsesImageResultBase64(result.Result)
+	if !ok {
 		return nil, "", false
 	}
 	contentType := openAIImageOutputMIMEType(result.OutputFormat)
-	if strings.HasPrefix(raw, "data:") {
-		header, payload, ok := strings.Cut(raw, ",")
-		if !ok {
-			return nil, "", false
-		}
-		if strings.Contains(strings.ToLower(header), ";base64") {
-			if mediaType := strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:"); strings.TrimSpace(mediaType) != "" {
-				contentType = strings.TrimSpace(mediaType)
+	if dataURLContentType != "" {
+		contentType = dataURLContentType
+	}
+	encoding := base64.StdEncoding
+	if !strings.Contains(raw, "=") {
+		encodedBytes := 0
+		for i := 0; i < len(raw); i++ {
+			if raw[i] != '\r' && raw[i] != '\n' {
+				encodedBytes++
 			}
-			raw = strings.TrimSpace(payload)
+		}
+		if encodedBytes%4 != 0 {
+			encoding = base64.RawStdEncoding
 		}
 	}
-	body, err := base64.StdEncoding.DecodeString(raw)
+	body, err := encoding.DecodeString(raw)
 	if err != nil {
-		if body, err = base64.RawStdEncoding.DecodeString(raw); err != nil {
-			return nil, "", false
-		}
+		return nil, "", false
 	}
 	return body, contentType, true
 }

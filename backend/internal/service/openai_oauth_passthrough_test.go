@@ -155,7 +155,7 @@ func TestOpenAIGatewayService_ResponsesPreservesNativeFileForAPIKeyAndOAuth(t *t
 	}
 }
 
-func TestOpenAIGatewayService_ResponsesStreamingImageResultsSurviveNativeAndOAuthPassthrough(t *testing.T) {
+func TestOpenAIGatewayService_ResponsesStreamingImageResultsRetainedOnlyForWebChat(t *testing.T) {
 	const imageBase64 = "aW1hZ2UtYnl0ZXM="
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station"}}`,
@@ -194,37 +194,51 @@ func TestOpenAIGatewayService_ResponsesStreamingImageResultsSurviveNativeAndOAut
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-			c.Request.Header.Set("Content-Type", "application/json")
-			upstream := &httpUpstreamRecorder{resp: &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_image"}},
-				Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
-			}}
-			svc := &OpenAIGatewayService{
-				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
-					Enabled: false, AllowInsecureHTTP: true,
-				}}},
-				httpUpstream: upstream,
+		for _, webChat := range []bool{false, true} {
+			name := tc.name + "/public"
+			if webChat {
+				name = tc.name + "/webchat"
 			}
+			t.Run(name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+				c.Request.Header.Set("Content-Type", "application/json")
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_image"}},
+					Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+				}}
+				svc := &OpenAIGatewayService{
+					cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+						Enabled: false, AllowInsecureHTTP: true,
+					}}},
+					httpUpstream: upstream,
+				}
 
-			result, err := svc.Forward(context.Background(), c, tc.account, body)
+				forwardCtx := context.Background()
+				if webChat {
+					forwardCtx = withWebChatStreamCapture(forwardCtx, newWebChatStreamCapture(4<<20))
+				}
+				result, err := svc.Forward(forwardCtx, c, tc.account, body)
 
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			require.Equal(t, 1, result.ImageCount)
-			require.Equal(t, []string{"2048x1152"}, result.ImageOutputSizes)
-			require.Len(t, result.imageResults, 1)
-			require.Equal(t, imageBase64, result.imageResults[0].Result)
-			require.Equal(t, "draw a blue station", result.imageResults[0].RevisedPrompt)
-			require.Equal(t, "webp", result.imageResults[0].OutputFormat)
-			require.Equal(t, "2048x1152", result.imageResults[0].Size)
-			require.Equal(t, "high", result.imageResults[0].Quality)
-		})
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, 1, result.ImageCount)
+				require.Equal(t, []string{"2048x1152"}, result.ImageOutputSizes)
+				if !webChat {
+					require.Empty(t, result.imageResults)
+					return
+				}
+				require.Len(t, result.imageResults, 1)
+				require.Equal(t, imageBase64, result.imageResults[0].Result)
+				require.Equal(t, "draw a blue station", result.imageResults[0].RevisedPrompt)
+				require.Equal(t, "webp", result.imageResults[0].OutputFormat)
+				require.Equal(t, "2048x1152", result.imageResults[0].Size)
+				require.Equal(t, "high", result.imageResults[0].Quality)
+			})
+		}
 	}
 }
 
@@ -269,7 +283,8 @@ func TestOpenAIGatewayService_ResponsesNonStreamingImageResultsSurviveNativeAndP
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 			c.Request.Header.Set("Content-Type", "application/json")
 
-			result, err := svc.Forward(context.Background(), c, account, body)
+			forwardCtx := withWebChatStreamCapture(context.Background(), newWebChatStreamCapture(4<<20))
+			result, err := svc.Forward(forwardCtx, c, account, body)
 
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -281,6 +296,74 @@ func TestOpenAIGatewayService_ResponsesNonStreamingImageResultsSurviveNativeAndP
 			require.Equal(t, "1024x1024", result.imageResults[0].Size)
 		})
 	}
+}
+
+func TestOpenAIGatewayService_WebChatDropsOversizedResponsesImageResultsWithoutChangingBillingMetadata(t *testing.T) {
+	oversizedBase64 := strings.Repeat("A", 4*((webChatMaxUploadBytes+1+2)/3))
+	body := []byte(`{"model":"gpt-5.5","stream":false,"store":false,"input":"draw","tools":[{"type":"image_generation","size":"1024x1024"}]}`)
+	cases := []struct {
+		name   string
+		extra  map[string]any
+		result string
+	}{
+		{
+			name: "native base64",
+			extra: map[string]any{
+				openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+				openai_compat.ExtraKeyResponsesSupported: true,
+			},
+			result: oversizedBase64,
+		},
+		{
+			name:   "passthrough data URL",
+			extra:  map[string]any{"openai_passthrough": true},
+			result: "data:image/png;base64," + oversizedBase64,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upstreamBody := `{"id":"resp_oversized","output":[{"id":"ig_oversized","type":"image_generation_call","result":"` + tc.result + `","output_format":"png","size":"1024x1024"}],"usage":{"input_tokens":2,"output_tokens":7,"output_tokens_details":{"image_tokens":6}}}`
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+					Enabled: false, AllowInsecureHTTP: true,
+				}}},
+				httpUpstream: upstream,
+			}
+			account := &Account{
+				ID: 715, Name: "openai", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+				Extra:       tc.extra,
+				Status:      StatusActive, Schedulable: true,
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			forwardCtx := withWebChatStreamCapture(context.Background(), newWebChatStreamCapture(4<<20))
+
+			result, err := svc.Forward(forwardCtx, c, account, body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, 1, result.ImageCount)
+			require.Equal(t, []string{"1024x1024"}, result.ImageOutputSizes)
+			require.Empty(t, result.imageResults)
+		})
+	}
+}
+
+func TestOpenAIResponsesImageResultDedupKeyIsFixedSize(t *testing.T) {
+	imageBase64 := strings.Repeat("A", 1<<20)
+	key := openAIResponsesImageResultKey("", openAIResponsesImageResult{Result: imageBase64, OutputFormat: "png"})
+
+	require.LessOrEqual(t, len(key), len("sha256:")+64)
+	require.NotContains(t, key, imageBase64)
 }
 
 func TestOpenAIGatewayService_WebChatCodexPayloadReachesOAuthPassthrough(t *testing.T) {

@@ -183,6 +183,46 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 	require.False(t, gjson.GetBytes(svc.forwardedBody, "tools.#(type==\"web_search\")").Exists())
 }
 
+func TestWebChatSend_DropsOversizedOpenAIImageResultsBeforeArtifactSave(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive, AllowImageGeneration: true}}
+	svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+	oversizedBase64 := strings.Repeat("A", 4*((webChatMaxUploadBytes+1+2)/3))
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID:     "openai_req_oversized",
+		Model:         "gpt-image-2",
+		UpstreamModel: openAIImagesResponsesMainModel,
+		Stream:        true,
+		ImageCount:    1,
+		imageResults: []openAIResponsesImageResult{{
+			Result:       "data:image/png;base64," + oversizedBase64,
+			OutputFormat: "png",
+			Size:         "1024x1024",
+		}},
+	}
+
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "gpt-image-2",
+		Provider:       "openai",
+		Text:           "draw an oversized image",
+		Stream:         true,
+		ImageGeneration: WebChatImageGenerationConfig{
+			Enabled:      true,
+			Size:         "1024x1024",
+			OutputFormat: "png",
+		},
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, svc.savedFiles)
+	require.Empty(t, svc.createdArtifacts)
+}
+
 func TestWebChatSend_OpenAIAlwaysUsesResponsesWithAutomaticSearch(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
