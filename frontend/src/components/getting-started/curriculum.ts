@@ -9,6 +9,7 @@ export interface GuideVariant {
   os: BeginnerGuideOS
   shell: 'terminal' | 'powershell'
   installCommand: string
+  desktopDownloadUrl?: string
   verifyCommand: string
   launchCommand: string
   diagnosticCommands: string[]
@@ -35,6 +36,8 @@ export const GUIDE_VARIANTS: GuideVariant[] = [
     os: 'windows',
     shell: 'powershell',
     installCommand: 'irm https://claude.ai/install.ps1 | iex',
+    desktopDownloadUrl:
+      'https://claude.ai/api/desktop/win32/x64/setup/latest/redirect?utm_source=claude_code&utm_medium=docs',
     verifyCommand: 'claude --version',
     launchCommand: 'claude',
     diagnosticCommands: ['claude doctor'],
@@ -60,18 +63,20 @@ export const GUIDE_VARIANTS: GuideVariant[] = [
     verifyCommand: 'codex --version',
     launchCommand: 'codex',
     diagnosticCommands: ['codex login status', 'codex doctor'],
-    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli/install',
+    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli',
     verifiedAt: '2026-07-15'
   },
   {
     client: 'codex',
     os: 'windows',
     shell: 'powershell',
-    installCommand: 'irm https://chatgpt.com/codex/install.ps1 | iex',
+    installCommand: 'npm install -g @openai/codex',
+    desktopDownloadUrl:
+      'https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi',
     verifyCommand: 'codex --version',
     launchCommand: 'codex',
     diagnosticCommands: ['codex login status', 'codex doctor'],
-    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli/install',
+    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli',
     verifiedAt: '2026-07-15'
   },
   {
@@ -82,7 +87,7 @@ export const GUIDE_VARIANTS: GuideVariant[] = [
     verifyCommand: 'codex --version',
     launchCommand: 'codex',
     diagnosticCommands: ['codex login status', 'codex doctor'],
-    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli/install',
+    officialSourceUrl: 'https://learn.chatgpt.com/docs/codex/cli',
     verifiedAt: '2026-07-15'
   }
 ]

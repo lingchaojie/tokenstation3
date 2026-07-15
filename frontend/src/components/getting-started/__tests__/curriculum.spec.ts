@@ -184,18 +184,44 @@ describe('beginner guide curriculum contract', () => {
     ])
   })
 
-  it('keeps the official native installer commands exact', () => {
-    const commands = Object.fromEntries(
-      GUIDE_VARIANTS.map(({ client, os, installCommand }) => [`${client}:${os}`, installCommand])
+  it('maps every client and OS to the exact official install action', () => {
+    const installations = Object.fromEntries(
+      GUIDE_VARIANTS.map(({ client, os, installCommand, desktopDownloadUrl }) => [
+        `${client}:${os}`,
+        {
+          command: installCommand,
+          desktopDownloadUrl: desktopDownloadUrl ?? null
+        }
+      ])
     )
 
-    expect(commands).toEqual({
-      'claude_code:macos': 'curl -fsSL https://claude.ai/install.sh | bash',
-      'claude_code:windows': 'irm https://claude.ai/install.ps1 | iex',
-      'claude_code:linux': 'curl -fsSL https://claude.ai/install.sh | bash',
-      'codex:macos': 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
-      'codex:windows': 'irm https://chatgpt.com/codex/install.ps1 | iex',
-      'codex:linux': 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+    expect(installations).toEqual({
+      'claude_code:macos': {
+        command: 'curl -fsSL https://claude.ai/install.sh | bash',
+        desktopDownloadUrl: null
+      },
+      'claude_code:windows': {
+        command: 'irm https://claude.ai/install.ps1 | iex',
+        desktopDownloadUrl:
+          'https://claude.ai/api/desktop/win32/x64/setup/latest/redirect?utm_source=claude_code&utm_medium=docs'
+      },
+      'claude_code:linux': {
+        command: 'curl -fsSL https://claude.ai/install.sh | bash',
+        desktopDownloadUrl: null
+      },
+      'codex:macos': {
+        command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+        desktopDownloadUrl: null
+      },
+      'codex:windows': {
+        command: 'npm install -g @openai/codex',
+        desktopDownloadUrl:
+          'https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi'
+      },
+      'codex:linux': {
+        command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+        desktopDownloadUrl: null
+      }
     })
   })
 
@@ -217,7 +243,7 @@ describe('beginner guide curriculum contract', () => {
         expect(variant.launchCommand).toBe('codex')
         expect(variant.diagnosticCommands).toEqual(['codex login status', 'codex doctor'])
         expect(variant.officialSourceUrl).toBe(
-          'https://learn.chatgpt.com/docs/codex/cli/install'
+          'https://learn.chatgpt.com/docs/codex/cli'
         )
       }
     }
