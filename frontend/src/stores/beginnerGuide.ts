@@ -533,10 +533,17 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     }
 
     const persistenceEpoch = nextPersistenceOperationEpoch()
-    const outcome = await enqueueRemoteWrite(context, { progress: safeProgress })
+    const promptIntent = strongestSavePromptIntent(
+      currentSavePromptIntent(context),
+      promptState.value === 'completed' ? 'completed' : undefined
+    )
+    const outcome = await enqueueRemoteWrite(context, {
+      ...(promptIntent ? { prompt_state: promptIntent } : {}),
+      progress: safeProgress
+    })
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
-      if (remote !== null && isCurrent(context)) {
+      if (promptIntentConfirmed(remote, promptIntent) && isCurrent(context)) {
         clearPersistenceIssue(context, 'save', persistenceEpoch)
         applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
         if (
@@ -550,11 +557,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
       }
     }
     if (outcome.status !== 'stale' && isCurrent(context)) {
-      reportSaveIssue(
-        context,
-        persistenceEpoch,
-        promptState.value === 'completed' ? 'completed' : undefined
-      )
+      reportSaveIssue(context, persistenceEpoch, promptIntent)
     }
     if (
       outcome.status !== 'stale' &&

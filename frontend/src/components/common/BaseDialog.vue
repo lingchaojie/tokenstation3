@@ -144,7 +144,7 @@ function isValidContentEditable(element: HTMLElement): boolean {
   if (value === null) {
     return false
   }
-  const normalized = value.trim().toLowerCase()
+  const normalized = value.toLowerCase()
   return normalized === '' || normalized === 'true' || normalized === 'plaintext-only'
 }
 
@@ -179,10 +179,12 @@ function isVisible(element: HTMLElement): boolean {
     if (
       candidate !== element &&
       candidate.tagName === 'DETAILS' &&
-      !candidate.hasAttribute('open') &&
-      firstSummary(candidate) !== element
+      !candidate.hasAttribute('open')
     ) {
-      return false
+      const summary = firstSummary(candidate)
+      if (summary === null || !summary.contains(element)) {
+        return false
+      }
     }
     if (candidate === dialogRef.value) {
       break

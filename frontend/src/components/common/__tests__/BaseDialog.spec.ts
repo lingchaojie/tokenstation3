@@ -193,6 +193,19 @@ describe('BaseDialog focus management', () => {
     }
   )
 
+  it('does not trim whitespace around contenteditable keywords', async () => {
+    const dialog = mountDialog(`
+      <div contenteditable=" true " data-testid="invalid-editable">Invalid editable</div>
+      <button type="button" data-testid="valid-action">Valid action</button>
+    `)
+
+    await openDialog(dialog)
+
+    expect(document.activeElement).toBe(
+      document.body.querySelector('[data-testid="valid-action"]')
+    )
+  })
+
   it('excludes closed-details content while retaining each first summary through nested details', async () => {
     const dialog = mountDialog(`
       <details open>
@@ -258,6 +271,35 @@ describe('BaseDialog focus management', () => {
     const backward = pressTab(outerSummary, true)
     expect(backward.defaultPrevented).toBe(true)
     expect(document.activeElement).toBe(innerSummary)
+  })
+
+  it('keeps explicitly focusable descendants of a closed details first summary in the trap', async () => {
+    const dialog = mountDialog(
+      `
+        <details>
+          <summary>
+            Summary
+            <button type="button" data-testid="summary-action">Summary action</button>
+          </summary>
+          <button type="button" data-testid="hidden-action">Hidden action</button>
+        </details>
+      `,
+      true
+    )
+    await openDialog(dialog)
+    const close = document.body.querySelector<HTMLElement>('[aria-label="Close modal"]')!
+    const summaryAction = document.body.querySelector<HTMLElement>(
+      '[data-testid="summary-action"]'
+    )!
+
+    summaryAction.focus()
+    const forward = pressTab(summaryAction)
+    expect(forward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(close)
+
+    const backward = pressTab(close, true)
+    expect(backward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(summaryAction)
   })
 
   it('does not treat a focusable closed details element as its own hidden descendant', async () => {

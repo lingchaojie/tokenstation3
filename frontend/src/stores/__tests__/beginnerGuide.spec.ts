@@ -809,6 +809,61 @@ describe('useBeginnerGuideStore', () => {
     expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).toBeNull()
   })
 
+  it('keeps a pending completion through a nonconfirming ordinary progress save', async () => {
+    const anonymous = progress({
+      currentStep: 'api_key',
+      completedSteps: ['understand']
+    })
+    const current = progress({
+      currentStep: 'first_run',
+      completedSteps: ['understand', 'choose']
+    })
+    localStorage.setItem(ANONYMOUS_PROGRESS_KEY, JSON.stringify(anonymous))
+    getBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({
+        prompt_state: 'eligible',
+        progress: progress({ completedSteps: ['choose'] })
+      })
+    )
+    patchBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('merge offline'))
+      .mockRejectedValueOnce(new Error('completion offline'))
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+      )
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({
+          prompt_state: 'completed',
+          progress: patch.progress ?? null,
+          completed_at: '2026-07-15T00:00:00Z'
+        })
+      )
+    const store = useBeginnerGuideStore()
+
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+    await store.completeGuide()
+    await store.goToStep('first_run')
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenNthCalledWith(3, {
+      prompt_state: 'completed',
+      progress: current
+    })
+    expect(store.promptState).toBe('completed')
+    expect(store.completedAt).toBeNull()
+    expect(store.persistenceIssue).toBe('save')
+    expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).not.toBeNull()
+
+    await store.retryPersistence()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+      prompt_state: 'completed',
+      progress: current
+    })
+    expect(store.completedAt).toBe('2026-07-15T00:00:00Z')
+    expect(store.persistenceIssue).toBeNull()
+    expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).toBeNull()
+  })
+
   it('keeps suppressed stronger than a later ordinary progress save failure', async () => {
     const anonymous = progress({
       currentStep: 'api_key',
@@ -842,6 +897,53 @@ describe('useBeginnerGuideStore', () => {
         currentStep: 'api_key',
         completedSteps: ['understand', 'choose', 'api_key']
       })
+    })
+    expect(store.persistenceIssue).toBeNull()
+    expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).toBeNull()
+  })
+
+  it('keeps pending suppression through a nonconfirming ordinary progress save', async () => {
+    const anonymous = progress({
+      currentStep: 'api_key',
+      completedSteps: ['understand']
+    })
+    const current = progress({
+      currentStep: 'api_key',
+      completedSteps: ['understand', 'choose', 'api_key']
+    })
+    localStorage.setItem(ANONYMOUS_PROGRESS_KEY, JSON.stringify(anonymous))
+    getBeginnerGuideStateMock.mockResolvedValueOnce(
+      state({
+        prompt_state: 'eligible',
+        progress: progress({ completedSteps: ['choose'] })
+      })
+    )
+    patchBeginnerGuideStateMock
+      .mockRejectedValueOnce(new Error('merge offline'))
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'eligible', progress: patch.progress ?? null })
+      )
+      .mockImplementationOnce(async (patch: PatchBeginnerGuideStateRequest) =>
+        state({ prompt_state: 'suppressed', progress: patch.progress ?? null })
+      )
+    const store = useBeginnerGuideStore()
+
+    await store.initialize({ authenticated: true, userId: 'user-a' })
+    await store.completeStep('api_key')
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenNthCalledWith(2, {
+      prompt_state: 'suppressed',
+      progress: current
+    })
+    expect(store.promptState).toBe('suppressed')
+    expect(store.persistenceIssue).toBe('save')
+    expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).not.toBeNull()
+
+    await store.retryPersistence()
+
+    expect(patchBeginnerGuideStateMock).toHaveBeenLastCalledWith({
+      prompt_state: 'suppressed',
+      progress: current
     })
     expect(store.persistenceIssue).toBeNull()
     expect(localStorage.getItem(ANONYMOUS_PROGRESS_KEY)).toBeNull()
