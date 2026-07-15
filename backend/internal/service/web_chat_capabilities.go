@@ -109,9 +109,12 @@ func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatM
 	}
 	hasImageModality := containsFold(model.Modalities, "image")
 	hasTextModality := len(model.Modalities) == 0 || containsFold(model.Modalities, "text")
-	supportsImageInput := hasImageModality || containsFold(model.Features, "vision input")
-	supportsThinking := hasTextModality && webChatProviderSupportsThinking(provider)
 	supportsImageGeneration := hasImageModality || containsFold(model.Features, "image generation")
+	supportsImageInput := hasImageModality || containsFold(model.Features, "vision input")
+	if isOpenAIWebChatGPTTextModel(provider, model.ModelName, supportsImageGeneration) {
+		supportsImageInput = true
+	}
+	supportsThinking := hasTextModality && webChatProviderSupportsThinking(provider)
 	supportsWebSearch := hasTextModality && !supportsImageGeneration && webChatProviderSupportsWebSearch(provider)
 
 	return WebChatModelCapability{
@@ -169,6 +172,12 @@ func containsFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func isOpenAIWebChatGPTTextModel(provider, model string, supportsImageGeneration bool) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), "openai") &&
+		resolveWebChatModelFamily(model) == webChatFamilyGPT &&
+		!supportsImageGeneration
 }
 
 func webChatProviderSupportsThinking(provider string) bool {
