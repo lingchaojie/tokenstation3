@@ -1308,14 +1308,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithWebChatCapture(ctx 
 	return s.handlePassthroughSSEToJSONWithContext(ctx, resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
 }
 
-// handlePassthroughSSEToJSON converts an SSE response body into a JSON
-// response for the passthrough path. It mirrors handleSSEToJSON while
-// preserving passthrough payloads, except compact-only model remapping may
-// rewrite model fields back to the original requested model.
-func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
-	return s.handlePassthroughSSEToJSONWithContext(context.Background(), resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
-}
-
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithContext(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
 	stop := compactStopFunc(stopBeforeWrite...)
 	bodyText := string(body)

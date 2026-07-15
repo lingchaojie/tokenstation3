@@ -650,10 +650,6 @@ func collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload []byte, r
 	}
 }
 
-func collectOpenAIResponsesImageResultsFromSSEBody(body string) []openAIResponsesImageResult {
-	return collectOpenAIResponsesImageResultsFromSSEBodyBounded(body, 0)
-}
-
 func collectOpenAIResponsesImageResultsFromSSEBodyBounded(body string, maxDecodedBytes int) []openAIResponsesImageResult {
 	results := make([]openAIResponsesImageResult, 0, 1)
 	seen := make(map[string]struct{})
@@ -661,10 +657,6 @@ func collectOpenAIResponsesImageResultsFromSSEBodyBounded(body string, maxDecode
 		collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload, &results, seen, maxDecodedBytes)
 	})
 	return results
-}
-
-func collectOpenAIResponsesImageResultsFromJSONResponse(body []byte) []openAIResponsesImageResult {
-	return collectOpenAIResponsesImageResultsFromJSONResponseBounded(body, 0)
 }
 
 func collectOpenAIResponsesImageResultsFromJSONResponseBounded(body []byte, maxDecodedBytes int) []openAIResponsesImageResult {
