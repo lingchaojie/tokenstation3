@@ -30,17 +30,11 @@ SELECT ua.user_id,
        COALESCE(ua.aff_rebate_rate_percent, 0)::double precision,
        (ua.aff_rebate_rate_percent IS NOT NULL) AS has_custom_rate,
        ua.aff_count,
-       COALESCE(rebated.rebated_invitee_count, 0),
+       ua.inviter_reward_count,
        (ua.aff_quota + COALESCE(matured.matured_frozen_quota, 0))::double precision,
        ua.aff_history_quota::double precision
 FROM user_affiliates ua
 JOIN users u ON u.id = ua.user_id
-LEFT JOIN (
-    SELECT user_id, COUNT(DISTINCT source_user_id)::integer AS rebated_invitee_count
-    FROM user_affiliate_ledger
-    WHERE action = 'accrue' AND source_user_id IS NOT NULL
-    GROUP BY user_id
-) rebated ON rebated.user_id = ua.user_id
 LEFT JOIN (
     SELECT user_id, COALESCE(SUM(amount), 0)::double precision AS matured_frozen_quota
     FROM user_affiliate_ledger
@@ -730,54 +724,117 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 
 func (r *affiliateRepository) ListAffiliateRebateRecords(ctx context.Context, filter service.AffiliateRecordFilter) ([]service.AffiliateRebateRecord, int64, error) {
 	client := clientFromContext(ctx, r.client)
-	where, args := buildAffiliateRecordWhere(filter, "ual.created_at", []string{
-		"inviter.email", "inviter.username", "invitee.email", "invitee.username",
-		"po.id::text", "po.out_trade_no", "po.payment_type", "po.status",
+	where, args := buildAffiliateRecordWhere(filter, "created_at", []string{
+		"inviter_email", "inviter_username", "invitee_email", "invitee_username",
+		"order_id::text", "out_trade_no", "payment_type", "order_status", "record_source", "COALESCE(reward_role, '')",
 	})
-	baseJoin := `
-FROM user_affiliate_ledger ual
-JOIN payment_orders po ON po.id = ual.source_order_id
-JOIN users invitee ON invitee.id = ual.source_user_id
-JOIN users inviter ON inviter.id = ual.user_id
-WHERE ual.action = 'accrue'
-  AND ual.source_order_id IS NOT NULL`
-	if where != "" {
-		where = strings.Replace(where, "WHERE ", " AND ", 1)
-	}
+	const unified = `
+WITH unified_affiliate_rewards AS (
+    SELECT ual.id AS audit_id,
+           'legacy'::text AS record_source,
+           po.id AS order_id,
+           po.out_trade_no,
+           ual.user_id AS inviter_id,
+           COALESCE(inviter.email, '') AS inviter_email,
+           COALESCE(inviter.username, '') AS inviter_username,
+           ual.source_user_id AS invitee_id,
+           COALESCE(invitee.email, '') AS invitee_email,
+           COALESCE(invitee.username, '') AS invitee_username,
+           po.amount::double precision AS order_amount,
+           po.pay_amount::double precision AS pay_amount,
+           ual.amount::double precision AS rebate_amount,
+           po.payment_type,
+           po.status AS order_status,
+           NULL::text AS reward_role,
+           NULL::timestamptz AS expires_at,
+           NULL::double precision AS remaining_amount,
+           ual.created_at
+    FROM user_affiliate_ledger ual
+    JOIN payment_orders po ON po.id = ual.source_order_id
+    JOIN users invitee ON invitee.id = ual.source_user_id
+    JOIN users inviter ON inviter.id = ual.user_id
+    WHERE ual.action = 'accrue'
+      AND ual.source_order_id IS NOT NULL
 
-	total, err := queryAffiliateRecordCount(ctx, client, "SELECT COUNT(*) "+baseJoin+where, args...)
+    UNION ALL
+
+    SELECT events.id AS audit_id,
+           'reward_credit'::text AS record_source,
+           0::bigint AS order_id,
+           ''::text AS out_trade_no,
+           split_part(credits.source_key, ':', 2)::bigint AS inviter_id,
+           COALESCE(inviter.email, '') AS inviter_email,
+           COALESCE(inviter.username, '') AS inviter_username,
+           split_part(credits.source_key, ':', 3)::bigint AS invitee_id,
+           COALESCE(invitee.email, '') AS invitee_email,
+           COALESCE(invitee.username, '') AS invitee_username,
+           0::double precision AS order_amount,
+           0::double precision AS pay_amount,
+           events.amount::double precision AS rebate_amount,
+           ''::text AS payment_type,
+           ''::text AS order_status,
+           CASE credits.credit_type
+               WHEN 'affiliate_inviter' THEN 'inviter'
+               ELSE 'invitee'
+           END::text AS reward_role,
+           credits.expires_at,
+           credits.remaining_amount::double precision AS remaining_amount,
+           events.created_at
+    FROM user_reward_credits credits
+    JOIN user_reward_credit_events events
+      ON events.credit_id = credits.id AND events.event_type = 'grant'
+    JOIN users inviter ON inviter.id = split_part(credits.source_key, ':', 2)::bigint
+    JOIN users invitee ON invitee.id = split_part(credits.source_key, ':', 3)::bigint
+    WHERE credits.credit_type IN ('affiliate_inviter', 'affiliate_invitee')
+      AND credits.source_key ~ '^affiliate:[0-9]+:[0-9]+$'
+)
+`
+
+	total, err := queryAffiliateRecordCount(ctx, client, unified+"SELECT COUNT(*) FROM unified_affiliate_rewards "+where, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	orderBy := buildAffiliateRecordOrderBy(filter, map[string]string{
-		"order":         "po.id",
-		"inviter":       "inviter.email",
-		"invitee":       "invitee.email",
-		"order_amount":  "po.amount",
-		"pay_amount":    "po.pay_amount",
-		"rebate_amount": "ual.amount",
-		"payment_type":  "po.payment_type",
-		"order_status":  "po.status",
-		"created_at":    "ual.created_at",
-	}, "ual.created_at")
+		"source":           "record_source",
+		"record_source":    "record_source",
+		"reward_role":      "reward_role",
+		"order":            "order_id",
+		"inviter":          "inviter_email",
+		"invitee":          "invitee_email",
+		"order_amount":     "order_amount",
+		"pay_amount":       "pay_amount",
+		"rebate_amount":    "rebate_amount",
+		"remaining_amount": "remaining_amount",
+		"expires_at":       "expires_at",
+		"payment_type":     "payment_type",
+		"order_status":     "order_status",
+		"created_at":       "created_at",
+	}, "created_at")
+	orderBy += ", record_source ASC, audit_id ASC"
 	args = append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)
 	rows, err := client.QueryContext(ctx, `
-SELECT po.id,
-       po.out_trade_no,
-       ual.user_id,
-       COALESCE(inviter.email, ''),
-       COALESCE(inviter.username, ''),
-       ual.source_user_id,
-       COALESCE(invitee.email, ''),
-       COALESCE(invitee.username, ''),
-       po.amount::double precision,
-       po.pay_amount::double precision,
-       ual.amount::double precision,
-       po.payment_type,
-       po.status,
-       ual.created_at
-`+baseJoin+where+`
+`+unified+`
+SELECT order_id,
+       out_trade_no,
+       inviter_id,
+       inviter_email,
+       inviter_username,
+       invitee_id,
+       invitee_email,
+       invitee_username,
+       order_amount,
+       pay_amount,
+       rebate_amount,
+       payment_type,
+       order_status,
+       record_source,
+       reward_role,
+       expires_at,
+       remaining_amount,
+       created_at
+FROM unified_affiliate_rewards
+`+where+`
 `+orderBy+`
 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
@@ -788,6 +845,9 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	items := make([]service.AffiliateRebateRecord, 0)
 	for rows.Next() {
 		var item service.AffiliateRebateRecord
+		var rewardRole sql.NullString
+		var expiresAt sql.NullTime
+		var remainingAmount sql.NullFloat64
 		if err := rows.Scan(
 			&item.OrderID,
 			&item.OutTradeNo,
@@ -802,9 +862,22 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 			&item.RebateAmount,
 			&item.PaymentType,
 			&item.OrderStatus,
+			&item.RecordSource,
+			&rewardRole,
+			&expiresAt,
+			&remainingAmount,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
+		}
+		if rewardRole.Valid {
+			item.RewardRole = &rewardRole.String
+		}
+		if expiresAt.Valid {
+			item.ExpiresAt = &expiresAt.Time
+		}
+		if remainingAmount.Valid {
+			item.RemainingAmount = &remainingAmount.Float64
 		}
 		items = append(items, item)
 	}

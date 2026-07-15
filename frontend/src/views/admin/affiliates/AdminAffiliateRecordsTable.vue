@@ -58,9 +58,30 @@
           </template>
           <template #cell-order="{ row }">
             <div class="space-y-0.5">
-              <div class="font-mono text-sm text-gray-900 dark:text-white">#{{ row.order_id }}</div>
-              <div class="max-w-56 truncate text-sm text-gray-500 dark:text-dark-400">{{ row.out_trade_no }}</div>
+              <template v-if="row.order_id">
+                <div class="font-mono text-sm text-gray-900 dark:text-white">#{{ row.order_id }}</div>
+                <div class="max-w-56 truncate text-sm text-gray-500 dark:text-dark-400">{{ row.out_trade_no }}</div>
+              </template>
+              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
             </div>
+          </template>
+          <template #cell-record_source="{ row }">
+            <span
+              class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium"
+              :class="row.record_source === 'reward_credit'
+                ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-300'"
+            >
+              {{ t(row.record_source === 'reward_credit'
+                ? 'admin.affiliates.records.sources.rewardCredit'
+                : 'admin.affiliates.records.sources.legacy') }}
+            </span>
+          </template>
+          <template #cell-reward_role="{ row }">
+            <span v-if="row.reward_role" class="text-sm text-gray-700 dark:text-gray-300">
+              {{ t(`admin.affiliates.records.roles.${row.reward_role}`) }}
+            </span>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-payment_type="{ row }">
             {{ t('payment.methods.' + row.payment_type, row.payment_type || '-') }}
@@ -79,6 +100,12 @@
           </template>
           <template #cell-rebate_amount="{ row }">
             <AmountText :value="row.rebate_amount" strong />
+          </template>
+          <template #cell-remaining_amount="{ row }">
+            <NullableAmountText :value="row.remaining_amount" />
+          </template>
+          <template #cell-expires_at="{ row }">
+            <span class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(row.expires_at) }}</span>
           </template>
           <template #cell-amount="{ row }">
             <AmountText :value="row.amount" strong />
@@ -130,7 +157,7 @@
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <OverviewStat :label="t('admin.affiliates.overview.affCode')" :value="selectedOverview.aff_code || '-'" mono />
-          <OverviewStat :label="t('admin.affiliates.overview.rebateRate')" :value="formatPercent(selectedOverview.rebate_rate_percent)" />
+          <OverviewStat :label="t('admin.affiliates.overview.inviterReward')" :value="'$' + formatAmount(selectedOverview.inviter_reward)" />
           <OverviewStat :label="t('admin.affiliates.overview.invitedCount')" :value="String(selectedOverview.invited_count)" />
           <OverviewStat :label="t('admin.affiliates.overview.rebatedInviteeCount')" :value="String(selectedOverview.rebated_invitee_count)" />
           <OverviewStat :label="t('admin.affiliates.overview.availableQuota')" :value="'$' + formatAmount(selectedOverview.available_quota)" />
@@ -188,12 +215,16 @@ const columns = computed<Column[]>(() => {
   }
   if (props.type === 'rebates') {
     return [
+      { key: 'record_source', label: t('admin.affiliates.records.source'), sortable: true },
+      { key: 'reward_role', label: t('admin.affiliates.records.rewardRole'), sortable: true },
       { key: 'order', label: t('admin.affiliates.records.order'), sortable: true },
       { key: 'inviter', label: t('admin.affiliates.records.inviter'), sortable: true },
       { key: 'invitee', label: t('admin.affiliates.records.invitee'), sortable: true },
       { key: 'order_amount', label: t('admin.affiliates.records.orderAmount'), sortable: true },
       { key: 'pay_amount', label: t('admin.affiliates.records.payAmount'), sortable: true },
       { key: 'rebate_amount', label: t('admin.affiliates.records.rebateAmount') },
+      { key: 'remaining_amount', label: t('admin.affiliates.records.remainingAmount'), sortable: true },
+      { key: 'expires_at', label: t('admin.affiliates.records.expiresAt'), sortable: true },
       { key: 'payment_type', label: t('admin.affiliates.records.paymentType'), sortable: true },
       { key: 'order_status', label: t('admin.affiliates.records.orderStatus'), sortable: true },
       { key: 'created_at', label: t('admin.affiliates.records.rebatedAt'), sortable: true },
@@ -305,11 +336,6 @@ function handleSort(key: string, order: 'asc' | 'desc') {
 
 function formatAmount(value: number | null | undefined): string {
   return Number(value || 0).toFixed(2)
-}
-
-function formatPercent(value: number | null | undefined): string {
-  const rounded = Math.round(Number(value || 0) * 100) / 100
-  return `${Number.isInteger(rounded) ? rounded.toString() : rounded.toString()}%`
 }
 
 function formatDateTime(value: string | null | undefined): string {

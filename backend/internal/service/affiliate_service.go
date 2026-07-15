@@ -163,20 +163,24 @@ type AffiliateInviteRecord struct {
 }
 
 type AffiliateRebateRecord struct {
-	OrderID         int64     `json:"order_id"`
-	OutTradeNo      string    `json:"out_trade_no"`
-	InviterID       int64     `json:"inviter_id"`
-	InviterEmail    string    `json:"inviter_email"`
-	InviterUsername string    `json:"inviter_username"`
-	InviteeID       int64     `json:"invitee_id"`
-	InviteeEmail    string    `json:"invitee_email"`
-	InviteeUsername string    `json:"invitee_username"`
-	OrderAmount     float64   `json:"order_amount"`
-	PayAmount       float64   `json:"pay_amount"`
-	RebateAmount    float64   `json:"rebate_amount"`
-	PaymentType     string    `json:"payment_type"`
-	OrderStatus     string    `json:"order_status"`
-	CreatedAt       time.Time `json:"created_at"`
+	OrderID         int64      `json:"order_id"`
+	OutTradeNo      string     `json:"out_trade_no"`
+	InviterID       int64      `json:"inviter_id"`
+	InviterEmail    string     `json:"inviter_email"`
+	InviterUsername string     `json:"inviter_username"`
+	InviteeID       int64      `json:"invitee_id"`
+	InviteeEmail    string     `json:"invitee_email"`
+	InviteeUsername string     `json:"invitee_username"`
+	OrderAmount     float64    `json:"order_amount"`
+	PayAmount       float64    `json:"pay_amount"`
+	RebateAmount    float64    `json:"rebate_amount"`
+	PaymentType     string     `json:"payment_type"`
+	OrderStatus     string     `json:"order_status"`
+	RecordSource    string     `json:"record_source"`
+	RewardRole      *string    `json:"reward_role"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	RemainingAmount *float64   `json:"remaining_amount"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 type AffiliateTransferRecord struct {
