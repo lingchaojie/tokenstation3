@@ -70,3 +70,21 @@ export interface ApiEndpointExamples {
   success: string
   stream?: string
 }
+
+export type ApiDocsBlock =
+  | { kind: 'paragraph'; textKey: string }
+  | { kind: 'callout'; tone: 'info' | 'warning'; textKey: string }
+  | { kind: 'code'; label: string; language: string; code: string }
+  | { kind: 'table'; columns: string[]; rows: string[][] }
+  | { kind: 'links'; links: Array<{ labelKey: string; to: string }> }
+
+export interface ApiDocsGuideSection {
+  id: string
+  titleKey: string
+  blocks: ApiDocsBlock[]
+}
+
+export interface ApiDocsGuideDefinition {
+  pageId: ApiDocsPageId
+  sections: ApiDocsGuideSection[]
+}
