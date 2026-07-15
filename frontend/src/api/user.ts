@@ -17,6 +17,7 @@ import type {
   UserAffiliateDetail,
   AffiliateTransferResponse,
   PlatformQuotasResponse,
+  RewardCreditPage,
 } from '@/types'
 
 /**
@@ -182,6 +183,22 @@ export async function getAffiliateDetail(): Promise<UserAffiliateDetail> {
   return data
 }
 
+export async function getRewardCredits(params: {
+  type?: 'affiliate'
+  status?: 'active' | 'expired' | 'consumed' | 'all'
+  page?: number
+  page_size?: number
+} = {}): Promise<RewardCreditPage> {
+  const { data } = await apiClient.get<Omit<RewardCreditPage, 'pages'> & { pages?: number }>(
+    '/user/reward-credits',
+    { params },
+  )
+  return {
+    ...data,
+    pages: data.pages ?? Math.ceil(data.total / Math.max(1, data.page_size)),
+  }
+}
+
 export async function transferAffiliateQuota(): Promise<AffiliateTransferResponse> {
   const { data } = await apiClient.post<AffiliateTransferResponse>('/user/aff/transfer')
   return data
@@ -209,6 +226,7 @@ export const userAPI = {
   buildOAuthBindingStartURL,
   startOAuthBinding,
   getAffiliateDetail,
+  getRewardCredits,
   transferAffiliateQuota,
   getMyPlatformQuotas,
 }

@@ -63,6 +63,34 @@ export interface UserProfileSourceContext {
   provider_label?: string | null
 }
 
+export interface DailyRewardBalance {
+  amount: number
+  expires_at: string | null
+}
+
+export interface AffiliateRewardBalance {
+  amount: number
+  earliest_expires_at: string | null
+  credit_count: number
+}
+
+export interface RewardBalanceSummary {
+  daily_check_in: DailyRewardBalance
+  affiliate: AffiliateRewardBalance
+}
+
+export interface RewardCreditItem {
+  id: number
+  credit_type: 'affiliate_inviter' | 'affiliate_invitee'
+  role_label: 'inviter' | 'invitee'
+  original_amount: number
+  remaining_amount: number
+  granted_at: string
+  expires_at: string
+}
+
+export type RewardCreditPage = BasePaginationResponse<RewardCreditItem>
+
 export interface User {
   id: number
   username: string
@@ -87,6 +115,7 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
+  reward_balances?: RewardBalanceSummary // Included by the current-user profile endpoint
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
