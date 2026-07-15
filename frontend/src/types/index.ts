@@ -173,18 +173,18 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
-  /** 被邀请人首充达标阈值（余额充值到账额需 ≥ 此值；订阅无条件达标）。 */
+  /** 0 = 注册后立即奖励；大于 0 = 首充达标阈值（订阅无条件达标）。 */
   first_recharge_threshold: number
-  /** 邀请方在被邀请人首充达标后获得的固定奖励额。 */
+  /** 满足当前奖励模式后，邀请方获得的固定奖励额。 */
   inviter_reward: number
-  /** 被邀请方在首充达标后获得的固定奖励额。 */
+  /** 满足当前奖励模式后，被邀请方获得的固定奖励额。 */
   invitee_reward: number
+  reward_mode: 'immediate' | 'first_recharge'
+  reward_validity_days: number
+  inviter_reward_limit: number
+  inviter_reward_count: number
+  inviter_reward_limit_reached: boolean
   invitees: AffiliateInvitee[]
-}
-
-export interface AffiliateTransferResponse {
-  transferred_quota: number
-  balance: number
 }
 
 export interface SendVerifyCodeRequest {

@@ -64,6 +64,7 @@ type AffiliateSummary struct {
 	AffRebateRatePercent *float64  `json:"aff_rebate_rate_percent,omitempty"`
 	InviterID            *int64    `json:"inviter_id,omitempty"`
 	AffCount             int       `json:"aff_count"`
+	InviterRewardCount   int       `json:"inviter_reward_count"`
 	AffQuota             float64   `json:"aff_quota"`
 	AffFrozenQuota       float64   `json:"aff_frozen_quota"`
 	AffHistoryQuota      float64   `json:"aff_history_quota"`
@@ -88,10 +89,15 @@ type AffiliateDetail struct {
 	AffFrozenQuota  float64 `json:"aff_frozen_quota"`
 	AffHistoryQuota float64 `json:"aff_history_quota"`
 	// 首充奖励展示（固定金额模型）
-	FirstRechargeThreshold float64            `json:"first_recharge_threshold"`
-	InviterReward          float64            `json:"inviter_reward"`
-	InviteeReward          float64            `json:"invitee_reward"`
-	Invitees               []AffiliateInvitee `json:"invitees"`
+	FirstRechargeThreshold    float64             `json:"first_recharge_threshold"`
+	InviterReward             float64             `json:"inviter_reward"`
+	InviteeReward             float64             `json:"invitee_reward"`
+	RewardMode                AffiliateRewardMode `json:"reward_mode"`
+	RewardValidityDays        int                 `json:"reward_validity_days"`
+	InviterRewardLimit        int                 `json:"inviter_reward_limit"`
+	InviterRewardCount        int                 `json:"inviter_reward_count"`
+	InviterRewardLimitReached bool                `json:"inviter_reward_limit_reached"`
+	Invitees                  []AffiliateInvitee  `json:"invitees"`
 }
 
 type AffiliateRepository interface {
@@ -299,18 +305,27 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		return nil, err
 	}
 	cfg := s.affiliateRewardConfig(ctx)
+	rewardMode := AffiliateRewardModeFirstRecharge
+	if cfg.FirstRechargeThreshold == 0 {
+		rewardMode = AffiliateRewardModeImmediate
+	}
 	return &AffiliateDetail{
-		UserID:                 summary.UserID,
-		AffCode:                summary.AffCode,
-		InviterID:              summary.InviterID,
-		AffCount:               summary.AffCount,
-		AffQuota:               summary.AffQuota,
-		AffFrozenQuota:         summary.AffFrozenQuota,
-		AffHistoryQuota:        summary.AffHistoryQuota,
-		FirstRechargeThreshold: cfg.FirstRechargeThreshold,
-		InviterReward:          cfg.InviterReward,
-		InviteeReward:          cfg.InviteeReward,
-		Invitees:               invitees,
+		UserID:                    summary.UserID,
+		AffCode:                   summary.AffCode,
+		InviterID:                 summary.InviterID,
+		AffCount:                  summary.AffCount,
+		AffQuota:                  summary.AffQuota,
+		AffFrozenQuota:            summary.AffFrozenQuota,
+		AffHistoryQuota:           summary.AffHistoryQuota,
+		FirstRechargeThreshold:    cfg.FirstRechargeThreshold,
+		InviterReward:             cfg.InviterReward,
+		InviteeReward:             cfg.InviteeReward,
+		RewardMode:                rewardMode,
+		RewardValidityDays:        cfg.ValidityDays,
+		InviterRewardLimit:        cfg.InviterRewardLimit,
+		InviterRewardCount:        summary.InviterRewardCount,
+		InviterRewardLimitReached: cfg.InviterRewardLimit > 0 && summary.InviterRewardCount >= cfg.InviterRewardLimit,
+		Invitees:                  invitees,
 	}, nil
 }
 

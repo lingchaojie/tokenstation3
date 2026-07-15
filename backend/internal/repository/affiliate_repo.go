@@ -606,15 +606,28 @@ SELECT ua.user_id,
        COALESCE(u.email, ''),
        COALESCE(u.username, ''),
        ua.created_at,
-       COALESCE(SUM(ual.amount), 0)::double precision AS total_rebate
+       (COALESCE(legacy.total_rebate, 0) + COALESCE(rewards.total_reward, 0))::double precision AS total_rebate
 FROM user_affiliates ua
 LEFT JOIN users u ON u.id = ua.user_id
-LEFT JOIN user_affiliate_ledger ual
-       ON ual.user_id = $1
-      AND ual.source_user_id = ua.user_id
-      AND ual.action = 'accrue'
+LEFT JOIN (
+    SELECT source_user_id, COALESCE(SUM(amount), 0) AS total_rebate
+    FROM user_affiliate_ledger
+    WHERE user_id = $1 AND action = 'accrue' AND source_user_id IS NOT NULL
+    GROUP BY source_user_id
+) legacy ON legacy.source_user_id = ua.user_id
+LEFT JOIN (
+    SELECT split_part(rc.source_key, ':', 3)::bigint AS invitee_user_id,
+           COALESCE(SUM(events.amount), 0) AS total_reward
+    FROM user_reward_credits rc
+    JOIN user_reward_credit_events events
+      ON events.credit_id = rc.id AND events.event_type = 'grant'
+    WHERE rc.user_id = $1
+      AND rc.credit_type = 'affiliate_inviter'
+      AND rc.source_key LIKE ('affiliate:' || $1::text || ':%')
+      AND rc.source_key ~ '^affiliate:[0-9]+:[0-9]+$'
+    GROUP BY split_part(rc.source_key, ':', 3)::bigint
+) rewards ON rewards.invitee_user_id = ua.user_id
 WHERE ua.inviter_id = $1
-GROUP BY ua.user_id, u.email, u.username, ua.created_at
 ORDER BY ua.created_at DESC
 LIMIT $2`, inviterID, limit)
 	if err != nil {
@@ -1041,6 +1054,7 @@ SELECT user_id,
        aff_rebate_rate_percent,
        inviter_id,
        aff_count,
+       inviter_reward_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
@@ -1069,6 +1083,7 @@ WHERE user_id = $1`, userID)
 		&rebateRate,
 		&inviterID,
 		&out.AffCount,
+		&out.InviterRewardCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,
@@ -1095,6 +1110,7 @@ SELECT user_id,
        aff_rebate_rate_percent,
        inviter_id,
        aff_count,
+       inviter_reward_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
@@ -1125,6 +1141,7 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		&rebateRate,
 		&inviterID,
 		&out.AffCount,
+		&out.InviterRewardCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,

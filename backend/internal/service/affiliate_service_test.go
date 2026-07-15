@@ -47,6 +47,14 @@ func (r *affiliatePolicyRepoFake) ResolveFirstRecharge(_ context.Context, input 
 	return r.settleResult, nil
 }
 
+func (r *affiliatePolicyRepoFake) ThawFrozenQuota(context.Context, int64) (float64, error) {
+	return 0, nil
+}
+
+func (r *affiliatePolicyRepoFake) ListInvitees(context.Context, int64, int) ([]AffiliateInvitee, error) {
+	return []AffiliateInvitee{}, nil
+}
+
 func newAffiliatePolicyService(repo AffiliateRepository, values map[string]string) *AffiliateService {
 	base := map[string]string{
 		SettingKeyAffiliateEnabled:                "true",
@@ -118,6 +126,53 @@ func TestBindInviterByCode_UsesConfiguredRewardMode(t *testing.T) {
 		require.NoError(t, svc.BindInviterByCode(context.Background(), inviteeID, "ABCD"))
 		require.Len(t, repo.bindInputs, 1)
 		require.Equal(t, AffiliateRewardModeFirstRecharge, repo.bindInputs[0].RewardMode)
+	})
+}
+
+func TestGetAffiliateDetail_ExposesRewardModeValidityAndInviterLimit(t *testing.T) {
+	t.Run("immediate mode at reached limit", func(t *testing.T) {
+		repo := &affiliatePolicyRepoFake{
+			summaries: map[int64]*AffiliateSummary{
+				42: {
+					UserID:             42,
+					AffCode:            "INVITE42",
+					InviterRewardCount: 3,
+				},
+			},
+		}
+		svc := newAffiliatePolicyService(repo, map[string]string{
+			SettingKeyAffiliateFirstRechargeThreshold: "0",
+			SettingKeyAffiliateRewardValidityDays:     "7",
+			SettingKeyAffiliateInviterRewardLimit:     "3",
+		})
+
+		detail, err := svc.GetAffiliateDetail(context.Background(), 42)
+
+		require.NoError(t, err)
+		require.Equal(t, AffiliateRewardModeImmediate, detail.RewardMode)
+		require.Equal(t, 7, detail.RewardValidityDays)
+		require.Equal(t, 3, detail.InviterRewardLimit)
+		require.Equal(t, 3, detail.InviterRewardCount)
+		require.True(t, detail.InviterRewardLimitReached)
+	})
+
+	t.Run("first recharge mode below limit", func(t *testing.T) {
+		repo := &affiliatePolicyRepoFake{
+			summaries: map[int64]*AffiliateSummary{
+				42: {UserID: 42, InviterRewardCount: 2},
+			},
+		}
+		svc := newAffiliatePolicyService(repo, map[string]string{
+			SettingKeyAffiliateFirstRechargeThreshold: "20",
+			SettingKeyAffiliateInviterRewardLimit:     "3",
+		})
+
+		detail, err := svc.GetAffiliateDetail(context.Background(), 42)
+
+		require.NoError(t, err)
+		require.Equal(t, AffiliateRewardModeFirstRecharge, detail.RewardMode)
+		require.Equal(t, 2, detail.InviterRewardCount)
+		require.False(t, detail.InviterRewardLimitReached)
 	})
 }
 

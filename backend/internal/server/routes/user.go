@@ -28,8 +28,7 @@ func RegisterUserRoutes(
 			registerRewardCreditRoutes(user, h)
 			user.PUT("/password", h.User.ChangePassword)
 			user.PUT("", h.User.UpdateProfile)
-			user.GET("/aff", h.User.GetAffiliate)
-			user.POST("/aff/transfer", h.User.TransferAffiliateQuota)
+			registerUserAffiliateRoutes(user, h)
 			user.POST("/account-bindings/email/send-code", h.User.SendEmailBindingCode)
 			user.POST("/account-bindings/email", h.User.BindEmailIdentity)
 			user.DELETE("/account-bindings/:provider", h.User.UnbindIdentity)
@@ -154,6 +153,10 @@ func RegisterUserRoutes(
 
 func registerRewardCreditRoutes(user *gin.RouterGroup, h *handler.Handlers) {
 	user.GET("/reward-credits", h.User.ListRewardCredits)
+}
+
+func registerUserAffiliateRoutes(user *gin.RouterGroup, h *handler.Handlers) {
+	user.GET("/aff", h.User.GetAffiliate)
 }
 
 func registerCheckInRoutes(user *gin.RouterGroup, h *handler.Handlers) {

@@ -15,7 +15,6 @@ import type {
   NotifyEmailEntry,
   UserAuthProvider,
   UserAffiliateDetail,
-  AffiliateTransferResponse,
   PlatformQuotasResponse,
   RewardCreditPage,
 } from '@/types'
@@ -199,11 +198,6 @@ export async function getRewardCredits(params: {
   }
 }
 
-export async function transferAffiliateQuota(): Promise<AffiliateTransferResponse> {
-  const { data } = await apiClient.post<AffiliateTransferResponse>('/user/aff/transfer')
-  return data
-}
-
 /**
  * 获取当前用户的平台限额 + 用量。
  */
@@ -227,7 +221,6 @@ export const userAPI = {
   startOAuthBinding,
   getAffiliateDetail,
   getRewardCredits,
-  transferAffiliateQuota,
   getMyPlatformQuotas,
 }
 
