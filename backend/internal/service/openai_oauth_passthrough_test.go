@@ -92,6 +92,69 @@ func (u *httpUpstreamRecorder) DoWithTLS(req *http.Request, proxyURL string, acc
 	return u.record(req, proxyURL)
 }
 
+func TestOpenAIGatewayService_ResponsesPreservesNativeFileForAPIKeyAndOAuth(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"store":false,"input":[{"role":"user","content":[{"type":"input_file","filename":"paper.pdf","file_data":"data:application/pdf;base64,JVBERi0xLjcKJSVFT0Y=","detail":"auto"}]}],"tools":[{"type":"web_search"}],"tool_choice":"auto"}`)
+	cases := []struct {
+		name, wantURL string
+		account       *Account
+	}{
+		{
+			name: "api key", wantURL: "http://upstream.example/v1/responses",
+			account: &Account{
+				ID: 701, Name: "openai-apikey", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+				Extra: map[string]any{
+					openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+					openai_compat.ExtraKeyResponsesSupported: true,
+				},
+				Status: StatusActive, Schedulable: true,
+			},
+		},
+		{
+			name: "oauth", wantURL: chatgptCodexURL,
+			account: &Account{
+				ID: 702, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+				Status:      StatusActive, Schedulable: true,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop after capture"}}`)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+					Enabled: false, AllowInsecureHTTP: true,
+				}}},
+				httpUpstream: upstream,
+			}
+
+			result, err := svc.Forward(context.Background(), c, tc.account, body)
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, tc.wantURL, upstream.lastReq.URL.String())
+			require.Equal(t, "input_file", gjson.GetBytes(upstream.lastBody, "input.0.content.0.type").String())
+			require.Equal(t, "paper.pdf", gjson.GetBytes(upstream.lastBody, "input.0.content.0.filename").String())
+			require.Equal(t, "data:application/pdf;base64,JVBERi0xLjcKJSVFT0Y=", gjson.GetBytes(upstream.lastBody, "input.0.content.0.file_data").String())
+			require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "input.0.content.0.detail").String())
+			require.Equal(t, "web_search", gjson.GetBytes(upstream.lastBody, "tools.0.type").String())
+			require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+			require.True(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
+		})
+	}
+}
+
 func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

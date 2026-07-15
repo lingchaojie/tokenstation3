@@ -173,10 +173,14 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 	require.Equal(t, "generated-image-1.webp", svc.createdArtifacts[0].Filename)
 	require.Equal(t, "image/webp", svc.createdArtifacts[0].ContentType)
 	require.Equal(t, WebChatArtifactSourceImageOutput, svc.createdArtifacts[0].Source)
-	requireOrderedEvents(t, svc.events, "forward_openai", "record_openai_usage", "usage_lookup")
+	requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
+	require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
+	require.Equal(t, "image_generation", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "image_generation", gjson.GetBytes(svc.forwardedBody, "tool_choice.type").String())
+	require.False(t, gjson.GetBytes(svc.forwardedBody, "tools.#(type==\"web_search\")").Exists())
 }
 
-func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
+func TestWebChatSend_OpenAIAlwaysUsesResponsesWithAutomaticSearch(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
 	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
@@ -196,7 +200,6 @@ func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
 		Provider:       "openai",
 		Text:           "search today's AI news",
 		Stream:         true,
-		WebSearch:      WebChatWebSearchConfig{Enabled: true},
 		GinContext:     newTestGinContext(context.Background()),
 	})
 
@@ -205,9 +208,29 @@ func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
 	requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
 	require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
 	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
-	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tool_choice.type").String())
-	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content.0.text").String())
 	require.Equal(t, "Done.", *svc.finalUpdate.ContentText)
+}
+
+func TestWebChatSend_OpenAIIgnoresLegacyDisabledSearchConfig(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID: "openai_req", Model: "gpt-5.5", UpstreamModel: "gpt-5.5", Stream: true,
+	}
+
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID: 42, User: user, ConversationID: 7,
+		Model: "gpt-5.5", Provider: "openai", Text: "answer", Stream: true,
+		WebSearch:  WebChatWebSearchConfig{Configured: true, Enabled: false},
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
 }
 
 func TestWebChatSend_AnthropicWebSearchAutoUsesResponsesAPI(t *testing.T) {
