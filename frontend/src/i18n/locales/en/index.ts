@@ -2,6 +2,7 @@ import landing from './landing'
 import common from './common'
 import dashboard from './dashboard'
 import gettingStarted from './gettingStarted'
+import apiDocs from './apiDocs'
 import admin from './admin'
 import misc from './misc'
 import webchat from './webchat'
@@ -11,6 +12,7 @@ export default {
   ...common,
   ...dashboard,
   ...gettingStarted,
+  ...apiDocs,
   admin,
   ...misc,
   ...webchat,
