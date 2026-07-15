@@ -32,10 +32,14 @@
 
       <div class="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
         <button
+          ref="searchTrigger"
           type="button"
           data-testid="api-docs-search-open"
           class="inline-flex h-10 items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-gray-600 outline-none transition-colors hover:bg-gray-100 hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 motion-reduce:transition-none dark:text-linear-ink-muted dark:hover:bg-linear-elevated dark:hover:text-linear-ink dark:focus-visible:ring-offset-linear-canvas"
           :aria-label="t('apiDocs.search')"
+          aria-haspopup="dialog"
+          aria-controls="api-docs-search-dialog"
+          :aria-expanded="searchOpen"
           @click="emit('openSearch')"
         >
           <Icon name="search" size="sm" aria-hidden="true" />
@@ -102,6 +106,15 @@ import { useAppStore, useAuthStore } from '@/stores'
 import { sanitizeUrl } from '@/utils/url'
 import { API_DOCS_CAPABILITY_TAGS } from './catalog'
 
+withDefaults(
+  defineProps<{
+    searchOpen?: boolean
+  }>(),
+  {
+    searchOpen: false
+  }
+)
+
 const emit = defineEmits<{
   openSearch: []
 }>()
@@ -111,6 +124,7 @@ const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const isDark = ref(document.documentElement.classList.contains('dark'))
+const searchTrigger = ref<HTMLButtonElement | null>(null)
 const defaultSiteName = 'LINX2.AI'
 
 const siteName = computed(
@@ -139,4 +153,10 @@ function toggleTheme(): void {
   isDark.value = document.documentElement.classList.contains('dark')
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
 }
+
+function focusSearchTrigger(): void {
+  searchTrigger.value?.focus()
+}
+
+defineExpose({ focusSearchTrigger })
 </script>
