@@ -343,6 +343,21 @@ const BeginnerGuideIcon = {
     )
 }
 
+const ApiDocsIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m.75 10.5h6m-6 3h6m-6 3h3.75M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z',
+        }),
+      ],
+    ),
+}
+
 const BatchImageIcon = {
   render: () =>
     h(
@@ -743,7 +758,7 @@ const flagBatchImageAccess = () => canUseBatchImage.value
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘；普通用户可传入“概览”文案，并在活动期插入签到入口。
 //
-// 条目顺序：仪表盘（可选）→ 签到（活动期可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
+// 条目顺序：仪表盘（可选）→ 签到（活动期可选）→ 模型广场 → 对话 → 新手教程 → API 文档 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
 // 可用渠道紧挨渠道状态之上，让用户"先看自己能用什么、再看对应状态"。
 function buildSelfNavItems(
   withDashboard: boolean,
@@ -761,6 +776,7 @@ function buildSelfNavItems(
     { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
     { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
     { path: '/getting-started', label: t('gettingStarted.dashboard.sidebarLabel'), icon: BeginnerGuideIcon },
+    { path: '/docs', label: t('apiDocs.navLabel'), icon: ApiDocsIcon },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
@@ -813,7 +829,9 @@ const personalNavItems = computed((): NavItem[] => finalizeNav(buildAdminPersona
 
 const visiblePersonalNavItems = computed((): NavItem[] =>
   authStore.isSimpleMode
-    ? personalNavItems.value.filter((item) => item.path === '/getting-started')
+    ? personalNavItems.value.filter((item) =>
+      item.path === '/getting-started' || item.path === '/docs'
+    )
     : personalNavItems.value,
 )
 

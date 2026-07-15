@@ -321,6 +321,66 @@ describe('AppSidebar beginner guide navigation', () => {
   )
 })
 
+describe('AppSidebar API docs navigation', () => {
+  const selfNavBuilder = componentSource.match(
+    /function buildSelfNavItems\([\s\S]*?\): NavItem\[] \{[\s\S]*?\n\}/,
+  )?.[0]
+  const adminPersonalBuilder = componentSource.match(
+    /function buildAdminPersonalNavItems\(\): NavItem\[] \{[\s\S]*?\n\}/,
+  )?.[0]
+  const adminOperationsBuilder = componentSource.match(
+    /const adminNavItems = computed\(\(\): NavItem\[] => \{[\s\S]*?const visible/,
+  )?.[0]
+
+  it('declares the canonical route exactly once between the beginner guide and API keys', () => {
+    expect(selfNavBuilder?.match(/path: '\/docs'/g)).toHaveLength(1)
+    expect(selfNavBuilder).toContain("label: t('apiDocs.navLabel')")
+    expect(selfNavBuilder!.indexOf("path: '/getting-started'")).toBeLessThan(
+      selfNavBuilder!.indexOf("path: '/docs'"),
+    )
+    expect(selfNavBuilder!.indexOf("path: '/docs'")).toBeLessThan(
+      selfNavBuilder!.indexOf("path: '/keys'"),
+    )
+  })
+
+  it('inherits the public route in admin My Account without remapping it', () => {
+    expect(adminPersonalBuilder).toContain("buildSelfNavItems(true, t('nav.dashboard'))")
+    expect(adminPersonalBuilder).not.toContain("'/docs':")
+    expect(adminOperationsBuilder).not.toContain("path: '/docs'")
+  })
+
+  it('keeps both permanent discovery entries in simple-mode personal navigation', () => {
+    const docsItem = selfNavBuilder?.match(/\{ path: '\/docs'[^\n]+\}/)?.[0]
+
+    expect(docsItem).toBeDefined()
+    expect(docsItem).not.toContain('hideInSimpleMode')
+    expect(componentSource).toContain(
+      "item.path === '/getting-started' || item.path === '/docs'",
+    )
+  })
+
+  it.each([
+    ['regular simple user', { admin: false, simple: true }, false],
+    ['standard admin', { admin: true, simple: false }, true],
+    ['simple-mode admin', { admin: true, simple: true }, true],
+  ] as const)(
+    'mounts exactly one canonical API docs link for %s in the expected self scope',
+    (_label, options, expectsPersonalScope) => {
+      const wrapper = mountSidebar(options)
+      const docsLinks = wrapper.findAll('[data-route="/docs"]')
+
+      expect(docsLinks).toHaveLength(1)
+      const section = docsLinks[0].element.closest('.sidebar-section')
+      expect(section).not.toBeNull()
+      if (expectsPersonalScope) {
+        expect(section?.textContent).toContain('nav.myAccount')
+      } else {
+        expect(section?.textContent).not.toContain('nav.myAccount')
+      }
+    },
+  )
+})
+
 describe('AppSidebar model marketplace navigation', () => {
   it('keeps the model marketplace route in self navigation for authenticated users', () => {
     expect(componentSource).not.toContain('管理员灰度入口')

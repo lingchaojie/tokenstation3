@@ -60,6 +60,13 @@
             >
               {{ t('gettingStarted.discovery.navLabel') }}
             </router-link>
+            <router-link
+              to="/docs"
+              data-testid="api-docs-nav-link"
+              class="transition-colors hover:text-linear-ink"
+            >
+              {{ t('apiDocs.navLabel') }}
+            </router-link>
             <router-link v-if="isAuthenticated" :to="chatPath" class="transition-colors hover:text-linear-ink">{{ t('chat.openWebChatShort') }}</router-link>
             <router-link v-if="isAuthenticated" to="/models" class="transition-colors hover:text-linear-ink">{{ t('nav.modelMarketplace') }}</router-link>
             <a href="#pricing" class="transition-colors hover:text-linear-ink">{{ copy.nav.pricing }}</a>

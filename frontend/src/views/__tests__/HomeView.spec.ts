@@ -87,6 +87,7 @@ vi.mock('@/api/chat', () => ({
 }))
 
 const messages: Record<string, string> = {
+  'apiDocs.navLabel': 'API 文档',
   'gettingStarted.discovery.navLabel': '新手教程',
   'gettingStarted.discovery.eyebrow': '第一次使用 AI 工具？',
   'gettingStarted.discovery.title': '完全不懂也没关系，我们一步一步带你完成',
@@ -622,6 +623,18 @@ describe('HomeView landing page', () => {
     expect(guideCard.element.compareDocumentPosition(productConsole.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('keeps the built-in API docs entry separate from configured external docs', async () => {
+    appState.docUrl = 'https://docs.example.test/'
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const apiDocsLink = wrapper.get('[data-testid="api-docs-nav-link"]')
+    expect(apiDocsLink.attributes('href')).toBe('/docs')
+    expect(apiDocsLink.text()).toBe('API 文档')
+    expect(wrapper.findAll('a[href="https://docs.example.test/"]').length).toBeGreaterThan(0)
+  })
+
   it('keeps the beginner guide CTA before authenticated chat content', async () => {
     authState.isAuthenticated = true
     authState.user = { email: 'user@example.com' }
@@ -840,6 +853,7 @@ describe('HomeView landing page', () => {
     expect(iframe.attributes('src')).toBe('https://landing.example.test')
     expect(iframe.attributes('title')).toBe('Fuse API custom home content')
     expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-docs-nav-link"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
@@ -855,6 +869,7 @@ describe('HomeView landing page', () => {
     expect(wrapper.get('h1').text()).toBe('Custom Home')
     expect(wrapper.html()).toContain('<strong>custom</strong>')
     expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-docs-nav-link"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
@@ -870,6 +885,7 @@ describe('HomeView landing page', () => {
     expect(wrapper.html()).toContain('data-testid="custom-home"')
     expect(wrapper.text()).toContain('Custom Home')
     expect(wrapper.find('[data-testid="beginner-guide-nav-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-docs-nav-link"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="beginner-guide-card"]').exists()).toBe(false)
     expect(wrapper.find('.linear-landing').exists()).toBe(false)
   })
