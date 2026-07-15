@@ -703,6 +703,8 @@ var ProviderSet = wire.NewSet(
 	NewContentModerationService,
 	NewAffiliateService,
 	NewCheckInService,
+	NewRewardCreditService,
+	ProvideRewardCreditExpiryService,
 	NewLocalWebChatStorageFromConfig,
 	wire.Bind(new(WebChatStorage), new(*LocalWebChatStorage)),
 	NewWebChatService,
