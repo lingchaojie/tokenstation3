@@ -178,6 +178,54 @@ func TestBuildOpenAIWebChatResponsesPayload_RejectsMoreThanFiftyMiBOfActualFiles
 	storage.requireOpened("first.pdf", "second.pdf", "third.pdf")
 }
 
+func TestReadWebChatStoredAttachmentAcceptsExactlyTwentyMiB(t *testing.T) {
+	content := bytes.Repeat([]byte{'x'}, webChatMaxUploadBytes)
+	storage := fakeWebChatStorageWithFile(t, "exact.txt", content)
+
+	data, contentType, err := readWebChatStoredAttachment(context.Background(), storage, WebChatAttachment{
+		Kind: WebChatAttachmentKindFile, Filename: "exact.txt", ContentType: "text/plain",
+		SizeBytes: int64(len(content)), StorageKey: "exact.txt",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "text/plain", contentType)
+	require.Len(t, data, webChatMaxUploadBytes)
+	storage.requireOpened("exact.txt")
+}
+
+func TestBuildOpenAIWebChatResponsesInputAcceptsExactlyFiftyMiBOfFiles(t *testing.T) {
+	twentyMiB := bytes.Repeat([]byte{'x'}, webChatMaxUploadBytes)
+	tenMiB := twentyMiB[:10<<20]
+	storage := &fakeWebChatStorage{
+		t: t,
+		files: map[string][]byte{
+			"first.txt":  twentyMiB,
+			"second.txt": twentyMiB,
+			"third.txt":  tenMiB,
+		},
+		metaSizes: map[string]int64{
+			"first.txt":  int64(len(twentyMiB)),
+			"second.txt": int64(len(twentyMiB)),
+			"third.txt":  int64(len(tenMiB)),
+		},
+		expectedKeys: []string{"first.txt", "second.txt", "third.txt"},
+	}
+	attachments := []WebChatAttachment{
+		{Kind: WebChatAttachmentKindFile, Filename: "first.txt", ContentType: "text/plain", SizeBytes: int64(len(twentyMiB)), StorageKey: "first.txt"},
+		{Kind: WebChatAttachmentKindFile, Filename: "second.txt", ContentType: "text/plain", SizeBytes: int64(len(twentyMiB)), StorageKey: "second.txt"},
+		{Kind: WebChatAttachmentKindFile, Filename: "third.txt", ContentType: "text/plain", SizeBytes: int64(len(tenMiB)), StorageKey: "third.txt"},
+	}
+
+	items, err := buildOpenAIWebChatResponsesInput(context.Background(), storage, []WebChatMessage{{
+		Role: WebChatRoleUser, Attachments: attachments,
+	}})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Len(t, gjson.ParseBytes(items[0].Content).Array(), 3)
+	storage.requireOpened("first.txt", "second.txt", "third.txt")
+}
+
 func TestBuildOpenAIWebChatResponsesPayload_PreservesRoles(t *testing.T) {
 	payload, err := BuildOpenAIWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), WebChatModelCapability{
 		Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true,

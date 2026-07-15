@@ -246,12 +246,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageOutputSizes = result.imageOutputSizes
 		imageResults = result.imageResults
 	}
-	if len(imageResults) > 0 {
-		imageCount = len(imageResults)
-		if resultSizes := openAIResponsesImageResultSizes(imageResults); len(resultSizes) > 0 {
-			imageOutputSizes = resultSizes
-		}
-	}
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。

@@ -264,6 +264,48 @@ describe('Composer', () => {
     expect(uploadSpy).toHaveBeenCalledWith(file)
   })
 
+  it('accumulates attachments across consecutive selections on the same input', async () => {
+    const store = useChatStore()
+    store.selectedModel = chatModel
+    const firstAttachment: WebChatAttachment = {
+      id: 1,
+      user_id: 42,
+      kind: 'file',
+      filename: 'first.pdf',
+      content_type: 'application/pdf',
+      size_bytes: 5,
+      storage_key: 'first.pdf',
+      sha256: 'first',
+      status: 'uploaded',
+      created_at: '2026-07-16T00:00:00Z',
+    }
+    const secondAttachment: WebChatAttachment = {
+      ...firstAttachment,
+      id: 2,
+      filename: 'second.pdf',
+      storage_key: 'second.pdf',
+      sha256: 'second',
+    }
+    const uploadSpy = vi.spyOn(chatAPI, 'uploadAttachment')
+      .mockResolvedValueOnce(firstAttachment)
+      .mockResolvedValueOnce(secondAttachment)
+    const wrapper = mount(Composer)
+    const input = wrapper.get('[data-testid="chat-attachment-input"]')
+    const firstFile = new File(['first'], 'first.pdf', { type: 'application/pdf' })
+    const secondFile = new File(['second'], 'second.pdf', { type: 'application/pdf' })
+
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [firstFile] })
+    await input.trigger('change')
+    expect((input.element as HTMLInputElement).value).toBe('')
+
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [secondFile] })
+    await input.trigger('change')
+
+    expect(uploadSpy).toHaveBeenNthCalledWith(1, firstFile)
+    expect(uploadSpy).toHaveBeenNthCalledWith(2, secondFile)
+    expect(store.pendingAttachments.map((attachment) => attachment.filename)).toEqual(['first.pdf', 'second.pdf'])
+  })
+
   it('does not render a web search control or explanation for GPT', async () => {
     const store = useChatStore()
     store.selectedModel = chatModel

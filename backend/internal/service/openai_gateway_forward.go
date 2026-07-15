@@ -820,12 +820,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			imageResults = nonStreamResult.imageResults
 		}
-		if len(imageResults) > 0 {
-			imageCount = len(imageResults)
-			if resultSizes := openAIResponsesImageResultSizes(imageResults); len(resultSizes) > 0 {
-				imageOutputSizes = resultSizes
-			}
-		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).

@@ -358,6 +358,81 @@ func TestOpenAIGatewayService_WebChatDropsOversizedResponsesImageResultsWithoutC
 	}
 }
 
+func TestOpenAIGatewayService_WebChatArtifactFilteringDoesNotChangeImageBillingCounters(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"store":false,"input":"draw","tools":[{"type":"image_generation"}]}`)
+	paths := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{
+			name: "native",
+			extra: map[string]any{
+				openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+				openai_compat.ExtraKeyResponsesSupported: true,
+			},
+		},
+		{name: "passthrough", extra: map[string]any{"openai_passthrough": true}},
+	}
+	scenarios := []struct {
+		name          string
+		secondResult  func() string
+		wantArtifacts int
+	}{
+		{
+			name: "oversized second artifact",
+			secondResult: func() string {
+				return strings.Repeat("A", 4*((webChatMaxUploadBytes+1+2)/3))
+			},
+			wantArtifacts: 1,
+		},
+		{
+			name:          "distinct IDs with identical bytes",
+			secondResult:  func() string { return "c2FtZS1pbWFnZQ==" },
+			wantArtifacts: 1,
+		},
+	}
+
+	for _, path := range paths {
+		for _, scenario := range scenarios {
+			t.Run(path.name+"/"+scenario.name, func(t *testing.T) {
+				upstreamBody := fmt.Sprintf(
+					`{"id":"resp_two_images","output":[{"id":"ig_1","type":"image_generation_call","result":"c2FtZS1pbWFnZQ==","output_format":"png","size":"1024x1024"},{"id":"ig_2","type":"image_generation_call","result":"%s","output_format":"webp","size":"2048x1152"}],"usage":{"input_tokens":2,"output_tokens":7,"output_tokens_details":{"image_tokens":6}}}`,
+					scenario.secondResult(),
+				)
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+				}}
+				svc := &OpenAIGatewayService{
+					cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+						Enabled: false, AllowInsecureHTTP: true,
+					}}},
+					httpUpstream: upstream,
+				}
+				account := &Account{
+					ID: 716, Name: "openai", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+					Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+					Extra:       path.extra,
+					Status:      StatusActive, Schedulable: true,
+				}
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+				c.Request.Header.Set("Content-Type", "application/json")
+
+				result, err := svc.Forward(withWebChatStreamCapture(context.Background(), newWebChatStreamCapture(4<<20)), c, account, body)
+
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, 2, result.ImageCount)
+				require.Equal(t, []string{"1024x1024", "2048x1152"}, result.ImageOutputSizes)
+				require.Len(t, result.imageResults, scenario.wantArtifacts)
+			})
+		}
+	}
+}
+
 func TestOpenAIResponsesImageResultDedupKeyIsFixedSize(t *testing.T) {
 	imageBase64 := strings.Repeat("A", 1<<20)
 	key := openAIResponsesImageResultKey("", openAIResponsesImageResult{Result: imageBase64, OutputFormat: "png"})
