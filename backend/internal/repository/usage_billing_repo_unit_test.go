@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	conditionalBalanceDeductSQL = `(?s)UPDATE users\s+SET balance = balance - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL AND balance >= \$1\s+RETURNING balance`
+	conditionalBalanceDeductSQL = `(?s)UPDATE users\s+SET balance = balance - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2\s+AND deleted_at IS NULL\s+AND balance - COALESCE\(\(\s+SELECT SUM\(rc.remaining_amount \+ rc.reserved_amount\).*\), 0\) >= \$1\s+RETURNING balance`
 	overdraftBalanceDeductSQL   = `(?s)UPDATE users\s+SET balance = balance - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL\s+RETURNING balance`
+	expiredRewardCreditsSQL     = `(?s)SELECT id, user_id, remaining_amount::double precision\s+FROM user_reward_credits\s+WHERE expires_at <= \$1.*AND user_id = \$2.*FOR UPDATE SKIP LOCKED`
+	activeRewardCreditsSQL      = `(?s)SELECT id, remaining_amount::double precision\s+FROM user_reward_credits\s+WHERE user_id = \$1.*AND credit_type IN \(.*\).*FOR UPDATE`
 	reserveBatchImageHoldSQL    = `(?s)UPDATE users\s+SET balance = balance - \$1,\s+frozen_balance = COALESCE\(frozen_balance, 0\) \+ \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL AND balance >= \$1\s+RETURNING balance, frozen_balance`
 	captureBatchImageHoldSQL    = `(?s)UPDATE users\s+SET balance = balance\s+\+ CASE WHEN \$1 > \$2 THEN \$1 - \$2 ELSE 0 END\s+- CASE WHEN \$2 > \$1 THEN \$2 - \$1 ELSE 0 END,\s+frozen_balance = COALESCE\(frozen_balance, 0\) - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$3 AND deleted_at IS NULL AND COALESCE\(frozen_balance, 0\) >= \$1\s+RETURNING balance, frozen_balance`
 	releaseBatchImageHoldSQL    = `(?s)UPDATE users\s+SET balance = balance \+ \$1,\s+frozen_balance = COALESCE\(frozen_balance, 0\) - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL AND COALESCE\(frozen_balance, 0\) >= \$1\s+RETURNING balance, frozen_balance`
@@ -78,6 +80,15 @@ func TestApplyUsageBillingEffects_FlagsBalanceOverdraft(t *testing.T) {
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
+	mock.ExpectQuery(expiredRewardCreditsSQL).
+		WithArgs(sqlmock.AnyArg(), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "remaining_amount"}))
+	mock.ExpectQuery(activeRewardCreditsSQL).
+		WithArgs(int64(42), sqlmock.AnyArg(), service.RewardCreditDailyCheckIn).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "remaining_amount"}))
+	mock.ExpectQuery(activeRewardCreditsSQL).
+		WithArgs(int64(42), sqlmock.AnyArg(), service.RewardCreditAffiliateInviter, service.RewardCreditAffiliateInvitee).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "remaining_amount"}))
 	mock.ExpectQuery(conditionalBalanceDeductSQL).
 		WithArgs(10.0, int64(42)).
 		WillReturnError(sql.ErrNoRows)
