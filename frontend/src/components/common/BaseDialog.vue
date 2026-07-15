@@ -64,7 +64,8 @@ const TABBABLE_SELECTOR = [
   'iframe',
   'object',
   'embed',
-  '[contenteditable="true"]',
+  'summary',
+  '[contenteditable]',
   '[tabindex]'
 ].join(', ')
 
@@ -121,6 +122,46 @@ const handleClose = () => {
   }
 }
 
+function firstSummary(details: HTMLElement): HTMLElement | null {
+  return (
+    Array.from(details.children).find((child) => child.tagName === 'SUMMARY') as
+      | HTMLElement
+      | undefined
+  ) ?? null
+}
+
+function isNativeSummary(element: HTMLElement): boolean {
+  const details = element.parentElement
+  return (
+    element.tagName === 'SUMMARY' &&
+    details?.tagName === 'DETAILS' &&
+    firstSummary(details) === element
+  )
+}
+
+function isValidContentEditable(element: HTMLElement): boolean {
+  const value = element.getAttribute('contenteditable')
+  if (value === null) {
+    return false
+  }
+  const normalized = value.trim().toLowerCase()
+  return normalized === '' || normalized === 'true' || normalized === 'plaintext-only'
+}
+
+function hasTabStopSemantics(element: HTMLElement): boolean {
+  const hasExplicitTabIndex = element.hasAttribute('tabindex')
+  if (hasExplicitTabIndex) {
+    return element.tabIndex >= 0
+  }
+  if (element.tagName === 'SUMMARY') {
+    return isNativeSummary(element)
+  }
+  if (element.hasAttribute('contenteditable')) {
+    return isValidContentEditable(element)
+  }
+  return element.tabIndex >= 0
+}
+
 function isVisible(element: HTMLElement): boolean {
   let candidate: HTMLElement | null = element
   while (candidate) {
@@ -133,6 +174,14 @@ function isVisible(element: HTMLElement): boolean {
     }
     const style = window.getComputedStyle(candidate)
     if (style.display === 'none' || style.visibility === 'hidden') {
+      return false
+    }
+    if (
+      candidate !== element &&
+      candidate.tagName === 'DETAILS' &&
+      !candidate.hasAttribute('open') &&
+      firstSummary(candidate) !== element
+    ) {
       return false
     }
     if (candidate === dialogRef.value) {
@@ -150,7 +199,7 @@ function getTabbableElements(): HTMLElement[] {
   return Array.from(dialogRef.value.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
     (element) =>
       !element.matches(':disabled') &&
-      element.tabIndex >= 0 &&
+      hasTabStopSemantics(element) &&
       isVisible(element)
   )
 }

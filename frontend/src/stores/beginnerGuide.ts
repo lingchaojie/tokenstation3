@@ -348,16 +348,69 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     if (!isCurrent(context)) {
       return
     }
+    const existing =
+      persistenceIssueRecord?.kind === 'save' &&
+      sameContext(persistenceIssueRecord.context, context)
+        ? persistenceIssueRecord
+        : null
+    const strongestIntent = strongestSavePromptIntent(
+      existing?.promptIntent,
+      promptIntent,
+      promptState.value === 'completed' ? 'completed' : undefined
+    )
     if (persistenceIssueRecord && persistenceIssueRecord.epoch > epoch) {
+      if (existing && existing.promptIntent !== strongestIntent) {
+        persistenceIssueRecord = {
+          ...existing,
+          ...(strongestIntent ? { promptIntent: strongestIntent } : {})
+        }
+      }
       return
     }
     persistenceIssueRecord = {
       kind: 'save',
       context,
       epoch,
-      ...(promptIntent ? { promptIntent } : {})
+      ...(strongestIntent ? { promptIntent: strongestIntent } : {})
     }
     persistenceIssue.value = 'save'
+  }
+
+  function strongestSavePromptIntent(
+    ...intents: Array<SavePromptIntent | undefined>
+  ): SavePromptIntent | undefined {
+    if (intents.includes('completed')) {
+      return 'completed'
+    }
+    if (intents.includes('suppressed')) {
+      return 'suppressed'
+    }
+    return undefined
+  }
+
+  function currentSavePromptIntent(
+    context: Extract<OwnerContext, { authenticated: true }>
+  ): SavePromptIntent | undefined {
+    const issue = persistenceIssueRecord
+    return issue?.kind === 'save' && sameContext(issue.context, context)
+      ? issue.promptIntent
+      : undefined
+  }
+
+  function promptIntentConfirmed(
+    remote: NormalizedBeginnerGuideState | null,
+    promptIntent?: SavePromptIntent
+  ): remote is NormalizedBeginnerGuideState {
+    if (remote === null) {
+      return false
+    }
+    if (promptIntent === 'completed') {
+      return remote.promptState === 'completed'
+    }
+    if (promptIntent === 'suppressed') {
+      return remote.promptState !== 'eligible'
+    }
+    return true
   }
 
   function clearPersistenceIssue(
@@ -654,18 +707,27 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
       replaceProgress(merged)
       const mergeRevision = localProgressRevision
       showPrompt.value = false
-      if (remote.promptState !== 'completed') {
+      const mergePromptIntent = strongestSavePromptIntent(
+        'suppressed',
+        currentSavePromptIntent(context),
+        promptState.value === 'completed' || remote.promptState === 'completed'
+          ? 'completed'
+          : undefined
+      )!
+      if (mergePromptIntent === 'suppressed') {
         replacePromptState('suppressed')
+      } else {
+        setPromptState('completed')
       }
       const mergePromptRevision = localPromptRevision
       const mergePersistenceEpoch = nextPersistenceOperationEpoch()
       const outcome = await enqueueRemoteWrite(context, {
-        prompt_state: 'suppressed',
+        prompt_state: mergePromptIntent,
         progress: merged
       })
       if (outcome.status === 'success') {
         const saved = normalizeRemoteState(outcome.remote)
-        if (saved !== null && saved.promptState !== 'eligible') {
+        if (promptIntentConfirmed(saved, mergePromptIntent)) {
           clearPersistenceIssue(context, 'save', mergePersistenceEpoch)
           clearPromptRetry(context.userId)
           if (isCurrentInitialization(context, requestEpoch)) {
@@ -679,9 +741,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
         }
       }
       if (outcome.status !== 'stale' && isCurrent(context)) {
-        reportSaveIssue(context, mergePersistenceEpoch, 'suppressed')
+        reportSaveIssue(context, mergePersistenceEpoch, mergePromptIntent)
       }
-      if (remote.promptState === 'eligible') {
+      if (mergePromptIntent === 'suppressed' && remote.promptState === 'eligible') {
         setPromptRetry(context.userId)
       }
       return
@@ -843,6 +905,9 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     try {
       response = await getBeginnerGuideState()
     } catch {
+      if (!isCurrent(context) || persistenceIssueRecord !== issue) {
+        return
+      }
       reportLoadIssue(context, loadEpoch, {
         progressRevision: issue.progressRevision,
         promptRevision: issue.promptRevision,
@@ -916,13 +981,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     const outcome = await enqueueRemoteWrite(context, patch)
     if (outcome.status === 'success') {
       const saved = normalizeRemoteState(outcome.remote)
-      const promptConfirmed =
-        saved !== null &&
-        (promptIntent === undefined ||
-          (promptIntent === 'completed'
-            ? saved.promptState === 'completed'
-            : saved.promptState !== 'eligible'))
-      if (saved !== null && promptConfirmed && isCurrent(context)) {
+      if (promptIntentConfirmed(saved, promptIntent) && isCurrent(context)) {
         applyRemoteState(saved, merged, progressRevision, promptRevision)
         clearPersistenceIssue(context, 'load', saveEpoch)
         if (promptIntent === 'suppressed') {
@@ -965,13 +1024,7 @@ export const useBeginnerGuideStore = defineStore('beginnerGuide', () => {
     const outcome = await enqueueRemoteWrite(context, patch)
     if (outcome.status === 'success') {
       const remote = normalizeRemoteState(outcome.remote)
-      const promptConfirmed =
-        remote !== null &&
-        (promptIntent === undefined ||
-          (promptIntent === 'completed'
-            ? remote.promptState === 'completed'
-            : remote.promptState !== 'eligible'))
-      if (remote !== null && promptConfirmed && isCurrent(context)) {
+      if (promptIntentConfirmed(remote, promptIntent) && isCurrent(context)) {
         applyRemoteState(remote, safeProgress, progressRevision, promptRevision)
         clearPersistenceIssue(context, 'save', saveEpoch)
         if (promptIntent) {
