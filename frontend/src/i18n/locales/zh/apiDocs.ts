@@ -93,6 +93,52 @@ export default {
       configuration: '配置',
       security: '安全'
     },
+    guideSectionTitles: {
+      quickstart: {
+        baseUrl: '基础地址',
+        apiKey: 'API 密钥',
+        firstRequest: '第一个请求',
+        availableModels: '可用模型'
+      },
+      authentication: {
+        bearer: 'Bearer 身份验证',
+        xApiKey: 'x-api-key 身份验证',
+        keySafety: '密钥安全',
+        deprecatedQuery: '查询字符串凭证'
+      },
+      clientIntegration: {
+        claudeCode: 'Claude Code 配置',
+        codexCli: 'Codex CLI 配置',
+        opencode: 'OpenCode 配置',
+        ccSwitch: 'CC Switch 配置',
+        pythonSdk: 'Python SDK 示例'
+      },
+      capabilities: {
+        streaming: '流式响应',
+        tools: '工具调用',
+        structuredOutput: '结构化输出',
+        reasoning: '推理控制',
+        promptCache: '提示词缓存'
+      },
+      errors: {
+        gatewayEnvelope: '网关错误结构',
+        gatewayCodes: '网关错误代码',
+        anthropicEnvelope: 'Anthropic 错误结构',
+        openaiEnvelope: 'OpenAI 错误结构',
+        streamErrors: '流式错误'
+      },
+      requestId: {
+        headers: '关联请求头',
+        supportChecklist: '支持信息清单',
+        redaction: '诊断信息脱敏'
+      },
+      keySecurity: {
+        expiration: '密钥有效期',
+        quota: '密钥额度',
+        rateWindows: '速率周期',
+        ipRules: 'IP 与 CIDR 规则'
+      }
+    },
     labels: {
       required: '必填',
       optional: '可选',
@@ -103,6 +149,17 @@ export default {
       python: 'Python',
       successExample: '成功响应',
       streamExample: '流式事件'
+    },
+    tables: {
+      code: '代码',
+      recommendedAction: '建议操作',
+      window: '周期',
+      rule: '规则',
+      matchingIpCidr: '匹配的 IP/CIDR',
+      whitelist: '白名单',
+      blacklist: '黑名单',
+      allowed: '仅允许匹配项',
+      denied: '拒绝匹配项'
     },
     parameters: {
       model: '本次请求选择的模型。',
@@ -142,7 +199,8 @@ export default {
         intro: '使用共享客户端构建器，使基础地址和示例模型与 LINX2 其他位置保持一致。',
         installation: '请先从已验证的来源安装客户端，再应用网关设置。',
         configuration: '根据操作系统和所选协议使用生成的配置。',
-        windowsNote: 'Windows 文件位置和命令会与默认的 macOS 说明一并展示。'
+        macosNote: 'macOS 安装与配置',
+        windowsNote: 'Windows 安装与配置替代方案'
       },
       capabilities: {
         intro: '可用能力取决于所选模型以及各端点记录的协议字段。',

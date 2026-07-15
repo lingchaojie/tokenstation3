@@ -38,6 +38,15 @@ function hasLocaleKey(locale: object, key: string): boolean {
   return typeof value === 'string'
 }
 
+function localeText(locale: object, key: string): string {
+  let value: unknown = locale
+  for (const segment of key.split('.')) {
+    if (typeof value !== 'object' || value === null || !(segment in value)) return key
+    value = (value as Record<string, unknown>)[segment]
+  }
+  return typeof value === 'string' ? value : key
+}
+
 describe('buildGuidePage', () => {
   it('builds every approved guide and platform page with stable section IDs', () => {
     expect(sectionIds('quickstart')).toEqual([
@@ -167,6 +176,52 @@ describe('buildGuidePage', () => {
     expect(serialized).toContain('apiDocs.guides.clientIntegration.windowsNote')
   })
 
+  it('renders Windows curriculum actions and shared unified configurations alongside macOS', () => {
+    const page = buildGuidePage('client-integration', BASE_URL)
+    const sectionByClient = {
+      claude_code: 'claude-code',
+      codex: 'codex-cli',
+      opencode: 'opencode',
+      cc_switch: 'cc-switch'
+    } as const
+
+    for (const [client, sectionId] of Object.entries(sectionByClient)) {
+      const variant = GUIDE_VARIANTS.find((candidate) =>
+        candidate.client === client && candidate.os === 'windows'
+      )!
+      const section = page.sections.find(({ id }) => id === sectionId)!
+      const sectionCodeBlocks = section.blocks.filter(
+        (block): block is Extract<ApiDocsBlock, { kind: 'code' }> => block.kind === 'code'
+      )
+      const sectionLinks = section.blocks.flatMap((block) =>
+        block.kind === 'links' ? block.links : []
+      )
+      const expectedFiles = buildClientConfigFiles({
+        client: client as keyof typeof sectionByClient,
+        os: 'windows',
+        platform: 'unified',
+        apiKey: DOCS_API_KEY_PLACEHOLDER,
+        baseUrl: BASE_URL
+      })
+
+      expect(JSON.stringify(section)).toContain('apiDocs.guides.clientIntegration.windowsNote')
+      if (variant.installCommand) {
+        expect(sectionCodeBlocks).toContainEqual(
+          expect.objectContaining({ label: 'Windows', code: variant.installCommand })
+        )
+      }
+      expect(sectionLinks.map(({ to }) => to)).toContain(variant.officialSourceUrl)
+      if (variant.desktopDownloadUrl) {
+        expect(sectionLinks.map(({ to }) => to)).toContain(variant.desktopDownloadUrl)
+      }
+      for (const file of expectedFiles) {
+        expect(sectionCodeBlocks).toContainEqual(
+          expect.objectContaining({ label: file.path, code: file.content })
+        )
+      }
+    }
+  })
+
   it('appends all three shared Python SDK examples', () => {
     const codes = codeBlocks('client-integration').map(({ code }) => code)
     const endpoints = resolveGatewayEndpoints(BASE_URL)
@@ -208,6 +263,15 @@ describe('buildGuidePage', () => {
       ['429', 'USAGE_LIMIT_EXCEEDED'],
       ['500', 'INTERNAL_ERROR'],
       ['500', 'SUBSCRIPTION_MAINTENANCE_FAILED']
+    ].map(([status, errorCode]) => [
+      { kind: 'raw', value: status },
+      { kind: 'raw', value: errorCode },
+      { kind: 'localized', textKey: `apiDocs.errors.actions.${errorCode}` }
+    ]))
+    expect(gatewayCodes.columns).toEqual([
+      { kind: 'raw', value: 'HTTP' },
+      { kind: 'localized', textKey: 'apiDocs.tables.code' },
+      { kind: 'localized', textKey: 'apiDocs.tables.recommendedAction' }
     ])
     expect(codes).toContain('{"code":"INVALID_API_KEY","message":"Invalid API key"}')
     expect(codes).toContain(
@@ -245,9 +309,9 @@ describe('buildGuidePage', () => {
     expect(security).toContain('5h')
     expect(security).toContain('1d')
     expect(security).toContain('7d')
-    expect(security).toContain('IP/CIDR')
-    expect(security).toContain('Whitelist')
-    expect(security).toContain('Blacklist')
+    expect(security).toContain('apiDocs.tables.matchingIpCidr')
+    expect(security).toContain('apiDocs.tables.whitelist')
+    expect(security).toContain('apiDocs.tables.blacklist')
   })
 
   it('rejects endpoint pages that are not guide or platform content', () => {
@@ -281,6 +345,42 @@ describe('buildGuidePage', () => {
 
     for (const locale of localePairs) {
       expect(localizedKeys.filter((key) => !hasLocaleKey(locale, key))).toEqual([])
+    }
+  })
+
+  it('uses dedicated concise unique bilingual titles for every guide section', () => {
+    const pageIds: ApiDocsPageId[] = [
+      'quickstart',
+      'authentication',
+      'client-integration',
+      'capabilities',
+      'errors',
+      'request-id',
+      'key-security'
+    ]
+    const sections = pageIds.flatMap((pageId) => buildGuidePage(pageId, BASE_URL).sections)
+    const titleKeys = sections.map(({ titleKey }) => titleKey)
+    const enLocale = { ...enApiDocs, ...enGettingStarted }
+    const zhLocale = { ...zhApiDocs, ...zhGettingStarted }
+    const enTitles = titleKeys.map((key) => localeText(enLocale, key))
+    const zhTitles = titleKeys.map((key) => localeText(zhLocale, key))
+
+    expect(titleKeys.every((key) => key.startsWith('apiDocs.guideSectionTitles.'))).toBe(true)
+    expect(new Set(titleKeys).size).toBe(sections.length)
+    expect(new Set(enTitles).size).toBe(sections.length)
+    expect(new Set(zhTitles).size).toBe(sections.length)
+    expect(enTitles.every((title) => title.length <= 32)).toBe(true)
+    expect(zhTitles.every((title) => title.length <= 20)).toBe(true)
+    expect(enTitles).toContain('Anthropic error envelope')
+    expect(enTitles).toContain('OpenAI error envelope')
+
+    for (const section of sections) {
+      const bodyKeys = section.blocks.flatMap((block) => {
+        if (block.kind === 'paragraph' || block.kind === 'callout') return [block.textKey]
+        if (block.kind === 'links') return block.links.map(({ labelKey }) => labelKey)
+        return []
+      })
+      expect(bodyKeys).not.toContain(section.titleKey)
     }
   })
 })

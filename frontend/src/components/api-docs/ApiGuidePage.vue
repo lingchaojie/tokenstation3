@@ -50,12 +50,12 @@
             <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500 dark:bg-dark-800 dark:text-gray-400">
               <tr>
                 <th
-                  v-for="column in block.columns"
-                  :key="column"
+                  v-for="(column, columnIndex) in block.columns"
+                  :key="columnIndex"
                   scope="col"
                   class="px-4 py-3 font-semibold"
                 >
-                  {{ column }}
+                  {{ tableValue(column) }}
                 </th>
               </tr>
             </thead>
@@ -66,7 +66,7 @@
                   :key="cellIndex"
                   class="whitespace-nowrap px-4 py-3 font-mono text-xs text-gray-700 dark:text-gray-300"
                 >
-                  {{ cell }}
+                  {{ tableValue(cell) }}
                 </td>
               </tr>
             </tbody>
@@ -105,7 +105,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ApiDocsCodeBlock from './ApiDocsCodeBlock.vue'
-import type { ApiDocsGuideDefinition } from './types'
+import type { ApiDocsGuideDefinition, ApiDocsTableValue } from './types'
 
 const props = defineProps<{
   definition: ApiDocsGuideDefinition
@@ -120,6 +120,10 @@ const headings = computed(() => props.definition.sections.map((section) => ({
 
 function isExternalLink(to: string): boolean {
   return /^https?:\/\//i.test(to)
+}
+
+function tableValue(value: ApiDocsTableValue): string {
+  return value.kind === 'localized' ? t(value.textKey) : value.value
 }
 
 defineExpose({ headings })

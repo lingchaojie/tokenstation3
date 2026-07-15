@@ -1,15 +1,22 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { translateMock } = vi.hoisted(() => ({
+  translateMock: vi.fn<(key: string) => string>()
+}))
 
 vi.mock('@/composables/useClipboard', () => ({
   useClipboard: () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) })
 }))
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => `localized:${key}` })
+vi.mock('vue-i18n', async (importOriginal) => ({
+  ...await importOriginal<typeof import('vue-i18n')>(),
+  useI18n: () => ({ t: translateMock })
 }))
 
+import zhApiDocs from '@/i18n/locales/zh/apiDocs'
 import ApiGuidePage from '../ApiGuidePage.vue'
+import { buildGuidePage } from '../guideContent'
 import type { ApiDocsGuideDefinition } from '../types'
 
 const definition: ApiDocsGuideDefinition = {
@@ -25,8 +32,14 @@ const definition: ApiDocsGuideDefinition = {
         { kind: 'code', label: 'Example file', language: 'json', code: '{"ok":true}' },
         {
           kind: 'table',
-          columns: ['HTTP', 'Code'],
-          rows: [['401', 'INVALID_API_KEY']]
+          columns: [
+            { kind: 'raw', value: 'HTTP' },
+            { kind: 'raw', value: 'Code' }
+          ],
+          rows: [[
+            { kind: 'raw', value: '401' },
+            { kind: 'raw', value: 'INVALID_API_KEY' }
+          ]]
         },
         {
           kind: 'links',
@@ -45,7 +58,7 @@ const definition: ApiDocsGuideDefinition = {
   ]
 }
 
-function mountGuide() {
+function mountDefinition(definition: ApiDocsGuideDefinition) {
   return mount(ApiGuidePage, {
     props: { definition },
     global: {
@@ -59,7 +72,25 @@ function mountGuide() {
   })
 }
 
+function mountGuide() {
+  return mountDefinition(definition)
+}
+
+function localeValue(locale: object, key: string): string {
+  let value: unknown = locale
+  for (const segment of key.split('.')) {
+    if (typeof value !== 'object' || value === null || !(segment in value)) return key
+    value = (value as Record<string, unknown>)[segment]
+  }
+  return typeof value === 'string' ? value : key
+}
+
 describe('ApiGuidePage', () => {
+  beforeEach(() => {
+    translateMock.mockReset()
+    translateMock.mockImplementation((key) => `localized:${key}`)
+  })
+
   it('renders stable localized headings in article order and exposes them', () => {
     const wrapper = mountGuide()
 
@@ -129,5 +160,42 @@ describe('ApiGuidePage', () => {
     expect(links[1].attributes('href')).toBe('https://example.com/docs')
     expect(links[1].attributes('target')).toBe('_blank')
     expect(links[1].attributes('rel')).toBe('noopener noreferrer')
+  })
+
+  it('localizes Chinese table columns, actions, windows, rules, and values', () => {
+    translateMock.mockImplementation((key) => localeValue(zhApiDocs, key))
+    const errors = mountDefinition(buildGuidePage('errors', 'https://gateway.example.com/v1/'))
+    const security = mountDefinition(
+      buildGuidePage('key-security', 'https://gateway.example.com/v1/')
+    )
+    const errorTable = errors.get('[data-testid="guide-table"]')
+    const securityTables = security.findAll('[data-testid="guide-table"]')
+
+    expect(errorTable.findAll('thead th').map((header) => header.text())).toEqual([
+      'HTTP',
+      '代码',
+      '建议操作'
+    ])
+    expect(errorTable.findAll('tbody tr')).toHaveLength(17)
+    expect(errorTable.text()).toContain('INVALID_API_KEY')
+    expect(errorTable.text()).toContain('检查密钥或重新创建密钥。')
+    expect(errorTable.text()).not.toContain('Recommended action')
+    expect(errorTable.text()).not.toContain('Code')
+
+    expect(securityTables[0].findAll('thead th').map((header) => header.text())).toEqual([
+      '周期'
+    ])
+    expect(securityTables[0].text()).toContain('5h')
+    expect(securityTables[0].text()).toContain('1d')
+    expect(securityTables[0].text()).toContain('7d')
+    expect(securityTables[1].findAll('thead th').map((header) => header.text())).toEqual([
+      '规则',
+      '匹配的 IP/CIDR'
+    ])
+    expect(securityTables[1].text()).toContain('白名单')
+    expect(securityTables[1].text()).toContain('仅允许匹配项')
+    expect(securityTables[1].text()).toContain('黑名单')
+    expect(securityTables[1].text()).toContain('拒绝匹配项')
+    expect(securityTables[1].text()).not.toMatch(/Rule|Matching|Whitelist|Allowed|Blacklist|Denied/)
   })
 })

@@ -71,11 +71,15 @@ export interface ApiEndpointExamples {
   stream?: string
 }
 
+export type ApiDocsTableValue =
+  | { kind: 'raw'; value: string }
+  | { kind: 'localized'; textKey: string }
+
 export type ApiDocsBlock =
   | { kind: 'paragraph'; textKey: string }
   | { kind: 'callout'; tone: 'info' | 'warning'; textKey: string }
   | { kind: 'code'; label: string; language: string; code: string }
-  | { kind: 'table'; columns: string[]; rows: string[][] }
+  | { kind: 'table'; columns: ApiDocsTableValue[]; rows: ApiDocsTableValue[][] }
   | { kind: 'links'; links: Array<{ labelKey: string; to: string }> }
 
 export interface ApiDocsGuideSection {

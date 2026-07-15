@@ -93,6 +93,52 @@ export default {
       configuration: 'Configuration',
       security: 'Security'
     },
+    guideSectionTitles: {
+      quickstart: {
+        baseUrl: 'Base URL',
+        apiKey: 'API key',
+        firstRequest: 'First request',
+        availableModels: 'Available models'
+      },
+      authentication: {
+        bearer: 'Bearer authentication',
+        xApiKey: 'x-api-key authentication',
+        keySafety: 'Key safety',
+        deprecatedQuery: 'Query-string credentials'
+      },
+      clientIntegration: {
+        claudeCode: 'Claude Code setup',
+        codexCli: 'Codex CLI setup',
+        opencode: 'OpenCode setup',
+        ccSwitch: 'CC Switch setup',
+        pythonSdk: 'Python SDK examples'
+      },
+      capabilities: {
+        streaming: 'Streaming responses',
+        tools: 'Tool calling',
+        structuredOutput: 'Structured output',
+        reasoning: 'Reasoning controls',
+        promptCache: 'Prompt caching'
+      },
+      errors: {
+        gatewayEnvelope: 'Gateway error envelope',
+        gatewayCodes: 'Gateway error codes',
+        anthropicEnvelope: 'Anthropic error envelope',
+        openaiEnvelope: 'OpenAI error envelope',
+        streamErrors: 'Streaming errors'
+      },
+      requestId: {
+        headers: 'Correlation headers',
+        supportChecklist: 'Support checklist',
+        redaction: 'Diagnostic redaction'
+      },
+      keySecurity: {
+        expiration: 'Key expiration',
+        quota: 'Key quota',
+        rateWindows: 'Rate windows',
+        ipRules: 'IP and CIDR rules'
+      }
+    },
     labels: {
       required: 'Required',
       optional: 'Optional',
@@ -103,6 +149,17 @@ export default {
       python: 'Python',
       successExample: 'Success response',
       streamExample: 'Stream events'
+    },
+    tables: {
+      code: 'Code',
+      recommendedAction: 'Recommended action',
+      window: 'Window',
+      rule: 'Rule',
+      matchingIpCidr: 'Matching IP/CIDR',
+      whitelist: 'Whitelist',
+      blacklist: 'Blacklist',
+      allowed: 'Only matching entries are allowed',
+      denied: 'Matching entries are denied'
     },
     parameters: {
       model: 'The model selected for the request.',
@@ -142,7 +199,8 @@ export default {
         intro: 'Use the shared client builders so Base URLs and example models match the rest of LINX2.',
         installation: 'Install each client from its verified source before applying gateway settings.',
         configuration: 'Use the generated configuration for your operating system and chosen protocol.',
-        windowsNote: 'Windows file locations and commands are shown alongside the default macOS instructions.'
+        macosNote: 'macOS installation and configuration',
+        windowsNote: 'Windows installation and configuration alternative'
       },
       capabilities: {
         intro: 'Capabilities depend on the selected model and the protocol fields documented for each endpoint.',

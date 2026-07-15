@@ -5,7 +5,8 @@ import {
   DOCS_API_KEY_PLACEHOLDER,
   resolveGatewayEndpoints,
   type ClientConfigFile,
-  type SupportedGuideClient
+  type SupportedGuideClient,
+  type SupportedGuideOS
 } from '@/components/keys/clientConfigFiles'
 
 import { API_DOCS_PAGES } from './catalog'
@@ -14,7 +15,8 @@ import type {
   ApiDocsBlock,
   ApiDocsGuideDefinition,
   ApiDocsGuideSection,
-  ApiDocsPageId
+  ApiDocsPageId,
+  ApiDocsTableValue
 } from './types'
 
 const gatewayCodeRows = [
@@ -35,7 +37,7 @@ const gatewayCodeRows = [
   ['429', 'USAGE_LIMIT_EXCEEDED'],
   ['500', 'INTERNAL_ERROR'],
   ['500', 'SUBSCRIPTION_MAINTENANCE_FAILED']
-] as string[][]
+] as const
 
 const clientSections: Array<{
   client: SupportedGuideClient
@@ -45,11 +47,23 @@ const clientSections: Array<{
   {
     client: 'claude_code',
     id: 'claude-code',
-    titleKey: 'gettingStarted.clients.claude_code'
+    titleKey: 'apiDocs.guideSectionTitles.clientIntegration.claudeCode'
   },
-  { client: 'codex', id: 'codex-cli', titleKey: 'gettingStarted.clients.codex' },
-  { client: 'opencode', id: 'opencode', titleKey: 'gettingStarted.clients.opencode' },
-  { client: 'cc_switch', id: 'cc-switch', titleKey: 'gettingStarted.clients.cc_switch' }
+  {
+    client: 'codex',
+    id: 'codex-cli',
+    titleKey: 'apiDocs.guideSectionTitles.clientIntegration.codexCli'
+  },
+  {
+    client: 'opencode',
+    id: 'opencode',
+    titleKey: 'apiDocs.guideSectionTitles.clientIntegration.opencode'
+  },
+  {
+    client: 'cc_switch',
+    id: 'cc-switch',
+    titleKey: 'apiDocs.guideSectionTitles.clientIntegration.ccSwitch'
+  }
 ]
 
 function paragraph(textKey: string): ApiDocsBlock {
@@ -62,6 +76,14 @@ function callout(tone: 'info' | 'warning', textKey: string): ApiDocsBlock {
 
 function code(label: string, language: string, content: string): ApiDocsBlock {
   return { kind: 'code', label, language, code: content }
+}
+
+function raw(value: string): ApiDocsTableValue {
+  return { kind: 'raw', value }
+}
+
+function localized(textKey: string): ApiDocsTableValue {
+  return { kind: 'localized', textKey }
 }
 
 function languageForFile(file: ClientConfigFile): string {
@@ -77,6 +99,53 @@ function fileBlock(file: ClientConfigFile): ApiDocsBlock {
   return code(file.path, languageForFile(file), file.content)
 }
 
+function buildClientVariantBlocks(
+  client: SupportedGuideClient,
+  os: Extract<SupportedGuideOS, 'macos' | 'windows'>,
+  baseUrl: string
+): ApiDocsBlock[] {
+  const variant = GUIDE_VARIANTS.find((candidate) =>
+    candidate.client === client && candidate.os === os
+  )
+  if (!variant) throw new Error(`Missing ${os} guide variant for ${client}`)
+
+  const platformLabel = os === 'macos' ? 'macOS' : 'Windows'
+  const installBlocks = variant.installCommand
+    ? [code(platformLabel, variant.shell === 'powershell' ? 'powershell' : 'bash', variant.installCommand)]
+    : []
+  const links: Array<{ labelKey: string; to: string }> = [
+    {
+      labelKey: 'gettingStarted.installation.officialSource',
+      to: variant.officialSourceUrl
+    }
+  ]
+  if (variant.desktopDownloadUrl) {
+    links.push({
+      labelKey: 'gettingStarted.installation.downloadDesktop',
+      to: variant.desktopDownloadUrl
+    })
+  }
+  const configBlocks = buildClientConfigFiles({
+    client,
+    os,
+    platform: 'unified',
+    apiKey: DOCS_API_KEY_PLACEHOLDER,
+    baseUrl
+  }).map(fileBlock)
+
+  return [
+    callout(
+      'info',
+      os === 'macos'
+        ? 'apiDocs.guides.clientIntegration.macosNote'
+        : 'apiDocs.guides.clientIntegration.windowsNote'
+    ),
+    ...installBlocks,
+    { kind: 'links', links },
+    ...configBlocks
+  ]
+}
+
 function buildQuickstart(baseUrl: string): ApiDocsGuideSection[] {
   const endpoints = resolveGatewayEndpoints(baseUrl)
   const firstRequest = buildEndpointExamples('responses', baseUrl)
@@ -85,7 +154,7 @@ function buildQuickstart(baseUrl: string): ApiDocsGuideSection[] {
   return [
     {
       id: 'base-url',
-      titleKey: 'apiDocs.sections.overview',
+      titleKey: 'apiDocs.guideSectionTitles.quickstart.baseUrl',
       blocks: [
         paragraph('apiDocs.guides.quickstart.intro'),
         paragraph('apiDocs.guides.quickstart.baseUrl'),
@@ -94,7 +163,7 @@ function buildQuickstart(baseUrl: string): ApiDocsGuideSection[] {
     },
     {
       id: 'api-key',
-      titleKey: 'apiDocs.sections.authentication',
+      titleKey: 'apiDocs.guideSectionTitles.quickstart.apiKey',
       blocks: [
         paragraph('apiDocs.guides.quickstart.apiKey'),
         callout('warning', 'apiDocs.guides.authentication.safety'),
@@ -106,7 +175,7 @@ function buildQuickstart(baseUrl: string): ApiDocsGuideSection[] {
     },
     {
       id: 'first-request',
-      titleKey: 'apiDocs.sections.request',
+      titleKey: 'apiDocs.guideSectionTitles.quickstart.firstRequest',
       blocks: [
         paragraph('apiDocs.guides.quickstart.firstRequest'),
         code('cURL', 'bash', firstRequest.curl)
@@ -114,7 +183,7 @@ function buildQuickstart(baseUrl: string): ApiDocsGuideSection[] {
     },
     {
       id: 'available-models',
-      titleKey: 'apiDocs.pages.models.title',
+      titleKey: 'apiDocs.guideSectionTitles.quickstart.availableModels',
       blocks: [
         paragraph('apiDocs.guides.quickstart.models'),
         code('cURL', 'bash', models.curl),
@@ -134,7 +203,7 @@ function buildAuthentication(): ApiDocsGuideSection[] {
   return [
     {
       id: 'bearer',
-      titleKey: 'apiDocs.sections.authentication',
+      titleKey: 'apiDocs.guideSectionTitles.authentication.bearer',
       blocks: [
         paragraph('apiDocs.guides.authentication.intro'),
         paragraph('apiDocs.guides.authentication.bearer'),
@@ -143,7 +212,7 @@ function buildAuthentication(): ApiDocsGuideSection[] {
     },
     {
       id: 'x-api-key',
-      titleKey: 'apiDocs.guides.authentication.xApiKey',
+      titleKey: 'apiDocs.guideSectionTitles.authentication.xApiKey',
       blocks: [
         paragraph('apiDocs.guides.authentication.xApiKey'),
         code('x-api-key', 'http', `x-api-key: ${DOCS_API_KEY_PLACEHOLDER}`)
@@ -151,7 +220,7 @@ function buildAuthentication(): ApiDocsGuideSection[] {
     },
     {
       id: 'key-safety',
-      titleKey: 'apiDocs.sections.security',
+      titleKey: 'apiDocs.guideSectionTitles.authentication.keySafety',
       blocks: [
         callout('warning', 'apiDocs.guides.authentication.safety'),
         {
@@ -162,7 +231,7 @@ function buildAuthentication(): ApiDocsGuideSection[] {
     },
     {
       id: 'deprecated-query',
-      titleKey: 'apiDocs.guides.authentication.deprecatedQuery',
+      titleKey: 'apiDocs.guideSectionTitles.authentication.deprecatedQuery',
       blocks: [callout('warning', 'apiDocs.guides.authentication.deprecatedQuery')]
     }
   ]
@@ -174,40 +243,14 @@ function buildClientSection(
   titleKey: string,
   baseUrl: string
 ): ApiDocsGuideSection {
-  const variant = GUIDE_VARIANTS.find((candidate) =>
-    candidate.client === client && candidate.os === 'macos'
-  )
-  if (!variant) throw new Error(`Missing macOS guide variant for ${client}`)
-
-  const installBlocks = variant.installCommand
-    ? [code('macOS', 'bash', variant.installCommand)]
-    : []
-  const configBlocks = buildClientConfigFiles({
-    client,
-    os: 'macos',
-    platform: 'unified',
-    apiKey: DOCS_API_KEY_PLACEHOLDER,
-    baseUrl
-  }).map(fileBlock)
-
   return {
     id,
     titleKey,
     blocks: [
       paragraph('apiDocs.guides.clientIntegration.installation'),
-      ...installBlocks,
-      {
-        kind: 'links',
-        links: [
-          {
-            labelKey: 'gettingStarted.installation.officialSource',
-            to: variant.officialSourceUrl
-          }
-        ]
-      },
       paragraph('apiDocs.guides.clientIntegration.configuration'),
-      ...configBlocks,
-      callout('info', 'apiDocs.guides.clientIntegration.windowsNote')
+      ...buildClientVariantBlocks(client, 'macos', baseUrl),
+      ...buildClientVariantBlocks(client, 'windows', baseUrl)
     ]
   }
 }
@@ -229,7 +272,7 @@ function buildClientIntegration(baseUrl: string): ApiDocsGuideSection[] {
     ...clientGuideSections,
     {
       id: 'python-sdk',
-      titleKey: 'apiDocs.labels.python',
+      titleKey: 'apiDocs.guideSectionTitles.clientIntegration.pythonSdk',
       blocks: [
         paragraph('apiDocs.guides.clientIntegration.intro'),
         ...sdkFiles.map(fileBlock)
@@ -242,7 +285,7 @@ function buildCapabilities(): ApiDocsGuideSection[] {
   return [
     {
       id: 'streaming',
-      titleKey: 'apiDocs.sections.streaming',
+      titleKey: 'apiDocs.guideSectionTitles.capabilities.streaming',
       blocks: [
         paragraph('apiDocs.guides.capabilities.intro'),
         paragraph('apiDocs.guides.capabilities.streaming'),
@@ -251,7 +294,7 @@ function buildCapabilities(): ApiDocsGuideSection[] {
     },
     {
       id: 'tools',
-      titleKey: 'apiDocs.guides.capabilities.tools',
+      titleKey: 'apiDocs.guideSectionTitles.capabilities.tools',
       blocks: [
         paragraph('apiDocs.guides.capabilities.tools'),
         code(
@@ -263,7 +306,7 @@ function buildCapabilities(): ApiDocsGuideSection[] {
     },
     {
       id: 'structured-output',
-      titleKey: 'apiDocs.guides.capabilities.structuredOutput',
+      titleKey: 'apiDocs.guideSectionTitles.capabilities.structuredOutput',
       blocks: [
         paragraph('apiDocs.guides.capabilities.structuredOutput'),
         code(
@@ -275,7 +318,7 @@ function buildCapabilities(): ApiDocsGuideSection[] {
     },
     {
       id: 'reasoning',
-      titleKey: 'apiDocs.guides.capabilities.reasoning',
+      titleKey: 'apiDocs.guideSectionTitles.capabilities.reasoning',
       blocks: [
         paragraph('apiDocs.guides.capabilities.reasoning'),
         code('JSON', 'json', '{"reasoning":{"effort":"high"}}')
@@ -283,7 +326,7 @@ function buildCapabilities(): ApiDocsGuideSection[] {
     },
     {
       id: 'prompt-cache',
-      titleKey: 'apiDocs.guides.capabilities.promptCache',
+      titleKey: 'apiDocs.guideSectionTitles.capabilities.promptCache',
       blocks: [
         paragraph('apiDocs.guides.capabilities.promptCache'),
         code(
@@ -305,7 +348,7 @@ function buildErrors(): ApiDocsGuideSection[] {
   return [
     {
       id: 'gateway-envelope',
-      titleKey: 'apiDocs.guides.errors.gatewayEnvelope',
+      titleKey: 'apiDocs.guideSectionTitles.errors.gatewayEnvelope',
       blocks: [
         paragraph('apiDocs.guides.errors.gatewayEnvelope'),
         code(
@@ -317,16 +360,26 @@ function buildErrors(): ApiDocsGuideSection[] {
     },
     {
       id: 'gateway-codes',
-      titleKey: 'apiDocs.pages.errors.title',
+      titleKey: 'apiDocs.guideSectionTitles.errors.gatewayCodes',
       blocks: [
-        { kind: 'table', columns: ['HTTP', 'Code'], rows: gatewayCodeRows },
-        callout('info', 'apiDocs.errors.actions.INSUFFICIENT_BALANCE'),
-        callout('info', 'apiDocs.errors.actions.USER_NOT_FOUND')
+        {
+          kind: 'table',
+          columns: [
+            raw('HTTP'),
+            localized('apiDocs.tables.code'),
+            localized('apiDocs.tables.recommendedAction')
+          ],
+          rows: gatewayCodeRows.map(([status, errorCode]) => [
+            raw(status),
+            raw(errorCode),
+            localized(`apiDocs.errors.actions.${errorCode}`)
+          ])
+        }
       ]
     },
     {
       id: 'anthropic-envelope',
-      titleKey: 'apiDocs.guides.errors.protocolEnvelope',
+      titleKey: 'apiDocs.guideSectionTitles.errors.anthropicEnvelope',
       blocks: [
         paragraph('apiDocs.guides.errors.protocolEnvelope'),
         code(
@@ -338,7 +391,7 @@ function buildErrors(): ApiDocsGuideSection[] {
     },
     {
       id: 'openai-envelope',
-      titleKey: 'apiDocs.guides.errors.protocolEnvelope',
+      titleKey: 'apiDocs.guideSectionTitles.errors.openaiEnvelope',
       blocks: [
         paragraph('apiDocs.guides.errors.protocolEnvelope'),
         callout('warning', 'apiDocs.errors.gatewayEnvelopeWarning'),
@@ -351,7 +404,7 @@ function buildErrors(): ApiDocsGuideSection[] {
     },
     {
       id: 'stream-errors',
-      titleKey: 'apiDocs.sections.streaming',
+      titleKey: 'apiDocs.guideSectionTitles.errors.streamErrors',
       blocks: [
         paragraph('apiDocs.guides.errors.streamFailures'),
         code(
@@ -381,7 +434,7 @@ function buildRequestId(): ApiDocsGuideSection[] {
   return [
     {
       id: 'headers',
-      titleKey: 'apiDocs.guides.requestId.headers',
+      titleKey: 'apiDocs.guideSectionTitles.requestId.headers',
       blocks: [
         paragraph('apiDocs.guides.requestId.intro'),
         paragraph('apiDocs.guides.requestId.headers'),
@@ -390,12 +443,12 @@ function buildRequestId(): ApiDocsGuideSection[] {
     },
     {
       id: 'support-checklist',
-      titleKey: 'apiDocs.guides.requestId.supportChecklist',
+      titleKey: 'apiDocs.guideSectionTitles.requestId.supportChecklist',
       blocks: [paragraph('apiDocs.guides.requestId.supportChecklist')]
     },
     {
       id: 'redaction',
-      titleKey: 'apiDocs.guides.requestId.redaction',
+      titleKey: 'apiDocs.guideSectionTitles.requestId.redaction',
       blocks: [callout('warning', 'apiDocs.guides.requestId.redaction')]
     }
   ]
@@ -405,7 +458,7 @@ function buildKeySecurity(): ApiDocsGuideSection[] {
   return [
     {
       id: 'expiration',
-      titleKey: 'apiDocs.guides.keySecurity.expiration',
+      titleKey: 'apiDocs.guideSectionTitles.keySecurity.expiration',
       blocks: [
         paragraph('apiDocs.guides.keySecurity.intro'),
         paragraph('apiDocs.guides.keySecurity.expiration')
@@ -413,28 +466,41 @@ function buildKeySecurity(): ApiDocsGuideSection[] {
     },
     {
       id: 'quota',
-      titleKey: 'apiDocs.guides.keySecurity.quota',
+      titleKey: 'apiDocs.guideSectionTitles.keySecurity.quota',
       blocks: [paragraph('apiDocs.guides.keySecurity.quota')]
     },
     {
       id: 'rate-windows',
-      titleKey: 'apiDocs.guides.keySecurity.rateWindows',
+      titleKey: 'apiDocs.guideSectionTitles.keySecurity.rateWindows',
       blocks: [
         paragraph('apiDocs.guides.keySecurity.rateWindows'),
-        { kind: 'table', columns: ['Window'], rows: [['5h'], ['1d'], ['7d']] }
+        {
+          kind: 'table',
+          columns: [localized('apiDocs.tables.window')],
+          rows: [[raw('5h')], [raw('1d')], [raw('7d')]]
+        }
       ]
     },
     {
       id: 'ip-rules',
-      titleKey: 'apiDocs.guides.keySecurity.ipRules',
+      titleKey: 'apiDocs.guideSectionTitles.keySecurity.ipRules',
       blocks: [
         paragraph('apiDocs.guides.keySecurity.ipRules'),
         {
           kind: 'table',
-          columns: ['Rule', 'Matching IP/CIDR'],
+          columns: [
+            localized('apiDocs.tables.rule'),
+            localized('apiDocs.tables.matchingIpCidr')
+          ],
           rows: [
-            ['Whitelist', 'Allowed'],
-            ['Blacklist', 'Denied']
+            [
+              localized('apiDocs.tables.whitelist'),
+              localized('apiDocs.tables.allowed')
+            ],
+            [
+              localized('apiDocs.tables.blacklist'),
+              localized('apiDocs.tables.denied')
+            ]
           ]
         }
       ]
