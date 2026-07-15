@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -267,6 +269,40 @@ func (_c *UserCreate) SetLastActiveAt(v time.Time) *UserCreate {
 func (_c *UserCreate) SetNillableLastActiveAt(v *time.Time) *UserCreate {
 	if v != nil {
 		_c.SetLastActiveAt(*v)
+	}
+	return _c
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (_c *UserCreate) SetBeginnerGuidePromptState(v string) *UserCreate {
+	_c.mutation.SetBeginnerGuidePromptState(v)
+	return _c
+}
+
+// SetNillableBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field if the given value is not nil.
+func (_c *UserCreate) SetNillableBeginnerGuidePromptState(v *string) *UserCreate {
+	if v != nil {
+		_c.SetBeginnerGuidePromptState(*v)
+	}
+	return _c
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (_c *UserCreate) SetBeginnerGuideProgress(v json.RawMessage) *UserCreate {
+	_c.mutation.SetBeginnerGuideProgress(v)
+	return _c
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (_c *UserCreate) SetBeginnerGuideCompletedAt(v time.Time) *UserCreate {
+	_c.mutation.SetBeginnerGuideCompletedAt(v)
+	return _c
+}
+
+// SetNillableBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field if the given value is not nil.
+func (_c *UserCreate) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserCreate {
+	if v != nil {
+		_c.SetBeginnerGuideCompletedAt(*v)
 	}
 	return _c
 }
@@ -579,6 +615,21 @@ func (_c *UserCreate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserCreate {
 	return _c.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_c *UserCreate) AddDailyCheckInClaimIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _c
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_c *UserCreate) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_c *UserCreate) Mutation() *UserMutation {
 	return _c.mutation
@@ -665,6 +716,10 @@ func (_c *UserCreate) defaults() error {
 	if _, ok := _c.mutation.SignupSource(); !ok {
 		v := user.DefaultSignupSource
 		_c.mutation.SetSignupSource(v)
+	}
+	if _, ok := _c.mutation.BeginnerGuidePromptState(); !ok {
+		v := user.DefaultBeginnerGuidePromptState
+		_c.mutation.SetBeginnerGuidePromptState(v)
 	}
 	if _, ok := _c.mutation.BalanceNotifyEnabled(); !ok {
 		v := user.DefaultBalanceNotifyEnabled
@@ -762,6 +817,14 @@ func (_c *UserCreate) check() error {
 	if v, ok := _c.mutation.SignupSource(); ok {
 		if err := user.SignupSourceValidator(v); err != nil {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.BeginnerGuidePromptState(); !ok {
+		return &ValidationError{Name: "beginner_guide_prompt_state", err: errors.New(`ent: missing required field "User.beginner_guide_prompt_state"`)}
+	}
+	if v, ok := _c.mutation.BeginnerGuidePromptState(); ok {
+		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
+			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.BalanceNotifyEnabled(); !ok {
@@ -880,6 +943,18 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LastActiveAt(); ok {
 		_spec.SetField(user.FieldLastActiveAt, field.TypeTime, value)
 		_node.LastActiveAt = &value
+	}
+	if value, ok := _c.mutation.BeginnerGuidePromptState(); ok {
+		_spec.SetField(user.FieldBeginnerGuidePromptState, field.TypeString, value)
+		_node.BeginnerGuidePromptState = value
+	}
+	if value, ok := _c.mutation.BeginnerGuideProgress(); ok {
+		_spec.SetField(user.FieldBeginnerGuideProgress, field.TypeJSON, value)
+		_node.BeginnerGuideProgress = value
+	}
+	if value, ok := _c.mutation.BeginnerGuideCompletedAt(); ok {
+		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
+		_node.BeginnerGuideCompletedAt = &value
 	}
 	if value, ok := _c.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -1130,6 +1205,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1438,6 +1529,54 @@ func (u *UserUpsert) UpdateLastActiveAt() *UserUpsert {
 // ClearLastActiveAt clears the value of the "last_active_at" field.
 func (u *UserUpsert) ClearLastActiveAt() *UserUpsert {
 	u.SetNull(user.FieldLastActiveAt)
+	return u
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (u *UserUpsert) SetBeginnerGuidePromptState(v string) *UserUpsert {
+	u.Set(user.FieldBeginnerGuidePromptState, v)
+	return u
+}
+
+// UpdateBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field to the value that was provided on create.
+func (u *UserUpsert) UpdateBeginnerGuidePromptState() *UserUpsert {
+	u.SetExcluded(user.FieldBeginnerGuidePromptState)
+	return u
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (u *UserUpsert) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsert {
+	u.Set(user.FieldBeginnerGuideProgress, v)
+	return u
+}
+
+// UpdateBeginnerGuideProgress sets the "beginner_guide_progress" field to the value that was provided on create.
+func (u *UserUpsert) UpdateBeginnerGuideProgress() *UserUpsert {
+	u.SetExcluded(user.FieldBeginnerGuideProgress)
+	return u
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (u *UserUpsert) ClearBeginnerGuideProgress() *UserUpsert {
+	u.SetNull(user.FieldBeginnerGuideProgress)
+	return u
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (u *UserUpsert) SetBeginnerGuideCompletedAt(v time.Time) *UserUpsert {
+	u.Set(user.FieldBeginnerGuideCompletedAt, v)
+	return u
+}
+
+// UpdateBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field to the value that was provided on create.
+func (u *UserUpsert) UpdateBeginnerGuideCompletedAt() *UserUpsert {
+	u.SetExcluded(user.FieldBeginnerGuideCompletedAt)
+	return u
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (u *UserUpsert) ClearBeginnerGuideCompletedAt() *UserUpsert {
+	u.SetNull(user.FieldBeginnerGuideCompletedAt)
 	return u
 }
 
@@ -1885,6 +2024,62 @@ func (u *UserUpsertOne) UpdateLastActiveAt() *UserUpsertOne {
 func (u *UserUpsertOne) ClearLastActiveAt() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.ClearLastActiveAt()
+	})
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (u *UserUpsertOne) SetBeginnerGuidePromptState(v string) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuidePromptState(v)
+	})
+}
+
+// UpdateBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateBeginnerGuidePromptState() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuidePromptState()
+	})
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (u *UserUpsertOne) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuideProgress(v)
+	})
+}
+
+// UpdateBeginnerGuideProgress sets the "beginner_guide_progress" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateBeginnerGuideProgress() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuideProgress()
+	})
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (u *UserUpsertOne) ClearBeginnerGuideProgress() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.ClearBeginnerGuideProgress()
+	})
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (u *UserUpsertOne) SetBeginnerGuideCompletedAt(v time.Time) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuideCompletedAt(v)
+	})
+}
+
+// UpdateBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateBeginnerGuideCompletedAt() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuideCompletedAt()
+	})
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (u *UserUpsertOne) ClearBeginnerGuideCompletedAt() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.ClearBeginnerGuideCompletedAt()
 	})
 }
 
@@ -2516,6 +2711,62 @@ func (u *UserUpsertBulk) UpdateLastActiveAt() *UserUpsertBulk {
 func (u *UserUpsertBulk) ClearLastActiveAt() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.ClearLastActiveAt()
+	})
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (u *UserUpsertBulk) SetBeginnerGuidePromptState(v string) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuidePromptState(v)
+	})
+}
+
+// UpdateBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateBeginnerGuidePromptState() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuidePromptState()
+	})
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (u *UserUpsertBulk) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuideProgress(v)
+	})
+}
+
+// UpdateBeginnerGuideProgress sets the "beginner_guide_progress" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateBeginnerGuideProgress() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuideProgress()
+	})
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (u *UserUpsertBulk) ClearBeginnerGuideProgress() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.ClearBeginnerGuideProgress()
+	})
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (u *UserUpsertBulk) SetBeginnerGuideCompletedAt(v time.Time) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBeginnerGuideCompletedAt(v)
+	})
+}
+
+// UpdateBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateBeginnerGuideCompletedAt() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBeginnerGuideCompletedAt()
+	})
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (u *UserUpsertBulk) ClearBeginnerGuideCompletedAt() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.ClearBeginnerGuideCompletedAt()
 	})
 }
 

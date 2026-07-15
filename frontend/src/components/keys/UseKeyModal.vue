@@ -140,6 +140,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import type { GroupPlatform } from '@/types'
+import { buildClientConfigFiles } from './clientConfigFiles'
 
 interface Props {
   show: boolean
@@ -460,6 +461,28 @@ const currentFiles = computed((): FileConfig[] => {
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
 
+  if ((activeClientTab.value === 'claude' || activeClientTab.value === 'codex') && props.platform) {
+    const selectedOS = activeTab.value === 'windows' || activeTab.value === 'cmd' || activeTab.value === 'powershell'
+      ? 'windows'
+      : 'macos'
+    const windowsShell = activeTab.value === 'cmd' ? 'cmd' : 'powershell'
+    const sharedBaseUrl = activeClientTab.value === 'claude' && props.platform === 'antigravity'
+      ? `${baseRoot}/antigravity`
+      : baseUrl
+
+    return buildClientConfigFiles({
+      client: activeClientTab.value === 'claude' ? 'claude_code' : 'codex',
+      os: selectedOS,
+      platform: props.platform,
+      apiKey,
+      baseUrl: sharedBaseUrl,
+      allowMessagesDispatch: props.allowMessagesDispatch,
+      windowsShell
+    }).map(({ hintKey, ...file }) => hintKey
+      ? { ...file, hint: t(hintKey) }
+      : file)
+  }
+
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
       case 'unified':
@@ -495,29 +518,21 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'anthropic-python-sdk') {
         return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
-      if (activeClientTab.value === 'codex') {
-        return generateOpenAIFiles(apiBase, apiKey)
-      }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
         return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
-      // default unified client is Claude Code; ANTHROPIC_BASE_URL must be bare.
-      return generateAnthropicFiles(baseRoot, apiKey)
+      return []
     case 'openai':
-      if (activeClientTab.value === 'claude') {
-        // ANTHROPIC_BASE_URL must be bare — Claude Code appends /v1/messages.
-        return generateAnthropicFiles(baseRoot, apiKey)
-      }
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
       }
       if (activeClientTab.value === 'openai-imagen2-python-sdk') {
         return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
-      return generateOpenAIFiles(apiBase, apiKey)
+      return []
     case 'gemini':
       // Gemini CLI appends /v1beta itself; GOOGLE_GEMINI_BASE_URL must be bare.
       return [generateGeminiCliContent(baseRoot, apiKey)]
@@ -527,7 +542,7 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'gemini') {
         return [generateGeminiCliContent(`${baseRoot}/antigravity`, apiKey)]
       }
-      return generateAnthropicFiles(`${baseRoot}/antigravity`, apiKey)
+      return []
     case 'grok':
       return generateGrokFiles(apiBase, apiKey)
     default:
@@ -535,8 +550,7 @@ const currentFiles = computed((): FileConfig[] => {
       if (activeClientTab.value === 'anthropic-python-sdk') {
         return [generateAnthropicPythonSdkFile(baseRoot, apiKey)]
       }
-      // Claude Code env vars: ANTHROPIC_BASE_URL must be bare for the same reason.
-      return generateAnthropicFiles(baseRoot, apiKey)
+      return []
   }
 })
 
@@ -643,56 +657,6 @@ print()`
   }
 }
 
-function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  let path: string
-  let content: string
-
-  switch (activeTab.value) {
-    case 'unix':
-      path = 'Terminal'
-      content = `export ANTHROPIC_BASE_URL="${baseUrl}"
-export ANTHROPIC_AUTH_TOKEN="${apiKey}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0`
-      break
-    case 'cmd':
-      path = 'Command Prompt'
-      content = `set ANTHROPIC_BASE_URL=${baseUrl}
-set ANTHROPIC_AUTH_TOKEN=${apiKey}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
-      break
-    case 'powershell':
-      path = 'PowerShell'
-      content = `$env:ANTHROPIC_BASE_URL="${baseUrl}"
-$env:ANTHROPIC_AUTH_TOKEN="${apiKey}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-$env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
-      break
-    default:
-      path = 'Terminal'
-      content = ''
-  }
-
-  const vscodeSettingsPath = activeTab.value === 'unix'
-    ? '~/.claude/settings.json'
-    : '%userprofile%\\.claude\\settings.json'
-
-  const vscodeContent = `{
-  "env": {
-    "ANTHROPIC_BASE_URL": "${baseUrl}",
-    "ANTHROPIC_AUTH_TOKEN": "${apiKey}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
-  }
-}`
-
-  return [
-    { path, content },
-    { path: vscodeSettingsPath, content: vscodeContent, hint: 'VSCode Claude Code' }
-  ]
-}
-
 function generateGeminiCliContent(baseUrl: string, apiKey: string): FileConfig {
   const model = 'gemini-2.0-flash'
   const modelComment = t('keys.useKeyModal.gemini.modelComment')
@@ -797,46 +761,6 @@ for event in stream:
     output_path.write_bytes(b64decode(image_b64))
     print(f"Wrote {output_path}")`
   }
-}
-
-function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-
-  // config.toml content
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-requires_openai_auth = true
-
-[features]
-goals = true`
-
-  // auth.json content
-  const authContent = `{
-  "OPENAI_API_KEY": "${apiKey}"
-}`
-
-  return [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    },
-    {
-      path: `${configDir}/auth.json`,
-      content: authContent
-    }
-  ]
 }
 
 function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {

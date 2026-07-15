@@ -1,5 +1,11 @@
 <template>
   <div class="linear-dashboard-page space-y-5">
+    <BeginnerWelcomeDialog
+      :show="guideStore.showPrompt"
+      @start="handleWelcomeStart"
+      @close="handleWelcomeClose"
+    />
+
     <div v-if="loading" class="linx-panel flex items-center justify-center py-12"><LoadingSpinner /></div>
     <template v-else-if="stats">
       <UserDashboardStats
@@ -35,21 +41,30 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { paymentAPI } from '@/api/payment'
 import { usageAPI, type UserDashboardStats as UserStatsType } from '@/api/usage'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import BeginnerWelcomeDialog from '@/components/getting-started/BeginnerWelcomeDialog.vue'
 import UserDashboardCharts from '@/components/user/dashboard/UserDashboardCharts.vue'
 import UserDashboardQuickActions from '@/components/user/dashboard/UserDashboardQuickActions.vue'
 import UserDashboardRecentUsage from '@/components/user/dashboard/UserDashboardRecentUsage.vue'
 import UserDashboardStats from '@/components/user/dashboard/UserDashboardStats.vue'
+import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useBeginnerGuideStore } from '@/stores/beginnerGuide'
 import { useSubscriptionStore } from '@/stores/subscriptions'
 import type { ModelStat, TrendDataPoint, UsageLog } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 
 const authStore = useAuthStore()
+const appStore = useAppStore()
+const guideStore = useBeginnerGuideStore()
 const subscriptionStore = useSubscriptionStore()
+const router = useRouter()
+const { t } = useI18n()
 const user = computed(() => authStore.user)
 
 withDefaults(defineProps<{
@@ -135,6 +150,41 @@ const refreshAll = () => {
   loadRecent()
   loadSubscriptionData()
 }
+
+const persistWelcomeDismissal = async () => {
+  const ownerId = user.value?.id ?? null
+  try {
+    const persisted = await guideStore.suppressPrompt()
+    if (!persisted && (user.value?.id ?? null) === ownerId) {
+      appStore.showWarning(t('gettingStarted.warnings.promptSaveFailed'))
+    }
+  } catch {
+    if ((user.value?.id ?? null) === ownerId) {
+      appStore.showWarning(t('gettingStarted.warnings.promptSaveFailed'))
+    }
+  }
+}
+
+const handleWelcomeClose = async () => {
+  await persistWelcomeDismissal()
+}
+
+const handleWelcomeStart = async () => {
+  await persistWelcomeDismissal()
+  await router.push('/getting-started')
+}
+
+watch(
+  () => user.value?.id ?? null,
+  (userId) => {
+    if (userId === null) {
+      void guideStore.initialize({ authenticated: false, userId: null })
+      return
+    }
+    void guideStore.initialize({ authenticated: true, userId })
+  },
+  { immediate: true }
+)
 
 onMounted(() => {
   refreshAll()

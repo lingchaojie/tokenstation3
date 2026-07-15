@@ -51,6 +51,12 @@ const (
 	FieldLastLoginAt = "last_login_at"
 	// FieldLastActiveAt holds the string denoting the last_active_at field in the database.
 	FieldLastActiveAt = "last_active_at"
+	// FieldBeginnerGuidePromptState holds the string denoting the beginner_guide_prompt_state field in the database.
+	FieldBeginnerGuidePromptState = "beginner_guide_prompt_state"
+	// FieldBeginnerGuideProgress holds the string denoting the beginner_guide_progress field in the database.
+	FieldBeginnerGuideProgress = "beginner_guide_progress"
+	// FieldBeginnerGuideCompletedAt holds the string denoting the beginner_guide_completed_at field in the database.
+	FieldBeginnerGuideCompletedAt = "beginner_guide_completed_at"
 	// FieldBalanceNotifyEnabled holds the string denoting the balance_notify_enabled field in the database.
 	FieldBalanceNotifyEnabled = "balance_notify_enabled"
 	// FieldSubscriptionBalanceFallbackEnabled holds the string denoting the subscription_balance_fallback_enabled field in the database.
@@ -93,6 +99,8 @@ const (
 	EdgePlatformQuotas = "platform_quotas"
 	// EdgeAPIKeyRoutes holds the string denoting the api_key_routes edge name in mutations.
 	EdgeAPIKeyRoutes = "api_key_routes"
+	// EdgeDailyCheckInClaims holds the string denoting the daily_check_in_claims edge name in mutations.
+	EdgeDailyCheckInClaims = "daily_check_in_claims"
 	// EdgeUserAllowedGroups holds the string denoting the user_allowed_groups edge name in mutations.
 	EdgeUserAllowedGroups = "user_allowed_groups"
 	// Table holds the table name of the user in the database.
@@ -193,6 +201,13 @@ const (
 	APIKeyRoutesInverseTable = "user_api_key_routes"
 	// APIKeyRoutesColumn is the table column denoting the api_key_routes relation/edge.
 	APIKeyRoutesColumn = "user_id"
+	// DailyCheckInClaimsTable is the table that holds the daily_check_in_claims relation/edge.
+	DailyCheckInClaimsTable = "daily_check_in_claims"
+	// DailyCheckInClaimsInverseTable is the table name for the DailyCheckInClaim entity.
+	// It exists in this package in order to avoid circular dependency with the "dailycheckinclaim" package.
+	DailyCheckInClaimsInverseTable = "daily_check_in_claims"
+	// DailyCheckInClaimsColumn is the table column denoting the daily_check_in_claims relation/edge.
+	DailyCheckInClaimsColumn = "user_id"
 	// UserAllowedGroupsTable is the table that holds the user_allowed_groups relation/edge.
 	UserAllowedGroupsTable = "user_allowed_groups"
 	// UserAllowedGroupsInverseTable is the table name for the UserAllowedGroup entity.
@@ -223,6 +238,9 @@ var Columns = []string{
 	FieldSignupSource,
 	FieldLastLoginAt,
 	FieldLastActiveAt,
+	FieldBeginnerGuidePromptState,
+	FieldBeginnerGuideProgress,
+	FieldBeginnerGuideCompletedAt,
 	FieldBalanceNotifyEnabled,
 	FieldSubscriptionBalanceFallbackEnabled,
 	FieldBalanceNotifyThresholdType,
@@ -292,6 +310,10 @@ var (
 	DefaultSignupSource string
 	// SignupSourceValidator is a validator for the "signup_source" field. It is called by the builders before save.
 	SignupSourceValidator func(string) error
+	// DefaultBeginnerGuidePromptState holds the default value on creation for the "beginner_guide_prompt_state" field.
+	DefaultBeginnerGuidePromptState string
+	// BeginnerGuidePromptStateValidator is a validator for the "beginner_guide_prompt_state" field. It is called by the builders before save.
+	BeginnerGuidePromptStateValidator func(string) error
 	// DefaultBalanceNotifyEnabled holds the default value on creation for the "balance_notify_enabled" field.
 	DefaultBalanceNotifyEnabled bool
 	// DefaultSubscriptionBalanceFallbackEnabled holds the default value on creation for the "subscription_balance_fallback_enabled" field.
@@ -402,6 +424,16 @@ func ByLastLoginAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLastActiveAt orders the results by the last_active_at field.
 func ByLastActiveAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastActiveAt, opts...).ToFunc()
+}
+
+// ByBeginnerGuidePromptState orders the results by the beginner_guide_prompt_state field.
+func ByBeginnerGuidePromptState(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBeginnerGuidePromptState, opts...).ToFunc()
+}
+
+// ByBeginnerGuideCompletedAt orders the results by the beginner_guide_completed_at field.
+func ByBeginnerGuideCompletedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBeginnerGuideCompletedAt, opts...).ToFunc()
 }
 
 // ByBalanceNotifyEnabled orders the results by the balance_notify_enabled field.
@@ -635,6 +667,20 @@ func ByAPIKeyRoutes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByDailyCheckInClaimsCount orders the results by daily_check_in_claims count.
+func ByDailyCheckInClaimsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDailyCheckInClaimsStep(), opts...)
+	}
+}
+
+// ByDailyCheckInClaims orders the results by daily_check_in_claims terms.
+func ByDailyCheckInClaims(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDailyCheckInClaimsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByUserAllowedGroupsCount orders the results by user_allowed_groups count.
 func ByUserAllowedGroupsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -744,6 +790,13 @@ func newAPIKeyRoutesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(APIKeyRoutesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, APIKeyRoutesTable, APIKeyRoutesColumn),
+	)
+}
+func newDailyCheckInClaimsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DailyCheckInClaimsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DailyCheckInClaimsTable, DailyCheckInClaimsColumn),
 	)
 }
 func newUserAllowedGroupsStep() *sqlgraph.Step {

@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ type User struct {
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	// LastActiveAt holds the value of the "last_active_at" field.
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
+	// BeginnerGuidePromptState holds the value of the "beginner_guide_prompt_state" field.
+	BeginnerGuidePromptState string `json:"beginner_guide_prompt_state,omitempty"`
+	// BeginnerGuideProgress holds the value of the "beginner_guide_progress" field.
+	BeginnerGuideProgress json.RawMessage `json:"beginner_guide_progress,omitempty"`
+	// BeginnerGuideCompletedAt holds the value of the "beginner_guide_completed_at" field.
+	BeginnerGuideCompletedAt *time.Time `json:"beginner_guide_completed_at,omitempty"`
 	// BalanceNotifyEnabled holds the value of the "balance_notify_enabled" field.
 	BalanceNotifyEnabled bool `json:"balance_notify_enabled,omitempty"`
 	// SubscriptionBalanceFallbackEnabled holds the value of the "subscription_balance_fallback_enabled" field.
@@ -103,11 +110,13 @@ type UserEdges struct {
 	PlatformQuotas []*UserPlatformQuota `json:"platform_quotas,omitempty"`
 	// APIKeyRoutes holds the value of the api_key_routes edge.
 	APIKeyRoutes []*UserAPIKeyRoute `json:"api_key_routes,omitempty"`
+	// DailyCheckInClaims holds the value of the daily_check_in_claims edge.
+	DailyCheckInClaims []*DailyCheckInClaim `json:"daily_check_in_claims,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [15]bool
+	loadedTypes [16]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -236,10 +245,19 @@ func (e UserEdges) APIKeyRoutesOrErr() ([]*UserAPIKeyRoute, error) {
 	return nil, &NotLoadedError{edge: "api_key_routes"}
 }
 
+// DailyCheckInClaimsOrErr returns the DailyCheckInClaims value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) DailyCheckInClaimsOrErr() ([]*DailyCheckInClaim, error) {
+	if e.loadedTypes[14] {
+		return e.DailyCheckInClaims, nil
+	}
+	return nil, &NotLoadedError{edge: "daily_check_in_claims"}
+}
+
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[14] {
+	if e.loadedTypes[15] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -250,15 +268,17 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case user.FieldBeginnerGuideProgress:
+			values[i] = new([]byte)
 		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldFrozenBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
 		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
+		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBeginnerGuidePromptState, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
 			values[i] = new(sql.NullString)
-		case user.FieldCreatedAt, user.FieldUpdatedAt, user.FieldDeletedAt, user.FieldTotpEnabledAt, user.FieldLastLoginAt, user.FieldLastActiveAt:
+		case user.FieldCreatedAt, user.FieldUpdatedAt, user.FieldDeletedAt, user.FieldTotpEnabledAt, user.FieldLastLoginAt, user.FieldLastActiveAt, user.FieldBeginnerGuideCompletedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -394,6 +414,27 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				_m.LastActiveAt = new(time.Time)
 				*_m.LastActiveAt = value.Time
 			}
+		case user.FieldBeginnerGuidePromptState:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_prompt_state", values[i])
+			} else if value.Valid {
+				_m.BeginnerGuidePromptState = value.String
+			}
+		case user.FieldBeginnerGuideProgress:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_progress", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.BeginnerGuideProgress); err != nil {
+					return fmt.Errorf("unmarshal field beginner_guide_progress: %w", err)
+				}
+			}
+		case user.FieldBeginnerGuideCompletedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field beginner_guide_completed_at", values[i])
+			} else if value.Valid {
+				_m.BeginnerGuideCompletedAt = new(time.Time)
+				*_m.BeginnerGuideCompletedAt = value.Time
+			}
 		case user.FieldBalanceNotifyEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field balance_notify_enabled", values[i])
@@ -520,6 +561,11 @@ func (_m *User) QueryAPIKeyRoutes() *UserAPIKeyRouteQuery {
 	return NewUserClient(_m.config).QueryAPIKeyRoutes(_m)
 }
 
+// QueryDailyCheckInClaims queries the "daily_check_in_claims" edge of the User entity.
+func (_m *User) QueryDailyCheckInClaims() *DailyCheckInClaimQuery {
+	return NewUserClient(_m.config).QueryDailyCheckInClaims(_m)
+}
+
 // QueryUserAllowedGroups queries the "user_allowed_groups" edge of the User entity.
 func (_m *User) QueryUserAllowedGroups() *UserAllowedGroupQuery {
 	return NewUserClient(_m.config).QueryUserAllowedGroups(_m)
@@ -609,6 +655,17 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	if v := _m.LastActiveAt; v != nil {
 		builder.WriteString("last_active_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("beginner_guide_prompt_state=")
+	builder.WriteString(_m.BeginnerGuidePromptState)
+	builder.WriteString(", ")
+	builder.WriteString("beginner_guide_progress=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BeginnerGuideProgress))
+	builder.WriteString(", ")
+	if v := _m.BeginnerGuideCompletedAt; v != nil {
+		builder.WriteString("beginner_guide_completed_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")

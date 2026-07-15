@@ -102,8 +102,8 @@
           </template>
         </div>
 
-        <!-- Personal Section for Admin (hidden in simple mode) -->
-        <div v-if="!authStore.isSimpleMode" class="sidebar-section">
+        <!-- Personal Section for Admin -->
+        <div v-if="visiblePersonalNavItems.length" class="sidebar-section">
           <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
             <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
               {{ t('nav.myAccount') }}
@@ -111,7 +111,7 @@
           </div>
 
           <router-link
-            v-for="item in personalNavItems"
+            v-for="item in visiblePersonalNavItems"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -199,6 +199,7 @@ import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import { useDailyCheckInActivity } from '@/composables/useDailyCheckInActivity'
 
 interface NavItem {
   path: string
@@ -245,6 +246,7 @@ const authStore = useAuthStore()
 const onboardingStore = useOnboardingStore()
 const adminSettingsStore = useAdminSettingsStore()
 const { canUseBatchImage, refreshBatchImageAccess } = useBatchImageAccess()
+const { active: dailyCheckInActive } = useDailyCheckInActivity()
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
@@ -321,6 +323,21 @@ const KeyIcon = {
           'stroke-linecap': 'round',
           'stroke-linejoin': 'round',
           d: 'M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z'
+        })
+      ]
+    )
+}
+
+const BeginnerGuideIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25'
         })
       ]
     )
@@ -724,18 +741,26 @@ const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
-// withDashboard=true 时包含仪表盘。
+// withDashboard=true 时包含仪表盘；普通用户可传入“概览”文案，并在活动期插入签到入口。
 //
-// 条目顺序：仪表盘（可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
+// 条目顺序：仪表盘（可选）→ 签到（活动期可选）→ 模型广场 → 对话 → 密钥 → 用量 → 可用渠道 → 渠道状态 → 订阅/支付 → 兑换/资料。
 // 可用渠道紧挨渠道状态之上，让用户"先看自己能用什么、再看对应状态"。
-function buildSelfNavItems(withDashboard: boolean): NavItem[] {
+function buildSelfNavItems(
+  withDashboard: boolean,
+  dashboardLabel: string,
+  includeDailyCheckIn = false,
+): NavItem[] {
   const items: NavItem[] = []
   if (withDashboard) {
-    items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon })
+    items.push({ path: '/dashboard', label: dashboardLabel, icon: DashboardIcon })
+  }
+  if (includeDailyCheckIn) {
+    items.push({ path: '/check-in', label: t('nav.dailyCheckIn'), icon: GiftIcon })
   }
   items.push(
     { path: '/dashboard/models', label: t('nav.modelMarketplace'), icon: ModelCatalogIcon },
     { path: '/chat', label: t('nav.chat'), icon: ChatIcon },
+    { path: '/getting-started', label: t('gettingStarted.dashboard.sidebarLabel'), icon: BeginnerGuideIcon },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
@@ -765,7 +790,7 @@ function remapNavPaths(items: NavItem[], pathMap: Record<string, string>): NavIt
 }
 
 function buildAdminPersonalNavItems(): NavItem[] {
-  return remapNavPaths(buildSelfNavItems(true), {
+  return remapNavPaths(buildSelfNavItems(true, t('nav.dashboard')), {
     '/dashboard': '/admin/my-account/dashboard',
   })
 }
@@ -777,12 +802,20 @@ function finalizeNav(items: NavItem[]): NavItem[] {
 }
 
 // User navigation items (for regular users)
-const userNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(true)))
+const userNavItems = computed((): NavItem[] =>
+  finalizeNav(buildSelfNavItems(true, t('nav.overview'), dailyCheckInActive.value)),
+)
 
 // Personal navigation items (for admin's "My Account" section).
 // The dashboard item is the same user dashboard declaration, remapped into the
 // admin route namespace so admins stay inside the admin panel while viewing it.
 const personalNavItems = computed((): NavItem[] => finalizeNav(buildAdminPersonalNavItems()))
+
+const visiblePersonalNavItems = computed((): NavItem[] =>
+  authStore.isSimpleMode
+    ? personalNavItems.value.filter((item) => item.path === '/getting-started')
+    : personalNavItems.value,
+)
 
 // Custom menu items filtered by visibility
 const customMenuItemsForUser = computed(() => {
@@ -829,11 +862,11 @@ const adminNavItems = computed((): NavItem[] => {
       icon: UsersIcon,
       hideInSimpleMode: true,
       expandOnly: true,
-      featureFlag: flagAffiliate,
       children: [
         { path: '/admin/affiliates/invites', label: t('nav.affiliateInviteRecords'), icon: UsersIcon },
         { path: '/admin/affiliates/rebates', label: t('nav.affiliateRebateRecords'), icon: OrderIcon },
         { path: '/admin/affiliates/transfers', label: t('nav.affiliateTransferRecords'), icon: CreditCardIcon },
+        { path: '/admin/affiliates/check-in', label: t('nav.dailyCheckInConfig'), icon: GiftIcon },
       ],
     },
     {

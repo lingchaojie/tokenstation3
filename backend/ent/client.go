@@ -29,6 +29,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -95,6 +96,8 @@ type Client struct {
 	ChannelMonitorHistory *ChannelMonitorHistoryClient
 	// ChannelMonitorRequestTemplate is the client for interacting with the ChannelMonitorRequestTemplate builders.
 	ChannelMonitorRequestTemplate *ChannelMonitorRequestTemplateClient
+	// DailyCheckInClaim is the client for interacting with the DailyCheckInClaim builders.
+	DailyCheckInClaim *DailyCheckInClaimClient
 	// ErrorPassthroughRule is the client for interacting with the ErrorPassthroughRule builders.
 	ErrorPassthroughRule *ErrorPassthroughRuleClient
 	// Group is the client for interacting with the Group builders.
@@ -178,6 +181,7 @@ func (c *Client) init() {
 	c.ChannelMonitorDailyRollup = NewChannelMonitorDailyRollupClient(c.config)
 	c.ChannelMonitorHistory = NewChannelMonitorHistoryClient(c.config)
 	c.ChannelMonitorRequestTemplate = NewChannelMonitorRequestTemplateClient(c.config)
+	c.DailyCheckInClaim = NewDailyCheckInClaimClient(c.config)
 	c.ErrorPassthroughRule = NewErrorPassthroughRuleClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.IdempotencyRecord = NewIdempotencyRecordClient(c.config)
@@ -313,6 +317,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ChannelMonitorDailyRollup:     NewChannelMonitorDailyRollupClient(cfg),
 		ChannelMonitorHistory:         NewChannelMonitorHistoryClient(cfg),
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
+		DailyCheckInClaim:             NewDailyCheckInClaimClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
@@ -375,6 +380,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ChannelMonitorDailyRollup:     NewChannelMonitorDailyRollupClient(cfg),
 		ChannelMonitorHistory:         NewChannelMonitorHistoryClient(cfg),
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
+		DailyCheckInClaim:             NewDailyCheckInClaimClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
@@ -436,7 +442,7 @@ func (c *Client) Use(hooks ...Hook) {
 		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
 		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
-		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
+		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate, c.DailyCheckInClaim,
 		c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
 		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
@@ -458,7 +464,7 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
 		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
-		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
+		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate, c.DailyCheckInClaim,
 		c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
 		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
@@ -504,6 +510,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ChannelMonitorHistory.mutate(ctx, m)
 	case *ChannelMonitorRequestTemplateMutation:
 		return c.ChannelMonitorRequestTemplate.mutate(ctx, m)
+	case *DailyCheckInClaimMutation:
+		return c.DailyCheckInClaim.mutate(ctx, m)
 	case *ErrorPassthroughRuleMutation:
 		return c.ErrorPassthroughRule.mutate(ctx, m)
 	case *GroupMutation:
@@ -2765,6 +2773,155 @@ func (c *ChannelMonitorRequestTemplateClient) mutate(ctx context.Context, m *Cha
 		return (&ChannelMonitorRequestTemplateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ChannelMonitorRequestTemplate mutation op: %q", m.Op())
+	}
+}
+
+// DailyCheckInClaimClient is a client for the DailyCheckInClaim schema.
+type DailyCheckInClaimClient struct {
+	config
+}
+
+// NewDailyCheckInClaimClient returns a client for the DailyCheckInClaim from the given config.
+func NewDailyCheckInClaimClient(c config) *DailyCheckInClaimClient {
+	return &DailyCheckInClaimClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `dailycheckinclaim.Hooks(f(g(h())))`.
+func (c *DailyCheckInClaimClient) Use(hooks ...Hook) {
+	c.hooks.DailyCheckInClaim = append(c.hooks.DailyCheckInClaim, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `dailycheckinclaim.Intercept(f(g(h())))`.
+func (c *DailyCheckInClaimClient) Intercept(interceptors ...Interceptor) {
+	c.inters.DailyCheckInClaim = append(c.inters.DailyCheckInClaim, interceptors...)
+}
+
+// Create returns a builder for creating a DailyCheckInClaim entity.
+func (c *DailyCheckInClaimClient) Create() *DailyCheckInClaimCreate {
+	mutation := newDailyCheckInClaimMutation(c.config, OpCreate)
+	return &DailyCheckInClaimCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of DailyCheckInClaim entities.
+func (c *DailyCheckInClaimClient) CreateBulk(builders ...*DailyCheckInClaimCreate) *DailyCheckInClaimCreateBulk {
+	return &DailyCheckInClaimCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *DailyCheckInClaimClient) MapCreateBulk(slice any, setFunc func(*DailyCheckInClaimCreate, int)) *DailyCheckInClaimCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &DailyCheckInClaimCreateBulk{err: fmt.Errorf("calling to DailyCheckInClaimClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*DailyCheckInClaimCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &DailyCheckInClaimCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for DailyCheckInClaim.
+func (c *DailyCheckInClaimClient) Update() *DailyCheckInClaimUpdate {
+	mutation := newDailyCheckInClaimMutation(c.config, OpUpdate)
+	return &DailyCheckInClaimUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *DailyCheckInClaimClient) UpdateOne(_m *DailyCheckInClaim) *DailyCheckInClaimUpdateOne {
+	mutation := newDailyCheckInClaimMutation(c.config, OpUpdateOne, withDailyCheckInClaim(_m))
+	return &DailyCheckInClaimUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *DailyCheckInClaimClient) UpdateOneID(id int64) *DailyCheckInClaimUpdateOne {
+	mutation := newDailyCheckInClaimMutation(c.config, OpUpdateOne, withDailyCheckInClaimID(id))
+	return &DailyCheckInClaimUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for DailyCheckInClaim.
+func (c *DailyCheckInClaimClient) Delete() *DailyCheckInClaimDelete {
+	mutation := newDailyCheckInClaimMutation(c.config, OpDelete)
+	return &DailyCheckInClaimDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *DailyCheckInClaimClient) DeleteOne(_m *DailyCheckInClaim) *DailyCheckInClaimDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *DailyCheckInClaimClient) DeleteOneID(id int64) *DailyCheckInClaimDeleteOne {
+	builder := c.Delete().Where(dailycheckinclaim.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &DailyCheckInClaimDeleteOne{builder}
+}
+
+// Query returns a query builder for DailyCheckInClaim.
+func (c *DailyCheckInClaimClient) Query() *DailyCheckInClaimQuery {
+	return &DailyCheckInClaimQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeDailyCheckInClaim},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a DailyCheckInClaim entity by its id.
+func (c *DailyCheckInClaimClient) Get(ctx context.Context, id int64) (*DailyCheckInClaim, error) {
+	return c.Query().Where(dailycheckinclaim.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *DailyCheckInClaimClient) GetX(ctx context.Context, id int64) *DailyCheckInClaim {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a DailyCheckInClaim.
+func (c *DailyCheckInClaimClient) QueryUser(_m *DailyCheckInClaim) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(dailycheckinclaim.Table, dailycheckinclaim.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, dailycheckinclaim.UserTable, dailycheckinclaim.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *DailyCheckInClaimClient) Hooks() []Hook {
+	return c.hooks.DailyCheckInClaim
+}
+
+// Interceptors returns the client interceptors.
+func (c *DailyCheckInClaimClient) Interceptors() []Interceptor {
+	return c.inters.DailyCheckInClaim
+}
+
+func (c *DailyCheckInClaimClient) mutate(ctx context.Context, m *DailyCheckInClaimMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&DailyCheckInClaimCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&DailyCheckInClaimUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&DailyCheckInClaimUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&DailyCheckInClaimDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown DailyCheckInClaim mutation op: %q", m.Op())
 	}
 }
 
@@ -5914,6 +6071,22 @@ func (c *UserClient) QueryAPIKeyRoutes(_m *User) *UserAPIKeyRouteQuery {
 	return query
 }
 
+// QueryDailyCheckInClaims queries the daily_check_in_claims edge of a User.
+func (c *UserClient) QueryDailyCheckInClaims(_m *User) *DailyCheckInClaimQuery {
+	query := (&DailyCheckInClaimClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(dailycheckinclaim.Table, dailycheckinclaim.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.DailyCheckInClaimsTable, user.DailyCheckInClaimsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryUserAllowedGroups queries the user_allowed_groups edge of a User.
 func (c *UserClient) QueryUserAllowedGroups(_m *User) *UserAllowedGroupQuery {
 	query := (&UserAllowedGroupClient{config: c.config}).Query()
@@ -7442,8 +7615,8 @@ type (
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
 		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
-		ChannelMonitorRequestTemplate, ErrorPassthroughRule, Group, IdempotencyRecord,
-		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		ChannelMonitorRequestTemplate, DailyCheckInClaim, ErrorPassthroughRule, Group,
+		IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
 		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
 		UsageCleanupTask, UsageLog, User, UserAPIKeyRoute, UserAllowedGroup,
@@ -7455,8 +7628,8 @@ type (
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
 		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
-		ChannelMonitorRequestTemplate, ErrorPassthroughRule, Group, IdempotencyRecord,
-		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		ChannelMonitorRequestTemplate, DailyCheckInClaim, ErrorPassthroughRule, Group,
+		IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
 		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
 		UsageCleanupTask, UsageLog, User, UserAPIKeyRoute, UserAllowedGroup,

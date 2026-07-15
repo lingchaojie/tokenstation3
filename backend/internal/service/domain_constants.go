@@ -171,6 +171,10 @@ const (
 	SettingKeyAffiliateFirstRechargeThreshold  = "affiliate_first_recharge_threshold"  // 首充达标阈值（USD）
 	SettingKeyAffiliateInviterReward           = "affiliate_inviter_reward"            // 邀请方奖励（进返利余额）
 	SettingKeyAffiliateInviteeReward           = "affiliate_invitee_reward"            // 被邀请方奖励（进账户余额）
+	SettingKeyDailyCheckInEnabled              = "daily_check_in_enabled"              // 每日签到活动总开关
+	SettingKeyDailyCheckInStartAt              = "daily_check_in_start_at"             // 每日签到活动开始时间（UTC RFC3339）
+	SettingKeyDailyCheckInDurationDays         = "daily_check_in_duration_days"        // 每日签到活动持续天数
+	SettingKeyDailyCheckInRewardAmount         = "daily_check_in_reward_amount"        // 每日签到奖励余额（USD）
 	SettingKeyRiskControlEnabled               = "risk_control_enabled"                // 是否启用风控中心入口与审计链路
 	SettingKeyContentModerationConfig          = "content_moderation_config"           // 内容审计配置（JSON）
 	SettingKeyCyberSessionBlockEnabled         = "cyber_session_block_enabled"         // cyber 命中后会话级自动屏蔽总开关(默认关)

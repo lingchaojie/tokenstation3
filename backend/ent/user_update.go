@@ -4,16 +4,19 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/dailycheckinclaim"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -319,6 +322,58 @@ func (_u *UserUpdate) SetNillableLastActiveAt(v *time.Time) *UserUpdate {
 // ClearLastActiveAt clears the value of the "last_active_at" field.
 func (_u *UserUpdate) ClearLastActiveAt() *UserUpdate {
 	_u.mutation.ClearLastActiveAt()
+	return _u
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (_u *UserUpdate) SetBeginnerGuidePromptState(v string) *UserUpdate {
+	_u.mutation.SetBeginnerGuidePromptState(v)
+	return _u
+}
+
+// SetNillableBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableBeginnerGuidePromptState(v *string) *UserUpdate {
+	if v != nil {
+		_u.SetBeginnerGuidePromptState(*v)
+	}
+	return _u
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (_u *UserUpdate) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+	_u.mutation.SetBeginnerGuideProgress(v)
+	return _u
+}
+
+// AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
+func (_u *UserUpdate) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+	_u.mutation.AppendBeginnerGuideProgress(v)
+	return _u
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (_u *UserUpdate) ClearBeginnerGuideProgress() *UserUpdate {
+	_u.mutation.ClearBeginnerGuideProgress()
+	return _u
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (_u *UserUpdate) SetBeginnerGuideCompletedAt(v time.Time) *UserUpdate {
+	_u.mutation.SetBeginnerGuideCompletedAt(v)
+	return _u
+}
+
+// SetNillableBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserUpdate {
+	if v != nil {
+		_u.SetBeginnerGuideCompletedAt(*v)
+	}
+	return _u
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (_u *UserUpdate) ClearBeginnerGuideCompletedAt() *UserUpdate {
+	_u.mutation.ClearBeginnerGuideCompletedAt()
 	return _u
 }
 
@@ -657,6 +712,21 @@ func (_u *UserUpdate) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
 	return _u.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_u *UserUpdate) AddDailyCheckInClaimIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdate) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdate) Mutation() *UserMutation {
 	return _u.mutation
@@ -956,6 +1026,27 @@ func (_u *UserUpdate) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdate {
 	return _u.RemoveAPIKeyRouteIDs(ids...)
 }
 
+// ClearDailyCheckInClaims clears all "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdate) ClearDailyCheckInClaims() *UserUpdate {
+	_u.mutation.ClearDailyCheckInClaims()
+	return _u
+}
+
+// RemoveDailyCheckInClaimIDs removes the "daily_check_in_claims" edge to DailyCheckInClaim entities by IDs.
+func (_u *UserUpdate) RemoveDailyCheckInClaimIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// RemoveDailyCheckInClaims removes "daily_check_in_claims" edges to DailyCheckInClaim entities.
+func (_u *UserUpdate) RemoveDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDailyCheckInClaimIDs(ids...)
+}
+
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *UserUpdate) Save(ctx context.Context) (int, error) {
 	if err := _u.defaults(); err != nil {
@@ -1028,6 +1119,11 @@ func (_u *UserUpdate) check() error {
 	if v, ok := _u.mutation.SignupSource(); ok {
 		if err := user.SignupSourceValidator(v); err != nil {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
+			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
 		}
 	}
 	return nil
@@ -1119,6 +1215,26 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.LastActiveAtCleared() {
 		_spec.ClearField(user.FieldLastActiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		_spec.SetField(user.FieldBeginnerGuidePromptState, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BeginnerGuideProgress(); ok {
+		_spec.SetField(user.FieldBeginnerGuideProgress, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBeginnerGuideProgress(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldBeginnerGuideProgress, value)
+		})
+	}
+	if _u.mutation.BeginnerGuideProgressCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideProgress, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BeginnerGuideCompletedAt(); ok {
+		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BeginnerGuideCompletedAtCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -1795,6 +1911,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDailyCheckInClaimsIDs(); len(nodes) > 0 && !_u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{user.Label}
@@ -2093,6 +2254,58 @@ func (_u *UserUpdateOne) SetNillableLastActiveAt(v *time.Time) *UserUpdateOne {
 // ClearLastActiveAt clears the value of the "last_active_at" field.
 func (_u *UserUpdateOne) ClearLastActiveAt() *UserUpdateOne {
 	_u.mutation.ClearLastActiveAt()
+	return _u
+}
+
+// SetBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field.
+func (_u *UserUpdateOne) SetBeginnerGuidePromptState(v string) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuidePromptState(v)
+	return _u
+}
+
+// SetNillableBeginnerGuidePromptState sets the "beginner_guide_prompt_state" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableBeginnerGuidePromptState(v *string) *UserUpdateOne {
+	if v != nil {
+		_u.SetBeginnerGuidePromptState(*v)
+	}
+	return _u
+}
+
+// SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuideProgress(v)
+	return _u
+}
+
+// AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+	_u.mutation.AppendBeginnerGuideProgress(v)
+	return _u
+}
+
+// ClearBeginnerGuideProgress clears the value of the "beginner_guide_progress" field.
+func (_u *UserUpdateOne) ClearBeginnerGuideProgress() *UserUpdateOne {
+	_u.mutation.ClearBeginnerGuideProgress()
+	return _u
+}
+
+// SetBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field.
+func (_u *UserUpdateOne) SetBeginnerGuideCompletedAt(v time.Time) *UserUpdateOne {
+	_u.mutation.SetBeginnerGuideCompletedAt(v)
+	return _u
+}
+
+// SetNillableBeginnerGuideCompletedAt sets the "beginner_guide_completed_at" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserUpdateOne {
+	if v != nil {
+		_u.SetBeginnerGuideCompletedAt(*v)
+	}
+	return _u
+}
+
+// ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
+func (_u *UserUpdateOne) ClearBeginnerGuideCompletedAt() *UserUpdateOne {
+	_u.mutation.ClearBeginnerGuideCompletedAt()
 	return _u
 }
 
@@ -2431,6 +2644,21 @@ func (_u *UserUpdateOne) AddAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOne {
 	return _u.AddAPIKeyRouteIDs(ids...)
 }
 
+// AddDailyCheckInClaimIDs adds the "daily_check_in_claims" edge to the DailyCheckInClaim entity by IDs.
+func (_u *UserUpdateOne) AddDailyCheckInClaimIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// AddDailyCheckInClaims adds the "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdateOne) AddDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDailyCheckInClaimIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdateOne) Mutation() *UserMutation {
 	return _u.mutation
@@ -2730,6 +2958,27 @@ func (_u *UserUpdateOne) RemoveAPIKeyRoutes(v ...*UserAPIKeyRoute) *UserUpdateOn
 	return _u.RemoveAPIKeyRouteIDs(ids...)
 }
 
+// ClearDailyCheckInClaims clears all "daily_check_in_claims" edges to the DailyCheckInClaim entity.
+func (_u *UserUpdateOne) ClearDailyCheckInClaims() *UserUpdateOne {
+	_u.mutation.ClearDailyCheckInClaims()
+	return _u
+}
+
+// RemoveDailyCheckInClaimIDs removes the "daily_check_in_claims" edge to DailyCheckInClaim entities by IDs.
+func (_u *UserUpdateOne) RemoveDailyCheckInClaimIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveDailyCheckInClaimIDs(ids...)
+	return _u
+}
+
+// RemoveDailyCheckInClaims removes "daily_check_in_claims" edges to DailyCheckInClaim entities.
+func (_u *UserUpdateOne) RemoveDailyCheckInClaims(v ...*DailyCheckInClaim) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDailyCheckInClaimIDs(ids...)
+}
+
 // Where appends a list predicates to the UserUpdate builder.
 func (_u *UserUpdateOne) Where(ps ...predicate.User) *UserUpdateOne {
 	_u.mutation.Where(ps...)
@@ -2815,6 +3064,11 @@ func (_u *UserUpdateOne) check() error {
 	if v, ok := _u.mutation.SignupSource(); ok {
 		if err := user.SignupSourceValidator(v); err != nil {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
+			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
 		}
 	}
 	return nil
@@ -2923,6 +3177,26 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if _u.mutation.LastActiveAtCleared() {
 		_spec.ClearField(user.FieldLastActiveAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BeginnerGuidePromptState(); ok {
+		_spec.SetField(user.FieldBeginnerGuidePromptState, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BeginnerGuideProgress(); ok {
+		_spec.SetField(user.FieldBeginnerGuideProgress, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBeginnerGuideProgress(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldBeginnerGuideProgress, value)
+		})
+	}
+	if _u.mutation.BeginnerGuideProgressCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideProgress, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BeginnerGuideCompletedAt(); ok {
+		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BeginnerGuideCompletedAtCleared() {
+		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -3592,6 +3866,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userapikeyroute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDailyCheckInClaimsIDs(); len(nodes) > 0 && !_u.mutation.DailyCheckInClaimsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DailyCheckInClaimsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.DailyCheckInClaimsTable,
+			Columns: []string{user.DailyCheckInClaimsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dailycheckinclaim.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

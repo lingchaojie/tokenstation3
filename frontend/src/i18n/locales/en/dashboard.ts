@@ -80,6 +80,28 @@ export default {
     addBalanceWithCode: 'Add balance with a code'
   },
 
+  checkIn: {
+    title: 'Check in for Token',
+    description: 'Check in daily and receive the reward in your account balance immediately.',
+    rewardLabel: "Today's reward",
+    rewardHint: 'Refreshes daily at 00:00 (UTC+8). Missed days cannot be claimed later.',
+    claimButton: 'Check in and claim',
+    claiming: 'Claiming...',
+    claimedToday: 'Checked in today',
+    claimedHint: 'The reward is in your balance. Come back after 00:00 (UTC+8) tomorrow.',
+    claimSuccess: 'Check-in successful. {amount} has been credited.',
+    loadFailed: 'Failed to load the check-in activity. Please try again later.',
+    claimFailed: 'Check-in failed. Please try again later.',
+    balanceAfter: 'Balance after claim: {amount}',
+    activityPeriod: 'Activity period: {start} – {end}',
+    states: {
+      disabled: 'The check-in activity is not enabled',
+      upcoming: 'The check-in activity has not started',
+      active: 'The check-in activity is active',
+      ended: 'The check-in activity has ended',
+    },
+  },
+
   // Groups (shared)
   groups: {
     subscription: 'Sub'

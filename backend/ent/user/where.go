@@ -145,6 +145,16 @@ func LastActiveAt(v time.Time) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldLastActiveAt, v))
 }
 
+// BeginnerGuidePromptState applies equality check predicate on the "beginner_guide_prompt_state" field. It's identical to BeginnerGuidePromptStateEQ.
+func BeginnerGuidePromptState(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuideCompletedAt applies equality check predicate on the "beginner_guide_completed_at" field. It's identical to BeginnerGuideCompletedAtEQ.
+func BeginnerGuideCompletedAt(v time.Time) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBeginnerGuideCompletedAt, v))
+}
+
 // BalanceNotifyEnabled applies equality check predicate on the "balance_notify_enabled" field. It's identical to BalanceNotifyEnabledEQ.
 func BalanceNotifyEnabled(v bool) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyEnabled, v))
@@ -1120,6 +1130,131 @@ func LastActiveAtNotNil() predicate.User {
 	return predicate.User(sql.FieldNotNull(FieldLastActiveAt))
 }
 
+// BeginnerGuidePromptStateEQ applies the EQ predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateEQ(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateNEQ applies the NEQ predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateNEQ(v string) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateIn applies the In predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldIn(FieldBeginnerGuidePromptState, vs...))
+}
+
+// BeginnerGuidePromptStateNotIn applies the NotIn predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateNotIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldBeginnerGuidePromptState, vs...))
+}
+
+// BeginnerGuidePromptStateGT applies the GT predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateGT(v string) predicate.User {
+	return predicate.User(sql.FieldGT(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateGTE applies the GTE predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateGTE(v string) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateLT applies the LT predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateLT(v string) predicate.User {
+	return predicate.User(sql.FieldLT(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateLTE applies the LTE predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateLTE(v string) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateContains applies the Contains predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateContains(v string) predicate.User {
+	return predicate.User(sql.FieldContains(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateHasPrefix applies the HasPrefix predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateHasPrefix(v string) predicate.User {
+	return predicate.User(sql.FieldHasPrefix(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateHasSuffix applies the HasSuffix predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateHasSuffix(v string) predicate.User {
+	return predicate.User(sql.FieldHasSuffix(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateEqualFold applies the EqualFold predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateEqualFold(v string) predicate.User {
+	return predicate.User(sql.FieldEqualFold(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuidePromptStateContainsFold applies the ContainsFold predicate on the "beginner_guide_prompt_state" field.
+func BeginnerGuidePromptStateContainsFold(v string) predicate.User {
+	return predicate.User(sql.FieldContainsFold(FieldBeginnerGuidePromptState, v))
+}
+
+// BeginnerGuideProgressIsNil applies the IsNil predicate on the "beginner_guide_progress" field.
+func BeginnerGuideProgressIsNil() predicate.User {
+	return predicate.User(sql.FieldIsNull(FieldBeginnerGuideProgress))
+}
+
+// BeginnerGuideProgressNotNil applies the NotNil predicate on the "beginner_guide_progress" field.
+func BeginnerGuideProgressNotNil() predicate.User {
+	return predicate.User(sql.FieldNotNull(FieldBeginnerGuideProgress))
+}
+
+// BeginnerGuideCompletedAtEQ applies the EQ predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtEQ(v time.Time) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtNEQ applies the NEQ predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtNEQ(v time.Time) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtIn applies the In predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtIn(vs ...time.Time) predicate.User {
+	return predicate.User(sql.FieldIn(FieldBeginnerGuideCompletedAt, vs...))
+}
+
+// BeginnerGuideCompletedAtNotIn applies the NotIn predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtNotIn(vs ...time.Time) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldBeginnerGuideCompletedAt, vs...))
+}
+
+// BeginnerGuideCompletedAtGT applies the GT predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtGT(v time.Time) predicate.User {
+	return predicate.User(sql.FieldGT(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtGTE applies the GTE predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtGTE(v time.Time) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtLT applies the LT predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtLT(v time.Time) predicate.User {
+	return predicate.User(sql.FieldLT(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtLTE applies the LTE predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtLTE(v time.Time) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldBeginnerGuideCompletedAt, v))
+}
+
+// BeginnerGuideCompletedAtIsNil applies the IsNil predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtIsNil() predicate.User {
+	return predicate.User(sql.FieldIsNull(FieldBeginnerGuideCompletedAt))
+}
+
+// BeginnerGuideCompletedAtNotNil applies the NotNil predicate on the "beginner_guide_completed_at" field.
+func BeginnerGuideCompletedAtNotNil() predicate.User {
+	return predicate.User(sql.FieldNotNull(FieldBeginnerGuideCompletedAt))
+}
+
 // BalanceNotifyEnabledEQ applies the EQ predicate on the "balance_notify_enabled" field.
 func BalanceNotifyEnabledEQ(v bool) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyEnabled, v))
@@ -1714,6 +1849,29 @@ func HasAPIKeyRoutes() predicate.User {
 func HasAPIKeyRoutesWith(preds ...predicate.UserAPIKeyRoute) predicate.User {
 	return predicate.User(func(s *sql.Selector) {
 		step := newAPIKeyRoutesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasDailyCheckInClaims applies the HasEdge predicate on the "daily_check_in_claims" edge.
+func HasDailyCheckInClaims() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, DailyCheckInClaimsTable, DailyCheckInClaimsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDailyCheckInClaimsWith applies the HasEdge predicate on the "daily_check_in_claims" edge with a given conditions (other predicates).
+func HasDailyCheckInClaimsWith(preds ...predicate.DailyCheckInClaim) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newDailyCheckInClaimsStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
@@ -95,6 +96,24 @@ func (User) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+		field.String("beginner_guide_prompt_state").
+			MaxLen(20).
+			Default("eligible").
+			Validate(func(value string) error {
+				switch value {
+				case "eligible", "suppressed", "completed":
+					return nil
+				default:
+					return fmt.Errorf("must be eligible, suppressed, or completed")
+				}
+			}),
+		field.JSON("beginner_guide_progress", json.RawMessage{}).
+			Optional().
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.Time("beginner_guide_completed_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 
 		// 余额不足通知
 		field.Bool("balance_notify_enabled").
@@ -138,6 +157,8 @@ func (User) Edges() []ent.Edge {
 		edge.To("pending_auth_sessions", PendingAuthSession.Type),
 		edge.To("platform_quotas", UserPlatformQuota.Type),
 		edge.To("api_key_routes", UserAPIKeyRoute.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("daily_check_in_claims", DailyCheckInClaim.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

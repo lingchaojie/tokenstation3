@@ -41,6 +41,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/getting-started',
+    name: 'GettingStarted',
+    component: () => import('@/views/public/GettingStartedView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Beginner Guide',
+      titleKey: 'gettingStarted.title'
+    }
+  },
+  {
     path: '/models',
     name: 'PublicModels',
     component: () => import('@/views/public/ModelsView.vue'),
@@ -203,6 +213,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Dashboard',
       titleKey: 'dashboard.title',
       descriptionKey: 'dashboard.welcomeMessage'
+    }
+  },
+  {
+    path: '/check-in',
+    name: 'DailyCheckIn',
+    component: () => import('@/views/user/CheckInView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Daily Check-in',
+      titleKey: 'checkIn.title',
+      descriptionKey: 'checkIn.description'
     }
   },
   {
@@ -673,6 +695,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Affiliate Transfer Records',
       titleKey: 'nav.affiliateTransferRecords',
       descriptionKey: 'admin.affiliates.transfersDescription'
+    }
+  },
+  {
+    path: '/admin/affiliates/check-in',
+    name: 'AdminDailyCheckInConfig',
+    component: () => import('@/views/admin/affiliates/AdminCheckInConfigView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Daily Check-in Configuration',
+      titleKey: 'admin.affiliates.checkIn.title',
+      descriptionKey: 'admin.affiliates.checkIn.description'
     }
   },
 

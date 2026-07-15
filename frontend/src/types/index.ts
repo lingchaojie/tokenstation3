@@ -253,6 +253,9 @@ export interface PublicSettings {
   available_channels_enabled: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
+  daily_check_in_enabled?: boolean
+  daily_check_in_start_at?: string
+  daily_check_in_end_at?: string
   allow_user_view_error_requests?: boolean
 }
 

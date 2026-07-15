@@ -22,6 +22,8 @@ func RegisterUserRoutes(
 		// 用户接口
 		user := authenticated.Group("/user")
 		{
+			user.GET("/beginner-guide", h.User.GetBeginnerGuide)
+			user.PATCH("/beginner-guide", h.User.PatchBeginnerGuide)
 			user.GET("/profile", h.User.GetProfile)
 			user.PUT("/password", h.User.ChangePassword)
 			user.PUT("", h.User.UpdateProfile)
@@ -33,6 +35,7 @@ func RegisterUserRoutes(
 			user.POST("/auth-identities/bind/start", h.User.StartIdentityBinding)
 			user.GET("/api-keys/:id/usage/daily", h.Usage.GetMyAPIKeyDailyUsage)
 			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
+			registerCheckInRoutes(user, h)
 
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")
@@ -145,5 +148,13 @@ func RegisterUserRoutes(
 			chat.GET("/attachments/:id/download", h.WebChat.DownloadAttachment)
 			chat.GET("/artifacts/:id/download", h.WebChat.DownloadArtifact)
 		}
+	}
+}
+
+func registerCheckInRoutes(user *gin.RouterGroup, h *handler.Handlers) {
+	checkIn := user.Group("/check-in")
+	{
+		checkIn.GET("/status", h.CheckIn.GetStatus)
+		checkIn.POST("/claim", h.CheckIn.Claim)
 	}
 }

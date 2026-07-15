@@ -80,6 +80,28 @@ export default {
     addBalanceWithCode: '使用兑换码充值'
   },
 
+  checkIn: {
+    title: '签到领Token',
+    description: '每日签到，奖励将立即发放到您的账户余额。',
+    rewardLabel: '今日签到奖励',
+    rewardHint: '每天 00:00（UTC+8）刷新，错过当天不可补签。',
+    claimButton: '立即签到领取',
+    claiming: '领取中...',
+    claimedToday: '今日已签到',
+    claimedHint: '奖励已到账，明天 00:00（UTC+8）后可再次领取。',
+    claimSuccess: '签到成功，已到账 {amount}',
+    loadFailed: '加载签到活动失败，请稍后重试。',
+    claimFailed: '签到失败，请稍后重试。',
+    balanceAfter: '领取后余额：{amount}',
+    activityPeriod: '活动时间：{start} 至 {end}',
+    states: {
+      disabled: '签到活动暂未开启',
+      upcoming: '签到活动尚未开始',
+      active: '签到活动进行中',
+      ended: '签到活动已结束',
+    },
+  },
+
   // Groups (shared)
   groups: {
     subscription: '订阅'

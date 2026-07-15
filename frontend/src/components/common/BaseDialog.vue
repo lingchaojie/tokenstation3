@@ -11,7 +11,7 @@
         @click.self="handleClose"
       >
         <!-- Modal panel -->
-        <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
+        <div ref="dialogRef" :class="['modal-content', widthClasses]" tabindex="-1" @click.stop>
           <!-- Header -->
           <div class="modal-header">
             <h3 :id="dialogId" class="modal-title">
@@ -21,7 +21,7 @@
               v-if="showCloseButton"
               @click="emit('close')"
               class="-mr-2 rounded-xl p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/30 focus-visible:ring-offset-2 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300 dark:focus-visible:ring-offset-dark-900"
-              aria-label="Close modal"
+              :aria-label="closeAriaLabel"
             >
               <Icon name="x" size="md" />
             </button>
@@ -54,6 +54,21 @@ const dialogId = `modal-title-${++dialogIdCounter}`
 const dialogRef = ref<HTMLElement | null>(null)
 let previousActiveElement: HTMLElement | null = null
 
+const TABBABLE_SELECTOR = [
+  'a[href]',
+  'area[href]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'iframe',
+  'object',
+  'embed',
+  'summary',
+  '[contenteditable]',
+  '[tabindex]'
+].join(', ')
+
 type DialogWidth = 'narrow' | 'normal' | 'wide' | 'extra-wide' | 'full'
 
 interface Props {
@@ -63,6 +78,7 @@ interface Props {
   closeOnEscape?: boolean
   closeOnClickOutside?: boolean
   showCloseButton?: boolean
+  closeAriaLabel?: string
   zIndex?: number
 }
 
@@ -75,6 +91,7 @@ const props = withDefaults(defineProps<Props>(), {
   closeOnEscape: true,
   closeOnClickOutside: false,
   showCloseButton: true,
+  closeAriaLabel: 'Close modal',
   zIndex: 50
 })
 
@@ -105,9 +122,121 @@ const handleClose = () => {
   }
 }
 
-const handleEscape = (event: KeyboardEvent) => {
+function firstSummary(details: HTMLElement): HTMLElement | null {
+  return (
+    Array.from(details.children).find((child) => child.tagName === 'SUMMARY') as
+      | HTMLElement
+      | undefined
+  ) ?? null
+}
+
+function isNativeSummary(element: HTMLElement): boolean {
+  const details = element.parentElement
+  return (
+    element.tagName === 'SUMMARY' &&
+    details?.tagName === 'DETAILS' &&
+    firstSummary(details) === element
+  )
+}
+
+function isValidContentEditable(element: HTMLElement): boolean {
+  const value = element.getAttribute('contenteditable')
+  if (value === null) {
+    return false
+  }
+  const normalized = value.toLowerCase()
+  return normalized === '' || normalized === 'true' || normalized === 'plaintext-only'
+}
+
+function hasTabStopSemantics(element: HTMLElement): boolean {
+  const hasExplicitTabIndex = element.hasAttribute('tabindex')
+  if (hasExplicitTabIndex) {
+    return element.tabIndex >= 0
+  }
+  if (element.tagName === 'SUMMARY') {
+    return isNativeSummary(element)
+  }
+  if (element.hasAttribute('contenteditable')) {
+    return isValidContentEditable(element)
+  }
+  return element.tabIndex >= 0
+}
+
+function isVisible(element: HTMLElement): boolean {
+  let candidate: HTMLElement | null = element
+  while (candidate) {
+    if (
+      candidate.hidden ||
+      candidate.hasAttribute('inert') ||
+      candidate.getAttribute('aria-hidden') === 'true'
+    ) {
+      return false
+    }
+    const style = window.getComputedStyle(candidate)
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      return false
+    }
+    if (
+      candidate !== element &&
+      candidate.tagName === 'DETAILS' &&
+      !candidate.hasAttribute('open')
+    ) {
+      const summary = firstSummary(candidate)
+      if (summary === null || !summary.contains(element)) {
+        return false
+      }
+    }
+    if (candidate === dialogRef.value) {
+      break
+    }
+    candidate = candidate.parentElement
+  }
+  return true
+}
+
+function getTabbableElements(): HTMLElement[] {
+  if (!dialogRef.value) {
+    return []
+  }
+  return Array.from(dialogRef.value.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
+    (element) =>
+      !element.matches(':disabled') &&
+      hasTabStopSemantics(element) &&
+      isVisible(element)
+  )
+}
+
+function focusDialogStart(): void {
+  const target = getTabbableElements()[0] ?? dialogRef.value
+  target?.focus()
+}
+
+const handleKeydown = (event: KeyboardEvent) => {
   if (props.show && props.closeOnEscape && event.key === 'Escape') {
     emit('close')
+    return
+  }
+  if (!props.show || event.key !== 'Tab' || !dialogRef.value) {
+    return
+  }
+
+  const tabbable = getTabbableElements()
+  if (tabbable.length === 0) {
+    event.preventDefault()
+    dialogRef.value.focus()
+    return
+  }
+
+  const first = tabbable[0]
+  const last = tabbable[tabbable.length - 1]
+  const active = document.activeElement
+  const focusLeftDialog = active === null || !dialogRef.value.contains(active)
+  if (event.shiftKey && (active === first || focusLeftDialog)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (active === last || focusLeftDialog)) {
+    event.preventDefault()
+    first.focus()
   }
 }
 
@@ -123,12 +252,7 @@ watch(
 
       // 等待DOM更新后设置焦点到对话框
       await nextTick()
-      if (dialogRef.value) {
-        const firstFocusable = dialogRef.value.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        )
-        firstFocusable?.focus()
-      }
+      focusDialogStart()
     } else {
       document.body.classList.remove('modal-open')
       // 恢复之前的焦点
@@ -142,11 +266,11 @@ watch(
 )
 
 onMounted(() => {
-  document.addEventListener('keydown', handleEscape)
+  document.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', handleEscape)
+  document.removeEventListener('keydown', handleKeydown)
   // 确保组件卸载时移除滚动锁定
   document.body.classList.remove('modal-open')
 })

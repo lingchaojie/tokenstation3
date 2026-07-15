@@ -16,7 +16,11 @@ FRONTEND_CRITICAL_VITEST := \
 	src/router/__tests__/admin-my-account-dashboard-route.spec.ts \
 	src/components/account/__tests__/AccountUsageCell.spec.ts \
 	src/views/user/__tests__/KeysView.spec.ts \
-	src/utils/__tests__/analytics51la.spec.ts
+	src/utils/__tests__/analytics51la.spec.ts \
+	src/views/user/__tests__/CheckInView.spec.ts \
+	src/views/admin/affiliates/__tests__/AdminCheckInConfigView.spec.ts \
+	src/components/layout/__tests__/AppSidebar.spec.ts \
+	src/router/__tests__/checkInRoute.spec.ts
 
 FRONTEND_WEBCHAT_VITEST := \
 	src/utils/__tests__/webChatModelName.spec.ts \
