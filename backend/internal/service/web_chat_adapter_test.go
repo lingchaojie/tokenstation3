@@ -144,9 +144,9 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 		ContentText: "What is new in AI today?",
 	}}
 	caps := WebChatModelCapability{
-		Provider:          "openai",
-		Platform:          PlatformOpenAI,
-		Model:             "gpt-5.5",
+		Provider:          "anthropic",
+		Platform:          PlatformAnthropic,
+		Model:             "claude-sonnet-4",
 		SupportsText:      true,
 		SupportsWebSearch: true,
 	}
@@ -157,7 +157,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{
-		"model":"gpt-5.5",
+		"model":"claude-sonnet-4",
 		"stream":true,
 		"include":["reasoning.encrypted_content"],
 		"store":false,
@@ -172,7 +172,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{
-		"model":"gpt-5.5",
+		"model":"claude-sonnet-4",
 		"stream":true,
 		"include":["reasoning.encrypted_content"],
 		"store":false,
