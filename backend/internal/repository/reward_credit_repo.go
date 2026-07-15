@@ -286,7 +286,7 @@ RETURNING id`, input.UserID, input.CreditType, input.SourceKey, input.Amount, in
 UPDATE users
 SET balance = balance + $1, updated_at = $2
 WHERE id = $3 AND deleted_at IS NULL
-RETURNING balance::double precision`, input.Amount, input.GrantedAt, input.UserID)
+RETURNING balance`, input.Amount, input.GrantedAt, input.UserID)
 	if err != nil {
 		return result, err
 	}
@@ -315,7 +315,7 @@ VALUES ($1, $2, 'grant', $3, $4, $5)`, result.CreditID, input.UserID, input.Sour
 func existingRewardCreditGrantResult(ctx context.Context, q rewardCreditQueryExecer, input service.RewardCreditGrant) (service.RewardCreditGrantResult, error) {
 	var result service.RewardCreditGrantResult
 	rows, err := q.QueryContext(ctx, `
-SELECT rc.id, u.balance::double precision
+SELECT rc.id, u.balance
 FROM user_reward_credits rc
 JOIN users u ON u.id = rc.user_id
 WHERE rc.user_id = $1 AND rc.credit_type = $2 AND rc.source_key = $3`, input.UserID, input.CreditType, input.SourceKey)

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -42,61 +44,76 @@ func (r *checkInRepository) FindClaim(
 func (r *checkInRepository) CreateClaim(
 	ctx context.Context,
 	input service.DailyCheckInClaimInput,
-) (_ *service.DailyCheckInClaim, err error) {
+) (*service.DailyCheckInClaim, error) {
+	var result *service.DailyCheckInClaim
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		exists, err := txClient.User.Query().Where(user.IDEQ(input.UserID)).Exist(txCtx)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return service.ErrUserNotFound
+		}
+
+		claim, err := txClient.DailyCheckInClaim.Create().
+			SetUserID(input.UserID).
+			SetActivityStartAt(input.ActivityStartAt.UTC()).
+			SetCheckInDate(input.CheckInDate.UTC()).
+			SetRewardAmount(input.RewardAmount).
+			SetBalanceAfter(0).
+			SetClaimedAt(input.ClaimedAt.UTC()).
+			Save(txCtx)
+		if err != nil {
+			if isDailyCheckInUniqueConstraint(err) {
+				return service.ErrDailyCheckInAlreadyClaimed
+			}
+			return err
+		}
+
+		grant, err := grantRewardCreditTx(txCtx, txClient, service.RewardCreditGrant{
+			UserID:     input.UserID,
+			CreditType: service.RewardCreditDailyCheckIn,
+			SourceKey:  fmt.Sprintf("daily-check-in:%d", claim.ID),
+			Amount:     input.RewardAmount,
+			GrantedAt:  input.ClaimedAt.UTC(),
+			ExpiresAt:  input.ExpiresAt.UTC(),
+		})
+		if err != nil {
+			return fmt.Errorf("grant daily check-in reward credit: %w", err)
+		}
+		if !grant.Applied {
+			return errors.New("daily check-in reward credit already exists")
+		}
+
+		claim, err = txClient.DailyCheckInClaim.UpdateOneID(claim.ID).
+			SetBalanceAfter(grant.BalanceAfter).
+			Save(txCtx)
+		if err != nil {
+			return err
+		}
+		result = dailyCheckInClaimEntityToService(claim)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *checkInRepository) withTx(ctx context.Context, fn func(context.Context, *dbent.Client) error) error {
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return fn(ctx, tx.Client())
+	}
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	exists, err := tx.User.Query().Where(user.IDEQ(input.UserID)).Exist(ctx)
-	if err != nil {
-		return nil, err
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := fn(txCtx, tx.Client()); err != nil {
+		return err
 	}
-	if !exists {
-		return nil, service.ErrUserNotFound
-	}
-
-	claim, err := tx.DailyCheckInClaim.Create().
-		SetUserID(input.UserID).
-		SetActivityStartAt(input.ActivityStartAt.UTC()).
-		SetCheckInDate(input.CheckInDate.UTC()).
-		SetRewardAmount(input.RewardAmount).
-		SetBalanceAfter(0).
-		SetClaimedAt(input.ClaimedAt.UTC()).
-		Save(ctx)
-	if err != nil {
-		if isDailyCheckInUniqueConstraint(err) {
-			return nil, service.ErrDailyCheckInAlreadyClaimed
-		}
-		return nil, err
-	}
-
-	updatedUser, err := tx.User.UpdateOneID(input.UserID).
-		AddBalance(input.RewardAmount).
-		Save(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil, service.ErrUserNotFound
-		}
-		return nil, err
-	}
-
-	claim, err = tx.DailyCheckInClaim.UpdateOneID(claim.ID).
-		SetBalanceAfter(updatedUser.Balance).
-		Save(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return dailyCheckInClaimEntityToService(claim), nil
+	return tx.Commit()
 }
 
 func isDailyCheckInUniqueConstraint(err error) bool {
