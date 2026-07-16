@@ -113,7 +113,7 @@
               :saving="editingSaving"
               @open="openConversation(conversation.id)"
               @rename="beginRename(conversation.id, conversationTitle(conversation))"
-              @update-title="editingTitle = $event"
+              @update-title="updateEditingTitle"
               @save="saveRename"
               @cancel="cancelRename"
               @delete="deleteConversation(conversation.id)"
@@ -133,7 +133,7 @@
           :saving="editingSaving"
           @open="openConversation(conversation.id)"
           @rename="beginRename(conversation.id, conversationTitle(conversation))"
-          @update-title="editingTitle = $event"
+          @update-title="updateEditingTitle"
           @save="saveRename"
           @cancel="cancelRename"
           @delete="deleteConversation(conversation.id)"
@@ -365,6 +365,10 @@ async function openConversation(conversationId: number): Promise<void> {
 function beginRename(conversationId: number, currentTitle: string): void {
   editingConversationId.value = conversationId
   editingTitle.value = currentTitle
+}
+
+function updateEditingTitle(title: string): void {
+  editingTitle.value = title
 }
 
 function cancelRename(): void {
