@@ -136,4 +136,91 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(zhSource).toContain("apiRegionEuCentral: '欧洲（法兰克福）'");
     expect(zhSource).toContain("apiRegionLegacy: '{region}（当前历史值）'");
   });
+
+  it("preserves the selected Kiro API region across every reauthorization mode", () => {
+    const kiroTemplateSource = reauthSource.slice(
+      reauthSource.indexOf('<div v-if="isKiro"'),
+      reauthSource.indexOf("<OAuthAuthorizationFlow"),
+    );
+    const selectorOpeningTag =
+      kiroTemplateSource.match(
+        /<div\b[^>]*data-testid="kiro-api-region-select-reauth"[^>]*>/s,
+      )?.[0] ?? "";
+    const selectorIndex = kiroTemplateSource.indexOf(selectorOpeningTag);
+    const idcOnlyIndex = kiroTemplateSource.indexOf(
+      '<div v-if="kiroAccountType === \'idc\'"',
+    );
+    const importOnlyIndex = kiroTemplateSource.indexOf(
+      '<div v-if="isKiroImportMode"',
+    );
+    const initializationSource = reauthSource.slice(
+      reauthSource.indexOf("// Watchers"),
+      reauthSource.indexOf("const resetState"),
+    );
+    const resetStateSource = reauthSource.slice(
+      reauthSource.indexOf("const resetState"),
+      reauthSource.indexOf("const kiroModeClass"),
+    );
+    const handleExchangeSource = reauthSource.slice(
+      reauthSource.indexOf("const handleExchangeCode"),
+      reauthSource.indexOf("const handleKiroImport"),
+    );
+    const kiroExchangeSource = handleExchangeSource.slice(
+      handleExchangeSource.indexOf("} else if (isKiro.value) {"),
+      handleExchangeSource.indexOf("} else if (isAntigravity.value) {"),
+    );
+    const kiroImportSource = reauthSource.slice(
+      reauthSource.indexOf("const handleKiroImport"),
+      reauthSource.indexOf("const handleCookieAuth"),
+    );
+    const apiRegionAssignments =
+      reauthSource.match(/credentials\.api_region\s*=\s*kiroAPIRegion\.value/g) ?? [];
+
+    expect(reauthSource).toContain("DEFAULT_KIRO_API_REGION");
+    expect(reauthSource).toContain("buildKiroAPIRegionOptions");
+    expect(reauthSource).toContain("resolveKiroAPIRegion");
+    expect(reauthSource).toContain("const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)");
+    expect(reauthSource).toContain("const kiroAPIRegionOptions = computed(() =>");
+    expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionLegacy");
+    expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionUsEast");
+    expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionEuCentral");
+    expect(reauthSource).toContain("`${region} - ${t(regionLabelKey)}`");
+
+    expect(selectorOpeningTag).not.toBe("");
+    expect(selectorOpeningTag).not.toContain("v-if");
+    expect(selectorIndex).toBeGreaterThan(idcOnlyIndex);
+    expect(selectorIndex).toBeGreaterThan(importOnlyIndex);
+    expect(kiroTemplateSource).toMatch(
+      /<div v-if="isKiroImportMode"[\s\S]*<\/div>\s*<\/div>\s*<div\b[^>]*data-testid="kiro-api-region-select-reauth"[^>]*>[\s\S]*<\/div>\s*<\/div>\s*$/,
+    );
+    expect(kiroTemplateSource).toContain('v-model="kiroAPIRegion"');
+    expect(kiroTemplateSource).toContain(':options="kiroAPIRegionOptions"');
+    expect(kiroTemplateSource).toContain("admin.accounts.oauth.kiro.apiRegionLabel");
+    expect(kiroTemplateSource).toContain("admin.accounts.oauth.kiro.apiRegionHint");
+
+    expect(initializationSource).toContain(
+      "kiroAPIRegion.value = resolveKiroAPIRegion(creds.api_region)",
+    );
+    expect(initializationSource).not.toMatch(
+      /kiroAPIRegion\.value\s*=\s*resolveKiroAPIRegion\([^)]*creds\.region/,
+    );
+    expect(resetStateSource).toContain(
+      "kiroAPIRegion.value = DEFAULT_KIRO_API_REGION",
+    );
+
+    expect(apiRegionAssignments).toHaveLength(2);
+    expect(kiroExchangeSource.match(/credentials\.api_region\s*=\s*kiroAPIRegion\.value/g)).toHaveLength(1);
+    expect(kiroImportSource.match(/credentials\.api_region\s*=\s*kiroAPIRegion\.value/g)).toHaveLength(1);
+    expect(kiroExchangeSource).toContain(
+      "const credentials = kiroOAuth.buildCredentials(tokenInfo)",
+    );
+    expect(kiroImportSource).toContain(
+      "const credentials = kiroOAuth.buildCredentials(tokenInfo)",
+    );
+    expect(kiroExchangeSource).toContain("buildUpdatedCredentials(credentials)");
+    expect(kiroImportSource).toContain("buildUpdatedCredentials(credentials)");
+    expect(reauthSource).not.toMatch(
+      /api_region\s*(?:=|:)\s*(?:kiroIDCRegion|tokenInfo\.region)/,
+    );
+  });
 });
