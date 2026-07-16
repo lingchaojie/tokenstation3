@@ -65,4 +65,71 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(zhSource).not.toContain("该 Kiro 账号可参与 Anthropic/Gemini");
     expect(enSource).toContain("kiroMixedScheduling: 'Use in Anthropic /v1/messages'");
   });
+
+  it("configures the Kiro API region for every direct account create flow", () => {
+    const buildKiroCredentialsSource = source.slice(
+      source.indexOf("const buildKiroCredentials"),
+      source.indexOf("const handleSubmit"),
+    );
+    const resetFormSource = source.slice(
+      source.indexOf("const resetForm"),
+      source.indexOf("const handleClose"),
+    );
+    const nativeKiroAPIKeySource = source.slice(
+      source.indexOf("if (form.platform === 'kiro' && accountCategory.value === 'apikey')"),
+      source.indexOf("if (form.platform === 'kiro' && accountCategory.value === 'apikey-relay')"),
+    );
+    const relayKiroAPIKeySource = source.slice(
+      source.indexOf("if (form.platform === 'kiro' && accountCategory.value === 'apikey-relay')"),
+      source.indexOf("// For Bedrock type, create directly"),
+    );
+    const kiroOAuthExchangeSource = source.slice(
+      source.indexOf("const handleKiroExchange"),
+      source.indexOf("const handleGrokExchange"),
+    );
+    const kiroImportSource = source.slice(
+      source.indexOf("const handleKiroImport"),
+      source.indexOf("const handleCookieAuth"),
+    );
+
+    expect(source).toContain("DEFAULT_KIRO_API_REGION");
+    expect(source).toContain("buildKiroAPIRegionOptions");
+    expect(source).toContain("const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)");
+    expect(resetFormSource).toContain("kiroIDCRegion.value = 'us-east-1'");
+    expect(resetFormSource).toContain("kiroAPIRegion.value = DEFAULT_KIRO_API_REGION");
+    expect(source).toContain('data-testid="kiro-api-region-select-create"');
+    expect(source).toContain('v-model="kiroAPIRegion"');
+    expect(source).toContain("kiroAPIRegionOptions");
+    expect(source).toContain("admin.accounts.oauth.kiro.apiRegionLabel");
+    expect(source).toContain("admin.accounts.oauth.kiro.apiRegionHint");
+    expect(source).toContain("admin.accounts.oauth.kiro.apiRegionLegacy");
+    expect(source).toContain("admin.accounts.oauth.kiro.apiRegionUsEast");
+    expect(source).toContain("admin.accounts.oauth.kiro.apiRegionEuCentral");
+    expect(source).toContain("`${region} - ${t(regionLabelKey)}`");
+    expect(buildKiroCredentialsSource).toContain(
+      "credentials.api_region = kiroAPIRegion.value",
+    );
+    expect(kiroOAuthExchangeSource).toContain("buildKiroCredentials(tokenInfo)");
+    expect(kiroImportSource).toContain("buildKiroCredentials(tokenInfo)");
+    expect(nativeKiroAPIKeySource).toContain("api_region: kiroAPIRegion.value");
+    expect(relayKiroAPIKeySource).not.toContain("api_region");
+    expect(source).toMatch(
+      /accountCategory === 'oauth-based' \|\|\s*accountCategory === 'apikey'/,
+    );
+
+    expect(enSource).toContain("apiRegionLabel: 'API Region'");
+    expect(enSource).toContain(
+      'apiRegionHint: "Select the region of this account\'s Kiro/Q Developer Profile. It can differ from the IAM Identity Center region."',
+    );
+    expect(enSource).toContain("apiRegionUsEast: 'US East (N. Virginia)'");
+    expect(enSource).toContain("apiRegionEuCentral: 'Europe (Frankfurt)'");
+    expect(enSource).toContain("apiRegionLegacy: '{region} (current legacy value)'");
+    expect(zhSource).toContain("apiRegionLabel: 'API Region'");
+    expect(zhSource).toContain(
+      "apiRegionHint: '请选择该账号 Kiro/Q Developer Profile 所在区域，它可以与 IAM Identity Center Region 不同。'",
+    );
+    expect(zhSource).toContain("apiRegionUsEast: '美国东部（弗吉尼亚北部）'");
+    expect(zhSource).toContain("apiRegionEuCentral: '欧洲（法兰克福）'");
+    expect(zhSource).toContain("apiRegionLegacy: '{region}（当前历史值）'");
+  });
 });
