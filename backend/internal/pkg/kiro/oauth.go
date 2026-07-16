@@ -632,19 +632,28 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 			token.ClientSecret = reg.ClientSecret
 		}
 	}
-	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
-		token.AuthMethod = "idc"
-	}
 	token.Provider = strings.TrimSpace(token.Provider)
 	if !IsValidKiroProvider(token.Provider) {
 		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise/ExternalIdp)", token.Provider)
+	}
+	if token.AuthMethod == "" {
+		if token.Provider == ProviderExternalIdp {
+			token.AuthMethod = "external_idp"
+		} else if strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
+			token.AuthMethod = "idc"
+		}
+	}
+	if token.Provider == ProviderExternalIdp && token.AuthMethod != "external_idp" {
+		return nil, fmt.Errorf("kiro provider %s requires authMethod external_idp", ProviderExternalIdp)
+	}
+	if token.AuthMethod == "external_idp" && token.Provider != ProviderExternalIdp {
+		return nil, fmt.Errorf("kiro authMethod external_idp requires provider %s", ProviderExternalIdp)
 	}
 	if token.AuthMethod == "idc" {
 		if strings.TrimSpace(token.Region) == "" {
 			token.Region = defaultIDCRegion
 		}
 	} else if token.AuthMethod == "external_idp" {
-		token.Provider = ProviderExternalIdp
 		token.RefreshToken = strings.TrimSpace(token.RefreshToken)
 		token.ClientID = strings.TrimSpace(token.ClientID)
 		token.IssuerURL = strings.TrimSpace(token.IssuerURL)

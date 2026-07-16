@@ -268,20 +268,78 @@ func TestParseImportedTokenRejectsMissingOrInvalidProvider(t *testing.T) {
 }
 
 func TestParseImportedTokenAcceptsCanonicalProviders(t *testing.T) {
-	for _, provider := range []string{
-		ProviderGoogle,
-		ProviderGithub,
-		ProviderBuilderId,
-		ProviderEnterprise,
-		ProviderExternalIdp,
-	} {
-		t.Run(provider, func(t *testing.T) {
-			token, err := ParseImportedToken(`{"accessToken":"access-token","provider":"`+provider+`"}`, "")
+	tests := []struct {
+		provider   string
+		tokenJSON  string
+		authMethod string
+	}{
+		{
+			provider:   ProviderGoogle,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"social","provider":"Google"}`,
+			authMethod: "social",
+		},
+		{
+			provider:   ProviderGithub,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"social","provider":"Github"}`,
+			authMethod: "social",
+		},
+		{
+			provider:   ProviderBuilderId,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"idc","provider":"BuilderId","clientId":"client-id","clientSecret":"client-secret"}`,
+			authMethod: "idc",
+		},
+		{
+			provider:   ProviderEnterprise,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"idc","provider":"Enterprise","clientId":"client-id","clientSecret":"client-secret"}`,
+			authMethod: "idc",
+		},
+		{
+			provider:   ProviderExternalIdp,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","provider":"ExternalIdp","clientId":"client-id","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
+			authMethod: "external_idp",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			token, err := ParseImportedToken(tt.tokenJSON, "")
 			if err != nil {
 				t.Fatalf("ParseImportedToken() error = %v", err)
 			}
-			if token.Provider != provider {
-				t.Fatalf("Provider = %q, want %q", token.Provider, provider)
+			if token.Provider != tt.provider {
+				t.Fatalf("Provider = %q, want %q", token.Provider, tt.provider)
+			}
+			if token.AuthMethod != tt.authMethod {
+				t.Fatalf("AuthMethod = %q, want %q", token.AuthMethod, tt.authMethod)
+			}
+		})
+	}
+}
+
+func TestParseImportedTokenRejectsExternalIdpWithoutRefreshMetadata(t *testing.T) {
+	_, err := ParseImportedToken(`{"accessToken":"access-token","provider":"ExternalIdp"}`, "")
+	if err == nil {
+		t.Fatal("ParseImportedToken() error = nil, want external_idp refresh metadata error")
+	}
+}
+
+func TestParseImportedTokenRejectsExternalIdpAuthMethodMismatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		tokenJSON string
+	}{
+		{
+			name:      "ExternalIdp provider with social auth",
+			tokenJSON: `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"social","provider":"ExternalIdp","clientId":"client-id","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
+		},
+		{
+			name:      "external_idp auth with Google provider",
+			tokenJSON: `{"accessToken":"access-token","refreshToken":"refresh-token","authMethod":"external_idp","provider":"Google","clientId":"client-id","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseImportedToken(tt.tokenJSON, ""); err == nil {
+				t.Fatal("ParseImportedToken() error = nil, want provider/authMethod mismatch error")
 			}
 		})
 	}
@@ -393,7 +451,7 @@ func TestParseImportedTokenValidatesExternalIdpRefreshFields(t *testing.T) {
 		"accessToken":"access-token",
 		"refreshToken":" refresh-token ",
 		"authMethod":"external_idp",
-		"provider":"Google",
+		"provider":"ExternalIdp",
 		"clientId":" client-id ",
 		"issuerUrl":" https://login.microsoftonline.com/tenant/v2.0 ",
 		"scopes":" openid offline_access "
