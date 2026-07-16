@@ -1,4 +1,4 @@
--- Keep mixed-version writers consistent before backfilling rows that already exist.
+-- Migration 187 keeps mixed-version writers consistent before backfilling rows that already exist.
 CREATE OR REPLACE FUNCTION public.enforce_openai_long_context_billing_extra()
 RETURNS TRIGGER
 LANGUAGE plpgsql

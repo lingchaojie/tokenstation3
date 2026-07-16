@@ -90,7 +90,10 @@ func (w *serverTimingResponseWriter) finalize() {
 // authenticated users may receive timing only on allowlisted user-facing paths.
 // X-User-UI-Request is a scope signal and is never used as authorization.
 func ServerTimingHeaderValue(c *gin.Context) string {
-	if c == nil || c.Request == nil {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	if !isServerTimingUISurface(c.Request.URL.Path) {
 		return ""
 	}
 	role, ok := GetUserRoleFromContext(c)
@@ -113,7 +116,31 @@ func ServerTimingResponseHeader(c *gin.Context) http.Header {
 }
 
 func shouldCollectServerTiming(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil || !isServerTimingUISurface(c.Request.URL.Path) {
+		return false
+	}
 	return isAdminUIRequest(c) || isUserUIRequest(c)
+}
+
+// isServerTimingUISurface positively scopes collection and emission to the
+// authenticated web API. Gateway aliases live outside /api/v1 and must never
+// be enabled by a client-supplied UI marker. Public payment verification and
+// webhook routes are excluded even for an authenticated admin caller.
+func isServerTimingUISurface(path string) bool {
+	path = strings.TrimSpace(path)
+	const apiPrefix = "/api/v1"
+	if path != apiPrefix && !strings.HasPrefix(path, apiPrefix+"/") {
+		return false
+	}
+	for _, excludedPrefix := range []string{
+		apiPrefix + "/payment/public",
+		apiPrefix + "/payment/webhook",
+	} {
+		if path == excludedPrefix || strings.HasPrefix(path, excludedPrefix+"/") {
+			return false
+		}
+	}
+	return true
 }
 
 func isAdminUIRequest(c *gin.Context) bool {
@@ -141,7 +168,7 @@ func isUserUIRequest(c *gin.Context) bool {
 // emit Server-Timing for authenticated callers (excluding public payment routes).
 func isUserTimingPath(path string) bool {
 	path = strings.TrimSpace(path)
-	if path == "" {
+	if !isServerTimingUISurface(path) {
 		return false
 	}
 	const prefix = "/api/v1"

@@ -277,6 +277,8 @@ func (h *SettingHandler) buildSystemSettingsPayload(
 		AffiliateFirstRechargeThreshold: settings.AffiliateFirstRechargeThreshold,
 		AffiliateInviterReward:          settings.AffiliateInviterReward,
 		AffiliateInviteeReward:          settings.AffiliateInviteeReward,
+		AffiliateRewardValidityDays:     settings.AffiliateRewardValidityDays,
+		AffiliateInviterRewardLimit:     settings.AffiliateInviterRewardLimit,
 		DefaultUserRPMLimit:             settings.DefaultUserRPMLimit,
 		DefaultSubscriptions:            defaultSubscriptions,
 		DefaultAnthropicGroupID:         settings.DefaultAnthropicGroupID,
@@ -595,6 +597,8 @@ type UpdateSettingsRequest struct {
 	AffiliateFirstRechargeThreshold           *float64                          `json:"affiliate_first_recharge_threshold"`
 	AffiliateInviterReward                    *float64                          `json:"affiliate_inviter_reward"`
 	AffiliateInviteeReward                    *float64                          `json:"affiliate_invitee_reward"`
+	AffiliateRewardValidityDays               *int                              `json:"affiliate_reward_validity_days"`
+	AffiliateInviterRewardLimit               *int                              `json:"affiliate_inviter_reward_limit"`
 	DefaultUserRPMLimit                       int                               `json:"default_user_rpm_limit"`
 	DefaultSubscriptions                      []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
 	DefaultAnthropicGroupID                   *int64                            `json:"default_anthropic_group_id"`
@@ -894,6 +898,22 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	affiliateInviteeReward := previousSettings.AffiliateInviteeReward
 	if req.AffiliateInviteeReward != nil {
 		affiliateInviteeReward = *req.AffiliateInviteeReward
+	}
+	affiliateRewardValidityDays := previousSettings.AffiliateRewardValidityDays
+	if req.AffiliateRewardValidityDays != nil {
+		affiliateRewardValidityDays = *req.AffiliateRewardValidityDays
+		if affiliateRewardValidityDays < 1 || affiliateRewardValidityDays > service.AffiliateRewardValidityDaysMax {
+			response.BadRequest(c, "Affiliate reward validity days must be between 1 and 3650")
+			return
+		}
+	}
+	affiliateInviterRewardLimit := previousSettings.AffiliateInviterRewardLimit
+	if req.AffiliateInviterRewardLimit != nil {
+		affiliateInviterRewardLimit = *req.AffiliateInviterRewardLimit
+		if affiliateInviterRewardLimit < 0 || affiliateInviterRewardLimit > service.AffiliateInviterRewardLimitMax {
+			response.BadRequest(c, "Affiliate inviter reward limit must be between 0 and 1000000")
+			return
+		}
 	}
 	// 通用表格配置：兼容旧客户端未传字段时保留当前值。
 	if req.TableDefaultPageSize <= 0 {
@@ -1845,6 +1865,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateFirstRechargeThreshold:        affiliateFirstRechargeThreshold,
 		AffiliateInviterReward:                 affiliateInviterReward,
 		AffiliateInviteeReward:                 affiliateInviteeReward,
+		AffiliateRewardValidityDays:            affiliateRewardValidityDays,
+		AffiliateInviterRewardLimit:            affiliateInviterRewardLimit,
 		DefaultUserRPMLimit:                    req.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
 		DefaultAnthropicGroupID:                optionalInt64FromRequest(req.DefaultAnthropicGroupID, req.defaultAnthropicGroupIDPresent, previousSettings.DefaultAnthropicGroupID),
@@ -2601,6 +2623,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AffiliateInviteeReward != after.AffiliateInviteeReward {
 		changed = append(changed, "affiliate_invitee_reward")
+	}
+	if before.AffiliateRewardValidityDays != after.AffiliateRewardValidityDays {
+		changed = append(changed, "affiliate_reward_validity_days")
+	}
+	if before.AffiliateInviterRewardLimit != after.AffiliateInviterRewardLimit {
+		changed = append(changed, "affiliate_inviter_reward_limit")
 	}
 	if !equalDefaultSubscriptions(before.DefaultSubscriptions, after.DefaultSubscriptions) {
 		changed = append(changed, "default_subscriptions")

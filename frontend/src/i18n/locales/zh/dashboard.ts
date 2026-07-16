@@ -7,7 +7,22 @@ export default {
     buySubscription: '去购买订阅',
     subscriptionRemaining: '剩余 {remaining} / {total}',
     rechargeBalance: '充值余额',
-    balanceOrderHint: '优先消耗订阅额度，再使用充值余额。',
+    balanceOrderHint: '按签到奖励、邀请奖励、订阅额度、充值余额的顺序扣除。',
+    rewardBalance: {
+      daily: '签到余额 {amount}，{expiresAt} 到期',
+      affiliate: '邀请余额 {amount}，最早 {expiresAt} 到期',
+      detailCount: '{count} 笔明细',
+      detailsAria: '查看邀请奖励明细',
+      dialogTitle: '邀请奖励明细',
+      closeAria: '关闭邀请奖励明细',
+      loading: '正在加载奖励明细…',
+      empty: '暂无邀请奖励明细',
+      loadError: '邀请奖励明细加载失败',
+      inviterRole: '邀请方奖励',
+      inviteeRole: '受邀方奖励',
+      expiresAt: '{expiresAt} 到期',
+      pageStatus: '第 {page} / {pages} 页',
+    },
     balanceFallbackToggle: {
       title: '月卡用完后使用余额',
       enabledHint: '开启后，月卡 7 日额度用完会自动扣充值余额继续请求。',
@@ -593,9 +608,17 @@ export default {
   },
 
   affiliate: {
-    rewardIntro: '邀请好友注册，其首充满 {threshold} 后，你获得 {inviter}、好友获得 {invitee}（仅首充一次）',
     title: '邀请返利',
-    description: '邀请新用户注册，并将返利额度转入账户余额',
+    description: '分享邀请码或邀请链接给新用户，奖励会直接进入有期限的 Token 余额。',
+    immediateTitle: '邀请立刻获得返现',
+    immediateRewardIntro: '你获得 {inviter}，好友获得 {invitee}',
+    firstRechargeTitle: '邀请好友首充得返现',
+    firstRechargeRewardIntro: '好友首充满 {threshold}，你获得 {inviter}，好友获得 {invitee}',
+    validityHint: '奖励到账后 {days} 天有效',
+    limit: {
+      reached: '邀请方奖励已达 {count}/{limit} 上限',
+      inviteeStillRewarded: '你仍可继续分享；新好友注册后仍可获得受邀方奖励。',
+    },
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
     copyCode: '复制邀请码',
@@ -633,11 +656,10 @@ export default {
       }
     },
     tips: {
-      title: '使用说明',
-      line1: '将邀请码或邀请链接分享给新用户。',
-      line2: '被邀请用户首充达标后，你可获得 {reward} 的返利额度。',
-      line3: '返利额度可随时转入账户余额。',
-      line4: '新产生的返利需要经过冻结期后才能提现。'
+      title: '活动规则',
+      immediate: '好友注册并绑定邀请码后，双方奖励立即到账。',
+      firstRecharge: '好友首次充值达到 {threshold} 后，双方奖励到账；订阅充值无条件达标。',
+      validity: '每笔奖励自到账起 {days} 天有效，到期自动清零。'
     }
   },
 

@@ -114,6 +114,7 @@ type BillingCacheService struct {
 	cfg                   *config.Config
 	circuitBreaker        *billingCircuitBreaker
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	rewardCreditRepo      RewardCreditRepository
 
 	cacheWriteChan     chan cacheWriteTask
 	cacheWriteWg       sync.WaitGroup
@@ -347,6 +348,76 @@ func (s *BillingCacheService) GetUserBalance(ctx context.Context, userID int64) 
 		return 0, fmt.Errorf("unexpected balance type: %T", value)
 	}
 	return balance, nil
+}
+
+func (s *BillingCacheService) getBillingBalanceSnapshot(ctx context.Context, userID int64) (BillingBalanceSnapshot, error) {
+	if snapshotCache, ok := s.cache.(BillingBalanceSnapshotCache); ok {
+		if snapshot, err := snapshotCache.GetUserBalanceSnapshot(ctx, userID); err == nil {
+			return snapshot, nil
+		}
+	}
+
+	// Tests and alternate cache implementations can keep the legacy total-only
+	// behavior. Production wiring provides both repositories below.
+	if s.rewardCreditRepo == nil || s.userRepo == nil {
+		balance, err := s.GetUserBalance(ctx, userID)
+		if err != nil {
+			return BillingBalanceSnapshot{}, err
+		}
+		return BillingBalanceSnapshot{
+			SchemaVersion:  BillingBalanceSnapshotSchemaV1,
+			TotalBalance:   balance,
+			AccountBalance: balance,
+		}, nil
+	}
+
+	value, err, _ := s.balanceLoadSF.Do("snapshot:"+strconv.FormatInt(userID, 10), func() (any, error) {
+		loadCtx, cancel := context.WithTimeout(context.Background(), balanceLoadTimeout)
+		defer cancel()
+
+		summary, err := s.rewardCreditRepo.GetSummary(loadCtx, userID, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		user, err := s.userRepo.GetByID(loadCtx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("get user balance snapshot: %w", err)
+		}
+		snapshot := BillingBalanceSnapshot{
+			SchemaVersion:          BillingBalanceSnapshotSchemaV1,
+			TotalBalance:           user.Balance,
+			DailyRewardBalance:     summary.DailyCheckIn.Amount,
+			AffiliateRewardBalance: summary.Affiliate.Amount,
+			AccountBalance:         user.Balance - summary.DailyCheckIn.Amount - summary.Affiliate.Amount,
+			NextRewardExpiresAt:    earliestRewardExpiry(summary),
+		}
+		if snapshotCache, ok := s.cache.(BillingBalanceSnapshotCache); ok {
+			if err := snapshotCache.SetUserBalanceSnapshot(loadCtx, userID, snapshot); err != nil {
+				logger.LegacyPrintf("service.billing_cache", "Warning: set balance snapshot cache failed for user %d: %v", userID, err)
+			}
+		}
+		return snapshot, nil
+	})
+	if err != nil {
+		return BillingBalanceSnapshot{}, err
+	}
+	snapshot, ok := value.(BillingBalanceSnapshot)
+	if !ok {
+		return BillingBalanceSnapshot{}, fmt.Errorf("unexpected balance snapshot type: %T", value)
+	}
+	return snapshot, nil
+}
+
+func earliestRewardExpiry(summary RewardBalanceSummary) *time.Time {
+	daily := summary.DailyCheckIn.ExpiresAt
+	affiliate := summary.Affiliate.EarliestExpiresAt
+	if daily == nil {
+		return affiliate
+	}
+	if affiliate == nil || daily.Before(*affiliate) {
+		return daily
+	}
+	return affiliate
 }
 
 // getUserBalanceFromDB 从数据库获取用户余额
@@ -763,11 +834,17 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		return ErrBillingServiceUnavailable
 	}
 
-	// 判断计费模式
+	// 奖励层优先于订阅，而且不受订阅余额 fallback 开关影响。
 	isSubscriptionMode := subscription != nil
-	balanceFallback := false
+	balanceFunding := false
+	rewardEligible, err := s.checkRewardBalanceEligibility(ctx, user.ID)
+	if err != nil {
+		return err
+	}
 
-	if isSubscriptionMode {
+	if rewardEligible {
+		balanceFunding = true
+	} else if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			if !errors.Is(err, ErrWeeklyLimitExceeded) {
 				return err
@@ -775,16 +852,16 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 			if !user.SubscriptionBalanceFallbackEnabled {
 				return err
 			}
-			balanceFallback = true
-			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
+			balanceFunding = true
+			if balanceErr := s.checkAccountBalanceEligibility(ctx, user.ID); balanceErr != nil {
 				return balanceErr
 			}
 		} else if subscription.EffectiveSevenDayLimit(group) == nil {
 			if !user.SubscriptionBalanceFallbackEnabled {
 				return ErrWeeklyLimitExceeded
 			}
-			balanceFallback = true
-			if balanceErr := s.checkBalanceEligibility(ctx, user.ID); balanceErr != nil {
+			balanceFunding = true
+			if balanceErr := s.checkAccountBalanceEligibility(ctx, user.ID); balanceErr != nil {
 				return balanceErr
 			}
 		}
@@ -796,7 +873,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 
 	// user × platform quota applies to balance-billed requests. Only actual subscription-billed
 	// requests with effective quota bypass it.
-	if !isSubscriptionMode || balanceFallback {
+	if !isSubscriptionMode || balanceFunding {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}
@@ -918,7 +995,7 @@ func (s *BillingCacheService) balanceBelowEligibilityThreshold(balance float64) 
 
 // checkBalanceEligibility 检查余额模式资格
 func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userID int64) error {
-	balance, err := s.GetUserBalance(ctx, userID)
+	snapshot, err := s.getBillingBalanceSnapshot(ctx, userID)
 	if err != nil {
 		if s.circuitBreaker != nil {
 			s.circuitBreaker.OnFailure(err)
@@ -930,10 +1007,54 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 		s.circuitBreaker.OnSuccess()
 	}
 
-	if s.balanceBelowEligibilityThreshold(balance) {
+	if s.balanceBelowEligibilityThreshold(snapshot.DailyRewardBalance) &&
+		s.balanceBelowEligibilityThreshold(snapshot.AffiliateRewardBalance) &&
+		s.balanceBelowEligibilityThreshold(snapshot.AccountBalance) {
 		return ErrInsufficientBalance
 	}
 
+	return nil
+}
+
+func (s *BillingCacheService) checkRewardBalanceEligibility(ctx context.Context, userID int64) (bool, error) {
+	// Legacy cache implementations have only a scalar total and cannot safely
+	// distinguish reward money from account money. Production Redis implements
+	// the snapshot extension; alternate implementations keep prior semantics.
+	if s.cache != nil {
+		if _, ok := s.cache.(BillingBalanceSnapshotCache); !ok {
+			return false, nil
+		}
+	}
+	snapshot, err := s.getBillingBalanceSnapshot(ctx, userID)
+	if err != nil {
+		if s.circuitBreaker != nil {
+			s.circuitBreaker.OnFailure(err)
+		}
+		logger.LegacyPrintf("service.billing_cache", "ALERT: billing reward balance check failed for user %d: %v", userID, err)
+		return false, ErrBillingServiceUnavailable.WithCause(err)
+	}
+	if s.circuitBreaker != nil {
+		s.circuitBreaker.OnSuccess()
+	}
+	return !s.balanceBelowEligibilityThreshold(snapshot.DailyRewardBalance) ||
+		!s.balanceBelowEligibilityThreshold(snapshot.AffiliateRewardBalance), nil
+}
+
+func (s *BillingCacheService) checkAccountBalanceEligibility(ctx context.Context, userID int64) error {
+	snapshot, err := s.getBillingBalanceSnapshot(ctx, userID)
+	if err != nil {
+		if s.circuitBreaker != nil {
+			s.circuitBreaker.OnFailure(err)
+		}
+		logger.LegacyPrintf("service.billing_cache", "ALERT: billing account balance check failed for user %d: %v", userID, err)
+		return ErrBillingServiceUnavailable.WithCause(err)
+	}
+	if s.circuitBreaker != nil {
+		s.circuitBreaker.OnSuccess()
+	}
+	if s.balanceBelowEligibilityThreshold(snapshot.AccountBalance) {
+		return ErrInsufficientBalance
+	}
 	return nil
 }
 

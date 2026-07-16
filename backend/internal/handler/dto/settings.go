@@ -161,6 +161,8 @@ type SystemSettings struct {
 	AffiliateFirstRechargeThreshold float64                      `json:"affiliate_first_recharge_threshold"`
 	AffiliateInviterReward          float64                      `json:"affiliate_inviter_reward"`
 	AffiliateInviteeReward          float64                      `json:"affiliate_invitee_reward"`
+	AffiliateRewardValidityDays     int                          `json:"affiliate_reward_validity_days"`
+	AffiliateInviterRewardLimit     int                          `json:"affiliate_inviter_reward_limit"`
 	DefaultUserRPMLimit             int                          `json:"default_user_rpm_limit"`
 	DefaultSubscriptions            []DefaultSubscriptionSetting `json:"default_subscriptions"`
 	DefaultAnthropicGroupID         *int64                       `json:"default_anthropic_group_id"`

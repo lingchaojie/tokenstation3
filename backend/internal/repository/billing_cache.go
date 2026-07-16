@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -78,6 +79,10 @@ var (
 		if current == false then
 			return 0
 		end
+		if string.sub(current, 1, 1) == '{' then
+			redis.call('DEL', KEYS[1])
+			return 1
+		end
 		local newVal = tonumber(current) - tonumber(ARGV[1])
 		redis.call('SET', KEYS[1], newVal)
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
@@ -150,7 +155,52 @@ func (c *billingCache) GetUserBalance(ctx context.Context, userID int64) (float6
 	if err != nil {
 		return 0, err
 	}
+	if strings.HasPrefix(strings.TrimSpace(val), "{") {
+		var snapshot service.BillingBalanceSnapshot
+		if err := json.Unmarshal([]byte(val), &snapshot); err != nil {
+			return 0, err
+		}
+		return snapshot.TotalBalance, nil
+	}
 	return strconv.ParseFloat(val, 64)
+}
+
+func (c *billingCache) GetUserBalanceSnapshot(ctx context.Context, userID int64) (service.BillingBalanceSnapshot, error) {
+	key := billingBalanceKey(userID)
+	val, err := c.rdb.Get(ctx, key).Bytes()
+	if err != nil {
+		return service.BillingBalanceSnapshot{}, err
+	}
+	var snapshot service.BillingBalanceSnapshot
+	if err := json.Unmarshal(val, &snapshot); err != nil {
+		return service.BillingBalanceSnapshot{}, redis.Nil
+	}
+	if snapshot.SchemaVersion != service.BillingBalanceSnapshotSchemaV1 {
+		return service.BillingBalanceSnapshot{}, redis.Nil
+	}
+	if snapshot.NextRewardExpiresAt != nil && !snapshot.NextRewardExpiresAt.After(time.Now()) {
+		return service.BillingBalanceSnapshot{}, redis.Nil
+	}
+	return snapshot, nil
+}
+
+func (c *billingCache) SetUserBalanceSnapshot(ctx context.Context, userID int64, snapshot service.BillingBalanceSnapshot) error {
+	snapshot.SchemaVersion = service.BillingBalanceSnapshotSchemaV1
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	ttl := jitteredTTL()
+	if snapshot.NextRewardExpiresAt != nil {
+		untilExpiry := time.Until(*snapshot.NextRewardExpiresAt)
+		if untilExpiry <= 0 {
+			return c.rdb.Del(ctx, billingBalanceKey(userID)).Err()
+		}
+		if untilExpiry < ttl {
+			ttl = untilExpiry
+		}
+	}
+	return c.rdb.Set(ctx, billingBalanceKey(userID), payload, ttl).Err()
 }
 
 func (c *billingCache) SetUserBalance(ctx context.Context, userID int64, balance float64) error {

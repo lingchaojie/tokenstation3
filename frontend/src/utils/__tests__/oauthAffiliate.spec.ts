@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearAffiliateReferralCode,
+  clearAllAffiliateReferralCodes,
   clearOAuthAffiliateCode,
   loadAffiliateReferralCode,
   loadOAuthAffiliateCode,
   resolveAffiliateReferralCode,
   storeAffiliateReferralCode,
-  storeOAuthAffiliateCode
+  storeOAuthAffiliateCode,
 } from '@/utils/oauthAffiliate'
 
 describe('oauthAffiliate', () => {
@@ -44,5 +45,15 @@ describe('oauthAffiliate', () => {
 
     clearAffiliateReferralCode()
     expect(loadAffiliateReferralCode()).toBe('')
+  })
+
+  it('clears both persistent invite links and one-time oauth credentials', () => {
+    storeAffiliateReferralCode('PERSISTED')
+    storeOAuthAffiliateCode('SESSION')
+
+    clearAllAffiliateReferralCodes()
+
+    expect(loadAffiliateReferralCode()).toBe('')
+    expect(loadOAuthAffiliateCode()).toBe('')
   })
 })

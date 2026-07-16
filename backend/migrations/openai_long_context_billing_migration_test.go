@@ -7,7 +7,7 @@ import (
 )
 
 func TestMigration186BackfillsExistingOpenAIAndDefaultsNewAccountsOff(t *testing.T) {
-	content, err := FS.ReadFile("186_default_openai_long_context_billing.sql")
+	content, err := FS.ReadFile("187_default_openai_long_context_billing.sql")
 	require.NoError(t, err)
 
 	sql := string(content)
@@ -31,7 +31,7 @@ WHERE platform = 'openai'
 }
 
 func TestMigration186GuardsMixedVersionAccountWrites(t *testing.T) {
-	content, err := FS.ReadFile("186_default_openai_long_context_billing.sql")
+	content, err := FS.ReadFile("187_default_openai_long_context_billing.sql")
 	require.NoError(t, err)
 
 	sql := string(content)

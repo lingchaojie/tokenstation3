@@ -25,6 +25,7 @@ const appStore = vi.hoisted(() => ({
   cachedPublicSettings: null as null | {
     payment_enabled?: boolean
     risk_control_enabled?: boolean
+    affiliate_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -117,6 +118,29 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+  })
+
+  it('waits for public settings and redirects a disabled affiliate route', async () => {
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      appStore.cachedPublicSettings = { affiliate_enabled: false }
+      appStore.publicSettingsLoaded = true
+      return appStore.cachedPublicSettings
+    })
+
+    const { navigation, next } = runGuard({ requiresAffiliate: true }, '/affiliate')
+    await navigation
+
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('does not block affiliate access when settings loading fails', async () => {
+    appStore.fetchPublicSettings.mockResolvedValue(null)
+
+    const { navigation, next } = runGuard({ requiresAffiliate: true }, '/affiliate')
+    await navigation
+
+    expect(next).toHaveBeenCalledWith()
   })
 
   it('waits for the first public-settings request before deciding payment access', async () => {

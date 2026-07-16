@@ -54,6 +54,24 @@ type UserPlatformQuotaCacheEntry struct {
 	MonthlyWindowStart *time.Time
 }
 
+const BillingBalanceSnapshotSchemaV1 = 1
+
+type BillingBalanceSnapshot struct {
+	SchemaVersion          int        `json:"schema_version"`
+	TotalBalance           float64    `json:"total_balance"`
+	DailyRewardBalance     float64    `json:"daily_reward_balance"`
+	AffiliateRewardBalance float64    `json:"affiliate_reward_balance"`
+	AccountBalance         float64    `json:"account_balance"`
+	NextRewardExpiresAt    *time.Time `json:"next_reward_expires_at,omitempty"`
+}
+
+// BillingBalanceSnapshotCache is an optional extension implemented by caches
+// that understand the individual, non-combinable funding layers.
+type BillingBalanceSnapshotCache interface {
+	GetUserBalanceSnapshot(context.Context, int64) (BillingBalanceSnapshot, error)
+	SetUserBalanceSnapshot(context.Context, int64, BillingBalanceSnapshot) error
+}
+
 // BillingCache defines cache operations for billing service
 type BillingCache interface {
 	// Balance operations

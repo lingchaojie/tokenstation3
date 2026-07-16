@@ -28,6 +28,36 @@ func newCheckInRepoSQLite(t *testing.T) (service.CheckInRepository, *dbent.Clien
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
+	_, err = db.Exec(`
+CREATE TABLE user_reward_credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credit_type TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    original_amount REAL NOT NULL,
+    remaining_amount REAL NOT NULL,
+    reserved_amount REAL NOT NULL DEFAULT 0,
+    granted_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    consumed_at DATETIME NULL,
+    expired_at DATETIME NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE (user_id, credit_type, source_key),
+    CHECK (original_amount > 0),
+    CHECK (expires_at > granted_at)
+);
+CREATE TABLE user_reward_credit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    credit_id INTEGER NOT NULL REFERENCES user_reward_credits(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at DATETIME NOT NULL,
+    UNIQUE (credit_id, event_type, event_key)
+);`)
+	require.NoError(t, err)
 	return NewCheckInRepository(client), client, db
 }
 
@@ -53,6 +83,7 @@ func checkInClaimInput(userID int64) service.DailyCheckInClaimInput {
 		CheckInDate:     time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		RewardAmount:    10,
 		ClaimedAt:       start.Add(25 * time.Hour),
+		ExpiresAt:       time.Date(2026, 7, 21, 16, 0, 0, 0, time.UTC),
 	}
 }
 

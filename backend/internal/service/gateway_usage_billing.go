@@ -262,53 +262,20 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionSevenDayLimitUSD = p.Subscription.EffectiveSevenDayLimit(p.APIKey.Group)
 		balanceFallbackEnabled := p.User != nil && p.User.SubscriptionBalanceFallbackEnabled
-		if cmd.SubscriptionSevenDayLimitUSD == nil {
-			if balanceFallbackEnabled {
-				p.IsSubscriptionBill = false
-				cmd.BalanceCost = p.Cost.ActualCost
-				cmd.BillingType = BillingTypeBalance
-				if usageLog != nil {
-					usageLog.BillingType = BillingTypeBalance
-				}
-			} else {
-				cmd.SubscriptionCost = p.Cost.ActualCost
-				cmd.BillingType = BillingTypeSubscription
-				if usageLog != nil {
-					usageLog.BillingType = BillingTypeSubscription
-				}
-			}
-		} else if p.Cost.ActualCost <= 0 || p.Subscription.CanUseSevenDayQuota(p.APIKey.Group, p.Cost.ActualCost) {
-			p.IsSubscriptionBill = true
-			cmd.SubscriptionCost = p.Cost.ActualCost
-			cmd.AllowBalanceFallback = balanceFallbackEnabled && p.Cost.ActualCost > 0
-			if cmd.AllowBalanceFallback {
-				cmd.BalanceFallbackCost = p.Cost.ActualCost
-			}
-			cmd.BillingType = BillingTypeSubscription
-			if usageLog != nil {
-				usageLog.BillingType = BillingTypeSubscription
-			}
-		} else if balanceFallbackEnabled && p.User.Balance >= p.Cost.ActualCost {
-			p.IsSubscriptionBill = false
-			cmd.BalanceCost = p.Cost.ActualCost
-			cmd.BillingType = BillingTypeBalance
-			if usageLog != nil {
-				usageLog.BillingType = BillingTypeBalance
-			}
-		} else if balanceFallbackEnabled {
-			p.IsSubscriptionBill = false
-			cmd.BalanceCost = p.Cost.ActualCost
-			cmd.BillingType = BillingTypeBalance
-			if usageLog != nil {
-				usageLog.BillingType = BillingTypeBalance
-			}
-		} else {
-			cmd.SubscriptionCost = p.Cost.ActualCost
+		cmd.SubscriptionCost = p.Cost.ActualCost
+		cmd.AllowBalanceFallback = balanceFallbackEnabled && p.Cost.ActualCost > 0
+		if cmd.AllowBalanceFallback {
+			cmd.BalanceFallbackCost = p.Cost.ActualCost
+		}
+		if cmd.SubscriptionSevenDayLimitUSD != nil &&
+			p.Cost.ActualCost > 0 &&
+			!p.Subscription.CanUseSevenDayQuota(p.APIKey.Group, p.Cost.ActualCost) &&
+			!balanceFallbackEnabled {
 			cmd.AllowSubscriptionQuotaOverrun = true
-			cmd.BillingType = BillingTypeSubscription
-			if usageLog != nil {
-				usageLog.BillingType = BillingTypeSubscription
-			}
+		}
+		cmd.BillingType = BillingTypeSubscription
+		if usageLog != nil {
+			usageLog.BillingType = BillingTypeSubscription
 		}
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
@@ -327,7 +294,6 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.shouldUpdateAccountQuota() {
 		cmd.AccountQuotaCost = p.Cost.TotalCost * p.AccountRateMultiplier
 	}
-
 	cmd.Normalize()
 	return cmd
 }
@@ -432,6 +398,18 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 
 func syncBalanceCacheAfterDeduction(ctx context.Context, p *postUsageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
 	if p == nil || p.Cost == nil || p.User == nil || deps == nil || deps.billingCacheService == nil {
+		return
+	}
+	// Structured snapshots contain several non-combinable layers. A scalar
+	// decrement cannot safely identify which field changed, so force a rebuild.
+	if result != nil && result.FundingSource != "" {
+		if err := deps.billingCacheService.InvalidateUserBalance(ctx, p.User.ID); err != nil {
+			slog.Warn("invalidate layered balance cache after deduction failed",
+				"user_id", p.User.ID,
+				"funding_source", result.FundingSource,
+				"error", err,
+			)
+		}
 		return
 	}
 	if result != nil && result.NewBalance != nil && deps.billingCacheService.balanceBelowEligibilityThreshold(*result.NewBalance) {

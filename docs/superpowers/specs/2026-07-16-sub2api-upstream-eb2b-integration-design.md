@@ -147,12 +147,12 @@ upstream migrations in execution order:
 
 | Upstream filename | Local filename |
 |---|---|
-| `174_add_usage_log_long_context_billing.sql` | `184_add_usage_log_long_context_billing.sql` |
-| `175_add_ops_system_logs_host.sql` | `185_add_ops_system_logs_host.sql` |
-| `175_default_openai_long_context_billing.sql` | `186_default_openai_long_context_billing.sql` |
-| `175a_add_ops_system_logs_host_index_notx.sql` | `187_add_ops_system_logs_host_index_notx.sql` |
-| `176_channel_monitor_grok_provider.sql` | `188_channel_monitor_grok_provider.sql` |
-| `177_add_subscription_plan_currency.sql` | `189_add_subscription_plan_currency.sql` |
+| `174_add_usage_log_long_context_billing.sql` | `185_add_usage_log_long_context_billing.sql` |
+| `175_add_ops_system_logs_host.sql` | `186_add_ops_system_logs_host.sql` |
+| `175_default_openai_long_context_billing.sql` | `187_default_openai_long_context_billing.sql` |
+| `175a_add_ops_system_logs_host_index_notx.sql` | `188_add_ops_system_logs_host_index_notx.sql` |
+| `176_channel_monitor_grok_provider.sql` | `189_channel_monitor_grok_provider.sql` |
+| `177_add_subscription_plan_currency.sql` | `190_add_subscription_plan_currency.sql` |
 
 Update migration tests to use the local filenames. The long-context migration
 implements the existing-on/new-off policy above. The ops host index remains a

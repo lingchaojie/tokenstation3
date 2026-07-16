@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/imroc/req/v3"
+	"github.com/shopspring/decimal"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -55,6 +56,10 @@ var (
 	ErrDefaultSubGroupDuplicate = infraerrors.BadRequest(
 		"DEFAULT_SUBSCRIPTION_GROUP_DUPLICATE",
 		"default subscription group cannot be duplicated",
+	)
+	ErrAffiliateRewardConfigInvalid = infraerrors.BadRequest(
+		"INVALID_AFFILIATE_REWARD_CONFIG",
+		"affiliate reward configuration is invalid",
 	)
 )
 
@@ -1978,6 +1983,9 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Contex
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
+	if err := validateAffiliateRewardSettings(settings); err != nil {
+		return nil, err
+	}
 	if err := s.validateDefaultAPIKeyGroup(ctx, settings.DefaultAnthropicGroupID, PlatformAnthropic); err != nil {
 		return nil, err
 	}
@@ -2233,12 +2241,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyAffiliateRebatePerInviteeCap] = strconv.FormatFloat(settings.AffiliateRebatePerInviteeCap, 'f', 8, 64)
 	updates[SettingKeyAffiliateAdminRechargeEnabled] = strconv.FormatBool(settings.AdminRechargeRebateEnabled)
-	settings.AffiliateFirstRechargeThreshold = clampAffiliateReward(settings.AffiliateFirstRechargeThreshold, AffiliateFirstRechargeThresholdDefault)
 	updates[SettingKeyAffiliateFirstRechargeThreshold] = strconv.FormatFloat(settings.AffiliateFirstRechargeThreshold, 'f', 8, 64)
-	settings.AffiliateInviterReward = clampAffiliateReward(settings.AffiliateInviterReward, AffiliateInviterRewardDefault)
 	updates[SettingKeyAffiliateInviterReward] = strconv.FormatFloat(settings.AffiliateInviterReward, 'f', 8, 64)
-	settings.AffiliateInviteeReward = clampAffiliateReward(settings.AffiliateInviteeReward, AffiliateInviteeRewardDefault)
 	updates[SettingKeyAffiliateInviteeReward] = strconv.FormatFloat(settings.AffiliateInviteeReward, 'f', 8, 64)
+	updates[SettingKeyAffiliateRewardValidityDays] = strconv.Itoa(settings.AffiliateRewardValidityDays)
+	updates[SettingKeyAffiliateInviterRewardLimit] = strconv.Itoa(settings.AffiliateInviterRewardLimit)
 	updates[SettingKeyDefaultUserRPMLimit] = strconv.Itoa(settings.DefaultUserRPMLimit)
 	updates[SettingKeyDefaultAnthropicGroupID] = formatOptionalSettingInt64(settings.DefaultAnthropicGroupID)
 	updates[SettingKeyDefaultOpenAIGroupID] = formatOptionalSettingInt64(settings.DefaultOpenAIGroupID)
@@ -2993,6 +3000,95 @@ func clampAffiliateReward(value, def float64) float64 {
 	return value
 }
 
+type AffiliateRewardConfig struct {
+	FirstRechargeThreshold float64
+	InviterReward          float64
+	InviteeReward          float64
+	ValidityDays           int
+	InviterRewardLimit     int
+}
+
+func validateAffiliateRewardSettings(settings *SystemSettings) error {
+	if settings == nil {
+		return ErrAffiliateRewardConfigInvalid
+	}
+	values := []float64{
+		settings.AffiliateFirstRechargeThreshold,
+		settings.AffiliateInviterReward,
+		settings.AffiliateInviteeReward,
+	}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > AffiliateRewardMax || decimal.NewFromFloat(value).Exponent() < -8 {
+			return ErrAffiliateRewardConfigInvalid
+		}
+	}
+	// A zero value can come from an older internal caller that does not yet know
+	// about this setting. Explicit API input is validated in the admin handler.
+	if settings.AffiliateRewardValidityDays == 0 {
+		settings.AffiliateRewardValidityDays = AffiliateRewardValidityDaysDefault
+	}
+	if settings.AffiliateRewardValidityDays < 1 || settings.AffiliateRewardValidityDays > AffiliateRewardValidityDaysMax {
+		return ErrAffiliateRewardConfigInvalid
+	}
+	if settings.AffiliateInviterRewardLimit < 0 || settings.AffiliateInviterRewardLimit > AffiliateInviterRewardLimitMax {
+		return ErrAffiliateRewardConfigInvalid
+	}
+	return nil
+}
+
+func parseAffiliateRewardValue(raw string, def float64) float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return def
+	}
+	return clampAffiliateReward(value, def)
+}
+
+func parseAffiliateRewardValidityDays(raw string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < 1 {
+		return AffiliateRewardValidityDaysDefault
+	}
+	if value > AffiliateRewardValidityDaysMax {
+		return AffiliateRewardValidityDaysMax
+	}
+	return value
+}
+
+func parseAffiliateInviterRewardLimit(raw string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < 0 {
+		return AffiliateInviterRewardLimitDefault
+	}
+	if value > AffiliateInviterRewardLimitMax {
+		return AffiliateInviterRewardLimitMax
+	}
+	return value
+}
+
+// GetAffiliateRewardConfig returns the complete administrator-controlled
+// affiliate reward policy from one consistent settings snapshot.
+func (s *SettingService) GetAffiliateRewardConfig(ctx context.Context) (AffiliateRewardConfig, error) {
+	keys := []string{
+		SettingKeyAffiliateFirstRechargeThreshold,
+		SettingKeyAffiliateInviterReward,
+		SettingKeyAffiliateInviteeReward,
+		SettingKeyAffiliateRewardValidityDays,
+		SettingKeyAffiliateInviterRewardLimit,
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return AffiliateRewardConfig{}, err
+	}
+	return AffiliateRewardConfig{
+		FirstRechargeThreshold: parseAffiliateRewardValue(values[SettingKeyAffiliateFirstRechargeThreshold], AffiliateFirstRechargeThresholdDefault),
+		InviterReward:          parseAffiliateRewardValue(values[SettingKeyAffiliateInviterReward], AffiliateInviterRewardDefault),
+		InviteeReward:          parseAffiliateRewardValue(values[SettingKeyAffiliateInviteeReward], AffiliateInviteeRewardDefault),
+		ValidityDays:           parseAffiliateRewardValidityDays(values[SettingKeyAffiliateRewardValidityDays]),
+		InviterRewardLimit:     parseAffiliateInviterRewardLimit(values[SettingKeyAffiliateInviterRewardLimit]),
+	}, nil
+}
+
 // GetAffiliateFirstRechargeThreshold 返回首充达标阈值（USD）。
 func (s *SettingService) GetAffiliateFirstRechargeThreshold(ctx context.Context) float64 {
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyAffiliateFirstRechargeThreshold)
@@ -3349,6 +3445,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAffiliateFirstRechargeThreshold:           strconv.FormatFloat(AffiliateFirstRechargeThresholdDefault, 'f', 2, 64),
 		SettingKeyAffiliateInviterReward:                    strconv.FormatFloat(AffiliateInviterRewardDefault, 'f', 2, 64),
 		SettingKeyAffiliateInviteeReward:                    strconv.FormatFloat(AffiliateInviteeRewardDefault, 'f', 2, 64),
+		SettingKeyAffiliateRewardValidityDays:               strconv.Itoa(AffiliateRewardValidityDaysDefault),
+		SettingKeyAffiliateInviterRewardLimit:               strconv.Itoa(AffiliateInviterRewardLimitDefault),
 		SettingKeyDefaultUserRPMLimit:                       "0",
 		SettingKeyDefaultSubscriptions:                      "[]",
 		SettingKeyDefaultAnthropicGroupID:                   "",
@@ -3613,6 +3711,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else {
 		result.AffiliateInviteeReward = AffiliateInviteeRewardDefault
 	}
+	result.AffiliateRewardValidityDays = parseAffiliateRewardValidityDays(settings[SettingKeyAffiliateRewardValidityDays])
+	result.AffiliateInviterRewardLimit = parseAffiliateInviterRewardLimit(settings[SettingKeyAffiliateInviterRewardLimit])
 	result.DefaultSubscriptions = parseDefaultSubscriptions(settings[SettingKeyDefaultSubscriptions])
 	result.DefaultAnthropicGroupID = parseOptionalSettingInt64(settings[SettingKeyDefaultAnthropicGroupID])
 	result.DefaultOpenAIGroupID = parseOptionalSettingInt64(settings[SettingKeyDefaultOpenAIGroupID])

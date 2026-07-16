@@ -8,6 +8,20 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+func RewardBalanceSummaryFromService(summary service.RewardBalanceSummary) RewardBalanceSummary {
+	return RewardBalanceSummary{
+		DailyCheckIn: DailyRewardBalanceSummary{
+			Amount:    summary.DailyCheckIn.Amount,
+			ExpiresAt: summary.DailyCheckIn.ExpiresAt,
+		},
+		Affiliate: AffiliateRewardBalanceSummary{
+			Amount:            summary.Affiliate.Amount,
+			EarliestExpiresAt: summary.Affiliate.EarliestExpiresAt,
+			CreditCount:       summary.Affiliate.CreditCount,
+		},
+	}
+}
+
 func UserFromServiceShallow(u *service.User) *User {
 	if u == nil {
 		return nil

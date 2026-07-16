@@ -60,6 +60,10 @@ export interface AffiliateRebateRecord {
   rebate_amount: number
   payment_type: string
   order_status: string
+  record_source: 'legacy' | 'reward_credit'
+  reward_role: 'inviter' | 'invitee' | null
+  expires_at: string | null
+  remaining_amount: number | null
   created_at: string
 }
 
@@ -82,7 +86,9 @@ export interface AffiliateUserOverview {
   email: string
   username: string
   aff_code: string
-  rebate_rate_percent: number
+  first_recharge_threshold: number
+  inviter_reward: number
+  invitee_reward: number
   invited_count: number
   rebated_invitee_count: number
   available_quota: number

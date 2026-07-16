@@ -334,9 +334,11 @@ func (s *GrokQuotaService) fetchBilling(
 		return nil, resp.StatusCode, nil
 	}
 	if resp.StatusCode >= 400 {
-		bodyText := truncate(strings.TrimSpace(string(bodyBytes)), 240)
-		slog.Warn("grok_quota_billing_failed", "account_id", account.ID, "weekly", weekly, "status", resp.StatusCode, "body", bodyText)
-		return nil, resp.StatusCode, infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "GROK_QUOTA_PROBE_UPSTREAM_ERROR", "billing returned %d: %s", resp.StatusCode, bodyText)
+		// A custom billing endpoint can echo request credentials or account-level
+		// header overrides in its error body. Keep that untrusted body out of both
+		// logs and admin-facing errors; the status is enough to diagnose the probe.
+		slog.Warn("grok_quota_billing_failed", "account_id", account.ID, "weekly", weekly, "status", resp.StatusCode)
+		return nil, resp.StatusCode, infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "GROK_QUOTA_PROBE_UPSTREAM_ERROR", "billing returned %d", resp.StatusCode)
 	}
 	payload, err := xai.ParseBillingPayload(bodyBytes)
 	if err != nil {

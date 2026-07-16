@@ -111,6 +111,7 @@ type grokHybridUpstream struct {
 	billingStartOnce   sync.Once
 	billingStatus      int
 	billingHeaders     http.Header
+	billingErrorBody   string
 }
 
 func (u *grokHybridUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -148,10 +149,14 @@ func (u *grokHybridUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*h
 		}
 	}
 	if u.billingStatus != 0 && u.billingStatus != http.StatusOK {
+		body := u.billingErrorBody
+		if body == "" {
+			body = `{"error":{"message":"billing limited"}}`
+		}
 		return &http.Response{
 			StatusCode: u.billingStatus,
 			Header:     u.billingHeaders,
-			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"billing limited"}}`)),
+			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
 	}
 
@@ -753,6 +758,43 @@ func TestGrokQuotaServiceBilling429DoesNotPauseModelScheduling(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Zero(t, repo.rateLimitedCalls)
+}
+
+func TestGrokQuotaServiceProbeBillingRedactsUpstreamErrorBodyFromErrorAndLogs(t *testing.T) {
+	const (
+		upstreamSecret = "upstream-secret-refresh-token"
+		headerSecret   = "custom-header-secret"
+	)
+	account := healthyGrokQuotaOAuthAccount(59)
+	account.Credentials[credKeyHeaderOverrideEnabled] = true
+	account.Credentials[credKeyHeaderOverrides] = map[string]any{"x-tenant-secret": headerSecret}
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &grokHybridUpstream{
+		billingStatus: http.StatusBadRequest,
+		billingErrorBody: `{"error":"` + upstreamSecret + `","authorization":"Bearer access-token",` +
+			`"x-tenant-secret":"` + headerSecret + `","detail":"credential rejected"}`,
+	}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	result, err := svc.ProbeBilling(context.Background(), account.ID)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, "GROK_QUOTA_PROBE_UPSTREAM_ERROR", infraerrors.Reason(err))
+	require.Contains(t, infraerrors.Message(err), "billing returned 400")
+
+	for _, secret := range []string{upstreamSecret, "access-token", headerSecret, "credential rejected"} {
+		require.NotContains(t, err.Error(), secret)
+		require.NotContains(t, infraerrors.Message(err), secret)
+		require.NotContains(t, logs.String(), secret)
+	}
+	require.Contains(t, logs.String(), "grok_quota_billing_failed")
 }
 
 func TestGrokQuotaServiceQueryQuotaFree429PersistsLimitAndKeepsBilling(t *testing.T) {

@@ -5,13 +5,371 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
+
+func inviteeUserIDs(users []*service.User) []int64 {
+	ids := make([]int64, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, user.ID)
+	}
+	return ids
+}
+
+func TestAffiliateRepository_RebateHistoryMergesLegacyAndRewardCredits(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB)
+
+	suffix := time.Now().UnixNano()
+	inviter := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-history-inviter-%d@example.com", suffix), Username: "history-inviter"})
+	invitee := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-history-invitee-%d@example.com", suffix), Username: "history-invitee"})
+	grantedAt := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	result, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID: invitee.ID,
+		InviterUserID: inviter.ID,
+		RewardMode:    service.AffiliateRewardModeImmediate,
+		InviterReward: 10,
+		InviteeReward: 5,
+		ValidityDays:  7,
+		GrantedAt:     grantedAt,
+	})
+	require.NoError(t, err)
+	require.True(t, result.InviterRewarded)
+	require.True(t, result.InviteeRewarded)
+
+	legacyAt := grantedAt.Add(-time.Hour)
+	var orderID int64
+	orderRows, err := client.QueryContext(txCtx, `
+INSERT INTO payment_orders (
+    user_id, user_email, user_name, amount, pay_amount, recharge_code,
+    out_trade_no, payment_type, payment_trade_no, status, expires_at,
+    client_ip, src_host, created_at, updated_at
+) VALUES ($1, $2, $3, 20, 20, $4, $5, 'alipay', $6, 'COMPLETED', $7, '127.0.0.1', 'test', $8, $8)
+RETURNING id`, invitee.ID, invitee.Email, invitee.Username,
+		fmt.Sprintf("history-code-%d", suffix), fmt.Sprintf("history-order-%d", suffix), fmt.Sprintf("history-trade-%d", suffix),
+		legacyAt.Add(time.Hour), legacyAt)
+	require.NoError(t, err)
+	require.True(t, orderRows.Next())
+	require.NoError(t, orderRows.Scan(&orderID))
+	require.NoError(t, orderRows.Close())
+	_, err = client.ExecContext(txCtx, `
+INSERT INTO user_affiliate_ledger (
+    user_id, action, amount, source_user_id, source_order_id, created_at, updated_at
+) VALUES ($1, 'accrue', 3, $2, $3, $4, $4)`, inviter.ID, invitee.ID, orderID, legacyAt)
+	require.NoError(t, err)
+	_, err = client.ExecContext(txCtx, `
+INSERT INTO user_affiliate_ledger (user_id, action, amount, created_at, updated_at)
+VALUES ($1, 'transfer', 2, $2, $2)`, inviter.ID, grantedAt.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = client.ExecContext(txCtx, "UPDATE user_affiliates SET inviter_reward_count = 7, aff_quota = 999 WHERE user_id = $1", inviter.ID)
+	require.NoError(t, err)
+
+	records, total, err := repo.ListAffiliateRebateRecords(txCtx, service.AffiliateRecordFilter{
+		Page: 1, PageSize: 20, SortBy: "created_at", SortDesc: false,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, total)
+	require.Len(t, records, 3)
+	require.Equal(t, "legacy", records[0].RecordSource)
+	require.Equal(t, orderID, records[0].OrderID)
+	require.InDelta(t, 3, records[0].RebateAmount, 1e-9)
+	require.Nil(t, records[0].RewardRole)
+
+	require.Equal(t, "reward_credit", records[1].RecordSource)
+	require.NotNil(t, records[1].RewardRole)
+	require.Equal(t, "inviter", *records[1].RewardRole)
+	require.NotNil(t, records[1].ExpiresAt)
+	require.NotNil(t, records[1].RemainingAmount)
+	require.InDelta(t, 10, records[1].RebateAmount, 1e-9)
+	require.Equal(t, "invitee", *records[2].RewardRole)
+	require.InDelta(t, 5, records[2].RebateAmount, 1e-9)
+	invitees, err := repo.ListInvitees(txCtx, inviter.ID, 20)
+	require.NoError(t, err)
+	require.Len(t, invitees, 1)
+	require.InDelta(t, 13, invitees[0].TotalRebate, 1e-9)
+
+	searchRecords, searchTotal, err := repo.ListAffiliateRebateRecords(txCtx, service.AffiliateRecordFilter{
+		Search: invitee.Email, Page: 1, PageSize: 20, SortBy: "created_at", SortDesc: true,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, searchTotal)
+	require.Len(t, searchRecords, 3)
+
+	start := grantedAt.Add(-time.Minute)
+	recentRecords, recentTotal, err := repo.ListAffiliateRebateRecords(txCtx, service.AffiliateRecordFilter{
+		StartAt: &start, Page: 1, PageSize: 20, SortBy: "rebate_amount", SortDesc: true,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, recentTotal)
+	require.Len(t, recentRecords, 2)
+	require.InDelta(t, 10, recentRecords[0].RebateAmount, 1e-9)
+
+	page, pageTotal, err := repo.ListAffiliateRebateRecords(txCtx, service.AffiliateRecordFilter{
+		Page: 2, PageSize: 2, SortBy: "created_at", SortDesc: false,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, pageTotal)
+	require.Len(t, page, 1)
+
+	transfers, transferTotal, err := repo.ListAffiliateTransferRecords(txCtx, service.AffiliateRecordFilter{Page: 1, PageSize: 20})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, transferTotal)
+	require.Len(t, transfers, 1)
+
+	overview, err := repo.GetAffiliateUserOverview(txCtx, inviter.ID)
+	require.NoError(t, err)
+	require.Equal(t, 7, overview.RebatedInviteeCount)
+}
+
+func TestAffiliateRepository_BindInviterAtLimitStillRewardsInvitee(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB)
+
+	inviter := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-limit-inviter-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	invitee := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-limit-invitee-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	_, err := repo.EnsureUserAffiliate(txCtx, inviter.ID)
+	require.NoError(t, err)
+	_, err = repo.EnsureUserAffiliate(txCtx, invitee.ID)
+	require.NoError(t, err)
+	_, err = client.ExecContext(txCtx, "UPDATE user_affiliates SET inviter_reward_count = 3 WHERE user_id = $1", inviter.ID)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
+	result, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID:      invitee.ID,
+		InviterUserID:      inviter.ID,
+		RewardMode:         service.AffiliateRewardModeImmediate,
+		InviterReward:      10,
+		InviteeReward:      5,
+		ValidityDays:       7,
+		InviterRewardLimit: 3,
+		GrantedAt:          now,
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Bound)
+	require.True(t, result.Resolved)
+	require.False(t, result.InviterRewarded)
+	require.True(t, result.InviteeRewarded)
+	require.InDelta(t, 0, querySingleFloat(t, txCtx, client, "SELECT balance::double precision FROM users WHERE id = $1", inviter.ID), 1e-9)
+	require.InDelta(t, 5, querySingleFloat(t, txCtx, client, "SELECT balance::double precision FROM users WHERE id = $1", invitee.ID), 1e-9)
+	require.Equal(t, 3, querySingleInt(t, txCtx, client, "SELECT inviter_reward_count FROM user_affiliates WHERE user_id = $1", inviter.ID))
+	require.Equal(t, 1, querySingleInt(t, txCtx, client, "SELECT COUNT(*) FROM user_reward_credits WHERE user_id = $1 AND credit_type = 'affiliate_invitee'", invitee.ID))
+	rows, err := client.QueryContext(txCtx, `
+SELECT granted_at, expires_at
+FROM user_reward_credits
+WHERE user_id = $1 AND credit_type = 'affiliate_invitee'`, invitee.ID)
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	var grantedAt, expiresAt time.Time
+	require.NoError(t, rows.Scan(&grantedAt, &expiresAt))
+	require.NoError(t, rows.Close())
+	require.Equal(t, now, grantedAt.UTC())
+	require.Equal(t, now.Add(7*24*time.Hour), expiresAt.UTC())
+}
+
+func TestAffiliateRepository_ZeroInviterRewardDoesNotConsumeLimit(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB)
+
+	inviter := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-zero-inviter-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	invitee := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-zero-invitee-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	_, err := repo.EnsureUserAffiliate(txCtx, inviter.ID)
+	require.NoError(t, err)
+	_, err = client.ExecContext(txCtx, "UPDATE user_affiliates SET inviter_reward_count = 2 WHERE user_id = $1", inviter.ID)
+	require.NoError(t, err)
+
+	result, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID:      invitee.ID,
+		InviterUserID:      inviter.ID,
+		RewardMode:         service.AffiliateRewardModeImmediate,
+		InviterReward:      0,
+		InviteeReward:      5,
+		ValidityDays:       7,
+		InviterRewardLimit: 3,
+		GrantedAt:          time.Now().UTC(),
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Bound)
+	require.False(t, result.InviterRewarded)
+	require.True(t, result.InviteeRewarded)
+	require.Equal(t, 2, querySingleInt(t, txCtx, client, "SELECT inviter_reward_count FROM user_affiliates WHERE user_id = $1", inviter.ID))
+}
+
+func TestAffiliateRepository_ResolveFirstRechargeBelowThresholdIsFinal(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB)
+
+	inviter := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-resolve-inviter-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	invitee := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-resolve-invitee-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
+	bound, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID: invitee.ID,
+		InviterUserID: inviter.ID,
+		RewardMode:    service.AffiliateRewardModeFirstRecharge,
+		ValidityDays:  7,
+		GrantedAt:     now,
+	})
+	require.NoError(t, err)
+	require.True(t, bound.Bound)
+	require.False(t, bound.Resolved)
+
+	first, err := repo.ResolveFirstRecharge(txCtx, service.AffiliateSettlementInput{
+		InviteeUserID: invitee.ID,
+		Qualified:     false,
+		InviterReward: 10,
+		InviteeReward: 5,
+		ValidityDays:  7,
+		GrantedAt:     now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.True(t, first.Resolved)
+	require.False(t, first.Qualified)
+
+	second, err := repo.ResolveFirstRecharge(txCtx, service.AffiliateSettlementInput{
+		InviteeUserID: invitee.ID,
+		Qualified:     true,
+		InviterReward: 10,
+		InviteeReward: 5,
+		ValidityDays:  7,
+		GrantedAt:     now.Add(2 * time.Hour),
+	})
+	require.NoError(t, err)
+	require.False(t, second.Resolved)
+	require.Equal(t, 0, querySingleInt(t, txCtx, client, "SELECT COUNT(*) FROM user_reward_credits WHERE user_id IN ($1, $2)", inviter.ID, invitee.ID))
+}
+
+func TestAffiliateRepository_ResolveFirstRechargeQualifiedRewardsBoth(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	repo := NewAffiliateRepository(client, integrationDB)
+
+	inviter := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-qualified-inviter-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	invitee := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("affiliate-qualified-invitee-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
+	_, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID: invitee.ID,
+		InviterUserID: inviter.ID,
+		RewardMode:    service.AffiliateRewardModeFirstRecharge,
+		ValidityDays:  7,
+		GrantedAt:     now,
+	})
+	require.NoError(t, err)
+
+	result, err := repo.ResolveFirstRecharge(txCtx, service.AffiliateSettlementInput{
+		InviteeUserID:      invitee.ID,
+		Qualified:          true,
+		InviterReward:      10,
+		InviteeReward:      5,
+		ValidityDays:       7,
+		InviterRewardLimit: 3,
+		GrantedAt:          now.Add(time.Hour),
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Resolved)
+	require.True(t, result.Qualified)
+	require.True(t, result.InviterRewarded)
+	require.True(t, result.InviteeRewarded)
+	require.InDelta(t, 10, querySingleFloat(t, txCtx, client, "SELECT balance::double precision FROM users WHERE id = $1", inviter.ID), 1e-9)
+	require.InDelta(t, 5, querySingleFloat(t, txCtx, client, "SELECT balance::double precision FROM users WHERE id = $1", invitee.ID), 1e-9)
+	require.Equal(t, 1, querySingleInt(t, txCtx, client, "SELECT inviter_reward_count FROM user_affiliates WHERE user_id = $1", inviter.ID))
+	require.Equal(t, 2, querySingleInt(t, txCtx, client, "SELECT COUNT(*) FROM user_reward_credits WHERE user_id IN ($1, $2)", inviter.ID, invitee.ID))
+	require.Equal(t, 1, querySingleInt(t, txCtx, client, "SELECT COUNT(*) FROM user_affiliates WHERE user_id = $1 AND reward_status = 'resolved' AND inviter_rewarded AND invitee_rewarded", invitee.ID))
+}
+
+func TestAffiliateRepository_ConcurrentImmediateRewardsRespectInviterLimit(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAffiliateRepository(integrationEntClient, integrationDB)
+	stamp := time.Now().UnixNano()
+	inviter := mustCreateUser(t, integrationEntClient, &service.User{Email: fmt.Sprintf("affiliate-concurrent-inviter-%d@example.com", stamp), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+	t.Cleanup(func() {
+		_, _ = integrationEntClient.User.Delete().Where(user.IDEQ(inviter.ID)).Exec(context.Background())
+	})
+
+	const inviteeCount = 9
+	invitees := make([]*service.User, 0, inviteeCount)
+	for i := 0; i < inviteeCount; i++ {
+		invitee := mustCreateUser(t, integrationEntClient, &service.User{Email: fmt.Sprintf("affiliate-concurrent-invitee-%d-%d@example.com", stamp, i), PasswordHash: "hash", Role: service.RoleUser, Status: service.StatusActive})
+		invitees = append(invitees, invitee)
+		t.Cleanup(func() {
+			_, _ = integrationEntClient.User.Delete().Where(user.IDEQ(invitee.ID)).Exec(context.Background())
+		})
+	}
+
+	start := make(chan struct{})
+	results := make(chan service.AffiliateRewardResult, inviteeCount)
+	errs := make(chan error, inviteeCount)
+	var wg sync.WaitGroup
+	for _, invitee := range invitees {
+		invitee := invitee
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := repo.BindInviter(ctx, service.AffiliateBindInput{
+				InviteeUserID:      invitee.ID,
+				InviterUserID:      inviter.ID,
+				RewardMode:         service.AffiliateRewardModeImmediate,
+				InviterReward:      10,
+				InviteeReward:      5,
+				ValidityDays:       7,
+				InviterRewardLimit: 3,
+				GrantedAt:          time.Now().UTC(),
+			})
+			results <- result
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	boundCount, inviteeRewarded, inviterRewarded := 0, 0, 0
+	for result := range results {
+		if result.Bound {
+			boundCount++
+		}
+		if result.InviteeRewarded {
+			inviteeRewarded++
+		}
+		if result.InviterRewarded {
+			inviterRewarded++
+		}
+	}
+	require.Equal(t, inviteeCount, boundCount)
+	require.Equal(t, inviteeCount, inviteeRewarded)
+	require.Equal(t, 3, inviterRewarded)
+	require.Equal(t, 3, querySingleInt(t, ctx, integrationEntClient, "SELECT inviter_reward_count FROM user_affiliates WHERE user_id = $1", inviter.ID))
+	require.Equal(t, 3, querySingleInt(t, ctx, integrationEntClient, "SELECT COUNT(*) FROM user_reward_credits WHERE user_id = $1 AND credit_type = 'affiliate_inviter'", inviter.ID))
+	require.Equal(t, inviteeCount, querySingleInt(t, ctx, integrationEntClient, "SELECT COUNT(*) FROM user_reward_credits WHERE credit_type = 'affiliate_invitee' AND user_id = ANY($1)", pq.Array(inviteeUserIDs(invitees))))
+}
 
 func querySingleFloat(t *testing.T, ctx context.Context, client *dbent.Client, query string, args ...any) float64 {
 	t.Helper()
@@ -100,14 +458,9 @@ LIMIT 1`, u.ID)
 	require.InDelta(t, 12.34, historyAfter, 1e-9)
 }
 
-// TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction guards the
-// cross-layer tx propagation invariant: when AccrueQuota is called with a ctx
-// that already carries a transaction (via dbent.NewTxContext), repo.withTx
-// must reuse that tx rather than opening a nested one. If this invariant
-// breaks, AccrueQuota would commit independently and survive a rollback of
-// the outer tx, which would violate payment_fulfillment's all-or-nothing
-// semantics.
-func TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(t *testing.T) {
+// TestAffiliateRepository_BindInviter_ReusesOuterTransaction guards the
+// cross-layer transaction propagation used by payment fulfillment.
+func TestAffiliateRepository_BindInviter_ReusesOuterTransaction(t *testing.T) {
 	ctx := context.Background()
 
 	outerTx, err := integrationEntClient.Tx(ctx)
@@ -141,18 +494,22 @@ func TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(t *testing.T) {
 	_, err = repo.EnsureUserAffiliate(txCtx, invitee.ID)
 	require.NoError(t, err)
 
-	bound, err := repo.BindInviter(txCtx, invitee.ID, inviter.ID)
+	bound, err := repo.BindInviter(txCtx, service.AffiliateBindInput{
+		InviteeUserID: invitee.ID,
+		InviterUserID: inviter.ID,
+		RewardMode:    service.AffiliateRewardModeImmediate,
+		InviterReward: 3.5,
+		ValidityDays:  7,
+		GrantedAt:     time.Now().UTC(),
+	})
 	require.NoError(t, err)
-	require.True(t, bound, "invitee must bind to inviter")
-
-	applied, err := repo.AccrueQuota(txCtx, inviter.ID, invitee.ID, 3.5, 0, nil)
-	require.NoError(t, err)
-	require.True(t, applied, "AccrueQuota must report applied=true")
+	require.True(t, bound.Bound, "invitee must bind to inviter")
+	require.True(t, bound.InviterRewarded)
 
 	// Visible inside the outer tx.
-	innerQuota := querySingleFloat(t, txCtx, client,
-		"SELECT aff_quota::double precision FROM user_affiliates WHERE user_id = $1", inviter.ID)
-	require.InDelta(t, 3.5, innerQuota, 1e-9)
+	innerBalance := querySingleFloat(t, txCtx, client,
+		"SELECT balance::double precision FROM users WHERE id = $1", inviter.ID)
+	require.InDelta(t, 3.5, innerBalance, 1e-9)
 
 	// Roll back the outer tx; if AccrueQuota had opened its own inner tx and
 	// committed it, the rows would still be visible to the global client.
@@ -167,7 +524,7 @@ func TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(t *testing.T) {
 	var postRollbackCount int
 	require.NoError(t, rows.Scan(&postRollbackCount))
 	require.Equal(t, 0, postRollbackCount,
-		"AccrueQuota must propagate the outer tx — found persisted rows after rollback")
+		"BindInviter must propagate the outer tx — found persisted rows after rollback")
 }
 
 func TestAffiliateRepository_TransferQuotaToBalance_EmptyQuota(t *testing.T) {

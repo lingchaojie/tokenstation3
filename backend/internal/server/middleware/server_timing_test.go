@@ -91,6 +91,44 @@ func TestServerTimingScopesAndRoleGate(t *testing.T) {
 	}
 }
 
+func TestServerTimingExcludesGatewayAndPublicPaymentSurfaces(t *testing.T) {
+	paths := []string{
+		"/v1/messages",
+		"/v1/responses",
+		"/v1beta/models/gemini-pro:generateContent",
+		"/responses",
+		"/responses/resp_123",
+		"/alpha/search",
+		"/models",
+		"/backend-api/codex/responses",
+		"/chat/completions",
+		"/embeddings",
+		"/images/generations",
+		"/videos/generations",
+		"/antigravity/models",
+		"/antigravity/v1/messages",
+		"/api/v1/payment/public/orders/verify",
+		"/api/v1/payment/webhook/stripe",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			collectorActive := false
+			recorder := runServerTimingRequest(t, true, path, "1", "1", "admin", func(c *gin.Context) {
+				collectorActive = servertiming.Active(c.Request.Context())
+				c.JSON(http.StatusOK, gin.H{"ok": true})
+			})
+
+			if collectorActive {
+				t.Fatal("server timing collector attached to excluded surface")
+			}
+			if got := recorder.Header().Get(servertiming.HeaderName); got != "" {
+				t.Fatalf("excluded surface received %s: %q", servertiming.HeaderName, got)
+			}
+		})
+	}
+}
+
 func TestIsUserTimingPath(t *testing.T) {
 	tests := []struct {
 		path string

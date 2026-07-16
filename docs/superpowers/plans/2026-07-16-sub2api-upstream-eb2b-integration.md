@@ -20,7 +20,8 @@
 - `server.enable_server_timing` defaults to `false` and must not expose timings on gateway, public payment, or webhook routes.
 - Local consolidated settings stay in `backend/internal/service/setting_service.go` and `backend/internal/handler/admin/setting_handler.go`; upstream split files deleted by local `dev` remain deleted after their new semantics are folded in.
 - KIRO direct/relay separation, Q chat/Q MCP/KRS profile ARN placement, persisted machine ID, credits, sticky/session, cooldown, refresh, custom headers, WebChat capture, and admin workflows remain intact.
-- Existing local migrations are immutable; new upstream migrations are renamed in order to local numbers `184` through `189`.
+- Existing local migrations are immutable; after the refreshed `origin/dev` consumed `184`, new upstream migrations are renamed in order to local numbers `185` through `190`.
+- Before push, merge the user-approved refreshed `origin/dev` tip `16ecb4e337eec3768cc0fa3a5d9a561013f3775a` while keeping `UPSTREAM_PIN` fixed; preserve both the expiring fixed-reward ledger and the percentage-based admin recharge rebate path.
 - Use explicit path staging only. Do not use `git add -A`, force-push, squash, cherry-pick the upstream range, or edit production.
 
 ---
@@ -78,12 +79,12 @@ Expected: `conflicts.initial` contains 59 paths, `upstream-files.txt` is non-emp
 ### Task 2: Integrate migrations, Ent schema, and long-context billing
 
 **Files:**
-- Rename: `backend/migrations/174_add_usage_log_long_context_billing.sql` to `backend/migrations/184_add_usage_log_long_context_billing.sql`
-- Rename: `backend/migrations/175_add_ops_system_logs_host.sql` to `backend/migrations/185_add_ops_system_logs_host.sql`
-- Rename: `backend/migrations/175_default_openai_long_context_billing.sql` to `backend/migrations/186_default_openai_long_context_billing.sql`
-- Rename: `backend/migrations/175a_add_ops_system_logs_host_index_notx.sql` to `backend/migrations/187_add_ops_system_logs_host_index_notx.sql`
-- Rename: `backend/migrations/176_channel_monitor_grok_provider.sql` to `backend/migrations/188_channel_monitor_grok_provider.sql`
-- Rename: `backend/migrations/177_add_subscription_plan_currency.sql` to `backend/migrations/189_add_subscription_plan_currency.sql`
+- Rename: `backend/migrations/174_add_usage_log_long_context_billing.sql` to `backend/migrations/185_add_usage_log_long_context_billing.sql`
+- Rename: `backend/migrations/175_add_ops_system_logs_host.sql` to `backend/migrations/186_add_ops_system_logs_host.sql`
+- Rename: `backend/migrations/175_default_openai_long_context_billing.sql` to `backend/migrations/187_default_openai_long_context_billing.sql`
+- Rename: `backend/migrations/175a_add_ops_system_logs_host_index_notx.sql` to `backend/migrations/188_add_ops_system_logs_host_index_notx.sql`
+- Rename: `backend/migrations/176_channel_monitor_grok_provider.sql` to `backend/migrations/189_channel_monitor_grok_provider.sql`
+- Rename: `backend/migrations/177_add_subscription_plan_currency.sql` to `backend/migrations/190_add_subscription_plan_currency.sql`
 - Modify: `backend/migrations/openai_long_context_billing_migration_test.go`
 - Modify: `backend/internal/repository/openai_long_context_billing_migration_integration_test.go`
 - Modify: `backend/ent/schema/subscription_plan.go`
@@ -92,7 +93,7 @@ Expected: `conflicts.initial` contains 59 paths, `upstream-files.txt` is non-emp
 
 **Interfaces:**
 - Consumes: upstream usage-log snapshot field, currency field, ops-host migrations, Grok monitor migration, and long-context trigger.
-- Produces: local migration sequence `184`–`189`, `subscription_plans.currency`, `usage_logs.long_context_billing_applied`, and account trigger semantics used by account and billing services.
+- Produces: local migration sequence `185`–`190` after `184_expiring_reward_credits.sql`, `subscription_plans.currency`, `usage_logs.long_context_billing_applied`, and account trigger semantics used by account and billing services.
 
 - [ ] **Step 1: Rename the six migrations with explicit paths**
 
@@ -102,11 +103,11 @@ Run the six `git mv` commands matching the table above. Then run:
 find backend/migrations -maxdepth 1 -type f -printf '%f\n' | sort -V | tail -n 18
 ```
 
-Expected: `184` through `189` appear in execution order and no new `174`, `175`, `175a`, `176`, or `177` upstream filename remains.
+Expected: `184_expiring_reward_credits.sql` is followed by `185` through `190` in execution order and no new `174`, `175`, `175a`, `176`, or `177` upstream filename remains.
 
 - [ ] **Step 2: Write the local-policy migration tests before changing SQL**
 
-Change `backend/migrations/openai_long_context_billing_migration_test.go` so both tests read `186_default_openai_long_context_billing.sql`, and add assertions that distinguish backfill from insert defaults:
+Change `backend/migrations/openai_long_context_billing_migration_test.go` so both tests read `187_default_openai_long_context_billing.sql`, and add assertions that distinguish backfill from insert defaults:
 
 ```go
 require.Contains(t, sql, "parent_account_id IS NULL")
@@ -115,21 +116,21 @@ require.Contains(t, sql, "ELSIF NOT (NEW.extra ? 'openai_long_context_billing_en
 require.Contains(t, sql, "'false'::jsonb")
 ```
 
-Extend `backend/internal/repository/openai_long_context_billing_migration_integration_test.go` with an existing parent that omits the field and assert it reads `true` after applying migration 186; insert a new OpenAI parent after the migration with omitted `extra` and assert it reads `false`.
+Extend `backend/internal/repository/openai_long_context_billing_migration_integration_test.go` with an existing parent that omits the field and assert it reads `true` after applying migration 187; insert a new OpenAI parent after the migration with omitted `extra` and assert it reads `false`.
 
 - [ ] **Step 3: Run the focused tests and record RED**
 
 Run:
 
 ```bash
-cd backend && GOMAXPROCS=2 go test -p 1 ./migrations ./internal/repository -run 'TestMigration186|TestOpenAILongContextBillingMigration' -count=1
+cd backend && GOMAXPROCS=2 go test -p 1 ./migrations ./internal/repository -run 'TestMigration187|TestOpenAILongContextBillingMigration' -count=1
 ```
 
 Expected: FAIL because tests still reference upstream migration numbering and/or upstream backfills missing existing parents to `false`.
 
 - [ ] **Step 4: Implement the existing-on/new-off SQL policy**
 
-In migration 186, keep the trigger branch for a new missing value at `false`, keep malformed values normalized to `false`, but make the one-time parent backfill use `true`:
+In migration 187, keep the trigger branch for a new missing value at `false`, keep malformed values normalized to `false`, but make the one-time parent backfill use `true`:
 
 ```sql
 UPDATE accounts
@@ -511,7 +512,7 @@ Generate a review package from `DEV_BASE` to final `HEAD`. The reviewer must rea
 
 - [ ] **Step 6: Refresh remote state and push without force**
 
-Fetch `origin`; require `origin/dev` still equals `DEV_BASE`; then push the reviewed `HEAD` to `origin/dev` with a normal push. Fast-forward local `main` to the same reviewed commit only if `origin/main` is an ancestor/no-op under the repository's documented release flow, then push `main` normally. Never use `--force` or `--force-with-lease`.
+Fetch `origin`; require `origin/dev` still equals the user-approved merged drift tip `16ecb4e337eec3768cc0fa3a5d9a561013f3775a` and verify it is an ancestor of reviewed `HEAD`; then push reviewed `HEAD` to `origin/dev` with a normal push. Fast-forward `main` to the same reviewed commit only if `origin/main` is an ancestor/no-op under the repository's documented release flow, then push `main` normally. Never use `--force` or `--force-with-lease`.
 
 - [ ] **Step 7: Wait for exact-SHA CI completion**
 

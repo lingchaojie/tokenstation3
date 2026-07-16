@@ -158,6 +158,8 @@ type SystemSettings struct {
 	AffiliateFirstRechargeThreshold float64
 	AffiliateInviterReward          float64
 	AffiliateInviteeReward          float64
+	AffiliateRewardValidityDays     int
+	AffiliateInviterRewardLimit     int
 	DefaultUserRPMLimit             int
 	DefaultSubscriptions            []DefaultSubscriptionSetting
 	DefaultAnthropicGroupID         *int64 `json:"default_anthropic_group_id"`

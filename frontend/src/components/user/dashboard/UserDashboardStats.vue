@@ -55,6 +55,10 @@
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-500 dark:text-emerald-300">{{ t('dashboard.rechargeBalance') }}</p>
           <p class="mt-3 text-3xl font-bold tracking-[-0.05em] text-gray-950 dark:text-linear-ink">${{ formatBalance(balance) }}</p>
+          <RewardBalanceBreakdown
+            class="mt-3"
+            :summary="rewardBalances"
+          />
           <p class="mt-3 text-sm text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.balanceOrderHint') }}</p>
         </div>
         <div class="rounded-2xl bg-emerald-100 p-3 dark:bg-emerald-900/30">
@@ -220,9 +224,10 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { userAPI } from '@/api/user'
 import Icon from '@/components/icons/Icon.vue'
+import RewardBalanceBreakdown from '@/components/user/RewardBalanceBreakdown.vue'
 import { useAuthStore } from '@/stores/auth'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
-import type { SubscriptionBalanceSummary, UserSubscription } from '@/types'
+import type { RewardBalanceSummary, SubscriptionBalanceSummary, UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import { displayMonthlyPlanName } from '@/utils/monthlyPlans'
 
@@ -235,6 +240,7 @@ const props = withDefaults(defineProps<{
   subscriptionPlans?: SubscriptionPlan[]
   activeSubscriptions?: UserSubscription[]
   subscriptionBalanceFallbackEnabled?: boolean
+  rewardBalances?: RewardBalanceSummary | null
 }>(), {
   showStandardCosts: false,
 })
