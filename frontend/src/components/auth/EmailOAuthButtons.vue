@@ -31,6 +31,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import GitHubMark from './GitHubMark.vue'
 import GoogleMark from './GoogleMark.vue'
+import { useAppStore } from '@/stores'
 import { storeOAuthAffiliateCode } from '@/utils/oauthAffiliate'
 import {
   getPromotionOAuthOrigin,
@@ -50,6 +51,7 @@ const props = withDefaults(defineProps<{
   showDivider: true
 })
 
+const appStore = useAppStore()
 const route = useRoute()
 const { t } = useI18n()
 
@@ -81,19 +83,25 @@ function startLogin(provider: EmailOAuthProvider): void {
     route.query.aff,
     route.query.aff_code
   ])
-  storeOAuthAffiliateCode(affiliateCode)
-  window.sessionStorage.setItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY, provider)
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
-  const normalized = apiBase.replace(/\/$/, '')
+  const normalized = apiBase.replace(/\/+$/, '')
   const promotionOrigin = getPromotionOAuthOrigin()
-  const startBase = promotionOrigin
-    ? new URL(normalized, `${promotionOrigin}/`).toString().replace(/\/$/, '')
-    : normalized
+  let startBase = normalized
+  if (promotionOrigin) {
+    try {
+      startBase = new URL(normalized, `${promotionOrigin}/`).toString().replace(/\/+$/, '')
+    } catch {
+      appStore.showError(t('auth.loginFailed'))
+      return
+    }
+  }
   const params = new URLSearchParams({ redirect: redirectTo })
   if (affiliateCode) {
     params.set('aff_code', affiliateCode)
   }
   const startURL = `${startBase}/auth/oauth/${provider}/start?${params.toString()}`
+  storeOAuthAffiliateCode(affiliateCode)
+  window.sessionStorage.setItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY, provider)
   window.location.href = startURL
 }
 </script>
