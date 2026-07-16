@@ -7,7 +7,10 @@ const routeState = vi.hoisted(() => ({
 }))
 
 const locationState = vi.hoisted(() => ({
-  current: { href: 'http://localhost/register?aff=AFF123' } as { href: string },
+  current: {
+    href: 'http://localhost/register?aff=AFF123',
+    hostname: 'localhost',
+  } as { href: string; hostname: string },
 }))
 
 vi.mock('vue-router', () => ({
@@ -28,7 +31,10 @@ vi.mock('vue-i18n', () => ({
 describe('EmailOAuthButtons', () => {
   beforeEach(() => {
     routeState.query = { redirect: '/billing?plan=pro', aff: 'AFF123' }
-    locationState.current = { href: 'http://localhost/register?aff=AFF123' }
+    locationState.current = {
+      href: 'http://localhost/register?aff=AFF123',
+      hostname: 'localhost',
+    }
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: locationState.current,
@@ -59,6 +65,42 @@ describe('EmailOAuthButtons', () => {
     expect(window.sessionStorage.getItem('oauth_aff_code')).toBe('AFF123')
     expect(window.sessionStorage.getItem('email_oauth_pending_provider')).toBe('github')
   })
+
+  it.each(['github', 'google'] as const)(
+    'routes %s oauth through the canonical host on yundu.linx2.ai',
+    async (provider) => {
+      routeState.query = { redirect: '/dashboard', aff: 'OTHER' }
+      locationState.current = {
+        href: 'https://yundu.linx2.ai/register?aff=OTHER',
+        hostname: 'yundu.linx2.ai',
+      }
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: locationState.current,
+      })
+      const wrapper = mount(EmailOAuthButtons, {
+        props: {
+          affCode: 'OTHER',
+          githubEnabled: provider === 'github',
+          googleEnabled: provider === 'google',
+        },
+        global: {
+          stubs: {
+            GitHubMark: true,
+            GoogleMark: true,
+          },
+        },
+      })
+
+      await wrapper.get('button').trigger('click')
+
+      expect(locationState.current.href).toBe(
+        `https://www.linx2.ai/api/v1/auth/oauth/${provider}/start?redirect=%2Fdashboard&aff_code=YUNDU`
+      )
+      expect(window.sessionStorage.getItem('oauth_aff_code')).toBe('YUNDU')
+      expect(window.sessionStorage.getItem('email_oauth_pending_provider')).toBe(provider)
+    }
+  )
 
   it('uses a full-width descriptive button when only GitHub is enabled', () => {
     const wrapper = mount(EmailOAuthButtons, {
