@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -209,6 +210,126 @@ func (s *WebChatService) DeleteConversation(ctx context.Context, userID, convers
 		return ErrWebChatConversationNotFound
 	}
 	return s.repo.SoftDeleteConversation(ctx, userID, conversationID)
+}
+
+func (s *WebChatService) GenerateConversationTitle(c *gin.Context, userID, conversationID int64) (*WebChatConversation, error) {
+	if s == nil || s.repo == nil || c == nil || c.Request == nil || userID <= 0 || conversationID <= 0 {
+		return nil, ErrWebChatConversationNotFound
+	}
+	ctx := c.Request.Context()
+	conversation, err := s.repo.GetConversationForUser(ctx, userID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := s.repo.ListMessages(ctx, userID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	firstUser, ok := firstCompletedWebChatUserMessage(messages)
+	if !ok || !hasCompletedWebChatAssistantMessage(messages) {
+		return conversation, nil
+	}
+	fallbackTitle := webChatInitialTitleFallback(firstUser.ContentText)
+	if !webChatTitleCanBeAutoUpdated(conversation.Title, fallbackTitle) {
+		return conversation, nil
+	}
+
+	user, err := s.resolveWebChatSendUser(ctx, WebChatSendInput{UserID: userID})
+	if err != nil {
+		return nil, err
+	}
+	provider := firstNonEmpty(conversation.LastProvider, conversation.DefaultProvider, firstUser.Provider)
+	model := firstNonEmpty(conversation.LastModel, conversation.DefaultModel, firstUser.Model)
+	caps, err := s.resolveWebChatSendCapability(ctx, provider, model)
+	if err != nil {
+		return nil, err
+	}
+	titlePrompt := buildWebChatTitlePrompt(firstUser.ContentText)
+	recorder := httptest.NewRecorder()
+	titleCtx, _ := gin.CreateTestContext(recorder)
+	titleCtx.Request = c.Request.Clone(ctx)
+	titleCtx.Request.Header = c.Request.Header.Clone()
+
+	dispatchResult, err := s.dispatchChatCompletions(titleCtx, webChatDispatchInput{
+		User:            user,
+		ConversationID:  conversationID,
+		UsageClientID:   "webchat-message-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+		InboundEndpoint: "/api/v1/chat/conversations/" + strconv.FormatInt(conversationID, 10) + "/messages",
+		Model:           caps.Model,
+		Provider:        caps.Provider,
+		Capabilities:    caps,
+		Messages:        []WebChatMessage{{Role: WebChatRoleUser, Model: caps.Model, Provider: caps.Provider, ContentText: titlePrompt, Status: WebChatMessageStatusCompleted}},
+		Stream:          true,
+	})
+	if err != nil {
+		return conversation, nil
+	}
+	generated := sanitizeWebChatGeneratedTitle(ExtractAssistantTextFromChatCompletions(dispatchResult.ResponseBody, true))
+	if generated == "" {
+		return conversation, nil
+	}
+	latest, err := s.repo.GetConversationForUser(context.WithoutCancel(ctx), userID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if !webChatTitleCanBeAutoUpdated(latest.Title, fallbackTitle) {
+		return latest, nil
+	}
+	return s.repo.UpdateConversation(context.WithoutCancel(ctx), userID, conversationID, UpdateWebChatConversationInput{Title: &generated})
+}
+
+func firstCompletedWebChatUserMessage(messages []WebChatMessage) (WebChatMessage, bool) {
+	for _, message := range messages {
+		if message.Role == WebChatRoleUser && message.Status == WebChatMessageStatusCompleted && strings.TrimSpace(message.ContentText) != "" {
+			return message, true
+		}
+	}
+	return WebChatMessage{}, false
+}
+
+func hasCompletedWebChatAssistantMessage(messages []WebChatMessage) bool {
+	for _, message := range messages {
+		if message.Role == WebChatRoleAssistant && message.Status == WebChatMessageStatusCompleted {
+			return true
+		}
+	}
+	return false
+}
+
+func webChatInitialTitleFallback(content string) string {
+	title := strings.TrimSpace(content)
+	if title == "" {
+		return ""
+	}
+	runes := []rune(title)
+	if len(runes) > 80 {
+		title = string(runes[:80])
+	}
+	return strings.TrimSpace(title)
+}
+
+func webChatTitleCanBeAutoUpdated(current, fallback string) bool {
+	current = strings.TrimSpace(current)
+	fallback = strings.TrimSpace(fallback)
+	return current == "" || (fallback != "" && current == fallback)
+}
+
+func buildWebChatTitlePrompt(firstUserMessage string) string {
+	return "Generate a concise conversation title in the same language as the user's message. Return only the title, no quotes, no punctuation explanation, maximum 20 Chinese characters or 8 English words.\n\nUser message:\n" + strings.TrimSpace(firstUserMessage)
+}
+
+func sanitizeWebChatGeneratedTitle(title string) string {
+	title = strings.TrimSpace(title)
+	title = strings.Trim(title, "\"'`“”‘’")
+	title = strings.TrimSpace(strings.Split(title, "\n")[0])
+	if title == "" {
+		return ""
+	}
+	runes := []rune(title)
+	if len(runes) > 80 {
+		title = string(runes[:80])
+	}
+	return strings.TrimSpace(title)
 }
 
 func (s *WebChatService) OpenAttachment(ctx context.Context, userID, attachmentID int64) (io.ReadCloser, WebChatDownloadMeta, error) {

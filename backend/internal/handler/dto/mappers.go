@@ -713,8 +713,21 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 }
 
 func usageLogAPIKeyFromService(k *service.APIKey) *APIKey {
-	if k == nil || k.KeyType == service.APIKeyTypeWebChat {
+	if k == nil {
 		return nil
+	}
+	if k.KeyType == service.APIKeyTypeWebChat {
+		return &APIKey{
+			ID:               k.ID,
+			UserID:           k.UserID,
+			Name:             "Web Chat",
+			KeyType:          service.APIKeyTypeWebChat,
+			GroupID:          k.GroupID,
+			GroupBindingMode: apiKeyGroupBindingMode(k.GroupBindingMode),
+			Status:           k.Status,
+			CreatedAt:        k.CreatedAt,
+			UpdatedAt:        k.UpdatedAt,
+		}
 	}
 	return APIKeyFromService(k)
 }

@@ -167,6 +167,28 @@ func TestWebChatSendMessageBindsWebSearchSettings(t *testing.T) {
 	require.True(t, fake.sendInput.WebSearch.Configured)
 }
 
+func TestWebChatGenerateTitleUsesCurrentUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeWebChatService{
+		generatedTitleConversation: &service.WebChatConversation{
+			ID:     7,
+			UserID: 42,
+			Title:  "Generated title",
+		},
+	}
+	router := newWebChatAdminRoutesTestRouter(fake, 42)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/title/generate", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, fake.generateTitleCalled)
+	require.Equal(t, int64(42), fake.generateTitleUserID)
+	require.Equal(t, int64(7), fake.generateTitleConversationID)
+	require.Contains(t, w.Body.String(), `"title":"Generated title"`)
+}
+
 func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin.Engine {
 	router := gin.New()
 	v1 := router.Group("/api/v1")
@@ -212,6 +234,7 @@ func newWebChatAdminRoutesTestRouter(fake *fakeWebChatService, userID int64) *gi
 		chat.GET("/conversations/:id", webChat.GetConversation)
 		chat.PATCH("/conversations/:id", webChat.UpdateConversation)
 		chat.DELETE("/conversations/:id", webChat.DeleteConversation)
+		chat.POST("/conversations/:id/title/generate", webChat.GenerateConversationTitle)
 		chat.POST("/conversations/:id/messages", webChat.SendMessage)
 		chat.POST("/conversations/:id/messages/:message_id/cancel", webChat.CancelMessage)
 		chat.POST("/attachments", webChat.UploadAttachment)
@@ -231,6 +254,11 @@ type fakeWebChatService struct {
 
 	sendCalled bool
 	sendInput  service.WebChatSendInput
+
+	generateTitleCalled         bool
+	generateTitleUserID         int64
+	generateTitleConversationID int64
+	generatedTitleConversation  *service.WebChatConversation
 }
 
 func (s *fakeWebChatService) ListConversations(context.Context, int64, pagination.PaginationParams) ([]service.WebChatConversation, *pagination.PaginationResult, error) {
@@ -277,6 +305,13 @@ func (s *fakeWebChatService) SendMessage(_ *gin.Context, in service.WebChatSendI
 	s.sendCalled = true
 	s.sendInput = in
 	return &service.WebChatSendResult{UserMessageID: 100, AssistantMessageID: 101}, nil
+}
+
+func (s *fakeWebChatService) GenerateConversationTitle(_ *gin.Context, userID, conversationID int64) (*service.WebChatConversation, error) {
+	s.generateTitleCalled = true
+	s.generateTitleUserID = userID
+	s.generateTitleConversationID = conversationID
+	return s.generatedTitleConversation, nil
 }
 
 func (s *fakeWebChatService) CancelMessage(context.Context, int64, int64, int64) error {

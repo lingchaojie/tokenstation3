@@ -142,6 +142,7 @@ func RegisterUserRoutes(
 			chat.GET("/conversations/:id", h.WebChat.GetConversation)
 			chat.PATCH("/conversations/:id", h.WebChat.UpdateConversation)
 			chat.DELETE("/conversations/:id", h.WebChat.DeleteConversation)
+			chat.POST("/conversations/:id/title/generate", h.WebChat.GenerateConversationTitle)
 			chat.POST("/conversations/:id/messages", h.WebChat.SendMessage)
 			chat.POST("/conversations/:id/messages/:message_id/cancel", h.WebChat.CancelMessage)
 			chat.POST("/attachments", h.WebChat.UploadAttachment)

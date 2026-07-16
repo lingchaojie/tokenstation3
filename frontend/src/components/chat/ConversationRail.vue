@@ -108,8 +108,14 @@
               :key="conversation.id"
               :conversation="conversation"
               :current="isCurrent(conversation.id)"
+              :editing="editingConversationId === conversation.id"
+              :editing-title="editingTitle"
+              :saving="editingSaving"
               @open="openConversation(conversation.id)"
-              @rename="renameConversation(conversation.id, conversationTitle(conversation))"
+              @rename="beginRename(conversation.id, conversationTitle(conversation))"
+              @update-title="editingTitle = $event"
+              @save="saveRename"
+              @cancel="cancelRename"
               @delete="deleteConversation(conversation.id)"
             />
           </div>
@@ -122,8 +128,14 @@
           :key="conversation.id"
           :conversation="conversation"
           :current="isCurrent(conversation.id)"
+          :editing="editingConversationId === conversation.id"
+          :editing-title="editingTitle"
+          :saving="editingSaving"
           @open="openConversation(conversation.id)"
-          @rename="renameConversation(conversation.id, conversationTitle(conversation))"
+          @rename="beginRename(conversation.id, conversationTitle(conversation))"
+          @update-title="editingTitle = $event"
+          @save="saveRename"
+          @cancel="cancelRename"
           @delete="deleteConversation(conversation.id)"
         />
       </div>
@@ -147,6 +159,9 @@ const query = ref('')
 const groupedView = ref(true)
 const searchInput = ref<HTMLInputElement | null>(null)
 const collapsedGroups = ref(new Set<string>())
+const editingConversationId = ref<number | null>(null)
+const editingTitle = ref('')
+const editingSaving = ref(false)
 
 const emit = defineEmits<{
   (event: 'new-chat'): void
@@ -213,15 +228,71 @@ const ConversationRow = defineComponent({
       type: Boolean,
       default: false,
     },
+    editing: {
+      type: Boolean,
+      default: false,
+    },
+    editingTitle: {
+      type: String,
+      default: '',
+    },
+    saving: {
+      type: Boolean,
+      default: false,
+    },
   },
-  emits: ['open', 'rename', 'delete'],
+  emits: ['open', 'rename', 'update-title', 'save', 'cancel', 'delete'],
   setup(props, { emit }) {
     return () => h('div', {
       class: [
         'group flex items-center gap-1 rounded-lg transition-colors',
         props.current ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300' : 'text-linear-ink hover:bg-linear-surface-1',
       ],
-    }, [
+    }, props.editing ? [
+      h('div', {
+        class: 'flex min-w-0 flex-1 items-center gap-1 px-1.5 py-1.5',
+        onFocusout: (event: FocusEvent) => {
+          const nextTarget = event.relatedTarget as Node | null
+          if (nextTarget && (event.currentTarget as HTMLElement).contains(nextTarget)) return
+          emit('save')
+        },
+      }, [
+        h('input', {
+          class: 'h-8 min-w-0 flex-1 rounded-md border border-linear-hairline-strong bg-linear-canvas px-2 text-sm text-linear-ink outline-none',
+          value: props.editingTitle,
+          'aria-label': t('chat.renameConversation'),
+          disabled: props.saving,
+          onInput: (event: Event) => emit('update-title', (event.target as HTMLInputElement).value),
+          onKeydown: (event: KeyboardEvent) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              emit('save')
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              emit('cancel')
+            }
+          },
+        }),
+        h('button', {
+          class: 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary-600 transition-colors hover:bg-primary-500/10 disabled:opacity-50 dark:text-primary-300',
+          type: 'button',
+          title: t('chat.saveRename'),
+          'aria-label': t('chat.saveRename'),
+          disabled: props.saving,
+          onMousedown: (event: MouseEvent) => event.preventDefault(),
+          onClick: () => emit('save'),
+        }, [h(Icon, { name: 'check', size: 'xs' })]),
+        h('button', {
+          class: 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-linear-ink-tertiary transition-colors hover:bg-linear-canvas hover:text-linear-ink disabled:opacity-50',
+          type: 'button',
+          title: t('chat.cancelRename'),
+          'aria-label': t('chat.cancelRename'),
+          disabled: props.saving,
+          onMousedown: (event: MouseEvent) => event.preventDefault(),
+          onClick: () => emit('cancel'),
+        }, [h(Icon, { name: 'x', size: 'xs' })]),
+      ]),
+    ] : [
       h('button', {
         class: 'min-w-0 flex-1 px-2.5 py-2 text-left',
         type: 'button',
@@ -291,10 +362,33 @@ async function openConversation(conversationId: number): Promise<void> {
   emit('open-conversation')
 }
 
-async function renameConversation(conversationId: number, currentTitle: string): Promise<void> {
-  const nextTitle = window.prompt(t('chat.renameConversation'), currentTitle)
-  if (!nextTitle || nextTitle.trim() === currentTitle) return
-  await chatStore.renameConversation(conversationId, nextTitle.trim())
+function beginRename(conversationId: number, currentTitle: string): void {
+  editingConversationId.value = conversationId
+  editingTitle.value = currentTitle
+}
+
+function cancelRename(): void {
+  editingConversationId.value = null
+  editingTitle.value = ''
+}
+
+async function saveRename(): Promise<void> {
+  const conversationId = editingConversationId.value
+  if (!conversationId || editingSaving.value) return
+  const current = chatStore.conversations.find((conversation) => conversation.id === conversationId)
+  const currentTitle = current ? conversationTitle(current) : ''
+  const nextTitle = editingTitle.value.trim()
+  if (!nextTitle || nextTitle === currentTitle) {
+    cancelRename()
+    return
+  }
+  editingSaving.value = true
+  try {
+    await chatStore.renameConversation(conversationId, nextTitle)
+    cancelRename()
+  } finally {
+    editingSaving.value = false
+  }
 }
 
 async function deleteConversation(conversationId: number): Promise<void> {

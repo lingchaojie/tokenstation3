@@ -326,6 +326,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useChatStore } from '@/stores/chat'
 import { webChatAttachmentAccept } from '@/utils/webChatAttachmentAccept'
 import { providerIconModel } from '@/utils/modelCatalog'
+import { sortWebChatModelsByReleaseDate } from '@/utils/webChatModelSort'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -354,7 +355,7 @@ const selectedProvider = computed({
 })
 
 const modelOptions = computed(() =>
-  chatStore.models.filter((model) => model.provider === selectedProvider.value)
+  sortWebChatModelsByReleaseDate(chatStore.models.filter((model) => model.provider === selectedProvider.value))
 )
 
 const selectedModelKey = computed({

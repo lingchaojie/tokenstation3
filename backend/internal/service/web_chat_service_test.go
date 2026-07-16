@@ -552,6 +552,139 @@ func TestWebChatSend_UsesHiddenKeyAndSubscriptionFirstBilling(t *testing.T) {
 	requireOrderedEvents(t, svc.events, "resolve_subscription", "validate_subscription", "billing_eligibility", "forward", "record_usage")
 }
 
+func TestWebChatDispatchUsageReasoningEffortDefaultsMediumWhenThinkingSupportedAndDisabled(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+
+	_, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:               &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID:     7,
+		AssistantMessageID: 101,
+		Model:              "claude-sonnet-4",
+		Provider:           "anthropic",
+		Capabilities: WebChatModelCapability{
+			Provider:         "anthropic",
+			Platform:         PlatformAnthropic,
+			Model:            "claude-sonnet-4",
+			SupportsText:     true,
+			SupportsThinking: true,
+			ThinkingEfforts:  []string{"medium", "high", "xhigh"},
+		},
+		Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}},
+		Stream:   true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, svc.recordUsageInput.Result.ReasoningEffort)
+	require.Equal(t, "medium", *svc.recordUsageInput.Result.ReasoningEffort)
+	require.False(t, gjson.GetBytes(svc.forwardedBody, "reasoning_effort").Exists())
+}
+
+func TestWebChatDispatchUsageReasoningEffortRecordsHighestWhenThinkingEnabled(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+
+	_, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:               &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID:     7,
+		AssistantMessageID: 101,
+		Model:              "claude-sonnet-4",
+		Provider:           "anthropic",
+		Capabilities: WebChatModelCapability{
+			Provider:         "anthropic",
+			Platform:         PlatformAnthropic,
+			Model:            "claude-sonnet-4",
+			SupportsText:     true,
+			SupportsThinking: true,
+			ThinkingEfforts:  []string{"medium", "high", "xhigh"},
+		},
+		Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "think"}},
+		Stream:   true,
+		Thinking: WebChatThinkingConfig{Enabled: true, Effort: "xhigh"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, svc.recordUsageInput.Result.ReasoningEffort)
+	require.Equal(t, "xhigh", *svc.recordUsageInput.Result.ReasoningEffort)
+	require.Equal(t, "xhigh", gjson.GetBytes(svc.forwardedBody, "reasoning_effort").String())
+}
+
+func TestWebChatDispatchUsageReasoningEffortStaysEmptyWhenThinkingUnsupported(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+
+	_, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:               &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID:     7,
+		AssistantMessageID: 101,
+		Model:              "claude-plain",
+		Provider:           "anthropic",
+		Capabilities: WebChatModelCapability{
+			Provider:     "anthropic",
+			Platform:     PlatformAnthropic,
+			Model:        "claude-plain",
+			SupportsText: true,
+		},
+		Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}},
+		Stream:   true,
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, svc.recordUsageInput.Result.ReasoningEffort)
+}
+
+func TestWebChatGenerateConversationTitleUpdatesFallbackTitle(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.userResolver = webChatUserResolverStub{user: &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}}
+	svc.repo.conversation = WebChatConversation{
+		ID:              7,
+		UserID:          42,
+		Title:           "Explain Kubernetes controllers",
+		DefaultModel:    "claude-sonnet-4",
+		DefaultProvider: "anthropic",
+		LastModel:       "claude-sonnet-4",
+		LastProvider:    "anthropic",
+		Status:          WebChatConversationStatusActive,
+	}
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{
+		{ID: 1, ConversationID: 7, UserID: 42, Role: WebChatRoleUser, Model: "claude-sonnet-4", Provider: "anthropic", ContentText: "Explain Kubernetes controllers", Status: WebChatMessageStatusCompleted},
+		{ID: 2, ConversationID: 7, UserID: 42, Role: WebChatRoleAssistant, Model: "claude-sonnet-4", Provider: "anthropic", ContentText: "Controllers reconcile desired state.", Status: WebChatMessageStatusCompleted},
+	}
+
+	conversation, err := svc.GenerateConversationTitle(newTestGinContext(context.Background()), 42, 7)
+
+	require.NoError(t, err)
+	require.Equal(t, "Done.", conversation.Title)
+	require.NotNil(t, svc.repo.lastConversationUpdate.Title)
+	require.Equal(t, "Done.", *svc.repo.lastConversationUpdate.Title)
+	requireOrderedEvents(t, svc.events, "forward", "record_usage")
+}
+
+func TestWebChatGenerateConversationTitleDoesNotOverwriteManualTitle(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.userResolver = webChatUserResolverStub{user: &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}}
+	svc.repo.conversation = WebChatConversation{
+		ID:              7,
+		UserID:          42,
+		Title:           "Manual title",
+		DefaultModel:    "claude-sonnet-4",
+		DefaultProvider: "anthropic",
+		LastModel:       "claude-sonnet-4",
+		LastProvider:    "anthropic",
+		Status:          WebChatConversationStatusActive,
+	}
+	svc.repo.statefulMessages = true
+	svc.repo.messages = []WebChatMessage{
+		{ID: 1, ConversationID: 7, UserID: 42, Role: WebChatRoleUser, Model: "claude-sonnet-4", Provider: "anthropic", ContentText: "Explain Kubernetes controllers", Status: WebChatMessageStatusCompleted},
+		{ID: 2, ConversationID: 7, UserID: 42, Role: WebChatRoleAssistant, Model: "claude-sonnet-4", Provider: "anthropic", ContentText: "Controllers reconcile desired state.", Status: WebChatMessageStatusCompleted},
+	}
+
+	conversation, err := svc.GenerateConversationTitle(newTestGinContext(context.Background()), 42, 7)
+
+	require.NoError(t, err)
+	require.Equal(t, "Manual title", conversation.Title)
+	require.Nil(t, svc.repo.lastConversationUpdate.Title)
+	require.NotContains(t, svc.events, "forward")
+}
+
 func TestWebChatSend_BlocksUnsupportedContextBeforeBilling(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}}
@@ -1028,6 +1161,7 @@ func newWebChatServiceWithStubs(t *testing.T) *webChatServiceTestDouble {
 
 type webChatRepoStub struct {
 	double                 *webChatServiceTestDouble
+	conversation           WebChatConversation
 	statefulMessages       bool
 	messages               []WebChatMessage
 	attachOnCreate         bool
@@ -1045,6 +1179,10 @@ func (r *webChatRepoStub) ListConversations(context.Context, int64, pagination.P
 }
 
 func (r *webChatRepoStub) GetConversationForUser(_ context.Context, userID, conversationID int64) (*WebChatConversation, error) {
+	if r.conversation.ID != 0 {
+		conversation := r.conversation
+		return &conversation, nil
+	}
 	return &WebChatConversation{ID: conversationID, UserID: userID, Status: WebChatConversationStatusActive}, nil
 }
 
@@ -1053,6 +1191,22 @@ func (r *webChatRepoStub) UpdateConversation(_ context.Context, userID, conversa
 	status := WebChatConversationStatusActive
 	if in.Status != nil {
 		status = *in.Status
+	}
+	if r.conversation.ID != 0 {
+		if in.Title != nil {
+			r.conversation.Title = *in.Title
+		}
+		if in.DefaultModel != nil {
+			r.conversation.DefaultModel = *in.DefaultModel
+		}
+		if in.DefaultProvider != nil {
+			r.conversation.DefaultProvider = *in.DefaultProvider
+		}
+		if in.Status != nil {
+			r.conversation.Status = *in.Status
+		}
+		conversation := r.conversation
+		return &conversation, nil
 	}
 	return &WebChatConversation{ID: conversationID, UserID: userID, Status: status}, nil
 }
@@ -1245,9 +1399,15 @@ func (s *webChatGatewayServiceStub) SelectAccountWithLoadAwareness(context.Conte
 	return s.double.selection, nil
 }
 
-func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, _ *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
+func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, c *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
 	s.double.events = append(s.double.events, "forward")
 	s.double.forwardedBody = append([]byte(nil), body...)
+	if _, err := c.Writer.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"Done.\"}}]}\n\n"); err != nil {
+		return nil, err
+	}
+	if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err != nil {
+		return nil, err
+	}
 	if s.double.cancelAssistantOnForward {
 		_ = s.double.CancelMessage(context.Background(), 42, 7, s.double.nextMessageID)
 	}

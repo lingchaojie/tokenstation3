@@ -99,7 +99,21 @@ func resolveWebChatCatalog(ctx context.Context, groups webChatDefaultGroupResolv
 		if out[i].Provider != out[j].Provider {
 			return out[i].Provider < out[j].Provider
 		}
-		return out[i].Model < out[j].Model
+		if out[i].ReleasedAt != out[j].ReleasedAt {
+			if out[i].ReleasedAt == "" {
+				return false
+			}
+			if out[j].ReleasedAt == "" {
+				return true
+			}
+			return out[i].ReleasedAt > out[j].ReleasedAt
+		}
+		leftName := strings.ToLower(strings.TrimSpace(out[i].DisplayName))
+		rightName := strings.ToLower(strings.TrimSpace(out[j].DisplayName))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return strings.ToLower(out[i].Model) < strings.ToLower(out[j].Model)
 	})
 	return out, nil
 }

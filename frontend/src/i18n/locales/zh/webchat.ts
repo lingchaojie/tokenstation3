@@ -25,6 +25,8 @@ export default {
     noConversations: '暂无会话',
     rename: '重命名',
     renameConversation: '重命名会话',
+    saveRename: '保存标题',
+    cancelRename: '取消重命名',
     deleteAction: '删除',
     deleteConversation: '删除会话',
     untitledChat: '未命名会话',
