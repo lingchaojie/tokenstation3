@@ -11080,7 +11080,7 @@
     "semantic_hash": "ee027aac8b515f417cb28a62a6958a0d"
   },
   "frontend/package.json": {
-    "mtime": 1784143359.5805008,
+    "mtime": 1784164847.2287943,
     "ast_hash": "0b99ed645606a223713e98e0eb99e33e",
     "semantic_hash": "0b99ed645606a223713e98e0eb99e33e"
   },
@@ -13550,8 +13550,8 @@
     "semantic_hash": "aa71842da9a1ce262bc0467ef4f2ffd0"
   },
   "frontend/src/views/HomeView.vue": {
-    "mtime": 1784162981.113198,
-    "ast_hash": "7a0cdff8f22b2e56ae30bf719a7cfbb9",
+    "mtime": 1784164829.2568824,
+    "ast_hash": "591256d63c5dadc95ea821f187533ba3",
     "semantic_hash": ""
   },
   "frontend/src/views/KeyUsageView.vue": {
@@ -13565,8 +13565,8 @@
     "semantic_hash": "1e36d23e5f73567f439f6880a52f3708"
   },
   "frontend/src/views/__tests__/HomeView.spec.ts": {
-    "mtime": 1784163159.52439,
-    "ast_hash": "83ab81b92a872aff63903c8d8310c16d",
+    "mtime": 1784164810.832962,
+    "ast_hash": "c62400336b27546de4bc1824735d7bc7",
     "semantic_hash": ""
   },
   "frontend/src/views/__tests__/KeyUsageView.spec.ts": {
