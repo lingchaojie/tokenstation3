@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,14 +55,15 @@ func TestParseExternalIDPCallbackURL(t *testing.T) {
 
 func TestBuildExternalIDPAuthURLUsesOAuthCallbackRedirect(t *testing.T) {
 	got, err := BuildExternalIDPAuthURL(ExternalIDPAuthURLInput{
-		IssuerURL:           "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0",
-		ClientID:            "e491fadf-0239-44f9-be3b-d3e1ff193c79",
-		Scopes:              []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"},
-		RedirectURI:         "http://localhost:49153/oauth/callback",
-		State:               "state-1",
-		CodeChallenge:       "challenge-1",
-		CodeChallengeMethod: "S256",
-		LoginHint:           "phoebe.baral@mrdev.cyou",
+		AuthorizationEndpoint: "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/authorize",
+		IssuerURL:             "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0",
+		ClientID:              "e491fadf-0239-44f9-be3b-d3e1ff193c79",
+		Scopes:                []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"},
+		RedirectURI:           "http://localhost:3128/oauth/callback",
+		State:                 "state-1",
+		CodeChallenge:         "challenge-1",
+		CodeChallengeMethod:   "S256",
+		LoginHint:             "phoebe.baral@mrdev.cyou",
 	})
 	if err != nil {
 		t.Fatalf("BuildExternalIDPAuthURL() error = %v", err)
@@ -75,7 +77,7 @@ func TestBuildExternalIDPAuthURLUsesOAuthCallbackRedirect(t *testing.T) {
 		t.Fatalf("auth endpoint = %s://%s%s", parsed.Scheme, parsed.Host, parsed.Path)
 	}
 	params := parsed.Query()
-	if params.Get("redirect_uri") != "http://localhost:49153/oauth/callback" {
+	if params.Get("redirect_uri") != "http://localhost:3128/oauth/callback" {
 		t.Fatalf("redirect_uri = %q", params.Get("redirect_uri"))
 	}
 	if params.Get("scope") != "api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations offline_access" {
@@ -86,6 +88,61 @@ func TestBuildExternalIDPAuthURLUsesOAuthCallbackRedirect(t *testing.T) {
 	}
 	if params.Get("prompt") != "login" {
 		t.Fatalf("prompt = %q", params.Get("prompt"))
+	}
+}
+
+func TestValidateExternalIdpEndpointAcceptsMicrosoftOnlineSuffixes(t *testing.T) {
+	tests := []string{
+		"https://login.microsoftonline.com/tenant/v2.0",
+		"https://login.microsoftonline.us/tenant/v2.0",
+		"https://login.partner.microsoftonline.cn/tenant/v2.0",
+	}
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			if err := validateExternalIdpEndpoint(rawURL); err != nil {
+				t.Fatalf("validateExternalIdpEndpoint(%q) error = %v", rawURL, err)
+			}
+		})
+	}
+}
+
+func TestValidateExternalIdpEndpointRejectsUnsafeURLs(t *testing.T) {
+	tests := []string{
+		"http://login.microsoftonline.com/tenant/v2.0",
+		"https://127.0.0.1/tenant/v2.0",
+		"https://[::1]/tenant/v2.0",
+		"https://microsoftonline.com.evil.example/tenant/v2.0",
+		"https://login.example.com/tenant/v2.0",
+	}
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			if err := validateExternalIdpEndpoint(rawURL); err == nil {
+				t.Fatalf("validateExternalIdpEndpoint(%q) error = nil, want rejection", rawURL)
+			}
+		})
+	}
+}
+
+func TestDiscoverExternalIdpRejectsUnsafeIssuerBeforeRequest(t *testing.T) {
+	_, err := DiscoverExternalIdp(context.Background(), "", "https://login.example.com/tenant/v2.0")
+	if err == nil || !strings.Contains(err.Error(), "allow-listed") {
+		t.Fatalf("DiscoverExternalIdp() error = %v, want allow-list rejection", err)
+	}
+}
+
+func TestDiscoverExternalIdpRejectsEndpointsOutsideAllowlist(t *testing.T) {
+	discovery := externalIdpDiscoveryResponse{
+		AuthorizationEndpoint: "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+		TokenEndpoint:         "https://token.evil.example/oauth2/v2.0/token",
+	}
+	if err := validateExternalIdpDiscovery(&discovery); err == nil {
+		t.Fatal("validateExternalIdpDiscovery() error = nil, want token endpoint rejection")
+	}
+
+	discovery.AuthorizationEndpoint = "https://authorize.evil.example/oauth2/v2.0/authorize"
+	discovery.TokenEndpoint = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token"
+	if err := validateExternalIdpDiscovery(&discovery); err == nil {
+		t.Fatal("validateExternalIdpDiscovery() error = nil, want authorization endpoint rejection")
 	}
 }
 
@@ -119,7 +176,7 @@ func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
 		[]string{"scope-a", "offline_access"},
 		"auth-code",
 		"code-verifier",
-		"http://localhost:49153/oauth/callback",
+		"http://localhost:3128/oauth/callback",
 		"user@example.com",
 	)
 	if err != nil {
@@ -138,7 +195,7 @@ func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
 	if gotForm.Get("code_verifier") != "code-verifier" {
 		t.Fatalf("code_verifier = %q", gotForm.Get("code_verifier"))
 	}
-	if gotForm.Get("redirect_uri") != "http://localhost:49153/oauth/callback" {
+	if gotForm.Get("redirect_uri") != "http://localhost:3128/oauth/callback" {
 		t.Fatalf("redirect_uri = %q", gotForm.Get("redirect_uri"))
 	}
 	if token.AuthMethod != "external_idp" || token.Provider != ProviderExternalIdp {
@@ -149,6 +206,9 @@ func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
 	}
 	if token.IssuerURL != "https://login.microsoftonline.com/tenant-id/v2.0" || token.Scopes != "scope-a offline_access" {
 		t.Fatalf("metadata = %q %q", token.IssuerURL, token.Scopes)
+	}
+	if token.TokenEndpoint != server.URL {
+		t.Fatalf("TokenEndpoint = %q, want %q", token.TokenEndpoint, server.URL)
 	}
 }
 
@@ -295,7 +355,7 @@ func TestParseImportedTokenAcceptsCanonicalProviders(t *testing.T) {
 		},
 		{
 			provider:   ProviderExternalIdp,
-			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","provider":"ExternalIdp","clientId":"client-id","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
+			tokenJSON:  `{"accessToken":"access-token","refreshToken":"refresh-token","provider":"ExternalIdp","clientId":"client-id","tokenEndpoint":"https://login.microsoftonline.com/tenant/oauth2/v2.0/token","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
 			authMethod: "external_idp",
 		},
 	}
@@ -417,12 +477,13 @@ func TestParseImportedTokenRejectsInvalidExpiresAt(t *testing.T) {
 
 func TestParseImportedTokenValidatesExternalIdpRefreshFields(t *testing.T) {
 	valid := map[string]string{
-		"refreshToken": "refresh-token",
-		"clientId":     "client-id",
-		"issuerUrl":    "https://login.microsoftonline.com/tenant/v2.0",
-		"scopes":       "openid offline_access",
+		"refreshToken":  "refresh-token",
+		"clientId":      "client-id",
+		"tokenEndpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+		"issuerUrl":     "https://login.microsoftonline.com/tenant/v2.0",
+		"scopes":        "openid offline_access",
 	}
-	for _, missing := range []string{"refreshToken", "clientId", "issuerUrl", "scopes"} {
+	for _, missing := range []string{"refreshToken", "clientId", "tokenEndpoint", "issuerUrl", "scopes"} {
 		t.Run("missing "+missing, func(t *testing.T) {
 			fields := make(map[string]string, len(valid))
 			for key, value := range valid {
@@ -430,13 +491,14 @@ func TestParseImportedTokenValidatesExternalIdpRefreshFields(t *testing.T) {
 			}
 			delete(fields, missing)
 			raw, err := json.Marshal(map[string]string{
-				"accessToken":  "access-token",
-				"authMethod":   "external_idp",
-				"provider":     ProviderExternalIdp,
-				"refreshToken": fields["refreshToken"],
-				"clientId":     fields["clientId"],
-				"issuerUrl":    fields["issuerUrl"],
-				"scopes":       fields["scopes"],
+				"accessToken":   "access-token",
+				"authMethod":    "external_idp",
+				"provider":      ProviderExternalIdp,
+				"refreshToken":  fields["refreshToken"],
+				"clientId":      fields["clientId"],
+				"tokenEndpoint": fields["tokenEndpoint"],
+				"issuerUrl":     fields["issuerUrl"],
+				"scopes":        fields["scopes"],
 			})
 			if err != nil {
 				t.Fatalf("json.Marshal() error = %v", err)
@@ -453,13 +515,14 @@ func TestParseImportedTokenValidatesExternalIdpRefreshFields(t *testing.T) {
 		"authMethod":"external_idp",
 		"provider":"ExternalIdp",
 		"clientId":" client-id ",
+		"tokenEndpoint":" https://login.microsoftonline.com/tenant/oauth2/v2.0/token ",
 		"issuerUrl":" https://login.microsoftonline.com/tenant/v2.0 ",
 		"scopes":" openid offline_access "
 	}`, "")
 	if err != nil {
 		t.Fatalf("ParseImportedToken() error = %v", err)
 	}
-	if token.Provider != ProviderExternalIdp || token.RefreshToken != "refresh-token" || token.ClientID != "client-id" || token.IssuerURL != "https://login.microsoftonline.com/tenant/v2.0" || token.Scopes != "openid offline_access" {
+	if token.Provider != ProviderExternalIdp || token.RefreshToken != "refresh-token" || token.ClientID != "client-id" || token.TokenEndpoint != "https://login.microsoftonline.com/tenant/oauth2/v2.0/token" || token.IssuerURL != "https://login.microsoftonline.com/tenant/v2.0" || token.Scopes != "openid offline_access" {
 		t.Fatalf("external_idp metadata = %#v", token)
 	}
 }

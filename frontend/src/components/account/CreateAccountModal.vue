@@ -3525,12 +3525,28 @@
     <div v-else class="space-y-5">
       <div v-if="isKiroImportMode" class="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/20">
         <div>
-          <label class="input-label">{{ t('admin.accounts.oauth.kiro.tokenJsonLabel') }}</label>
-          <textarea v-model="kiroTokenJson" rows="8" class="input font-mono text-xs" placeholder='{"accessToken":"...","refreshToken":"..."}'></textarea>
-          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.tokenJsonHint') }}</p>
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.importProviderLabel') }}</label>
+          <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <label
+              v-for="opt in kiroImportProviderOptions"
+              :key="opt"
+              class="flex cursor-pointer items-center rounded-lg border px-3 py-2"
+              :class="kiroImportProvider === opt
+                ? 'border-primary-500 bg-primary-50 dark:border-primary-400 dark:bg-primary-900/20'
+                : 'border-gray-200 dark:border-dark-600'"
+            >
+              <input v-model="kiroImportProvider" type="radio" :value="opt" class="mr-2 text-primary-600 focus:ring-primary-500" />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ opt }}</span>
+            </label>
+          </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accounts.oauth.kiro.deviceRegistrationLabel') }}</label>
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.tokenJsonLabel') }} <span class="text-red-500">*</span></label>
+          <textarea v-model="kiroTokenJson" rows="8" class="input font-mono text-xs" :placeholder="kiroImportTokenPlaceholder"></textarea>
+          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.tokenJsonHint') }}</p>
+        </div>
+        <div v-if="kiroImportNeedsDeviceRegistration">
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.deviceRegistrationLabel') }} <span class="text-red-500">*</span></label>
           <textarea v-model="kiroDeviceRegistrationJson" rows="6" class="input font-mono text-xs" placeholder='{"clientId":"...","clientSecret":"..."}'></textarea>
           <p class="input-hint">{{ t('admin.accounts.oauth.kiro.deviceRegistrationHint') }}</p>
         </div>
@@ -3563,6 +3579,8 @@
         :initial-input-method="'manual'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
+        :is-kiro-external-idp="form.platform === 'kiro' && kiroOAuth.externalIdpStage.value === 'idp'"
+        :external-idp-stage="kiroOAuth.externalIdpStage.value"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
         @validate-refresh-token="handleValidateRefreshToken"
@@ -4279,6 +4297,19 @@ const kiroIDCRegion = ref('us-east-1')
 const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
+const kiroImportProvider = ref<'Google' | 'Github' | 'BuilderId' | 'Enterprise' | 'ExternalIdp'>('Google')
+const kiroImportProviderOptions = ['Google', 'Github', 'BuilderId', 'Enterprise', 'ExternalIdp'] as const
+const kiroImportNeedsDeviceRegistration = computed(
+  () => kiroImportProvider.value === 'BuilderId' || kiroImportProvider.value === 'Enterprise'
+)
+const kiroImportTokenPlaceholder = computed(() => {
+  if (kiroImportProvider.value === 'ExternalIdp') {
+    return '{"accessToken":"...","refreshToken":"...","authMethod":"external_idp","provider":"ExternalIdp","clientId":"...","tokenEndpoint":"https://login.microsoftonline.com/tenant/oauth2/v2.0/token","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}'
+  }
+  return kiroImportNeedsDeviceRegistration.value
+    ? `{"accessToken":"...","refreshToken":"...","clientIdHash":"...","authMethod":"idc","provider":"${kiroImportProvider.value}"}`
+    : `{"accessToken":"...","refreshToken":"...","authMethod":"social","provider":"${kiroImportProvider.value}"}`
+})
 const kiroModelMappings = ref<ModelMapping[]>([])
 const kiroCreditUnitPriceUsd = ref(0)
 const kiroPresetMappings = computed(() => getPresetMappingsByPlatform('kiro'))
@@ -5504,6 +5535,7 @@ const resetKiroOAuthLocalState = () => {
   kiroOAuth.resetState()
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
+  kiroImportProvider.value = 'Google'
 }
 
 const buildKiroCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
@@ -6898,11 +6930,40 @@ const handleExchangeCode = async () => {
 }
 
 const handleKiroImport = async () => {
-  if (!isKiroImportMode.value || !kiroTokenJson.value.trim()) return
+  if (!isKiroImportMode.value) return
+  if (!kiroTokenJson.value.trim()) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.tokenJsonRequired')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+  if (kiroImportNeedsDeviceRegistration.value && !kiroDeviceRegistrationJson.value.trim()) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.deviceRegistrationRequired')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+
+  let parsedProvider = ''
+  try {
+    parsedProvider = String(JSON.parse(kiroTokenJson.value)?.provider ?? '').trim()
+  } catch {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.tokenJsonInvalid')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+  if (parsedProvider !== kiroImportProvider.value) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.providerMismatch', {
+      selected: kiroImportProvider.value,
+      actual: parsedProvider || '-'
+    })
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
 
   const tokenInfo = await kiroOAuth.importToken(
     kiroTokenJson.value,
-    kiroDeviceRegistrationJson.value || undefined
+    kiroImportNeedsDeviceRegistration.value
+      ? kiroDeviceRegistrationJson.value.trim()
+      : undefined
   )
   if (!tokenInfo) return
 

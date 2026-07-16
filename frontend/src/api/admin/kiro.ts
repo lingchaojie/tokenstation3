@@ -32,6 +32,7 @@ export interface KiroTokenInfo {
   email?: string
   start_url?: string
   region?: string
+  token_endpoint?: string
   issuer_url?: string
   scopes?: string
   [key: string]: unknown
@@ -84,6 +85,7 @@ export async function refreshToken(payload: {
   start_url?: string
   region?: string
   profile_arn?: string
+  token_endpoint?: string
   issuer_url?: string
   scopes?: string
   email?: string

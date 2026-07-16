@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(currentDir, "../CreateAccountModal.vue"), "utf8");
 const editSource = readFileSync(resolve(currentDir, "../EditAccountModal.vue"), "utf8");
+const authorizationFlowSource = readFileSync(resolve(currentDir, "../OAuthAuthorizationFlow.vue"), "utf8");
 const reauthSource = readFileSync(resolve(currentDir, "../../admin/account/ReAuthAccountModal.vue"), "utf8");
 const zhSource = readFileSync(resolve(currentDir, "../../../i18n/locales/zh/admin/accounts.ts"), "utf8");
 const enSource = readFileSync(resolve(currentDir, "../../../i18n/locales/en/admin/accounts.ts"), "utf8");
@@ -53,6 +54,58 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(reauthSource).toContain("kiroOAuthProvider");
     expect(reauthSource).toContain("callbackPath: oauthFlowRef.value?.oauthCallbackPath");
     expect(reauthSource).toContain("loginOption: oauthFlowRef.value?.oauthLoginOption");
+  });
+
+  it("offers canonical provider-aware Kiro imports before calling the API", () => {
+    const createImportSource = source.slice(
+      source.indexOf("const handleKiroImport"),
+      source.indexOf("const handleCookieAuth"),
+    );
+    const reauthImportSource = reauthSource.slice(
+      reauthSource.indexOf("const handleKiroImport"),
+      reauthSource.indexOf("const handleCookieAuth"),
+    );
+
+    for (const modalSource of [source, reauthSource]) {
+      expect(modalSource).toContain(
+        "const kiroImportProvider = ref<'Google' | 'Github' | 'BuilderId' | 'Enterprise' | 'ExternalIdp'>('Google')",
+      );
+      expect(modalSource).toContain(
+        "const kiroImportProviderOptions = ['Google', 'Github', 'BuilderId', 'Enterprise', 'ExternalIdp'] as const",
+      );
+      expect(modalSource).toContain(
+        "() => kiroImportProvider.value === 'BuilderId' || kiroImportProvider.value === 'Enterprise'",
+      );
+      expect(modalSource).toContain('v-for="opt in kiroImportProviderOptions"');
+      expect(modalSource).toContain('v-if="kiroImportNeedsDeviceRegistration"');
+      expect(modalSource).toContain('"tokenEndpoint"');
+      expect(modalSource).toContain('"issuerUrl"');
+      expect(modalSource).toContain('"scopes"');
+    }
+
+    for (const importSource of [createImportSource, reauthImportSource]) {
+      expect(importSource).toContain("JSON.parse(kiroTokenJson.value)");
+      expect(importSource).toContain("admin.accounts.oauth.kiro.tokenJsonInvalid");
+      expect(importSource).toContain("parsedProvider !== kiroImportProvider.value");
+      expect(importSource).toContain("admin.accounts.oauth.kiro.providerMismatch");
+      expect(importSource.indexOf("parsedProvider !== kiroImportProvider.value")).toBeLessThan(
+        importSource.indexOf("kiroOAuth.importToken"),
+      );
+    }
+
+    expect(enSource).toContain("importProviderLabel: 'Account source'");
+    expect(enSource).toContain("tokenJsonInvalid: 'Kiro Token JSON is invalid and cannot be parsed.'");
+    expect(zhSource).toContain("importProviderLabel: '账号来源'");
+    expect(zhSource).toContain("tokenJsonInvalid: 'Kiro Token JSON 格式无效，无法解析。'");
+  });
+
+  it("resets the pasted Kiro portal descriptor when External IdP advances", () => {
+    expect(source).toContain(':external-idp-stage="kiroOAuth.externalIdpStage.value"');
+    expect(reauthSource).toContain(':external-idp-stage="kiroOAuth.externalIdpStage.value"');
+    expect(authorizationFlowSource).toContain("externalIdpStage?: 'portal' | 'idp'");
+    expect(authorizationFlowSource).toContain("() => props.externalIdpStage");
+    expect(authorizationFlowSource).toContain("stage === 'idp' && prev === 'portal'");
+    expect(authorizationFlowSource).toContain("authCodeInput.value = ''");
   });
 
   it("uses Kiro-specific mixed scheduling copy", () => {

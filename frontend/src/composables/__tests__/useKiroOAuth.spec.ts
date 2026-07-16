@@ -104,7 +104,7 @@ describe('useKiroOAuth', () => {
       state: 'state-kiro'
     })
     vi.mocked(adminAPI.kiro.startExternalIDPAuth).mockResolvedValueOnce({
-      auth_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A49153%2Foauth%2Fcallback',
+      auth_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A3128%2Foauth%2Fcallback',
       session_id: 'session-external',
       state: 'state-external',
       client_id: 'client-id',
@@ -114,6 +114,7 @@ describe('useKiroOAuth', () => {
 
     const callbackUrl = 'http://localhost:49153/signin/callback?login_option=external_idp&state=state-external'
     const oauth = useKiroOAuth()
+    expect(oauth.externalIdpStage.value).toBe('portal')
     await oauth.generateAuthUrl(7, 'Google')
 
     const started = await oauth.startExternalIDPAuth({
@@ -133,6 +134,10 @@ describe('useKiroOAuth', () => {
     expect(oauth.externalIDPAuthUrl.value).toContain('login.microsoftonline.com')
     expect(oauth.sessionId.value).toBe('session-external')
     expect(oauth.state.value).toBe('state-external')
+    expect(oauth.externalIdpStage.value).toBe('idp')
+
+    oauth.resetState()
+    expect(oauth.externalIdpStage.value).toBe('portal')
   })
 
   it('validates Kiro refresh tokens with refresh metadata', async () => {
@@ -151,6 +156,7 @@ describe('useKiroOAuth', () => {
       startUrl: 'https://view.awsapps.com/start',
       region: 'us-east-1',
       profileArn: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/default',
+      tokenEndpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
       issuerUrl: 'https://login.microsoftonline.com/tenant/v2.0',
       scopes: 'scope-a offline_access',
       email: 'user@example.com',
@@ -167,6 +173,7 @@ describe('useKiroOAuth', () => {
       start_url: 'https://view.awsapps.com/start',
       region: 'us-east-1',
       profile_arn: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/default',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
       issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
       scopes: 'scope-a offline_access',
       email: 'user@example.com',
@@ -184,6 +191,7 @@ describe('useKiroOAuth', () => {
       provider: 'AWS',
       client_id: 'client-id',
       client_secret: 'client-secret',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
       issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
       scopes: 'scope-a offline_access'
     })
@@ -195,6 +203,7 @@ describe('useKiroOAuth', () => {
       provider: 'AWS',
       client_id: 'client-id',
       client_secret: 'client-secret',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
       issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
       scopes: 'scope-a offline_access'
     })

@@ -281,6 +281,28 @@ function buildKiroOrganizationAccount() {
   } as any
 }
 
+function buildKiroExternalIdpAccount() {
+  const account = buildKiroOrganizationAccount()
+  return {
+    ...account,
+    id: 8,
+    name: 'Kiro External IdP',
+    credentials: {
+      ...account.credentials,
+      auth_method: 'external_idp',
+      provider: 'ExternalIdp',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'openid offline_access',
+      api_region: 'eu-central-1'
+    },
+    extra: {
+      mixed_scheduling: true,
+      kiro_endpoint_mode: 'krs'
+    }
+  } as any
+}
+
 function buildKiroAPIKeyAccount(baseUrl = '', apiRegion?: string) {
   return {
     ...buildAccount(),
@@ -1181,6 +1203,29 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-north-1')
+  })
+
+  it('preserves canonical ExternalIdp metadata, API region, and endpoint mode on edit', async () => {
+    const account = buildKiroExternalIdpAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      auth_method: 'external_idp',
+      provider: 'ExternalIdp',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      scopes: 'openid offline_access',
+      api_region: 'eu-central-1'
+    })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('preferred_endpoint')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.kiro_endpoint_mode).toBe('krs')
   })
 
   it('defaults Anthropic OAuth model mapping to the supported Claude model list', async () => {
