@@ -138,6 +138,7 @@ export default {
     editKey: '编辑密钥',
     deleteKey: '删除密钥',
     deleteConfirmMessage: "确定要删除 '{name}' 吗？此操作无法撤销。",
+    id: 'ID',
     apiKey: 'API 密钥',
     group: '分组',
     currentConcurrency: '当前并发',
@@ -204,10 +205,14 @@ export default {
       copied: '已复制',
       note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。',
       noGroupTitle: '请先分配分组',
-      noGroupDescription:
-        '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
-      openai: {
-        description: '请同时保存下方的 config.toml 和 auth.json 到 Codex CLI 配置目录，两个文件缺一不可。',
+	  noGroupDescription:
+		'此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
+	  openai: {
+		description: '请同时保存下方的 config.toml 和 auth.json 到 Codex CLI 配置目录，两个文件缺一不可。',
+		authModeTitle: 'Codex 认证模式',
+		authModeDescription: '兼容模式保留旧版 Codex 配置；API Key Mode 用于启用客户端图片执行器。',
+		authModeLegacy: '兼容模式',
+		authModeApiKey: 'API Key Mode',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',
         note: '如果 auth.json 已存在，请只合并 OPENAI_API_KEY 字段，不要覆盖其他登录信息。不要把真实密钥写入 env_key；本示例使用 auth.json。保存后请完全退出并重启 Codex，再创建一个新会话。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。',
         noteWindows:
@@ -244,8 +249,8 @@ export default {
       grok: {
         description: '配置 Grok Build 或 OpenCode，让 Responses API 请求通过当前 Sub2API Grok 分组发送。',
         configTomlHint: '如已有 config.toml，请先备份再合并此模型配置。保存后运行 grok inspect 验证生效配置。',
-        note: '保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。',
-        noteWindows: '保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。'
+        note: '保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 grok。',
+        noteWindows: '保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 grok。'
       },
       opencode: {
         description: '将以下配置写入 OpenCode 配置文件，使用当前支持的 Claude 或 OpenAI 模型通过此 API 密钥访问网关。',
@@ -484,7 +489,8 @@ export default {
     providers: {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
-      gemini: 'Gemini'
+      gemini: 'Gemini',
+      grok: 'Grok'
     },
     extraModelsHeader: '附加模型',
     extraModelsEmpty: '无附加模型',

@@ -321,6 +321,98 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 	return nil
 }
 
+// AccrueInviteRebate applies the percentage-based affiliate rules to recharge
+// sources that explicitly opt in (currently positive admin balance additions).
+// The existing payment fulfillment path continues to use the fixed first-
+// recharge reward model through GrantFirstRechargeReward.
+func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error) {
+	return s.AccrueInviteRebateForOrder(ctx, inviteeUserID, baseRechargeAmount, nil)
+}
+
+func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64, sourceOrderID *int64) (float64, error) {
+	if s == nil || s.repo == nil {
+		return 0, nil
+	}
+	if inviteeUserID <= 0 || baseRechargeAmount <= 0 || math.IsNaN(baseRechargeAmount) || math.IsInf(baseRechargeAmount, 0) {
+		return 0, nil
+	}
+	if !s.IsEnabled(ctx) {
+		return 0, nil
+	}
+
+	inviteeSummary, err := s.repo.EnsureUserAffiliate(ctx, inviteeUserID)
+	if err != nil {
+		return 0, err
+	}
+	if inviteeSummary.InviterID == nil || *inviteeSummary.InviterID <= 0 {
+		return 0, nil
+	}
+
+	inviterSummary, err := s.repo.EnsureUserAffiliate(ctx, *inviteeSummary.InviterID)
+	if err != nil {
+		return 0, err
+	}
+	if s.settingService != nil {
+		if durationDays := s.settingService.GetAffiliateRebateDurationDays(ctx); durationDays > 0 {
+			if time.Now().After(inviteeSummary.CreatedAt.AddDate(0, 0, durationDays)) {
+				return 0, nil
+			}
+		}
+	}
+
+	rebateRatePercent := s.resolveRebateRatePercent(ctx, inviterSummary)
+	rebate := roundTo(baseRechargeAmount*(rebateRatePercent/100), 8)
+	if rebate <= 0 {
+		return 0, nil
+	}
+
+	if s.settingService != nil {
+		if perInviteeCap := s.settingService.GetAffiliateRebatePerInviteeCap(ctx); perInviteeCap > 0 {
+			existing, err := s.repo.GetAccruedRebateFromInvitee(ctx, *inviteeSummary.InviterID, inviteeUserID)
+			if err != nil {
+				return 0, err
+			}
+			if existing >= perInviteeCap {
+				return 0, nil
+			}
+			if remaining := perInviteeCap - existing; rebate > remaining {
+				rebate = roundTo(remaining, 8)
+			}
+		}
+	}
+
+	freezeHours := 0
+	if s.settingService != nil {
+		freezeHours = s.settingService.GetAffiliateRebateFreezeHours(ctx)
+	}
+	applied, err := s.repo.AccrueQuota(ctx, *inviteeSummary.InviterID, inviteeUserID, rebate, freezeHours, sourceOrderID)
+	if err != nil {
+		return 0, err
+	}
+	if !applied {
+		return 0, nil
+	}
+	return rebate, nil
+}
+
+func (s *AffiliateService) resolveRebateRatePercent(ctx context.Context, inviter *AffiliateSummary) float64 {
+	if inviter != nil && inviter.AffRebateRatePercent != nil {
+		v := *inviter.AffRebateRatePercent
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return s.globalRebateRatePercent(ctx)
+		}
+		return clampAffiliateRebateRate(v)
+	}
+	return s.globalRebateRatePercent(ctx)
+}
+
+func (s *AffiliateService) globalRebateRatePercent(ctx context.Context) float64 {
+	if s == nil || s.settingService == nil {
+		return AffiliateRebateRateDefault
+	}
+	return s.settingService.GetAffiliateRebateRatePercent(ctx)
+}
+
 // LockInviteeForSettlement 对被邀请人的 affiliate 行加行锁（FOR UPDATE），
 // 串行化同一被邀请人的首充奖励结算，防止并发订单各自观察到 priorCount==0 而重复发放。
 // 必须在履约事务上下文内调用（ctx 携带 tx），锁随事务提交/回滚释放。

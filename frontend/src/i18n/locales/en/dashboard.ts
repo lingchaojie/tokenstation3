@@ -138,6 +138,7 @@ export default {
     editKey: 'Edit API Key',
     deleteKey: 'Delete API Key',
     deleteConfirmMessage: "Are you sure you want to delete '{name}'? This action cannot be undone.",
+    id: 'ID',
     apiKey: 'API Key',
     group: 'Group',
     currentConcurrency: 'Current Concurrency',
@@ -205,9 +206,13 @@ export default {
       copied: 'Copied',
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       noGroupTitle: 'Please assign a group first',
-      noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
-      openai: {
-        description: 'Save both config.toml and auth.json below in the Codex CLI config directory; both files are required.',
+	  noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
+	  openai: {
+		description: 'Save both config.toml and auth.json below in the Codex CLI config directory; both files are required.',
+		authModeTitle: 'Codex authentication mode',
+		authModeDescription: 'Compatibility mode keeps the existing setup for older Codex clients. API Key Mode enables the client-side image executor.',
+		authModeLegacy: 'Compatibility mode',
+		authModeApiKey: 'API Key Mode',
         configTomlHint: 'Make sure the following content is at the beginning of the config.toml file',
         note: 'If auth.json already exists, merge only the OPENAI_API_KEY property instead of overwriting other sign-in data. Do not put the literal key in env_key; this example uses auth.json. Fully quit and restart Codex after saving, then create a new conversation. On macOS/Linux, run mkdir -p ~/.codex if the directory does not exist.',
         noteWindows: 'If auth.json already exists, merge only the OPENAI_API_KEY property instead of overwriting other sign-in data. Do not put the literal key in env_key; this example uses auth.json. Fully quit and restart Codex after saving, then create a new conversation. Press Win+R and enter %userprofile%\\.codex; create the directory first if it does not exist.',
@@ -240,8 +245,8 @@ export default {
       grok: {
         description: 'Configure Grok Build or OpenCode to send Responses API traffic through your Sub2API Grok group.',
         configTomlHint: 'Back up an existing config.toml before merging this model entry. Run grok inspect after saving to verify the effective configuration.',
-        note: 'Save the file as ~/.grok/config.toml, then run grok inspect and select sub2api-grok from /model.',
-        noteWindows: 'Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select sub2api-grok from /model.',
+        note: 'Save the file as ~/.grok/config.toml, then run grok inspect and select grok from /model.',
+        noteWindows: 'Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select grok from /model.',
       },
       opencode: {
         description: 'Add the following OpenCode config to use this API key with the currently supported Claude or OpenAI models.',
@@ -479,7 +484,8 @@ export default {
     providers: {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
-      gemini: 'Gemini'
+      gemini: 'Gemini',
+      grok: 'Grok'
     },
     extraModelsHeader: 'Extra Models',
     extraModelsEmpty: 'No extra models',

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +20,7 @@ type affiliateRewardFakeRepo struct {
 	// summaries lets tests control the summary returned by EnsureUserAffiliate
 	// per user id (notably the invitee's InviterID).
 	summaries map[int64]*AffiliateSummary
+	accrued   float64
 }
 
 func (r *affiliateRewardFakeRepo) EnsureUserAffiliate(_ context.Context, userID int64) (*AffiliateSummary, error) {
@@ -27,6 +29,10 @@ func (r *affiliateRewardFakeRepo) EnsureUserAffiliate(_ context.Context, userID 
 		return &cp, nil
 	}
 	return &AffiliateSummary{UserID: userID}, nil
+}
+
+func (r *affiliateRewardFakeRepo) GetAccruedRebateFromInvitee(context.Context, int64, int64) (float64, error) {
+	return r.accrued, nil
 }
 
 // affiliateRewardFakeUserRepo records UpdateBalance calls for the invitee-side
@@ -185,6 +191,34 @@ func TestGrantFirstRechargeReward(t *testing.T) {
 		_, err := svc.GrantFirstRechargeReward(ctx, inviteeID, 20, false, true, &orderID)
 		require.Error(t, err)
 	})
+}
+
+func TestAccrueInviteRebatePreservesPercentageRulesAlongsideFixedFirstRechargeRewards(t *testing.T) {
+	ctx := context.Background()
+	const inviteeID, inviterID = int64(100), int64(200)
+	exclusiveRate := 25.0
+	repo := &affiliateRewardFakeRepo{
+		summaries: map[int64]*AffiliateSummary{
+			inviteeID: {UserID: inviteeID, InviterID: int64Ptr(inviterID), CreatedAt: time.Now().Add(-time.Hour)},
+			inviterID: {UserID: inviterID, AffRebateRatePercent: &exclusiveRate},
+		},
+		accrued: 4,
+	}
+	svc := newRewardTestService(t, repo, &affiliateRewardFakeUserRepo{}, map[string]string{
+		SettingKeyAffiliateRebateRate:          "20",
+		SettingKeyAffiliateRebateDurationDays:  "365",
+		SettingKeyAffiliateRebatePerInviteeCap: "5",
+		SettingKeyAffiliateRebateFreezeHours:   "12",
+	})
+
+	rebate, err := svc.AccrueInviteRebate(ctx, inviteeID, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, rebate, "25%% exclusive rate is capped to the remaining per-invitee allowance")
+	require.Len(t, repo.accrueCalls, 1)
+	require.Equal(t, inviterID, repo.accrueCalls[0].inviterID)
+	require.Equal(t, inviteeID, repo.accrueCalls[0].inviteeUserID)
+	require.Equal(t, 1.0, repo.accrueCalls[0].amount)
+	require.Equal(t, 12, repo.accrueCalls[0].freezeHours)
 }
 
 // TestIsEnabled_NilSettingServiceReturnsDefault verifies that IsEnabled

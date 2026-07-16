@@ -150,7 +150,11 @@ type SystemSettings struct {
 	CyberSessionBlockEnabled        bool
 	CyberSessionBlockTTLSeconds     int
 	AffiliateEnabled                bool
+	AffiliateRebateRate             float64
 	AffiliateRebateFreezeHours      int
+	AffiliateRebateDurationDays     int
+	AffiliateRebatePerInviteeCap    float64
+	AdminRechargeRebateEnabled      bool
 	AffiliateFirstRechargeThreshold float64
 	AffiliateInviterReward          float64
 	AffiliateInviteeReward          float64

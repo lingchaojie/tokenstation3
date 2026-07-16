@@ -166,6 +166,7 @@ type CreatePlanRequest struct {
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
 	OriginalPrice    *float64 `json:"original_price"`
+	Currency         string   `json:"currency"`
 	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
 	ValidityDays     int      `json:"validity_days"`
 	ValidityUnit     string   `json:"validity_unit"`
@@ -204,6 +205,7 @@ type UpdatePlanRequest struct {
 	Description           *string     `json:"description"`
 	Price                 *float64    `json:"price"`
 	OriginalPrice         *float64    `json:"original_price"`
+	Currency              *string     `json:"currency"`
 	SevenDayQuotaUSD      *float64    `json:"seven_day_quota_usd"`
 	ClearSevenDayQuotaUSD bool        `json:"clear_seven_day_quota_usd"`
 	ValidityDays          *int        `json:"validity_days"`
@@ -226,6 +228,7 @@ type PublicPlanResponse struct {
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
 	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	Currency         string   `json:"currency"`
 	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
 	ValidityDays     int      `json:"validity_days"`
 	ValidityUnit     string   `json:"validity_unit"`

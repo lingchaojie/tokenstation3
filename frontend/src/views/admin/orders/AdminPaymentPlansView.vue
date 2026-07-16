@@ -14,10 +14,11 @@
         <template #cell-name="{ value }">
           <span class="text-sm font-medium text-gray-900 dark:text-white">{{ value }}</span>
         </template>
-        <template #cell-price="{ value, row }">
-          <div class="text-sm">
-            <span class="font-medium text-gray-900 dark:text-white">¥{{ formatMoney(value) }}</span>
-            <span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">¥{{ formatMoney(row.original_price) }}</span>
+		<template #cell-price="{ value, row }">
+		  <div class="text-sm">
+			<span class="font-medium text-gray-900 dark:text-white">{{ row.currency ? '' : '¥' }}{{ formatMoney(value) }}</span>
+			<span v-if="row.currency" class="ml-1 text-xs text-gray-400">{{ row.currency }}</span>
+			<span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">{{ row.currency ? '' : '¥' }}{{ formatMoney(row.original_price) }}</span>
           </div>
         </template>
         <template #cell-seven_day_quota_usd="{ value }">

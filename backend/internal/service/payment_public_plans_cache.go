@@ -80,6 +80,7 @@ func publicPlanResponseFromEnt(p *dbent.SubscriptionPlan) PublicPlanResponse {
 		Description:      p.Description,
 		Price:            p.Price,
 		OriginalPrice:    p.OriginalPrice,
+		Currency:         p.Currency,
 		SevenDayQuotaUSD: p.SevenDayQuotaUsd,
 		ValidityDays:     p.ValidityDays,
 		ValidityUnit:     p.ValidityUnit,
