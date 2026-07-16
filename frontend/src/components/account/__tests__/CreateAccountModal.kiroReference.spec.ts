@@ -91,13 +91,20 @@ describe("CreateAccountModal Kiro reference account modes", () => {
       source.indexOf("const handleKiroImport"),
       source.indexOf("const handleCookieAuth"),
     );
+    const apiRegionSelectorOpeningTag =
+      source.match(/<div\b[^>]*data-testid="kiro-api-region-select-create"[^>]*>/s)?.[0] ?? "";
+    const apiRegionSelectorVisibility =
+      apiRegionSelectorOpeningTag.match(/v-if="([^"]*)"/s)?.[1] ?? "";
 
     expect(source).toContain("DEFAULT_KIRO_API_REGION");
     expect(source).toContain("buildKiroAPIRegionOptions");
     expect(source).toContain("const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)");
     expect(resetFormSource).toContain("kiroIDCRegion.value = 'us-east-1'");
     expect(resetFormSource).toContain("kiroAPIRegion.value = DEFAULT_KIRO_API_REGION");
-    expect(source).toContain('data-testid="kiro-api-region-select-create"');
+    expect(apiRegionSelectorOpeningTag).not.toBe("");
+    expect(apiRegionSelectorVisibility.replace(/\s+/g, " ").trim()).toBe(
+      "form.platform === 'kiro' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')",
+    );
     expect(source).toContain('v-model="kiroAPIRegion"');
     expect(source).toContain("kiroAPIRegionOptions");
     expect(source).toContain("admin.accounts.oauth.kiro.apiRegionLabel");
@@ -113,9 +120,6 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(kiroImportSource).toContain("buildKiroCredentials(tokenInfo)");
     expect(nativeKiroAPIKeySource).toContain("api_region: kiroAPIRegion.value");
     expect(relayKiroAPIKeySource).not.toContain("api_region");
-    expect(source).toMatch(
-      /accountCategory === 'oauth-based' \|\|\s*accountCategory === 'apikey'/,
-    );
 
     expect(enSource).toContain("apiRegionLabel: 'API Region'");
     expect(enSource).toContain(
