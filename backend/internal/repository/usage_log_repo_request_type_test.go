@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -258,14 +259,9 @@ func TestUsageLogRepositoryCreate_PlaceholderCountMatchesPreparedArgs(t *testing
 		Model:     "gpt-5.4",
 		CreatedAt: time.Date(2025, 1, 5, 13, 0, 0, 0, time.UTC),
 	})
-	lastPlaceholder := fmt.Sprintf("$%d", len(prepared.args))
-
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
 		func(_, actualSQL string) error {
-			if !strings.Contains(actualSQL, lastPlaceholder) {
-				return fmt.Errorf("usage log insert is missing final placeholder %s", lastPlaceholder)
-			}
-			return nil
+			return validateUsageLogStaticInsertShape(actualSQL, len(prepared.args))
 		},
 	)))
 	require.NoError(t, err)
@@ -290,6 +286,62 @@ func TestUsageLogRepositoryCreate_PlaceholderCountMatchesPreparedArgs(t *testing
 	require.NoError(t, err)
 	require.True(t, inserted)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecUsageLogInsertNoResult_PlaceholdersMatchPreparedArgs(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-fallback-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: time.Date(2025, 1, 5, 14, 0, 0, 0, time.UTC),
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(_, actualSQL string) error {
+			return validateUsageLogStaticInsertShape(actualSQL, len(prepared.args))
+		},
+	)))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec("usage log fallback insert").
+		WithArgs(anySliceToDriverValues(prepared.args)...).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	require.NoError(t, execUsageLogInsertNoResult(context.Background(), db, prepared))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func validateUsageLogStaticInsertShape(query string, wantCount int) error {
+	match := regexp.MustCompile(`(?is)INSERT\s+INTO\s+usage_logs\s*\((.*?)\)\s*VALUES\s*\((.*?)\)`).FindStringSubmatch(query)
+	if len(match) != 3 {
+		return fmt.Errorf("usage log INSERT columns/VALUES shape not found")
+	}
+	columns := splitTrimmedCSV(match[1])
+	values := splitTrimmedCSV(match[2])
+	wantColumns := splitTrimmedCSV(usageLogSelectColumns)[1:] // INSERT omits generated id.
+	if !reflect.DeepEqual(columns, wantColumns) {
+		return fmt.Errorf("usage log INSERT columns do not match scan/argument order: got %v want %v", columns, wantColumns)
+	}
+	if len(columns) != wantCount || len(values) != wantCount {
+		return fmt.Errorf("usage log INSERT shape count mismatch: columns=%d values=%d args=%d", len(columns), len(values), wantCount)
+	}
+	for i, value := range values {
+		want := fmt.Sprintf("$%d", i+1)
+		if value != want {
+			return fmt.Errorf("usage log INSERT placeholder %d = %q, want %q", i+1, value, want)
+		}
+	}
+	return nil
+}
+
+func splitTrimmedCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func TestPrepareUsageLogInsert_PersistsImageSizeMetadata(t *testing.T) {

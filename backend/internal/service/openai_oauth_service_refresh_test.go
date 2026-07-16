@@ -106,6 +106,26 @@ func TestOpenAIOAuthService_RefreshAccountToken_PATIgnoresStaleRefreshToken(t *t
 	require.Zero(t, atomic.LoadInt32(&client.refreshCalls), "PAT accounts must not call OAuth refresh even if stale refresh_token remains")
 }
 
+func TestOpenAIOAuthService_RefreshAccountToken_AgentIdentityRejectsStaleOAuthCredentials(t *testing.T) {
+	client := &openaiOAuthClientRefreshStub{}
+	svc := NewOpenAIOAuthService(nil, client)
+	account := &Account{
+		ID:       78,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":     OpenAIAuthModeAgentIdentity,
+			"access_token":  "stale-access-token",
+			"refresh_token": "stale-refresh-token",
+			"expires_at":    time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+
+	_, err := svc.RefreshAccountToken(context.Background(), account)
+	require.ErrorContains(t, err, "agent identity accounts do not use OAuth refresh")
+	require.Zero(t, atomic.LoadInt32(&client.refreshCalls), "Agent Identity must never call OAuth refresh")
+}
+
 func TestOpenAITokenRefresher_NeedsRefresh_SkipsAccountWithoutRefreshToken(t *testing.T) {
 	refresher := NewOpenAITokenRefresher(nil, nil)
 	expiresAt := time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
@@ -142,6 +162,18 @@ func TestOpenAITokenRefresher_NeedsRefresh_SkipsAccountWithoutRefreshToken(t *te
 		},
 	}
 	require.False(t, refresher.NeedsRefresh(patWithStaleRT, 5*time.Minute))
+
+	agentWithStaleRT := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":     OpenAIAuthModeAgentIdentity,
+			"refresh_token": "stale-refresh-token",
+			"expires_at":    expiresAt,
+		},
+	}
+	require.False(t, refresher.CanRefresh(agentWithStaleRT))
+	require.False(t, refresher.NeedsRefresh(agentWithStaleRT, 5*time.Minute))
 }
 
 func TestOpenAITokenRefresher_Refresh_PATRemovesStaleOAuthFields(t *testing.T) {

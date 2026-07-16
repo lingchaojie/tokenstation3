@@ -396,6 +396,43 @@ func (s *AccountRepoSuite) TestListOAuthRefreshCandidatePage_GrokCursorAndExclus
 	s.Require().NotContains([]int64{first[0].ID, first[1].ID}, second[0].ID)
 }
 
+func (s *AccountRepoSuite) TestListOAuthRefreshCandidatePage_ExcludesOpenAIAgentIdentity() {
+	valid := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "openai-oauth-refreshable",
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"auth_mode":     "oauth",
+			"refresh_token": "refresh-valid",
+		},
+	})
+	agent := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "openai-agent-identity-stale-oauth",
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"auth_mode":     service.OpenAIAuthModeAgentIdentity,
+			"refresh_token": "stale-refresh-must-not-run",
+		},
+	})
+
+	page, err := s.repo.ListOAuthRefreshCandidatePage(s.ctx, service.OAuthRefreshPageOptions{
+		Platforms:           []string{service.PlatformOpenAI},
+		Limit:               10,
+		ActiveOnly:          true,
+		RequireRefreshToken: true,
+	})
+	s.Require().NoError(err)
+	ids := make([]int64, 0, len(page.Accounts))
+	for _, account := range page.Accounts {
+		ids = append(ids, account.ID)
+	}
+	s.Require().Contains(ids, valid.ID)
+	s.Require().NotContains(ids, agent.ID)
+}
+
 func (s *AccountRepoSuite) TestListWithFilters() {
 	tests := []struct {
 		name        string

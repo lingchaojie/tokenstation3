@@ -818,6 +818,8 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 		query += `
 			AND type = 'oauth'`
 	}
+	query += `
+			AND lower(btrim(COALESCE(credentials->>'auth_mode', ''))) <> 'agentidentity'`
 	if options.RequireRefreshToken {
 		query += `
 			AND credentials ? 'refresh_token'

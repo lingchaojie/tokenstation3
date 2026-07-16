@@ -284,6 +284,8 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 		"candidate platforms must come from the refresher registry instead of a second hard-coded list")
 	require.Contains(t, normalized, "credentials ? 'refresh_token'")
 	require.Contains(t, normalized, "btrim(credentials->>'refresh_token') <> ''")
+	require.Contains(t, normalized, "lower(btrim(COALESCE(credentials->>'auth_mode', ''))) <> 'agentidentity'",
+		"Agent Identity accounts must never enter the OAuth refresh worker even if stale OAuth fields remain")
 	require.Contains(t, normalized, "temp_unschedulable_until > NOW()")
 	require.Contains(t, normalized, "temp_unschedulable_reason LIKE 'token refresh retry exhausted:%'")
 	require.Contains(t, normalized, "IS NOT TRUE",

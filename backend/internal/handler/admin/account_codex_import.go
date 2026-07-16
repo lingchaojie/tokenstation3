@@ -262,7 +262,13 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 					Message: "已有账号未记录 chatgpt_user_id，已按共享的 chatgpt_account_id 匹配并回填，请确认两者属于同一用户",
 				})
 			}
-			preserveExistingRefresh := item.RefreshToken == "" &&
+			if item.IsAgentIdentity {
+				clearExpiry := int64(0)
+				disableAutoPause := false
+				effectiveExpiresAt = &clearExpiry
+				autoPauseOnExpired = &disableAutoPause
+			}
+			preserveExistingRefresh := !item.IsAgentIdentity && item.RefreshToken == "" &&
 				codexCredentialString(existing.Credentials, "refresh_token") != ""
 			if preserveExistingRefresh {
 				result.Warnings = append(result.Warnings, CodexSessionImportMessage{
@@ -1054,6 +1060,9 @@ func mergeCodexImportCredentials(existing, incoming map[string]any, item *codexI
 	out := mergeCodexImportMap(existing, incoming)
 	if item == nil {
 		return out
+	}
+	if item.IsAgentIdentity {
+		return service.NormalizeOpenAIAgentIdentityCredentials(out)
 	}
 	if strings.TrimSpace(item.RefreshToken) == "" {
 		if codexCredentialString(existing, "refresh_token") == "" {

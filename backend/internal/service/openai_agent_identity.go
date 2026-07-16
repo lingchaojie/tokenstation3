@@ -27,6 +27,17 @@ const (
 	agentIdentityTaskRegistrationTimeout = 30 * time.Second
 )
 
+var openAIAgentIdentityOAuthCredentialKeys = [...]string{
+	"access_token",
+	"refresh_token",
+	"id_token",
+	"expires_at",
+	"expires_in",
+	"client_id",
+	"token_type",
+	openAIAuthModeLegacyCredentialKey,
+}
+
 var openAIAgentIdentityAuthAPIBaseURL = agentIdentityAuthAPIBaseURL
 
 var agentIdentityTaskLocks sync.Map // map[int64]*sync.Mutex
@@ -59,6 +70,21 @@ func (a *Account) IsOpenAIAgentIdentity() bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(a.GetCredential(openAIAuthModeCredentialKey)), OpenAIAuthModeAgentIdentity)
+}
+
+// NormalizeOpenAIAgentIdentityCredentials removes OAuth-only runtime fields
+// while preserving local routing, mapping, quota, and account metadata. Agent
+// Identity authenticates with a freshly signed assertion and must never fall
+// back to a stale OAuth access or refresh token.
+func NormalizeOpenAIAgentIdentityCredentials(credentials map[string]any) map[string]any {
+	if credentials == nil {
+		credentials = make(map[string]any)
+	}
+	for _, key := range openAIAgentIdentityOAuthCredentialKeys {
+		delete(credentials, key)
+	}
+	credentials[openAIAuthModeCredentialKey] = OpenAIAuthModeAgentIdentity
+	return credentials
 }
 
 func agentIdentityPrivateKey(account *Account) (ed25519.PrivateKey, error) {
