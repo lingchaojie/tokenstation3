@@ -123,7 +123,7 @@ Extend `backend/internal/repository/openai_long_context_billing_migration_integr
 Run:
 
 ```bash
-cd backend && GOMAXPROCS=2 go test -p 1 ./migrations ./internal/repository -run 'TestMigration187|TestOpenAILongContextBillingMigration' -count=1
+cd backend && GOMAXPROCS=2 go test -p 1 -tags=integration ./migrations ./internal/repository -run 'TestMigration187|TestOpenAILongContextBillingMigration' -count=1
 ```
 
 Expected: FAIL because tests still reference upstream migration numbering and/or upstream backfills missing existing parents to `false`.

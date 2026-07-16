@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMigration186BackfillsExistingOpenAIAndDefaultsNewAccountsOff(t *testing.T) {
+func TestMigration187BackfillsExistingOpenAIAndDefaultsNewAccountsOff(t *testing.T) {
 	content, err := FS.ReadFile("187_default_openai_long_context_billing.sql")
 	require.NoError(t, err)
 
@@ -30,7 +30,7 @@ WHERE platform = 'openai'
 	require.Contains(t, sql, "'false'::jsonb")
 }
 
-func TestMigration186GuardsMixedVersionAccountWrites(t *testing.T) {
+func TestMigration187GuardsMixedVersionAccountWrites(t *testing.T) {
 	content, err := FS.ReadFile("187_default_openai_long_context_billing.sql")
 	require.NoError(t, err)
 
