@@ -77,6 +77,62 @@ assert_rejected_domains "WWW.EXAMPLE.COM" "www.example.com" "example.com" "the p
 assert_rejected_domains "EXAMPLE.COM" "www.example.com" "example.com" "the apex domain should not be repeated"
 assert_rejected_domains "https://bad.example.com" "www.example.com" "example.com" "URL input should be rejected"
 
+preflight_dir="${TEMP_DIR}/main-preflight"
+preflight_stub_dir="${preflight_dir}/bin"
+download_log="${preflight_dir}/download.log"
+mkdir -p "$preflight_stub_dir"
+
+cat > "${preflight_stub_dir}/curl" <<'EOF'
+#!/bin/bash
+printf 'curl\n' >> "$DOWNLOAD_LOG"
+output_file=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+        shift
+        output_file="$1"
+    fi
+    shift
+done
+if [ "$(basename "$output_file")" = ".env.example" ]; then
+    printf 'JWT_SECRET=\nTOTP_ENCRYPTION_KEY=\nPOSTGRES_PASSWORD=\n' > "$output_file"
+else
+    printf 'services: {}\n' > "$output_file"
+fi
+EOF
+
+cat > "${preflight_stub_dir}/wget" <<'EOF'
+#!/bin/bash
+printf 'wget\n' >> "$DOWNLOAD_LOG"
+exit 1
+EOF
+
+cat > "${preflight_stub_dir}/openssl" <<'EOF'
+#!/bin/bash
+printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
+EOF
+chmod +x "${preflight_stub_dir}/curl" "${preflight_stub_dir}/wget" "${preflight_stub_dir}/openssl"
+
+if (
+    cd "$preflight_dir"
+    export PATH="${preflight_stub_dir}:${PATH}"
+    export DOWNLOAD_LOG="$download_log"
+    DOMAIN="www.example.com"
+    APEX_DOMAIN="example.com"
+    ADDITIONAL_DOMAINS="https://bad.example.com"
+    main > "${preflight_dir}/main-output.log" 2>&1
+); then
+    fail "main should reject invalid additional domains"
+fi
+
+if [ -e "$download_log" ]; then
+    fail "main should validate requested domains before calling download tools"
+fi
+for artifact in docker-compose.yml .env .env.example data postgres_data redis_data; do
+    if [ -e "${preflight_dir}/${artifact}" ]; then
+        fail "invalid requested domains should not create ${artifact}"
+    fi
+done
+
 rendered="$(render_managed_caddyfile \
     "www.example.com" \
     "example.com" \
@@ -95,6 +151,12 @@ expected_rendered=$'# Managed by Sub2API/TokenStation docker-deploy.sh.\n# To ch
 assert_equal "$expected_rendered" "$rendered" "empty additional domains should preserve the primary-only config"
 count="$(printf '%s\n' "$rendered" | grep -Fc 'reverse_proxy 127.0.0.1:8080')"
 assert_equal "1" "$count" "primary-only rendering should have one reverse proxy"
+
+if ! strict_rendered="$(render_managed_caddyfile "strict.example.com" "" "8080")"; then
+    fail "three-argument rendering should work with set -u"
+fi
+expected_strict_rendered=$'# Managed by Sub2API/TokenStation docker-deploy.sh.\n# To change domains after deployment, edit this file and reload Caddy.\nstrict.example.com {\n\treverse_proxy 127.0.0.1:8080\n}'
+assert_equal "$expected_strict_rendered" "$strict_rendered" "omitted additional domains should render as empty"
 
 existing_file="${TEMP_DIR}/existing.caddy"
 existing_backup="${TEMP_DIR}/existing.caddy.backup"
@@ -124,6 +186,9 @@ EOF
 
 cat > "${stub_dir}/caddy" <<'EOF'
 #!/bin/bash
+if [ -n "${CALL_LOG:-}" ]; then
+    printf 'caddy %s\n' "$*" >> "$CALL_LOG"
+fi
 case "${1:-}" in
     version)
         printf 'test-caddy\n'
@@ -142,12 +207,41 @@ EOF
 
 cat > "${stub_dir}/systemctl" <<'EOF'
 #!/bin/bash
+if [ -n "${CALL_LOG:-}" ]; then
+    printf 'systemctl %s\n' "$*" >> "$CALL_LOG"
+fi
+
+next_attempt() {
+    local operation="$1"
+    local count_file="${STUB_STATE_DIR}/${operation}.count"
+    local count=0
+
+    if [ -f "$count_file" ]; then
+        read -r count < "$count_file"
+    fi
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    printf '%s' "$count"
+}
+
 case "${1:-}" in
     is-active)
-        exit 1
+        [ "${SYSTEMCTL_ACTIVE:-0}" = "1" ]
         ;;
-    reload|restart)
-        [ "${SYSTEMCTL_FAILURE:-}" != "reload-restart" ]
+    enable)
+        [ "${SYSTEMCTL_ENABLE_FAILURE:-0}" != "1" ]
+        ;;
+    reload)
+        if [ -n "${SYSTEMCTL_RELOAD_FAILURES:-}" ]; then
+            attempt="$(next_attempt reload)"
+            [ "$attempt" -gt "$SYSTEMCTL_RELOAD_FAILURES" ]
+        fi
+        ;;
+    restart)
+        if [ -n "${SYSTEMCTL_RESTART_FAILURES:-}" ]; then
+            attempt="$(next_attempt restart)"
+            [ "$attempt" -gt "$SYSTEMCTL_RESTART_FAILURES" ]
+        fi
         ;;
     *)
         exit 0
@@ -157,23 +251,82 @@ EOF
 
 chmod +x "${stub_dir}/id" "${stub_dir}/caddy" "${stub_dir}/systemctl"
 export PATH="${stub_dir}:${PATH}"
+unset CALL_LOG CADDY_FAILURE STUB_STATE_DIR SYSTEMCTL_ACTIVE \
+    SYSTEMCTL_ENABLE_FAILURE SYSTEMCTL_RELOAD_FAILURES SYSTEMCTL_RESTART_FAILURES
+
+ordering_dir="${TEMP_DIR}/normal-ordering"
+ordering_root="${ordering_dir}/Caddyfile"
+ordering_managed="${ordering_dir}/managed/sub2api.caddy"
+ordering_log="${ordering_dir}/calls.log"
+mkdir -p "$(dirname "$ordering_managed")"
+printf 'root original\n' > "$ordering_root"
+printf 'managed original\n' > "$ordering_managed"
+
+if ! CALL_LOG="$ordering_log" write_caddyfile \
+    "www.example.com" "example.com" "8080" "" \
+    "$ordering_root" "$ordering_managed" >/dev/null 2>&1; then
+    fail "normal Caddy write should succeed"
+fi
+if [ ! -f "$ordering_log" ]; then
+    fail "Caddy and systemctl stubs should record command order"
+fi
+expected_ordering="$(printf '%s\n' \
+    "caddy fmt --overwrite ${ordering_managed}" \
+    "caddy validate --config ${ordering_root}" \
+    "systemctl enable --now caddy" \
+    "systemctl reload caddy")"
+assert_file_content "$expected_ordering" "$ordering_log" "normal Caddy operations should run in order"
+
+fallback_dir="${TEMP_DIR}/reload-fallback"
+fallback_root="${fallback_dir}/Caddyfile"
+fallback_managed="${fallback_dir}/managed/sub2api.caddy"
+fallback_log="${fallback_dir}/calls.log"
+fallback_state="${fallback_dir}/state"
+mkdir -p "$(dirname "$fallback_managed")" "$fallback_state"
+printf 'root original\n' > "$fallback_root"
+printf 'managed original\n' > "$fallback_managed"
+
+if ! CALL_LOG="$fallback_log" STUB_STATE_DIR="$fallback_state" SYSTEMCTL_RELOAD_FAILURES=1 \
+    write_caddyfile \
+        "www.example.com" "example.com" "8080" "" \
+        "$fallback_root" "$fallback_managed" >/dev/null 2>&1; then
+    fail "restart fallback should succeed after the first reload fails"
+fi
+expected_fallback="$(printf '%s\n' \
+    "caddy fmt --overwrite ${fallback_managed}" \
+    "caddy validate --config ${fallback_root}" \
+    "systemctl enable --now caddy" \
+    "systemctl reload caddy" \
+    "systemctl restart caddy")"
+assert_file_content "$expected_fallback" "$fallback_log" "reload failure should fall back to restart in order"
 
 assert_write_failure_restores_both_files() {
     local case_name="$1"
     local caddy_failure="$2"
-    local systemctl_failure="$3"
+    local enable_failure="$3"
+    local active_before="$4"
+    local reload_failures="$5"
+    local restart_failures="$6"
+    local expected_log="$7"
     local case_dir="${TEMP_DIR}/${case_name}"
     local root_caddyfile="${case_dir}/Caddyfile"
     local managed_caddyfile="${case_dir}/managed/sub2api.caddy"
     local output_file="${case_dir}/output.log"
+    local call_log="${case_dir}/calls.log"
+    local state_dir="${case_dir}/state"
     local root_original="root original ${case_name}"
     local managed_original="managed original ${case_name}"
 
-    mkdir -p "$(dirname "$managed_caddyfile")"
+    mkdir -p "$(dirname "$managed_caddyfile")" "$state_dir"
     printf '%s\n' "$root_original" > "$root_caddyfile"
     printf '%s\n' "$managed_original" > "$managed_caddyfile"
 
-    if CADDY_FAILURE="$caddy_failure" SYSTEMCTL_FAILURE="$systemctl_failure" \
+    if CALL_LOG="$call_log" STUB_STATE_DIR="$state_dir" \
+        CADDY_FAILURE="$caddy_failure" \
+        SYSTEMCTL_ENABLE_FAILURE="$enable_failure" \
+        SYSTEMCTL_ACTIVE="$active_before" \
+        SYSTEMCTL_RELOAD_FAILURES="$reload_failures" \
+        SYSTEMCTL_RESTART_FAILURES="$restart_failures" \
         write_caddyfile \
             "www.example.com" \
             "example.com" \
@@ -186,11 +339,45 @@ assert_write_failure_restores_both_files() {
 
     assert_file_content "$root_original" "$root_caddyfile" "${case_name} should restore the root Caddyfile"
     assert_file_content "$managed_original" "$managed_caddyfile" "${case_name} should restore the managed Caddyfile"
+    assert_file_content "$expected_log" "$call_log" "${case_name} should use the expected Caddy/systemctl sequence"
 }
 
-assert_write_failure_restores_both_files "fmt-failure" "fmt" ""
-assert_write_failure_restores_both_files "validate-failure" "validate" ""
-assert_write_failure_restores_both_files "reload-restart-failure" "" "reload-restart"
+fmt_dir="${TEMP_DIR}/fmt-failure"
+fmt_expected="$(printf '%s\n' \
+    "caddy fmt --overwrite ${fmt_dir}/managed/sub2api.caddy" \
+    "systemctl is-active --quiet caddy")"
+assert_write_failure_restores_both_files \
+    "fmt-failure" "fmt" "" "0" "" "" "$fmt_expected"
+
+validate_dir="${TEMP_DIR}/validate-failure"
+validate_expected="$(printf '%s\n' \
+    "caddy fmt --overwrite ${validate_dir}/managed/sub2api.caddy" \
+    "caddy validate --config ${validate_dir}/Caddyfile" \
+    "systemctl is-active --quiet caddy")"
+assert_write_failure_restores_both_files \
+    "validate-failure" "validate" "" "0" "" "" "$validate_expected"
+
+enable_dir="${TEMP_DIR}/enable-failure"
+enable_expected="$(printf '%s\n' \
+    "caddy fmt --overwrite ${enable_dir}/managed/sub2api.caddy" \
+    "caddy validate --config ${enable_dir}/Caddyfile" \
+    "systemctl enable --now caddy" \
+    "systemctl is-active --quiet caddy" \
+    "systemctl reload caddy")"
+assert_write_failure_restores_both_files \
+    "enable-failure" "" "1" "1" "0" "0" "$enable_expected"
+
+rollback_dir="${TEMP_DIR}/reload-restart-failure"
+rollback_expected="$(printf '%s\n' \
+    "caddy fmt --overwrite ${rollback_dir}/managed/sub2api.caddy" \
+    "caddy validate --config ${rollback_dir}/Caddyfile" \
+    "systemctl enable --now caddy" \
+    "systemctl reload caddy" \
+    "systemctl restart caddy" \
+    "systemctl is-active --quiet caddy" \
+    "systemctl reload caddy")"
+assert_write_failure_restores_both_files \
+    "reload-restart-failure" "" "" "1" "1" "1" "$rollback_expected"
 
 mutation_marker="${TEMP_DIR}/unexpected-caddy-mutation"
 if (

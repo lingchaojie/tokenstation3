@@ -23,7 +23,7 @@ NC='\033[0m' # No Color
 # GitHub raw content base URL
 GITHUB_RAW_URL="${GITHUB_RAW_URL:-https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy}"
 CUSTOM_DOMAIN_CONFIGURED=0
-CONFIGURED_ADDITIONAL_DOMAINS=""
+NORMALIZED_ADDITIONAL_DOMAINS=""
 
 # Print colored message
 print_info() {
@@ -119,12 +119,45 @@ normalize_additional_domains() {
     done
 }
 
+# Validate requested Caddy domains before deployment preparation mutates files.
+preflight_requested_domains() {
+    local domain="${DOMAIN:-}"
+    local apex_domain="${APEX_DOMAIN:-}"
+    local additional_domains=""
+
+    NORMALIZED_ADDITIONAL_DOMAINS=""
+
+    if [ -z "$domain" ]; then
+        return 0
+    fi
+
+    if ! validate_domain_name "$domain"; then
+        print_error "Invalid DOMAIN: ${domain}"
+        print_error "Use a hostname such as www.example.com, without https:// or paths."
+        return 1
+    fi
+
+    if [ -n "$apex_domain" ] && ! validate_domain_name "$apex_domain"; then
+        print_error "Invalid APEX_DOMAIN: ${apex_domain}"
+        print_error "Use a hostname such as example.com, without https:// or paths."
+        return 1
+    fi
+
+    if ! additional_domains="$(normalize_additional_domains "${ADDITIONAL_DOMAINS:-}" "$domain" "$apex_domain")"; then
+        print_error "Invalid ADDITIONAL_DOMAINS."
+        print_error "Use unique hostnames separated by commas or whitespace, without https:// or paths."
+        return 1
+    fi
+
+    NORMALIZED_ADDITIONAL_DOMAINS="$additional_domains"
+}
+
 # Render the complete managed Caddy config without changing the filesystem.
 render_managed_caddyfile() {
     local domain="$1"
     local apex_domain="$2"
     local upstream_port="$3"
-    local additional_domains="$4"
+    local additional_domains="${4:-}"
     local additional_domain=""
 
     printf '%s\n' \
@@ -313,7 +346,7 @@ write_caddyfile() {
     local domain="$1"
     local apex_domain="$2"
     local upstream_port="$3"
-    local additional_domains="$4"
+    local additional_domains="${4:-}"
     local caddyfile="${5:-/etc/caddy/Caddyfile}"
     local managed_caddyfile="${6:-/etc/caddy/sub2api/sub2api.caddy}"
     local managed_dir=""
@@ -422,29 +455,16 @@ configure_caddy_if_requested() {
     local additional_domain=""
     local upstream_port=""
 
+    if ! preflight_requested_domains; then
+        exit 1
+    fi
+
     if [ -z "$domain" ]; then
         return 0
     fi
 
     print_info "DOMAIN is set: ${domain}"
-
-    if ! validate_domain_name "$domain"; then
-        print_error "Invalid DOMAIN: ${domain}"
-        print_error "Use a hostname such as www.example.com, without https:// or paths."
-        exit 1
-    fi
-
-    if [ -n "$apex_domain" ] && ! validate_domain_name "$apex_domain"; then
-        print_error "Invalid APEX_DOMAIN: ${apex_domain}"
-        print_error "Use a hostname such as example.com, without https:// or paths."
-        exit 1
-    fi
-
-    if ! additional_domains="$(normalize_additional_domains "${ADDITIONAL_DOMAINS:-}" "$domain" "$apex_domain")"; then
-        print_error "Invalid ADDITIONAL_DOMAINS."
-        print_error "Use unique hostnames separated by commas or whitespace, without https:// or paths."
-        exit 1
-    fi
+    additional_domains="$NORMALIZED_ADDITIONAL_DOMAINS"
 
     sync_server_port_env
     sync_bind_host_env
@@ -467,7 +487,6 @@ configure_caddy_if_requested() {
         exit 1
     }
     CUSTOM_DOMAIN_CONFIGURED=1
-    CONFIGURED_ADDITIONAL_DOMAINS="$additional_domains"
 
     echo ""
     print_info "Custom domain notes:"
@@ -487,6 +506,10 @@ configure_caddy_if_requested() {
 
 # Main installation function
 main() {
+    if ! preflight_requested_domains; then
+        exit 1
+    fi
+
     echo ""
     echo "=========================================="
     echo "  Sub2API Deployment Preparation"
@@ -625,7 +648,7 @@ main() {
             if [ -n "$additional_domain" ]; then
                 echo "     https://${additional_domain}"
             fi
-        done <<< "$CONFIGURED_ADDITIONAL_DOMAINS"
+        done <<< "$NORMALIZED_ADDITIONAL_DOMAINS"
         echo ""
     else
         echo "  Optional custom domain: enable during initial preparation,"
