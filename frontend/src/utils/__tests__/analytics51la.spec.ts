@@ -40,9 +40,11 @@ describe('shouldEnable51laAnalytics', () => {
   it('enables analytics only for production builds on official LINX2 domains', () => {
     expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'linx2.ai' })).toBe(true)
     expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'www.linx2.ai' })).toBe(true)
+    expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'yundu.linx2.ai' })).toBe(true)
     expect(shouldEnable51laAnalytics({ isProduction: false, hostname: 'linx2.ai' })).toBe(false)
     expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'localhost' })).toBe(false)
     expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'preview.linx2.ai' })).toBe(false)
+    expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'other.linx2.ai' })).toBe(false)
     expect(shouldEnable51laAnalytics({ isProduction: true, hostname: 'linx2.com' })).toBe(false)
   })
 })
@@ -119,6 +121,19 @@ describe('init51laAnalytics', () => {
 
     expect(document.getElementById('LA_COLLECT')).not.toBeNull()
     expect(analyticsWindow.LA?.ids).toHaveLength(1)
+  })
+
+  it('injects the 51.LA SDK on yundu.linx2.ai production', () => {
+    init51laAnalytics({
+      isProduction: true,
+      hostname: 'yundu.linx2.ai',
+      window,
+      document
+    })
+
+    expect(document.getElementById('LA_COLLECT')).not.toBeNull()
+    expect(analyticsWindow.LA?.ids).toHaveLength(1)
+    expect(analyticsWindow.LA?.ids?.[0]).toMatchObject(LA_COLLECT_CONFIG)
   })
 
   it('does not inject duplicate SDK scripts when called more than once', () => {
