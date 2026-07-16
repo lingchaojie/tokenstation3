@@ -5,6 +5,7 @@ import router from './router'
 import i18n, { initI18n } from './i18n'
 import { useAppStore } from '@/stores/app'
 import { init51laAnalytics } from '@/utils/analytics51la'
+import { initializePromotionChannelAttribution } from '@/utils/promotionChannel'
 import './style.css'
 
 function initThemeClass() {
@@ -18,6 +19,7 @@ function initThemeClass() {
 async function bootstrap() {
   // Apply theme class globally before app mount to keep all routes consistent.
   initThemeClass()
+  initializePromotionChannelAttribution()
   init51laAnalytics()
 
   const app = createApp(App)
