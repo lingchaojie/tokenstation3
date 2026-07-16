@@ -834,6 +834,11 @@
       </div>
 
       <div v-if="isKiroAccount && !isKiroRelay" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-4 space-y-2" data-testid="kiro-api-region-select-edit">
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
+          <Select v-model="editKiroAPIRegion" :options="kiroAPIRegionOptions" />
+          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
+        </div>
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
         <input
           v-model.number="kiroCreditUnitPriceUsd"
@@ -2847,7 +2852,12 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import { isKiroRelayAccount } from '@/utils/kiroAccount'
+import {
+  DEFAULT_KIRO_API_REGION,
+  buildKiroAPIRegionOptions,
+  isKiroRelayAccount,
+  resolveKiroAPIRegion
+} from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -2935,6 +2945,19 @@ const editApiKey = ref('')
 const kiroCreditUnitPriceUsd = ref(0)
 const editKiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const editKiroIDCRegion = ref('us-east-1')
+const editKiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
+const kiroAPIRegionOptions = computed(() =>
+  buildKiroAPIRegionOptions(editKiroAPIRegion.value, (region, legacy) => {
+    if (legacy) {
+      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+    }
+    const regionLabelKey =
+      region === 'us-east-1'
+        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
+        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
+    return `${region} - ${t(regionLabelKey)}`
+  }).map(option => ({ ...option }))
+)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3568,6 +3591,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     credentials.region.trim()
       ? credentials.region.trim()
       : 'us-east-1'
+  editKiroAPIRegion.value = resolveKiroAPIRegion(credentials?.api_region)
   antigravityProjectId.value =
     newAccount.platform === 'antigravity' &&
     newAccount.type === 'oauth' &&
@@ -4423,6 +4447,9 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.base_url
       }
+      if (props.account.platform === 'kiro' && !isKiroRelay.value) {
+        newCredentials.api_region = editKiroAPIRegion.value
+      }
 
       // Handle API key
       // 后端响应已脱敏：currentCredentials 不会再包含 api_key 原文。
@@ -4684,6 +4711,7 @@ const handleSubmit = async () => {
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       delete newCredentials.preferred_endpoint
+      newCredentials.api_region = editKiroAPIRegion.value
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
       if (modelMapping) {

@@ -281,6 +281,12 @@
             />
           </div>
         </div>
+
+        <div class="mt-3 space-y-2" data-testid="kiro-api-region-select-reauth">
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
+          <Select v-model="kiroAPIRegion" :options="kiroAPIRegionOptions" />
+          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
+        </div>
       </div>
 
       <OAuthAuthorizationFlow
@@ -374,8 +380,14 @@ import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
 import type { Account, AccountPlatform } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
+import {
+  DEFAULT_KIRO_API_REGION,
+  buildKiroAPIRegionOptions,
+  resolveKiroAPIRegion
+} from '@/utils/kiroAccount'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -422,6 +434,7 @@ const kiroAccountType = ref<'oauth' | 'idc' | 'import'>('oauth')
 const kiroOAuthProvider = ref<'google' | 'github'>('google')
 const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
+const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
 
@@ -483,6 +496,18 @@ const currentError = computed(() => {
 
 // Computed
 const isKiroImportMode = computed(() => isKiro.value && kiroAccountType.value === 'import')
+const kiroAPIRegionOptions = computed(() =>
+  buildKiroAPIRegionOptions(kiroAPIRegion.value, (region, legacy) => {
+    if (legacy) {
+      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+    }
+    const regionLabelKey =
+      region === 'us-east-1'
+        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
+        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
+    return `${region} - ${t(regionLabelKey)}`
+  }).map(option => ({ ...option }))
+)
 
 const isManualInputMethod = computed(() => {
   // OpenAI/Gemini/Kiro/Antigravity/Grok always use manual input (no cookie auth option)
@@ -528,6 +553,7 @@ watch(
             : 'https://view.awsapps.com/start'
         kiroIDCRegion.value =
           typeof creds.region === 'string' && creds.region ? creds.region : 'us-east-1'
+        kiroAPIRegion.value = resolveKiroAPIRegion(creds.api_region)
         kiroAccountType.value = authMethod === 'idc' ? 'idc' : 'oauth'
         kiroOAuthProvider.value = provider === 'github' ? 'github' : 'google'
       }
@@ -545,6 +571,7 @@ const resetState = () => {
   kiroOAuthProvider.value = 'google'
   kiroIDCStartUrl.value = 'https://view.awsapps.com/start'
   kiroIDCRegion.value = 'us-east-1'
+  kiroAPIRegion.value = DEFAULT_KIRO_API_REGION
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
   claudeOAuth.resetState()
@@ -734,6 +761,7 @@ const handleExchangeCode = async () => {
 
     try {
       const credentials = kiroOAuth.buildCredentials(tokenInfo)
+      credentials.api_region = kiroAPIRegion.value
       if (kiroAccountType.value === 'idc') {
         const startUrl =
           typeof tokenInfo.start_url === 'string' && tokenInfo.start_url.trim()
@@ -877,9 +905,11 @@ const handleKiroImport = async () => {
   if (!tokenInfo) return
 
   try {
+    const credentials = kiroOAuth.buildCredentials(tokenInfo)
+    credentials.api_region = kiroAPIRegion.value
     const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
       type: 'oauth',
-      credentials: buildUpdatedCredentials(kiroOAuth.buildCredentials(tokenInfo))
+      credentials: buildUpdatedCredentials(credentials)
     })
 
     appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))

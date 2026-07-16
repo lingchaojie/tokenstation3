@@ -563,6 +563,19 @@
         </div>
       </div>
 
+      <div
+        v-if="
+          form.platform === 'kiro' &&
+          (accountCategory === 'oauth-based' || accountCategory === 'apikey')
+        "
+        class="space-y-2"
+        data-testid="kiro-api-region-select-create"
+      >
+        <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
+        <Select v-model="kiroAPIRegion" :options="kiroAPIRegionOptions" />
+        <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
+      </div>
+
       <div v-if="form.platform === 'kiro' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')" class="space-y-2">
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
         <input
@@ -3967,6 +3980,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { DEFAULT_KIRO_API_REGION, buildKiroAPIRegionOptions } from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import {
@@ -4262,11 +4276,24 @@ const kiroAccountType = ref<'oauth' | 'idc' | 'import'>('oauth')
 const kiroOAuthProvider = ref<'google' | 'github'>('google')
 const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
+const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
 const kiroModelMappings = ref<ModelMapping[]>([])
 const kiroCreditUnitPriceUsd = ref(0)
 const kiroPresetMappings = computed(() => getPresetMappingsByPlatform('kiro'))
+const kiroAPIRegionOptions = computed(() =>
+  buildKiroAPIRegionOptions(kiroAPIRegion.value, (region, legacy) => {
+    if (legacy) {
+      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+    }
+    const regionLabelKey =
+      region === 'us-east-1'
+        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
+        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
+    return `${region} - ${t(regionLabelKey)}`
+  }).map(option => ({ ...option }))
+)
 // Kiro mixed-scheduling config refs
 const kiroEndpointMode = ref<'q' | 'krs'>('q')
 const kiroCacheEmulationEnabled = ref(false)
@@ -5189,6 +5216,7 @@ const resetForm = () => {
   kiroOAuthProvider.value = 'google'
   kiroIDCStartUrl.value = 'https://view.awsapps.com/start'
   kiroIDCRegion.value = 'us-east-1'
+  kiroAPIRegion.value = DEFAULT_KIRO_API_REGION
   kiroModelMappings.value = []
   kiroCreditUnitPriceUsd.value = 0
   resetKiroOAuthLocalState()
@@ -5480,6 +5508,7 @@ const resetKiroOAuthLocalState = () => {
 
 const buildKiroCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
   const credentials = kiroOAuth.buildCredentials(tokenInfo)
+  credentials.api_region = kiroAPIRegion.value
   if (kiroAccountType.value === 'idc') {
     const startUrl =
       typeof tokenInfo.start_url === 'string' && tokenInfo.start_url.trim()
@@ -5530,7 +5559,8 @@ const handleSubmit = async () => {
     }
 
     const credentials: Record<string, unknown> = {
-      api_key: apiKeyValue.value.trim()
+      api_key: apiKeyValue.value.trim(),
+      api_region: kiroAPIRegion.value
     }
 
     const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)

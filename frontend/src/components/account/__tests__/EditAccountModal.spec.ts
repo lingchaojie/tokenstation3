@@ -112,7 +112,12 @@ const SelectStub = defineComponent({
       :value="modelValue"
       @change="$emit('update:modelValue', $event.target.value)"
     >
-      <option v-for="option in options" :key="option.value" :value="option.value">
+      <option
+        v-for="option in options"
+        :key="option.value"
+        :value="option.value"
+        :disabled="option.disabled"
+      >
         {{ option.label }}
       </option>
     </select>
@@ -258,7 +263,8 @@ function buildKiroOrganizationAccount() {
       client_secret: 'client-secret',
       client_id_hash: 'client-hash',
       start_url: 'https://d-99674ac649.awsapps.com/start',
-      region: 'us-east-1',
+      region: 'eu-north-1',
+      api_region: 'us-east-1',
       model_mapping: {
         'claude-sonnet-4-5': 'claude-sonnet-4-5'
       }
@@ -272,6 +278,23 @@ function buildKiroOrganizationAccount() {
     group_ids: [],
     expires_at: null,
     auto_pause_on_expired: false
+  } as any
+}
+
+function buildKiroAPIKeyAccount(baseUrl = '', apiRegion?: string) {
+  return {
+    ...buildAccount(),
+    id: 7,
+    name: baseUrl ? 'Kiro Relay API Key' : 'Kiro Native API Key',
+    platform: 'kiro',
+    credentials: {
+      api_key: 'sk-kiro-test',
+      ...(baseUrl ? { base_url: baseUrl } : {}),
+      ...(apiRegion ? { api_region: apiRegion } : {}),
+      model_mapping: {
+        'claude-sonnet-4-5': 'claude-sonnet-4-5'
+      }
+    }
   } as any
 }
 
@@ -1061,12 +1084,17 @@ describe('EditAccountModal', () => {
 
     const startUrlInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-start-url-input"]')
     const regionInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-region-input"]')
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
 
     expect(startUrlInput.element.value).toBe('https://d-99674ac649.awsapps.com/start')
-    expect(regionInput.element.value).toBe('us-east-1')
+    expect(regionInput.element.value).toBe('eu-north-1')
+    expect(apiRegionSelect.element.value).toBe('us-east-1')
 
     await startUrlInput.setValue('  https://d-1111111111.awsapps.com/start  ')
-    await regionInput.setValue('  us-west-2  ')
+    await regionInput.setValue('  eu-west-1  ')
+    await apiRegionSelect.setValue('eu-central-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
@@ -1077,8 +1105,82 @@ describe('EditAccountModal', () => {
       client_secret: 'client-secret',
       client_id_hash: 'client-hash',
       start_url: 'https://d-1111111111.awsapps.com/start',
-      region: 'us-west-2'
+      region: 'eu-west-1',
+      api_region: 'eu-central-1'
     })
+  })
+
+  it('defaults a missing Kiro API region independently from the IDC region', () => {
+    const account = buildKiroOrganizationAccount()
+    delete account.credentials.api_region
+
+    const wrapper = mountModal(account)
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+
+    expect(account.credentials.region).toBe('eu-north-1')
+    expect(apiRegionSelect.element.value).toBe('us-east-1')
+  })
+
+  it('submits the selected API region for a direct Kiro API-key account', async () => {
+    const account = buildKiroAPIKeyAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+
+    await apiRegionSelect.setValue('eu-central-1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-central-1')
+  })
+
+  it('does not expose or introduce API region for a relay Kiro API-key account', async () => {
+    const account = buildKiroAPIKeyAccount('https://relay.example.com')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="kiro-api-region-select-edit"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('api_region')
+  })
+
+  it('keeps a historical unsupported Kiro API region selected and preserves it on save', async () => {
+    const account = buildKiroAPIKeyAccount('', 'eu-north-1')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+    const legacyOption = apiRegionSelect
+      .findAll('option')
+      .find(option => option.attributes('value') === 'eu-north-1')
+
+    expect(apiRegionSelect.element.value).toBe('eu-north-1')
+    expect(legacyOption?.attributes('disabled')).toBeDefined()
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-north-1')
   })
 
   it('defaults Anthropic OAuth model mapping to the supported Claude model list', async () => {
