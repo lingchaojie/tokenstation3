@@ -37,6 +37,13 @@ describe('promotionChannel', () => {
     }
   })
 
+  it.each(['constructor', 'toString', '__proto__'])(
+    'rejects inherited object key hostname %s',
+    (hostname) => {
+      expect(resolvePromotionChannel(hostname)).toBeNull()
+    }
+  )
+
   it('normalizes case, whitespace, and one trailing dot before matching', () => {
     expect(resolvePromotionChannel(' YUNDU.LINX2.AI. ')).toEqual({
       affiliateCode: 'YUNDU',

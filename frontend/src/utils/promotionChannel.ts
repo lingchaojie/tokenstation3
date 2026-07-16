@@ -4,16 +4,18 @@ import {
 } from '@/utils/oauthAffiliate'
 
 export interface PromotionChannel {
-  affiliateCode: string
-  oauthOrigin: string
+  readonly affiliateCode: string
+  readonly oauthOrigin: string
 }
 
-const PROMOTION_CHANNELS: Readonly<Record<string, PromotionChannel>> = Object.freeze({
+const PROMOTION_CHANNELS = Object.freeze({
   'yundu.linx2.ai': Object.freeze({
     affiliateCode: 'YUNDU',
     oauthOrigin: 'https://www.linx2.ai'
-  })
+  } satisfies PromotionChannel)
 })
+
+type PromotionHostname = keyof typeof PROMOTION_CHANNELS
 
 function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/\.$/, '')
@@ -23,8 +25,15 @@ function runtimeHostname(): string {
   return typeof window === 'undefined' ? '' : window.location.hostname
 }
 
+function isPromotionHostname(hostname: string): hostname is PromotionHostname {
+  return Object.prototype.hasOwnProperty.call(PROMOTION_CHANNELS, hostname)
+}
+
 export function resolvePromotionChannel(hostname: string): PromotionChannel | null {
-  return PROMOTION_CHANNELS[normalizeHostname(hostname)] ?? null
+  const normalizedHostname = normalizeHostname(hostname)
+  return isPromotionHostname(normalizedHostname)
+    ? PROMOTION_CHANNELS[normalizedHostname]
+    : null
 }
 
 export function getCurrentPromotionChannel(): PromotionChannel | null {
