@@ -161,6 +161,10 @@ describe("CreateAccountModal Kiro reference account modes", () => {
       reauthSource.indexOf("const resetState"),
       reauthSource.indexOf("const kiroModeClass"),
     );
+    const kiroAPIRegionOptionsSource = reauthSource.slice(
+      reauthSource.indexOf("const kiroAPIRegionOptions = computed(() =>"),
+      reauthSource.indexOf("const isManualInputMethod"),
+    );
     const handleExchangeSource = reauthSource.slice(
       reauthSource.indexOf("const handleExchangeCode"),
       reauthSource.indexOf("const handleKiroImport"),
@@ -177,10 +181,11 @@ describe("CreateAccountModal Kiro reference account modes", () => {
       reauthSource.match(/credentials\.api_region\s*=\s*kiroAPIRegion\.value/g) ?? [];
 
     expect(reauthSource).toContain("DEFAULT_KIRO_API_REGION");
-    expect(reauthSource).toContain("buildKiroAPIRegionOptions");
     expect(reauthSource).toContain("resolveKiroAPIRegion");
     expect(reauthSource).toContain("const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)");
-    expect(reauthSource).toContain("const kiroAPIRegionOptions = computed(() =>");
+    expect(kiroAPIRegionOptionsSource).toContain(
+      "buildKiroAPIRegionOptions(kiroAPIRegion.value,",
+    );
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionLegacy");
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionUsEast");
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionEuCentral");
