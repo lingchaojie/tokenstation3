@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved
 
 **Branch:** `dev`
 
