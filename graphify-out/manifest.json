@@ -13170,8 +13170,8 @@
     "semantic_hash": "1b25a160fc2d80e62e4945452bf84b3d"
   },
   "frontend/src/router/index.ts": {
-    "mtime": 1784157975.3618119,
-    "ast_hash": "f7c7d2f47ab67abad49a6c2bad1c7a11",
+    "mtime": 1784162723.0663545,
+    "ast_hash": "d6422f1b3ed2ca0dc00eb858a69ef85f",
     "semantic_hash": ""
   },
   "frontend/src/router/meta.d.ts": {
@@ -13550,8 +13550,8 @@
     "semantic_hash": "aa71842da9a1ce262bc0467ef4f2ffd0"
   },
   "frontend/src/views/HomeView.vue": {
-    "mtime": 1784158831.714627,
-    "ast_hash": "275fd309512e58aa4a2a8596fea513c5",
+    "mtime": 1784162981.113198,
+    "ast_hash": "7a0cdff8f22b2e56ae30bf719a7cfbb9",
     "semantic_hash": ""
   },
   "frontend/src/views/KeyUsageView.vue": {
@@ -13565,8 +13565,8 @@
     "semantic_hash": "1e36d23e5f73567f439f6880a52f3708"
   },
   "frontend/src/views/__tests__/HomeView.spec.ts": {
-    "mtime": 1784158794.8307662,
-    "ast_hash": "4ade9f0ff4fd95ff084c1e60063535b1",
+    "mtime": 1784163159.52439,
+    "ast_hash": "83ab81b92a872aff63903c8d8310c16d",
     "semantic_hash": ""
   },
   "frontend/src/views/__tests__/KeyUsageView.spec.ts": {
@@ -15685,13 +15685,13 @@
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/ApiDocsShell.vue": {
-    "mtime": 1784154993.0501204,
-    "ast_hash": "1a49f3984e4223910483f9072eaf33d4",
+    "mtime": 1784162750.9662309,
+    "ast_hash": "7d16d7cf4ff0f89ae0846fe841759514",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/ApiDocsSidebar.vue": {
-    "mtime": 1784153674.37533,
-    "ast_hash": "a9c481cbf425981b45d97422ad84cbbd",
+    "mtime": 1784162750.9702308,
+    "ast_hash": "aefc3dc2a4bf91a31d6b3bd8d17ab722",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/ApiDocsToc.vue": {
@@ -15710,13 +15710,13 @@
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/__tests__/ApiDocsCodeBlock.spec.ts": {
-    "mtime": 1784149671.4084697,
-    "ast_hash": "bfe5d876347ba7031b287432e953bace",
+    "mtime": 1784162850.069784,
+    "ast_hash": "befd469777543e76de404aad8c2cc9bb",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/__tests__/ApiDocsSearch.spec.ts": {
-    "mtime": 1784155022.3260796,
-    "ast_hash": "1f317aaeec25e59e70d81051a6b5f69b",
+    "mtime": 1784162776.8181102,
+    "ast_hash": "4cec2b597d7a71e20ed1db91d6d5093c",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/__tests__/ApiDocsShell.spec.ts": {
@@ -15740,8 +15740,8 @@
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/__tests__/guideContent.spec.ts": {
-    "mtime": 1784157110.552773,
-    "ast_hash": "f86bcf335716204dc14f40162a50a635",
+    "mtime": 1784163159.52439,
+    "ast_hash": "a709e19d4dfc839be86853fb8561ebae",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/catalog.ts": {
@@ -15755,13 +15755,13 @@
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/guideContent.ts": {
-    "mtime": 1784157178.2045376,
-    "ast_hash": "3d44d3bfae3608d64183eb372f960662",
+    "mtime": 1784163159.52039,
+    "ast_hash": "5c42859e54b77529f010179febe4fb89",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/search.ts": {
-    "mtime": 1784154462.5828001,
-    "ast_hash": "ba014872a6460ed836aed9cc5915fca1",
+    "mtime": 1784162794.7860334,
+    "ast_hash": "693003c5f90eafbc7ee820a1f5450957",
     "semantic_hash": ""
   },
   "frontend/src/components/api-docs/types.ts": {
@@ -15785,28 +15785,28 @@
     "semantic_hash": ""
   },
   "frontend/src/i18n/locales/en/apiDocs.ts": {
-    "mtime": 1784157178.2045376,
-    "ast_hash": "d6a8f0ba03d03de9bdb7dd3567c90d83",
+    "mtime": 1784162794.7900333,
+    "ast_hash": "13164d91eea1658c36e8dd3b5d061e71",
     "semantic_hash": ""
   },
   "frontend/src/i18n/locales/zh/apiDocs.ts": {
-    "mtime": 1784157178.2045376,
-    "ast_hash": "5c905e0f9b10079a08f0145925a4a274",
+    "mtime": 1784162794.7900333,
+    "ast_hash": "237cb35f1a52f2297d5bf688942885d9",
     "semantic_hash": ""
   },
   "frontend/src/router/__tests__/api-docs-route.spec.ts": {
-    "mtime": 1784157998.6497347,
-    "ast_hash": "572c8aa6d8ef1280d39166853110e822",
+    "mtime": 1784162836.629844,
+    "ast_hash": "f42bdf25f108319ad9e6fc9dd9dc5849",
     "semantic_hash": ""
   },
   "frontend/src/views/public/ApiDocsView.vue": {
-    "mtime": 1784157975.3618119,
-    "ast_hash": "7a756ddc67f49cc996a56f2f46bb05c3",
+    "mtime": 1784162750.9662309,
+    "ast_hash": "a66e29de2d6be97d9f236b8b909e1adf",
     "semantic_hash": ""
   },
   "frontend/src/views/public/__tests__/ApiDocsView.spec.ts": {
-    "mtime": 1784158019.2376564,
-    "ast_hash": "ccc13577c117846ecb69c04fdad2c33d",
+    "mtime": 1784162736.9342916,
+    "ast_hash": "5974cab91444d640ff6a0b0da423dc04",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-07-15-cc-switch-opencode-guides.md": {
