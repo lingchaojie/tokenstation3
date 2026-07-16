@@ -780,16 +780,52 @@ const routes: RouteRecordRaw[] = [
   }
 ]
 
+const API_DOCS_STICKY_HEADER_OFFSET = 128
+const HASH_TARGET_WAIT_FRAMES = 60
+
+function hashTargetId(hash: string): string {
+  const encodedId = hash.startsWith('#') ? hash.slice(1) : hash
+  try {
+    return decodeURIComponent(encodedId)
+  } catch {
+    return encodedId
+  }
+}
+
+function waitForHashTarget(hash: string, remainingFrames = HASH_TARGET_WAIT_FRAMES): Promise<HTMLElement | null> {
+  const id = hashTargetId(hash)
+  if (!id) return Promise.resolve(null)
+
+  const target = document.getElementById(id)
+  if (target || remainingFrames <= 0) return Promise.resolve(target)
+
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      void waitForHashTarget(hash, remainingFrames - 1).then(resolve)
+    })
+  })
+}
+
 /**
  * Create router instance
  */
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
-  scrollBehavior(_to, _from, savedPosition) {
+  async scrollBehavior(to, _from, savedPosition) {
     // Scroll to saved position when using browser back/forward
     if (savedPosition) {
       return savedPosition
+    }
+    if (to.hash) {
+      const target = await waitForHashTarget(to.hash)
+      if (target) {
+        const isApiDocsRoute = to.name === 'ApiDocs' || to.name === 'ApiDocsPage'
+        return {
+          el: target,
+          top: isApiDocsRoute ? API_DOCS_STICKY_HEADER_OFFSET : 0
+        }
+      }
     }
     // Scroll to top for new routes
     return { top: 0 }

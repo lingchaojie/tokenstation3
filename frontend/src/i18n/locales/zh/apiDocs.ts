@@ -6,6 +6,11 @@ export default {
     apiKeys: 'API 密钥',
     search: '搜索文档',
     searchPlaceholder: '搜索指南和 API 参考',
+    searchCategories: {
+      guide: '指南',
+      endpoint: 'API 参考',
+      platform: '平台'
+    },
     noResults: '没有匹配的文档页面。',
     menu: '文档菜单',
     onThisPage: '本页内容',

@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { GUIDE_VARIANTS } from '@/components/getting-started/curriculum'
@@ -5,6 +7,7 @@ import { buildPythonSdkExample } from '@/components/keys/clientExampleFiles'
 import {
   buildClientConfigFiles,
   DOCS_API_KEY_PLACEHOLDER,
+  EXAMPLE_MODELS,
   resolveGatewayEndpoints
 } from '@/components/keys/clientConfigFiles'
 import enApiDocs from '@/i18n/locales/en/apiDocs'
@@ -282,16 +285,79 @@ describe('buildGuidePage', () => {
     )
   })
 
-  it('documents distinct terminal stream errors after HTTP 200 has started', () => {
+  it('matches the live Responses and handler-specific streaming error contracts', async () => {
     const streamSection = buildGuidePage('errors', BASE_URL).sections.find(
       ({ id }) => id === 'stream-errors'
     )!
-    const serialized = JSON.stringify(streamSection)
+    const streamBlock = streamSection.blocks.find(
+      (block): block is Extract<ApiDocsBlock, { kind: 'code' }> => block.kind === 'code'
+    )!
+    const handlerRoot = resolve(process.cwd(), '../backend/internal/handler')
+    const [responsesSource, gatewaySource, openAiGatewaySource] = await Promise.all([
+      readFile(resolve(handlerRoot, 'stream_error_event.go'), 'utf8'),
+      readFile(resolve(handlerRoot, 'gateway_handler.go'), 'utf8'),
+      readFile(resolve(handlerRoot, 'openai_gateway_handler.go'), 'utf8')
+    ])
 
-    expect(serialized).toContain('HTTP 200')
-    expect(serialized).toContain('event: error')
-    expect(serialized).toContain('response.failed')
-    expect(serialized).toContain('Chat Completions')
+    expect(responsesSource).toContain('type responsesFailedEvent struct')
+    expect(responsesSource).toContain('Response responsesFailedBody `json:"response"`')
+    expect(responsesSource).toContain('ID     string               `json:"id"`')
+    expect(responsesSource).toContain('Object string               `json:"object"`')
+    expect(responsesSource).toContain('Model  string               `json:"model,omitempty"`')
+    expect(responsesSource).toContain('Status string               `json:"status"`')
+    expect(responsesSource).toContain('Output []any                `json:"output"`')
+    expect(responsesSource).toContain('Error  responsesFailedError `json:"error"`')
+    expect(responsesSource).toContain('Code    string `json:"code"`')
+    expect(responsesSource).toContain('Message string `json:"message"`')
+    expect(responsesSource).toContain(
+      'fmt.Fprintf(c.Writer, "event: response.failed\\ndata: %s\\n\\n", payload)'
+    )
+    expect(gatewaySource).toContain(
+      '`data: {"type":"error","error":{"type":` + strconv.Quote(errType)'
+    )
+    expect(openAiGatewaySource).toContain(
+      '"event: error\\ndata: " + `{"error":{"type":` + strconv.Quote(errType)'
+    )
+
+    expect(streamBlock.code).toBe([
+      'HTTP 200 (stream started)',
+      '',
+      'OpenAI Responses (all gateway handler paths)',
+      'event: response.failed',
+      `data: {"type":"response.failed","response":{"id":"resp_request_id","object":"response","model":"${EXAMPLE_MODELS.openai}","status":"failed","output":[],"error":{"code":"upstream_error","message":"Stream failed"}}}`,
+      '',
+      'Anthropic-backed GatewayHandler (for example, Messages)',
+      'data: {"type":"error","error":{"type":"api_error","message":"Stream failed"}}',
+      '',
+      'OpenAI-backed OpenAIGatewayHandler (for example, Chat Completions)',
+      'event: error',
+      'data: {"error":{"type":"upstream_error","message":"Stream failed"}}'
+    ].join('\n'))
+
+    const dataObjects = streamBlock.code
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)))
+    expect(dataObjects).toEqual([
+      {
+        type: 'response.failed',
+        response: {
+          id: 'resp_request_id',
+          object: 'response',
+          model: EXAMPLE_MODELS.openai,
+          status: 'failed',
+          output: [],
+          error: { code: 'upstream_error', message: 'Stream failed' }
+        }
+      },
+      {
+        type: 'error',
+        error: { type: 'api_error', message: 'Stream failed' }
+      },
+      {
+        error: { type: 'upstream_error', message: 'Stream failed' }
+      }
+    ])
   })
 
   it('documents cache TTLs, key rate windows, and both IP/CIDR rule modes', () => {

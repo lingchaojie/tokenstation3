@@ -55,8 +55,7 @@ describe('ApiDocsCodeBlock', () => {
     expect(wrapper.findAll('.overflow-x-auto')).toHaveLength(1)
   })
 
-  it('keeps copied feedback for two seconds and clears its timer on unmount', async () => {
-    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+  it('keeps copied feedback for two seconds', async () => {
     const wrapper = mount(ApiDocsCodeBlock, {
       props: { label: 'cURL', language: 'bash', code: 'curl https://example.test' }
     })
@@ -70,10 +69,22 @@ describe('ApiDocsCodeBlock', () => {
     vi.advanceTimersByTime(1)
     await wrapper.vm.$nextTick()
     expect(wrapper.get('[role="status"]').text()).toBe('')
+    wrapper.unmount()
+  })
+
+  it('clears the outstanding copied-feedback timer specifically on unmount', async () => {
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+    const wrapper = mount(ApiDocsCodeBlock, {
+      props: { label: 'cURL', language: 'bash', code: 'curl https://example.test' }
+    })
 
     await wrapper.get('[data-testid="api-docs-copy"]').trigger('click')
+    expect(vi.getTimerCount()).toBe(1)
+    expect(clearTimeoutSpy).not.toHaveBeenCalled()
+
     wrapper.unmount()
-    expect(clearTimeoutSpy).toHaveBeenCalled()
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('keeps feedback quiet when copying fails and exposes only a copy action', async () => {

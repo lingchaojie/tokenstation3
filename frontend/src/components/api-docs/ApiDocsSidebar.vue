@@ -124,7 +124,7 @@ import type { ApiDocsPageId } from './types'
 
 const props = withDefaults(
   defineProps<{
-    currentPageId: ApiDocsPageId
+    currentPageId?: ApiDocsPageId
     mobileOpen?: boolean
     menuTrigger?: HTMLButtonElement | null
   }>(),

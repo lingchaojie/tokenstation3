@@ -1,6 +1,6 @@
 <template>
   <ApiDocsShell
-    :current-page-id="page?.id ?? 'quickstart'"
+    :current-page-id="page?.id"
     :headings="headings"
   >
     <ApiEndpointPage

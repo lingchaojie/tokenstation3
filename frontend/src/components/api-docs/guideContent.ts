@@ -3,6 +3,7 @@ import { buildPythonSdkExample } from '@/components/keys/clientExampleFiles'
 import {
   buildClientConfigFiles,
   DOCS_API_KEY_PLACEHOLDER,
+  EXAMPLE_MODELS,
   resolveGatewayEndpoints,
   type ClientConfigFile,
   type SupportedGuideClient,
@@ -413,16 +414,16 @@ function buildErrors(): ApiDocsGuideSection[] {
           [
             'HTTP 200 (stream started)',
             '',
-            'Anthropic Messages',
-            'event: error',
+            'OpenAI Responses (all gateway handler paths)',
+            'event: response.failed',
+            `data: {"type":"response.failed","response":{"id":"resp_request_id","object":"response","model":"${EXAMPLE_MODELS.openai}","status":"failed","output":[],"error":{"code":"upstream_error","message":"Stream failed"}}}`,
+            '',
+            'Anthropic-backed GatewayHandler (for example, Messages)',
             'data: {"type":"error","error":{"type":"api_error","message":"Stream failed"}}',
             '',
-            'OpenAI Responses',
-            'event: response.failed',
-            'data: {"type":"response.failed","error":{"message":"Stream failed"}}',
-            '',
-            'Chat Completions',
-            'data: {"type":"error","error":{"type":"upstream_error","message":"Stream failed"}}'
+            'OpenAI-backed OpenAIGatewayHandler (for example, Chat Completions)',
+            'event: error',
+            'data: {"error":{"type":"upstream_error","message":"Stream failed"}}'
           ].join('\n')
         )
       ]

@@ -114,7 +114,7 @@ interface ApiDocsHeaderExposed {
 
 const props = withDefaults(
   defineProps<{
-    currentPageId: ApiDocsPageId
+    currentPageId?: ApiDocsPageId
     headings?: ApiDocsHeading[]
   }>(),
   {

@@ -118,7 +118,8 @@ describe('API documentation route contract', () => {
     const allowlist = source.match(/const BACKEND_MODE_ALLOWED_PATHS = \[(.*?)\]/s)?.[1]
 
     i18n.global.setLocaleMessage('en', {
-      apiDocs: { title: () => 'API Docs' }
+      apiDocs: { title: () => 'API Docs' },
+      home: { login: () => 'Login' }
     })
     vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
 
@@ -129,5 +130,68 @@ describe('API documentation route contract', () => {
     expect(router.currentRoute.value.name).toBe('ApiDocs')
     expect(router.currentRoute.value.path).toBe('/docs')
     expect(authStore.checkAuth).toHaveBeenCalled()
+  })
+
+  it('redirects an anonymous backend-only /docs navigation to login through the real guard', async () => {
+    const { default: router } = (await import('../index')) as { default: Router }
+    authStore.isAuthenticated = false
+    authStore.isAdmin = false
+    appStore.backendModeEnabled = true
+
+    try {
+      await router.push('/login')
+      await router.push('/docs')
+
+      expect(router.currentRoute.value.path).toBe('/login')
+      expect(router.currentRoute.value.name).toBe('Login')
+    } finally {
+      appStore.backendModeEnabled = false
+    }
+  })
+
+  it.each([
+    ['direct docs URL', '/home'],
+    ['in-app docs hash navigation', '/docs#first-request']
+  ])('waits for the hash target and applies the sticky docs-header offset for %s', async (_case, fromPath) => {
+    const { default: router } = (await import('../index')) as { default: Router }
+    const scrollBehavior = router.options.scrollBehavior!
+    const animationFrames: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      animationFrames.push(callback)
+      return animationFrames.length
+    })
+
+    const resultPromise = Promise.resolve(
+      scrollBehavior(
+        router.resolve('/docs#available-models'),
+        router.resolve(fromPath),
+        null
+      )
+    )
+    await Promise.resolve()
+    expect(animationFrames).toHaveLength(1)
+
+    const target = document.createElement('h2')
+    target.id = 'available-models'
+    document.body.append(target)
+    animationFrames.shift()?.(performance.now())
+
+    await expect(resultPromise).resolves.toEqual({ el: target, top: 128 })
+    target.remove()
+  })
+
+  it('preserves saved positions and top-of-page behavior when no hash target applies', async () => {
+    const { default: router } = (await import('../index')) as { default: Router }
+    const scrollBehavior = router.options.scrollBehavior!
+    const savedPosition = { left: 12, top: 345 }
+
+    await expect(
+      Promise.resolve(
+        scrollBehavior(router.resolve('/docs'), router.resolve('/home'), savedPosition)
+      )
+    ).resolves.toEqual(savedPosition)
+    await expect(
+      Promise.resolve(scrollBehavior(router.resolve('/docs'), router.resolve('/home'), null))
+    ).resolves.toEqual({ top: 0 })
   })
 })

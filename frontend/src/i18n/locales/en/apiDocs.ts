@@ -6,6 +6,11 @@ export default {
     apiKeys: 'API Keys',
     search: 'Search documentation',
     searchPlaceholder: 'Search guides and API reference',
+    searchCategories: {
+      guide: 'Guide',
+      endpoint: 'API reference',
+      platform: 'Platform'
+    },
     noResults: 'No documentation pages matched your search.',
     menu: 'Documentation menu',
     onThisPage: 'On this page',

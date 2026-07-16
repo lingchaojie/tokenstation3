@@ -183,6 +183,9 @@ describe('ApiDocsView', () => {
     expect(wrapper.get('[data-testid="api-docs-not-found-home"]').attributes('href')).toBe(
       '/docs'
     )
+    expect(wrapper.find('[data-testid="api-docs-sidebar"] [aria-current="page"]').exists()).toBe(
+      false
+    )
     expect(document.title).toBe('API Docs - Developer Portal')
 
     await wrapper.get('[data-testid="api-docs-not-found-search"]').trigger('click')

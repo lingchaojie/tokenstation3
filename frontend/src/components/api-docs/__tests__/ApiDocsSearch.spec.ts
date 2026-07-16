@@ -19,7 +19,10 @@ const translations: Record<string, string> = {
   'apiDocs.pages.quickstart.title': 'Localized Quickstart',
   'apiDocs.pages.quickstart.summary': 'Localized first request summary',
   'apiDocs.pages.responses.title': 'Localized Responses',
-  'apiDocs.pages.responses.summary': 'Localized structured response summary'
+  'apiDocs.pages.responses.summary': 'Localized structured response summary',
+  'apiDocs.searchCategories.guide': 'Localized guide',
+  'apiDocs.searchCategories.endpoint': 'Localized API reference',
+  'apiDocs.searchCategories.platform': 'Localized platform'
 }
 
 const translate = (key: string): string => translations[key] ?? key
@@ -33,12 +36,13 @@ describe('buildApiDocsSearchEntries', () => {
     expect(quickstart).toMatchObject({
       path: '/docs',
       title: 'Localized Quickstart',
-      section: 'guide'
+      section: 'Localized guide'
     })
     expect(quickstart?.text).toContain('localized first request summary')
     expect(responses?.text).toContain('/v1/responses')
     expect(responses?.text).toContain('invalid_api_key')
     expect(responses?.text).toContain('reasoning')
+    expect(responses?.section).toBe('Localized API reference')
   })
 
   it('contains only the approved catalog in stable catalog order', () => {
@@ -351,6 +355,7 @@ describe('ApiDocsShell search integration', () => {
 
     expect(wrapper.findAll('[data-testid="api-docs-search-result"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="api-docs-search-result"]').text()).toContain('聊天补全')
+    expect(wrapper.get('[data-testid="api-docs-search-result"]').text()).toContain('API 参考')
     expect(router.currentRoute.value.fullPath).toBe(initialRoute)
   })
 

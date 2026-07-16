@@ -14,9 +14,11 @@ export function buildApiDocsSearchEntries(
   return API_DOCS_PAGES.map((page) => {
     const endpoint = API_ENDPOINTS.find(({ pageId }) => pageId === page.id)
     const title = t(page.titleKey)
+    const section = t(`apiDocs.searchCategories.${page.kind}`)
     const text = [
       title,
       t(page.summaryKey),
+      section,
       endpoint?.path ?? '',
       ...(endpoint?.errorCodes ?? []),
       ...page.keywords
@@ -28,7 +30,7 @@ export function buildApiDocsSearchEntries(
       id: page.id,
       path: page.path,
       title,
-      section: page.kind,
+      section,
       text
     }
   })

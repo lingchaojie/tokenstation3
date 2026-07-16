@@ -41,7 +41,7 @@
           <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1.5 ring-1 ring-linear-hairline transition-colors group-hover:ring-linear-hairline-strong">
             <img :src="brandLogo" :alt="`${siteName} logo`" class="h-full w-full object-contain" />
           </span>
-          <span class="leading-tight">
+          <span class="hidden leading-tight sm:block">
             <span class="block text-sm font-semibold tracking-[-0.02em] text-linear-ink">
               <LinxWordmark v-if="usesDefaultBrand" />
               <span v-else>{{ siteName }}</span>
@@ -80,6 +80,15 @@
               {{ t('home.docs') }}
             </a>
           </div>
+          <router-link
+            to="/docs"
+            data-testid="api-docs-mobile-nav-link"
+            class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-linear-ink-muted outline-none transition-colors hover:bg-linear-surface-1 hover:text-linear-ink focus-visible:ring-2 focus-visible:ring-primary-500/50 md:hidden"
+            :aria-label="t('apiDocs.navLabel')"
+          >
+            <Icon name="document" size="sm" aria-hidden="true" />
+            <span class="sr-only">{{ t('apiDocs.navLabel') }}</span>
+          </router-link>
           <LocaleSwitcher />
           <button
             data-testid="homepage-theme-toggle"
