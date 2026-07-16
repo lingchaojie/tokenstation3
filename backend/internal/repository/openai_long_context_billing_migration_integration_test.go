@@ -87,7 +87,7 @@ WHERE id = $1
 	require.False(t, malformedLegacyEnabled)
 	_, err = tx.ExecContext(ctx, `
 UPDATE accounts
-SET extra = extra || '{"migration_175_unrelated_update":true}'::jsonb
+SET extra = extra || '{"migration_187_unrelated_update":true}'::jsonb
 WHERE id = $1
 `, malformedLegacyID)
 	require.NoError(t, err)
