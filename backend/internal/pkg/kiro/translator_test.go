@@ -1664,6 +1664,109 @@ func TestStreamEventStreamAsAnthropicConvertsStreamedStructuredOutputToText(t *t
 	require.Contains(t, out.String(), `"stop_reason":"end_turn"`)
 }
 
+func TestStreamEventStreamAsAnthropicStreamedStructuredOutputPreservesTerminalReason(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamReason string
+		stopSequences  []string
+		wantReason     string
+		wantSequence   string
+	}{
+		{name: "max tokens", upstreamReason: "max_tokens", wantReason: "max_tokens"},
+		{name: "matched stop sequence", stopSequences: []string{"<STOP>"}, wantReason: "stop_sequence", wantSequence: "<STOP>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := bytes.NewBuffer(nil)
+			if len(tt.stopSequences) > 0 {
+				_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{"content": "before<STOP>after"},
+				}))
+			}
+			_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+				"stopReason": tt.upstreamReason,
+				"toolUseEvent": map[string]any{
+					"toolUseId": "toolu_structured_stream_terminal",
+					"name":      structuredOutputToolName,
+					"input":     `{"answer":"done"}`,
+					"stop":      true,
+				},
+			}))
+
+			var out bytes.Buffer
+			result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{
+				StructuredOutputToolName: structuredOutputToolName,
+				StopSequences:            tt.stopSequences,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantReason, result.StopReason)
+			require.NotContains(t, out.String(), `"type":"tool_use"`)
+			messageDelta := parseAnthropicSSEEvents(t, out.String())["message_delta"]
+			require.Equal(t, tt.wantReason, gjson.GetBytes(messageDelta, "delta.stop_reason").String())
+			require.Equal(t, tt.wantSequence, gjson.GetBytes(messageDelta, "delta.stop_sequence").String())
+			if tt.wantReason == "stop_sequence" {
+				require.Contains(t, out.String(), `"text":"before"`)
+				require.NotContains(t, out.String(), "after")
+				require.NotContains(t, out.String(), `"answer":"done"`)
+			} else {
+				require.Contains(t, out.String(), `"text":"{\"answer\":\"done\"}"`)
+			}
+		})
+	}
+}
+
+func TestStreamEventStreamAsAnthropicAggregateStructuredOutputPreservesTerminalReason(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamReason string
+		stopSequences  []string
+		wantReason     string
+		wantSequence   string
+	}{
+		{name: "max tokens", upstreamReason: "max_tokens", wantReason: "max_tokens"},
+		{name: "matched stop sequence", stopSequences: []string{"<STOP>"}, wantReason: "stop_sequence", wantSequence: "<STOP>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := bytes.NewBuffer(nil)
+			if len(tt.stopSequences) > 0 {
+				_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{"content": "before<STOP>after"},
+				}))
+			}
+			_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"stopReason": tt.upstreamReason,
+				"assistantResponseEvent": map[string]any{
+					"toolUses": []map[string]any{{
+						"toolUseId": "toolu_structured_aggregate_terminal",
+						"name":      structuredOutputToolName,
+						"input":     map[string]any{"answer": "done"},
+					}},
+				},
+			}))
+
+			var out bytes.Buffer
+			result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{
+				StructuredOutputToolName: structuredOutputToolName,
+				StopSequences:            tt.stopSequences,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantReason, result.StopReason)
+			require.NotContains(t, out.String(), `"type":"tool_use"`)
+			messageDelta := parseAnthropicSSEEvents(t, out.String())["message_delta"]
+			require.Equal(t, tt.wantReason, gjson.GetBytes(messageDelta, "delta.stop_reason").String())
+			require.Equal(t, tt.wantSequence, gjson.GetBytes(messageDelta, "delta.stop_sequence").String())
+			if tt.wantReason == "stop_sequence" {
+				require.Contains(t, out.String(), `"text":"before"`)
+				require.NotContains(t, out.String(), "after")
+				require.NotContains(t, out.String(), `"answer":"done"`)
+			} else {
+				require.Contains(t, out.String(), `"text":"{\"answer\":\"done\"}"`)
+			}
+		})
+	}
+}
+
 func TestStreamEventStreamAsAnthropicRejectsNonObjectAggregateToolInput(t *testing.T) {
 	for _, input := range []any{[]any{"not", "an", "object"}, "string", json.Number("7"), true, nil} {
 		stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{

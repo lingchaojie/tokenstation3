@@ -760,7 +760,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		if structuredOutput {
-			stopReason = "end_turn"
+			if stopReason == "" || stopReason == "tool_use" {
+				stopReason = "end_turn"
+			}
 			if err := emitTextDelta(inputJSON, true); err != nil {
 				return err
 			}
@@ -1002,7 +1004,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		if structuredOutput {
-			stopReason = "end_turn"
+			if stopReason == "" || stopReason == "tool_use" {
+				stopReason = "end_turn"
+			}
 			if err := emitTextDelta(inputJSON, true); err != nil {
 				return err
 			}
