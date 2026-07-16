@@ -23,7 +23,9 @@ NC='\033[0m' # No Color
 # GitHub raw content base URL
 GITHUB_RAW_URL="${GITHUB_RAW_URL:-https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy}"
 CUSTOM_DOMAIN_CONFIGURED=0
-NORMALIZED_ADDITIONAL_DOMAINS=""
+CONFIGURED_PRIMARY_DOMAIN=""
+CONFIGURED_APEX_DOMAIN=""
+CONFIGURED_ADDITIONAL_DOMAINS=""
 
 # Print colored message
 print_info() {
@@ -125,7 +127,10 @@ preflight_requested_domains() {
     local apex_domain="${APEX_DOMAIN:-}"
     local additional_domains=""
 
-    NORMALIZED_ADDITIONAL_DOMAINS=""
+    CUSTOM_DOMAIN_CONFIGURED=0
+    CONFIGURED_PRIMARY_DOMAIN=""
+    CONFIGURED_APEX_DOMAIN=""
+    CONFIGURED_ADDITIONAL_DOMAINS=""
 
     if [ -z "$domain" ]; then
         return 0
@@ -143,13 +148,24 @@ preflight_requested_domains() {
         return 1
     fi
 
+    domain="$(normalize_domain_name "$domain")"
+    apex_domain="$(normalize_domain_name "$apex_domain")"
+
+    if [ -n "$apex_domain" ] && [ "$domain" = "$apex_domain" ]; then
+        print_error "DOMAIN and APEX_DOMAIN must be different hostnames."
+        print_error "Hostname comparisons are case-insensitive."
+        return 1
+    fi
+
     if ! additional_domains="$(normalize_additional_domains "${ADDITIONAL_DOMAINS:-}" "$domain" "$apex_domain")"; then
         print_error "Invalid ADDITIONAL_DOMAINS."
         print_error "Use unique hostnames separated by commas or whitespace, without https:// or paths."
         return 1
     fi
 
-    NORMALIZED_ADDITIONAL_DOMAINS="$additional_domains"
+    CONFIGURED_PRIMARY_DOMAIN="$domain"
+    CONFIGURED_APEX_DOMAIN="$apex_domain"
+    CONFIGURED_ADDITIONAL_DOMAINS="$additional_domains"
 }
 
 # Render the complete managed Caddy config without changing the filesystem.
@@ -449,8 +465,8 @@ write_caddyfile() {
 
 # Configure Caddy only when DOMAIN is explicitly provided.
 configure_caddy_if_requested() {
-    local domain="${DOMAIN:-}"
-    local apex_domain="${APEX_DOMAIN:-}"
+    local domain=""
+    local apex_domain=""
     local additional_domains=""
     local additional_domain=""
     local upstream_port=""
@@ -459,12 +475,15 @@ configure_caddy_if_requested() {
         exit 1
     fi
 
+    domain="$CONFIGURED_PRIMARY_DOMAIN"
+    apex_domain="$CONFIGURED_APEX_DOMAIN"
+    additional_domains="$CONFIGURED_ADDITIONAL_DOMAINS"
+
     if [ -z "$domain" ]; then
         return 0
     fi
 
     print_info "DOMAIN is set: ${domain}"
-    additional_domains="$NORMALIZED_ADDITIONAL_DOMAINS"
 
     sync_server_port_env
     sync_bind_host_env
@@ -640,15 +659,15 @@ main() {
         local additional_domain=""
 
         echo "  Custom domain:"
-        echo "     https://${DOMAIN}"
-        if [ -n "${APEX_DOMAIN:-}" ]; then
-            echo "     https://${APEX_DOMAIN} redirects to https://${DOMAIN}"
+        echo "     https://${CONFIGURED_PRIMARY_DOMAIN}"
+        if [ -n "$CONFIGURED_APEX_DOMAIN" ]; then
+            echo "     https://${CONFIGURED_APEX_DOMAIN} redirects to https://${CONFIGURED_PRIMARY_DOMAIN}"
         fi
         while IFS= read -r additional_domain || [ -n "$additional_domain" ]; do
             if [ -n "$additional_domain" ]; then
                 echo "     https://${additional_domain}"
             fi
-        done <<< "$NORMALIZED_ADDITIONAL_DOMAINS"
+        done <<< "$CONFIGURED_ADDITIONAL_DOMAINS"
         echo ""
     else
         echo "  Optional custom domain: enable during initial preparation,"

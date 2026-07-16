@@ -110,7 +110,28 @@ cat > "${preflight_stub_dir}/openssl" <<'EOF'
 #!/bin/bash
 printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
 EOF
-chmod +x "${preflight_stub_dir}/curl" "${preflight_stub_dir}/wget" "${preflight_stub_dir}/openssl"
+
+cat > "${preflight_stub_dir}/caddy" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "version" ]; then
+    printf 'test-caddy\n'
+fi
+EOF
+
+cat > "${preflight_stub_dir}/id" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "-u" ]; then
+    printf '1000\n'
+else
+    exec /usr/bin/id "$@"
+fi
+EOF
+chmod +x \
+    "${preflight_stub_dir}/curl" \
+    "${preflight_stub_dir}/wget" \
+    "${preflight_stub_dir}/openssl" \
+    "${preflight_stub_dir}/caddy" \
+    "${preflight_stub_dir}/id"
 
 if (
     cd "$preflight_dir"
@@ -132,6 +153,121 @@ for artifact in docker-compose.yml .env .env.example data postgres_data redis_da
         fail "invalid requested domains should not create ${artifact}"
     fi
 done
+
+collision_dir="${TEMP_DIR}/main-domain-collision"
+collision_download_log="${collision_dir}/download.log"
+mkdir -p "$collision_dir"
+if (
+    cd "$collision_dir"
+    export PATH="${preflight_stub_dir}:${PATH}"
+    export DOWNLOAD_LOG="$collision_download_log"
+    DOMAIN="www.example.com"
+    APEX_DOMAIN="WWW.EXAMPLE.COM"
+    ADDITIONAL_DOMAINS=""
+    main > "${collision_dir}/main-output.log" 2>&1
+); then
+    fail "main should reject case-insensitive DOMAIN and APEX_DOMAIN collisions"
+fi
+
+if [ -e "$collision_download_log" ]; then
+    fail "domain collisions should be rejected before calling download tools"
+fi
+for artifact in docker-compose.yml .env .env.example data postgres_data redis_data; do
+    if [ -e "${collision_dir}/${artifact}" ]; then
+        fail "domain collisions should not create ${artifact}"
+    fi
+done
+
+if (
+    DOMAIN="www.example.com"
+    APEX_DOMAIN="www.example.com"
+    ADDITIONAL_DOMAINS=""
+    preflight_requested_domains >/dev/null 2>&1
+); then
+    fail "preflight should reject identical DOMAIN and APEX_DOMAIN values"
+fi
+
+(
+    CONFIGURED_PRIMARY_DOMAIN=""
+    CONFIGURED_APEX_DOMAIN=""
+    CONFIGURED_ADDITIONAL_DOMAINS=""
+    DOMAIN="WWW.Example.COM"
+    APEX_DOMAIN="Example.COM"
+    ADDITIONAL_DOMAINS="API.Example.COM"
+    preflight_requested_domains
+    assert_equal "www.example.com" "$CONFIGURED_PRIMARY_DOMAIN" "preflight should store a normalized primary domain"
+    assert_equal "example.com" "$CONFIGURED_APEX_DOMAIN" "preflight should store a normalized apex domain"
+    assert_equal "api.example.com" "$CONFIGURED_ADDITIONAL_DOMAINS" "preflight should store normalized additional domains"
+)
+
+(
+    CUSTOM_DOMAIN_CONFIGURED=1
+    CONFIGURED_PRIMARY_DOMAIN="stale-primary.example.com"
+    CONFIGURED_APEX_DOMAIN="stale-apex.example.com"
+    CONFIGURED_ADDITIONAL_DOMAINS="stale-additional.example.com"
+    DOMAIN=""
+    APEX_DOMAIN="IGNORED.EXAMPLE.COM"
+    ADDITIONAL_DOMAINS="IGNORED-ADDITIONAL.EXAMPLE.COM"
+    preflight_requested_domains
+    assert_equal "0" "$CUSTOM_DOMAIN_CONFIGURED" "preflight should reset the configured flag"
+    assert_equal "" "$CONFIGURED_PRIMARY_DOMAIN" "no-domain preflight should clear the primary domain"
+    assert_equal "" "$CONFIGURED_APEX_DOMAIN" "no-domain preflight should clear the apex domain"
+    assert_equal "" "$CONFIGURED_ADDITIONAL_DOMAINS" "no-domain preflight should clear additional domains"
+)
+
+normalized_config_dir="${TEMP_DIR}/normalized-configure"
+normalized_write_args="${normalized_config_dir}/write-args"
+normalized_config_output="${normalized_config_dir}/output.log"
+mkdir -p "$normalized_config_dir"
+printf 'BIND_HOST=127.0.0.1\n' > "${normalized_config_dir}/.env"
+(
+    cd "$normalized_config_dir"
+    DOMAIN="WWW.Example.COM"
+    APEX_DOMAIN="Example.COM"
+    ADDITIONAL_DOMAINS="API.Example.COM"
+    sync_server_port_env() { return 0; }
+    sync_bind_host_env() { return 0; }
+    get_public_server_port() { printf '8080'; }
+    install_caddy_if_needed() { return 0; }
+    write_caddyfile() { printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" > "$normalized_write_args"; }
+    configure_caddy_if_requested > "$normalized_config_output"
+)
+expected_write_args=$'www.example.com\nexample.com\n8080\napi.example.com'
+assert_file_content "$expected_write_args" "$normalized_write_args" "Caddy configuration should use normalized domain values"
+for normalized_dns_domain in www.example.com example.com api.example.com; do
+    if ! grep -Fq "Point DNS for ${normalized_dns_domain}" "$normalized_config_output"; then
+        fail "DNS notes should use normalized ${normalized_dns_domain}"
+    fi
+done
+if grep -Fq 'WWW.Example.COM' "$normalized_config_output"; then
+    fail "DNS notes should not use raw mixed-case domain input"
+fi
+
+summary_dir="${TEMP_DIR}/normalized-summary"
+summary_output="${summary_dir}/output.log"
+summary_download_log="${summary_dir}/download.log"
+mkdir -p "$summary_dir"
+(
+    cd "$summary_dir"
+    export PATH="${preflight_stub_dir}:${PATH}"
+    export DOWNLOAD_LOG="$summary_download_log"
+    DOMAIN="WWW.Example.COM"
+    APEX_DOMAIN="Example.COM"
+    ADDITIONAL_DOMAINS="API.Example.COM"
+    configure_caddy_if_requested() { CUSTOM_DOMAIN_CONFIGURED=1; }
+    main > "$summary_output"
+)
+for normalized_url in \
+    'https://www.example.com' \
+    'https://example.com redirects to https://www.example.com' \
+    'https://api.example.com'; do
+    if ! grep -Fq "$normalized_url" "$summary_output"; then
+        fail "main summary should include normalized URL: ${normalized_url}"
+    fi
+done
+if grep -Fq 'WWW.Example.COM' "$summary_output" || grep -Fq 'Example.COM' "$summary_output"; then
+    fail "main summary should not use raw mixed-case domain input"
+fi
 
 rendered="$(render_managed_caddyfile \
     "www.example.com" \
