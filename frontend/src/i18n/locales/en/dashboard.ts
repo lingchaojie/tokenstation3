@@ -7,7 +7,22 @@ export default {
     buySubscription: 'Buy subscription',
     subscriptionRemaining: '{remaining} remaining of {total}',
     rechargeBalance: 'Recharge balance',
-    balanceOrderHint: 'Subscription quota is used before recharge balance.',
+    balanceOrderHint: 'Check-in rewards, invite rewards, subscription quota, and recharge balance are used in order.',
+    rewardBalance: {
+      daily: 'Check-in balance {amount}, expires {expiresAt}',
+      affiliate: 'Invite balance {amount}, earliest expiry {expiresAt}',
+      detailCount: '{count} details',
+      detailsAria: 'View invite reward details',
+      dialogTitle: 'Invite reward details',
+      closeAria: 'Close invite reward details',
+      loading: 'Loading reward details…',
+      empty: 'No invite reward details',
+      loadError: 'Could not load invite reward details',
+      inviterRole: 'Inviter reward',
+      inviteeRole: 'Invitee reward',
+      expiresAt: 'Expires {expiresAt}',
+      pageStatus: 'Page {page} of {pages}',
+    },
     balanceFallbackToggle: {
       title: 'Use balance after monthly card quota',
       enabledHint: 'When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.',
@@ -582,9 +597,17 @@ export default {
   },
 
   affiliate: {
-    rewardIntro: 'Invite a friend to sign up. Once their first recharge reaches {threshold}, you earn {inviter} and your friend earns {invitee} (first recharge only).',
     title: 'Affiliate Rebates',
-    description: 'Invite new users and convert your rebate quota into account balance',
+    description: 'Share your code or link with new users. Rewards go directly to expiring Token credit.',
+    immediateTitle: 'Earn rewards immediately',
+    immediateRewardIntro: 'You receive {inviter}; your friend receives {invitee}',
+    firstRechargeTitle: 'Earn after a qualifying first recharge',
+    firstRechargeRewardIntro: 'When your friend first recharges {threshold}, you receive {inviter} and they receive {invitee}',
+    validityHint: 'Rewards remain valid for {days} days after grant',
+    limit: {
+      reached: 'Inviter rewards have reached the {count}/{limit} cap',
+      inviteeStillRewarded: 'You can keep sharing. New friends can still receive the invitee reward.',
+    },
     yourCode: 'Your Affiliate Code',
     inviteLink: 'Invite Link',
     copyCode: 'Copy Code',
@@ -622,11 +645,10 @@ export default {
       }
     },
     tips: {
-      title: 'How It Works',
-      line1: 'Share your affiliate code or invite link with new users.',
-      line2: 'When an invitee completes a qualifying first recharge, you receive {reward} of rebate quota.',
-      line3: 'Transfer rebate quota to balance at any time.',
-      line4: 'Newly earned rebates may have a waiting period before they can be transferred.'
+      title: 'Campaign Rules',
+      immediate: 'Both rewards are granted as soon as your friend registers with the invite code.',
+      firstRecharge: 'Both rewards are granted when the first recharge reaches {threshold}; subscriptions always qualify.',
+      validity: 'Each reward remains valid for {days} days after grant and is cleared at expiry.'
     }
   },
 

@@ -38,6 +38,22 @@ type User struct {
 	Subscriptions []UserSubscription `json:"subscriptions,omitempty"`
 }
 
+type DailyRewardBalanceSummary struct {
+	Amount    float64    `json:"amount"`
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+
+type AffiliateRewardBalanceSummary struct {
+	Amount            float64    `json:"amount"`
+	EarliestExpiresAt *time.Time `json:"earliest_expires_at"`
+	CreditCount       int        `json:"credit_count"`
+}
+
+type RewardBalanceSummary struct {
+	DailyCheckIn DailyRewardBalanceSummary     `json:"daily_check_in"`
+	Affiliate    AffiliateRewardBalanceSummary `json:"affiliate"`
+}
+
 // AdminUser 是管理员接口使用的 user DTO（包含敏感/内部字段）。
 // 注意：普通用户接口不得返回 notes 等管理员备注信息。
 type AdminUser struct {

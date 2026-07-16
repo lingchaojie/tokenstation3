@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -65,6 +64,7 @@ type AffiliateSummary struct {
 	AffRebateRatePercent *float64  `json:"aff_rebate_rate_percent,omitempty"`
 	InviterID            *int64    `json:"inviter_id,omitempty"`
 	AffCount             int       `json:"aff_count"`
+	InviterRewardCount   int       `json:"inviter_reward_count"`
 	AffQuota             float64   `json:"aff_quota"`
 	AffFrozenQuota       float64   `json:"aff_frozen_quota"`
 	AffHistoryQuota      float64   `json:"aff_history_quota"`
@@ -89,20 +89,22 @@ type AffiliateDetail struct {
 	AffFrozenQuota  float64 `json:"aff_frozen_quota"`
 	AffHistoryQuota float64 `json:"aff_history_quota"`
 	// 首充奖励展示（固定金额模型）
-	FirstRechargeThreshold float64            `json:"first_recharge_threshold"`
-	InviterReward          float64            `json:"inviter_reward"`
-	InviteeReward          float64            `json:"invitee_reward"`
-	Invitees               []AffiliateInvitee `json:"invitees"`
+	FirstRechargeThreshold    float64             `json:"first_recharge_threshold"`
+	InviterReward             float64             `json:"inviter_reward"`
+	InviteeReward             float64             `json:"invitee_reward"`
+	RewardMode                AffiliateRewardMode `json:"reward_mode"`
+	RewardValidityDays        int                 `json:"reward_validity_days"`
+	InviterRewardLimit        int                 `json:"inviter_reward_limit"`
+	InviterRewardCount        int                 `json:"inviter_reward_count"`
+	InviterRewardLimitReached bool                `json:"inviter_reward_limit_reached"`
+	Invitees                  []AffiliateInvitee  `json:"invitees"`
 }
 
 type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
-	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
-	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error)
-	// LockUserAffiliateForUpdate 确保行存在并对其加行锁（FOR UPDATE），
-	// 用于串行化同一被邀请人的首充奖励结算，防并发重复发放。必须在事务上下文内调用。
-	LockUserAffiliateForUpdate(ctx context.Context, userID int64) error
+	BindInviter(ctx context.Context, input AffiliateBindInput) (AffiliateRewardResult, error)
+	ResolveFirstRecharge(ctx context.Context, input AffiliateSettlementInput) (AffiliateRewardResult, error)
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
 	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
 	TransferQuotaToBalance(ctx context.Context, userID int64) (float64, float64, error)
@@ -161,20 +163,24 @@ type AffiliateInviteRecord struct {
 }
 
 type AffiliateRebateRecord struct {
-	OrderID         int64     `json:"order_id"`
-	OutTradeNo      string    `json:"out_trade_no"`
-	InviterID       int64     `json:"inviter_id"`
-	InviterEmail    string    `json:"inviter_email"`
-	InviterUsername string    `json:"inviter_username"`
-	InviteeID       int64     `json:"invitee_id"`
-	InviteeEmail    string    `json:"invitee_email"`
-	InviteeUsername string    `json:"invitee_username"`
-	OrderAmount     float64   `json:"order_amount"`
-	PayAmount       float64   `json:"pay_amount"`
-	RebateAmount    float64   `json:"rebate_amount"`
-	PaymentType     string    `json:"payment_type"`
-	OrderStatus     string    `json:"order_status"`
-	CreatedAt       time.Time `json:"created_at"`
+	OrderID         int64      `json:"order_id"`
+	OutTradeNo      string     `json:"out_trade_no"`
+	InviterID       int64      `json:"inviter_id"`
+	InviterEmail    string     `json:"inviter_email"`
+	InviterUsername string     `json:"inviter_username"`
+	InviteeID       int64      `json:"invitee_id"`
+	InviteeEmail    string     `json:"invitee_email"`
+	InviteeUsername string     `json:"invitee_username"`
+	OrderAmount     float64    `json:"order_amount"`
+	PayAmount       float64    `json:"pay_amount"`
+	RebateAmount    float64    `json:"rebate_amount"`
+	PaymentType     string     `json:"payment_type"`
+	OrderStatus     string     `json:"order_status"`
+	RecordSource    string     `json:"record_source"`
+	RewardRole      *string    `json:"reward_role"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	RemainingAmount *float64   `json:"remaining_amount"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 type AffiliateTransferRecord struct {
@@ -214,16 +220,58 @@ type AffiliateService struct {
 	settingService       *SettingService
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	billingCacheService  *BillingCacheService
-	userRepo             UserRepository
+}
+
+type AffiliateRewardMode string
+
+const (
+	AffiliateRewardModeImmediate     AffiliateRewardMode = "immediate"
+	AffiliateRewardModeFirstRecharge AffiliateRewardMode = "first_recharge"
+)
+
+type AffiliateBindInput struct {
+	InviteeUserID      int64
+	InviterUserID      int64
+	RewardMode         AffiliateRewardMode
+	InviterReward      float64
+	InviteeReward      float64
+	ValidityDays       int
+	InviterRewardLimit int
+	GrantedAt          time.Time
+}
+
+type AffiliateSettlementInput struct {
+	InviteeUserID      int64
+	SourceOrderID      int64
+	Qualified          bool
+	InviterReward      float64
+	InviteeReward      float64
+	ValidityDays       int
+	InviterRewardLimit int
+	GrantedAt          time.Time
+}
+
+// AffiliateRewardResult describes the atomic state transition and actual
+// rewards applied for either registration binding or first-recharge settlement.
+type AffiliateRewardResult struct {
+	Bound               bool
+	Resolved            bool
+	Qualified           bool
+	InviterID           int64
+	InviterReward       float64
+	InviteeReward       float64
+	InviterRewarded     bool
+	InviteeRewarded     bool
+	InviterLimitReached bool
 }
 
 func NewAffiliateService(repo AffiliateRepository, settingService *SettingService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, userRepo UserRepository) *AffiliateService {
+	_ = userRepo // Kept in the constructor for wire compatibility; rewards are now repository-atomic.
 	return &AffiliateService{
 		repo:                 repo,
 		settingService:       settingService,
 		authCacheInvalidator: authCacheInvalidator,
 		billingCacheService:  billingCacheService,
-		userRepo:             userRepo,
 	}
 }
 
@@ -261,18 +309,27 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		return nil, err
 	}
 	cfg := s.affiliateRewardConfig(ctx)
+	rewardMode := AffiliateRewardModeFirstRecharge
+	if cfg.FirstRechargeThreshold == 0 {
+		rewardMode = AffiliateRewardModeImmediate
+	}
 	return &AffiliateDetail{
-		UserID:                 summary.UserID,
-		AffCode:                summary.AffCode,
-		InviterID:              summary.InviterID,
-		AffCount:               summary.AffCount,
-		AffQuota:               summary.AffQuota,
-		AffFrozenQuota:         summary.AffFrozenQuota,
-		AffHistoryQuota:        summary.AffHistoryQuota,
-		FirstRechargeThreshold: cfg.threshold,
-		InviterReward:          cfg.inviter,
-		InviteeReward:          cfg.invitee,
-		Invitees:               invitees,
+		UserID:                    summary.UserID,
+		AffCode:                   summary.AffCode,
+		InviterID:                 summary.InviterID,
+		AffCount:                  summary.AffCount,
+		AffQuota:                  summary.AffQuota,
+		AffFrozenQuota:            summary.AffFrozenQuota,
+		AffHistoryQuota:           summary.AffHistoryQuota,
+		FirstRechargeThreshold:    cfg.FirstRechargeThreshold,
+		InviterReward:             cfg.InviterReward,
+		InviteeReward:             cfg.InviteeReward,
+		RewardMode:                rewardMode,
+		RewardValidityDays:        cfg.ValidityDays,
+		InviterRewardLimit:        cfg.InviterRewardLimit,
+		InviterRewardCount:        summary.InviterRewardCount,
+		InviterRewardLimitReached: cfg.InviterRewardLimit > 0 && summary.InviterRewardCount >= cfg.InviterRewardLimit,
+		Invitees:                  invitees,
 	}, nil
 }
 
@@ -311,40 +368,44 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 		return ErrAffiliateCodeInvalid
 	}
 
-	bound, err := s.repo.BindInviter(ctx, userID, inviterSummary.UserID)
+	cfg, err := s.loadAffiliateRewardConfig(ctx)
 	if err != nil {
 		return err
 	}
-	if !bound {
+	mode := AffiliateRewardModeFirstRecharge
+	if cfg.FirstRechargeThreshold == 0 {
+		mode = AffiliateRewardModeImmediate
+	}
+	result, err := s.repo.BindInviter(ctx, AffiliateBindInput{
+		InviteeUserID:      userID,
+		InviterUserID:      inviterSummary.UserID,
+		RewardMode:         mode,
+		InviterReward:      roundTo(cfg.InviterReward, 8),
+		InviteeReward:      roundTo(cfg.InviteeReward, 8),
+		ValidityDays:       cfg.ValidityDays,
+		InviterRewardLimit: cfg.InviterRewardLimit,
+		GrantedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if !result.Bound {
 		return ErrAffiliateAlreadyBound
+	}
+	if result.InviterRewarded || result.InviteeRewarded {
+		s.invalidateRewardCaches(ctx, userID, result)
 	}
 	return nil
 }
 
-// LockInviteeForSettlement 对被邀请人的 affiliate 行加行锁（FOR UPDATE），
-// 串行化同一被邀请人的首充奖励结算，防止并发订单各自观察到 priorCount==0 而重复发放。
-// 必须在履约事务上下文内调用（ctx 携带 tx），锁随事务提交/回滚释放。
-func (s *AffiliateService) LockInviteeForSettlement(ctx context.Context, userID int64) error {
-	if s == nil || s.repo == nil {
-		return nil
-	}
-	return s.repo.LockUserAffiliateForUpdate(ctx, userID)
-}
-
-// AffiliateRewardResult 描述一次首充奖励结算的结果，供调用方写审计与失效缓存。
-type AffiliateRewardResult struct {
-	Qualified     bool    // 是否达标并已发放
-	InviterID     int64   // 邀请方（达标时 > 0）
-	InviterReward float64 // 邀请方所得（进 aff_quota）
-	InviteeReward float64 // 被邀请方所得（进账户余额）
-}
-
 // GrantFirstRechargeReward 结算被邀请人首充奖励。
-// 前置：调用方已确认这是被邀请人的首充订单（isFirstRecharge）。
+// isFirstRecharge=false is retained for compatibility with older callers;
+// payment fulfillment now lets the repository's pending state choose the
+// single winning successful event atomically.
 // isSubscription=true 时无条件达标；否则要求 baseRechargeAmount >= 阈值。
-// 达标后：邀请方 +InviterReward 进 aff_quota（冻结期沿用设置）；
-// 被邀请方 +InviteeReward 进账户余额（同事务，经 userRepo）。
-// 必须在履约事务上下文内调用（ctx 携带 tx），以保证两侧发放原子性。
+// The repository resolves the pending relationship even when the first event
+// is below threshold or the activity has since been disabled, preventing a
+// later recharge from retroactively receiving the reward.
 func (s *AffiliateService) GrantFirstRechargeReward(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64, isSubscription, isFirstRecharge bool, sourceOrderID *int64) (AffiliateRewardResult, error) {
 	var res AffiliateRewardResult
 	if s == nil || s.repo == nil {
@@ -353,67 +414,29 @@ func (s *AffiliateService) GrantFirstRechargeReward(ctx context.Context, invitee
 	if inviteeUserID <= 0 || !isFirstRecharge {
 		return res, nil
 	}
-	if !s.IsEnabled(ctx) {
-		return res, nil
-	}
-	// 达标判定：订阅无条件达标；余额充值需 >= 阈值
-	if !isSubscription {
-		if baseRechargeAmount <= 0 || math.IsNaN(baseRechargeAmount) || math.IsInf(baseRechargeAmount, 0) {
-			return res, nil
-		}
-		threshold := AffiliateFirstRechargeThresholdDefault
-		if s.settingService != nil {
-			threshold = s.settingService.GetAffiliateFirstRechargeThreshold(ctx)
-		}
-		if baseRechargeAmount < threshold {
-			return res, nil
-		}
-	}
-
-	inviteeSummary, err := s.repo.EnsureUserAffiliate(ctx, inviteeUserID)
+	cfg, err := s.loadAffiliateRewardConfig(ctx)
 	if err != nil {
 		return res, err
 	}
-	if inviteeSummary.InviterID == nil || *inviteeSummary.InviterID <= 0 {
-		return res, nil
+	qualified := s.IsEnabled(ctx) && (isSubscription || validAffiliateRechargeAmount(baseRechargeAmount, cfg.FirstRechargeThreshold))
+	orderID := int64(0)
+	if sourceOrderID != nil {
+		orderID = *sourceOrderID
 	}
-	inviterID := *inviteeSummary.InviterID
+	return s.repo.ResolveFirstRecharge(ctx, AffiliateSettlementInput{
+		InviteeUserID:      inviteeUserID,
+		SourceOrderID:      orderID,
+		Qualified:          qualified,
+		InviterReward:      roundTo(cfg.InviterReward, 8),
+		InviteeReward:      roundTo(cfg.InviteeReward, 8),
+		ValidityDays:       cfg.ValidityDays,
+		InviterRewardLimit: cfg.InviterRewardLimit,
+		GrantedAt:          time.Now().UTC(),
+	})
+}
 
-	inviterReward := AffiliateInviterRewardDefault
-	inviteeReward := AffiliateInviteeRewardDefault
-	freezeHours := AffiliateRebateFreezeHoursDefault
-	if s.settingService != nil {
-		inviterReward = s.settingService.GetAffiliateInviterReward(ctx)
-		inviteeReward = s.settingService.GetAffiliateInviteeReward(ctx)
-		freezeHours = s.settingService.GetAffiliateRebateFreezeHours(ctx)
-	}
-	inviterReward = roundTo(inviterReward, 8)
-	inviteeReward = roundTo(inviteeReward, 8)
-
-	// 邀请方奖励 → aff_quota（冻结期沿用）
-	if inviterReward > 0 {
-		applied, err := s.repo.AccrueQuota(ctx, inviterID, inviteeUserID, inviterReward, freezeHours, sourceOrderID)
-		if err != nil {
-			return res, err
-		}
-		if applied {
-			res.InviterReward = inviterReward
-		}
-	}
-	// 被邀请方奖励 → 账户余额（同事务）
-	if inviteeReward > 0 {
-		if s.userRepo == nil {
-			return res, errors.New("affiliate: userRepo unavailable for invitee reward")
-		}
-		if err := s.userRepo.UpdateBalance(ctx, inviteeUserID, inviteeReward); err != nil {
-			return res, fmt.Errorf("credit invitee reward: %w", err)
-		}
-		res.InviteeReward = inviteeReward
-	}
-
-	res.Qualified = res.InviterReward > 0 || res.InviteeReward > 0
-	res.InviterID = inviterID
-	return res, nil
+func validAffiliateRechargeAmount(amount, threshold float64) bool {
+	return amount > 0 && !math.IsNaN(amount) && !math.IsInf(amount, 0) && amount >= threshold
 }
 
 // InvalidateUserBalanceCache 供履约层在事务提交后失效被邀请方余额缓存。
@@ -426,24 +449,31 @@ func (s *AffiliateService) InvalidateUserBalanceCache(ctx context.Context, userI
 	}
 }
 
-type affiliateRewardConfigValues struct {
-	threshold float64
-	inviter   float64
-	invitee   float64
+func (s *AffiliateService) loadAffiliateRewardConfig(ctx context.Context) (AffiliateRewardConfig, error) {
+	if s == nil || s.settingService == nil {
+		return AffiliateRewardConfig{
+			FirstRechargeThreshold: AffiliateFirstRechargeThresholdDefault,
+			InviterReward:          AffiliateInviterRewardDefault,
+			InviteeReward:          AffiliateInviteeRewardDefault,
+			ValidityDays:           AffiliateRewardValidityDaysDefault,
+			InviterRewardLimit:     AffiliateInviterRewardLimitDefault,
+		}, nil
+	}
+	return s.settingService.GetAffiliateRewardConfig(ctx)
 }
 
-func (s *AffiliateService) affiliateRewardConfig(ctx context.Context) affiliateRewardConfigValues {
-	v := affiliateRewardConfigValues{
-		threshold: AffiliateFirstRechargeThresholdDefault,
-		inviter:   AffiliateInviterRewardDefault,
-		invitee:   AffiliateInviteeRewardDefault,
+func (s *AffiliateService) affiliateRewardConfig(ctx context.Context) AffiliateRewardConfig {
+	cfg, err := s.loadAffiliateRewardConfig(ctx)
+	if err != nil {
+		return AffiliateRewardConfig{
+			FirstRechargeThreshold: AffiliateFirstRechargeThresholdDefault,
+			InviterReward:          AffiliateInviterRewardDefault,
+			InviteeReward:          AffiliateInviteeRewardDefault,
+			ValidityDays:           AffiliateRewardValidityDaysDefault,
+			InviterRewardLimit:     AffiliateInviterRewardLimitDefault,
+		}
 	}
-	if s.settingService != nil {
-		v.threshold = s.settingService.GetAffiliateFirstRechargeThreshold(ctx)
-		v.inviter = s.settingService.GetAffiliateInviterReward(ctx)
-		v.invitee = s.settingService.GetAffiliateInviteeReward(ctx)
-	}
-	return v
+	return cfg
 }
 
 func (s *AffiliateService) TransferAffiliateQuota(ctx context.Context, userID int64) (float64, float64, error) {
@@ -523,6 +553,15 @@ func (s *AffiliateService) invalidateAffiliateCaches(ctx context.Context, userID
 		if err := s.billingCacheService.InvalidateUserBalance(ctx, userID); err != nil {
 			logger.LegacyPrintf("service.affiliate", "[Affiliate] Failed to invalidate billing cache for user %d: %v", userID, err)
 		}
+	}
+}
+
+func (s *AffiliateService) invalidateRewardCaches(ctx context.Context, inviteeUserID int64, result AffiliateRewardResult) {
+	if result.InviteeRewarded {
+		s.invalidateAffiliateCaches(ctx, inviteeUserID)
+	}
+	if result.InviterRewarded && result.InviterID > 0 {
+		s.invalidateAffiliateCaches(ctx, result.InviterID)
 	}
 }
 
@@ -641,9 +680,9 @@ func (s *AffiliateService) AdminGetUserOverview(ctx context.Context, userID int6
 	}
 	if overview != nil {
 		cfg := s.affiliateRewardConfig(ctx)
-		overview.FirstRechargeThreshold = cfg.threshold
-		overview.InviterReward = cfg.inviter
-		overview.InviteeReward = cfg.invitee
+		overview.FirstRechargeThreshold = cfg.FirstRechargeThreshold
+		overview.InviterReward = cfg.InviterReward
+		overview.InviteeReward = cfg.InviteeReward
 	}
 	return overview, nil
 }

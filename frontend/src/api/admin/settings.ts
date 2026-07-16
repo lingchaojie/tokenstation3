@@ -392,7 +392,8 @@ export interface SystemSettings {
   affiliate_first_recharge_threshold: number;
   affiliate_inviter_reward: number;
   affiliate_invitee_reward: number;
-  affiliate_rebate_freeze_hours: number;
+  affiliate_reward_validity_days: number;
+  affiliate_inviter_reward_limit: number;
   default_concurrency: number;
   default_user_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
@@ -693,7 +694,8 @@ export interface UpdateSettingsRequest {
   affiliate_first_recharge_threshold?: number;
   affiliate_inviter_reward?: number;
   affiliate_invitee_reward?: number;
-  affiliate_rebate_freeze_hours?: number;
+  affiliate_reward_validity_days?: number;
+  affiliate_inviter_reward_limit?: number;
   default_concurrency?: number;
   default_user_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];

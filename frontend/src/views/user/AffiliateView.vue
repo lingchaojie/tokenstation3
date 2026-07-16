@@ -8,21 +8,21 @@
       </div>
 
       <template v-else-if="detail">
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="grid gap-4 sm:grid-cols-2">
           <div class="card p-5">
             <p class="flex items-center gap-1.5 text-sm text-gray-500 dark:text-dark-400">
               <Icon name="dollar" size="sm" class="text-primary-500" />
-              {{ t('affiliate.stats.rebateReward') }}
+              {{ t(isImmediateMode ? 'affiliate.immediateTitle' : 'affiliate.firstRechargeTitle') }}
             </p>
             <p class="mt-2 text-2xl font-semibold text-primary-600 dark:text-primary-400">
-              {{ formatCurrency(detail.inviter_reward) }}
-            </p>
-            <p class="mt-1 text-xs text-gray-400 dark:text-dark-500">
-              {{ t('affiliate.rewardIntro', {
+              {{ t(isImmediateMode ? 'affiliate.immediateRewardIntro' : 'affiliate.firstRechargeRewardIntro', {
                 threshold: formatCurrency(detail.first_recharge_threshold),
                 inviter: formatCurrency(detail.inviter_reward),
                 invitee: formatCurrency(detail.invitee_reward),
               }) }}
+            </p>
+            <p class="mt-1 text-xs text-gray-400 dark:text-dark-500">
+              {{ t('affiliate.validityHint', { days: detail.reward_validity_days }) }}
             </p>
           </div>
           <div class="card p-5">
@@ -31,26 +31,27 @@
               {{ formatCount(detail.aff_count) }}
             </p>
           </div>
-          <div class="card p-5">
-            <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.availableQuota') }}</p>
-            <p class="mt-2 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-              {{ formatCurrency(detail.aff_quota) }}
-            </p>
-          </div>
-          <div class="card p-5">
-            <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.totalQuota') }}</p>
-            <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
-              {{ formatCurrency(detail.aff_history_quota) }}
-            </p>
-            <p v-if="detail.aff_frozen_quota > 0" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {{ t('affiliate.stats.frozenQuota') }}: {{ formatCurrency(detail.aff_frozen_quota) }}
-            </p>
-          </div>
         </div>
 
         <div class="card p-6">
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.title') }}</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.description') }}</p>
+
+          <div
+            v-if="detail.inviter_reward_limit_reached"
+            class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/60 dark:bg-amber-900/20"
+            data-testid="affiliate-inviter-limit-reached"
+          >
+            <p class="text-sm font-semibold text-amber-800 dark:text-amber-200">
+              {{ t('affiliate.limit.reached', {
+                count: detail.inviter_reward_count,
+                limit: detail.inviter_reward_limit,
+              }) }}
+            </p>
+            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              {{ t('affiliate.limit.inviteeStillRewarded') }}
+            </p>
+          </div>
 
           <div class="mt-5 grid gap-4 md:grid-cols-2">
             <div class="space-y-2">
@@ -79,33 +80,16 @@
           <div class="mt-5 rounded-xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/40 dark:bg-primary-900/20">
             <p class="text-sm font-medium text-primary-800 dark:text-primary-200">{{ t('affiliate.tips.title') }}</p>
             <ul class="mt-2 space-y-1 text-sm text-primary-700 dark:text-primary-300">
-              <li>1. {{ t('affiliate.tips.line1') }}</li>
-              <li>2. {{ t('affiliate.tips.line2', { reward: formatCurrency(detail.inviter_reward) }) }}</li>
-              <li>3. {{ t('affiliate.tips.line3') }}</li>
-              <li v-if="detail.aff_frozen_quota > 0">4. {{ t('affiliate.tips.line4') }}</li>
+              <li>1. {{ t(isImmediateMode ? 'affiliate.tips.immediate' : 'affiliate.tips.firstRecharge', {
+                threshold: formatCurrency(detail.first_recharge_threshold),
+              }) }}</li>
+              <li>2. {{ t('affiliate.tips.validity', { days: detail.reward_validity_days }) }}</li>
             </ul>
           </div>
         </div>
 
-        <div class="card p-6">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.transfer.title') }}</h3>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.transfer.description') }}</p>
-            </div>
-            <button
-              class="btn btn-primary"
-              :disabled="transferring || detail.aff_quota <= 0"
-              @click="transferQuota"
-            >
-              <Icon v-if="transferring" name="refresh" size="sm" class="animate-spin" />
-              <Icon v-else name="dollar" size="sm" />
-              <span>{{ transferring ? t('affiliate.transfer.transferring') : t('affiliate.transfer.button') }}</span>
-            </button>
-          </div>
-          <p v-if="detail.aff_quota <= 0" class="mt-3 text-sm text-amber-600 dark:text-amber-400">
-            {{ t('affiliate.transfer.empty') }}
-          </p>
+        <div v-if="authStore.user?.reward_balances?.affiliate.amount" class="card p-6">
+          <RewardBalanceBreakdown :summary="authStore.user.reward_balances" />
         </div>
 
         <div class="card p-6">
@@ -148,6 +132,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+import RewardBalanceBreakdown from '@/components/user/RewardBalanceBreakdown.vue'
 import userAPI from '@/api/user'
 import type { UserAffiliateDetail } from '@/types'
 import { useAppStore } from '@/stores/app'
@@ -162,8 +147,9 @@ const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
 
 const loading = ref(true)
-const transferring = ref(false)
 const detail = ref<UserAffiliateDetail | null>(null)
+
+const isImmediateMode = computed(() => detail.value?.reward_mode === 'immediate')
 
 const inviteLink = computed(() => {
   if (!detail.value) return ''
@@ -180,7 +166,11 @@ async function loadAffiliateDetail(silent = false): Promise<void> {
     loading.value = true
   }
   try {
-    detail.value = await userAPI.getAffiliateDetail()
+    const [affiliateDetail] = await Promise.all([
+      userAPI.getAffiliateDetail(),
+      authStore.refreshUser().catch(() => undefined),
+    ])
+    detail.value = affiliateDetail
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('affiliate.loadFailed')))
   } finally {
@@ -198,23 +188,6 @@ async function copyCode(): Promise<void> {
 async function copyInviteLink(): Promise<void> {
   if (!inviteLink.value) return
   await copyToClipboard(inviteLink.value, t('affiliate.linkCopied'))
-}
-
-async function transferQuota(): Promise<void> {
-  if (!detail.value || detail.value.aff_quota <= 0 || transferring.value) return
-  transferring.value = true
-  try {
-    const resp = await userAPI.transferAffiliateQuota()
-    appStore.showSuccess(t('affiliate.transfer.success', { amount: formatCurrency(resp.transferred_quota) }))
-    await Promise.all([
-      loadAffiliateDetail(true),
-      authStore.refreshUser().catch(() => undefined),
-    ])
-  } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, t('affiliate.transferFailed')))
-  } finally {
-    transferring.value = false
-  }
 }
 
 onMounted(() => {

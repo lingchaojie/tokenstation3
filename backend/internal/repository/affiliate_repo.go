@@ -30,17 +30,11 @@ SELECT ua.user_id,
        COALESCE(ua.aff_rebate_rate_percent, 0)::double precision,
        (ua.aff_rebate_rate_percent IS NOT NULL) AS has_custom_rate,
        ua.aff_count,
-       COALESCE(rebated.rebated_invitee_count, 0),
+       ua.inviter_reward_count,
        (ua.aff_quota + COALESCE(matured.matured_frozen_quota, 0))::double precision,
        ua.aff_history_quota::double precision
 FROM user_affiliates ua
 JOIN users u ON u.id = ua.user_id
-LEFT JOIN (
-    SELECT user_id, COUNT(DISTINCT source_user_id)::integer AS rebated_invitee_count
-    FROM user_affiliate_ledger
-    WHERE action = 'accrue' AND source_user_id IS NOT NULL
-    GROUP BY user_id
-) rebated ON rebated.user_id = ua.user_id
 LEFT JOIN (
     SELECT user_id, COALESCE(SUM(amount), 0)::double precision AS matured_frozen_quota
     FROM user_affiliate_ledger
@@ -76,42 +70,263 @@ func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code strin
 	return queryAffiliateByCode(ctx, client, code)
 }
 
-func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID int64) (bool, error) {
-	var bound bool
+func (r *affiliateRepository) BindInviter(ctx context.Context, input service.AffiliateBindInput) (service.AffiliateRewardResult, error) {
+	var result service.AffiliateRewardResult
+	if err := validateAffiliateBindInput(input); err != nil {
+		return result, err
+	}
 	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
-		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, userID); err != nil {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviteeUserID); err != nil {
 			return err
 		}
-		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, inviterID); err != nil {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviterUserID); err != nil {
 			return err
 		}
 
-		res, err := txClient.ExecContext(txCtx,
-			"UPDATE user_affiliates SET inviter_id = $1, updated_at = NOW() WHERE user_id = $2 AND inviter_id IS NULL",
-			inviterID, userID,
-		)
+		relationship, err := lockAffiliateRelationship(txCtx, txClient, input.InviteeUserID)
 		if err != nil {
-			return fmt.Errorf("bind inviter: %w", err)
+			return err
 		}
-		affected, _ := res.RowsAffected()
-		if affected == 0 {
-			bound = false
+		if relationship.inviterID.Valid {
 			return nil
 		}
 
-		if _, err = txClient.ExecContext(txCtx,
-			"UPDATE user_affiliates SET aff_count = aff_count + 1, updated_at = NOW() WHERE user_id = $1",
-			inviterID,
-		); err != nil {
+		status := "pending"
+		var resolvedAt any
+		if input.RewardMode == service.AffiliateRewardModeImmediate {
+			status = "resolved"
+			resolvedAt = input.GrantedAt
+		}
+		if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET inviter_id = $1,
+    reward_mode = $2,
+    reward_status = $3,
+    reward_resolved_at = $4,
+    reward_source_order_id = NULL,
+    inviter_rewarded = FALSE,
+    invitee_rewarded = FALSE,
+    updated_at = $5
+WHERE user_id = $6`, input.InviterUserID, input.RewardMode, status, resolvedAt, input.GrantedAt, input.InviteeUserID); err != nil {
+			return fmt.Errorf("bind inviter: %w", err)
+		}
+
+		if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_count = aff_count + 1, updated_at = $1
+WHERE user_id = $2`, input.GrantedAt, input.InviterUserID); err != nil {
 			return fmt.Errorf("increment inviter aff_count: %w", err)
 		}
-		bound = true
+
+		result.Bound = true
+		result.InviterID = input.InviterUserID
+		if input.RewardMode == service.AffiliateRewardModeImmediate {
+			result.Resolved = true
+			result.Qualified = true
+			if err := grantAffiliateRelationshipRewardsTx(txCtx, txClient, input.InviterUserID, input.InviteeUserID, input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt, &result); err != nil {
+				return err
+			}
+			if err := updateAffiliateRelationshipRewardFlags(txCtx, txClient, input.InviteeUserID, result, input.GrantedAt); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return service.AffiliateRewardResult{}, err
 	}
-	return bound, nil
+	return result, nil
+}
+
+func (r *affiliateRepository) ResolveFirstRecharge(ctx context.Context, input service.AffiliateSettlementInput) (service.AffiliateRewardResult, error) {
+	var result service.AffiliateRewardResult
+	if err := validateAffiliateSettlementInput(input); err != nil {
+		return result, err
+	}
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, input.InviteeUserID); err != nil {
+			return err
+		}
+		relationship, err := lockAffiliateRelationship(txCtx, txClient, input.InviteeUserID)
+		if err != nil {
+			return err
+		}
+		if !relationship.inviterID.Valid ||
+			relationship.rewardMode.String != string(service.AffiliateRewardModeFirstRecharge) ||
+			relationship.rewardStatus.String != "pending" {
+			return nil
+		}
+
+		inviterID := relationship.inviterID.Int64
+		result.Resolved = true
+		result.Qualified = input.Qualified
+		result.InviterID = inviterID
+		if input.Qualified {
+			if err := grantAffiliateRelationshipRewardsTx(txCtx, txClient, inviterID, input.InviteeUserID, input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt, &result); err != nil {
+				return err
+			}
+		}
+
+		var sourceOrderID any
+		if input.SourceOrderID > 0 {
+			sourceOrderID = input.SourceOrderID
+		}
+		if _, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET reward_status = 'resolved',
+    reward_resolved_at = $1,
+    reward_source_order_id = $2,
+    inviter_rewarded = $3,
+    invitee_rewarded = $4,
+    updated_at = $1
+WHERE user_id = $5`, input.GrantedAt, sourceOrderID, result.InviterRewarded, result.InviteeRewarded, input.InviteeUserID); err != nil {
+			return fmt.Errorf("resolve affiliate first recharge: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return service.AffiliateRewardResult{}, err
+	}
+	return result, nil
+}
+
+type lockedAffiliateRelationship struct {
+	inviterID    sql.NullInt64
+	rewardMode   sql.NullString
+	rewardStatus sql.NullString
+}
+
+func lockAffiliateRelationship(ctx context.Context, q affiliateQueryExecer, inviteeUserID int64) (lockedAffiliateRelationship, error) {
+	var relationship lockedAffiliateRelationship
+	rows, err := q.QueryContext(ctx, `
+SELECT inviter_id, reward_mode, reward_status
+FROM user_affiliates
+WHERE user_id = $1
+FOR UPDATE`, inviteeUserID)
+	if err != nil {
+		return relationship, fmt.Errorf("lock affiliate relationship: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return relationship, service.ErrAffiliateProfileNotFound
+	}
+	if err := rows.Scan(&relationship.inviterID, &relationship.rewardMode, &relationship.rewardStatus); err != nil {
+		return relationship, err
+	}
+	return relationship, rows.Err()
+}
+
+func grantAffiliateRelationshipRewardsTx(
+	ctx context.Context,
+	q affiliateQueryExecer,
+	inviterID, inviteeUserID int64,
+	inviterReward, inviteeReward float64,
+	validityDays, inviterRewardLimit int,
+	grantedAt time.Time,
+	result *service.AffiliateRewardResult,
+) error {
+	var inviterRewardCount int
+	rows, err := q.QueryContext(ctx, `
+SELECT inviter_reward_count
+FROM user_affiliates
+WHERE user_id = $1
+FOR UPDATE`, inviterID)
+	if err != nil {
+		return fmt.Errorf("lock inviter reward count: %w", err)
+	}
+	if !rows.Next() {
+		_ = rows.Close()
+		return service.ErrAffiliateProfileNotFound
+	}
+	if err := rows.Scan(&inviterRewardCount); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	result.InviterLimitReached = inviterRewardLimit > 0 && inviterRewardCount >= inviterRewardLimit
+	expiresAt := grantedAt.Add(time.Duration(validityDays) * 24 * time.Hour)
+	sourceKey := fmt.Sprintf("affiliate:%d:%d", inviterID, inviteeUserID)
+	if inviterReward > 0 && !result.InviterLimitReached {
+		grant, err := grantRewardCreditTx(ctx, q, service.RewardCreditGrant{
+			UserID:     inviterID,
+			CreditType: service.RewardCreditAffiliateInviter,
+			SourceKey:  sourceKey,
+			Amount:     inviterReward,
+			GrantedAt:  grantedAt,
+			ExpiresAt:  expiresAt,
+		})
+		if err != nil {
+			return fmt.Errorf("grant inviter reward credit: %w", err)
+		}
+		if grant.Applied {
+			if _, err := q.ExecContext(ctx, `
+UPDATE user_affiliates
+SET inviter_reward_count = inviter_reward_count + 1, updated_at = $1
+WHERE user_id = $2`, grantedAt, inviterID); err != nil {
+				return fmt.Errorf("increment inviter reward count: %w", err)
+			}
+			result.InviterRewarded = true
+			result.InviterReward = inviterReward
+			inviterRewardCount++
+			result.InviterLimitReached = inviterRewardLimit > 0 && inviterRewardCount >= inviterRewardLimit
+		}
+	}
+	if inviteeReward > 0 {
+		grant, err := grantRewardCreditTx(ctx, q, service.RewardCreditGrant{
+			UserID:     inviteeUserID,
+			CreditType: service.RewardCreditAffiliateInvitee,
+			SourceKey:  sourceKey,
+			Amount:     inviteeReward,
+			GrantedAt:  grantedAt,
+			ExpiresAt:  expiresAt,
+		})
+		if err != nil {
+			return fmt.Errorf("grant invitee reward credit: %w", err)
+		}
+		if grant.Applied {
+			result.InviteeRewarded = true
+			result.InviteeReward = inviteeReward
+		}
+	}
+	return nil
+}
+
+func updateAffiliateRelationshipRewardFlags(ctx context.Context, q affiliateQueryExecer, inviteeUserID int64, result service.AffiliateRewardResult, now time.Time) error {
+	_, err := q.ExecContext(ctx, `
+UPDATE user_affiliates
+SET inviter_rewarded = $1, invitee_rewarded = $2, updated_at = $3
+WHERE user_id = $4`, result.InviterRewarded, result.InviteeRewarded, now, inviteeUserID)
+	if err != nil {
+		return fmt.Errorf("update affiliate reward flags: %w", err)
+	}
+	return nil
+}
+
+func validateAffiliateBindInput(input service.AffiliateBindInput) error {
+	if input.InviteeUserID <= 0 || input.InviterUserID <= 0 || input.InviteeUserID == input.InviterUserID {
+		return service.ErrAffiliateCodeInvalid
+	}
+	if input.RewardMode != service.AffiliateRewardModeImmediate && input.RewardMode != service.AffiliateRewardModeFirstRecharge {
+		return fmt.Errorf("invalid affiliate reward mode %q", input.RewardMode)
+	}
+	return validateAffiliateRewardInputs(input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt)
+}
+
+func validateAffiliateSettlementInput(input service.AffiliateSettlementInput) error {
+	if input.InviteeUserID <= 0 {
+		return service.ErrUserNotFound
+	}
+	return validateAffiliateRewardInputs(input.InviterReward, input.InviteeReward, input.ValidityDays, input.InviterRewardLimit, input.GrantedAt)
+}
+
+func validateAffiliateRewardInputs(inviterReward, inviteeReward float64, validityDays, inviterRewardLimit int, grantedAt time.Time) error {
+	if inviterReward < 0 || inviteeReward < 0 || validityDays < 1 || inviterRewardLimit < 0 || grantedAt.IsZero() {
+		return service.ErrAffiliateRewardConfigInvalid
+	}
+	return nil
 }
 
 func (r *affiliateRepository) AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error) {
@@ -385,15 +600,28 @@ SELECT ua.user_id,
        COALESCE(u.email, ''),
        COALESCE(u.username, ''),
        ua.created_at,
-       COALESCE(SUM(ual.amount), 0)::double precision AS total_rebate
+       (COALESCE(legacy.total_rebate, 0) + COALESCE(rewards.total_reward, 0))::double precision AS total_rebate
 FROM user_affiliates ua
 LEFT JOIN users u ON u.id = ua.user_id
-LEFT JOIN user_affiliate_ledger ual
-       ON ual.user_id = $1
-      AND ual.source_user_id = ua.user_id
-      AND ual.action = 'accrue'
+LEFT JOIN (
+    SELECT source_user_id, COALESCE(SUM(amount), 0) AS total_rebate
+    FROM user_affiliate_ledger
+    WHERE user_id = $1 AND action = 'accrue' AND source_user_id IS NOT NULL
+    GROUP BY source_user_id
+) legacy ON legacy.source_user_id = ua.user_id
+LEFT JOIN (
+    SELECT split_part(rc.source_key, ':', 3)::bigint AS invitee_user_id,
+           COALESCE(SUM(events.amount), 0) AS total_reward
+    FROM user_reward_credits rc
+    JOIN user_reward_credit_events events
+      ON events.credit_id = rc.id AND events.event_type = 'grant'
+    WHERE rc.user_id = $1
+      AND rc.credit_type = 'affiliate_inviter'
+      AND rc.source_key LIKE ('affiliate:' || $1::text || ':%')
+      AND rc.source_key ~ '^affiliate:[0-9]+:[0-9]+$'
+    GROUP BY split_part(rc.source_key, ':', 3)::bigint
+) rewards ON rewards.invitee_user_id = ua.user_id
 WHERE ua.inviter_id = $1
-GROUP BY ua.user_id, u.email, u.username, ua.created_at
 ORDER BY ua.created_at DESC
 LIMIT $2`, inviterID, limit)
 	if err != nil {
@@ -496,54 +724,117 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 
 func (r *affiliateRepository) ListAffiliateRebateRecords(ctx context.Context, filter service.AffiliateRecordFilter) ([]service.AffiliateRebateRecord, int64, error) {
 	client := clientFromContext(ctx, r.client)
-	where, args := buildAffiliateRecordWhere(filter, "ual.created_at", []string{
-		"inviter.email", "inviter.username", "invitee.email", "invitee.username",
-		"po.id::text", "po.out_trade_no", "po.payment_type", "po.status",
+	where, args := buildAffiliateRecordWhere(filter, "created_at", []string{
+		"inviter_email", "inviter_username", "invitee_email", "invitee_username",
+		"order_id::text", "out_trade_no", "payment_type", "order_status", "record_source", "COALESCE(reward_role, '')",
 	})
-	baseJoin := `
-FROM user_affiliate_ledger ual
-JOIN payment_orders po ON po.id = ual.source_order_id
-JOIN users invitee ON invitee.id = ual.source_user_id
-JOIN users inviter ON inviter.id = ual.user_id
-WHERE ual.action = 'accrue'
-  AND ual.source_order_id IS NOT NULL`
-	if where != "" {
-		where = strings.Replace(where, "WHERE ", " AND ", 1)
-	}
+	const unified = `
+WITH unified_affiliate_rewards AS (
+    SELECT ual.id AS audit_id,
+           'legacy'::text AS record_source,
+           po.id AS order_id,
+           po.out_trade_no,
+           ual.user_id AS inviter_id,
+           COALESCE(inviter.email, '') AS inviter_email,
+           COALESCE(inviter.username, '') AS inviter_username,
+           ual.source_user_id AS invitee_id,
+           COALESCE(invitee.email, '') AS invitee_email,
+           COALESCE(invitee.username, '') AS invitee_username,
+           po.amount::double precision AS order_amount,
+           po.pay_amount::double precision AS pay_amount,
+           ual.amount::double precision AS rebate_amount,
+           po.payment_type,
+           po.status AS order_status,
+           NULL::text AS reward_role,
+           NULL::timestamptz AS expires_at,
+           NULL::double precision AS remaining_amount,
+           ual.created_at
+    FROM user_affiliate_ledger ual
+    JOIN payment_orders po ON po.id = ual.source_order_id
+    JOIN users invitee ON invitee.id = ual.source_user_id
+    JOIN users inviter ON inviter.id = ual.user_id
+    WHERE ual.action = 'accrue'
+      AND ual.source_order_id IS NOT NULL
 
-	total, err := queryAffiliateRecordCount(ctx, client, "SELECT COUNT(*) "+baseJoin+where, args...)
+    UNION ALL
+
+    SELECT events.id AS audit_id,
+           'reward_credit'::text AS record_source,
+           0::bigint AS order_id,
+           ''::text AS out_trade_no,
+           split_part(credits.source_key, ':', 2)::bigint AS inviter_id,
+           COALESCE(inviter.email, '') AS inviter_email,
+           COALESCE(inviter.username, '') AS inviter_username,
+           split_part(credits.source_key, ':', 3)::bigint AS invitee_id,
+           COALESCE(invitee.email, '') AS invitee_email,
+           COALESCE(invitee.username, '') AS invitee_username,
+           0::double precision AS order_amount,
+           0::double precision AS pay_amount,
+           events.amount::double precision AS rebate_amount,
+           ''::text AS payment_type,
+           ''::text AS order_status,
+           CASE credits.credit_type
+               WHEN 'affiliate_inviter' THEN 'inviter'
+               ELSE 'invitee'
+           END::text AS reward_role,
+           credits.expires_at,
+           credits.remaining_amount::double precision AS remaining_amount,
+           events.created_at
+    FROM user_reward_credits credits
+    JOIN user_reward_credit_events events
+      ON events.credit_id = credits.id AND events.event_type = 'grant'
+    JOIN users inviter ON inviter.id = split_part(credits.source_key, ':', 2)::bigint
+    JOIN users invitee ON invitee.id = split_part(credits.source_key, ':', 3)::bigint
+    WHERE credits.credit_type IN ('affiliate_inviter', 'affiliate_invitee')
+      AND credits.source_key ~ '^affiliate:[0-9]+:[0-9]+$'
+)
+`
+
+	total, err := queryAffiliateRecordCount(ctx, client, unified+"SELECT COUNT(*) FROM unified_affiliate_rewards "+where, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	orderBy := buildAffiliateRecordOrderBy(filter, map[string]string{
-		"order":         "po.id",
-		"inviter":       "inviter.email",
-		"invitee":       "invitee.email",
-		"order_amount":  "po.amount",
-		"pay_amount":    "po.pay_amount",
-		"rebate_amount": "ual.amount",
-		"payment_type":  "po.payment_type",
-		"order_status":  "po.status",
-		"created_at":    "ual.created_at",
-	}, "ual.created_at")
+		"source":           "record_source",
+		"record_source":    "record_source",
+		"reward_role":      "reward_role",
+		"order":            "order_id",
+		"inviter":          "inviter_email",
+		"invitee":          "invitee_email",
+		"order_amount":     "order_amount",
+		"pay_amount":       "pay_amount",
+		"rebate_amount":    "rebate_amount",
+		"remaining_amount": "remaining_amount",
+		"expires_at":       "expires_at",
+		"payment_type":     "payment_type",
+		"order_status":     "order_status",
+		"created_at":       "created_at",
+	}, "created_at")
+	orderBy += ", record_source ASC, audit_id ASC"
 	args = append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)
 	rows, err := client.QueryContext(ctx, `
-SELECT po.id,
-       po.out_trade_no,
-       ual.user_id,
-       COALESCE(inviter.email, ''),
-       COALESCE(inviter.username, ''),
-       ual.source_user_id,
-       COALESCE(invitee.email, ''),
-       COALESCE(invitee.username, ''),
-       po.amount::double precision,
-       po.pay_amount::double precision,
-       ual.amount::double precision,
-       po.payment_type,
-       po.status,
-       ual.created_at
-`+baseJoin+where+`
+`+unified+`
+SELECT order_id,
+       out_trade_no,
+       inviter_id,
+       inviter_email,
+       inviter_username,
+       invitee_id,
+       invitee_email,
+       invitee_username,
+       order_amount,
+       pay_amount,
+       rebate_amount,
+       payment_type,
+       order_status,
+       record_source,
+       reward_role,
+       expires_at,
+       remaining_amount,
+       created_at
+FROM unified_affiliate_rewards
+`+where+`
 `+orderBy+`
 LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
@@ -554,6 +845,9 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	items := make([]service.AffiliateRebateRecord, 0)
 	for rows.Next() {
 		var item service.AffiliateRebateRecord
+		var rewardRole sql.NullString
+		var expiresAt sql.NullTime
+		var remainingAmount sql.NullFloat64
 		if err := rows.Scan(
 			&item.OrderID,
 			&item.OutTradeNo,
@@ -568,9 +862,22 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 			&item.RebateAmount,
 			&item.PaymentType,
 			&item.OrderStatus,
+			&item.RecordSource,
+			&rewardRole,
+			&expiresAt,
+			&remainingAmount,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
+		}
+		if rewardRole.Valid {
+			item.RewardRole = &rewardRole.String
+		}
+		if expiresAt.Valid {
+			item.ExpiresAt = &expiresAt.Time
+		}
+		if remainingAmount.Valid {
+			item.RemainingAmount = &remainingAmount.Float64
 		}
 		items = append(items, item)
 	}
@@ -820,6 +1127,7 @@ SELECT user_id,
        aff_rebate_rate_percent,
        inviter_id,
        aff_count,
+       inviter_reward_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
@@ -848,6 +1156,7 @@ WHERE user_id = $1`, userID)
 		&rebateRate,
 		&inviterID,
 		&out.AffCount,
+		&out.InviterRewardCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,
@@ -874,6 +1183,7 @@ SELECT user_id,
        aff_rebate_rate_percent,
        inviter_id,
        aff_count,
+       inviter_reward_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
@@ -904,6 +1214,7 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		&rebateRate,
 		&inviterID,
 		&out.AffCount,
+		&out.InviterRewardCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,

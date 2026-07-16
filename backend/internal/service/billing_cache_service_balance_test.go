@@ -23,6 +23,19 @@ type balanceEligibilityCacheStub struct {
 	invalidateCalls          atomic.Int64
 }
 
+type balanceSnapshotEligibilityCacheStub struct {
+	*balanceEligibilityCacheStub
+	snapshot BillingBalanceSnapshot
+}
+
+func (s *balanceSnapshotEligibilityCacheStub) GetUserBalanceSnapshot(context.Context, int64) (BillingBalanceSnapshot, error) {
+	return s.snapshot, nil
+}
+
+func (s *balanceSnapshotEligibilityCacheStub) SetUserBalanceSnapshot(context.Context, int64, BillingBalanceSnapshot) error {
+	return nil
+}
+
 func (s *balanceEligibilityCacheStub) GetUserBalance(context.Context, int64) (float64, error) {
 	if s.cacheMissAfterInvalidate && s.invalidated.Load() {
 		return 0, errors.New("cache miss")
@@ -60,6 +73,47 @@ func TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	err := svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, nil, nil, "")
+	require.NoError(t, err)
+}
+
+func TestCheckBillingEligibility_DoesNotCombineInsufficientBalanceLayers(t *testing.T) {
+	cache := &balanceSnapshotEligibilityCacheStub{
+		balanceEligibilityCacheStub: &balanceEligibilityCacheStub{balance: 0.01},
+		snapshot: BillingBalanceSnapshot{
+			TotalBalance:           0.01,
+			DailyRewardBalance:     0.005,
+			AffiliateRewardBalance: 0.005,
+			AccountBalance:         0,
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Billing.MinimumBalanceReserve = 0.01
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(svc.Stop)
+
+	err := svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrInsufficientBalance)
+}
+
+func TestCheckBillingEligibility_RewardPrecedesExhaustedSubscriptionWithoutFallback(t *testing.T) {
+	weeklyLimit := 5.0
+	cache := &balanceSnapshotEligibilityCacheStub{
+		balanceEligibilityCacheStub: &balanceEligibilityCacheStub{balance: 10},
+		snapshot: BillingBalanceSnapshot{
+			TotalBalance:           10,
+			AffiliateRewardBalance: 10,
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Billing.MinimumBalanceReserve = 0.01
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(svc.Stop)
+
+	err := svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, &Group{
+		ID: 9, SubscriptionType: SubscriptionTypeSubscription, WeeklyLimitUSD: &weeklyLimit,
+	}, &UserSubscription{
+		ID: 3, Status: "active", SevenDayLimitUSD: &weeklyLimit, WeeklyUsageUSD: weeklyLimit,
+	}, "")
 	require.NoError(t, err)
 }
 
@@ -103,6 +157,25 @@ func TestSyncBalanceCacheAfterDeduction_InvalidatesWhenBalanceFallsBelowReserve(
 		Cost: &CostBreakdown{ActualCost: 0.495},
 		User: &User{ID: 1},
 	}, &billingDeps{billingCacheService: svc}, &UsageBillingApplyResult{NewBalance: &newBalance})
+
+	require.Equal(t, int64(1), cache.invalidateCalls.Load())
+	require.Equal(t, int64(0), cache.deductCalls.Load())
+}
+
+func TestSyncBalanceCacheAfterDeduction_InvalidatesLayeredSnapshot(t *testing.T) {
+	cache := &balanceEligibilityCacheStub{balance: 1}
+	cfg := &config.Config{}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(svc.Stop)
+
+	newBalance := 0.75
+	syncBalanceCacheAfterDeduction(context.Background(), &postUsageBillingParams{
+		Cost: &CostBreakdown{ActualCost: 0.25},
+		User: &User{ID: 1},
+	}, &billingDeps{billingCacheService: svc}, &UsageBillingApplyResult{
+		NewBalance:    &newBalance,
+		FundingSource: UsageFundingAffiliate,
+	})
 
 	require.Equal(t, int64(1), cache.invalidateCalls.Load())
 	require.Equal(t, int64(0), cache.deductCalls.Load())

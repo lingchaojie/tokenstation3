@@ -72,7 +72,7 @@
             {{ balanceFrozenLabel }}
           </span>
           <div
-            class="pointer-events-none absolute right-0 top-full mt-2 hidden w-56 rounded-lg border border-gray-200 bg-white p-3 text-xs shadow-lg group-hover:block dark:border-dark-700 dark:bg-dark-800"
+            class="absolute right-0 top-full mt-2 hidden w-72 rounded-lg border border-gray-200 bg-white p-3 text-xs shadow-lg group-hover:block dark:border-dark-700 dark:bg-dark-800"
           >
             <div class="flex items-center justify-between">
               <span class="text-gray-500 dark:text-dark-400">{{ balanceAvailableText }}</span>
@@ -88,6 +88,10 @@
                 <span class="font-semibold text-gray-900 dark:text-white">{{ formatHeaderMoney(totalBalance) }}</span>
               </div>
             </div>
+            <RewardBalanceBreakdown
+              class="mt-2 border-t border-gray-100 pt-2 dark:border-dark-700"
+              :summary="user.reward_balances"
+            />
           </div>
         </div>
 
@@ -140,6 +144,10 @@
                 <div v-if="frozenBalance > 0" class="mt-1 text-xs text-amber-600 dark:text-amber-300">
                   {{ balanceFrozenText }} {{ formatHeaderMoney(frozenBalance) }}
                 </div>
+                <RewardBalanceBreakdown
+                  class="mt-2"
+                  :summary="user.reward_balances"
+                />
               </div>
 
               <div class="py-1">
@@ -231,6 +239,7 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import Icon from '@/components/icons/Icon.vue'
+import RewardBalanceBreakdown from '@/components/user/RewardBalanceBreakdown.vue'
 import { sanitizeUrl } from '@/utils/url'
 
 const router = useRouter()

@@ -139,12 +139,12 @@ func TestBuildUsageBillingCommand_SelectsLedgerFromActualSubscriptionQuota(t *te
 			wantBillingType: BillingTypeSubscription,
 		},
 		{
-			name:            "balance fallback when subscription quota is insufficient",
+			name:            "repository atomically decides fallback when subscription quota is insufficient",
 			weeklyUsage:     4,
 			actualCost:      2,
-			wantSubCost:     0,
-			wantBalanceCost: 2,
-			wantBillingType: BillingTypeBalance,
+			wantSubCost:     2,
+			wantBalanceCost: 0,
+			wantBillingType: BillingTypeSubscription,
 		},
 	}
 
@@ -339,7 +339,7 @@ func TestBuildUsageBillingCommand_AttemptedSubscriptionEnablesFallbackDespiteSta
 	}
 }
 
-func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitFallsBackToCoveringBalance(t *testing.T) {
+func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitDefersFallbackToRepository(t *testing.T) {
 	t.Parallel()
 
 	groupID := int64(7)
@@ -368,17 +368,17 @@ func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitFallsBackToCoverin
 	if cmd.SubscriptionSevenDayLimitUSD != nil {
 		t.Fatalf("SubscriptionSevenDayLimitUSD = %v, want nil", cmd.SubscriptionSevenDayLimitUSD)
 	}
-	if cmd.SubscriptionCost != 0 {
-		t.Fatalf("SubscriptionCost = %v, want 0", cmd.SubscriptionCost)
+	if cmd.SubscriptionCost != 2 {
+		t.Fatalf("SubscriptionCost = %v, want 2", cmd.SubscriptionCost)
 	}
-	if cmd.BalanceCost != 2 {
-		t.Fatalf("BalanceCost = %v, want 2", cmd.BalanceCost)
+	if cmd.BalanceCost != 0 {
+		t.Fatalf("BalanceCost = %v, want 0", cmd.BalanceCost)
 	}
-	if cmd.BillingType != BillingTypeBalance {
-		t.Fatalf("BillingType = %v, want balance", cmd.BillingType)
+	if !cmd.AllowBalanceFallback || cmd.BalanceFallbackCost != 2 {
+		t.Fatalf("fallback config enabled=%v cost=%v, want enabled cost 2", cmd.AllowBalanceFallback, cmd.BalanceFallbackCost)
 	}
-	if usageLog.BillingType != BillingTypeBalance {
-		t.Fatalf("usageLog BillingType = %v, want balance", usageLog.BillingType)
+	if cmd.BillingType != BillingTypeSubscription || usageLog.BillingType != BillingTypeSubscription {
+		t.Fatalf("billing types cmd=%v log=%v, want subscription until repository selects account", cmd.BillingType, usageLog.BillingType)
 	}
 }
 
@@ -431,7 +431,7 @@ func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithoutOptInDoesNo
 	}
 }
 
-func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithZeroBalanceDoesNotBillSubscription(t *testing.T) {
+func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithStaleZeroBalanceStillDefersFallback(t *testing.T) {
 	t.Parallel()
 
 	groupID := int64(7)
@@ -460,13 +460,16 @@ func TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithZeroBalanceDoe
 	if cmd.SubscriptionSevenDayLimitUSD != nil {
 		t.Fatalf("SubscriptionSevenDayLimitUSD = %v, want nil", cmd.SubscriptionSevenDayLimitUSD)
 	}
-	if cmd.SubscriptionCost != 0 {
-		t.Fatalf("SubscriptionCost = %v, want 0", cmd.SubscriptionCost)
+	if cmd.SubscriptionCost != 2 {
+		t.Fatalf("SubscriptionCost = %v, want 2", cmd.SubscriptionCost)
 	}
-	if cmd.BalanceCost != 2 {
-		t.Fatalf("BalanceCost = %v, want balance debit to be rejected by insufficient balance guard", cmd.BalanceCost)
+	if cmd.BalanceCost != 0 {
+		t.Fatalf("BalanceCost = %v, want 0", cmd.BalanceCost)
 	}
-	if cmd.BillingType != BillingTypeBalance {
-		t.Fatalf("BillingType = %v, want balance", cmd.BillingType)
+	if !cmd.AllowBalanceFallback || cmd.BalanceFallbackCost != 2 {
+		t.Fatalf("fallback config enabled=%v cost=%v, want enabled cost 2", cmd.AllowBalanceFallback, cmd.BalanceFallbackCost)
+	}
+	if cmd.BillingType != BillingTypeSubscription {
+		t.Fatalf("BillingType = %v, want subscription until repository selects funding", cmd.BillingType)
 	}
 }

@@ -6059,10 +6059,16 @@
                   step="0.01"
                   min="0"
                   class="input"
-                  placeholder="20"
+                  placeholder="0"
+                  data-testid="affiliate-first-recharge-threshold"
                 />
                 <p class="mt-1 text-xs text-gray-400">
                   {{ t('admin.settings.features.affiliate.firstRechargeThresholdHint') }}
+                </p>
+                <p class="mt-2 rounded-lg bg-primary-50 px-3 py-2 text-xs text-primary-700 dark:bg-primary-900/20 dark:text-primary-300">
+                  {{ t(Number(form.affiliate_first_recharge_threshold) === 0
+                    ? 'admin.settings.features.affiliate.immediateModeHint'
+                    : 'admin.settings.features.affiliate.firstRechargeModeHint') }}
                 </p>
               </div>
 
@@ -6076,7 +6082,8 @@
                   step="0.01"
                   min="0"
                   class="input"
-                  placeholder="5"
+                  placeholder="10"
+                  data-testid="affiliate-inviter-reward"
                 />
                 <p class="mt-1 text-xs text-gray-400">
                   {{ t('admin.settings.features.affiliate.inviterRewardHint') }}
@@ -6094,6 +6101,7 @@
                   min="0"
                   class="input"
                   placeholder="5"
+                  data-testid="affiliate-invitee-reward"
                 />
                 <p class="mt-1 text-xs text-gray-400">
                   {{ t('admin.settings.features.affiliate.inviteeRewardHint') }}
@@ -6102,18 +6110,37 @@
 
               <div>
                 <label class="input-label">
-                  {{ t('admin.settings.features.affiliate.freezeHours') }}
+                  {{ t('admin.settings.features.affiliate.rewardValidityDays') }}
                 </label>
                 <input
-                  v-model.number="form.affiliate_rebate_freeze_hours"
+                  v-model.number="form.affiliate_reward_validity_days"
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="3650"
+                  class="input"
+                  data-testid="affiliate-reward-validity-days"
+                />
+                <p class="mt-1 text-xs text-gray-400">
+                  {{ t('admin.settings.features.affiliate.rewardValidityDaysHint') }}
+                </p>
+              </div>
+
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.affiliate.inviterRewardLimit') }}
+                </label>
+                <input
+                  v-model.number="form.affiliate_inviter_reward_limit"
                   type="number"
                   step="1"
                   min="0"
-                  max="720"
+                  max="1000000"
                   class="input"
+                  data-testid="affiliate-inviter-reward-limit"
                 />
                 <p class="mt-1 text-xs text-gray-400">
-                  {{ t('admin.settings.features.affiliate.freezeHoursDesc') }}
+                  {{ t('admin.settings.features.affiliate.inviterRewardLimitHint') }}
                 </p>
               </div>
 
@@ -8078,10 +8105,11 @@ const form = reactive<SettingsForm>({
   login_agreement_documents: defaultLoginAgreementDocuments(),
   default_balance: 0,
   default_platform_quotas: normalizePlatformQuotasMap() as DefaultPlatformQuotasMap,
-  affiliate_first_recharge_threshold: 20,
-  affiliate_inviter_reward: 5,
+  affiliate_first_recharge_threshold: 0,
+  affiliate_inviter_reward: 10,
   affiliate_invitee_reward: 5,
-  affiliate_rebate_freeze_hours: 0,
+  affiliate_reward_validity_days: 7,
+  affiliate_inviter_reward_limit: 0,
   default_concurrency: 1,
   default_subscriptions: [],
   default_anthropic_group_id: null,
@@ -9497,7 +9525,8 @@ async function saveSettings() {
       affiliate_first_recharge_threshold: Math.max(0, Number(form.affiliate_first_recharge_threshold) || 0),
       affiliate_inviter_reward: Math.max(0, Number(form.affiliate_inviter_reward) || 0),
       affiliate_invitee_reward: Math.max(0, Number(form.affiliate_invitee_reward) || 0),
-      affiliate_rebate_freeze_hours: Math.max(0, Math.min(720, Number(form.affiliate_rebate_freeze_hours) || 0)),
+      affiliate_reward_validity_days: Math.max(1, Math.min(3650, Math.trunc(Number(form.affiliate_reward_validity_days) || 7))),
+      affiliate_inviter_reward_limit: Math.max(0, Math.min(1000000, Math.trunc(Number(form.affiliate_inviter_reward_limit) || 0))),
       default_concurrency: form.default_concurrency,
       default_subscriptions: normalizedDefaultSubscriptions,
       default_anthropic_group_id: form.default_anthropic_group_id ?? null,

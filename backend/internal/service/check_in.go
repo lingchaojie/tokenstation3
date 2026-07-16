@@ -68,6 +68,7 @@ type DailyCheckInClaimInput struct {
 	CheckInDate     time.Time
 	RewardAmount    float64
 	ClaimedAt       time.Time
+	ExpiresAt       time.Time
 }
 
 type CheckInRepository interface {
@@ -279,13 +280,14 @@ func (s *CheckInService) Claim(ctx context.Context, userID int64, role string) (
 	if state != DailyCheckInStateActive || cfg.StartAt == nil {
 		return DailyCheckInClaimResult{}, ErrDailyCheckInInactive
 	}
-	checkInDate, checkInDateText, _ := dailyCheckInDate(now)
+	checkInDate, checkInDateText, nextResetAt := dailyCheckInDate(now)
 	claim, err := s.repo.CreateClaim(ctx, DailyCheckInClaimInput{
 		UserID:          userID,
 		ActivityStartAt: cfg.StartAt.UTC(),
 		CheckInDate:     checkInDate,
 		RewardAmount:    cfg.RewardAmount,
 		ClaimedAt:       now.UTC(),
+		ExpiresAt:       nextResetAt.UTC(),
 	})
 	if err != nil {
 		return DailyCheckInClaimResult{}, err

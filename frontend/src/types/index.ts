@@ -63,6 +63,34 @@ export interface UserProfileSourceContext {
   provider_label?: string | null
 }
 
+export interface DailyRewardBalance {
+  amount: number
+  expires_at: string | null
+}
+
+export interface AffiliateRewardBalance {
+  amount: number
+  earliest_expires_at: string | null
+  credit_count: number
+}
+
+export interface RewardBalanceSummary {
+  daily_check_in: DailyRewardBalance
+  affiliate: AffiliateRewardBalance
+}
+
+export interface RewardCreditItem {
+  id: number
+  credit_type: 'affiliate_inviter' | 'affiliate_invitee'
+  role_label: 'inviter' | 'invitee'
+  original_amount: number
+  remaining_amount: number
+  granted_at: string
+  expires_at: string
+}
+
+export type RewardCreditPage = BasePaginationResponse<RewardCreditItem>
+
 export interface User {
   id: number
   username: string
@@ -87,6 +115,7 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
+  reward_balances?: RewardBalanceSummary // Included by the current-user profile endpoint
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
@@ -144,18 +173,18 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
-  /** 被邀请人首充达标阈值（余额充值到账额需 ≥ 此值；订阅无条件达标）。 */
+  /** 0 = 注册后立即奖励；大于 0 = 首充达标阈值（订阅无条件达标）。 */
   first_recharge_threshold: number
-  /** 邀请方在被邀请人首充达标后获得的固定奖励额。 */
+  /** 满足当前奖励模式后，邀请方获得的固定奖励额。 */
   inviter_reward: number
-  /** 被邀请方在首充达标后获得的固定奖励额。 */
+  /** 满足当前奖励模式后，被邀请方获得的固定奖励额。 */
   invitee_reward: number
+  reward_mode: 'immediate' | 'first_recharge'
+  reward_validity_days: number
+  inviter_reward_limit: number
+  inviter_reward_count: number
+  inviter_reward_limit_reached: boolean
   invitees: AffiliateInvitee[]
-}
-
-export interface AffiliateTransferResponse {
-  transferred_quota: number
-  balance: number
 }
 
 export interface SendVerifyCodeRequest {

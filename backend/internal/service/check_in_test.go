@@ -93,6 +93,24 @@ func TestCheckInService_Status_UsesUTC8CalendarDay(t *testing.T) {
 	require.Equal(t, "2026-07-22T00:00:00+08:00", got.NextResetAt.Format(time.RFC3339))
 }
 
+func TestDailyCheckInDate_ExpiresAtNextUTC8Midnight(t *testing.T) {
+	tests := []struct {
+		name string
+		now  time.Time
+	}{
+		{name: "morning", now: time.Date(2026, 7, 16, 1, 30, 0, 0, time.UTC)},
+		{name: "last second", now: time.Date(2026, 7, 16, 15, 59, 59, 0, time.UTC)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, date, expiresAt := dailyCheckInDate(tt.now)
+			require.Equal(t, "2026-07-16", date)
+			require.Equal(t, time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC), expiresAt.UTC())
+		})
+	}
+}
+
 func TestCheckInService_Status_ActivityBoundaries(t *testing.T) {
 	start := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -162,6 +180,7 @@ func TestCheckInService_Claim_InvalidatesCachesAfterSuccess(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.createCalls)
+	require.Equal(t, time.Date(2026, 7, 21, 16, 0, 0, 0, time.UTC), repo.inputs[0].ExpiresAt)
 	require.Equal(t, []int64{42}, authCache.userIDs)
 	require.Equal(t, []int64{42}, billingCache.userIDs)
 	require.InDelta(t, 10, got.RewardAmount, 1e-9)
