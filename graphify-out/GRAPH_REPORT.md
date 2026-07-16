@@ -1,16 +1,16 @@
-# Graph Report - model-marketplace-gpt-5-6  (2026-07-15)
+# Graph Report - api-docs  (2026-07-16)
 
 ## Corpus Check
-- 3074 files · ~3,916,178 words
+- 3108 files · ~3,943,863 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 76618 nodes · 134190 edges · 9206 communities (1993 shown, 7213 thin omitted)
-- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 24186 edges (avg confidence: 0.79)
+- 76931 nodes · 134778 edges · 9214 communities (2007 shown, 7207 thin omitted)
+- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 24192 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `2f6f42ba`
+- Built from commit: `e66e0bb7`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -25,6 +25,7 @@
 - ReAuthAccountModal.vue
 - settings.ts
 - SettingsView.vue
+- ChannelStatusView.vue
 - ErrorPassthroughRuleMutation
 - L
 - ChannelsView.vue
@@ -112,6 +113,7 @@
 - UserAttributeDefinitionQuery
 - payment_fulfillment_test.go
 - clientFromContext
+- .Update
 - extractApiErrorMessage
 - ProxyMutation
 - LegacyPrintf
@@ -130,7 +132,6 @@
 - newOpenAIImageOutputCounter
 - openai_gateway_request_body.go
 - BatchImageItemQuery
-- .defaults
 - .close
 - openai_quota_service.go
 - ErrorFrom
@@ -210,6 +211,7 @@
 - WebChatMessageUpdateOne
 - apiKeyRepoStubForGroupUpdate
 - NewSubscriptionService
+- BatchImageJobCreate
 - UserSubscription
 - Group
 - APIKey
@@ -254,7 +256,6 @@
 - AccountUpsert
 - PromoCodeUpdate
 - load_balancer.go
-- where.go
 - where.go
 - account_handler_available_models_test.go
 - AccountQuery
@@ -456,6 +457,7 @@
 - BackupService
 - redeemCodeRepository
 - UserSubscriptionCreate
+- SecuritySecretClient
 - groupRepository
 - ProxyUpsertBulk
 - account_repo_test.go
@@ -596,10 +598,8 @@
 - ProxyCreate
 - TLSFingerprintProfileUpsert
 - payment_handler.go
-- UsageLog
 - newPaymentConfigServiceTestClient
 - promoCodeRepository
-- where.go
 - openai_ws_state_store.go
 - WebChatAttachmentClient
 - StubConcurrencyCache
@@ -608,6 +608,7 @@
 - ChannelMonitorDailyRollupUpdateOne
 - UserPlatformQuotaUpsert
 - Manager
+- .Update
 - localesNoKeyCollision.spec.ts
 - PendingAuthSessionUpsertBulk
 - UserPlatformQuotaUpsertBulk
@@ -710,6 +711,7 @@
 - auth_service_register_test.go
 - OpsScheduledReportService
 - emailCache
+- .IsOpenAI
 - UserProfileIdentityRepoSuite
 - groupRepoNoop
 - channel_monitor_types.go
@@ -848,7 +850,6 @@
 - FromError
 - mockProxyRepoForOAuth
 - PublicPlanResponse
-- ErrorPassthroughRuleCreateBulk
 - UserAllowedGroupUpdate
 - newWebChatRepoTestClient
 - mustParseGeminiSessionHashRequest
@@ -891,10 +892,12 @@
 - TLSFingerprintProfileUpdateOne
 - userattributedefinition.go
 - .AddUsageRecordIDs
+- settingRepository
 - deriveOpenAIContentSessionSeed
 - openAIImagesFailoverAccountRepo
 - AnnouncementReadUpdate
 - NewDashboardService
+- .Save
 - .Execute
 - kiro_cache_emulation_test.go
 - NewOpenAICodexClientRestrictionDetector
@@ -930,6 +933,7 @@
 - kiroUsageCooldownStore
 - refreshTokenCache
 - newRuntimeSettingRepoStub
+- AdminComplianceGuard
 - web_chat_service_test.go
 - identityadoptiondecision.go
 - .ProbeUsage
@@ -945,6 +949,7 @@
 - AuthIdentityUpdateOne
 - NewAdminService
 - .SetStartsAt
+- Layout Components Integration Guide
 - AuthIdentityUpsert
 - AuthIdentityUpdate
 - ChannelMonitorRequestTemplateUpsertBulk
@@ -1049,8 +1054,6 @@
 - e2e_gateway_test.go
 - ChannelMonitorRequestTemplateService
 - newAuthServiceForRegisterTurnstileTest
-- TokenRefreshService
-- .GetDashboardStats
 - HasCompactionTriggerInInput
 - applyAnthropicCompatFullReplayGuard
 - KIRO Reference Replacement Design
@@ -1064,7 +1067,6 @@
 - ChannelMonitorHistoryCreate
 - getClientSecret
 - runCheckForModel
-- image_concurrency_limiter_test.go
 - pagination.go
 - accountEligibleForMixedPlatform
 - PaymentConfigService
@@ -1092,8 +1094,6 @@
 - cyberOrderingTestRepo
 - compilerOptions
 - ChannelMonitorService
-- Method 2: Docker Compose (Recommended)
-- 方法2: Docker Compose（推奨）
 - userPlatformQuotaRepoStub
 - ops_service.go
 - systemHandlerUpdateServiceStub
@@ -1107,6 +1107,7 @@
 - ProxyClient
 - pnpm Audit Exceptions
 - ProxyExpiryService
+- admin_service_delete_test.go
 - IdentityAdoptionDecisionUpsert
 - auth_identity_fk_ondelete_test.go
 - timeoutCounterCache
@@ -1115,7 +1116,6 @@
 - SubscriptionPlanClient
 - Sub2API Docker Image
 - NewOpenAIWSStateStore
-- .Save
 - Layout Component Examples
 - account_rpm_test.go
 - PaymentOrderExpiryService
@@ -1124,7 +1124,6 @@
 - stubAntigravityAccountRepo
 - groupRepoStubForGroupUpdate
 - errorPassthroughCache
-- isUpstreamModelNotFoundError
 - loadItemPreview
 - .SetIdentityID
 - English
@@ -1137,6 +1136,7 @@
 - IdentityAdoptionDecision
 - Group
 - UserAttributeValue
+- UserPlatformQuota
 - UserSubscription
 - paymentRoutesSettingRepo
 - captureHandlerStructuredLog
@@ -1178,6 +1178,7 @@
 - testTx
 - batchImageDownloadLimiter
 - channel_monitor_checker.go
+- proxyLatencyCache
 - billingCacheStub
 - admin_service_credentials_merge_test.go
 - codex_image_generation_bridge.go
@@ -1253,12 +1254,12 @@
 - CORS
 - anthropicWindowLimitRepo
 - ops_realtime_models.go
-- .SetLastUsedAt
 - TLSFingerprintProfileUpdate
 - embed_off.go
 - Anthropic Call-Level Acceptance
 - .SetMimeType
 - .SetSourceLineNumber
+- UsageLogCreateBulk
 - IkunPay Payment Integration Implementation Plan
 - closePromptPopover
 - fakeBatchImageBillingRepo
@@ -1271,7 +1272,17 @@
 - .SetWindow7dStart
 - promo_code_repository.go
 - BatchImageEvent
+- NormalizeAntigravitySubscription
+- PaymentAuditLog
+- SecuritySecret
+- Setting
+- .SetErrorCode
+- WebChatArtifact
+- WebChatAttachment
 - securitysecret.go
+- Sub2API Individual Contributor License Agreement (v1.0)
+- Kiro ↔ Anthropic 混合调度 Implementation Plan
+- Web Chat 动态模型目录与模型广场开放
 - newAdminUsageRequestTypeTestRouter
 - .SetIssuer
 - .SetFileExtension
@@ -1292,6 +1303,7 @@
 - .SetJobID
 - .SetMcpXMLInject
 - 管理员启用步骤
+- .defaults
 - AppShellLinear.spec.ts
 - WorkBuddy 使用密钥配置示例
 - Seven-Day Quota Dual Ledger
@@ -1330,8 +1342,8 @@
 - .SetBilledAmount
 - .SetErrorMessage
 - .ExistsByHostPortAuth
+- .SetProviderSourceObject
 - GroupUpdateOne
-- .SetSourceByteLength
 - .SetAccountID
 - translator_test.go
 - compositeLiteralHasKey
@@ -1340,7 +1352,6 @@
 - HTTPUpstreamProfileFromContext
 - .SetRequestHash
 - .SetSubmittedAt
-- .SetMonitorID
 - APIKeyService
 - 主要决策
 - newUserEntRepo
@@ -1348,7 +1359,6 @@
 - SHA256 Migration Immutability
 - Deployment and Operation Compliance Commitment
 - resolveOpenAIForwardModel
-- .SetSumLatencyMs
 - .SetCustomID
 - .SetProviderOutputRef
 - .SetTotalChecks
@@ -1358,9 +1368,6 @@
 - account_load_factor_test.go
 - .SetImageRateMultiplier
 - .SetKiroEndpointMode
-- .SetPeakRateEnabled
-- .AddAPIKeyRouteIDs
-- .RemoveAccountIDs
 - .SetImagePrice1k
 - .SetImagePrice4k
 - .SetImageRateIndependent
@@ -1370,7 +1377,6 @@
 - .SetImagePrice1k
 - LINX2.AI 部署与运营合规承诺
 - 需求背景：上游模型调用全量归档
-- .SetFailedReason
 - user_platform_quota_port.go
 - billing_cache_user_platform_quota_test.go
 - Model Marketplace Design
@@ -1400,9 +1406,7 @@
 - account_openai_compact_test.go
 - CleanGeminiNativeThoughtSignatures
 - openai_codex_models_service_test.go
-- .SetBodyOverrideMode
 - .SetRefundAt
-- .SetSubscriptionDays
 - channel_monitor_ssrf.go
 - .SetSubscriptionGroupID
 - .SetSortOrder
@@ -1418,32 +1422,24 @@
 - leader_lock_cache_test.go
 - sdk-example-05_filter_cron_enhanced.py
 - .SetBucketDate
-- .SetCountLatency
 - 调度行为
 - Section 1 — 调度准入
 - .SetErrorCount
-- .SetErrorMessage
-- .SetModel
-- .SetOperationalCount
 - .SetSumLatencyMs
 - .SetCanceledAt
 - .SetDefaultMappedModel
 - .SetSumPingLatencyMs
-- .SetTotalChecks
 - .SetKiroStickySessionTTLSeconds
 - .SetFinishedAt
 - .SetStatus
-- .SetAccountID
 - .SetAccountRateMultiplier
 - .SetChannelID
 - .SetImageSize
 - .SetUserAgent
 - .SetDescription
-- .SetBrowserSessionKey
 - .SetRequired
 - .SetUpdatedAt
 - .SetKiroCacheEmulationRatio
-- .SetNotes
 - .SetStatus
 - APIKeyUpdate
 - .SetSortOrder
@@ -1516,7 +1512,9 @@
 - First-Recharge Fixed Dual Reward
 - Configurable Rolling Announcement Design
 - e2e_helpers_test.go
-- mockGatewayCacheForPlatform
+- .SetCode
+- .SetExpiresAt
+- .SetErrorCodes
 - public_settings_injection_schema_test.go
 - Frontend HTML Shell
 - auth-oauth-adoption.spec.ts
@@ -1546,13 +1544,11 @@
 - .ClearGroupID
 - .SetStartedAt
 - .SetStatus
-- .ClearGroup
 - .ClearGroupID
 - .ClearUsedAt
 - .ClearUser
 - .Where
 - .SetEmail
-- .SetRole
 - runtime.go
 - resolve-version.sh
 - build_image.sh
@@ -2071,13 +2067,14 @@
 - Provider
 - Time
 - ChannelMonitorHistory
+- Mutation
+- PaymentOrder
+- PromoCodeUsage
 - Proxy
-- SecuritySecret
+- Result
 - Setting
-- SubscriptionPlan
 - TLSFingerprintProfile
 - UsageCleanupTask
-- UsageLog
 - User
 - Driver
 - Client
@@ -2116,7 +2113,6 @@
 - Hook
 - .SetContentType
 - .SetSizeBytes
-- .SetTextPreview
 - .SetCanceledBy
 - .SetUpdatedAt
 - .SetErrorMessage
@@ -2137,9 +2133,9 @@
 - UserAllowedGroup
 - UserAPIKeyRoute
 - UserSubscription
+- .SetFinishedAt
 - setupRedeemExportRouter
 - .SetStartedAt
-- Hook
 - .SetStatus
 - Time
 - Hook
@@ -2248,7 +2244,6 @@
 - UsageLog
 - UserAllowedGroup
 - UserAPIKeyRoute
-- UserAttributeDefinition
 - UserAttributeValue
 - .ListShadowsByParent
 - .SetPasswordHash
@@ -2951,12 +2946,6 @@
 - OrderOption
 - PaymentOrder
 - PendingAuthSession
-- PromoCodeUsage
-- QueryContext
-- QuerySpec
-- RedeemCode
-- Selector
-- UsageLog
 - User
 - UserAllowedGroup
 - UserAPIKeyRoute
@@ -3954,9 +3943,6 @@
 - Context
 - Hook
 - config
-- Context
-- Setting
-- T
 - Context
 - Context
 - ResponseRecorder
@@ -8313,6 +8299,11 @@
 - SettingService
 - UserPlatformQuotaRepository
 - UserService
+- PublicModelCatalogModel
+- PublicModelCatalogPriceLine
+- PublicModelCatalogPricing
+- PublicModelCatalogProvider
+- T
 
 ## God Nodes (most connected - your core abstractions)
 1. `Errorf()` - 2878 edges
@@ -8331,12 +8322,12 @@
   .goreleaser.simple.yaml → .goreleaser.yaml
 - `initializeApplication()` --calls--> `NewPgDumper()`  [INFERRED]
   backend/cmd/server/wire_gen.go → backend/internal/repository/backup_pg_dumper.go
-- `initializeApplication()` --calls--> `NewRPMCache()`  [INFERRED]
-  backend/cmd/server/wire_gen.go → backend/internal/repository/rpm_cache.go
 - `TestFetchQuota_ForbiddenReturnsIsForbidden()` --calls--> `As()`  [INFERRED]
   backend/internal/service/antigravity_quota_fetcher_test.go → backend/ent/ent.go
-- `TestOpenAIHandleErrorResponse_ContextWindow502KeepsMessageWithoutFailover()` --calls--> `As()`  [INFERRED]
-  backend/internal/service/error_passthrough_runtime_test.go → backend/ent/ent.go
+- `TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErrorWithoutFailover()` --calls--> `As()`  [INFERRED]
+  backend/internal/service/openai_gateway_chat_completions_test.go → backend/ent/ent.go
+- `TestForwardAsChatCompletions_StreamContextWindowResponseFailedReturnsErrorWithoutFailover()` --calls--> `As()`  [INFERRED]
+  backend/internal/service/openai_gateway_chat_completions_test.go → backend/ent/ent.go
 
 ## Import Cycles
 - 3-file cycle: `frontend/src/api/admin/users.ts -> frontend/src/api/client.ts -> frontend/src/types/index.ts -> frontend/src/api/admin/users.ts`
@@ -8346,7 +8337,7 @@
 - **Codex Instruction Evolution** — backend_internal_pkg_openai_instructions_codex_gpt5_agent_prompt, backend_internal_pkg_openai_instructions_gpt5_1_codex_agent_prompt, backend_internal_pkg_openai_instructions_gpt5_2_codex_agent_prompt, backend_internal_pkg_openai_instructions_gpt5_5_codex_agent_prompt [INFERRED 0.95]
 - **Default Compose Service Stack** — deploy_docker_compose_sub2api_service, deploy_docker_compose_postgres_service, deploy_docker_compose_redis_service [EXTRACTED 1.00]
 
-## Communities (9206 total, 7213 thin omitted)
+## Communities (9214 total, 7207 thin omitted)
 
 ### Community 0 - ".Hooks"
 Cohesion: 0.05
@@ -8354,11 +8345,11 @@ Nodes (11): RedeemCode, RedeemCodeClient, RedeemCodeDelete, RedeemCodeDeleteOne,
 
 ### Community 1 - "New"
 Cohesion: 0.01
-Nodes (112): cleanupAPIKeyRepoStub, storeUnavailableRepoStub, AuthResponse, ForgotPasswordRequest, ForgotPasswordResponse, Login2FARequest, LoginRequest, LogoutRequest (+104 more)
+Nodes (101): cleanupAPIKeyRepoStub, storeUnavailableRepoStub, GatewayService, userStoreUnavailableRepoStub, NewOpenAIOAuthHandler(), TestCreateShadow_BadBody(), TestCreateShadow_InvalidID(), TestCreateShadow_ReturnsCreatedShadow() (+93 more)
 
 ### Community 2 - "UserSubscriptionMutation"
 Cohesion: 0.01
-Nodes (3): RedeemCodeMutation, UserPlatformQuotaMutation, UserSubscriptionMutation
+Nodes (4): PromoCodeUsageMutation, RedeemCodeMutation, UserPlatformQuotaMutation, UserSubscriptionMutation
 
 ### Community 3 - "WechatCallbackView.vue"
 Cohesion: 0.04
@@ -8386,19 +8377,19 @@ Nodes (75): getAuthToken(), hasExplicitWeChatOAuthCapabilities(), isAuthenticate
 
 ### Community 4 - "index.ts"
 Cohesion: 0.01
-Nodes (183): AccountListWithEtagResult, announcementsAPI, apiKeysAPI, UpdateApiKeyGroupResult, CreateRuleRequest, errorPassthroughAPI, ErrorPassthroughRule, toggleEnabled() (+175 more)
+Nodes (243): AccountListWithEtagResult, announcementsAPI, apiKeysAPI, UpdateApiKeyGroupResult, promoAPI, proxiesAPI, toggleStatus(), update() (+235 more)
 
 ### Community 5 - "DashboardView.vue"
-Cohesion: 0.03
-Nodes (70): DashboardSnapshotV2Stats, keysAPI, activePreset, apply(), containerRef, DatePreset, displayValue, emit (+62 more)
+Cohesion: 0.02
+Nodes (86): DashboardSnapshotV2Stats, keysAPI, activePreset, apply(), containerRef, DatePreset, displayValue, emit (+78 more)
 
 ### Community 6 - "extractI18nErrorMessage"
-Cohesion: 0.04
-Nodes (58): GeminiMessagesCompatService, GeminiMessagesCompatService, HTTPStatusToGoogleStatus(), GoogleErrorWriter(), isGoogleProjectConfigError(), geminiResponseToChatCompletions(), asInt(), cleanToolSchema() (+50 more)
+Cohesion: 0.03
+Nodes (83): opsRepository, AntigravityGatewayService, AntigravityGatewayService, GeminiMessagesCompatService, GeminiMessagesCompatService, latencyHistogramRangeCaseExpr(), latencyHistogramRangeOrderCaseExpr(), filterEmptyPartsFromGeminiRequest() (+75 more)
 
 ### Community 7 - "ReAuthAccountModal.vue"
-Cohesion: 0.02
-Nodes (70): forgotPassword(), chartColors, emit, handleClose(), isDarkMode, lineChartOptions, loading, props (+62 more)
+Cohesion: 0.07
+Nodes (24): forgotPassword(), containerRef, emit, props, renderWidget(), scriptLoaded, TurnstileAPI, TurnstileRenderOptions (+16 more)
 
 ### Community 9 - "settings.ts"
 Cohesion: 0.17
@@ -8406,31 +8397,35 @@ Nodes (21): FailoverAction, FailoverState, mockTempUnscheduler, tempUnscheduleCa
 
 ### Community 10 - "SettingsView.vue"
 Cohesion: 0.01
-Nodes (223): AffiliateAdminEntry, SimpleUser, defaultWeChatConnectScopesForMode(), deriveWeChatConnectStoredMode(), normalizeWeChatConnectMode(), resolveWeChatConnectModeCapabilities(), appStore, authStore (+215 more)
+Nodes (206): AffiliateAdminEntry, SimpleUser, appendAuthSourceDefaultsToUpdateRequest(), AUTH_SOURCE_TYPES, buildAuthSourceDefaultsState(), DefaultPlatformQuotasMap, defaultWeChatConnectScopesForMode(), deriveWeChatConnectStoredMode() (+198 more)
+
+### Community 11 - "ChannelStatusView.vue"
+Cohesion: 0.03
+Nodes (48): openAILegacySessionHashFromContext(), extractOpenAISSETerminalEvent(), TestOpenAIGatewayService_GenerateExplicitSessionHash_SkipsContentFallback(), TestOpenAIGatewayService_GenerateSessionHash_AttachesLegacyHashToContext(), TestOpenAIGatewayService_GenerateSessionHashWithFallback(), TestOpenAISelectAccountForModelWithExclusions_LeastRecentlyUsed(), TestOpenAISelectAccountWithLoadAwareness_AllFullWaitPlan(), TestOpenAISelectAccountWithLoadAwareness_FiltersUnschedulable() (+40 more)
 
 ### Community 13 - "L"
-Cohesion: 0.06
-Nodes (79): OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, cyberSessionBlockFormat (+71 more)
+Cohesion: 0.02
+Nodes (139): GatewayHandler, OpenAIGatewayHandler, GatewayHandler, GatewayHandler, GatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler, OpenAIGatewayHandler (+131 more)
 
 ### Community 14 - "ChannelsView.vue"
 Cohesion: 0.02
-Nodes (121): AccountStatsPricingRule, Channel, ChannelModelPricing, channelsAPI, CreateChannelRequest, ModelDefaultPricing, PaginatedResponse, PricingInterval (+113 more)
+Nodes (128): AccountStatsPricingRule, Channel, ChannelModelPricing, channelsAPI, CreateChannelRequest, ModelDefaultPricing, PaginatedResponse, PricingInterval (+120 more)
 
 ### Community 15 - ".Where"
-Cohesion: 0.02
-Nodes (69): AuthService, AuthService, OpsService, TestGenericAdapter_ResetExpiredWindow_ForwardsAllParams(), TestGenericAdapter_ResetExpiredWindow_PropagatesError(), TestGenericAdapter_UpsertForUser_ForwardsRecords(), TestGenericAdapter_UpsertForUser_PropagatesError(), NewUserPlatformQuotaServiceAdapter() (+61 more)
+Cohesion: 0.04
+Nodes (44): OpsService, monthlyQuotaWindowExpired(), nextMonthlyResetFrom(), currentDayStart(), newServiceForPreflight(), TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitBalanceFallbackChecksPlatformQuota(), TestCheckBillingEligibility_AbsentEffectiveSevenDayLimitRequiresBalanceFallback(), TestCheckBillingEligibility_ExpiredSevenDayWindowIgnoresStaleWeeklyUsage() (+36 more)
 
 ### Community 16 - "WebChatMessageMutation"
 Cohesion: 0.01
-Nodes (3): WebChatArtifactMutation, WebChatAttachmentMutation, WebChatMessageMutation
+Nodes (5): ChannelMonitorHistoryMutation, WebChatArtifactMutation, WebChatAttachmentMutation, WebChatConversationMutation, WebChatMessageMutation
 
 ### Community 18 - "gemini_messages_compat_service.go"
 Cohesion: 0.03
-Nodes (98): AntigravityGatewayService, GatewayService, GatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService (+90 more)
+Nodes (115): OpenAIGatewayService, OpenAIGatewayService, newTestGinContext(), TestBuildCyberPolicyOpsErrorEntry_StatusCode(), TestBuildCyberSessionBlockedOpsEntry(), TestClearCyberPolicyTurnState(), TestRecordCyberPolicyIfMarked_BlockKeyPlumbed(), TestRecordCyberPolicyIfMarked_ForwardSuccessSkipsUsageLog() (+107 more)
 
 ### Community 20 - "format.ts"
-Cohesion: 0.01
-Nodes (144): AccountModelStatusItem, activeKiroQuotaResetAt, activeKiroRuntimeResetAt, activeModelStatuses, emit, handleTempUnschedClick(), hasError, isKiroRuntimeSuspended (+136 more)
+Cohesion: 0.02
+Nodes (110): getMyErrorDetail(), AccountModelStatusItem, activeKiroQuotaResetAt, activeKiroRuntimeResetAt, activeModelStatuses, emit, handleTempUnschedClick(), hasError (+102 more)
 
 ### Community 21 - "admin_service_search_test.go"
 Cohesion: 0.12
@@ -8442,15 +8437,15 @@ Nodes (235): APIMode, BodyOverrideMode, ChannelMonitor, channelMonitorAPI, Check
 
 ### Community 23 - "PaymentView.vue"
 Cohesion: 0.02
-Nodes (122): buildCreateOrderPayload(), decidePaymentLaunch(), normalizeVisibleMethod(), monthlyPlanKeyFromName(), normalizedOrderPaymentType(), buildPaymentErrorToastMessage(), defaultAlipayHint(), defaultWechatHint() (+114 more)
+Nodes (152): buildCreateOrderPayload(), decidePaymentLaunch(), normalizeVisibleMethod(), detectMobileDevice(), DeviceDetectionEnvironment, isMobileDevice(), matchesQuery(), MediaQueryResultLike (+144 more)
 
 ### Community 24 - "AccountUsageCell.vue"
 Cohesion: 0.01
-Nodes (134): GrokAuthUrlRequest, GrokAuthUrlResponse, GrokExchangeCodeRequest, GrokQuotaProbeResult, GrokQuotaResetResult, GrokQuotaSnapshot, GrokQuotaWindow, GrokTokenInfo (+126 more)
+Nodes (169): GrokAuthUrlRequest, GrokAuthUrlResponse, GrokExchangeCodeRequest, GrokQuotaProbeResult, GrokQuotaResetResult, GrokQuotaSnapshot, GrokQuotaWindow, GrokTokenInfo (+161 more)
 
 ### Community 25 - ".ProxyResponsesWebSocketFromClient"
 Cohesion: 0.02
-Nodes (138): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, ClassifyOpenAIPreviousResponseIDKind(), IsOpenAIPreviousResponseIDLikelyMessageID(), TestClassifyOpenAIPreviousResponseIDKind(), TestIsOpenAIPreviousResponseIDLikelyMessageID() (+130 more)
+Nodes (152): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, TestExtractOpenAIReasoningEffortFromBody(), ClassifyOpenAIPreviousResponseIDKind(), IsOpenAIPreviousResponseIDLikelyMessageID() (+144 more)
 
 ### Community 26 - "PendingAuthSessionMutation"
 Cohesion: 0.01
@@ -8458,75 +8453,71 @@ Nodes (3): AuthIdentityChannelMutation, AuthIdentityMutation, PendingAuthSession
 
 ### Community 27 - "UsageView.vue"
 Cohesion: 0.01
-Nodes (304): ApiKeyTrendParams, ApiKeyTrendResponse, BatchApiKeysUsageResponse, BatchApiKeyUsageStats, BatchUsersUsageResponse, BatchUserUsageStats, dashboardAPI, DashboardSnapshotV2Params (+296 more)
+Nodes (296): ApiKeyTrendParams, ApiKeyTrendResponse, BatchApiKeysUsageResponse, BatchApiKeyUsageStats, BatchUsersUsageResponse, BatchUserUsageStats, dashboardAPI, DashboardSnapshotV2Params (+288 more)
 
 ### Community 29 - "AccountsView.vue"
 Cohesion: 0.01
-Nodes (175): Props, { t }, expiresLabel, overagesBadge, planBadgeClass, planLabel, platformClass, platformLabel (+167 more)
+Nodes (194): isKiroCreditLoss, kiroCreditEstimatedCost, kiroCreditEstimatedCostValue, kiroCreditLabelClass, kiroCreditLossClass, kiroCreditValueClass, props, showKiroCredits (+186 more)
 
 ### Community 31 - "useAppStore"
 Cohesion: 0.01
-Nodes (239): AcceptAdminComplianceRequest, AdminComplianceAcknowledgement, adminComplianceAPI, AdminComplianceStatus, isWeChatWebOAuthEnabled(), userAPI, adminComplianceStore, adminSettingsStore (+231 more)
+Nodes (269): AcceptAdminComplianceRequest, AdminComplianceAcknowledgement, adminComplianceAPI, AdminComplianceStatus, isWeChatWebOAuthEnabled(), userAPI, adminComplianceStore, adminSettingsStore (+261 more)
 
 ### Community 32 - "SecuritySecretMutation"
-Cohesion: 0.02
-Nodes (106): appStore, closeFormModal(), confirmDelete(), deletingRule, editingRule, emit, errorCodesInput, form (+98 more)
+Cohesion: 0.09
+Nodes (28): appStore, closeFormModal(), confirmDelete(), deletingProfile, editingProfile, emit, fieldInputs, form (+20 more)
+
+### Community 34 - "ChannelMonitorMutation"
+Cohesion: 0.01
+Nodes (3): ChannelMonitorMutation, ChannelMonitorRequestTemplateMutation, UserAttributeDefinitionMutation
 
 ### Community 37 - "mustCreateAccount"
-Cohesion: 0.03
-Nodes (14): AccountRepoSuite, AccountRepoSuite, UsageLogRepoSuite, UsageLogRepoSuite, Today(), mustBindAccountToGroup(), mustCreateAccount(), idsOfAccounts() (+6 more)
-
-### Community 38 - "PromoCodeMutation"
-Cohesion: 0.01
-Nodes (4): AccountGroupMutation, AnnouncementReadMutation, UserAllowedGroupMutation, UserAPIKeyRouteMutation
+Cohesion: 0.02
+Nodes (34): AccountRepoSuite, AccountRepoSuite, UsageLogRepoSuite, UsageLogRepoSuite, mustBindAccountToGroup(), mustCreateAccount(), TestUsageLog_ListWithFilters_ResolvesSoftDeletedUser(), TestUsageLogRepository_GetByRequestIDAndAPIKeyID() (+26 more)
 
 ### Community 39 - "CreateAccountModal.vue"
 Cohesion: 0.01
 Nodes (179): accountCategory, addMethod, allowedModels, allowOverages, AnthropicAPIKeyAuthScheme, anthropicPassthroughEnabled, antigravityAccountType, antigravityMixedChannelConfirmed (+171 more)
 
 ### Community 42 - "SettingService"
-Cohesion: 0.03
-Nodes (12): SettingService, BetaPolicySettings, parsePositiveIntOverride(), clampAffiliateReward(), mergeEmailOAuthBaseConfig(), oidcCompatibilityWriteDefault(), OverloadCooldownSettings, RateLimit429CooldownSettings (+4 more)
+Cohesion: 0.02
+Nodes (77): SettingService, BetaPolicySettings, GetDefaultUserAgentVersion(), TestNormalizeAnnouncementInterval(), authSourceSignupSettings(), parsePositiveIntOverride(), TestValidateCodexClientEntriesJSON(), TestValidateCodexWhitelistEntriesJSON() (+69 more)
 
 ### Community 43 - "EditAccountModal.vue"
 Cohesion: 0.01
 Nodes (162): allowedModels, allowOverages, AnthropicAPIKeyAuthScheme, anthropicPassthroughEnabled, antigravityMixedChannelConfirmed, antigravityModelMappings, antigravityModelRestrictionMode, antigravityPresetMappings (+154 more)
 
-### Community 44 - "SubscriptionPlanMutation"
-Cohesion: 0.01
-Nodes (3): PaymentProviderInstanceMutation, SubscriptionPlanMutation, UserAttributeDefinitionMutation
-
 ### Community 45 - "UsersView.vue"
-Cohesion: 0.01
-Nodes (185): Props, Props, appStore, availableGroups, emit, handleReplace(), Props, selectedGroupId (+177 more)
+Cohesion: 0.02
+Nodes (112): props, statusClass, ApiKeyGroupFilterLabels, ApiKeyGroupFilterOption, buildApiKeyGroupFilterOptions(), g(), labels, activeAttributeFilters (+104 more)
 
 ### Community 46 - ".Update"
 Cohesion: 0.02
 Nodes (3): GroupCreateBulk, GroupUpsertBulk, GroupUpsertOne
-
-### Community 47 - ".Update"
-Cohesion: 0.03
-Nodes (3): UsageLogCreateBulk, UsageLogUpsertBulk, UsageLogUpsertOne
 
 ### Community 48 - "RiskControlView.vue"
 Cohesion: 0.01
 Nodes (142): ClearFlaggedHashesResponse, ContentModerationAPIKeyLoad, ContentModerationAPIKeyStatus, ContentModerationAPIKeyStatusValue, ContentModerationConfig, ContentModerationLog, ContentModerationLogsResponse, ContentModerationModelFilter (+134 more)
 
 ### Community 49 - "OpenAIGatewayService"
-Cohesion: 0.05
-Nodes (30): OpenAIGatewayService, TestNewOpenAIGatewayService_InitializesOpenAIWSResolver(), ptrFloat64WS(), ptrIntWS(), TestAdminService_ListAccounts_ExhaustedCodexExtraDoesNotSetRateLimit(), TestOpenAIGatewayService_GetSchedulableAccount_ExhaustedCodexExtraDoesNotSetRateLimit(), TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ExhaustedSnapshotDoesNotSetRateLimit(), TestOpenAIGatewayService_UpdateCodexUsageSnapshot_NonExhaustedSnapshotDoesNotSetRateLimit() (+22 more)
+Cohesion: 0.07
+Nodes (25): OpenAIGatewayService, CodexClientRestrictionMessage(), codexOnlyAccount(), hdrCtx(), TestDetect_Hardening(), TestDetect_N1_StrictOfficialUA(), TestDetectCodexClientRestriction_NilSettingServiceFailsClosed(), NewOpenAICodexClientRestrictionDetector() (+17 more)
 
 ### Community 51 - "ProfileIdentityBindingsSection.vue"
-Cohesion: 0.03
-Nodes (71): PlatformQuotasResponse, WeChatOAuthPublicSettings, BindableOAuthProvider, bindEmailIdentity(), buildOAuthBindingStartURL(), BuildOAuthBindingStartURLOptions, resolveWeChatOAuthBindingMode(), resolveWeChatOAuthMode() (+63 more)
+Cohesion: 0.04
+Nodes (50): getRollbackVersions(), performUpdate(), restartService(), rollback(), RollbackVersionInfo, { get, post }, activeManualCommand, appStore (+42 more)
 
 ### Community 52 - "SubscriptionPlanCard.vue"
 Cohesion: 0.02
 Nodes (3): SecuritySecretMutation, SettingMutation, UserAttributeValueMutation
 
+### Community 53 - "APIKeyMutation"
+Cohesion: 0.01
+Nodes (3): AnnouncementReadMutation, APIKeyMutation, UserAPIKeyRouteMutation
+
 ### Community 54 - ".Forward"
 Cohesion: 0.02
-Nodes (188): TestApplyCodexClientMetadata(), TestDefaultCodexSynthInstructionsModelAware(), TestEnsureCodexReasoningInclude(), firstNonEmptyString(), isOpenAIImageGenerationModel(), normalizeOpenAIImageSizeTier(), isOpenAIOAuthServableModel(), resolveOpenAICompactForwardModel() (+180 more)
+Nodes (192): TestApplyCodexClientMetadata(), TestDefaultCodexSynthInstructionsModelAware(), TestEnsureCodexReasoningInclude(), firstNonEmptyString(), isOpenAIImageGenerationModel(), normalizeOpenAIImageSizeTier(), isOpenAICompatMessagesBridgeBody(), isOpenAICompatMessagesBridgeContext() (+184 more)
 
 ### Community 55 - ".Update"
 Cohesion: 0.03
@@ -8534,31 +8525,31 @@ Nodes (3): BatchImageJobCreateBulk, BatchImageJobUpsertBulk, BatchImageJobUpsert
 
 ### Community 56 - "PaymentView.spec.ts"
 Cohesion: 0.04
-Nodes (122): TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten(), TestStreamWrittenGuard_MessagesPath_AbortFailoverOnSSEContentWritten(), TestKiroReferenceHandlersAttachFullGroupToParsedRequest(), SetCachedWebSearchDescription(), TestBeginnerGuideMigrationBackfillsBeforeDefault(), BuildKiroPayloadWithContext(), clampFloat(), extractClaudeStopSequences() (+114 more)
+Nodes (115): TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten(), TestStreamWrittenGuard_MessagesPath_AbortFailoverOnSSEContentWritten(), TestKiroReferenceHandlersAttachFullGroupToParsedRequest(), TestBeginnerGuideMigrationBackfillsBeforeDefault(), BuildKiroPayloadWithContext(), buildKiroTemporalContext(), extractClaudeStopSequences(), hasForcedClaudeToolChoice() (+107 more)
 
 ### Community 57 - "VersionBadge.vue"
 Cohesion: 0.05
 Nodes (34): mocks, appStore, canSubmit, codeCooldown, cooldownTimer, emit, form, handleDisable() (+26 more)
 
 ### Community 59 - "gateway_service.go"
-Cohesion: 0.04
-Nodes (47): GatewayService, TestIsForceCacheBilling(), TestWithForceCacheBilling(), TestParseDebugEnvBool(), TestGatewayHotpathHelpers_CacheTTLAndStickyContext(), TestInvalidateAvailableModelsCache_ByDimensions(), appendMessageTextsFromRaw(), appendResponsesContentText() (+39 more)
+Cohesion: 0.05
+Nodes (42): GatewayService, TestIsForceCacheBilling(), TestWithForceCacheBilling(), TestParseDebugEnvBool(), TestGatewayHotpathHelpers_CacheTTLAndStickyContext(), TestInvalidateAvailableModelsCache_ByDimensions(), appendMessageTextsFromRaw(), appendResponsesContentText() (+34 more)
 
 ### Community 60 - "auth_linuxdo_oauth.go"
-Cohesion: 0.09
-Nodes (31): AuthHandler, OpsService, completeWeChatOAuthRequest, wechatOAuthConfig, wechatOAuthTokenResponse, wechatOAuthUserInfoResponse, wechatPaymentOAuthContext, pendingOAuthIdentityExistsForUser() (+23 more)
+Cohesion: 0.06
+Nodes (40): anthropicErrors, API_DOCS_CAPABILITY_TAGS, API_DOCS_NAV, API_DOCS_PAGES, API_ENDPOINTS, findApiDocsPage(), gatewayErrors, openAiErrors (+32 more)
 
 ### Community 61 - "UserSubscriptionQuery"
 Cohesion: 0.08
 Nodes (3): UserSubscriptionGroupBy, UserSubscriptionQuery, UserSubscriptionSelect
 
 ### Community 62 - "newConversationCapturePool"
-Cohesion: 0.06
-Nodes (21): recordBytes(), TestRecordBytes(), captureEnvOr(), TestClickHouseArchiveRoundTrip(), archiveCreateTableDDL(), b2u8(), newClickHouseArchiveWriter(), TestCreateTableDDLContainsRawColumns() (+13 more)
+Cohesion: 0.10
+Nodes (12): recordBytes(), TestRecordBytes(), newConversationCapturePool(), TestCapturePoolDropsOnByteBudget(), TestCapturePoolDropsOnFullQueue(), TestCapturePoolNilSafe(), TestCapturePoolSubmitAndExtract(), blockingWriter (+4 more)
 
 ### Community 64 - "AnnouncementTargetingEditor.vue"
-Cohesion: 0.02
-Nodes (126): displayGroups, hiddenCount, moreButtonRef, popoverRef, popoverStyle, Props, showPopover, { t } (+118 more)
+Cohesion: 0.01
+Nodes (174): UserAvailableChannel, UserAvailableGroup, UserChannelPlatformSection, userChannelsAPI, UserPricingInterval, UserSupportedModel, UserSupportedModelPricing, displayGroups (+166 more)
 
 ### Community 65 - "account_handler.go"
 Cohesion: 0.07
@@ -8566,27 +8557,31 @@ Nodes (69): generateJWTSecret(), isWeakJWTSecret(), Load(), NormalizeRunMode(), 
 
 ### Community 66 - "encodeCookieValue"
 Cohesion: 0.03
-Nodes (80): oauthEmailAffiliateBindCall, oauthEmailAffiliateRepoStub, oauthPendingFlowAvatarRecord, oauthPendingFlowDefaultSubAssignerStub, oauthPendingFlowSettingRepoStub, oauthPendingFlowTestHandlerOptions, oauthPendingFlowTotpCacheStub, oauthPendingFlowTotpEncryptorStub (+72 more)
+Nodes (83): oauthEmailAffiliateBindCall, oauthEmailAffiliateRepoStub, oauthPendingFlowAvatarRecord, oauthPendingFlowDefaultSubAssignerStub, oauthPendingFlowSettingRepoStub, oauthPendingFlowTestHandlerOptions, oauthPendingFlowTotpCacheStub, oauthPendingFlowTotpEncryptorStub (+75 more)
+
+### Community 67 - ".Update"
+Cohesion: 0.03
+Nodes (3): PaymentOrderCreateBulk, PaymentOrderUpsertBulk, PaymentOrderUpsertOne
 
 ### Community 68 - "StripePaymentView.vue"
 Cohesion: 0.08
-Nodes (21): AssociatedMonitorBrief, GroupNameContainsFold(), PrimaryModelContainsFold(), TemplateIDEQ(), assignNullInt(), buildMonitorModelPairs(), clampTimelineLimit(), defaultAPIModeRepo() (+13 more)
+Nodes (20): AssociatedMonitorBrief, GroupNameContainsFold(), PrimaryModelContainsFold(), TemplateIDEQ(), assignNullInt(), buildMonitorModelPairs(), clampTimelineLimit(), defaultAPIModeRepo() (+12 more)
 
 ### Community 69 - "index.ts"
 Cohesion: 0.01
-Nodes (243): AntigravityAuthUrlRequest, AntigravityAuthUrlResponse, AntigravityExchangeCodeRequest, AntigravityTokenInfo, GeminiOAuthCapabilities, adminAPI, checkUpdates(), getRollbackVersions() (+235 more)
+Nodes (220): AntigravityAuthUrlRequest, AntigravityAuthUrlResponse, AntigravityExchangeCodeRequest, AntigravityTokenInfo, BackupAgentHealth, BackupAgentInfo, BackupArtifactInfo, BackupJob (+212 more)
 
 ### Community 70 - "OAuthCallbackView.vue"
 Cohesion: 0.01
-Nodes (156): API_BASE_URL, buildApiUrl(), getAPIBaseURL(), normalizeAPIBaseURL(), normalizePath(), abortStream(), addLine(), availableModels (+148 more)
+Nodes (167): API_BASE_URL, buildApiUrl(), getAPIBaseURL(), normalizeAPIBaseURL(), normalizePath(), abortStream(), addLine(), availableModels (+159 more)
 
 ### Community 71 - "Wxpay"
 Cohesion: 0.09
-Nodes (25): H5Info, appendWxpayRedirectURL(), buildWxpayH5Info(), buildWxpayResultURL(), buildWxpayTransactionMetadata(), formatPEM(), mapWxState(), NewWxpay() (+17 more)
+Nodes (26): H5Info, appendWxpayRedirectURL(), buildWxpayH5Info(), buildWxpayResultURL(), buildWxpayTransactionMetadata(), formatPEM(), mapWxState(), NewWxpay() (+18 more)
 
 ### Community 72 - "UserApiKeysModal.vue"
-Cohesion: 0.29
-Nodes (4): createModelsListCandidatesTracker(), ModelsListCandidatesMode, ModelsListCandidatesRequest, ModelsListCandidatesTracker
+Cohesion: 0.04
+Nodes (41): appStore, { copyToClipboard }, emit, form, handleUpdateUser(), passwordCopied, props, submitting (+33 more)
 
 ### Community 73 - "SubscriptionsView.vue"
 Cohesion: 0.02
@@ -8594,7 +8589,7 @@ Nodes (106): formatDateOnly(), getRemainingDurationParts(), isOneTimeDailyQuota(
 
 ### Community 74 - "AnnouncementsView.vue"
 Cohesion: 0.01
-Nodes (184): appStore, cancelPendingLoad(), columns, emit, handleClose(), handlePageChange(), handlePageSizeChange(), handleSearch() (+176 more)
+Nodes (178): appStore, cancelPendingLoad(), columns, emit, handleClose(), handlePageChange(), handlePageSizeChange(), handleSearch() (+170 more)
 
 ### Community 75 - "IsNotFound"
 Cohesion: 0.09
@@ -8605,28 +8600,24 @@ Cohesion: 0.09
 Nodes (6): openAIStickyAccountMatchesGroup(), groupAwareStubOpenAIAccountRepo, schedulerGroupAwareOpenAIAccountRepo, schedulerTestOpenAIAccountRepo, snapshotUpdateAccountRepo, stubOpenAIAccountRepo
 
 ### Community 78 - "setting_service.go"
-Cohesion: 0.02
-Nodes (91): adminPaymentAPI, AdminPaymentConfig, RefundResult, UpdatePaymentConfigRequest, paymentAPI, { get, post }, chartData, chartOptions (+83 more)
+Cohesion: 0.04
+Nodes (45): adminPaymentAPI, AdminPaymentConfig, RefundResult, UpdatePaymentConfigRequest, chartData, chartOptions, props, { t } (+37 more)
 
 ### Community 79 - ".handleStreamingResponse"
-Cohesion: 0.03
-Nodes (90): OpenAIGatewayService, OpenAIGatewayService, collectOpenAIImageOutputSizesFromSSEBody(), collectOpenAIResponseImageOutputSizesFromJSONBytes(), countOpenAIImageOutputsFromSSEBody(), countOpenAIResponseImageOutputsFromJSONBytes(), hashOpenAIImageOutputResult(), newOpenAIImageOutputCounter() (+82 more)
-
-### Community 80 - ".Update"
-Cohesion: 0.04
-Nodes (3): AccountCreateBulk, AccountUpsertBulk, AccountUpsertOne
+Cohesion: 0.02
+Nodes (121): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, collectOpenAIImageOutputSizesFromSSEBody(), collectOpenAIResponseImageOutputSizesFromJSONBytes(), countOpenAIImageOutputsFromSSEBody(), countOpenAIResponseImageOutputsFromJSONBytes() (+113 more)
 
 ### Community 84 - "content_moderation.go"
 Cohesion: 0.05
-Nodes (63): ContentModerationAPIKeyStatus, ContentModerationTestAuditResult, buildContentModerationTestAuditResult(), buildModerationTestInput(), cloneContentModerationConfig(), cloneContentModerationModelFilter(), cloneFloatMap(), cloneInt64Ptr() (+55 more)
+Nodes (62): ContentModerationAPIKeyStatus, ContentModerationTestAuditResult, buildContentModerationTestAuditResult(), buildModerationTestInput(), cloneContentModerationConfig(), cloneContentModerationModelFilter(), cloneFloatMap(), cloneInt64Ptr() (+54 more)
 
 ### Community 86 - "Success"
 Cohesion: 0.02
-Nodes (63): AccountUsageService, AntigravityExchangeCodeRequest, AntigravityGenerateAuthURLRequest, AntigravityOAuthHandler, AntigravityRefreshTokenRequest, BackupHandler, contentModerationAPIKeyTestRequest, contentModerationConfigRequest (+55 more)
+Nodes (42): BackupHandler, ChannelHandler, ContentModerationHandler, CreateErrorPassthroughRuleRequest, CreateTLSFingerprintProfileRequest, DataManagementHandler, ErrorPassthroughHandler, GrokOAuthHandler (+34 more)
 
 ### Community 87 - "EmailService"
-Cohesion: 0.15
-Nodes (7): Auth, NewEmailService(), EmailCache, EmailService, PasswordResetTokenData, SMTPConfig, VerificationCodeData
+Cohesion: 0.07
+Nodes (16): Auth, newOAuthEmailFlowAuthService(), TestFinalizeOAuthEmailAccount_SnapshotsPlatformQuotaDefaults(), TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(), TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(), TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFails(), TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(), TestRollbackOAuthEmailAccountCreationPropagatesDeleteError() (+8 more)
 
 ### Community 89 - "AnnouncementReadQuery"
 Cohesion: 0.09
@@ -8634,7 +8625,7 @@ Nodes (3): AnnouncementReadGroupBy, AnnouncementReadQuery, AnnouncementReadSelec
 
 ### Community 90 - "ProxiesView.vue"
 Cohesion: 0.02
-Nodes (103): ProxyProtocol, daysUntil(), proxyExpiryBadgeClass(), proxyExpiryLabelKey(), NOW, proxyExpiryBadge(), proxyExpiryText(), accountsLoading (+95 more)
+Nodes (104): { t }, ProxyProtocol, daysUntil(), proxyExpiryBadgeClass(), proxyExpiryLabelKey(), NOW, proxyExpiryBadge(), proxyExpiryText() (+96 more)
 
 ### Community 91 - "PendingAuthSessionQuery"
 Cohesion: 0.09
@@ -8645,8 +8636,8 @@ Cohesion: 0.09
 Nodes (3): ProxyGroupBy, ProxyQuery, ProxySelect
 
 ### Community 93 - "TLSFingerprintProfileMutation"
-Cohesion: 0.07
-Nodes (33): usageLogRepository, usageLogRepository, TestAppendUsageLogBillingModeQueryFilter(), TestAppendUsageLogBillingModeWhereCondition(), TestAppendUsageLogBillingModeWhereConditionWithAlias(), TestBuildRequestTypeFilterConditionLegacyFallback(), TestSafeDateFormat(), appendRawUsageLogModelQueryFilter() (+25 more)
+Cohesion: 0.06
+Nodes (40): BEGINNER_GUIDE_STEP_ORDER, BeginnerGuideProgressV1, BeginnerGuidePromptState, BeginnerGuideState, BeginnerGuideStepId, getBeginnerGuideState(), patchBeginnerGuideState(), PatchBeginnerGuideStateRequest (+32 more)
 
 ### Community 94 - "AuthIdentityChannelQuery"
 Cohesion: 0.09
@@ -8654,7 +8645,7 @@ Nodes (3): AuthIdentityChannelGroupBy, AuthIdentityChannelQuery, AuthIdentityCha
 
 ### Community 95 - "ops_error_logger.go"
 Cohesion: 0.04
-Nodes (88): cyberPolicyOpsErrorMeta, nestedOpsResponseWriter, opsCaptureWriter, opsErrorLogJob, parsedOpsError, TestExtractAttemptedKey(), TestKeyPrefix(), TestLooksLikeSystemKey() (+80 more)
+Nodes (80): nestedOpsResponseWriter, opsCaptureWriter, opsErrorLogJob, parsedOpsError, TestExtractAttemptedKey(), TestKeyPrefix(), TestLooksLikeSystemKey(), isBrokenPipe() (+72 more)
 
 ### Community 96 - "ChannelMonitorRequestTemplateQuery"
 Cohesion: 0.09
@@ -8666,31 +8657,35 @@ Nodes (3): UserAttributeDefinitionGroupBy, UserAttributeDefinitionQuery, UserAtt
 
 ### Community 98 - "payment_fulfillment_test.go"
 Cohesion: 0.03
-Nodes (68): PaymentService, ActionEQ(), OrderIDEQ(), OrderTypeIn(), affiliateRebateBaseAmount(), buildAffiliateRebateAuditClaimQuery(), expectedNotificationProviderKey(), hasPaymentSubscriptionOrderNote() (+60 more)
+Nodes (71): PaymentService, ActionEQ(), ActionIn(), OrderIDEQ(), OrderTypeIn(), affiliateRebateBaseAmount(), buildAffiliateRebateAuditClaimQuery(), expectedNotificationProviderKey() (+63 more)
 
 ### Community 99 - "clientFromContext"
 Cohesion: 0.03
 Nodes (55): userRepository, clientFromContext(), isUniqueConstraintViolation(), translatePersistenceError(), NewUserAPIKeyRouteRepository(), userAPIKeyRouteEntityToService(), defEntityToService(), getInt() (+47 more)
 
+### Community 101 - "extractApiErrorMessage"
+Cohesion: 0.07
+Nodes (25): channelRepository, channelRepository, createAccountStatsIntervalTx(), createAccountStatsModelPricingTx(), createAccountStatsPricingRuleTx(), replaceAccountStatsPricingRulesTx(), channelListOrderBy(), marshalFeaturesConfig() (+17 more)
+
 ### Community 103 - "LegacyPrintf"
 Cohesion: 0.03
-Nodes (60): CompositeLit, Expr, AutoPauseOnExpiredEQ(), OverloadUntilIsNil(), OverloadUntilLTE(), ParentAccountIDIsNil(), RateLimitResetAtGT(), RateLimitResetAtIsNil() (+52 more)
+Nodes (48): Expr, AutoPauseOnExpiredEQ(), OverloadUntilIsNil(), OverloadUntilLTE(), ParentAccountIDIsNil(), RateLimitResetAtGT(), RateLimitResetAtIsNil(), RateLimitResetAtLT() (+40 more)
 
 ### Community 104 - "antigravity_gateway_retry.go"
 Cohesion: 0.04
 Nodes (42): getPublicModelPricing(), stages, { t }, appStore, authStore, brandLogo, chatPath, copies (+34 more)
 
 ### Community 105 - "payment.ts"
-Cohesion: 0.06
-Nodes (35): activeClientTab, activeTab, AppleIcon, clientTabs, comment(), copiedIndex, { copyToClipboard: clipboardCopy }, currentFiles (+27 more)
+Cohesion: 0.07
+Nodes (32): activeClientTab, activeTab, AppleIcon, clientTabs, comment(), copiedIndex, { copyToClipboard: clipboardCopy }, currentFiles (+24 more)
 
 ### Community 106 - "openai_account_scheduler.go"
-Cohesion: 0.04
-Nodes (56): OpenAIGatewayService, RateLimitService, accountSupportsOpenAICapabilities(), applyOpenAIAdvancedSchedulerWeightOverrides(), buildOpenAIAccountLoadRequest(), BuildOpenAIAccountSchedulerScoreSnapshot(), buildOpenAIWeightedSelectionOrder(), calcLoadSkewByMoments() (+48 more)
+Cohesion: 0.06
+Nodes (42): OpenAIGatewayService, RateLimitService, accountSupportsOpenAICapabilities(), applyOpenAIAdvancedSchedulerWeightOverrides(), buildOpenAIAccountLoadRequest(), BuildOpenAIAccountSchedulerScoreSnapshot(), calcLoadSkewByMoments(), clamp01() (+34 more)
 
 ### Community 108 - "BatchImageGuideView.vue"
 Cohesion: 0.02
-Nodes (94): addPromptRow(), agentInstruction, allVisibleSelected, apiKeyFilterOptions, apiKeys, appStore, availableBatchImageModels, BatchImageDetailItem (+86 more)
+Nodes (83): addPromptRow(), agentInstruction, allVisibleSelected, apiKeyFilterOptions, apiKeys, appStore, availableBatchImageModels, BatchImageDetailItem (+75 more)
 
 ### Community 109 - "UserQuery"
 Cohesion: 0.05
@@ -8701,8 +8696,8 @@ Cohesion: 0.02
 Nodes (100): OpsDashboardOverview, OpsMetricThresholds, OpsRealtimeTrafficSummary, adminSettingsStore, availableRealtimeWindows, circleSize, circumference, cpuPercentClass (+92 more)
 
 ### Community 112 - "admin_service.go"
-Cohesion: 0.06
-Nodes (33): AdminBoundAuthIdentityChannel, AdminBindAuthIdentityChannelInput, AdminBindAuthIdentityInput, AdminBoundAuthIdentity, AdminBoundAuthIdentityChannel, AdminUpdateAPIKeyGroupIDResult, apiKeyEffectiveKeyTypeBulkUpdater, apiKeyGroupKeyTypeBulkUpdater (+25 more)
+Cohesion: 0.05
+Nodes (40): AdminBoundAuthIdentityChannel, adminServiceImpl, NewProxyExitInfoProber(), NewAdminService(), AdminBindAuthIdentityChannelInput, AdminBindAuthIdentityInput, AdminBoundAuthIdentity, AdminBoundAuthIdentityChannel (+32 more)
 
 ### Community 113 - "channelMonitorRepository"
 Cohesion: 0.05
@@ -8713,12 +8708,12 @@ Cohesion: 0.10
 Nodes (3): AccountGroupGroupBy, AccountGroupQuery, AccountGroupSelect
 
 ### Community 116 - "newOpenAIImageOutputCounter"
-Cohesion: 0.02
-Nodes (96): PublicOrderVerifyResult, baseAmount, canRefund(), creditedAmountSymbol, emit, feeAmount, formatDateTime(), paymentAmountSymbol (+88 more)
+Cohesion: 0.03
+Nodes (87): baseAmount, canRefund(), creditedAmountSymbol, emit, feeAmount, formatDateTime(), paymentAmountSymbol, props (+79 more)
 
 ### Community 117 - "openai_gateway_request_body.go"
 Cohesion: 0.02
-Nodes (112): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, resolveAndSetOpenAIChatGPTAccountHeaders(), TestResolveAndSetOpenAIChatGPTAccountHeaders(), SetOpenAIClientTransport(), TestGetAPIKeyIDFromContext(), TestExtractOpenAIReasoningEffortFromBody() (+104 more)
+Nodes (116): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, CompareVersions(), parseSemver(), TestCompareVersions(), resolveAndSetOpenAIChatGPTAccountHeaders(), TestResolveAndSetOpenAIChatGPTAccountHeaders() (+108 more)
 
 ### Community 118 - "BatchImageItemQuery"
 Cohesion: 0.10
@@ -8726,27 +8721,27 @@ Nodes (3): BatchImageItemGroupBy, BatchImageItemQuery, BatchImageItemSelect
 
 ### Community 120 - ".close"
 Cohesion: 0.05
-Nodes (14): StopOpsErrorLogWorkers(), accountPoolLoadLocked(), cloneOpenAIWSAcquireRequest(), cloneOpenAIWSAcquireRequestPtr(), closeOpenAIWSConns(), normalizeOpenAIWSBetaFeatures(), stringsTrim(), openAIWSAccountPool (+6 more)
+Nodes (14): accountPoolLoadLocked(), cloneHeader(), cloneOpenAIWSAcquireRequest(), cloneOpenAIWSAcquireRequestPtr(), normalizeOpenAIWSBetaFeatures(), stringsTrim(), openAIWSAccountPool, openAIWSAcquireRequest (+6 more)
 
 ### Community 121 - "openai_quota_service.go"
 Cohesion: 0.05
 Nodes (55): accountActionError, adoptAvatar, adoptDisplayName, adoptionRequired, applyAdoptionSuggestionState(), applyPendingAccountAction(), applyTotpChallenge(), appStore (+47 more)
 
 ### Community 122 - "ErrorFrom"
-Cohesion: 0.05
-Nodes (36): AffiliateHandler, AffiliateUserSummary, BatchSetRateRequest, opsResolveRequest, UpdateAffiliateUserRequest, OpsHandler, OpsHandler, OpsHandler (+28 more)
+Cohesion: 0.04
+Nodes (46): AffiliateHandler, AffiliateUserSummary, BatchSetRateRequest, contentModerationAPIKeyTestRequest, contentModerationConfigRequest, contentModerationHashRequest, opsAlertRuleValidatedInput, opsResolveRequest (+38 more)
 
 ### Community 123 - "scanSingleRow"
-Cohesion: 0.03
-Nodes (15): GroupRepoSuite, GroupRepoSuite, usageLogRepository, usageLogRepository, NewIdempotencyRepository(), scanSingleRow(), NewUserGroupRateRepository(), normalizePositiveInt64IDs() (+7 more)
+Cohesion: 0.02
+Nodes (46): GroupRepoSuite, GroupRepoSuite, usageLogRepository, usageLogRepository, usageLogRepository, usageLogRepository, Today(), scanSingleRow() (+38 more)
 
 ### Community 124 - ".Update"
 Cohesion: 0.04
 Nodes (3): UserSubscriptionCreateBulk, UserSubscriptionUpsertBulk, UserSubscriptionUpsertOne
 
 ### Community 125 - "account_codex_import.go"
-Cohesion: 0.06
-Nodes (66): codexAccountIndex, codexImportAccount, codexImportEntry, codexJWTClaims, codexJWTOpenAIClaims, codexSeenIdentity, CodexSessionImportItem, CodexSessionImportMessage (+58 more)
+Cohesion: 0.07
+Nodes (61): codexAccountIndex, codexImportAccount, codexImportEntry, codexJWTClaims, codexJWTOpenAIClaims, codexSeenIdentity, CodexSessionImportItem, CodexSessionImportMessage (+53 more)
 
 ### Community 127 - ".Update"
 Cohesion: 0.05
@@ -8762,31 +8757,31 @@ Nodes (80): emit, METHOD_ICONS, methodIcon(), methodSelectedClass(), PaymentMeth
 
 ### Community 130 - "KeysView.vue"
 Cohesion: 0.02
-Nodes (77): ApiKeyType, buildCcSwitchImportDeeplink(), CcSwitchClientType, CcSwitchImportConfig, CcSwitchImportDeeplinkInput, resolveCcSwitchImportConfig(), maskApiKey(), allColumns (+69 more)
+Nodes (94): emit, gOpts, pOpts, privacyOpts, props, sOpts, { t }, tOpts (+86 more)
 
 ### Community 133 - "GroupsView.vue"
 Cohesion: 0.02
-Nodes (99): accountSearchKeyword, accountSearchResults, accountSearchRunner, allColumns, ALWAYS_VISIBLE_COLUMNS, appStore, capacityMap, closeSortModal() (+91 more)
+Nodes (85): accountSearchKeyword, accountSearchResults, accountSearchRunner, allColumns, ALWAYS_VISIBLE_COLUMNS, appStore, capacityMap, columnDropdownRef (+77 more)
 
 ### Community 134 - "ent.go"
 Cohesion: 0.05
-Nodes (53): accountActionError, adoptAvatar, adoptDisplayName, adoptionRequired, applyAdoptionSuggestionState(), applyPendingAccountAction(), applyTotpChallenge(), appStore (+45 more)
+Nodes (52): accountActionError, adoptAvatar, adoptDisplayName, adoptionRequired, applyAdoptionSuggestionState(), applyPendingAccountAction(), applyTotpChallenge(), appStore (+44 more)
 
 ### Community 135 - "payment_order_result_test.go"
 Cohesion: 0.05
-Nodes (62): PaymentService, CreateOrderRequest, ResolveWxpayJSAPIAppID(), TestResolveWxpayJSAPIAppID(), GetBasePaymentType(), TooManyRequests(), calculateCreditedBalance(), normalizeBalanceRechargeMultiplier() (+54 more)
+Nodes (60): PaymentService, CreateOrderRequest, ResolveWxpayJSAPIAppID(), GetBasePaymentType(), TooManyRequests(), calculateCreditedBalance(), normalizeBalanceRechargeMultiplier(), normalizeSubscriptionUSDToCNYRate() (+52 more)
 
 ### Community 136 - ".handleStreamingResponse"
-Cohesion: 0.06
-Nodes (42): TestCaptureDisabledZeroCost(), buildErrorCaptureRecord(), CaptureRequestID(), captureResponseIfEnabled(), captureWithLimit(), extractCaptureColumns(), extractCaptureSessionID(), extractResponseColumns() (+34 more)
+Cohesion: 0.07
+Nodes (40): TestCaptureDisabledZeroCost(), buildErrorCaptureRecord(), CaptureRequestID(), captureResponseIfEnabled(), captureWithLimit(), extractCaptureColumns(), extractCaptureSessionID(), extractResponseColumns() (+32 more)
 
 ### Community 137 - "Select.vue"
 Cohesion: 0.02
 Nodes (94): AdminConfig, DatabaseConfig, getSetupStatus(), install(), InstallRequest, InstallResponse, RedisConfig, ServerConfig (+86 more)
 
 ### Community 139 - "AdminPaymentPlansView.vue"
-Cohesion: 0.35
-Nodes (8): UserService, validateBeginnerGuideProgress(), validateBeginnerGuideSteps(), BeginnerGuideProgress, BeginnerGuidePromptState, BeginnerGuideRepository, BeginnerGuideState, PatchBeginnerGuideStateRequest
+Cohesion: 0.28
+Nodes (10): Context, UserService, Time, validateBeginnerGuideProgress(), validateBeginnerGuideSteps(), BeginnerGuideProgress, BeginnerGuidePromptState, BeginnerGuideRepository (+2 more)
 
 ### Community 142 - ".Update"
 Cohesion: 0.04
@@ -8809,8 +8804,8 @@ Cohesion: 0.05
 Nodes (50): props, route, startLogin(), { t }, EmailOAuthProvider, hasMultipleProviders, hasProviders, props (+42 more)
 
 ### Community 148 - "AnnouncementReadMutation"
-Cohesion: 0.03
-Nodes (58): isTotp2FARequired(), getUTF8SequenceLength(), hasUnsafeLeadingEscapeChain(), hasURLControlCharacters(), inspectLeadingEscape(), isSafeInternalPath(), LeadingEscapeResult, readPercentEncodedByte() (+50 more)
+Cohesion: 0.04
+Nodes (54): isTotp2FARequired(), getUTF8SequenceLength(), hasUnsafeLeadingEscapeChain(), hasURLControlCharacters(), inspectLeadingEscape(), isSafeInternalPath(), LeadingEscapeResult, readPercentEncodedByte() (+46 more)
 
 ### Community 149 - "schedulerTestGatewayCache"
 Cohesion: 0.06
@@ -8821,12 +8816,12 @@ Cohesion: 0.13
 Nodes (15): CreateWebChatArtifactInput, CreateWebChatAttachmentInput, CreateWebChatConversationInput, CreateWebChatMessageInput, UpdateWebChatConversationInput, UpdateWebChatMessageInput, WebChatArtifact, WebChatAttachment (+7 more)
 
 ### Community 151 - ".parseUserUsageFilters"
-Cohesion: 0.09
-Nodes (23): BatchAPIKeysUsageRequest, dailyUsageAPIKeyRepoStub, dailyUsageHandlerResponse, dailyUsageRepoStub, UsageHandler, userGroupStat, userModelStat, userUsageFilters (+15 more)
+Cohesion: 0.07
+Nodes (30): BatchAPIKeysUsageRequest, dailyUsageAPIKeyRepoStub, dailyUsageHandlerResponse, dailyUsageRepoStub, RedeemHandler, RedeemRequest, RedeemResponse, SubscriptionProgressInfo (+22 more)
 
 ### Community 152 - "SubscriptionService"
-Cohesion: 0.06
-Nodes (30): appendSubscriptionNotes(), applyPlanSnapshot(), classifyActivePlanChange(), clearScheduledPlanChangeFields(), comparablePlanRanks(), detectAssignSemanticConflict(), hasPlanQuotaSnapshotInput(), hasPlanSnapshotInput() (+22 more)
+Cohesion: 0.09
+Nodes (8): TestMaybeInvalidateAssignmentCaches_DefersForOuterTransactionOwner(), normalizeExpiredWindows(), normalizeSubscriptionStatus(), startOfDay(), subCacheKey(), subscriptionActiveAt(), subscriptionCacheGroupID(), SubscriptionService
 
 ### Community 153 - "admin_service_rpm_status_test.go"
 Cohesion: 0.13
@@ -8837,12 +8832,12 @@ Cohesion: 0.13
 Nodes (17): decodeIkunPayResponseMap(), firstNonEmpty(), formValuesToStringMap(), ikunPayBasicResponseFromMap(), ikunPayCreateResponseFromMap(), ikunPayIsNotFoundMessage(), ikunPayProviderStatus(), ikunPayQueryResponseFromMap() (+9 more)
 
 ### Community 155 - "AccountTestService"
-Cohesion: 0.05
-Nodes (50): AccountTestService, AccountTestService, TestCreateGeminiTestPayload_ImageModel(), TestProcessGeminiStream_EmitsImageEvent(), TestIsKiroDirectModeAccount_RelayVsDirect(), TestMixedPool_AnthropicAccountNotKiroRouted(), TestWithHTTPUpstreamProfile_DefaultKeepsContext(), TestWithHTTPUpstreamProfile_OpenAI() (+42 more)
+Cohesion: 0.07
+Nodes (38): AccountTestService, AccountTestService, TestCreateGeminiTestPayload_ImageModel(), TestProcessGeminiStream_EmitsImageEvent(), TestWithHTTPUpstreamProfile_DefaultKeepsContext(), TestWithHTTPUpstreamProfile_OpenAI(), WithHTTPUpstreamProfile(), decideResponsesProbeSupport() (+30 more)
 
 ### Community 156 - "NewBatchImageWorker"
 Cohesion: 0.05
-Nodes (29): NewBatchImageWorker(), NewBatchImageWorkerOptionsFromConfig(), normalizeBatchImageWorkerOptions(), NewBatchImageWorkerRuntime(), ProvideBatchImageWorkerRuntime(), TestBatchImageWorkerRuntime_StartupDoesNotCreateRedisBatchImageKeys(), TestBatchImageWorkerRuntime_QueueDisabledDoesNotStart(), TestBatchImageWorkerRuntime_QueueEnabledStartsAndStops() (+21 more)
+Nodes (30): NewBatchImageWorker(), NewBatchImageWorkerOptionsFromConfig(), normalizeBatchImageWorkerOptions(), NewBatchImageWorkerRuntime(), ProvideBatchImageWorkerRuntime(), TestBatchImageWorkerRuntime_StartupDoesNotCreateRedisBatchImageKeys(), TestBatchImageWorkerRuntime_QueueDisabledDoesNotStart(), TestBatchImageWorkerRuntime_QueueEnabledStartsAndStops() (+22 more)
 
 ### Community 157 - "upstream_models.go"
 Cohesion: 0.11
@@ -8857,8 +8852,8 @@ Cohesion: 0.03
 Nodes (35): cloneEmailBindUser(), createEmailBindTestUser(), newAuthServiceForEmailBind(), newAuthServiceForEmailBindWithRefreshCache(), newEmailBindRefreshTokenCacheStub(), newEmailBindUserRepoStub(), TestAuthServiceBindEmailIdentity_AllowsAnyEmailWhenRegistrationSuffixWhitelistEmpty(), TestAuthServiceBindEmailIdentity_AllowsEmailInsideRegistrationSuffixWhitelist() (+27 more)
 
 ### Community 160 - "NewSettingService"
-Cohesion: 0.04
-Nodes (77): TestSettingHandler_GetSettings_InjectsAuthSourceDefaults(), TestSettingHandler_UpdateSettings_DoesNotPersistPartialSystemSettingsWhenAuthSourceDefaultsFail(), TestSettingHandler_UpdateSettings_DoesNotSolidifyImplicitOIDCSecurityDefaultsOnLegacyUpgrade(), TestSettingHandler_UpdateSettings_PaymentConfigPreservesVisibleMethodRouting(), TestSettingHandler_UpdateSettings_PersistsExplicitFalseOIDCCompatibilityFlags(), TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedScheduler(), TestSettingHandler_UpdateSettings_PreservesLegacyBlankPaymentVisibleMethodSource(), TestSettingHandler_UpdateSettings_PreservesOmittedAuthSourceDefaults() (+69 more)
+Cohesion: 0.03
+Nodes (81): TestAdminService_CreateUser_AssignsDefaultSubscriptions(), TestAdminService_CreateUser_CreateError(), TestAdminService_CreateUser_ExplicitZeroBalanceOverridesDefault(), TestAdminService_CreateUser_UsesDefaultBalanceWhenBalanceOmitted(), TestGatewayClientDatelineNormalization_HelperNoRewrite(), TestGatewayClientDatelineNormalization_LeavesUserProseUntouched(), TestGatewayClientDatelineNormalization_Scope(), TestResolveBedrockBetaTokensForRequest_BlocksBodyAutoInjectedComputerUse() (+73 more)
 
 ### Community 161 - "ops.ts"
 Cohesion: 0.02
@@ -8869,8 +8864,8 @@ Cohesion: 0.02
 Nodes (88): AccountUpstreamUserAgent, AccountUpstreamUserAgentsResponse, BatchOperationResult, BatchTodayStatsResponse, CRSPreviewAccount, getUpstreamUserAgents(), OpenAIAdditionalRateLimit, OpenAIQuotaResetCredit (+80 more)
 
 ### Community 164 - ".GetAccessToken"
-Cohesion: 0.11
-Nodes (35): ClaudeTokenCache, NewClaudeTokenProvider(), newClaudeTokenCacheStub(), TestClaudeTokenProvider_AccountRepoGetError(), TestClaudeTokenProvider_AccountUpdateError(), TestClaudeTokenProvider_CacheGetError(), TestClaudeTokenProvider_CacheHit(), TestClaudeTokenProvider_CacheMiss_FromCredentials() (+27 more)
+Cohesion: 0.07
+Nodes (43): ClaudeTokenCache, GrokTokenCache, NewClaudeTokenProvider(), newClaudeTokenCacheStub(), TestClaudeTokenProvider_AccountRepoGetError(), TestClaudeTokenProvider_AccountUpdateError(), TestClaudeTokenProvider_CacheGetError(), TestClaudeTokenProvider_CacheHit() (+35 more)
 
 ### Community 165 - "payment_resume_service_test.go"
 Cohesion: 0.05
@@ -8886,7 +8881,7 @@ Nodes (158): baseImageRow, DataTableStub, DataTableStubWithUser, ipGeoMocks, mes
 
 ### Community 168 - "GroupQuery"
 Cohesion: 0.07
-Nodes (4): GroupGroupBy, GroupQuery, GroupSelect, withInterceptors()
+Nodes (5): GroupGroupBy, GroupQuery, GroupSelect, withInterceptors(), V
 
 ### Community 169 - "group.go"
 Cohesion: 0.04
@@ -8897,8 +8892,8 @@ Cohesion: 0.06
 Nodes (25): stubAntigravityAccountRepo, setModelRateLimitByModelName(), buildGeminiRateLimitBody(), TestAccountIsSchedulableForModel_AntigravityRateLimits(), TestAntigravityRetryLoop_NoURLFallback_UsesConfiguredBaseURL(), TestAntigravityRetryLoop_PreCheck_SwitchesWhenRateLimited(), TestAntigravityRetryLoop_PreCheck_SwitchesWhenRemainingLong(), TestHandleUpstreamError_429_NonModelRateLimit() (+17 more)
 
 ### Community 171 - "adminServiceImpl"
-Cohesion: 0.09
-Nodes (3): adminServiceImpl, countAffiliateBalanceHistory(), packUserAPIKeyRoutes()
+Cohesion: 0.06
+Nodes (19): adminServiceImpl, TestMergeBalanceHistoryCodesIncludesAffiliateTransfersByDefault(), TestMergeBalanceHistoryCodesPaginatesAfterCombiningSources(), adminAuthIdentityProviderKeyRank(), buildAdminBoundAuthIdentity(), canonicalAdminAuthIdentityProviderKey(), cloneAdminAuthIdentityMetadata(), compatibleAdminAuthIdentityProviderKeys() (+11 more)
 
 ### Community 172 - "OpsDashboard.vue"
 Cohesion: 0.03
@@ -8910,35 +8905,35 @@ Nodes (92): ByAllowedGroups(), ByAllowedGroupsCount(), ByAnnouncementReads(), By
 
 ### Community 174 - ".describeGrokComposerImage"
 Cohesion: 0.04
-Nodes (73): OpenAIGatewayService, OpenAIGatewayService, firstHeader(), ObserveQuotaHeaders(), parseInt64Ptr(), ParseQuotaHeaders(), parseQuotaWindow(), parseResetHeader() (+65 more)
+Nodes (77): OpenAIGatewayService, OpenAIGatewayService, OpenAIGatewayService, firstHeader(), ObserveQuotaHeaders(), parseInt64Ptr(), ParseQuotaHeaders(), parseQuotaWindow() (+69 more)
 
 ### Community 175 - ".GetAccessToken"
-Cohesion: 0.04
-Nodes (71): TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(), buildCodexCommonHeaders(), buildCodexSparkWindowExtraUpdates(), firstNonEmptyResetCreditPayload(), generateRedeemRequestID(), mapUpstreamStatus(), NewOpenAIQuotaService(), parseOpenAIRateLimitResetCreditDetails() (+63 more)
+Cohesion: 0.06
+Nodes (54): TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(), buildCodexSparkWindowExtraUpdates(), NewOpenAIQuotaService(), newQuotaRedirectingFactory(), TestBuildCodexSparkWindowExtraUpdates_ContainsCodexKeys(), TestBuildCodexSparkWindowExtraUpdates_NilUsage(), TestBuildCodexSparkWindowExtraUpdates_NoBengalfox(), TestPrepareUpstreamCallShadowResolve() (+46 more)
 
 ### Community 176 - "oauth_refresh_api_test.go"
-Cohesion: 0.05
-Nodes (37): BuildClaudeAccountCredentials(), isInvalidGrantError(), MergeCredentials(), NewOAuthRefreshAPI(), TestBuildClaudeAccountCredentials_Full(), TestBuildClaudeAccountCredentials_Minimal(), TestIsInvalidGrantError(), TestMergeCredentials_Basic() (+29 more)
+Cohesion: 0.04
+Nodes (48): BuildClaudeAccountCredentials(), isInvalidGrantError(), MergeCredentials(), NewOAuthRefreshAPI(), TestAntigravityProviderRefreshPolicy(), TestBuildClaudeAccountCredentials_Full(), TestBuildClaudeAccountCredentials_Minimal(), TestClaudeProviderRefreshPolicy() (+40 more)
 
 ### Community 178 - "config.go"
 Cohesion: 0.03
-Nodes (85): APIKeyAuthCacheConfig, BatchImageConfig, BillingConfig, CaptureClickHouseConfig, CircuitBreakerConfig, ConcurrencyConfig, Config, CORSConfig (+77 more)
+Nodes (86): APIKeyAuthCacheConfig, BatchImageConfig, BillingConfig, CaptureClickHouseConfig, CircuitBreakerConfig, ConcurrencyConfig, Config, CORSConfig (+78 more)
 
 ### Community 179 - "batch_image_provider_vertex.go"
-Cohesion: 0.06
-Nodes (41): batchImageDefaultHTTPClient(), NewGeminiBatchHTTPClient(), BuildVertexBatchPredictionJobsEndpoint(), buildVertexManagedGCSPrefix(), doVertexDecodeJSON(), doVertexJSON(), doVertexNoBody(), mapVertexBatchState() (+33 more)
+Cohesion: 0.07
+Nodes (41): generateAPIKey(), batchImageProviderJobName(), batchImageProviderOutputRef(), batchImageDefaultHTTPClient(), buildVertexManagedGCSPrefix(), doVertexDecodeJSON(), doVertexJSON(), doVertexNoBody() (+33 more)
 
 ### Community 180 - "testPtrFloat64"
 Cohesion: 0.06
 Nodes (60): TestValidatePricingBillingMode(), TestChannelClone(), TestGetIntervalForContext(), TestGetIntervalForContext_NoMatch(), TestGetModelPricing(), TestGetModelPricing_ReturnsCopy(), TestGetModelPricingByPlatform(), TestGetTierByLabel() (+52 more)
 
 ### Community 183 - "DefaultBackgroundRefreshPolicy"
-Cohesion: 0.07
-Nodes (26): resetGatewayHotpathStatsForTest(), TestGetAvailableModels_ErrorAndGlobalListBranches(), TestGetAvailableModels_UsesShortCacheAndSupportsInvalidation(), TestGetUserGroupRateMultiplier_CacheHitAndNilRepo(), TestGetUserGroupRateMultiplier_FallbackOnRepoError(), TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(), TestSelectAccountWithLoadAwareness_StickyReadReuse(), TestWithWindowCostPrefetch_AllHitNoSQL() (+18 more)
+Cohesion: 0.09
+Nodes (19): resetGatewayHotpathStatsForTest(), TestGetAvailableModels_ErrorAndGlobalListBranches(), TestGetAvailableModels_UsesShortCacheAndSupportsInvalidation(), TestGetUserGroupRateMultiplier_CacheHitAndNilRepo(), TestGetUserGroupRateMultiplier_FallbackOnRepoError(), TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(), TestSelectAccountWithLoadAwareness_StickyReadReuse(), TestWithWindowCostPrefetch_AllHitNoSQL() (+11 more)
 
 ### Community 184 - "RateLimitService"
-Cohesion: 0.08
-Nodes (46): assertAnthropicResult(), makeHeader(), TestCalculateAnthropic429ResetTime_BothExceeded(), TestCalculateAnthropic429ResetTime_NeitherExceeded_UsesShorter(), TestCalculateAnthropic429ResetTime_NoHeaders(), TestCalculateAnthropic429ResetTime_NoPerWindowHeaders(), TestCalculateAnthropic429ResetTime_Only5hExceeded(), TestCalculateAnthropic429ResetTime_Only5hResetHeader() (+38 more)
+Cohesion: 0.07
+Nodes (51): assertAnthropicResult(), makeHeader(), TestCalculateAnthropic429ResetTime_BothExceeded(), TestCalculateAnthropic429ResetTime_NeitherExceeded_UsesShorter(), TestCalculateAnthropic429ResetTime_NoHeaders(), TestCalculateAnthropic429ResetTime_NoPerWindowHeaders(), TestCalculateAnthropic429ResetTime_Only5hExceeded(), TestCalculateAnthropic429ResetTime_Only5hResetHeader() (+43 more)
 
 ### Community 185 - "userSubRepoNoop"
 Cohesion: 0.05
@@ -8949,12 +8944,12 @@ Cohesion: 0.03
 Nodes (71): SimpleUser, messages, mockAccountsList, mockGetModelStats, mockGroupsList, mockSearchApiKeys, mockSearchUsers, accountKeyword (+63 more)
 
 ### Community 188 - "openai_gateway_grok_test.go"
-Cohesion: 0.03
-Nodes (81): GrokExchangeCodeRequest, GrokGenerateAuthURLRequest, grokQuotaHandlerAccountRepo, grokQuotaHandlerUpstream, GrokRefreshTokenRequest, GrokTokenCache, NewGrokOAuthHandler(), grokQuotaSnapshotFromExtra() (+73 more)
+Cohesion: 0.29
+Nodes (8): grokQuotaSnapshotFromExtra(), NewGrokQuotaFetcher(), grokIntPtrForTest(), TestGrokQuotaFetcherBuildUsageInfoFromNoHeadersProbe(), TestGrokQuotaFetcherBuildUsageInfoFromSnapshot(), TestGrokQuotaFetcherBuildUsageInfoUnknownUntilFirstSnapshot(), TestGrokQuotaFetcherClassifiesForbiddenAndReauth(), GrokQuotaFetcher
 
 ### Community 189 - "openai_compat_model_test.go"
 Cohesion: 0.04
-Nodes (46): applyOpenAICompatModelNormalization(), NormalizeOpenAICompatRequestedModel(), openAIReasoningEffortToClaudeOutputEffort(), splitOpenAICompatReasoningModel(), TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(), TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErrorWithoutFailover(), TestForwardAsChatCompletions_BufferedTerminalWithoutUpstreamCloseReturns(), TestForwardAsChatCompletions_EventNamedTerminalWithoutUpstreamCloseReturns() (+38 more)
+Nodes (47): applyOpenAICompatModelNormalization(), NormalizeOpenAICompatRequestedModel(), openAIReasoningEffortToClaudeOutputEffort(), splitOpenAICompatReasoningModel(), TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(), TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErrorWithoutFailover(), TestForwardAsChatCompletions_BufferedTerminalWithoutUpstreamCloseReturns(), TestForwardAsChatCompletions_EventNamedTerminalWithoutUpstreamCloseReturns() (+39 more)
 
 ### Community 190 - "WebChatConversationMutation"
 Cohesion: 0.09
@@ -8965,8 +8960,8 @@ Cohesion: 0.05
 Nodes (5): UserAPIKeyRouteCreate, UserAPIKeyRouteCreateBulk, UserAPIKeyRouteUpsert, UserAPIKeyRouteUpsertBulk, UserAPIKeyRouteUpsertOne
 
 ### Community 194 - "UserAttributeValueCreate"
-Cohesion: 0.07
-Nodes (41): OpenAIGatewayService, applyOpenAIImagesDefaults(), buildOpenAIImagesURL(), classifyOpenAIImagesCapability(), cloneHTTPHeader(), cloneMultipartHeader(), collectOpenAIImageInlineAssets(), collectOpenAIImagePointers() (+33 more)
+Cohesion: 0.03
+Nodes (68): OpenAIGatewayService, openAIUpstreamErrorBodyReadLimitForConfig(), applyOpenAIImagesDefaults(), buildOpenAIImagesURL(), classifyOpenAIImagesCapability(), cloneHTTPHeader(), cloneMultipartHeader(), collectOpenAIImageInlineAssets() (+60 more)
 
 ### Community 195 - "ChannelMonitorHistoryClient"
 Cohesion: 0.08
@@ -8986,15 +8981,15 @@ Nodes (54): getAntigravityDefaultModelMapping(), getKiroDefaultModelMapping(), s
 
 ### Community 202 - "Group"
 Cohesion: 0.05
-Nodes (24): adminServiceImpl, Group, Group, normalizeGroupModelsListConfig(), TestIsKiroGroup(), claudeMessagesDispatchFamily(), normalizeOpenAIMessagesDispatchMappedModel(), normalizeOpenAIMessagesDispatchModelConfig() (+16 more)
+Nodes (25): adminServiceImpl, Group, Group, matchModelWhitelist(), normalizeGroupModelsListConfig(), TestValidatePeakRateConfig(), claudeMessagesDispatchFamily(), normalizeOpenAIMessagesDispatchMappedModel() (+17 more)
 
 ### Community 203 - "APIKey"
-Cohesion: 0.06
-Nodes (43): clearAuthToken(), completeLinuxDoOAuthRegistration(), completeOIDCOAuthRegistration(), completePendingOAuthBindLogin(), completeWeChatOAuthRegistration(), createPendingDingTalkOAuthAccount(), createPendingLinuxDoOAuthAccount(), createPendingOAuthAccount() (+35 more)
+Cohesion: 0.05
+Nodes (57): clearAuthToken(), completeLinuxDoOAuthRegistration(), completeOIDCOAuthRegistration(), completePendingOAuthBindLogin(), completeWeChatOAuthRegistration(), createPendingDingTalkOAuthAccount(), createPendingLinuxDoOAuthAccount(), createPendingOAuthAccount() (+49 more)
 
 ### Community 204 - "DashboardHandler"
-Cohesion: 0.08
-Nodes (28): TestIsValidModelSource(), TestNormalizeModelSource(), IsValidModelSource(), NormalizeModelSource(), PlatformDashboardStats, AccountUsageHistory, AccountUsageStatsResponse, AccountUsageSummary (+20 more)
+Cohesion: 0.10
+Nodes (26): TestDetectAssignSemanticConflictCases(), TestDetectAssignSemanticConflictDetectsPlanSnapshotMismatch(), TestNormalizeAssignValidityDays(), appendSubscriptionNotes(), applyPlanSnapshot(), classifyActivePlanChange(), clearScheduledPlanChangeFields(), comparablePlanRanks() (+18 more)
 
 ### Community 206 - "UserAPIKeyRouteClient"
 Cohesion: 0.08
@@ -9005,68 +9000,64 @@ Cohesion: 0.06
 Nodes (5): PaymentAuditLogCreate, PaymentAuditLogCreateBulk, PaymentAuditLogUpsert, PaymentAuditLogUpsertBulk, PaymentAuditLogUpsertOne
 
 ### Community 209 - "AuthIdentity"
-Cohesion: 0.03
-Nodes (80): appStore, cancelling, cleanup(), countdownDisplay, creditedAmountSymbol, emit, formatGatewayAmount(), handleDone() (+72 more)
+Cohesion: 0.05
+Nodes (43): renderQR(), usePaymentStore, appStore, cancelling, cleanup(), countdownDisplay, expired, getLogoForType() (+35 more)
 
 ### Community 210 - "batch_image_public.go"
-Cohesion: 0.07
-Nodes (39): BatchImageSubmitItem, batchImageGCSRef(), BatchImageJobToPublic(), batchImageModelsFromAccountMapping(), batchImageProviderPlatform(), batchImageProviderSelectionOrder(), batchImageProviderSubmitPublicError(), batchImageProviderSubmitRecordCode() (+31 more)
+Cohesion: 0.06
+Nodes (43): BatchImageSubmitItem, isBatchImageProcessorDoneStatus(), batchImageGCSRef(), batchImageItemErrorSource(), BatchImageItemToPublic(), BatchImageJobToPublic(), batchImageModelsFromAccountMapping(), batchImageProviderPlatform() (+35 more)
 
 ### Community 211 - "PaymentConfigService"
-Cohesion: 0.08
-Nodes (29): PaymentConfigService, ProviderInstanceIDEQ(), easyPayCustomMethodTypeConflictsWithBuiltin(), hasPendingOrderProtectedConfigChange(), isSensitiveProviderConfigField(), providerConfigFieldValue(), boolPtrValue(), createPendingProviderConfigOrder() (+21 more)
-
-### Community 215 - "gateway_tool_rewrite_test.go"
-Cohesion: 0.05
-Nodes (36): NewRegistry(), TestRegistryConcurrentAccess(), TestRegistryGetProviderByKey(), TestRegistryGetProviderByKeyNotFound(), TestRegistryGetProviderKeyKnownType(), TestRegistryGetProviderKeyUnknownType(), TestRegistryGetProviderNotFound(), TestRegistryOverwriteExisting() (+28 more)
+Cohesion: 0.13
+Nodes (14): PaymentConfigService, ProviderInstanceIDEQ(), easyPayCustomMethodTypeConflictsWithBuiltin(), hasPendingOrderProtectedConfigChange(), isSensitiveProviderConfigField(), providerConfigFieldValue(), TestIkunPayProtectedConfigFields(), TestValidateEasyPayCustomMethods() (+6 more)
 
 ### Community 217 - "ConcurrencyCacheSuite"
 Cohesion: 0.45
 Nodes (10): assertChatInvariants(), convertGolden(), TestGolden_DanglingToolCallDropped(), TestGolden_MessageBetweenToolCallAndOutput(), TestGolden_ParallelToolCalls(), TestGolden_PartialParallelDropsUnansweredCall(), TestGolden_SingleToolCall(), TestGolden_UnknownItemBetweenToolCallAndOutput() (+2 more)
 
 ### Community 218 - "WebChatConversationClient"
-Cohesion: 0.03
-Nodes (90): t(), handleCancel(), appStore, cancelling, creditedAmountSymbol, emit, error, handleCancel() (+82 more)
+Cohesion: 0.04
+Nodes (81): t(), handleCancel(), reopenPopup(), handleCancel(), reopenPopup(), getPaymentPopupFeatures(), appStore, cancelling (+73 more)
 
 ### Community 219 - "websearch.go"
 Cohesion: 0.06
-Nodes (50): GatewayService, BuildMcpEndpoint(), buildSearchResultContent(), ExtractSearchQuery(), extractSearchText(), ExtractWebSearchToolUseFromResponse(), formatToolResultText(), GenerateToolUseID() (+42 more)
+Nodes (51): GatewayService, BuildMcpEndpoint(), buildSearchResultContent(), ExtractSearchQuery(), extractSearchText(), ExtractWebSearchToolUseFromResponse(), formatToolResultText(), GenerateToolUseID() (+43 more)
 
 ### Community 220 - "httpUpstreamService"
-Cohesion: 0.08
-Nodes (25): Closer, BenchmarkHTTPUpstreamProxyClient(), applyGrokCLIProxyHeaders(), buildCacheKey(), buildPoolKey(), buildUpstreamTransport(), buildUpstreamTransportWithTLSFingerprint(), defaultPoolSettings() (+17 more)
+Cohesion: 0.09
+Nodes (24): Closer, BenchmarkHTTPUpstreamProxyClient(), applyGrokCLIProxyHeaders(), buildCacheKey(), buildPoolKey(), buildUpstreamTransport(), defaultPoolSettings(), isHTTPProxyKey() (+16 more)
 
 ### Community 221 - "BillingCacheService"
-Cohesion: 0.06
-Nodes (15): ProtocolEQ(), paginateSlice(), paginationResultFromTotal(), applyProxyEntityToService(), NewProxyRepository(), newProxyRepositoryWithSQL(), proxyEntityToService(), proxyListOrder() (+7 more)
+Cohesion: 0.12
+Nodes (7): ProtocolEQ(), applyProxyEntityToService(), NewProxyRepository(), newProxyRepositoryWithSQL(), proxyEntityToService(), proxyListOrder(), proxyRepository
 
 ### Community 223 - "batch_image_download.go"
 Cohesion: 0.09
-Nodes (41): BatchImageContentDispositionAttachment(), BatchImageSafeDownloadFilename(), batchImageZipErrorsFromItems(), batchImageZipImageFilename(), extractBatchImageInlineImages(), ExtractBatchImagePartsFromResultLine(), findBatchImageLineImages(), NewBatchImageDownloadService() (+33 more)
+Nodes (39): BatchImageSafeDownloadFilename(), batchImageZipErrorsFromItems(), batchImageZipImageFilename(), extractBatchImageInlineImages(), ExtractBatchImagePartsFromResultLine(), findBatchImageLineImages(), NewBatchImageDownloadService(), sanitizeBatchImageFilenameBase() (+31 more)
 
 ### Community 224 - "openai_compact_stream_bridge_test.go"
-Cohesion: 0.07
-Nodes (47): buildOpenAICompactSSEPayload(), MarkOpenAICompactClientStream(), openAICompactClientWantsStream(), openAICompactUsageParsableByCodex(), newCompactBridgeTestContext(), newCompactBridgeTestService(), parseCompactBridgeSSE(), TestBuildOpenAICompactSSEPayload_DropsMalformedUsage() (+39 more)
+Cohesion: 0.05
+Nodes (59): buildOpenAICompactSSEPayload(), MarkOpenAICompactClientStream(), OpenAICompactClientStreamKeyForTest(), openAICompactClientWantsStream(), openAICompactUsageParsableByCodex(), newCompactBridgeTestContext(), newCompactBridgeTestService(), parseCompactBridgeSSE() (+51 more)
 
 ### Community 225 - "isKiroDirectModeAccount"
-Cohesion: 0.10
-Nodes (24): AccountUsageService, TestBuildKiroDegradedUsage_ClassifiesOverageExhausted(), TestBuildKiroDegradedUsage_ClassifiesProfileError(), kiroRuntimeStateSnapshot(), accountProxyURL(), buildKiroDegradedUsage(), cloneUsageInfo(), isLoopbackEndpoint() (+16 more)
+Cohesion: 0.11
+Nodes (22): AccountUsageService, kiroRuntimeStateSnapshot(), accountProxyURL(), cloneUsageInfo(), isLoopbackEndpoint(), kiroCacheTTL(), kiroCurrencySymbol(), mapKiroUsageToInfo() (+14 more)
 
 ### Community 226 - "GetAuthSubjectFromContext"
-Cohesion: 0.14
+Cohesion: 0.15
 Nodes (11): AnnouncementHandler, CreateAnnouncementRequest, UpdateAnnouncementRequest, Announcement, UserAnnouncement, AnnouncementHandler, NewAnnouncementHandler(), NewAnnouncementHandler() (+3 more)
 
 ### Community 227 - "usageLogRepository"
-Cohesion: 0.06
-Nodes (37): opsRepository, AntigravityGatewayService, AntigravityGatewayService, GatewayService, latencyHistogramRangeCaseExpr(), latencyHistogramRangeOrderCaseExpr(), logPrefix(), getOrCreateGeminiParts() (+29 more)
+Cohesion: 0.07
+Nodes (36): appStore, cancelling, cleanup(), countdownDisplay, creditedAmountSymbol, emit, handleDone(), i18n (+28 more)
 
 ### Community 228 - "token_refresh_service_test.go"
 Cohesion: 0.06
 Nodes (32): NewAntigravityTokenRefresher(), NewTokenRefreshService(), buildPathAService(), TestAntigravityTokenRefresher_NeedsRefresh_ForceRefreshMarker(), TestAntigravityTokenRefresher_NeedsRefresh_NormalExpiryRulesUnchanged(), TestPathA_AlreadyRefreshed(), TestPathA_DBUpdateFailed(), TestPathA_LockHeld() (+24 more)
 
 ### Community 229 - "ipGeoLookup.ts"
-Cohesion: 0.03
-Nodes (85): accentClass, actionIntent, actionLabel, activeGenericSubscription, borderClass, btnClass, buttonText, discountClass (+77 more)
+Cohesion: 0.04
+Nodes (62): accentClass, actionIntent, actionLabel, activeGenericSubscription, borderClass, btnClass, buttonText, discountClass (+54 more)
 
 ### Community 231 - "AccountGroupCreate"
 Cohesion: 0.06
@@ -9078,19 +9069,19 @@ Nodes (5): AnnouncementReadCreate, AnnouncementReadCreateBulk, AnnouncementReadU
 
 ### Community 233 - "IdentityAdoptionDecisionMutation"
 Cohesion: 0.03
-Nodes (54): AdminApiKeyStatus, appendAuthSourceDefaultsToUpdateRequest(), AUTH_SOURCE_TYPES, AuthSourceDefaultsState, AuthSourceDefaultsValue, AuthSourceType, BetaPolicyRule, BetaPolicySettings (+46 more)
+Nodes (46): AdminApiKeyStatus, AuthSourceDefaultsState, AuthSourceDefaultsValue, AuthSourceType, BetaPolicyRule, BetaPolicySettings, DefaultSubscriptionSetting, EmailTemplateDetail (+38 more)
 
 ### Community 234 - "SupportedModelChip.vue"
 Cohesion: 0.02
-Nodes (59): AccountGroupClient, accountgroupOption, accountOption, authidentityOption, BatchImageJobClient, batchimagejobOption, ChannelMonitorDailyRollupClient, channelmonitordailyrollupOption (+51 more)
+Nodes (45): accountgroupOption, accountOption, BatchImageJobClient, BatchImageJobDelete, BatchImageJobDeleteOne, batchimagejobOption, IdentityAdoptionDecisionClient, identityadoptiondecisionOption (+37 more)
 
 ### Community 236 - "gateway_usage_billing.go"
 Cohesion: 0.07
-Nodes (44): apiKeyAuthCacheInvalidator, GatewayService, TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitFallsBackToCoveringBalance(), TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithoutOptInDoesNotFallbackToBalance(), TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithZeroBalanceDoesNotBillSubscription(), TestBuildUsageBillingCommand_AttemptedSubscriptionEnablesFallbackDespiteStaleLowBalance(), TestBuildUsageBillingCommand_DisabledFallbackBuildsGuardedSubscriptionWhenActualCostExceedsQuota(), TestBuildUsageBillingCommand_KiroOAuthUpdatesAccountQuota() (+36 more)
+Nodes (45): apiKeyAuthCacheInvalidator, GatewayService, TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitFallsBackToCoveringBalance(), TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithoutOptInDoesNotFallbackToBalance(), TestBuildUsageBillingCommand_AbsentEffectiveSevenDayLimitWithZeroBalanceDoesNotBillSubscription(), TestBuildUsageBillingCommand_AttemptedSubscriptionEnablesFallbackDespiteStaleLowBalance(), TestBuildUsageBillingCommand_DisabledFallbackBuildsGuardedSubscriptionWhenActualCostExceedsQuota(), TestBuildUsageBillingCommand_KiroOAuthUpdatesAccountQuota() (+37 more)
 
 ### Community 238 - "EasyPay"
-Cohesion: 0.08
-Nodes (30): easyPayResponseCodeIsSuccess(), easyPaySign(), easyPayVerifySign(), isEasyPayRefundOrderNotFound(), NewEasyPay(), normalizeEasyPayAPIBase(), parseEasyPayRefundResponse(), TestEasyPayQueryOrderStatusMapping() (+22 more)
+Cohesion: 0.14
+Nodes (10): easyPayResponseCodeIsSuccess(), isEasyPayRefundOrderNotFound(), normalizeEasyPayAPIBase(), parseEasyPayRefundResponse(), TestNormalizeEasyPayAPIBase(), summarizeEasyPayResponse(), trimEasyPayEndpointPath(), EasyPay (+2 more)
 
 ### Community 239 - "BatchImageItemClient"
 Cohesion: 0.08
@@ -9098,11 +9089,11 @@ Nodes (7): BatchImageItemClient, BatchImageItemDelete, BatchImageItemDeleteOne, 
 
 ### Community 240 - "web_chat_capabilities.go"
 Cohesion: 0.11
-Nodes (33): containsFold(), DefaultWebChatCatalogModels(), NewWebChatCatalogCapabilityResolver(), TestResolveWebChatCatalog_OpenAIImageModelDoesNotInheritGPTThinking(), TestWebChatCapabilities_AllowsTextAcrossProviders(), TestWebChatCapabilities_BlocksImageWhenTargetDoesNotSupportImage(), TestWebChatCapabilities_DefaultCatalogDerivedFromPublicRoutableModels(), TestWebChatCapabilities_DerivesAnthropicWebSearchForTextModel() (+25 more)
+Nodes (34): validateWebChatAdapterContext(), containsFold(), DefaultWebChatCatalogModels(), NewWebChatCatalogCapabilityResolver(), TestResolveWebChatCatalog_OpenAIImageModelDoesNotInheritGPTThinking(), TestWebChatCapabilities_AllowsTextAcrossProviders(), TestWebChatCapabilities_BlocksImageWhenTargetDoesNotSupportImage(), TestWebChatCapabilities_DefaultCatalogDerivedFromPublicRoutableModels() (+26 more)
 
 ### Community 241 - "ErrorPassthroughRuleClient"
-Cohesion: 0.18
-Nodes (9): defaultWeChatConnectScopeForMode(), DefaultWeChatConnectScopesForMode(), mergeWeChatConnectCapabilitySettings(), normalizeWeChatConnectModeSetting(), normalizeWeChatConnectScopeSetting(), normalizeWeChatConnectStoredMode(), parseWeChatConnectCapabilitySettings(), firstNonEmpty() (+1 more)
+Cohesion: 0.05
+Nodes (38): Acceptance Criteria, Accessibility and Responsive Requirements, Anonymous progress, Authenticated dashboard entry, Authenticated progress, Backend API, Backend State Model, Backend tests (+30 more)
 
 ### Community 242 - "types.go"
 Cohesion: 0.06
@@ -9111,10 +9102,6 @@ Nodes (43): AnthropicCacheControl, AnthropicContentBlock, AnthropicDelta, Anthro
 ### Community 245 - "load_balancer.go"
 Cohesion: 0.08
 Nodes (36): PaymentService, PaidAtGTE(), ProviderInstanceIDIn(), filterByLimits(), getInstanceChannelLimits(), InstanceSupportsType(), legacyVisibleMethodAlias(), NewDefaultLoadBalancer() (+28 more)
-
-### Community 246 - "where.go"
-Cohesion: 0.10
-Nodes (3): isOfficialGrokAPIBaseURL(), isOfficialGrokBaseURL(), isOfficialGrokCLIBaseURL()
 
 ### Community 248 - "account_handler_available_models_test.go"
 Cohesion: 0.19
@@ -9125,16 +9112,16 @@ Cohesion: 0.08
 Nodes (3): AccountGroupBy, AccountQuery, AccountSelect
 
 ### Community 250 - "UsageCleanupTaskClient"
-Cohesion: 0.09
-Nodes (49): AllowUnsafeHighConcurrency(), AllowUnsafeURLOverrides(), base64URLEncode(), BuildAuthorizationURL(), BuildChatCompletionsURL(), BuildImagesEditsURL(), BuildImagesGenerationsURL(), BuildVideosEditsURL() (+41 more)
+Cohesion: 0.08
+Nodes (53): AllowUnsafeHighConcurrency(), AllowUnsafeURLOverrides(), base64URLEncode(), BuildAuthorizationURL(), BuildChatCompletionsURL(), BuildImagesEditsURL(), BuildImagesGenerationsURL(), BuildVideosEditsURL() (+45 more)
 
 ### Community 251 - "userRepository"
 Cohesion: 0.11
-Nodes (44): emitRelayTrace(), emitTurnComplete(), enrichResult(), TestEmitTurnCompleteCoverage(), TestHelperFunctionsCoverage(), TestIsDisconnectErrorCoverage_CloseStatusesAndMessageBranches(), TestIsTokenEventCoverageBranches(), TestObserveUpstreamMessage_ResponseIDFallbackPolicy() (+36 more)
+Nodes (46): emitRelayTrace(), emitTurnComplete(), enrichResult(), TestEmitTurnCompleteCoverage(), TestHelperFunctionsCoverage(), TestIsDisconnectErrorCoverage_CloseStatusesAndMessageBranches(), TestIsTokenEventCoverageBranches(), TestObserveUpstreamMessage_ResponseIDFallbackPolicy() (+38 more)
 
 ### Community 252 - "AuthService"
-Cohesion: 0.12
-Nodes (25): usageLogRepository, buildUsageLogBatchInsertQuery(), buildUsageLogBestEffortInsertQuery(), completeUsageLogCreateRequest(), execUsageLogInsertNoResult(), prepareUsageLogInsert(), sendUsageLogBestEffortResult(), sendUsageLogCreateResult() (+17 more)
+Cohesion: 0.07
+Nodes (31): activeHeadingId, ApiDocsHeaderExposed, ApiDocsHeading, emit, handleGlobalSearchShortcut(), header, headingElements, isEditableTarget() (+23 more)
 
 ### Community 253 - "FilterSignatureSensitiveBlocksForRetry"
 Cohesion: 0.08
@@ -9142,11 +9129,11 @@ Nodes (31): sessionContextDiscriminator(), clearGatewayRequestDerivedState(), cl
 
 ### Community 254 - "Now"
 Cohesion: 0.01
-Nodes (194): URLAvailability, ProxyRepoSuite, UserRepoSuite, AntigravityGatewayService, OpenAIGatewayService, OpenAIGatewayService, setupAccountListRouter(), TestAccountHandlerListIncludesCreatedAt() (+186 more)
+Nodes (209): GrokExchangeCodeRequest, GrokGenerateAuthURLRequest, grokQuotaHandlerAccountRepo, grokQuotaHandlerUpstream, GrokRefreshTokenRequest, URLAvailability, ProxyRepoSuite, UserRepoSuite (+201 more)
 
 ### Community 255 - "NewOpenAIWSProtocolResolver"
 Cohesion: 0.06
-Nodes (62): TestIsolateOpenAISessionID(), TestOpenAIGatewayService_ToolCorrection(), TestOpenAIGatewayService_ToolCorrectorInitialization(), TestToolCorrectionStats(), NewCodexToolCorrector(), TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentOnce(), TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedContentOnce(), TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled() (+54 more)
+Nodes (62): TestOpenAIGatewayService_ToolCorrection(), TestOpenAIGatewayService_ToolCorrectorInitialization(), TestToolCorrectionStats(), NewCodexToolCorrector(), TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentOnce(), TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedContentOnce(), TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled(), TestOpenAIGatewayService_Forward_PreservePreviousResponseIDWhenWSEnabled() (+54 more)
 
 ### Community 257 - "SecuritySecretCreate"
 Cohesion: 0.06
@@ -9157,11 +9144,11 @@ Cohesion: 0.07
 Nodes (30): sendPendingOAuthVerifyCode(), appStore, clearCountdown(), countdown, email, emailVerifyEnabled, emit, emitSwitchToBind() (+22 more)
 
 ### Community 259 - "user_handler_get_deleted_test.go"
-Cohesion: 0.10
-Nodes (20): getByIDAdminStub, listUsersFilterStub, userAPIKeyRoutesAdminStub, setupAdminRouter(), TestGroupHandlerEndpoints(), TestProxyHandlerEndpoints(), TestRedeemHandlerEndpoints(), TestUserHandlerBindAuthIdentityMapsRequest() (+12 more)
+Cohesion: 0.13
+Nodes (14): getByIDAdminStub, listUsersFilterStub, userAPIKeyRoutesAdminStub, TestUserHandlerGetByIDIncludesActivityFields(), TestUserHandlerListIncludesActivityFieldsAndSortParams(), decodeJSONResponse(), requireJSONObject(), setupGetByIDRouter() (+6 more)
 
 ### Community 260 - ".ForwardGemini"
-Cohesion: 0.09
+Cohesion: 0.08
 Nodes (7): ErrorPassthroughRuleClient, ErrorPassthroughRuleDelete, ErrorPassthroughRuleDeleteOne, errorpassthroughruleOption, newErrorPassthroughRuleMutation(), withErrorPassthroughRule(), withErrorPassthroughRuleID()
 
 ### Community 261 - "UsageLogQuery"
@@ -9169,56 +9156,56 @@ Cohesion: 0.08
 Nodes (3): UsageLogGroupBy, UsageLogQuery, UsageLogSelect
 
 ### Community 262 - "account_usage_service.go"
-Cohesion: 0.08
-Nodes (36): AccountUsageService, NewClaudeUsageFetcher(), TestShouldRefreshOpenAICodexSnapshot(), TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2(), antigravityCacheTTL(), applyExtraToUsage(), buildAntigravityDegradedUsage(), buildCodexUsageProgressFromExtra() (+28 more)
+Cohesion: 0.06
+Nodes (43): AccountUsageService, NewClaudeUsageFetcher(), TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(), TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(), TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(), TestExtractOpenAICodexProbeUpdatesAccepts429WithCodexHeaders(), TestShouldRefreshOpenAICodexSnapshot(), TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2() (+35 more)
 
 ### Community 263 - ".getDashboardOverviewPreaggregated"
-Cohesion: 0.08
-Nodes (33): opsRepository, opsRepository, opsRepository, opsRepository, aggregateHourlyRows(), buildErrorWhere(), buildUsageWhere(), combineApproxPercentiles() (+25 more)
+Cohesion: 0.14
+Nodes (22): opsRepository, opsRepository, aggregateHourlyRows(), buildErrorWhere(), buildUsageWhere(), combineApproxPercentiles(), floatToIntPtr(), isQueryTimeoutErr() (+14 more)
 
 ### Community 264 - "channel_service.go"
-Cohesion: 0.06
-Nodes (41): ChannelService, checkBillingModeRequirements(), checkIntervalsHavePrices(), checkPricesNotNegative(), checkRestricted(), conflictsBetween(), detectConflicts(), expandMappingToCache() (+33 more)
+Cohesion: 0.07
+Nodes (40): ChannelService, checkBillingModeRequirements(), checkIntervalsHavePrices(), checkPricesNotNegative(), checkRestricted(), conflictsBetween(), detectConflicts(), expandMappingToCache() (+32 more)
 
 ### Community 265 - "NewRegistry"
-Cohesion: 0.04
-Nodes (96): Option, options, TestingT, paymentHandlerSeatSettingRepo, paymentHandlerSettingRepoStub, migrateSchema(), NewClient(), newOptions() (+88 more)
+Cohesion: 0.02
+Nodes (140): Option, options, TestingT, paymentHandlerSeatSettingRepo, paymentHandlerSettingRepoStub, migrateSchema(), NewClient(), newOptions() (+132 more)
 
 ### Community 266 - "openai_images_test.go"
-Cohesion: 0.04
-Nodes (69): OpenAIGatewayService, TestExtractImagesUpstreamError_ErrorAndFailedUnchanged(), TestExtractImagesUpstreamError_IncompleteContentFilterNotRetryable(), TestExtractImagesUpstreamError_IncompleteIsRetryable(), TestExtractModelRefusal_EmptyWhenNoText(), TestImagesOAuthNonStreaming_CompletedNoImageTriggersSameAccountRetry(), TestImagesOAuthNonStreaming_ContentRefusalReturns400NoRetry(), TestSummarizeNoOutputBody_ExtractsDiagnostics() (+61 more)
+Cohesion: 0.02
+Nodes (140): AntigravityGatewayService, AntigravityGatewayService, GatewayService, GatewayService, GatewayService, GatewayService, GatewayService, OpenAIGatewayService (+132 more)
 
 ### Community 267 - ".forwardAsRawChatCompletions"
-Cohesion: 0.10
-Nodes (49): buildResponsesFailedSSEStream(), TestForwardAsAnthropic_BufferedResponseFailed_Failover(), TestForwardAsAnthropic_BufferedResponseFailed_ReturnsError(), TestForwardAsAnthropic_StreamingResponseFailed_ReturnsError(), TestForwardAsAnthropic_TransportError_ClientCanceled_NoFailover(), TestForwardAsAnthropic_TransportError_DoesNotWriteResponse(), TestForwardAsAnthropic_TransportError_ReturnsFailoverError(), bindPassthroughRule() (+41 more)
+Cohesion: 0.08
+Nodes (54): buildResponsesFailedSSEStream(), TestForwardAsAnthropic_BufferedResponseFailed_Failover(), TestForwardAsAnthropic_BufferedResponseFailed_ReturnsError(), TestForwardAsAnthropic_StreamingResponseFailed_ReturnsError(), TestForwardAsAnthropic_TransportError_ClientCanceled_NoFailover(), TestForwardAsAnthropic_TransportError_DoesNotWriteResponse(), TestForwardAsAnthropic_TransportError_ReturnsFailoverError(), bindPassthroughRule() (+46 more)
 
 ### Community 268 - "PaymentResultView.vue"
-Cohesion: 0.02
-Nodes (22): AccountDelete, AccountDeleteOne, AuthIdentityDelete, AuthIdentityDeleteOne, ChannelMonitorDailyRollupDelete, ChannelMonitorDailyRollupDeleteOne, ChannelMonitorDelete, ChannelMonitorDeleteOne (+14 more)
+Cohesion: 0.03
+Nodes (19): AccountDelete, AccountDeleteOne, IdentityAdoptionDecisionDelete, IdentityAdoptionDecisionDeleteOne, SecuritySecretDelete, SecuritySecretDeleteOne, TLSFingerprintProfileDelete, TLSFingerprintProfileDeleteOne (+11 more)
 
 ### Community 269 - ".RecordUsage"
-Cohesion: 0.08
-Nodes (12): RateLimitService, TestIsOpenAIImageRateLimitError(), buildForbiddenErrorMessage(), clampRateLimit429CooldownSeconds(), isOpenAIImageRateLimitError(), openAIImageRateLimitResetAt(), parseOpenAIImageTryAgainCooldown(), parseOpenAIRateLimitResetTime() (+4 more)
+Cohesion: 0.11
+Nodes (5): RateLimitService, buildForbiddenErrorMessage(), AccountRecoveryOptions, SuccessfulTestRecoveryResult, TempUnschedulableRule
 
 ### Community 271 - "BillingService"
-Cohesion: 0.09
-Nodes (22): NormalizeVideoBillingDurationSecondsOrDefault(), NormalizeVideoBillingResolutionOrDefault(), getDefaultGrokImagineImagePrice(), getDefaultGrokImagineVideoPrice(), getGrokImagineImageTierPrice(), normalizeBillingServiceTier(), serviceTierCostMultiplier(), TestServiceTierCostMultiplier() (+14 more)
+Cohesion: 0.11
+Nodes (18): getDefaultGrokImagineImagePrice(), getDefaultGrokImagineVideoPrice(), getGrokImagineImageTierPrice(), normalizeBillingServiceTier(), serviceTierCostMultiplier(), TestServiceTierCostMultiplier(), usePriorityServiceTierPricing(), usesOpenAILegacyLongContextPricing() (+10 more)
 
 ### Community 272 - "subscriptionExpiryRepoStub"
 Cohesion: 0.06
 Nodes (19): TestSubscriptionExpiryService_ReminderRunsEveryCycleSingleInstance(), TestSubscriptionExpiryService_ReminderScansWhenLeader(), TestSubscriptionExpiryService_ReminderSkipsScanWhenNotLeader(), TestTryAcquireSingletonLeaderLock_CacheErrorFallsThrough(), TestTryAcquireSingletonLeaderLock_ContendedThenReleased(), TestTryAcquireSingletonLeaderLock_NoBackendRunsUngated(), tryAcquireSingletonLeaderLock(), NewPaymentOrderExpiryService() (+11 more)
 
 ### Community 274 - "rawChatCompletionsTestConfig"
-Cohesion: 0.09
+Cohesion: 0.08
 Nodes (7): AuthIdentityChannelClient, AuthIdentityChannelDelete, AuthIdentityChannelDeleteOne, authidentitychannelOption, newAuthIdentityChannelMutation(), withAuthIdentityChannel(), withAuthIdentityChannelID()
 
 ### Community 275 - "user_service.go"
-Cohesion: 0.11
-Nodes (28): applyUserAvatar(), buildNotifyVerifyEmailBody(), buildUserIdentityBindAuthorizeURL(), compressInlineAvatar(), emailIdentitySupportsSignIn(), emailSignupSourceAllowsLogin(), filterUserAuthIdentities(), firstStringIdentityValue() (+20 more)
+Cohesion: 0.07
+Nodes (35): UserService, applyUserAvatar(), buildNotifyVerifyEmailBody(), buildUserIdentityBindAuthorizeURL(), checkNotifyCodeRateLimit(), compressInlineAvatar(), emailIdentitySupportsSignIn(), emailSignupSourceAllowsLogin() (+27 more)
 
 ### Community 277 - "setting_handler.go"
 Cohesion: 0.03
-Nodes (95): SendTestEmailRequest, TestSMTPRequest, UpdateBetaPolicySettingsRequest, UpdateOverloadCooldownSettingsRequest, UpdateRateLimit429CooldownSettingsRequest, UpdateRectifierSettingsRequest, UpdateSettingsRequest, UpdateStreamTimeoutSettingsRequest (+87 more)
+Nodes (94): SendTestEmailRequest, TestSMTPRequest, UpdateBetaPolicySettingsRequest, UpdateOverloadCooldownSettingsRequest, UpdateRateLimit429CooldownSettingsRequest, UpdateRectifierSettingsRequest, UpdateSettingsRequest, UpdateStreamTimeoutSettingsRequest (+86 more)
 
 ### Community 278 - ".SetFailedAt"
 Cohesion: 0.06
@@ -9226,19 +9213,19 @@ Nodes (31): WebChatModel, chatStore, mobilePanel, mobileTitle, props, { t }, cha
 
 ### Community 280 - "notification_email_service.go"
 Cohesion: 0.07
-Nodes (40): EmailTemplateSummary, isNotificationEmailDeliveryError(), isSafeNotificationEmailURL(), legacyNotificationEmailDeliveryKey(), legacyNotificationEmailPreferenceKey(), normalizeNotificationLocale(), notificationEmailAllowedPlaceholderSet(), notificationEmailConfigErr() (+32 more)
+Nodes (38): isNotificationEmailDeliveryError(), isSafeNotificationEmailURL(), legacyNotificationEmailDeliveryKey(), legacyNotificationEmailPreferenceKey(), normalizeNotificationLocale(), notificationEmailAllowedPlaceholderSet(), notificationEmailConfigErr(), notificationEmailDeliveryErr() (+30 more)
 
 ### Community 281 - "SettingCreate"
 Cohesion: 0.06
 Nodes (5): SettingCreate, SettingCreateBulk, SettingUpsert, SettingUpsertBulk, SettingUpsertOne
 
 ### Community 283 - "chatcompletions_responses_test.go"
-Cohesion: 0.03
-Nodes (36): infraerrorsReason(), newSubscriptionUserSubRepoStub(), ptrSubscriptionFloat64(), ptrSubscriptionString(), strconvFormatInt(), TestAssignOrExtendGenericPlanSubscriptionInvalidatesPublicPlansCache(), TestAssignOrExtendSubscription_NonExpiredRenewalWithPlanIDPreservesConcurrentUsage(), TestAssignSubscriptionConflictWhenSemanticsMismatch() (+28 more)
+Cohesion: 0.12
+Nodes (27): infraerrorsReason(), newSubscriptionUserSubRepoStub(), ptrSubscriptionFloat64(), ptrSubscriptionString(), TestAssignOrExtendGenericPlanSubscriptionInvalidatesPublicPlansCache(), TestAssignOrExtendSubscription_NonExpiredRenewalWithPlanIDPreservesConcurrentUsage(), TestAssignSubscriptionConflictWhenSemanticsMismatch(), TestAssignSubscriptionGroupTypeValidation() (+19 more)
 
 ### Community 284 - "GatewayService"
-Cohesion: 0.09
-Nodes (19): GatewayService, appendSelectionFailureRateSample(), appendSelectionFailureSampleID(), rpmFromPrefetchContext(), shuffleWithinPriority(), sortAccountsByPriorityOnly(), summarizeSelectionFailureStats(), derefGroupID() (+11 more)
+Cohesion: 0.08
+Nodes (17): GatewayService, TestAccountEligibleForMixedPlatform(), TestMixedSchedulingPlatforms(), mapAntigravityModel(), appendSelectionFailureRateSample(), appendSelectionFailureSampleID(), summarizeSelectionFailureStats(), derefGroupID() (+9 more)
 
 ### Community 285 - "sessionWindowMockRepo"
 Cohesion: 0.04
@@ -9246,19 +9233,19 @@ Nodes (13): newRateLimitServiceForTest(), TestUpdateSessionWindow_ClearsFable7dO
 
 ### Community 286 - "WebChatService"
 Cohesion: 0.08
-Nodes (23): WebChatService, boundedUTF8Preview(), classifyWebChatUploadContentType(), cloneWebChatModelCapabilities(), cloneWebChatStringSlice(), isGenericWebChatUploadContentType(), webChatBodyLooksText(), webChatFindMessage() (+15 more)
+Nodes (24): WebChatService, buildWebChatImageDataURL(), boundedUTF8Preview(), classifyWebChatUploadContentType(), cloneWebChatModelCapabilities(), cloneWebChatStringSlice(), isGenericWebChatUploadContentType(), webChatBodyLooksText() (+16 more)
 
 ### Community 287 - "channel_handler_test.go"
-Cohesion: 0.06
-Nodes (51): accountStatsPricingRuleRequest, accountStatsPricingRuleResponse, ChannelHandler, channelModelPricingRequest, channelModelPricingResponse, channelResponse, createChannelRequest, pricingIntervalRequest (+43 more)
+Cohesion: 0.12
+Nodes (27): channelToResponse(), pricingRequestToService(), float64Ptr(), intPtr(), setupSyncPricingModelsRouter(), TestChannelToResponse_BillingModelSourcePassthrough(), TestChannelToResponse_EmptyDefaults(), TestChannelToResponse_FullChannel() (+19 more)
 
 ### Community 289 - "where.go"
-Cohesion: 0.04
-Nodes (56): @airwallex/components-sdk, BuildCreateOrderPayloadInput, CreateOrderFlowResult, createPaymentRecoverySnapshot(), getVisibleMethods(), PaymentLaunchContext, PaymentLaunchDecision, PaymentLaunchKind (+48 more)
+Cohesion: 0.02
+Nodes (108): @airwallex/components-sdk, paymentAPI, PublicOrderVerifyResult, { get, post }, props, statusClass, statusLabel, statusMap (+100 more)
 
 ### Community 290 - "APIKeyService"
 Cohesion: 0.06
-Nodes (26): APIKeyAuthCacheInvalidator, APIKeyService, apiKeyEffectiveGroupCacheKey(), apiKeyPaginationResult(), autoBindingKeyTypeFromContext(), generateAPIKey(), ingressModelFromContext(), ingressProviderFromContext() (+18 more)
+Nodes (25): APIKeyAuthCacheInvalidator, APIKeyService, apiKeyEffectiveGroupCacheKey(), apiKeyPaginationResult(), autoBindingKeyTypeFromContext(), ingressModelFromContext(), ingressProviderFromContext(), isWebChatAPIKey() (+17 more)
 
 ### Community 294 - "where.go"
 Cohesion: 0.01
@@ -9273,8 +9260,8 @@ Cohesion: 0.09
 Nodes (34): newSparkShadowRepoStub(), TestBulkUpdateAccounts_PropagatesProxyToShadow(), TestBulkUpdateAccounts_RejectsCredentialWriteToShadow(), TestBulkUpdateAccounts_RejectsProxyChangeOnShadow(), TestCreateShadow(), TestCreateShadow_BindFailureRollsBackShadow(), TestCreateShadow_BindGroups(), TestCreateShadow_ConcurrentCreateReturns409() (+26 more)
 
 ### Community 298 - "newOpenAIGatewayServiceWithSettings"
-Cohesion: 0.06
-Nodes (25): subscriptionCacheData, StartOfWeek(), TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(), TestCheckBillingEligibility_RejectsBalanceBelowMinimumReserve(), TestSyncBalanceCacheAfterDeduction_InvalidatesExhaustedBalance(), TestSyncBalanceCacheAfterDeduction_InvalidatesWhenBalanceFallsBelowReserve(), TestSyncBalanceCacheAfterDeduction_QueuesDeductWhenBalanceStillEligible(), cacheWriteKindName() (+17 more)
+Cohesion: 0.08
+Nodes (16): subscriptionCacheData, StartOfWeek(), cacheWriteKindName(), circuitStateString(), newBillingCircuitBreaker(), nextDailyReset(), nextWeeklyReset(), quotaWindowExpired() (+8 more)
 
 ### Community 300 - ".evaluateOnce"
 Cohesion: 0.06
@@ -9285,32 +9272,32 @@ Cohesion: 0.01
 Nodes (93): NewQuery(), AccountFunc, AccountGroupFunc, AnnouncementFunc, AnnouncementReadFunc, APIKeyFunc, AuthIdentityChannelFunc, AuthIdentityFunc (+85 more)
 
 ### Community 302 - "UserAllowedGroupCreate"
-Cohesion: 0.05
-Nodes (6): UserAllowedGroupClient, UserAllowedGroupCreate, UserAllowedGroupCreateBulk, UserAllowedGroupUpsert, UserAllowedGroupUpsertBulk, UserAllowedGroupUpsertOne
+Cohesion: 0.07
+Nodes (5): UserAllowedGroupCreate, UserAllowedGroupCreateBulk, UserAllowedGroupUpsert, UserAllowedGroupUpsertBulk, UserAllowedGroupUpsertOne
 
 ### Community 303 - "openai_gateway_handler_test.go"
-Cohesion: 0.03
-Nodes (45): contentModerationHandlerSettingRepo, contentModerationHandlerTestRepo, openAIResponsesWSUsageLogCase, openAIResponsesWSUsageLogResult, openAIWSFailoverHandlerAccountRepoStub, openAIWSUsageHandlerAccountRepoStub, openAIWSUsageHandlerUsageLogRepoStub, newOpenAICompatibleStreamValidationContext() (+37 more)
+Cohesion: 0.02
+Nodes (44): concurrencyCacheMock, contentModerationHandlerSettingRepo, contentModerationHandlerTestRepo, openAIResponsesWSUsageLogCase, openAIResponsesWSUsageLogResult, openAIWSFailoverHandlerAccountRepoStub, openAIWSUsageHandlerAccountRepoStub, openAIWSUsageHandlerUsageLogRepoStub (+36 more)
 
 ### Community 306 - "batch_image_provider_gemini.go"
 Cohesion: 0.08
-Nodes (28): batchImageProviderAPIKey(), batchImageProviderInputRef(), batchImageProviderJobName(), batchImageProviderOutputRef(), geminiBatchHasInlineResults(), geminiBatchOutputRef(), geminiProviderError(), mapGeminiBatchState() (+20 more)
+Nodes (28): batchImageProviderAPIKey(), batchImageProviderInputRef(), batchImageGeminiParts(), geminiBatchHasInlineResults(), geminiBatchOutputRef(), geminiProviderError(), mapGeminiBatchState(), mapGeminiClientError() (+20 more)
 
 ### Community 307 - "openAIWSPingBlockingConn"
-Cohesion: 0.09
-Nodes (31): emit, loading, pendingCount, props, run(), { t }, uniqueIps, entry (+23 more)
+Cohesion: 0.06
+Nodes (47): emit, loading, pendingCount, props, run(), { t }, uniqueIps, entry (+39 more)
 
 ### Community 308 - "PaymentService"
 Cohesion: 0.09
-Nodes (26): PaymentService, PaymentService, PaymentService, calculateGatewayRefundAmount(), PaymentOrderCurrency(), paymentAmountToleranceForCurrency(), TestExpectedNotificationProviderKeyForOrderUsesSnapshotProviderKey(), psStringValue() (+18 more)
+Nodes (25): PaymentService, PaymentService, PaymentService, calculateGatewayRefundAmount(), PaymentOrderCurrency(), TestExpectedNotificationProviderKeyForOrderUsesSnapshotProviderKey(), psStringValue(), expectedNotificationProviderKeyForOrder() (+17 more)
 
 ### Community 310 - "usagelog.go"
 Cohesion: 0.06
 Nodes (61): ByAccountField(), ByAccountID(), ByAccountRateMultiplier(), ByActualCost(), ByAPIKeyField(), ByAPIKeyID(), ByBillingMode(), ByBillingTier() (+53 more)
 
 ### Community 313 - "PendingAuthSessionClient"
-Cohesion: 0.12
-Nodes (30): AnalyzeToolCallOutputContextCoverageBytes(), AnalyzeToolContinuationSignals(), FunctionCallOutputCallIDs(), HasFunctionCallOutput(), HasFunctionCallOutputMissingCallID(), HasItemReferenceForCallIDs(), hasNonEmptyString(), HasToolCallContext() (+22 more)
+Cohesion: 0.07
+Nodes (49): BenchmarkOpenAIUsageExtractLegacy(), BenchmarkOpenAIUsageExtractOptimized(), benchmarkOpenAIUsageJSONBytes(), benchmarkToolContinuationRequestBody(), BenchmarkToolContinuationValidationLegacy(), BenchmarkToolContinuationValidationOptimized(), benchmarkWSIngressPayloadBytes(), BenchmarkWSIngressPayloadParseLegacy() (+41 more)
 
 ### Community 314 - "balance_notify_service_test.go"
 Cohesion: 0.06
@@ -9329,8 +9316,8 @@ Cohesion: 0.09
 Nodes (32): SendWebChatMessageRequest, WebChatAttachment, WebChatConversationDetail, WebChatMessageStatus, WebChatThinkingEffort, DEFAULT_IMAGE_GENERATION_ASPECT_RATIOS, DEFAULT_IMAGE_GENERATION_SIZES, DEFAULT_THINKING_EFFORTS (+24 more)
 
 ### Community 321 - "airwallex.go"
-Cohesion: 0.11
-Nodes (17): Decimal, airwallexDeterministicRequestID(), airwallexProviderStatus(), airwallexRefundProviderStatus(), formatAirwallexAuthHTTPError(), newAirwallexRequestAmount(), parseAirwallexTime(), summarizeAirwallexResponse() (+9 more)
+Cohesion: 0.10
+Nodes (19): Decimal, airwallexDeterministicRequestID(), airwallexProviderStatus(), airwallexRefundProviderStatus(), formatAirwallexAuthHTTPError(), newAirwallexRequestAmount(), normalizeAirwallexAPIBase(), normalizeAirwallexCountryCode() (+11 more)
 
 ### Community 322 - "IsAllowedClientMatch"
 Cohesion: 0.13
@@ -9342,55 +9329,51 @@ Nodes (32): systemHandlerUpdateServiceStub, compareVersions(), NewUpdateService(
 
 ### Community 324 - ".Is"
 Cohesion: 0.05
-Nodes (20): AuthService, UserService, buildEmailSuffixNotAllowedError(), emailAuthIdentitySource(), hashToken(), inferLegacySignupSource(), randomHexString(), resolvedTokenVersion() (+12 more)
+Nodes (27): AuthService, AuthService, WithoutTx(), ensureBoundEmailAuthIdentityWithClient(), hasBindableEmailIdentitySubject(), normalizeBoundEmailAuthIdentitySubject(), normalizeEmailForIdentityBinding(), replaceBoundEmailAuthIdentityWithClient() (+19 more)
 
 ### Community 326 - "GeminiTokenRefresher"
-Cohesion: 0.11
-Nodes (25): FilterSignatureSensitiveBlocksForRetry(), FilterThinkingBlocks(), filterThinkingBlocksInternal(), TestFilterSignatureSensitiveBlocksForRetry_DowngradesTools(), TestFilterSignatureSensitiveBlocksForRetry_NoThinkingField_ContextManagementUntouched(), TestFilterSignatureSensitiveBlocksForRetry_PreservesNonThinkingStrategies(), TestFilterSignatureSensitiveBlocksForRetry_RemovesClearThinkingStrategy(), TestFilterThinkingBlocks() (+17 more)
+Cohesion: 0.10
+Nodes (27): DefaultEffortForThinkingEnabled(), FilterSignatureSensitiveBlocksForRetry(), FilterThinkingBlocks(), filterThinkingBlocksInternal(), TestDefaultEffortForThinkingEnabled(), TestFilterSignatureSensitiveBlocksForRetry_DowngradesTools(), TestFilterSignatureSensitiveBlocksForRetry_NoThinkingField_ContextManagementUntouched(), TestFilterSignatureSensitiveBlocksForRetry_PreservesNonThinkingStrategies() (+19 more)
 
 ### Community 327 - "PromoCodeUsageClient"
-Cohesion: 0.07
-Nodes (32): GatewayHandler, OpenAIGatewayHandler, GatewayHandler, Model, ModelsListResponse, pathParseError, buildContentModerationInput(), contentModerationProvider() (+24 more)
+Cohesion: 0.06
+Nodes (45): GatewayHandler, Model, ModelsListResponse, InterceptType, pathParseError, TestDetectInterceptType_MaxTokensOneHaikuRequiresClaudeCodeClient(), TestDetectInterceptType_SuggestionModeUnaffected(), TestSendMockInterceptResponse_MaxTokensOneHaiku() (+37 more)
 
 ### Community 328 - "openai_gateway_scheduling.go"
-Cohesion: 0.10
-Nodes (26): OpenAIGatewayService, TestOpenAIGatewayService_SelectAccountForModelWithExclusions_PerAccountDisableOverridesGlobalDefault(), TestOpenAIGatewayService_SelectAccountForModelWithExclusions_UsesGlobalDefaultThreshold(), TestParentHealthyForShadow(), parentHealthyForShadow(), parseTime(), explicitOpenAISessionID(), grokQuotaRetryAfterActive() (+18 more)
+Cohesion: 0.22
+Nodes (5): OpenAIGatewayService, TestParentHealthyForShadow(), parentHealthyForShadow(), isOpenAICompatibleAccountEligibleForRequest(), normalizeOpenAICompatiblePlatform()
 
 ### Community 329 - "oauth.go"
 Cohesion: 0.10
 Nodes (25): accountsAPI, SyncUpstreamPreviewParams, addCustom(), appStore, availableOptions, canSyncUpstream, clearAll(), customModel (+17 more)
 
 ### Community 333 - "Relay"
-Cohesion: 0.04
-Nodes (44): UserDashboardStats, emit, { t }, createTestI18n(), mountDialog(), appStore, authStore, endDate (+36 more)
+Cohesion: 0.03
+Nodes (62): UserDashboardStats, emit, { t }, createTestI18n(), mountDialog(), appStore, authStore, endDate (+54 more)
 
 ### Community 334 - "auth_oidc_oauth.go"
-Cohesion: 0.13
-Nodes (24): completeOIDCOAuthRequest, oidcIDTokenClaims, oidcJWK, oidcJWKSet, oidcTokenExchangeError, oidcTokenResponse, oidcUserInfoClaims, buildOIDCAuthorizeURL() (+16 more)
+Cohesion: 0.10
+Nodes (26): BatchImageHandler, completeOIDCOAuthRequest, oidcIDTokenClaims, oidcJWK, oidcJWKSet, oidcTokenExchangeError, oidcTokenResponse, oidcUserInfoClaims (+18 more)
 
 ### Community 337 - "Account"
-Cohesion: 0.10
-Nodes (40): NewBatchImageCleanupService(), batchImageProviderInputError(), batchImageGeminiParts(), BuildGeminiBatchJSONL(), NewGeminiAPIBatchImageProvider(), geminiAPIKeyAccount(), jobWithProviderName(), requireJSONLLine() (+32 more)
+Cohesion: 0.25
+Nodes (21): BuildGeminiBatchJSONL(), NewGeminiAPIBatchImageProvider(), geminiAPIKeyAccount(), jobWithProviderName(), requireJSONLLine(), TestBuildGeminiBatchJSONL_RejectsDuplicateCustomIDs(), TestBuildGeminiBatchJSONL_RejectsEmptyPrompt(), TestBuildGeminiBatchJSONL_WritesReferenceImages() (+13 more)
 
 ### Community 338 - ".executeKiroUpstreamWithParsed"
-Cohesion: 0.08
-Nodes (28): GatewayService, TestKiroModelNotSupportedError_Type(), buildKiroCaptureHeaders(), stashKiroCaptureHeaders(), takeKiroCaptureHeaders(), TestBuildKiroCaptureHeadersNilSafe(), TestBuildKiroCaptureHeadersRedactsAndSplits(), TestStashAndTakeKiroCaptureHeaders() (+20 more)
+Cohesion: 0.06
+Nodes (35): GatewayService, TestKiroModelNotSupportedError_Type(), buildKiroCaptureHeaders(), stashKiroCaptureHeaders(), takeKiroCaptureHeaders(), TestBuildKiroCaptureHeadersNilSafe(), TestBuildKiroCaptureHeadersRedactsAndSplits(), TestStashAndTakeKiroCaptureHeaders() (+27 more)
 
 ### Community 339 - "auth_wechat_oauth.go"
 Cohesion: 0.09
 Nodes (24): AccountSchedulerGroupScore, AccountSchedulerGroupScore, AccountSchedulerScore, AccountWithConcurrency, ApplyOAuthCredentialsRequest, BatchRefreshTierRequest, BatchTodayStatsRequest, BatchUpdateCredentialsRequest (+16 more)
 
 ### Community 340 - "IsNotFound"
-Cohesion: 0.10
-Nodes (9): KeyTypeIsNil(), apiKeyEntityToService(), apiKeyListOrder(), TestLatestUsageLogIPsQueryPostgresUsesPerKeyLateralLookup(), latestUsageLogIPsQuery(), newAPIKeyRepositoryWithSQL(), nonEmptyStringPtr(), normalizeAPIKeyGroupBindingMode() (+1 more)
+Cohesion: 0.05
+Nodes (21): KeyTypeIsNil(), PromoCodeIDEQ(), IsNotFound(), NewPromoCodeRepository(), promoCodeEntitiesToService(), promoCodeEntityToService(), promoCodeListOrder(), promoCodeUsageEntitiesToService() (+13 more)
 
 ### Community 341 - "endpoint.go"
 Cohesion: 0.04
 Nodes (55): validateInvitationCode(), validatePromoCode(), agreementAccepted, agreementGateActive, applyLoginAgreementSettings(), appStore, authStore, emailVerifyEnabled (+47 more)
-
-### Community 342 - "UserAttributeService"
-Cohesion: 0.05
-Nodes (9): SecuritySecretClient, SecuritySecretDelete, SecuritySecretDeleteOne, securitysecretOption, SecuritySecretUpdate, SecuritySecretUpdateOne, newSecuritySecretMutation(), withSecuritySecret() (+1 more)
 
 ### Community 344 - "IdentityAdoptionDecisionQuery"
 Cohesion: 0.09
@@ -9410,23 +9393,23 @@ Nodes (3): UserAPIKeyRouteGroupBy, UserAPIKeyRouteQuery, UserAPIKeyRouteSelect
 
 ### Community 350 - "UserAttributeValueQuery"
 Cohesion: 0.09
-Nodes (4): UserAttributeValueGroupBy, UserAttributeValueQuery, UserAttributeValueSelect, IsNotFound()
+Nodes (3): UserAttributeValueGroupBy, UserAttributeValueQuery, UserAttributeValueSelect
 
 ### Community 351 - "UsageCleanupService"
-Cohesion: 0.10
-Nodes (9): TestProvideCleanup_WithMinimalDependencies_NoPanic(), NewEmailQueueService(), NewIdempotencyCleanupService(), TestIdempotencyCleanupService_CleanupOnce(), TestNewIdempotencyCleanupService_UsesConfig(), EmailQueueService, EmailTask, idempotencyCleanupRepoStub (+1 more)
+Cohesion: 0.14
+Nodes (5): NewIdempotencyCleanupService(), TestIdempotencyCleanupService_CleanupOnce(), TestNewIdempotencyCleanupService_UsesConfig(), idempotencyCleanupRepoStub, IdempotencyCleanupService
 
 ### Community 352 - "newFakeBatchImageRepository"
 Cohesion: 0.08
 Nodes (41): BatchImageCaptureRequestID(), BatchImageReleaseRequestID(), buildBatchImageHoldCommand(), captureBatchImageBalanceHold(), releaseBatchImageBalanceHold(), reserveBatchImageBalanceHold(), TestBatchImageBillingRecoveryService_EnqueuesRetryWhenReleaseFails(), TestBatchImageBillingRecoveryService_ReleasesStaleUnsubmittedHold() (+33 more)
 
 ### Community 353 - ".buildOpenAIWSHeaders"
-Cohesion: 0.08
+Cohesion: 0.09
 Nodes (7): UsageCleanupTaskClient, UsageCleanupTaskDelete, UsageCleanupTaskDeleteOne, usagecleanuptaskOption, newUsageCleanupTaskMutation(), withUsageCleanupTask(), withUsageCleanupTaskID()
 
 ### Community 356 - ".Delete"
-Cohesion: 0.04
-Nodes (11): AccountGroupDelete, AccountGroupDeleteOne, PromoCodeUsageDelete, PromoCodeUsageDeleteOne, SettingUpdate, SettingUpdateOne, UserAllowedGroupDelete, UserAllowedGroupDeleteOne (+3 more)
+Cohesion: 0.06
+Nodes (8): AccountGroupDelete, AccountGroupDeleteOne, SettingUpdate, SettingUpdateOne, UserAllowedGroupDelete, UserAllowedGroupDeleteOne, withHooks(), PM
 
 ### Community 360 - "user_profile_identity_repo.go"
 Cohesion: 0.08
@@ -9437,16 +9420,16 @@ Cohesion: 0.04
 Nodes (13): apiKeyTestIDs(), filterAPIKeyStubKeys(), TestApiKeyService_Delete_DeleteFails(), TestApiKeyService_Delete_NotFound(), TestApiKeyService_Delete_OwnerMismatch(), TestApiKeyService_Delete_Success(), TestAPIKeyService_GetByID_FillsCurrentConcurrency(), TestAPIKeyService_List_FillsCurrentConcurrency() (+5 more)
 
 ### Community 362 - "concurrency_service_test.go"
-Cohesion: 0.05
-Nodes (30): TestAcquireAccountSlot_CacheError(), TestAcquireAccountSlot_Failure(), TestAcquireAccountSlot_ReleaseDecrements(), TestAcquireAccountSlot_Success(), TestAcquireAccountSlot_UnlimitedConcurrency(), TestAcquireOpenAIWSIngressLease(), TestAcquireUserSlot_IndependentFromAccount(), TestAcquireUserSlot_UnlimitedConcurrency() (+22 more)
+Cohesion: 0.09
+Nodes (14): AntigravityGatewayService, GetDefaultIdentityPatch(), applyThinkingModelSuffix(), extractTextFromSSEResponse(), injectIdentityPatchToGeminiRequest(), NewAntigravityGatewayService(), resolveAntigravityProjectID(), TestResolveAntigravityProjectID() (+6 more)
 
 ### Community 363 - "NewSchedulerSnapshotService"
-Cohesion: 0.11
-Nodes (16): TestGatewaySelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedulerSnapshot(), TestGatewaySelectAccountWithLoadAwareness_SkipsAntigravityGeminiFamilyRateLimitedSnapshot(), TestOpenAINewAcquiredSelectionResult_ReleasesSlotWhenHydrationFails(), TestOpenAISelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedulerSnapshot(), int64Range(), TestSchedulerSnapshotServiceCleanupSkipsNonPositiveWatermark(), TestSchedulerSnapshotServicePollOutboxCleansConsumedRowsAfterWatermark(), TestSchedulerSnapshotServicePollOutboxDoesNotCleanupOnHandleFailure() (+8 more)
+Cohesion: 0.07
+Nodes (17): TestGatewaySelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedulerSnapshot(), TestGatewaySelectAccountWithLoadAwareness_SkipsAntigravityGeminiFamilyRateLimitedSnapshot(), TestOpenAINewAcquiredSelectionResult_ReleasesSlotWhenHydrationFails(), TestOpenAISelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedulerSnapshot(), int64Range(), TestSchedulerSnapshotServiceCleanupSkipsNonPositiveWatermark(), TestSchedulerSnapshotServicePollOutboxCleansConsumedRowsAfterWatermark(), TestSchedulerSnapshotServicePollOutboxDoesNotCleanupOnHandleFailure() (+9 more)
 
 ### Community 364 - "ImportDataModal.vue"
-Cohesion: 0.04
-Nodes (45): appStore, dragActive, dragDepth, emit, Emits, errorItems, fileInput, fileListTitle (+37 more)
+Cohesion: 0.02
+Nodes (90): chartColors, emit, handleClose(), isDarkMode, lineChartOptions, loading, props, stats (+82 more)
 
 ### Community 365 - "KeyUsageView.vue"
 Cohesion: 0.09
@@ -9465,36 +9448,36 @@ Cohesion: 0.07
 Nodes (16): BenchmarkAccountConcurrency(), newBenchmarkRedisClient(), scanSlotCount(), ProvideConcurrencyCache(), accountSlotKey(), accountWaitKey(), apiKeySlotKey(), NewConcurrencyCache() (+8 more)
 
 ### Community 371 - "Newf"
-Cohesion: 0.16
-Nodes (12): EffectiveClientID(), NewGrokOAuthService(), parseJWTEmailClaim(), TestGrokOAuthServiceBuildAccountCredentialsDefaultsToSubscriptionProxy(), TestGrokOAuthServiceExchangeCodeRequiresStateForCallbackURLAndConsumesSession(), TestGrokOAuthServiceRefreshTokenPreservesOriginalRefreshTokenWhenNotRotated(), GrokAuthURLResult, GrokExchangeCodeInput (+4 more)
+Cohesion: 0.17
+Nodes (11): EffectiveClientID(), NewGrokOAuthService(), parseJWTEmailClaim(), TestGrokOAuthServiceBuildAccountCredentialsDefaultsToSubscriptionProxy(), TestGrokOAuthServiceExchangeCodeRequiresStateForCallbackURLAndConsumesSession(), TestGrokOAuthServiceRefreshTokenPreservesOriginalRefreshTokenWhenNotRotated(), GrokAuthURLResult, GrokExchangeCodeInput (+3 more)
 
 ### Community 372 - "adminServiceImpl"
-Cohesion: 0.03
-Nodes (48): adminServiceImpl, OpenAIGatewayService, OpenAIOAuthService, DriveClient, DriveStorageInfo, Newf(), NewDriveClient(), buildClient() (+40 more)
+Cohesion: 0.02
+Nodes (63): adminServiceImpl, OpenAIGatewayService, OpenAIOAuthService, ApplicationError, Status, DriveClient, DriveStorageInfo, Clone() (+55 more)
 
 ### Community 374 - "GroupCapacityService"
 Cohesion: 0.09
 Nodes (18): TestGroupCapacityRPMUsesSupportedAccountsOnly(), accountIDsForGroupsWithLimit(), NewGroupCapacityService(), TestGetAllGroupCapacityBatchAggregatesRuntimeAndLimits(), TestGetAllGroupCapacityBatchKeepsEmptyGroupRows(), TestGetAllGroupCapacityBatchRPMUsesSupportedAccountsOnly(), GroupAccountCapacityRow, groupCapacityAccountLister (+10 more)
 
 ### Community 375 - "EmptyState.vue"
-Cohesion: 0.08
-Nodes (35): OpenAIGatewayService, OpenAIGatewayService, Codec, Encoding, buildOpenAIEndpointURL(), buildOpenAIResponsesInputTokensURL(), isASCIIDigit(), isOpenAIAPIVersionSegment() (+27 more)
+Cohesion: 0.06
+Nodes (51): OpenAIGatewayService, OpenAIGatewayService, Codec, Encoding, compactOpenAIInputTokensJSON(), estimateOpenAIInputImageText(), estimateOpenAIInputTokens(), estimateOpenAIInputTokensForInput() (+43 more)
 
 ### Community 376 - ".Query"
 Cohesion: 0.02
-Nodes (9): AccountClient, AuthIdentityClient, ChannelMonitorClient, GroupClient, UsageLogClient, UsageLogDelete, UsageLogDeleteOne, UserClient (+1 more)
+Nodes (17): AccountClient, AccountGroupClient, GroupClient, GroupDelete, GroupDeleteOne, groupOption, UsageLogClient, UserClient (+9 more)
 
 ### Community 378 - "gemini_v1beta_handler.go"
-Cohesion: 0.06
-Nodes (29): failingReadCloser, TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(), TestOpenAIGatewayHandlerImages_ReadBodyErrorLogsSafeRequestSummary(), IntoContext(), AdminOnly(), GetUserRoleFromContext(), ClientRequestID(), TestClientRequestIDGeneratesAndExposesID() (+21 more)
+Cohesion: 0.09
+Nodes (31): adminAuth(), extractJWTFromWebSocketSubprotocol(), isWebSocketUpgradeRequest(), NewAdminAuthMiddleware(), validateAdminAPIKey(), validateJWTForAdmin(), AdminOnly(), AbortWithError() (+23 more)
 
 ### Community 379 - "gateway_request.go"
 Cohesion: 0.05
 Nodes (36): 1. Login Flow, 2. Registration Flow, Accessibility Examples, Additional Resources, Authentication Views Usage Examples, Backend Errors, Client-side Validation Errors, Code Examples (+28 more)
 
 ### Community 380 - "payment_service.go"
-Cohesion: 0.10
-Nodes (17): PaymentService, OperatorEQ(), PaymentTypeEQ(), PaymentTypeHasPrefix(), isValidProviderAmount(), TestIsValidProviderAmount(), cancelRateLimitWindowStart(), normalizeOrderLookupOutTradeNo() (+9 more)
+Cohesion: 0.05
+Nodes (41): PaymentService, PaymentService, OperatorEQ(), OrderTypeEQ(), OutTradeNoContainsFold(), PaymentTypeEQ(), PaymentTypeHasPrefix(), UserEmailContainsFold() (+33 more)
 
 ### Community 381 - "usage_billing_repo.go"
 Cohesion: 0.11
@@ -9509,12 +9492,12 @@ Cohesion: 0.05
 Nodes (35): backupAPI, BackupRecord, BackupS3Config, BackupScheduleConfig, CreateBackupRequest, TestS3Response, appStore, backups (+27 more)
 
 ### Community 384 - "redeem_handler_test.go"
-Cohesion: 0.10
-Nodes (27): CreateAndRedeemCodeRequest, GenerateRedeemCodesRequest, RedeemHandler, BatchUpdateRedeemCodeFields, NewRedeemHandler(), redeemBatchUpdateFieldsFromDTO(), resolveRedeemCodeExpiresAt(), newCreateAndRedeemHandler() (+19 more)
+Cohesion: 0.06
+Nodes (34): CreateAndRedeemCodeRequest, CreateUsageCleanupTaskRequest, GenerateRedeemCodesRequest, RedeemHandler, searchUsersAdminStub, UsageHandler, BatchUpdateRedeemCodeFields, executeAdminIdempotentJSON() (+26 more)
 
 ### Community 385 - "Code"
-Cohesion: 0.12
-Nodes (14): HashIdempotencyKey(), NewSystemOperationLockService(), TestSystemOperationLockService_AcquireBusyAndRelease(), TestSystemOperationLockService_ExistingNilAndReclaimBranches(), TestSystemOperationLockService_InputAndStoreErrorBranches(), TestSystemOperationLockService_RecoverAfterLeaseExpired(), TestSystemOperationLockService_ReleaseBranchesAndOperationID(), TestSystemOperationLockService_RenewLease() (+6 more)
+Cohesion: 0.07
+Nodes (23): copied, { copyToClipboard }, props, { t }, headings, props, { t }, headings (+15 more)
 
 ### Community 386 - "AnnouncementQuery"
 Cohesion: 0.09
@@ -9546,7 +9529,7 @@ Nodes (3): UserPlatformQuotaGroupBy, UserPlatformQuotaQuery, UserPlatformQuotaSe
 
 ### Community 399 - "InternalServer"
 Cohesion: 0.07
-Nodes (56): AuthHandler, bindPendingOAuthLoginRequest, createPendingOAuthAccountRequest, oauthAdoptionDecisionRequest, oauthPendingSessionPayload, sendPendingOAuthVerifyCodeRequest, ensureLoginUserActive(), applyPendingOAuthAdoption() (+48 more)
+Nodes (63): AuthHandler, bindPendingOAuthLoginRequest, createPendingOAuthAccountRequest, oauthAdoptionDecisionRequest, oauthPendingSessionPayload, sendPendingOAuthVerifyCodeRequest, ensureLoginUserActive(), isRequestHTTPS() (+55 more)
 
 ### Community 401 - "UseKeyModal.vue"
 Cohesion: 0.08
@@ -9562,35 +9545,31 @@ Nodes (11): Logger(), initMiddlewareTestLogger(), initMiddlewareTestLoggerWithLe
 
 ### Community 407 - "Errorf"
 Cohesion: 0.01
-Nodes (140): channelRepository, channelRepository, channelRepository, opsRepository, opsRepository, GatewayService, PaymentService, QuotaDimensionValidator() (+132 more)
+Nodes (99): channelRepository, opsRepository, opsRepository, PaymentService, QuotaDimensionValidator(), StatusValidator(), Decrypt(), Encrypt() (+91 more)
 
 ### Community 409 - "integration_harness_test.go"
-Cohesion: 0.09
-Nodes (15): NewBillingCache(), assertTTLWithin(), dockerImageExists(), dockerIsAvailable(), openSQLWithRetry(), pingWithTimeout(), sanitizeRedisNamespace(), selectDockerImage() (+7 more)
+Cohesion: 0.07
+Nodes (19): Cmder, DialHook, NewBillingCache(), assertTTLWithin(), dockerImageExists(), dockerIsAvailable(), openSQLWithRetry(), pingWithTimeout() (+11 more)
 
 ### Community 410 - "NewAPIKeyService"
-Cohesion: 0.24
-Nodes (7): Attr, slogAttrsToZapFields(), slogAttrToZapField(), slogZapHandler, zapObjectFields, ObjectEncoder, Record
+Cohesion: 0.12
+Nodes (13): Attr, newSlogZapHandler(), slogAttrsToZapFields(), slogAttrToZapField(), newCaptureCore(), TestSlogZapHandler_Handle_DoesNotAppendTimeField(), captureCore, capturedWrite (+5 more)
 
 ### Community 411 - "ServiceUnavailable"
-Cohesion: 0.05
-Nodes (33): OpsService, OpsService, OpsService, OpsService, ServiceUnavailable(), isValidAffiliateCodeFormat(), maskEmail(), maskSegment() (+25 more)
+Cohesion: 0.04
+Nodes (35): OpsService, OpsService, OpsService, OpsService, OpsService, ServiceUnavailable(), isValidAffiliateCodeFormat(), maskEmail() (+27 more)
 
 ### Community 412 - "embed_test.go"
 Cohesion: 0.06
 Nodes (27): FrontendServer, PublicSettingsProvider, hashBytes(), NewHTMLCache(), injectSiteTitle(), NewFrontendServer(), replaceNoncePlaceholder(), ServeEmbeddedFrontend() (+19 more)
 
-### Community 413 - ".Update"
-Cohesion: 0.07
-Nodes (3): IdempotencyRecordCreateBulk, IdempotencyRecordUpsertBulk, IdempotencyRecordUpsertOne
-
 ### Community 414 - "UpdateService"
-Cohesion: 0.07
-Nodes (27): GatewayHandler, GatewayHandler, GatewayHandler, InterceptType, concurrencyErrorResponse(), TestConcurrencyErrorResponse(), TestDetectInterceptType_MaxTokensOneHaikuRequiresClaudeCodeClient(), TestDetectInterceptType_SuggestionModeUnaffected() (+19 more)
+Cohesion: 0.36
+Nodes (4): SSEPingFormat, UserMsgQueueHelper, NewUserMsgQueueHelper(), NewGatewayHandler()
 
 ### Community 415 - "client.go"
-Cohesion: 0.10
-Nodes (18): AvailableCredit, DeprecatedModelInfo, FetchAvailableModelsRequest, FetchAvailableModelsResponse, FetchUserInfoRequest, ForbiddenError, IneligibleTier, LoadCodeAssistRequest (+10 more)
+Cohesion: 0.06
+Nodes (27): AvailableCredit, Client, DeprecatedModelInfo, FetchAvailableModelsRequest, FetchAvailableModelsResponse, FetchUserInfoRequest, FetchUserInfoResponse, ForbiddenError (+19 more)
 
 ### Community 416 - "chatcompletions_responses_bridge.go"
 Cohesion: 0.08
@@ -9608,25 +9587,29 @@ Nodes (11): APIKey, APIKeyClient, APIKeyDelete, APIKeyDeleteOne, APIKeyEdges, ap
 Cohesion: 0.10
 Nodes (3): UserAllowedGroupGroupBy, UserAllowedGroupQuery, UserAllowedGroupSelect
 
+### Community 426 - "MonitorTemplateManagerDialog.vue"
+Cohesion: 0.06
+Nodes (31): appStore, authStore, canAddMore, customThreshold, emailEntries, handleEmailToggle(), handleRemoveEmail(), handleThresholdUpdate() (+23 more)
+
 ### Community 427 - "usage_log_repo.go"
 Cohesion: 0.23
 Nodes (34): ikunPaySign(), ikunPayVerify(), formValuesToMap(), ikunPayTestMerchantPrivateKey(), ikunPayTestMerchantPublicKey(), ikunPayTestPlatformPrivateKey(), ikunPayTestPlatformPublicKey(), newIkunPayTestConfig() (+26 more)
 
 ### Community 429 - "TestBatchImageMVPFlow"
 Cohesion: 0.04
-Nodes (37): BatchImageSubmitRequest, cleanupTestJob(), mustJSON(), newTestBatchImageCleanupService(), TestBatchImageCleanupService_DeleteOutputsForOwner(), TestBatchImageCleanupService_InputOutputAndWorker(), TestBatchImageDownloadAfterOutputDeletedReturnsGone(), batchImageDownloadResultJSONL() (+29 more)
+Nodes (38): BatchImageSubmitRequest, cleanupTestJob(), mustJSON(), newTestBatchImageCleanupService(), TestBatchImageCleanupService_DeleteOutputsForOwner(), TestBatchImageCleanupService_InputOutputAndWorker(), TestBatchImageDownloadAfterOutputDeletedReturnsGone(), batchImageDownloadResultJSONL() (+30 more)
 
 ### Community 431 - "openai_gateway_count_tokens.go"
-Cohesion: 0.13
-Nodes (28): newPassthroughTestFrameConn(), TestRelay_BasicRelayAndUsage(), TestRelay_BinaryFramePassthrough(), TestRelay_BinaryJSONFrameSkipsObservation(), TestRelay_ClientDisconnect(), TestRelay_ClientDisconnect_DrainCapturesLateUsage(), TestRelay_ContextCanceled(), TestRelay_FunctionCallOutputBytesPreserved() (+20 more)
+Cohesion: 0.15
+Nodes (26): newPassthroughTestFrameConn(), TestRelay_BasicRelayAndUsage(), TestRelay_BinaryFramePassthrough(), TestRelay_BinaryJSONFrameSkipsObservation(), TestRelay_ClientDisconnect(), TestRelay_ClientDisconnect_DrainCapturesLateUsage(), TestRelay_ContextCanceled(), TestRelay_FunctionCallOutputBytesPreserved() (+18 more)
 
 ### Community 432 - "BatchImageEventQuery"
 Cohesion: 0.10
 Nodes (3): BatchImageEventGroupBy, BatchImageEventQuery, BatchImageEventSelect
 
 ### Community 433 - "SettingQuery"
-Cohesion: 0.10
-Nodes (3): SettingGroupBy, SettingQuery, SettingSelect
+Cohesion: 0.11
+Nodes (4): SettingGroupBy, SettingQuery, SettingSelect, setContextOp()
 
 ### Community 434 - "stubGroupRepoForAvailable"
 Cohesion: 0.06
@@ -9637,8 +9620,8 @@ Cohesion: 0.10
 Nodes (11): unsupportedRedeemTypeError(), GenerateCodesRequest, NullableInt64Update, NullableTimeUpdate, RedeemCache, RedeemCodeBatchUpdateFields, RedeemCodeBatchUpdateInput, RedeemCodeBatchUpdateResult (+3 more)
 
 ### Community 436 - "RedeemCodeRepoSuite"
-Cohesion: 0.04
-Nodes (39): RedeemCodeRepoSuite, TestGroupRepository_DeleteCascade_PreservesApiKeyGroupID(), TestUserRepository_RemoveGroupFromAllowedGroups_RemovesAllOccurrences(), uniqueTestValue(), hashedTestValue(), TestIdempotencyRepo_CreateProcessing_CompeteSameKey(), TestIdempotencyRepo_StatusTransition_ToSucceeded(), TestIdempotencyRepo_TryReclaim_StatusAndLockWindow() (+31 more)
+Cohesion: 0.08
+Nodes (23): RedeemCodeRepoSuite, uniqueTestValue(), hashedTestValue(), TestIdempotencyRepo_CreateProcessing_CompeteSameKey(), TestIdempotencyRepo_StatusTransition_ToSucceeded(), TestIdempotencyRepo_TryReclaim_StatusAndLockWindow(), newTestSubscriptionService(), ptrFloat64() (+15 more)
 
 ### Community 438 - "TotpService"
 Cohesion: 0.09
@@ -9661,16 +9644,16 @@ Cohesion: 0.09
 Nodes (7): ErrorPassthroughRuleGroupBy, ErrorPassthroughRuleQuery, ErrorPassthroughRuleSelect, querierAll(), scanWithInterceptors(), Q1, Q2
 
 ### Community 445 - "IdempotencyRecordQuery"
-Cohesion: 0.11
-Nodes (4): IdempotencyRecordGroupBy, IdempotencyRecordQuery, IdempotencyRecordSelect, setContextOp()
+Cohesion: 0.10
+Nodes (4): IdempotencyRecordGroupBy, IdempotencyRecordQuery, IdempotencyRecordSelect, IsNotFound()
 
 ### Community 446 - "PaymentProviderInstanceQuery"
 Cohesion: 0.10
 Nodes (3): PaymentProviderInstanceGroupBy, PaymentProviderInstanceQuery, PaymentProviderInstanceSelect
 
 ### Community 447 - "paginationResultFromTotal"
-Cohesion: 0.11
-Nodes (26): TestInboundEndpointMiddlewareStoresIngressModelAndRestoresBody(), TestInboundProviderFromPath(), isMultipartImagesContentType(), logOpenAIImagesRequestBodyReadError(), summarizeRequestContentType(), captureIngressModel(), DeriveUpstreamEndpoint(), InboundEndpointMiddleware() (+18 more)
+Cohesion: 0.14
+Nodes (21): TestInboundEndpointMiddlewareStoresIngressModelAndRestoresBody(), TestInboundProviderFromPath(), captureIngressModel(), DeriveUpstreamEndpoint(), InboundEndpointMiddleware(), InboundProviderFromPath(), ingressModelEndpoint(), isBareOrSubpathOf() (+13 more)
 
 ### Community 448 - "SecuritySecretQuery"
 Cohesion: 0.10
@@ -9705,8 +9688,8 @@ Cohesion: 0.10
 Nodes (3): WebChatMessageGroupBy, WebChatMessageQuery, WebChatMessageSelect
 
 ### Community 457 - "gateway_upstream_request.go"
-Cohesion: 0.06
-Nodes (51): Account, GatewayService, FullClaudeCodeMimicryBetas(), setAnthropicAPIKeyAuthHeader(), newVertexBetaTestContext(), newVertexServiceAccount(), TestFilterVertexBetaTokens(), TestVertexBetaFilter_BlocksViaBetaPolicy() (+43 more)
+Cohesion: 0.07
+Nodes (45): Account, GatewayService, FullClaudeCodeMimicryBetas(), setAnthropicAPIKeyAuthHeader(), TestFilterBetaTokens(), TestBuildBetaTokenSet(), TestDroppedBetaSet(), TestFullClaudeCodeMimicryBetas_DoesNotDefaultRedactThinking() (+37 more)
 
 ### Community 458 - "billingCache"
 Cohesion: 0.08
@@ -9717,7 +9700,7 @@ Cohesion: 0.05
 Nodes (4): TestAPIKeyService_Update_ReactivatesQuotaExhaustedWhenQuotaUnlimited(), quotaBaseAPIKeyRepoStub, quotaStateCacheStub, quotaStateRepoStub
 
 ### Community 461 - "BackupService"
-Cohesion: 0.16
+Cohesion: 0.15
 Nodes (9): EntryID, NewBackupService(), BackupObjectStore, BackupObjectStoreFactory, BackupRecord, BackupS3Config, BackupScheduleConfig, BackupService (+1 more)
 
 ### Community 462 - "redeemCodeRepository"
@@ -9729,24 +9712,28 @@ Cohesion: 0.07
 Nodes (17): columnsForParameterLimitQuery(), newParameterLimitAccountRepo(), parameterLimitError(), queryWithParameterLimit(), TestAccountsToService_LargeActiveAccountSetDoesNotExceedPostgresParameterLimit(), normalizeSQLWhitespace(), TestAccountRepository_ListOAuthRefreshCandidates_SQLFilter(), TestAccountRepository_SetTempUnschedulable_NoRowsAffectedDoesNotWriteOutbox() (+9 more)
 
 ### Community 468 - "oauth.go"
-Cohesion: 0.05
-Nodes (48): OpenAIOAuthService, base64URLEncode(), BuildAuthorizationURL(), BuildAuthorizationURLForPlatform(), BuildRefreshTokenRequest(), BuildTokenRequest(), DecodeIDToken(), GenerateCodeChallenge() (+40 more)
+Cohesion: 0.15
+Nodes (17): base64URLEncode(), BuildRefreshTokenRequest(), BuildTokenRequest(), DecodeIDToken(), GenerateCodeChallenge(), GenerateCodeVerifier(), GenerateRandomBytes(), GenerateSessionID() (+9 more)
 
 ### Community 469 - "NewOAuthService"
 Cohesion: 0.15
 Nodes (18): NewOAuthService(), TestNewOAuthService(), TestOAuthService_ExchangeCode_ClientError(), TestOAuthService_ExchangeCode_NilOrg(), TestOAuthService_ExchangeCode_SessionNotFound(), TestOAuthService_ExchangeCode_SetupToken(), TestOAuthService_ExchangeCode_Success(), TestOAuthService_GenerateAuthURL() (+10 more)
 
 ### Community 471 - "newUsageLogRepositoryWithSQL"
-Cohesion: 0.11
-Nodes (13): usageLogRepository, TestCoalesceTrimmedString(), TestScanUsageLogRequestTypeAndLegacyFallback(), coalesceTrimmedString(), collectUsageLogIDs(), nullFloat64Ptr(), nullInt64(), scanUsageLog() (+5 more)
+Cohesion: 0.06
+Nodes (26): usageLogRepository, TestGroupEntityToService_PreservesMessagesDispatchModelConfig(), paginateSlice(), paginationResultFromTotal(), TestCoalesceTrimmedString(), TestScanUsageLogRequestTypeAndLegacyFallback(), IsExclusiveEQ(), groupEntityToService() (+18 more)
 
 ### Community 472 - "UserMessageQueueService"
-Cohesion: 0.13
-Nodes (9): applyJitter(), generateUMQRequestID(), IsRealUserMessage(), NewUserMessageQueueService(), TestStartCleanupWorker_ReconcilesExpiredLockCandidates(), cleanupWorkerUserMsgQueueCache, QueueLockResult, UserMessageQueueService (+1 more)
+Cohesion: 0.14
+Nodes (8): applyJitter(), generateUMQRequestID(), NewUserMessageQueueService(), TestStartCleanupWorker_ReconcilesExpiredLockCandidates(), cleanupWorkerUserMsgQueueCache, QueueLockResult, UserMessageQueueService, UserMsgQueueCache
+
+### Community 473 - "payment_config_service.go"
+Cohesion: 0.07
+Nodes (28): MockImage, buildEmbeddedUrl(), detectTheme(), activeHeadingId, adminSettingsStore, appStore, authStore, buildPageImageUrl() (+20 more)
 
 ### Community 475 - "useModelWhitelist.ts"
-Cohesion: 0.02
-Nodes (121): BEGINNER_GUIDE_STEP_ORDER, BeginnerGuideClient, BeginnerGuideOS, BeginnerGuideProgressV1, BeginnerGuidePromptState, BeginnerGuideState, BeginnerGuideStepId, getBeginnerGuideState() (+113 more)
+Cohesion: 0.04
+Nodes (37): BeginnerGuideClient, BeginnerGuideOS, GUIDE_CLIENT_IDS, GUIDE_OS_IDS, GUIDE_STEP_IDS, GuideVariant, copying, props (+29 more)
 
 ### Community 476 - "OpsSettingsDialog.vue"
 Cohesion: 0.05
@@ -9769,8 +9756,8 @@ Cohesion: 0.24
 Nodes (12): ByBonusAmount(), ByID(), ByPromoCodeField(), ByPromoCodeID(), ByUsedAt(), ByUserField(), ByUserID(), newPromoCodeStep() (+4 more)
 
 ### Community 483 - "TxFromContext"
-Cohesion: 0.08
-Nodes (23): AuthService, WithoutTx(), buildAffiliateRecordOrderBy(), buildAffiliateRecordWhere(), ensureUserAffiliateWithClient(), generateAffiliateCode(), isAffiliateUniqueViolation(), nullableArg() (+15 more)
+Cohesion: 0.12
+Nodes (18): buildAffiliateRecordOrderBy(), buildAffiliateRecordWhere(), ensureUserAffiliateWithClient(), generateAffiliateCode(), isAffiliateUniqueViolation(), nullableArg(), nullableFloat64Ptr(), nullableInt64Arg() (+10 more)
 
 ### Community 484 - "admin_service_user_key_routes_test.go"
 Cohesion: 0.07
@@ -9778,7 +9765,7 @@ Nodes (18): routeKey(), TestAdminService_GetUserAPIKeyRoutes_RejectsInvalidUserI
 
 ### Community 485 - "web_chat_capture.go"
 Cohesion: 0.11
-Nodes (38): appendWebChatProcessDelta(), appendWebChatReasoningDelta(), appendWebChatToolCallDelta(), captureWebChatStreamBytes(), chatCompletionContentText(), ExtractArtifactsFromChatCompletions(), ExtractAssistantProcessFromChatCompletions(), extractAssistantProcessFromResponse() (+30 more)
+Nodes (37): appendWebChatProcessDelta(), appendWebChatReasoningDelta(), appendWebChatToolCallDelta(), captureWebChatStreamBytes(), captureWebChatStreamString(), chatCompletionContentText(), ExtractArtifactsFromChatCompletions(), ExtractAssistantProcessFromChatCompletions() (+29 more)
 
 ### Community 486 - "ops_alert_models.go"
 Cohesion: 0.40
@@ -9820,37 +9807,29 @@ Nodes (24): newGatewayRecordUsageServiceForTest(), newGatewayRecordUsageServiceW
 Cohesion: 0.06
 Nodes (31): newAnthropicAPIKeyAccountForTest(), TestGatewayService_AnthropicAPIKeyPassthrough_BearerAuthScheme(), TestGatewayService_AnthropicAPIKeyPassthrough_CountTokens404PassthroughNotError(), TestGatewayService_AnthropicAPIKeyPassthrough_CountTokensFiltersGenerationFields(), TestGatewayService_AnthropicAPIKeyPassthrough_EmptyModelSkipsMapping(), TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBody(), TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_EmptyResponseBody(), TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType() (+23 more)
 
-### Community 499 - "ops_settings.go"
-Cohesion: 0.13
-Nodes (22): OpenAIGatewayService, ExtractGrokMediaModel(), extractGrokMediaVideoRequestID(), grokMediaErrorType(), grokMediaUsageFromResponse(), GrokMediaVideoRequestSessionHash(), normalizeGrokMediaForwardBody(), normalizeGrokMediaModelForEndpoint() (+14 more)
-
 ### Community 500 - "web_chat_storage_test.go"
 Cohesion: 0.10
 Nodes (30): cleanWebChatStorageKey(), NewLocalWebChatStorage(), NewLocalWebChatStorageFromConfig(), randomWebChatStorageName(), resolveWebChatStoragePath(), sanitizeWebChatDisplayFilename(), countRegularFiles(), TestLocalWebChatStorage_RejectsPathTraversalOpen() (+22 more)
 
 ### Community 501 - "Pinia Stores Documentation"
-Cohesion: 0.19
-Nodes (6): ensureBodyLower(), NewErrorPassthroughService(), cachedPassthroughRule, ErrorPassthroughCache, ErrorPassthroughRepository, ErrorPassthroughService
+Cohesion: 0.08
+Nodes (7): ChannelMonitorDailyRollupClient, ChannelMonitorDailyRollupDelete, ChannelMonitorDailyRollupDeleteOne, channelmonitordailyrollupOption, newChannelMonitorDailyRollupMutation(), withChannelMonitorDailyRollup(), withChannelMonitorDailyRollupID()
 
 ### Community 503 - "OpsThroughputTrendChart.vue"
 Cohesion: 0.05
 Nodes (41): OpsErrorDistributionResponse, OpsErrorTrendPoint, OpsLatencyHistogramResponse, displayTitle, Props, { t }, categories, chartData (+33 more)
 
 ### Community 505 - "TotpSetupModal.vue"
-Cohesion: 0.05
-Nodes (41): UserAvailableChannel, UserAvailableGroup, UserChannelPlatformSection, userChannelsAPI, UserPricingInterval, UserSupportedModel, { t }, display (+33 more)
-
-### Community 511 - "auth_handler.go"
-Cohesion: 0.16
-Nodes (15): OpenAIGatewayHandler, TestRefreshSingleAccount_RejectsShadow(), Code(), ClientClosed(), GatewayTimeout(), IsClientClosed(), IsConflict(), IsForbidden() (+7 more)
+Cohesion: 0.09
+Nodes (10): TestGenericAdapter_ResetExpiredWindow_ForwardsAllParams(), TestGenericAdapter_ResetExpiredWindow_PropagatesError(), TestGenericAdapter_UpsertForUser_ForwardsRecords(), TestGenericAdapter_UpsertForUser_PropagatesError(), NewUserPlatformQuotaServiceAdapter(), toRepoRecords(), toServiceRecord(), fakeRepoForAdapter (+2 more)
 
 ### Community 513 - "store.go"
-Cohesion: 0.20
-Nodes (13): Calculate429Cooldown(), luaInt64(), luaString(), NewError(), RedisKey(), withRedisTimeout(), TestAsKiroCooldownFailoverError(), TestCalculateKiro429Cooldown() (+5 more)
+Cohesion: 0.25
+Nodes (10): Calculate429Cooldown(), luaInt64(), luaString(), RedisKey(), withRedisTimeout(), TestCalculateKiro429Cooldown(), Error, State (+2 more)
 
 ### Community 514 - ".Reason"
 Cohesion: 0.06
-Nodes (64): setupCleanupRouter(), setupCleanupRouterWithAPIKeyService(), TestUsageHandlerCancelCleanupTaskConflict(), TestUsageHandlerCancelCleanupTaskNotFound(), TestUsageHandlerCancelCleanupTaskSuccess(), TestUsageHandlerCancelCleanupTaskUnauthorized(), TestUsageHandlerCreateCleanupTaskBindError(), TestUsageHandlerCreateCleanupTaskInvalidDate() (+56 more)
+Nodes (65): setupCleanupRouter(), setupCleanupRouterWithAPIKeyService(), TestUsageHandlerCancelCleanupTaskConflict(), TestUsageHandlerCancelCleanupTaskNotFound(), TestUsageHandlerCancelCleanupTaskSuccess(), TestUsageHandlerCancelCleanupTaskUnauthorized(), TestUsageHandlerCreateCleanupTaskBindError(), TestUsageHandlerCreateCleanupTaskInvalidDate() (+57 more)
 
 ### Community 516 - "TestSchedulerSnapshotOutboxReplay"
 Cohesion: 0.05
@@ -9877,16 +9856,16 @@ Cohesion: 0.12
 Nodes (17): adminCheckInUseCase, CheckInHandler, UpdateDailyCheckInConfigRequest, DailyCheckInClaim, DailyCheckInClaimResult, DailyCheckInConfig, DailyCheckInStatus, CheckInHandler (+9 more)
 
 ### Community 525 - "gemini_quota.go"
-Cohesion: 0.10
-Nodes (30): TestHandleGeminiUpstreamError_GoogleOneCapacityExhaustedUsesTierCooldown(), nextGeminiDailyResetUnix(), canonicalGeminiTierID(), TestCanonicalGeminiTierID(), clampGeminiQuotaInt(), clampGeminiQuotaInt64WithUnlimited(), clampGeminiQuotaRPM(), geminiAggregateUsage() (+22 more)
+Cohesion: 0.11
+Nodes (26): canonicalGeminiTierID(), TestCanonicalGeminiTierID(), clampGeminiQuotaInt(), clampGeminiQuotaInt64WithUnlimited(), clampGeminiQuotaRPM(), geminiAggregateUsage(), geminiCooldownForTier(), geminiDailyWindowStart() (+18 more)
 
 ### Community 526 - "OpsCleanupService"
 Cohesion: 0.08
 Nodes (19): hashAdvisoryLockID(), tryAcquireDBAdvisoryLock(), minTime(), NewOpsAggregationService(), utcFloorToDay(), utcFloorToHour(), deleteOldRowsByID(), isMissingRelationError() (+11 more)
 
 ### Community 527 - "BuildWebChatCompletionsPayload"
-Cohesion: 0.11
-Nodes (35): appendWebChatResponsesTool(), BuildWebChatCompletionsPayload(), buildWebChatImageDataURL(), buildWebChatImageGenerationTool(), buildWebChatMessageText(), BuildWebChatResponsesPayload(), firstWebChatPayloadOptions(), normalizeWebChatAllowedOption() (+27 more)
+Cohesion: 0.12
+Nodes (33): appendWebChatResponsesTool(), BuildWebChatCompletionsPayload(), buildWebChatImageGenerationTool(), buildWebChatMessageText(), BuildWebChatResponsesPayload(), firstWebChatPayloadOptions(), normalizeWebChatAllowedOption(), normalizeWebChatThinkingEffort() (+25 more)
 
 ### Community 529 - "OpsAlertEventsCard.vue"
 Cohesion: 0.06
@@ -9894,7 +9873,7 @@ Nodes (39): AlertEventsQuery, appStore, buildQuery(), detailActionLoading, detai
 
 ### Community 531 - "testEntClient"
 Cohesion: 0.04
-Nodes (97): SkipSoftDelete(), TestAccountRepoSparkShadowRoundTrip(), TestListShadowsByParent(), querySingleFloat(), querySingleInt(), TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(), TestAffiliateRepository_AdminCustomCode(), TestAffiliateRepository_AdminCustomCode_Conflict() (+89 more)
+Nodes (86): AuthService, SkipSoftDelete(), TestAccountRepoSparkShadowRoundTrip(), TestListShadowsByParent(), querySingleFloat(), querySingleInt(), TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(), TestAffiliateRepository_AdminCustomCode() (+78 more)
 
 ### Community 532 - ".close"
 Cohesion: 0.10
@@ -9902,23 +9881,23 @@ Nodes (27): newUsageRecordTestPool(), TestGatewayHandlerSubmitUsageRecordTask_Wi
 
 ### Community 533 - "Profile"
 Cohesion: 0.09
-Nodes (36): ClientHelloSpec, CurveID, buildClientHelloSpecFromProfile(), assertIntSliceEqual(), assertStringSliceEqual(), fetchCapturedFingerprint(), TestBuildClientHelloSpecNewFields(), TestDialerAgainstCaptureServer() (+28 more)
+Nodes (37): ClientHelloSpec, CurveID, buildClientHelloSpecFromProfile(), assertIntSliceEqual(), assertStringSliceEqual(), fetchCapturedFingerprint(), TestBuildClientHelloSpecNewFields(), TestDialerAgainstCaptureServer() (+29 more)
 
 ### Community 535 - "NewIdempotencyCoordinator"
-Cohesion: 0.11
-Nodes (44): TestExecuteAdminIdempotentJSONConcurrentRetryOnlyOneSideEffect(), TestExecuteAdminIdempotentJSONFailCloseOnStoreUnavailable(), TestExecuteAdminIdempotentJSONFailOpenOnStoreUnavailable(), executeUserIdempotentJSON(), newUserMemoryIdempotencyRepoStub(), TestExecuteUserIdempotentJSONConcurrentRetrySingleSideEffectAndReplay(), TestExecuteUserIdempotentJSONFailCloseOnStoreUnavailable(), TestExecuteUserIdempotentJSONFallbackWithoutCoordinator() (+36 more)
+Cohesion: 0.10
+Nodes (48): OpenAIGatewayHandler, TestRefreshSingleAccount_RejectsShadow(), TestExecuteAdminIdempotentJSONConcurrentRetryOnlyOneSideEffect(), TestExecuteAdminIdempotentJSONFailCloseOnStoreUnavailable(), TestExecuteAdminIdempotentJSONFailOpenOnStoreUnavailable(), Code(), ClientClosed(), GatewayTimeout() (+40 more)
 
 ### Community 536 - "notification_email_service_test.go"
 Cohesion: 0.14
 Nodes (17): NewNotificationEmailService(), newNotificationEmailMemorySettingRepo(), startNotificationEmailTestSMTPServer(), TestNotificationEmailAdditionalEventsAreListedAndPreviewable(), TestNotificationEmailAuthTemplatesAreListedAndPreviewable(), TestNotificationEmailLocaleMemoryNormalizesAcceptLanguage(), TestNotificationEmailMemorySettingRepoSatisfiesInterface(), TestNotificationEmailPreferenceKeyUsesShortStableHashAndReadsLegacyKey() (+9 more)
 
 ### Community 537 - "mustNewClient"
-Cohesion: 0.05
+Cohesion: 0.06
 Nodes (11): AnnouncementRead, AnnouncementReadClient, AnnouncementReadDelete, AnnouncementReadDeleteOne, AnnouncementReadEdges, announcementreadOption, AnnouncementReads, NewAnnouncementReadClient() (+3 more)
 
 ### Community 543 - "gemini_session_test.go"
 Cohesion: 0.08
-Nodes (7): UserAttributeDefinitionClient, UserAttributeDefinitionDelete, UserAttributeDefinitionDeleteOne, userattributedefinitionOption, newUserAttributeDefinitionMutation(), withUserAttributeDefinition(), withUserAttributeDefinitionID()
+Nodes (7): BatchImageEventClient, BatchImageEventDelete, BatchImageEventDeleteOne, batchimageeventOption, newBatchImageEventMutation(), withBatchImageEvent(), withBatchImageEventID()
 
 ### Community 544 - "response.go"
 Cohesion: 0.12
@@ -9938,23 +9917,27 @@ Nodes (20): CancelCauseFunc, accountLoadBatchCacheKey(), cloneAccountLoadMap(), 
 
 ### Community 550 - "crs_sync_service.go"
 Cohesion: 0.10
-Nodes (30): CRSPreviewAccount, TestBuildSelectedSet(), TestShouldCreateAccount(), buildSelectedSet(), clampPriority(), cleanBaseURL(), defaultName(), defaultProxyName() (+22 more)
+Nodes (31): CRSPreviewAccount, TestBuildSelectedSet(), TestShouldCreateAccount(), buildSelectedSet(), clampPriority(), cleanBaseURL(), defaultName(), defaultProxyName() (+23 more)
 
 ### Community 551 - "request_metadata.go"
-Cohesion: 0.27
-Nodes (5): BlockType, StreamingProcessor, UsageMapHook, NewStreamingProcessor(), usageToMap()
+Cohesion: 0.08
+Nodes (7): PaymentProviderInstanceClient, PaymentProviderInstanceDelete, PaymentProviderInstanceDeleteOne, paymentproviderinstanceOption, newPaymentProviderInstanceMutation(), withPaymentProviderInstance(), withPaymentProviderInstanceID()
 
 ### Community 552 - "ops_ws_handler.go"
 Cohesion: 0.13
 Nodes (25): Addr, OpsWSProxyConfig, opsWSQPSCache, opsWSRuntimeLimits, OpsHandler, cancelQPSWSIdleStop(), closeWS(), defaultTrustedProxies() (+17 more)
 
 ### Community 554 - "IsBadRequest"
-Cohesion: 0.10
-Nodes (15): IsBadRequest(), newBatchUpdateTargetTestClient(), TestRedeemService_BatchUpdate_RejectsNonexistentPositivePlanIDTargetState(), TestRedeemService_BatchUpdate_RejectsPlanIDForNonSubscriptionCodeTargetState(), TestRedeemService_BatchUpdate_RejectsPositivePlanIDWhenValidationUnavailableTargetState(), TestRedeemService_BatchUpdate_RejectsSubscriptionMissingTargetAfterUpdateTargetState(), TestRedeemService_BatchUpdate_RejectsSubscriptionTargetConflictAfterUpdateTargetState(), TestRedeemService_BatchUpdate_PartialFields() (+7 more)
+Cohesion: 0.08
+Nodes (18): IsBadRequest(), IsInternalServer(), TestGenerateRedeemCodes_SubscriptionRejectsProvidedZeroGroupID(), TestGenerateRedeemCodes_SubscriptionRejectsProvidedZeroPlanID(), newBatchUpdateTargetTestClient(), TestRedeemService_BatchUpdate_RejectsNonexistentPositivePlanIDTargetState(), TestRedeemService_BatchUpdate_RejectsPlanIDForNonSubscriptionCodeTargetState(), TestRedeemService_BatchUpdate_RejectsPositivePlanIDWhenValidationUnavailableTargetState() (+10 more)
 
 ### Community 555 - "devDependencies"
 Cohesion: 0.05
 Nodes (40): devDependencies, autoprefixer, eslint, eslint-plugin-vue, jsdom, postcss, tailwindcss, @types/dompurify (+32 more)
+
+### Community 556 - "adminServiceImpl"
+Cohesion: 0.07
+Nodes (21): adminServiceImpl, finalizeProxyQualityResult(), proxyQualityBaseConnectivityPass(), proxyQualityFirstCFRay(), proxyQualityGrade(), proxyQualityOverallStatus(), runProxyQualityTarget(), TestFinalizeProxyQualityResult_ScoreAndGrade() (+13 more)
 
 ### Community 558 - "gemini_oauth_service_test.go"
 Cohesion: 0.11
@@ -9969,8 +9952,8 @@ Cohesion: 0.09
 Nodes (7): WebChatArtifactClient, WebChatArtifactDelete, WebChatArtifactDeleteOne, webchatartifactOption, newWebChatArtifactMutation(), withWebChatArtifact(), withWebChatArtifactID()
 
 ### Community 561 - "kiro_http_helpers.go"
-Cohesion: 0.06
-Nodes (56): GatewayService, BuildRuntimeAmzUserAgent(), cloneCredentials(), accountKiroMachineID(), applyKiroConditionalHeaders(), buildKiroAccountKey(), buildKiroMachineID(), buildKiroMachineIDFallbackKey() (+48 more)
+Cohesion: 0.05
+Nodes (61): GatewayService, BuildRuntimeAmzUserAgent(), BuildRuntimeUserAgent(), cloneCredentials(), isAllowedSparkShadowCredentialsUpdate(), persistAccountCredentials(), sanitizeSparkShadowCredentials(), accountKiroMachineID() (+53 more)
 
 ### Community 562 - "OpsMetricsCollector"
 Cohesion: 0.12
@@ -9990,43 +9973,43 @@ Nodes (11): webChatConversationRequest, WebChatHandler, webChatSendMessageReques
 
 ### Community 567 - "findCookie"
 Cohesion: 0.07
-Nodes (85): oidcProviderFixture, wechatOAuthSettingRepoStub, ChannelAppIDEQ(), ChannelEQ(), ChannelSubjectEQ(), SessionTokenEQ(), TestEmailOAuthStartPreservesPromoCodeInPendingSession(), linuxDoSyntheticEmail() (+77 more)
+Nodes (83): oidcProviderFixture, ChannelAppIDEQ(), ChannelEQ(), ChannelSubjectEQ(), SessionTokenEQ(), TestEmailOAuthStartPreservesPromoCodeInPendingSession(), linuxDoSyntheticEmail(), parseOAuthBindUserCookieValue() (+75 more)
 
 ### Community 569 - "redeemCodeRepoStub"
 Cohesion: 0.08
-Nodes (7): TLSFingerprintProfileClient, TLSFingerprintProfileDelete, TLSFingerprintProfileDeleteOne, tlsfingerprintprofileOption, newTLSFingerprintProfileMutation(), withTLSFingerprintProfile(), withTLSFingerprintProfileID()
+Nodes (7): WebChatAttachmentClient, WebChatAttachmentDelete, WebChatAttachmentDeleteOne, webchatattachmentOption, newWebChatAttachmentMutation(), withWebChatAttachment(), withWebChatAttachmentID()
 
 ### Community 570 - "batchImageQueue"
 Cohesion: 0.08
 Nodes (25): batchImageQueueOptionsFromConfig(), newBatchImageLockToken(), NewBatchImageQueue(), newBatchImageQueueWithOptions(), normalizeBatchImageQueueOptions(), newBatchImageQueueTest(), TestBatchImageQueue_DuplicateEnqueueReturnsAlreadyQueued(), TestBatchImageQueue_HeartbeatOnlyRefreshesExistingActiveMember() (+17 more)
 
-### Community 572 - "account.go"
+### Community 571 - "billingCacheWorkerStub"
 Cohesion: 0.07
-Nodes (27): Account, TestValidateAccountCustomHeaders(), TestMatchWildcardMappingResult(), TestAccountSupportsOpenAIEndpointCapability(), applyAntigravityGemini31ProAliases(), defaultModelMappingForPlatform(), ensureAntigravityDefaultPassthrough(), ensureAntigravityDefaultPassthroughs() (+19 more)
+Nodes (11): TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(), TestCheckBillingEligibility_RejectsBalanceBelowMinimumReserve(), TestSyncBalanceCacheAfterDeduction_InvalidatesExhaustedBalance(), TestSyncBalanceCacheAfterDeduction_InvalidatesWhenBalanceFallsBelowReserve(), TestSyncBalanceCacheAfterDeduction_QueuesDeductWhenBalanceStillEligible(), NewBillingCacheService(), TestBillingCacheServiceEnqueueAfterStopReturnsFalse(), TestBillingCacheServiceQueueHighLoad() (+3 more)
+
+### Community 572 - "account.go"
+Cohesion: 0.08
+Nodes (21): Account, applyAntigravityGemini31ProAliases(), defaultModelMappingForPlatform(), ensureAntigravityDefaultPassthrough(), ensureAntigravityDefaultPassthroughs(), isPoolModeRetryableStatus(), mappingHasWildcardForModel(), mappingSupportsRequestedModel() (+13 more)
 
 ### Community 573 - "batch_image_processor.go"
-Cohesion: 0.16
-Nodes (8): PromoCodeIDEQ(), NewPromoCodeRepository(), promoCodeEntitiesToService(), promoCodeEntityToService(), promoCodeListOrder(), promoCodeUsageEntitiesToService(), promoCodeUsageEntityToService(), promoCodeRepository
+Cohesion: 0.09
+Nodes (7): PaymentAuditLogClient, PaymentAuditLogDelete, PaymentAuditLogDeleteOne, paymentauditlogOption, newPaymentAuditLogMutation(), withPaymentAuditLog(), withPaymentAuditLogID()
 
 ### Community 575 - "fakeBatchImageRepository"
-Cohesion: 0.05
-Nodes (22): CanTransitionBatchImageJob(), IsTerminalBatchImageJobStatus(), batchImageDerefString(), batchImageOptionalStringPtr(), batchImageStringPtr(), isBatchImageProcessorDoneStatus(), TestBatchImageResultIndexer_ReconcilesMissingAndUnknownCustomIDs(), TestCanTransitionBatchImageJob_PR5DirectIndexing() (+14 more)
+Cohesion: 0.06
+Nodes (15): batchImageDerefString(), batchImageOptionalStringPtr(), batchImageStringPtr(), TestBatchImageResultIndexer_ReconcilesMissingAndUnknownCustomIDs(), truncateBatchImageMessage(), BuildBatchImageSettlementManifestHash(), isBatchImageSettlementRetryExhausted(), BatchImageAccountResolver (+7 more)
 
 ### Community 576 - "user_platform_quota_flusher_test.go"
 Cohesion: 0.10
 Nodes (21): NewUserPlatformQuotaUsageFlusher(), flusherPtrTime(), makeEntry(), newTestFlusher(), TestFlusher_FKViolationDropsNoReadd(), TestFlusher_MissKeySkipped(), TestFlusher_PopSnapshotUpsert(), TestFlusher_ReaddFailCounts() (+13 more)
 
 ### Community 578 - "setup.go"
-Cohesion: 0.14
-Nodes (30): AutoSetupFromEnv(), buildDatabaseConnectionDSNs(), buildPostgresDSN(), createAdminUser(), createInstallLock(), decideAdminBootstrap(), generateSecret(), GetConfigFilePath() (+22 more)
+Cohesion: 0.13
+Nodes (31): getStatus(), AutoSetupFromEnv(), buildDatabaseConnectionDSNs(), buildPostgresDSN(), createAdminUser(), createInstallLock(), decideAdminBootstrap(), generateSecret() (+23 more)
 
 ### Community 579 - "NewConcurrencyService"
-Cohesion: 0.06
-Nodes (68): TestDecrementAccountWaitCount_CacheError(), TestDecrementWaitCount_CacheError(), TestWaitingQueue_FailOpen_OnCacheError(), TestWaitingQueueFlow_AccountLevel(), TestWaitingQueueFlow_IncrementThenDecrement(), TestWaitingQueueFull_Returns429Signal(), TestOpenAIGatewayService_SelectAccountWithScheduler_CompactFallsBackToUnknown(), TestOpenAIGatewayService_SelectAccountWithScheduler_CompactPrefersSupportedOverUnknown() (+60 more)
-
-### Community 580 - "BatchImageEventUpdate"
-Cohesion: 0.04
-Nodes (9): BatchImageEventClient, BatchImageEventDelete, BatchImageEventDeleteOne, batchimageeventOption, BatchImageEventUpdate, BatchImageEventUpdateOne, newBatchImageEventMutation(), withBatchImageEvent() (+1 more)
+Cohesion: 0.02
+Nodes (127): newHelperTestContext(), TestAcquireAccountSlotWithWaitTimeout_ImmediateAttemptBeforeBackoff(), TestAcquireUserSlotWithWait_ImmediateAcquireSkipsWaitQueue(), TestAcquireUserSlotWithWait_RequestCancelDecrementsWaitQueue(), TestAcquireUserSlotWithWait_TimeoutDecrementsWaitQueue(), TestAcquireUserSlotWithWait_TracksAPIKeySlot(), TestAcquireUserSlotWithWait_WaitSuccessDecrementsBeforeReturn(), TestSetClaudeCodeClientContext_FastPathAndStrictPath() (+119 more)
 
 ### Community 582 - "auth_pending_identity_service.go"
 Cohesion: 0.11
@@ -10045,12 +10028,12 @@ Cohesion: 0.31
 Nodes (7): createGrokReqClient(), grokOAuthStatusError(), NewGrokOAuthClient(), TestGrokOAuthClientExchangeAndRefreshUseFormFields(), TestGrokOAuthClientRefreshForbiddenClassifiesEntitlement(), TestGrokOAuthClientStatusErrorRedactsSensitiveResponseBody(), grokOAuthClient
 
 ### Community 586 - "antigravity_quota_fetcher_test.go"
-Cohesion: 0.08
-Nodes (25): Access, Build Steps, Code Generation, Deployment, Deployment Versions, Development Mode, Easy Migration (Local Directory Version), ⚠️ Important: Creating the Admin Account (+17 more)
+Cohesion: 0.12
+Nodes (16): Build Steps, Code Generation, Deployment, Development Mode, ⚠️ Important: Creating the Admin Account, Installation Steps, Method 1: Script Installation (Recommended), Method 3: Apple container (macOS) (+8 more)
 
 ### Community 587 - "api_key_service_web_chat_test.go"
-Cohesion: 0.12
-Nodes (11): newWebChatAPIKey(), TestAdminResetAPIKeyRateLimitUsage_WebChatKeyHidden(), TestAdminUpdateAPIKeyGroupID_WebChatKeyHidden(), TestAPIKeyService_Delete_RejectsWebChatKey(), TestAPIKeyService_GetByID_HidesWebChatKey(), TestAPIKeyService_GetByKey_RejectsWebChatKeyWithoutAuthCacheWrites(), TestAPIKeyService_Update_RejectsWebChatKey(), ensureWebChatKeyGetResult (+3 more)
+Cohesion: 0.07
+Nodes (12): newWebChatAPIKey(), TestAdminResetAPIKeyRateLimitUsage_WebChatKeyHidden(), TestAdminUpdateAPIKeyGroupID_WebChatKeyHidden(), TestAPIKeyService_Delete_RejectsWebChatKey(), TestAPIKeyService_GetByID_HidesWebChatKey(), TestAPIKeyService_GetByKey_RejectsWebChatKeyWithoutAuthCacheWrites(), TestAPIKeyService_Update_RejectsWebChatKey(), ensureWebChatKeyGetResult (+4 more)
 
 ### Community 588 - "auth_service_platform_quota_test.go"
 Cohesion: 0.12
@@ -10066,15 +10049,15 @@ Nodes (16): closeOpenAIWSProxyClient(), newDefaultOpenAIWSClientDialer(), TestCo
 
 ### Community 592 - "newOpenAIWSConnPool"
 Cohesion: 0.05
-Nodes (61): newOpenAIWSConn(), newOpenAIWSConnPool(), TestOpenAIWSConn_AdditionalGuardBranches(), TestOpenAIWSConn_LeaseAndTimeHelpers_NilAndClosedBranches(), TestOpenAIWSConn_ReadAndWriteCanProceedConcurrently(), TestOpenAIWSConn_WriteJSONWithTimeout_NilParentContextUsesBackground(), TestOpenAIWSConnLease_BasicGetterBranches(), TestOpenAIWSConnLease_MarkBrokenAfterRelease_NoEviction() (+53 more)
+Nodes (62): closeOpenAIWSConns(), newOpenAIWSConn(), newOpenAIWSConnPool(), TestOpenAIWSConn_AdditionalGuardBranches(), TestOpenAIWSConn_LeaseAndTimeHelpers_NilAndClosedBranches(), TestOpenAIWSConn_ReadAndWriteCanProceedConcurrently(), TestOpenAIWSConn_WriteJSONWithTimeout_NilParentContextUsesBackground(), TestOpenAIWSConnLease_BasicGetterBranches() (+54 more)
 
 ### Community 593 - "ScheduledTestService"
 Cohesion: 0.24
 Nodes (3): computeNextRun(), NewScheduledTestService(), ScheduledTestService
 
 ### Community 594 - "GroupRateMultipliersModal.vue"
-Cohesion: 0.06
-Nodes (30): GroupRateMultiplierEntry, adjustPage(), appStore, batchFactor, cloneEntries(), currentPage, emit, handleAddLocal() (+22 more)
+Cohesion: 0.02
+Nodes (66): getAll(), getByPlatform(), GroupRateMultiplierEntry, GroupRPMOverrideEntry, groupsAPI, toggleStatus(), update(), adjustPage() (+58 more)
 
 ### Community 595 - "Sub2API Release Pipeline"
 Cohesion: 0.16
@@ -10089,8 +10072,8 @@ Cohesion: 0.07
 Nodes (26): OpsErrorDetail, appStore, close(), correlatedUpstream, correlatedUpstreamErrors, correlatedUpstreamLoading, detail, emit (+18 more)
 
 ### Community 604 - "ChatView.spec.ts"
-Cohesion: 0.16
-Nodes (24): TestAccountUsageService_GetPassiveUsage_KiroAPIKeySupported(), TestAccountUsageService_GetUsage_KiroAPIKeySupported(), kiroFloatPtr(), kiroUsageTestBody(), setKiroUsageTestEndpoint(), TestAccountUsageService_EnrichAccountWithKiroRuntimeState(), TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuotaState(), TestAccountUsageService_GetUsage_KiroActiveUsesCachedSnapshotWithinTTL() (+16 more)
+Cohesion: 0.15
+Nodes (26): TestAccountUsageService_GetPassiveUsage_KiroAPIKeySupported(), TestAccountUsageService_GetUsage_KiroAPIKeySupported(), kiroFloatPtr(), kiroUsageTestBody(), setKiroUsageTestEndpoint(), TestAccountUsageService_EnrichAccountWithKiroRuntimeState(), TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuotaState(), TestAccountUsageService_GetUsage_KiroActiveUsesCachedSnapshotWithinTTL() (+18 more)
 
 ### Community 605 - "QuotaLimitCard.vue"
 Cohesion: 0.07
@@ -10102,7 +10085,7 @@ Nodes (26): formattedSize, iconName, props, chatStore, draft, fileInput, handleC
 
 ### Community 608 - "data_management_handler.go"
 Cohesion: 0.09
-Nodes (23): apiEnvelope, CreateBackupJobRequest, CreateS3ProfileRequest, CreateSourceProfileRequest, dataManagementService, TestS3ConnectionRequest, UpdateS3ProfileRequest, UpdateSourceProfileRequest (+15 more)
+Nodes (22): apiEnvelope, CreateBackupJobRequest, CreateS3ProfileRequest, CreateSourceProfileRequest, dataManagementService, TestS3ConnectionRequest, UpdateS3ProfileRequest, UpdateSourceProfileRequest (+14 more)
 
 ### Community 609 - ".GetDashboardOverview"
 Cohesion: 0.11
@@ -10112,28 +10095,20 @@ Nodes (19): canonicalGeminiTierIDForOAuthType(), extractTierIDFromAllowedTiers()
 Cohesion: 0.05
 Nodes (73): TestCalculateCost_RateMultiplier_NegativeClampedToZero(), TestCalculateImageCost_RateMultiplier_NegativeClampedToZero(), newTestChannelServiceWithCache(), TestCalculateCostUnified_BillingModeFieldFilled(), TestCalculateCostUnified_ImageMode(), TestCalculateCostUnified_NegativeRateMultiplierClampedToZero(), TestCalculateCostUnified_NilResolver_FallsBackToOldPath(), TestCalculateCostUnified_PerRequestMode() (+65 more)
 
-### Community 612 - "withHooks"
-Cohesion: 0.05
-Nodes (9): PaymentAuditLogClient, PaymentAuditLogDelete, PaymentAuditLogDeleteOne, paymentauditlogOption, PaymentAuditLogUpdate, PaymentAuditLogUpdateOne, newPaymentAuditLogMutation(), withPaymentAuditLog() (+1 more)
-
 ### Community 613 - "userAPIKeyRouteGroupRepoStub"
-Cohesion: 0.19
-Nodes (11): ClaudeResponse, NonStreamingProcessor, buildGroundingText(), generateRandomID(), NewNonStreamingProcessor(), BenchmarkGenerateRandomID(), TestGenerateRandomID_Charset(), TestGenerateRandomID_ConcurrentUniqueness() (+3 more)
+Cohesion: 0.08
+Nodes (20): AggregateFunc, clientCtxKey, ConstraintError, NotFoundError, NotLoadedError, NotSingularError, OrderFunc, queryHook (+12 more)
 
 ### Community 617 - "payment_handler.go"
 Cohesion: 0.08
 Nodes (29): checkoutInfoResponse, checkoutPlan, CreateOrderRequest, PaymentHandler, PaymentOrderResult, planWithPlatform, PublicOrderResult, PublicOrderVerifyResult (+21 more)
 
-### Community 618 - "UsageLog"
-Cohesion: 0.13
-Nodes (12): Client, FetchUserInfoResponse, SetUserSettingsResponse, UserInfo, extractProjectIDFromOnboardResponse(), shouldFallbackToNextURL(), TestExtractProjectIDFromOnboardResponse(), TestShouldFallbackToNextURL_无错误且200() (+4 more)
-
 ### Community 619 - "newPaymentConfigServiceTestClient"
 Cohesion: 0.03
-Nodes (54): newPaymentConfigServiceTestClient(), paymentConfigStrPtr(), TestGetBasePaymentType(), TestGetPaymentConfigKeepsStoredEnabledTypes(), TestPaymentConfigServicePlanSevenDayQuota(), TestPaymentConfigServicePlanSevenDayQuotaRejectsInvalidValues(), TestPaymentConfigServicePlanVirtualSeatRangeDerivesLegacySeatLimit(), TestPaymentConfigServicePlanVirtualSeatRangeDerivesSeatLimit() (+46 more)
+Nodes (68): boolPtrValue(), createPendingProviderConfigOrder(), providerPendingOrderPaymentType(), TestCreateProviderInstanceAllowsVisibleMethodProvidersFromDifferentSources(), TestIsSensitiveProviderConfigField(), TestJoinTypes(), TestUpdateProviderInstanceAllowsEnablingVisibleMethodProviderFromDifferentSource(), TestUpdateProviderInstanceAllowsSafeConfigChangesWhilePendingOrders() (+60 more)
 
 ### Community 620 - "promoCodeRepository"
-Cohesion: 0.14
+Cohesion: 0.15
 Nodes (12): generateRandomToken(), MaskEmail(), NewTotpService(), PendingOAuthBindLoginSession, SecretEncryptor, TotpCache, TotpLoginSession, TotpService (+4 more)
 
 ### Community 622 - "openai_ws_state_store.go"
@@ -10141,20 +10116,20 @@ Cohesion: 0.08
 Nodes (38): newOpenAIWSV2TestConfig(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_BusyKeepsSticky(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_CapabilityMismatchKeepsSticky(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_DBRuntimeRecheckRateLimitedMiss(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_Excluded(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_ForceHTTPIgnored(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_Hit(), TestOpenAIGatewayService_SelectAccountByPreviousResponseID_QuotaAutoPausedMiss() (+30 more)
 
 ### Community 623 - "WebChatAttachmentClient"
-Cohesion: 0.13
-Nodes (20): UserAgentVersionResolver, base64URLEncode(), BuildUserAgent(), GenerateCodeVerifier(), GenerateRandomBytes(), GenerateSessionID(), GenerateState(), GetDefaultUserAgentVersion() (+12 more)
+Cohesion: 0.15
+Nodes (14): AuthHandler, completeEmailOAuthRequest, emailOAuthProfile, emailOAuthTokenResponse, buildEmailOAuthAuthorizeURL(), emailOAuthClearCookie(), emailOAuthSetCookie(), exchangeEmailOAuthCode() (+6 more)
 
 ### Community 624 - "StubConcurrencyCache"
 Cohesion: 0.06
 Nodes (3): StubConcurrencyCache, StubGatewayCache, StubSessionLimitCache
 
 ### Community 625 - "APIKeyCreate"
-Cohesion: 0.04
-Nodes (28): BackupAgentHealth, BackupAgentInfo, BackupArtifactInfo, BackupJob, BackupJobStatus, BackupS3Info, BackupType, CreateBackupJobRequest (+20 more)
+Cohesion: 0.19
+Nodes (23): buildAuthentication(), buildCapabilities(), buildClientIntegration(), buildClientSection(), buildClientVariantBlocks(), buildErrors(), buildGuidePage(), buildKeySecurity() (+15 more)
 
 ### Community 629 - "Manager"
-Cohesion: 0.19
-Nodes (10): mergeWeightedResults(), partitionByQuota(), quotaRedisKey(), resolveProxyID(), sortByStableRandomWeight(), TestQuotaRedisKey_Format(), TestResolveProxyID_AccountProxyOverrides(), Manager (+2 more)
+Cohesion: 0.22
+Nodes (8): mergeWeightedResults(), partitionByQuota(), quotaRedisKey(), resolveProxyID(), sortByStableRandomWeight(), Manager, ProviderConfig, weighted
 
 ### Community 632 - "localesNoKeyCollision.spec.ts"
 Cohesion: 0.09
@@ -10164,13 +10139,9 @@ Nodes (4): admins, assembledRoots, Modules, roots
 Cohesion: 0.13
 Nodes (43): extractSearchQueryFromBody(), extractWebSearchTextFromContent(), isOnlyWebSearchToolInBody(), isWebSearchToolJSON(), SetWebSearchManager(), clearGlobalWebSearchConfig(), newAnthropicAPIKeyAccount(), newChannelServiceWithCache() (+35 more)
 
-### Community 637 - "generateRedeemCodesGroupRepoStub"
-Cohesion: 0.06
-Nodes (4): TestGenerateRedeemCodes_SubscriptionRejectsProvidedZeroGroupID(), TestGenerateRedeemCodes_SubscriptionRejectsProvidedZeroPlanID(), generateRedeemCodesGroupRepoStub, generateRedeemCodesRedeemRepoStub
-
 ### Community 638 - "newMockSettingRepo"
-Cohesion: 0.06
-Nodes (59): newMockObjectStore(), newMockSettingRepo(), newTestBackupService(), seedS3Config(), TestBackupService_CreateBackup_ConcurrentBlocked(), TestBackupService_CreateBackup_DumpFailure(), TestBackupService_CreateBackup_NoS3Config(), TestBackupService_CreateBackup_Streaming() (+51 more)
+Cohesion: 0.09
+Nodes (41): newMockObjectStore(), newMockSettingRepo(), newTestBackupService(), seedS3Config(), TestBackupService_CreateBackup_ConcurrentBlocked(), TestBackupService_CreateBackup_DumpFailure(), TestBackupService_CreateBackup_NoS3Config(), TestBackupService_CreateBackup_Streaming() (+33 more)
 
 ### Community 639 - "payment_config_limits_test.go"
 Cohesion: 0.12
@@ -10197,36 +10168,36 @@ Cohesion: 0.05
 Nodes (84): bufferedFuncCall, BufferedResponseAccumulator, ResponsesEventToChatState, ChatCompletionsToResponses(), TestBufferedResponseAccumulator_CodexEvents(), TestResponsesEventToChatChunks_CustomToolCallInputDelta(), TestResponsesEventToChatChunks_ReasoningTextDelta(), mustMarshalJSON() (+76 more)
 
 ### Community 645 - "logger.go"
-Cohesion: 0.06
-Nodes (47): AtomicLevel, Encoder, bridgeStdLogLocked(), buildFileCore(), buildLogger(), inferStdLogLevel(), Init(), InitBootstrap() (+39 more)
+Cohesion: 0.05
+Nodes (48): AtomicLevel, Encoder, bridgeSlogLocked(), bridgeStdLogLocked(), buildFileCore(), buildLogger(), inferStdLogLevel(), Init() (+40 more)
 
 ### Community 646 - "TestProvideCleanup_WithMinimalDependencies_NoPanic"
-Cohesion: 0.18
-Nodes (10): isNonRetryableAntigravityOAuthError(), NewAntigravityOAuthService(), resolveDefaultTierID(), TestResolveDefaultTierID(), tryOnboardProjectID(), AntigravityAuthURLResult, AntigravityExchangeCodeInput, AntigravityOAuthService (+2 more)
+Cohesion: 0.07
+Nodes (20): TestProvideCleanup_WithMinimalDependencies_NoPanic(), NewAccountExpiryService(), isNonRetryableAntigravityOAuthError(), NewAntigravityOAuthService(), resolveDefaultTierID(), TestResolveDefaultTierID(), tryOnboardProjectID(), applyAntigravityPrivacyMode() (+12 more)
 
 ### Community 648 - "SecuritySecretUpdate"
 Cohesion: 0.07
 Nodes (27): 10. 错误处理, 11.1 后端, 11.2 前端, 11. 测试策略, 12. 兼容性与上线, 13. 验收标准, 1. 背景与目标, 2.1 包含 (+19 more)
 
 ### Community 649 - "SettingUpdate"
-Cohesion: 0.17
-Nodes (19): sameAccountGroup(), sameAccountWithLoadGroup(), sameLastUsedAt(), shuffleWithinPriorityAndLastUsed(), shuffleWithinSortGroups(), TestSameAccountGroup(), TestSameAccountWithLoadGroup(), TestSameLastUsedAt() (+11 more)
+Cohesion: 0.16
+Nodes (5): AuthService, AuthService, normalizeOAuthSignupSource(), oauthEmailFlowStringValue(), EmailOAuthIdentityInput
 
 ### Community 653 - "rate_limiter.go"
-Cohesion: 0.16
-Nodes (18): abortRateLimit(), failureModeLabel(), dockerAvailable(), ensureDockerAvailable(), performRequest(), startRedis(), TestRateLimiterFixesMissingTTL(), TestRateLimiterSetsTTLAndDoesNotRefresh() (+10 more)
+Cohesion: 0.24
+Nodes (11): abortRateLimit(), failureModeLabel(), NewRateLimiter(), TestRateLimiterDifferentIPsIndependent(), TestRateLimiterFailureModes(), TestRateLimiterSuccessAndLimit(), TestWindowTTLMillis(), windowTTLMillis() (+3 more)
 
 ### Community 654 - "error.go"
-Cohesion: 0.15
-Nodes (16): ErrorDetail, ErrorDetailInfo, ErrorHelp, ErrorResponse, HelpLink, ExtractActivationURL(), IsServiceDisabledError(), ParseError() (+8 more)
+Cohesion: 0.11
+Nodes (22): ErrorDetail, ErrorDetailInfo, ErrorHelp, ErrorResponse, HelpLink, isBase64Char(), SanitizeBodyForLogs(), truncateBase64InMessage() (+14 more)
 
 ### Community 656 - "generate_session_hash_test.go"
-Cohesion: 0.11
-Nodes (55): TestGenerateSessionHash_MixedKiroNoSeedFallsThrough(), anthropicSessionBody(), geminiMsg(), geminiSessionBody(), msg(), mustParseGeminiSessionHashRequest(), mustParseResponsesSessionHashRequest(), mustParseSessionHashRequest() (+47 more)
+Cohesion: 0.12
+Nodes (54): anthropicSessionBody(), geminiMsg(), geminiSessionBody(), msg(), mustParseGeminiSessionHashRequest(), mustParseResponsesSessionHashRequest(), mustParseSessionHashRequest(), TestGenerateSessionHash_ArraySystemPrompt() (+46 more)
 
 ### Community 658 - "NewAccountUsageService"
-Cohesion: 0.09
-Nodes (34): GatewayService, addMessageCacheBreakpoints(), injectCacheControlOnLastContentBlock(), mustJSONString(), stripMessageCacheControl(), applyToolNameRewriteToBody(), applyToolsLastCacheBreakpoint(), buildDynamicToolMap() (+26 more)
+Cohesion: 0.08
+Nodes (35): GatewayService, GatewayService, addMessageCacheBreakpoints(), injectCacheControlOnLastContentBlock(), mustJSONString(), stripMessageCacheControl(), applyToolNameRewriteToBody(), applyToolsLastCacheBreakpoint() (+27 more)
 
 ### Community 660 - "ChannelMonitorRequestTemplateClient"
 Cohesion: 0.08
@@ -10234,7 +10205,7 @@ Nodes (7): ChannelMonitorRequestTemplateClient, ChannelMonitorRequestTemplateDel
 
 ### Community 663 - "batchImageText"
 Cohesion: 0.14
-Nodes (32): batchImageAdminError(), batchImageErrorMessage(), batchImageErrorReference(), batchImagePlainError(), batchImageText(), canCancel(), cancelSelected(), canRetry() (+24 more)
+Nodes (25): applyChildCounts(), canCancel(), canRetry(), defaultTaskName(), detailJobsForBatch(), detailSourceName(), displayJob(), ensureItemsForRetry() (+17 more)
 
 ### Community 666 - "fakeWebChatService"
 Cohesion: 0.23
@@ -10242,7 +10213,7 @@ Nodes (14): activeCheckInConfig(), newCheckInServiceFixture(), TestCheckInServic
 
 ### Community 667 - "translator.go"
 Cohesion: 0.03
-Nodes (154): GetCachedWebSearchDescription(), addKiroCacheUsageFields(), addKiroTokenBuckets(), appendAssistantTextPart(), appendChunkedToolDescription(), appendImageURLFallback(), appendMissingPlaceholderTools(), appendTextBlock() (+146 more)
+Nodes (157): addKiroCacheUsageFields(), addKiroTokenBuckets(), appendAssistantTextPart(), appendChunkedToolDescription(), appendImageURLFallback(), appendMissingPlaceholderTools(), appendTextBlock(), applyStopSequencesToTextBlocks() (+149 more)
 
 ### Community 668 - "RedactText"
 Cohesion: 0.19
@@ -10252,13 +10223,9 @@ Nodes (19): buildKeyAlternation(), buildKeySet(), compileTextRedactPatterns(), g
 Cohesion: 0.14
 Nodes (4): NewHTTPUpstream(), hasEntry(), mustGetOrCreateClient(), HTTPUpstreamSuite
 
-### Community 670 - "SettingRepoSuite"
-Cohesion: 0.08
-Nodes (3): NewSettingRepository(), settingRepository, SettingRepoSuite
-
 ### Community 671 - "oauth.go"
 Cohesion: 0.05
-Nodes (84): BuildAccountKey(), BuildKiroIDERuntimeUserAgent(), BuildLoginHeaders(), BuildMachineID(), BuildOIDCHeaders(), BuildRuntimeUserAgent(), containsString(), ExponentialBackoffWithJitter() (+76 more)
+Nodes (82): BuildAccountKey(), BuildKiroIDERuntimeUserAgent(), BuildLoginHeaders(), BuildMachineID(), BuildOIDCHeaders(), containsString(), ExponentialBackoffWithJitter(), fingerprintLookupKey() (+74 more)
 
 ### Community 672 - "SettingClient"
 Cohesion: 0.07
@@ -10269,28 +10236,24 @@ Cohesion: 0.13
 Nodes (8): APIKeyService, isWebChatAuthCacheEntry(), newAPIKeyAuthCacheConfig(), apiKeyAuthCacheConfig, APIKeyAuthCacheEntry, APIKeyAuthGroupSnapshot, APIKeyAuthSnapshot, APIKeyAuthUserSnapshot
 
 ### Community 674 - "AuthService"
-Cohesion: 0.07
-Nodes (38): appStore, cancelling, cleanup(), countdownDisplay, creditedAmountSymbol, dialogTitle, emit, expired (+30 more)
+Cohesion: 0.08
+Nodes (34): appStore, cancelling, cleanup(), countdownDisplay, creditedAmountSymbol, dialogTitle, emit, expired (+26 more)
 
 ### Community 675 - "ChannelMonitorRequestTemplateHandler"
 Cohesion: 0.20
 Nodes (8): associatedMonitorBriefResponse, ChannelMonitorRequestTemplateHandler, channelMonitorTemplateApplyRequest, channelMonitorTemplateCreateRequest, channelMonitorTemplateResponse, channelMonitorTemplateUpdateRequest, NewChannelMonitorRequestTemplateHandler(), parseTemplateID()
 
 ### Community 676 - "testSettingRepo"
-Cohesion: 0.18
-Nodes (10): newRetryParams(), saveAndSetBaseURLs(), TestCustomErrorCode599_SkippedErrors_Return500_NoRateLimit(), TestRetryLoop_ErrorPolicy_CustomErrorCodes(), TestRetryLoop_ErrorPolicy_NilRateLimitService(), TestRetryLoop_ErrorPolicy_NoPolicy_OriginalBehavior(), TestRetryLoop_ErrorPolicy_TempUnschedulable(), epAccountRepo (+2 more)
+Cohesion: 0.13
+Nodes (6): TestUsageCleanupTaskFromEntFull(), TestUsageCleanupTaskFromEntInvalidFilters(), NewUsageCleanupRepository(), newUsageCleanupRepositoryWithSQL(), usageCleanupTaskFromEnt(), usageCleanupRepository
 
 ### Community 677 - "gateway_record_usage_test.go"
 Cohesion: 0.07
 Nodes (15): TestOpenAIGatewayServiceRecordUsage_NormalizesKiroBillingModel(), assertGPT56FallbackPricing(), TestBillingService_GetModelPricing_FailsClosedForImageOnlyEntries(), TestBillingService_GPT56CacheWritePricingUsesOfficialMultiplier(), TestBillingService_GPT56LongContextBoundaryIsExclusive(), TestBillingService_GPT56UsesLongContextPricingAcrossModelsAndTiers(), TestDefaultPricingIncludesOfficialGPT56Rates(), TestGPT56DedicatedFallbacksUseOfficialRates() (+7 more)
 
-### Community 678 - "RedeemCodeUpdateOne"
-Cohesion: 0.05
-Nodes (38): Acceptance Criteria, Accessibility and Responsive Requirements, Anonymous progress, Authenticated dashboard entry, Authenticated progress, Backend API, Backend State Model, Backend tests (+30 more)
-
 ### Community 679 - "public_model_catalog.go"
-Cohesion: 0.11
-Nodes (28): catalogModel(), floatPtr(), PublicModelCatalogModel, PublicModelCatalogPriceLine, PublicModelCatalogPricing, PublicModelCatalogProvider, pendingPricing(), priceLine() (+20 more)
+Cohesion: 0.13
+Nodes (23): catalogModel(), floatPtr(), pendingPricing(), priceLine(), PublicModelCatalogModelsForWebChat(), publicModelCatalogModelsSnapshot(), publicModelCatalogProviderRank(), PublicModelCatalogProviders() (+15 more)
 
 ### Community 680 - "navigation.spec.ts"
 Cohesion: 0.07
@@ -10305,8 +10268,8 @@ Cohesion: 0.11
 Nodes (31): OrderOption, Provider, ByAPIKeyEncrypted(), ByAPIMode(), ByBodyOverrideMode(), ByCreatedAt(), ByCreatedBy(), ByDailyRollups() (+23 more)
 
 ### Community 684 - "Parse"
-Cohesion: 0.08
-Nodes (38): TestCreateTradeRedirectModeSkipsPrecreate(), TestCreateTradeUsesPagePayForDesktop(), TestCreateTradeUsesPrecreateForDesktopWhenAvailable(), TestCreateTradeUsesWapPayForMobile(), TestIsTradeNotExist(), TestNewAlipay(), TestParseAlipayAmount(), Parse() (+30 more)
+Cohesion: 0.07
+Nodes (41): main(), TestCreateTradeRedirectModeSkipsPrecreate(), TestCreateTradeUsesPagePayForDesktop(), TestCreateTradeUsesPrecreateForDesktopWhenAvailable(), TestCreateTradeUsesWapPayForMobile(), TestIsTradeNotExist(), TestNewAlipay(), TestParseAlipayAmount() (+33 more)
 
 ### Community 685 - "AccountExpiryService"
 Cohesion: 0.07
@@ -10317,16 +10280,16 @@ Cohesion: 0.10
 Nodes (4): TestAdminService_ListUsers_BatchRateFallbackToSingle(), TestAdminService_ListUsers_PopulatesLastUsedAt(), userGroupRateRepoStubForListUsers, userRepoStubForListUsers
 
 ### Community 689 - "channel.go"
-Cohesion: 0.13
-Nodes (15): Channel, calculateTokenStatsCost(), buildPricingIndex(), deepCopyFeaturesConfig(), FindMatchingInterval(), formatMaxTokensLabel(), validateIntervalOverlap(), validateIntervalPrices() (+7 more)
+Cohesion: 0.09
+Nodes (23): Channel, BillingMode, calculateTokenStatsCost(), buildPricingIndex(), deepCopyFeaturesConfig(), FindMatchingInterval(), formatMaxTokensLabel(), splitWildcardSuffix() (+15 more)
 
 ### Community 690 - "MessageList.vue"
-Cohesion: 0.07
-Nodes (29): GroupRPMOverrideEntry, adjustPage(), appStore, clearing, cloneEntries(), currentPage, emit, handleAddLocal() (+21 more)
+Cohesion: 0.11
+Nodes (16): canSelect(), closeButton, closeDrawer(), completedSet, currentStepIndex, drawerDialog, drawerOpen, emit (+8 more)
 
 ### Community 691 - "mappers.go"
-Cohesion: 0.03
-Nodes (82): AdminAPIKeyHandler, AdminUpdateAPIKeyGroupRequest, AdminGroup, AdminUsageLog, APIKeyHandler, CreateAPIKeyRequest, RedeemHandler, RedeemRequest (+74 more)
+Cohesion: 0.04
+Nodes (70): CreateShadowRequest, OpenAICodexPATCreateRequest, OpenAIExchangeCodeRequest, OpenAIGenerateAuthURLRequest, OpenAIOAuthHandler, OpenAIRefreshTokenRequest, AdminUsageLog, buildOpenAICodexPATAccountName() (+62 more)
 
 ### Community 692 - "Account"
 Cohesion: 0.12
@@ -10341,8 +10304,8 @@ Cohesion: 0.20
 Nodes (4): isTradeNotExist(), NewAlipay(), parseAlipayAmount(), Alipay
 
 ### Community 698 - "PricingServiceSuite"
-Cohesion: 0.11
-Nodes (7): NewPricingRemoteClient(), TestNewPricingRemoteClient_InvalidProxy_NoFallback(), TestNewPricingRemoteClient_InvalidProxy_WithFallback(), ProvidePricingRemoteClient(), pricingRemoteClient, pricingRemoteClientError, PricingServiceSuite
+Cohesion: 0.12
+Nodes (6): NewPricingRemoteClient(), TestNewPricingRemoteClient_InvalidProxy_NoFallback(), TestNewPricingRemoteClient_InvalidProxy_WithFallback(), pricingRemoteClient, pricingRemoteClientError, PricingServiceSuite
 
 ### Community 699 - "newJWTTestEnv"
 Cohesion: 0.14
@@ -10362,7 +10325,7 @@ Nodes (3): TestBillingCacheServiceGetUserBalance_Singleflight(), balanceLoadUser
 
 ### Community 703 - "mockGeminiProxyRepo"
 Cohesion: 0.05
-Nodes (63): AuthHandler, AuthHandler, AuthHandler, completeEmailOAuthRequest, completeLinuxDoOAuthRequest, emailOAuthProfile, emailOAuthTokenResponse, linuxDoTokenExchangeError (+55 more)
+Nodes (71): AuthHandler, AuthHandler, AuthHandler, completeLinuxDoOAuthRequest, completeWeChatOAuthRequest, linuxDoTokenExchangeError, linuxDoTokenResponse, wechatOAuthConfig (+63 more)
 
 ### Community 704 - "usageCleanupRepository"
 Cohesion: 0.23
@@ -10373,12 +10336,12 @@ Cohesion: 0.17
 Nodes (14): CancelableProvider, CreatePaymentRequest, CreatePaymentResponse, InstanceSelection, MerchantIdentityProvider, PaymentNotification, Provider, QueryOrderResponse (+6 more)
 
 ### Community 706 - "PaymentService"
-Cohesion: 0.26
-Nodes (20): AccountSwitchCountFromContext(), IsMaxTokensOneHaikuRequestFromContext(), metadataFromContext(), PrefetchedStickyAccountIDFromContext(), PrefetchedStickyGroupIDFromContext(), RequestMetadataFallbackStats(), SingleAccountRetryFromContext(), TestRequestMetadataRead_LegacyFallbackAndStats() (+12 more)
+Cohesion: 0.11
+Nodes (33): TestSnapshotOpenAICompatibilityFallbackMetrics(), AccountSwitchCountFromContext(), IsMaxTokensOneHaikuRequestFromContext(), metadataFromContext(), PrefetchedStickyAccountIDFromContext(), PrefetchedStickyGroupIDFromContext(), RequestMetadataFallbackStats(), SingleAccountRetryFromContext() (+25 more)
 
 ### Community 707 - "usage_cleanup.go"
-Cohesion: 0.09
-Nodes (12): applyAntigravityPrivacyMode(), setAntigravityPrivacy(), applyAntigravitySubscriptionResult(), TestApplyAntigravityPrivacyMode_PreservedBySubscriptionResult(), TestApplyAntigravityPrivacyMode_SetsInMemoryExtra(), accountNeedsAntigravityForceTokenRefresh(), antigravityForceTokenRefreshExtra(), clearAntigravityForceTokenRefreshExtra() (+4 more)
+Cohesion: 0.06
+Nodes (16): accountNeedsAntigravityForceTokenRefresh(), antigravityForceTokenRefreshExtra(), clearAntigravityForceTokenRefreshExtra(), TestBackgroundRefreshPolicy_DefaultSkips(), DefaultBackgroundRefreshPolicy(), isOAuthRefreshPlatform(), TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(), TestTokenRefreshService_RefreshFailureDoesNotCallPrivacy() (+8 more)
 
 ### Community 708 - "dateline_test.go"
 Cohesion: 0.14
@@ -10405,20 +10368,20 @@ Cohesion: 0.11
 Nodes (9): providerRouteKey(), TestAPIKeyService_CreateFallsBackToDefaultProviderGroup(), TestAPIKeyService_CreatePersistsUserProviderRouteGroupAndKeyType(), TestAPIKeyService_CreateRejectsManualGroupWhenKeyTypeUsesProviderRouting(), TestAPIKeyService_ResolveProviderGroup_UsesUserProviderRoute(), apiKeyProviderRouteRepoStub, apiKeyProviderRoutingCreateRepoStub, apiKeyProviderRoutingUserRepoStub (+1 more)
 
 ### Community 714 - "openai_oauth_passthrough_test.go"
-Cohesion: 0.06
-Nodes (44): TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLogs(), TestIsOpenAIContextWindowError(), TestIsOpenAITransientProcessingError(), TestLogCodexCLIOnlyDetection_NilSafety(), TestLogCodexCLIOnlyDetection_OnlyLogsRejected(), TestLogCodexCLIOnlyDetection_RejectedIncludesRequestDetails(), TestLogOpenAIInstructionsRequiredDebug_LogsRequestDetails(), TestLogOpenAIInstructionsRequiredDebug_NonTargetErrorSkipped() (+36 more)
+Cohesion: 0.04
+Nodes (53): TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLogs(), openAIFailoverCachedBodyTestAccount(), TestGetOpenAIRequestBodyMap_IgnoresLegacyContextCache(), TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(), TestGetAPIKeyIDFromContext(), TestIsOpenAITransientProcessingError(), TestLogCodexCLIOnlyDetection_NilSafety(), TestLogCodexCLIOnlyDetection_OnlyLogsRejected() (+45 more)
 
 ### Community 715 - "chat.ts"
-Cohesion: 0.06
-Nodes (19): TestAsKiroCooldownFailoverErrorIgnoresNonCooldownErrors(), TestClassifyKiroHTTPErrorMonthlyRequestCount(), TestClassifyKiroHTTPErrorPlain402IsTransient(), TestExecuteKiroUpstreamMonthlyRequestCountRateLimitsUntilNextMonthAndFailovers(), TestGatewayServiceCheckAndWaitKiroCooldownPropagatesReserveError(), TestGatewayServiceIsAccountSchedulableForSelectionSkipsActiveKiroCooldown(), TestGatewayServiceTryRecoverKiroCooldownPoolClearsOnlyTransientCooldown(), TestGatewayServiceTryRecoverKiroCooldownPoolSkipsSuspended() (+11 more)
+Cohesion: 0.05
+Nodes (36): NewError(), classifyKiroBadRequest(), classifyKiroError(), classifyKiroHTTPError(), isNetErr(), looksLikeKiroBadRequestAuthError(), looksLikeKiroBadRequestInvalidModelError(), looksLikeKiroBadRequestSchemaError() (+28 more)
 
 ### Community 716 - "gemini_types.go"
-Cohesion: 0.11
-Nodes (26): GeminiCandidate, GeminiContent, GeminiEnhancedContent, GeminiFunctionCall, GeminiFunctionCallingConfig, GeminiFunctionDecl, GeminiFunctionResponse, GeminiGenerationConfig (+18 more)
+Cohesion: 0.06
+Nodes (42): BlockType, ClaudeResponse, GeminiCandidate, GeminiContent, GeminiEnhancedContent, GeminiFunctionCall, GeminiFunctionCallingConfig, GeminiFunctionDecl (+34 more)
 
 ### Community 717 - "AuthIdentityChannelClient"
-Cohesion: 0.03
-Nodes (76): Account, AntigravityGatewayService, AntigravityGatewayService, AntigravityGatewayService, AntigravityGatewayService, Account, GetDefaultIdentityPatch(), classifyAntigravity429() (+68 more)
+Cohesion: 0.06
+Nodes (37): Account, AntigravityGatewayService, AntigravityGatewayService, classifyAntigravity429(), injectEnabledCreditTypes(), resolveCreditsOveragesModelKey(), shouldMarkCreditsExhausted(), TestClassifyAntigravity429() (+29 more)
 
 ### Community 718 - "EmailVerifyView.vue"
 Cohesion: 0.05
@@ -10429,8 +10392,8 @@ Cohesion: 0.13
 Nodes (27): ByAdoptionDecisionField(), ByBrowserSessionKey(), ByCompletionCodeExpiresAt(), ByCompletionCodeHash(), ByConsumedAt(), ByCreatedAt(), ByEmailVerifiedAt(), ByExpiresAt() (+19 more)
 
 ### Community 721 - "error_policy_integration_test.go"
-Cohesion: 0.10
-Nodes (22): OpenAIGatewayService, TestBuildCodexUsageExtraUpdates_ClampNegativeResetSeconds(), TestBuildCodexUsageExtraUpdates_FallbackToNowWhenUpdatedAtInvalid(), TestBuildCodexUsageExtraUpdates_FreshAccountUsedPercentNotInverted_Issue2994(), TestBuildCodexUsageExtraUpdates_NilSnapshot(), TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(), TestBuildCodexUsageExtraUpdates_WithoutNormalizedWindowFields(), TestCodexResetAtRFC3339() (+14 more)
+Cohesion: 0.09
+Nodes (26): OpenAIGatewayService, TestBuildCodexUsageExtraUpdates_ClampNegativeResetSeconds(), TestBuildCodexUsageExtraUpdates_FallbackToNowWhenUpdatedAtInvalid(), TestBuildCodexUsageExtraUpdates_FreshAccountUsedPercentNotInverted_Issue2994(), TestBuildCodexUsageExtraUpdates_NilSnapshot(), TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(), TestBuildCodexUsageExtraUpdates_WithoutNormalizedWindowFields(), TestCodexResetAtRFC3339() (+18 more)
 
 ### Community 722 - "stream_error_event_test.go"
 Cohesion: 0.17
@@ -10458,39 +10421,47 @@ Nodes (28): Adding New Routes, Admin Routes (Admin Role Required), Authenticatio
 
 ### Community 733 - "KiroTokenProvider"
 Cohesion: 0.06
-Nodes (50): openAIAccountTestRepo, TestAccountTestService_KiroAPIKeyDirectAWSEndpoint(), TestAccountTestService_KiroAPIKeyRelayUsesBaseURL(), TestAccountTestService_KiroAPIKeyWithoutBaseURLDirectAWS(), TestExecuteKiroUpstreamInvalidGrantForceRefreshSetsErrorWithoutTempUnschedule(), TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(), TestExecuteKiroUpstreamPlain402FailoversWithoutTempUnschedule(), KiroTokenCacheKey() (+42 more)
+Nodes (50): openAIAccountTestRepo, TestAccountTestService_KiroAPIKeyDirectAWSEndpoint(), TestAccountTestService_KiroAPIKeyRelayUsesBaseURL(), TestAccountTestService_KiroAPIKeyWithoutBaseURLDirectAWS(), TestIsKiroDirectModeAccount_RelayVsDirect(), TestExecuteKiroUpstreamInvalidGrantForceRefreshSetsErrorWithoutTempUnschedule(), TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(), TestExecuteKiroUpstreamPlain402FailoversWithoutTempUnschedule() (+42 more)
 
 ### Community 734 - "UsageCleanupTaskUpsertOne"
 Cohesion: 0.12
 Nodes (32): registerAccountRoutes(), registerAdminAPIKeyRoutes(), registerAdminCheckInRoutes(), registerAdminComplianceRoutes(), RegisterAdminRoutes(), registerAffiliateRoutes(), registerAnnouncementRoutes(), registerAntigravityOAuthRoutes() (+24 more)
 
 ### Community 735 - "redeemRepoStub"
-Cohesion: 0.08
-Nodes (22): PaymentService, OrderTypeEQ(), OutTradeNoContainsFold(), UserEmailContainsFold(), UserNameContainsFold(), TestGenerateOutTradeNoUsesProviderSafeNumericFormat(), applyPagination(), generateOutTradeNo() (+14 more)
+Cohesion: 0.09
+Nodes (11): TestCalculateOpenAI429ResetTime_5hExhausted(), TestCalculateOpenAI429ResetTime_7dExhausted(), TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesMax(), TestCalculateOpenAI429ResetTime_ReversedWindowOrder(), TestCalculateOpenAI429ResetTime_UserProvidedScenario(), TestHandle429_OpenAIPersistsCodexSnapshotImmediately(), TestHandle429_OpenAISyncsObservedPlanType(), TestHandle429_SkipsSparkShadow() (+3 more)
 
 ### Community 737 - "auth_service_register_test.go"
-Cohesion: 0.06
-Nodes (35): minDingTalkURLs(), newAuthService(), newAuthServiceWithDingTalkCfg(), TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(), TestAuthService_GenerateToken_UsesMinutesWhenConfigured(), TestAuthService_GetAccessTokenExpiresIn_FallbackToExpireHour(), TestAuthService_GetAccessTokenExpiresIn_MinutesHasPriority(), TestAuthService_LoginOrRegisterOAuthWithTokenPair_ExistingUserDoesNotGrantAgain() (+27 more)
+Cohesion: 0.11
+Nodes (33): minDingTalkURLs(), newAuthService(), newAuthServiceWithDingTalkCfg(), TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(), TestAuthService_GenerateToken_UsesMinutesWhenConfigured(), TestAuthService_GetAccessTokenExpiresIn_FallbackToExpireHour(), TestAuthService_GetAccessTokenExpiresIn_MinutesHasPriority(), TestAuthService_LoginOrRegisterOAuthWithTokenPair_ExistingUserDoesNotGrantAgain() (+25 more)
+
+### Community 738 - "OpsScheduledReportService"
+Cohesion: 0.10
+Nodes (20): AuthResponse, ForgotPasswordRequest, ForgotPasswordResponse, Login2FARequest, LoginRequest, LogoutRequest, LogoutResponse, RefreshTokenRequest (+12 more)
 
 ### Community 739 - "emailCache"
 Cohesion: 0.14
 Nodes (8): NewEmailCache(), notifyCodeUserRateKey(), notifyVerifyKey(), passwordResetKey(), passwordResetSentAtKey(), TestVerifyCodeKey(), verifyCodeKey(), emailCache
 
+### Community 740 - ".IsOpenAI"
+Cohesion: 0.20
+Nodes (17): buildCodexCommonHeaders(), firstNonEmptyResetCreditPayload(), generateRedeemRequestID(), mapUpstreamStatus(), parseOpenAIRateLimitResetCreditDetails(), TestParseOpenAIRateLimitResetCreditDetails_CompatibleContainers(), OpenAIAdditionalRateLimit, OpenAIQuotaResetCredit (+9 more)
+
 ### Community 741 - "UserProfileIdentityRepoSuite"
-Cohesion: 0.09
-Nodes (7): SettingClient, SettingDelete, SettingDeleteOne, settingOption, newSettingMutation(), withSetting(), withSettingID()
+Cohesion: 0.14
+Nodes (17): dialog, emit, filteredEntries, focusResult(), handleDialogKeydown(), handleInputKeydown(), handleResultKeydown(), props (+9 more)
 
 ### Community 742 - "groupRepoNoop"
 Cohesion: 0.08
 Nodes (4): groupRepoNoop, paymentFulfillmentGroupRepoStub, paymentFulfillmentTxGuardGroupRepo, subscriptionGroupRepoStub
 
 ### Community 743 - "channel_monitor_types.go"
-Cohesion: 0.15
-Nodes (13): ExtraModelStatus, ChannelMonitor, ChannelMonitorAvailability, ChannelMonitorHistoryEntry, ChannelMonitorLatest, ChannelMonitorListParams, CheckResult, ExtraModelStatus (+5 more)
+Cohesion: 0.13
+Nodes (15): ExtraModelStatus, ChannelMonitor, ChannelMonitorAvailability, ChannelMonitorCreateParams, ChannelMonitorHistoryEntry, ChannelMonitorHistoryRow, ChannelMonitorLatest, ChannelMonitorListParams (+7 more)
 
 ### Community 744 - "gateway_websearch_emulation.go"
-Cohesion: 0.13
-Nodes (23): GatewayService, buildSearchResultBlocks(), buildTextSummary(), buildWebSearchClaudeUsage(), doWebSearch(), flushSSEJSON(), getWebSearchManager(), resolveAccountProxyURL() (+15 more)
+Cohesion: 0.16
+Nodes (22): buildSearchResultBlocks(), buildTextSummary(), buildWebSearchClaudeUsage(), doWebSearch(), flushSSEJSON(), resolveAccountProxyURL(), setSSEHeaders(), TestBuildSearchResultBlocks_Empty() (+14 more)
 
 ### Community 745 - "OpsOpenAITokenStatsCard.vue"
 Cohesion: 0.08
@@ -10501,16 +10472,16 @@ Cohesion: 0.11
 Nodes (23): ClaudeContentItem, ClaudeError, ClaudeMessage, ClaudeMetadata, ClaudeModel, ClaudeRequest, ClaudeTool, ClaudeUsage (+15 more)
 
 ### Community 747 - "AppSidebar.vue"
-Cohesion: 0.04
-Nodes (48): formatDateLocalInput(), apiKey, appStore, currentRange, currentYear, customEndDate, customStartDate, dailyUsageDays (+40 more)
+Cohesion: 0.03
+Nodes (62): activeSubscriptions, closeTooltip(), containerRef, displaySubscriptions, getDailyLimit(), getMonthlyLimit(), getWeeklyLimit(), handleClickOutside() (+54 more)
 
 ### Community 748 - "User"
 Cohesion: 0.07
 Nodes (4): User, UserEdges, Users, NewUserClient()
 
 ### Community 750 - "dashboardAggregationRepository"
-Cohesion: 0.07
-Nodes (44): fakeQuotaRepoForUserHandler, buildWindowSlice(), LazyZeroQuotaForResponse(), NeedsDailyReset(), NeedsMonthlyReset(), NeedsWeeklyReset(), nextDailyResetTime(), NextMonthlyResetTimeFrom() (+36 more)
+Cohesion: 0.06
+Nodes (45): fakeQuotaRepoForUserHandler, buildWindowSlice(), LazyZeroQuotaForResponse(), NeedsDailyReset(), NeedsMonthlyReset(), NeedsWeeklyReset(), nextDailyResetTime(), NextMonthlyResetTimeFrom() (+37 more)
 
 ### Community 751 - "SettingsView.spec.ts"
 Cohesion: 0.14
@@ -10539,24 +10510,24 @@ Nodes (7): AppLayoutStub, baseSettingsResponse, {
 }, ImageUploadStub, localeRef, SelectStub, ToggleStub
 
 ### Community 752 - "MonitorAdvancedRequestConfig.vue"
-Cohesion: 0.24
-Nodes (17): codexImportMemoryAdminService, boolPtr(), buildCodexAccessOnlyImportValue(), buildCodexAccessToken(), buildCodexAccessTokenWithJTI(), buildCodexRefreshImportValue(), cloneCodexImportTestMap(), newCodexImportMemoryAdminService() (+9 more)
+Cohesion: 0.18
+Nodes (23): AccountUsageService, codexImportMemoryAdminService, boolPtr(), buildCodexAccessOnlyImportValue(), buildCodexAccessToken(), buildCodexAccessTokenWithJTI(), buildCodexImportTestJWT(), buildCodexRefreshImportValue() (+15 more)
 
 ### Community 753 - "userHandlerEmailCacheStub"
-Cohesion: 0.10
-Nodes (16): BatchCreateProxyItem, BatchCreateRequest, CreateProxyRequest, proxyDataResponse, UpdateProxyRequest, ProxyHandler, setupProxyDataRouter(), TestProxyExportDataPassesSortParams() (+8 more)
+Cohesion: 0.06
+Nodes (29): BatchCreateProxyItem, BatchCreateRequest, BatchSetGroupRateMultipliersRequest, BatchSetGroupRPMOverridesRequest, CreateGroupRequest, CreateProxyRequest, optionalLimitField, proxyDataResponse (+21 more)
 
 ### Community 755 - "RedeemCacheSuite"
 Cohesion: 0.12
 Nodes (7): NewRedeemCache(), redeemLockKey(), redeemRateLimitKey(), TestRedeemLockKey(), TestRedeemRateLimitKey(), redeemCache, RedeemCacheSuite
 
 ### Community 756 - "schedulerCache"
-Cohesion: 0.20
-Nodes (10): decodeCachedAccount(), marshalSchedulerCacheAccount(), NewSchedulerCache(), newSchedulerCacheWithChunkSizes(), ptrTime(), schedulerAccountKey(), schedulerAccountMetaKey(), schedulerBucketKey() (+2 more)
+Cohesion: 0.08
+Nodes (31): TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(), TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(), TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(), ParseSchedulerBucket(), ProvideSchedulerCache(), buildSchedulerMetadataAccount(), decodeCachedAccount(), filterSchedulerAccountGroups() (+23 more)
 
 ### Community 757 - "ParseMetadataUserID"
-Cohesion: 0.08
-Nodes (36): GatewayService, buildStableSessionSeed(), extractProduct(), generateClientID(), generateRandomUUID(), generateUUIDFromSeed(), getHeaderOrDefault(), isClaudeCLIUserAgent() (+28 more)
+Cohesion: 0.09
+Nodes (36): buildStableSessionSeed(), extractProduct(), generateClientID(), generateRandomUUID(), generateUUIDFromSeed(), getHeaderOrDefault(), isClaudeCLIUserAgent(), isNewerVersion() (+28 more)
 
 ### Community 758 - "antigravity_smart_retry_test.go"
 Cohesion: 0.08
@@ -10583,20 +10554,20 @@ Cohesion: 0.11
 Nodes (9): resetBackendModeTestCache(), TestIsBackendModeEnabled_CachesResult(), TestIsBackendModeEnabled_ReturnsFalse(), TestIsBackendModeEnabled_ReturnsFalseOnDBError(), TestIsBackendModeEnabled_ReturnsFalseOnNotFound(), TestIsBackendModeEnabled_ReturnsTrue(), TestUpdateSettings_InvalidatesBackendModeCache(), bmRepoStub (+1 more)
 
 ### Community 765 - "ModelWhitelistSelector.vue"
-Cohesion: 0.10
-Nodes (4): cloneRecord(), conflictBranchRepo, inMemoryIdempotencyRepo, markBehaviorRepo
+Cohesion: 0.07
+Nodes (6): cloneRecord(), conflictBranchRepo, flakySystemLockRenewRepo, inMemoryIdempotencyRepo, markBehaviorRepo, systemLockRepoStub
 
 ### Community 766 - "settings_view.go"
-Cohesion: 0.13
-Nodes (19): TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(), TestDefaultOverloadCooldownSettings(), DefaultBetaPolicySettings(), DefaultOverloadCooldownSettings(), DefaultRateLimit429CooldownSettings(), DefaultRectifierSettings(), DefaultStreamTimeoutSettings(), BetaPolicyRule (+11 more)
+Cohesion: 0.08
+Nodes (28): TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(), TestDefaultOverloadCooldownSettings(), defaultWeChatConnectScopeForMode(), DefaultWeChatConnectScopesForMode(), mergeWeChatConnectCapabilitySettings(), normalizeWeChatConnectModeSetting(), normalizeWeChatConnectScopeSetting(), normalizeWeChatConnectStoredMode() (+20 more)
 
 ### Community 767 - "NewSettingHandler"
-Cohesion: 0.18
-Nodes (5): settingHandlerRepoStub, TestUpdateSettings_CodexBlacklistAllowsOriginatorOnly(), TestUpdateSettings_CodexWhitelistAcceptsMatchable(), TestUpdateSettings_CodexWhitelistRejectsUnmatchable(), updateSettingsCodexStatus()
+Cohesion: 0.07
+Nodes (23): failingAuthSourceSettingsRepoStub, settingHandlerRepoStub, newAnnouncementTestHandler(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsBothTextsEmpty(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsLongID(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsTooMany(), TestSettingHandler_UpdateSettings_AnnouncementBannersRoundTrip(), TestSettingHandler_GetSettings_InjectsAuthSourceDefaults() (+15 more)
 
 ### Community 768 - "backup.ts"
-Cohesion: 0.12
-Nodes (27): getOAuthCompletionKind(), isOAuthLoginCompletion(), PendingOAuthExchangeResponse, persistOAuthTokenContext(), PendingOAuthCreateAccountPayload, clearAllAffiliateReferralCodes(), clearPendingAuthSession(), finalizeCompletion() (+19 more)
+Cohesion: 0.17
+Nodes (14): PendingOAuthExchangeResponse, PendingOAuthCreateAccountPayload, accountActionError, appStore, authStore, getRequestErrorMessage(), handleCreateAccount(), handleSwitchToBind() (+6 more)
 
 ### Community 769 - "ResponsesEventToAnthropicEvents"
 Cohesion: 0.10
@@ -10608,15 +10579,15 @@ Nodes (27): Alipay (Direct), Basic Settings, Callback URL Format, Cancel Rate Li
 
 ### Community 773 - "client.go"
 Cohesion: 0.01
-Nodes (113): Client, AccountGroup, AccountGroupEdges, AccountGroups, Announcement, AnnouncementEdges, Announcements, AuthIdentityChannel (+105 more)
+Nodes (113): Client, Announcement, AnnouncementEdges, Announcements, AuthIdentityChannel, AuthIdentityChannelEdges, AuthIdentityChannels, BatchImageEvent (+105 more)
 
 ### Community 775 - "proxy.go"
 Cohesion: 0.15
 Nodes (23): ByAccounts(), ByAccountsCount(), ByBackupProxyField(), ByBackupProxyID(), ByCreatedAt(), ByDeletedAt(), ByExpiresAt(), ByExpiryWarnDays() (+15 more)
 
 ### Community 778 - "classifyNoAccountErrorFromGin"
-Cohesion: 0.18
-Nodes (20): GatewayService, fakeDiagnoseCall, fakeDiagnoser, noAccountErrorClassification, classifyNoAccountError(), classifyNoAccountErrorFromGin(), newTestGinContextWithRequest(), ptrInt64() (+12 more)
+Cohesion: 0.27
+Nodes (14): fakeDiagnoseCall, fakeDiagnoser, newTestGinContextWithRequest(), ptrInt64(), TestClassifyNoAccountError_DisplayModelOverridesRoutingForMessage(), TestClassifyNoAccountError_EmptyModel_Falls503(), TestClassifyNoAccountError_FromGin_NilContextStillSafe(), TestClassifyNoAccountError_HasModelSupport_KeepsRoutingMessageGenerationToCaller() (+6 more)
 
 ### Community 779 - "oauth.go"
 Cohesion: 0.16
@@ -10639,8 +10610,8 @@ Cohesion: 0.07
 Nodes (27): EasyPay（易支付）, Stripe, Stripe Webhook 设置, Webhook 配置, 主要差异, 从 Sub2ApiPay 迁移, 前台可见支付方式路由, 取消频率限制 (+19 more)
 
 ### Community 785 - "newSQLMock"
-Cohesion: 0.05
-Nodes (60): TestOpsRepositoryGetOpenAITokenStats_EmptyResult(), TestOpsRepositoryGetOpenAITokenStats_PaginationMode(), TestOpsRepositoryGetOpenAITokenStats_TopNMode(), buildUsageCleanupWhere(), newSQLMock(), TestBuildUsageCleanupWhere(), TestBuildUsageCleanupWhereModelEmpty(), TestBuildUsageCleanupWhereRequestTypeLegacyFallback() (+52 more)
+Cohesion: 0.04
+Nodes (82): usageLogRepository, TestOpsRepositoryGetOpenAITokenStats_EmptyResult(), TestOpsRepositoryGetOpenAITokenStats_PaginationMode(), TestOpsRepositoryGetOpenAITokenStats_TopNMode(), buildUsageCleanupWhere(), newSQLMock(), TestBuildUsageCleanupWhere(), TestBuildUsageCleanupWhereModelEmpty() (+74 more)
 
 ### Community 789 - "ChannelMonitor"
 Cohesion: 0.07
@@ -10651,16 +10622,16 @@ Cohesion: 0.09
 Nodes (50): applyAccountStatsCost(), calculatePerRequestStatsCost(), calculateStatsCost(), findPricingForModel(), isPlatformMatch(), matchAccountStatsRule(), resolveAccountStatsCost(), newTestBillingServiceWithPrices() (+42 more)
 
 ### Community 796 - ".handleNotify"
-Cohesion: 0.14
-Nodes (12): PaymentWebhookHandler, wxpaySuccessResponse, extractOutTradeNo(), NewPaymentWebhookHandler(), TestExtractOutTradeNo(), TestExtractOutTradeNoIkunPayQueryPayload(), TestVerifyNotificationWithProvidersFailsWhenAllProvidersReject(), TestVerifyNotificationWithProvidersReturnsMatchedProvider() (+4 more)
+Cohesion: 0.11
+Nodes (11): PaymentWebhookHandler, webhookHandlerProviderStub, wxpaySuccessResponse, extractOutTradeNo(), TestExtractOutTradeNo(), TestExtractOutTradeNoIkunPayQueryPayload(), TestVerifyNotificationWithProvidersFailsWhenAllProvidersReject(), TestVerifyNotificationWithProvidersReturnsMatchedProvider() (+3 more)
 
 ### Community 797 - "payment_config_plans_validation_test.go"
-Cohesion: 0.11
-Nodes (36): validatePlanPatch(), validatePlanRequired(), ptrFloat(), ptrInt(), ptrStr(), TestValidatePlanPatch_AllNil(), TestValidatePlanPatch_EmptyName(), TestValidatePlanPatch_EmptyValidityUnit() (+28 more)
+Cohesion: 0.07
+Nodes (52): applyPlanSeatRangeUpdate(), deriveSeatLimitFromOptionalVirtualRange(), deriveSeatLimitFromVirtualRange(), ensureSeatLimitMatchesVirtualRange(), normalizeCreatePlanSeatRange(), validatePlanPatch(), validatePlanRequired(), ptrFloat() (+44 more)
 
 ### Community 798 - "NewUserService"
 Cohesion: 0.07
-Nodes (50): TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(), TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(), NewUserHandler(), TestAdminAuthJWTValidatesTokenVersion(), newEmailOAuthAutoAuthService(), TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(), NewAuthService(), TestUpdateProfile_DoesNotReturnPartialSuccessFromEmailIdentityResync() (+42 more)
+Nodes (48): TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(), TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(), NewUserHandler(), TestAdminAuthJWTValidatesTokenVersion(), NewAuthService(), TestUpdateProfile_DoesNotReturnPartialSuccessFromEmailIdentityResync(), TestGetProfile_HydratesAvatarFromRepository(), TestGetProfileIdentitySummaries_AllowsUnbindWhenAnotherLoginMethodRemains() (+40 more)
 
 ### Community 799 - "GatewayCacheSuite"
 Cohesion: 0.13
@@ -10671,12 +10642,12 @@ Cohesion: 0.08
 Nodes (47): AnthropicRequest, ccChainToAnthropic(), TestCCChain_ImageGenerationToolPreservesOutputConfig(), TestCCChain_OrphanToolResultFromTrimmedHistory(), TestCCChain_ParallelToolOneResultMissing(), TestCCChain_WellFormedMultiRound(), TestConvertResponsesInputToAnthropic_DeveloperRole(), TestResponsesToAnthropicRequest_Instructions() (+39 more)
 
 ### Community 801 - "batchImageError"
-Cohesion: 0.13
-Nodes (12): dashboardEntityTrendCacheKey, dashboardModelGroupCacheKey, dashboardTrendCacheKey, usageStatsCacheKeyData, DashboardHandler, UsageHandler, mustMarshalDashboardCacheKey(), snapshotPayloadAs() (+4 more)
+Cohesion: 0.16
+Nodes (8): ApplyLegacyRequestFields(), RequestTypeFromInt16(), TestApplyLegacyRequestFields(), TestParseUsageRequestType(), TestRequestTypeFromLegacy(), TestRequestTypeNormalizeAndString(), RequestType, UsageLog
 
 ### Community 802 - "batch_image_provider.go"
-Cohesion: 0.22
-Nodes (5): cleanupErrorIsNotFound(), cleanupEventPayload(), cleanupFailureCode(), BatchImageCleanupRunResult, BatchImageCleanupService
+Cohesion: 0.20
+Nodes (6): cleanupErrorIsNotFound(), cleanupEventPayload(), cleanupFailureCode(), NewBatchImageCleanupService(), BatchImageCleanupRunResult, BatchImageCleanupService
 
 ### Community 803 - ".IsQuotaExceeded"
 Cohesion: 0.20
@@ -10703,28 +10674,28 @@ Cohesion: 0.24
 Nodes (17): benchmarkBodySizes(), BenchmarkExtractCacheableContent_System(), BenchmarkGenerateSessionHash_LargeAnthropicMessages(), BenchmarkOpenAIResponses_LargeInputDecodeMap(), BenchmarkOpenAIResponses_LargeInputEmptyBase64Guard(), BenchmarkOpenAIResponses_LargeInputFunctionCallValidation(), BenchmarkOpenAIResponses_LargeInputImageBillingRaw(), BenchmarkOpenAIResponses_LargeInputMeta() (+9 more)
 
 ### Community 811 - "webChatRepoStub"
-Cohesion: 0.11
-Nodes (26): addAndCondition(), addOrGroup(), anyOf, balanceOperatorOptions, conditionTypeOptions, defaultBalanceCondition(), defaultSubscriptionCondition(), emit (+18 more)
+Cohesion: 0.02
+Nodes (94): Props, Props, addAndCondition(), addOrGroup(), anyOf, balanceOperatorOptions, conditionTypeOptions, defaultBalanceCondition() (+86 more)
 
 ### Community 812 - "kiro_runtime_state_test.go"
 Cohesion: 0.19
 Nodes (13): TestMapUserErrorCategoryCyber(), MapUserErrorCategory(), TestCategoryToFilter(), TestMapUserErrorCategory(), TestToUserErrorRequest_RedactsSensitiveFields(), TestToUserErrorRequestDetail_Nil(), TestToUserErrorRequestDetail_WhitelistAndRedacts(), ToUserErrorRequest() (+5 more)
 
 ### Community 818 - "NewOpsService"
-Cohesion: 0.15
-Nodes (32): responseEnvelope, newOpsSystemLogTestRouter(), TestOpsSystemLogHandler_CleanupAcceptsAPIKeyID(), TestOpsSystemLogHandler_CleanupInvalidAPIKeyID(), TestOpsSystemLogHandler_CleanupInvalidEndTime(), TestOpsSystemLogHandler_CleanupInvalidPayload(), TestOpsSystemLogHandler_CleanupInvalidTime(), TestOpsSystemLogHandler_CleanupMonitoringDisabled() (+24 more)
+Cohesion: 0.12
+Nodes (36): responseEnvelope, newOpsSystemLogTestRouter(), TestOpsSystemLogHandler_CleanupAcceptsAPIKeyID(), TestOpsSystemLogHandler_CleanupInvalidAPIKeyID(), TestOpsSystemLogHandler_CleanupInvalidEndTime(), TestOpsSystemLogHandler_CleanupInvalidPayload(), TestOpsSystemLogHandler_CleanupInvalidTime(), TestOpsSystemLogHandler_CleanupMonitoringDisabled() (+28 more)
 
 ### Community 820 - "manager_test.go"
 Cohesion: 0.08
-Nodes (43): addMonthsClamped(), isProxyError(), newHTTPClient(), NewManager(), nextMonthlyReset(), quotaTTLFromSubscription(), TestAddMonthsClamped_Jan31ToFeb(), TestAddMonthsClamped_Jan31ToFebLeapYear() (+35 more)
+Nodes (45): addMonthsClamped(), isProxyError(), newHTTPClient(), NewManager(), nextMonthlyReset(), quotaTTLFromSubscription(), TestAddMonthsClamped_Jan31ToFeb(), TestAddMonthsClamped_Jan31ToFebLeapYear() (+37 more)
 
 ### Community 821 - "scheduledTestPlanRepository"
 Cohesion: 0.17
 Nodes (7): NewScheduledTestPlanRepository(), NewScheduledTestResultRepository(), scanPlan(), scanPlans(), scannable, scheduledTestPlanRepository, scheduledTestResultRepository
 
 ### Community 822 - "fakeRepoForAdapter"
-Cohesion: 0.10
-Nodes (19): PaymentConfigService, ForSaleEQ(), applyPlanSeatRangeUpdate(), deriveSeatLimitFromOptionalVirtualRange(), deriveSeatLimitFromVirtualRange(), ensureSeatLimitMatchesVirtualRange(), normalizeCreatePlanSeatRange(), TestDeriveSeatLimitFromOptionalVirtualRangeTracksAbsentClearAndValue() (+11 more)
+Cohesion: 0.25
+Nodes (3): PaymentConfigService, ForSaleEQ(), CreatePlanRequest
 
 ### Community 825 - "user_handler.go"
 Cohesion: 0.10
@@ -10735,12 +10706,12 @@ Cohesion: 0.04
 Nodes (99): makeStandardRepo(), newTestChannelService(), newTestChannelServiceWithAuth(), TestBuildCache_DBError(), TestBuildCache_GroupPlatformError(), TestBuildCache_MultipleGroupsSameChannel(), TestBuildCache_PlatformFiltering(), TestBuildCache_WildcardPreservesConfigOrder() (+91 more)
 
 ### Community 828 - "content_moderation_test.go"
-Cohesion: 0.06
-Nodes (53): TestApplyFlaggedAccountSideEffects_PassesExcludeCyberFlag(), TestRecordCyberPolicyEvent_DefaultCountsTowardBan(), TestRecordCyberPolicyEvent_DisabledWhenRiskControlOff(), TestRecordCyberPolicyEvent_ExcludeFromBanCount_SkipsBanJudgment(), TestRecordCyberPolicyEvent_WritesLogWhenEnabled(), defaultContentModerationConfig(), NewContentModerationService(), contentModerationIntPtr() (+45 more)
+Cohesion: 0.05
+Nodes (55): TestApplyFlaggedAccountSideEffects_PassesExcludeCyberFlag(), TestRecordCyberPolicyEvent_CreateLogBeforeEmail(), TestRecordCyberPolicyEvent_DefaultCountsTowardBan(), TestRecordCyberPolicyEvent_DisabledWhenRiskControlOff(), TestRecordCyberPolicyEvent_ExcludeFromBanCount_SkipsBanJudgment(), TestRecordCyberPolicyEvent_WritesLogWhenEnabled(), defaultContentModerationConfig(), NewContentModerationService() (+47 more)
 
 ### Community 829 - "setting_service_platform_quota_test.go"
-Cohesion: 0.14
-Nodes (19): TestSettingKeyAuthSourcePlatformQuotas(), floatPtrPQ(), newSettingServiceForPlatformQuotaTest(), TestGetAuthSourcePlatformQuotas_AllNegativeOrEmpty_NoEntry(), TestGetAuthSourcePlatformQuotas_JSON(), TestGetAuthSourcePlatformQuotas_OnlyConfiguredReturned(), TestGetDefaultPlatformQuotas_ReturnsAllowedPlatforms(), TestMergePlatformQuotaDefaults_NilSrcIsNoop() (+11 more)
+Cohesion: 0.18
+Nodes (17): TestSettingKeyAuthSourcePlatformQuotas(), floatPtrPQ(), newSettingServiceForPlatformQuotaTest(), TestGetAuthSourcePlatformQuotas_AllNegativeOrEmpty_NoEntry(), TestGetAuthSourcePlatformQuotas_JSON(), TestGetAuthSourcePlatformQuotas_OnlyConfiguredReturned(), TestGetDefaultPlatformQuotas_ReturnsAllowedPlatforms(), TestMergePlatformQuotaDefaults_NilSrcIsNoop() (+9 more)
 
 ### Community 830 - "FilterWebSearchHistoryBlocks"
 Cohesion: 0.27
@@ -10755,8 +10726,8 @@ Cohesion: 0.12
 Nodes (9): { replaceMock, routeState, locationState, showErrorMock }, appStore, backToPaymentText, callbackProcessingText, callbackTitleText, errorMessage, route, router (+1 more)
 
 ### Community 835 - "credentialsBuilder.ts"
-Cohesion: 0.10
-Nodes (14): activeSubscriptions, closeTooltip(), containerRef, displaySubscriptions, getDailyLimit(), getMonthlyLimit(), getWeeklyLimit(), handleClickOutside() (+6 more)
+Cohesion: 0.11
+Nodes (18): Documentation domain, Documentation presentation, File and Responsibility Map, Final Review Checklist, Global Constraints, LINX2 API Documentation Implementation Plan, Product integration, Shared configuration sources (+10 more)
 
 ### Community 836 - "batchImage.ts"
 Cohesion: 0.18
@@ -10779,24 +10750,16 @@ Cohesion: 0.07
 Nodes (26): 10. 非目标（本期不做）, 11. 风险, 1. 背景, 2. 目标（改造后行为）, 3. 需求与决策（已与需求方确认）, 4. 关键事实（代码调研结论）, 5. 行为规则（改造后）, 6. 配置项 (+18 more)
 
 ### Community 841 - "websearch_config_test.go"
-Cohesion: 0.08
-Nodes (36): SettingService, parseWebSearchConfigJSON(), PopulateWebSearchUsage(), ResetWebSearchUsage(), SanitizeWebSearchConfig(), TestParseWebSearchConfigJSON_BackwardCompatibility(), TestParseWebSearchConfigJSON_EmptyString(), TestParseWebSearchConfigJSON_InvalidJSON() (+28 more)
+Cohesion: 0.07
+Nodes (40): GatewayService, SettingService, getWebSearchManager(), parseWebSearchConfigJSON(), PopulateWebSearchUsage(), ResetWebSearchUsage(), SanitizeWebSearchConfig(), TestParseWebSearchConfigJSON_BackwardCompatibility() (+32 more)
 
 ### Community 843 - ".Settle"
-Cohesion: 0.06
-Nodes (54): TestDenyEntries_BlacklistOR(), TestMatchClientEntries_WhitelistAND(), IsAllowedClientMatch(), IsDeniedClientMatch(), MatchClientEntries(), MatchClientEntry(), MatchDenyEntries(), TestMatchClientEntry_ReturnsHitEntry() (+46 more)
+Cohesion: 0.08
+Nodes (36): TestDenyEntries_BlacklistOR(), TestMatchClientEntries_WhitelistAND(), IsAllowedClientMatch(), IsDeniedClientMatch(), MatchClientEntries(), MatchClientEntry(), MatchDenyEntries(), TestMatchClientEntry_ReturnsHitEntry() (+28 more)
 
 ### Community 845 - "newInProcessTransport"
 Cohesion: 0.12
 Nodes (9): createReqClient(), NewClaudeOAuthClient(), newTestReqClient(), newInProcessTransport(), claudeOAuthService, ClaudeOAuthServiceSuite, requestCapture, roundTripFunc (+1 more)
-
-### Community 846 - "WebChatMessageUpsertBulk"
-Cohesion: 0.20
-Nodes (8): imageConcurrencyLimiter, BenchmarkWrapReleaseOnDone(), TestWrapReleaseOnDone_ConcurrentCalls(), TestWrapReleaseOnDone_ContextCancellation(), TestWrapReleaseOnDone_MultipleCallsOnlyReleaseOnce(), TestWrapReleaseOnDone_NilReleaseFunc(), TestWrapReleaseOnDone_NoGoroutineLeak(), wrapReleaseOnDone()
-
-### Community 847 - "newAuthRoutesTestRouter"
-Cohesion: 0.10
-Nodes (18): BeginnerWelcomeDialogStub, mockFetchActiveSubscriptions, mockGetByDateRange, mockGetCheckoutInfo, mockGetDashboardModels, mockGetDashboardStats, mockGetDashboardTrend, mockGetMyPlatformQuotas (+10 more)
 
 ### Community 848 - "dependencies"
 Cohesion: 0.18
@@ -10840,7 +10803,7 @@ Nodes (38): newAnthropicAPIKeyPassthroughAccountForBetaTest(), newTestGatewaySer
 
 ### Community 860 - "WebChatMessageUpdate"
 Cohesion: 0.05
-Nodes (68): GatewayService, AdjustBedrockModelRegionPrefix(), autoInjectBedrockBetaTokens(), BedrockCrossRegionPrefix(), bedrockModelSupportsToolSearch(), bedrockRuntimeRegion(), BuildBedrockURL(), containsBedrockBetaToken() (+60 more)
+Nodes (69): GatewayService, AdjustBedrockModelRegionPrefix(), autoInjectBedrockBetaTokens(), BedrockCrossRegionPrefix(), bedrockModelSupportsToolSearch(), bedrockRuntimeRegion(), BuildBedrockURL(), containsBedrockBetaToken() (+61 more)
 
 ### Community 861 - "redeemcode.go"
 Cohesion: 0.16
@@ -10858,13 +10821,17 @@ Nodes (42): OrderOption, ByAccountID(), ByActualCost(), ByAPIKeyID(), ByBatchID(
 Cohesion: 0.27
 Nodes (16): gatewayModelItemForTest, gatewayModelsAccountRepoStub, gatewayModelsResponseForTest, modelIDsForTest(), newGatewayModelsHandlerForTest(), TestGatewayModels_AnthropicCustomModelsListDisabledKeepsMappedModelList(), TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedDeepSeek(), TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeWithoutMappings() (+8 more)
 
+### Community 867 - "userMemoryIdempotencyRepoStub"
+Cohesion: 0.18
+Nodes (8): userMemoryIdempotencyRepoStub, executeUserIdempotentJSON(), newUserMemoryIdempotencyRepoStub(), TestExecuteUserIdempotentJSONConcurrentRetrySingleSideEffectAndReplay(), TestExecuteUserIdempotentJSONFailCloseOnStoreUnavailable(), TestExecuteUserIdempotentJSONFallbackWithoutCoordinator(), withUserSubject(), SetDefaultIdempotencyCoordinator()
+
 ### Community 868 - "openai_ws_ratelimit_signal_test.go"
 Cohesion: 0.10
 Nodes (9): newBillingCacheStub(), TestAdminService_BatchDeleteRedeemCodes_PartialFailures(), TestAdminService_DeleteGroup_Error(), TestAdminService_DeleteGroup_Success_WithCacheInvalidation(), TestAdminService_DeleteProxy_Error(), TestAdminService_DeleteRedeemCode_Error(), TestAdminService_DeleteUser_DeleteError(), waitForInvalidations() (+1 more)
 
 ### Community 869 - "NewClaudeCodeValidator"
-Cohesion: 0.07
-Nodes (43): newTestValidator(), TestDiceCoefficient(), TestIsClaudeCodeClient_Context(), TestSystemPromptSimilarity(), TestValidate_ClaudeCLIUserAgent(), TestValidate_MaxTokensOneHaikuBypass(), TestValidate_MessagesPath_FullValid(), TestValidate_MessagesPath_InvalidMetadataUserID() (+35 more)
+Cohesion: 0.21
+Nodes (17): NewClaudeCodeValidator(), TestClaudeCodeValidator_BillingBlockRecognizedWithoutCCH(), TestClaudeCodeValidator_BillingBlockRecognizedWithoutIdentityPrompt(), TestClaudeCodeValidator_BillingBlockStillRequiresClaudeCodeUA(), TestClaudeCodeValidator_BillingBlockVSCodeEntrypointRecognized(), TestClaudeCodeValidator_BillingBlockWithoutEntrypointFallsThrough(), TestClaudeCodeValidator_CountTokensPathRequiresUA(), TestClaudeCodeValidator_CountTokensPathUAOnly() (+9 more)
 
 ### Community 870 - "TurnstileService"
 Cohesion: 0.20
@@ -10882,9 +10849,13 @@ Nodes (14): newBillingServiceForRPM(), TestBillingCacheService_CheckRPM_NilOverr
 Cohesion: 0.18
 Nodes (12): newResetQuotaSvc(), TestAdminResetQuota_BothFalseReturnsError(), TestAdminResetQuota_ResetBoth(), TestAdminResetQuota_ResetDailyOnly(), TestAdminResetQuota_ResetDailyUsageError(), TestAdminResetQuota_ResetMonthlyOnly(), TestAdminResetQuota_ResetMonthlyUsageError(), TestAdminResetQuota_ResetWeeklyOnly() (+4 more)
 
+### Community 875 - "DingTalkClient"
+Cohesion: 0.15
+Nodes (11): useBeginnerGuideStore, { getGuideState, patchGuideState }, gettingStartedDir, localeMessages(), mountAuthenticatedView(), mountView(), progress(), progressAt() (+3 more)
+
 ### Community 876 - "runProxyQualityTarget"
-Cohesion: 0.13
-Nodes (8): { showErrorMock }, appStore, code, emit, hiddenOtpInputRef, inputRefs, { t }, verifying
+Cohesion: 0.20
+Nodes (3): stringPtr(), sqlNullTime, UserProfileIdentityRepoSuite
 
 ### Community 878 - ".SetStatus"
 Cohesion: 0.08
@@ -10907,8 +10878,8 @@ Cohesion: 0.15
 Nodes (17): isSingleAccountRetry(), ctxWithSingleAccountRetry(), TestAntigravityRetryLoop_503_SingleAccount_InPlaceRetryUsed_E2E(), TestAntigravityRetryLoop_PreCheck_NoSingleAccountRetry_SwitchesOnRateLimit(), TestAntigravityRetryLoop_PreCheck_SingleAccountRetry_SkipsRateLimit(), TestHandleSingleAccountRetryInPlace_AllRetriesFail(), TestHandleSingleAccountRetryInPlace_NetworkError_ContinuesRetry(), TestHandleSingleAccountRetryInPlace_Success() (+9 more)
 
 ### Community 887 - "newWebChatRepoTestClient"
-Cohesion: 0.23
-Nodes (11): isAllowedHost(), isBlockedHost(), normalizeAllowlist(), TestValidateHTTPURL(), TestValidateURLFormat(), ValidateHTTPSURL(), ValidateHTTPURL(), ValidateResolvedIP() (+3 more)
+Cohesion: 0.24
+Nodes (10): isAllowedHost(), isBlockedHost(), normalizeAllowlist(), TestValidateHTTPURL(), TestValidateURLFormat(), ValidateHTTPSURL(), ValidateHTTPURL(), ValidateResolvedIP() (+2 more)
 
 ### Community 888 - "mustParseGeminiSessionHashRequest"
 Cohesion: 0.09
@@ -10931,20 +10902,20 @@ Cohesion: 0.11
 Nodes (18): Apple container Deployment, Binary Install, Common Issues, Common Values Reference, Comparison Table, Configuration, Default Behavior, Deployment Methods (+10 more)
 
 ### Community 896 - ".Less"
-Cohesion: 0.18
+Cohesion: 0.17
 Nodes (6): UsedByEQ(), redeemCodeEntitiesToService(), redeemCodeEntityToService(), redeemCodeListOrder(), EmailContainsFold(), redeemCodeRepository
 
 ### Community 897 - "NewSettingHandler"
-Cohesion: 0.09
-Nodes (12): dailyCheckInPublicRepo, settingHandlerPublicRepoStub, TestSettingHandler_GetPublicModelCatalog_CollapsesParameterVariants(), TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPricing(), TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(), TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(), TestSettingHandler_GetPublicModelPricing_OmitsMissingCuratedModels(), TestSettingHandler_GetPublicModelPricing_ReturnsCuratedPricingFromFallbackData() (+4 more)
+Cohesion: 0.16
+Nodes (12): T, TestSettingHandler_GetPublicModelCatalog_CollapsesParameterVariants(), TestSettingHandler_GetPublicModelCatalog_ExposesConfirmedAndUnverifiedPricing(), TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(), TestSettingHandler_GetPublicModelCatalog_UsesOfficialContextWindows(), TestSettingHandler_GetPublicModelPricing_OmitsMissingCuratedModels(), TestSettingHandler_GetPublicModelPricing_ReturnsCuratedPricingFromFallbackData(), TestSettingHandler_GetPublicSettings_ExposesForceEmailOnThirdPartySignup() (+4 more)
 
 ### Community 898 - "user_handler.go"
-Cohesion: 0.16
+Cohesion: 0.17
 Nodes (19): BindEmailIdentityRequest, ChangePasswordRequest, RemoveNotifyEmailRequest, SendEmailBindingCodeRequest, SendNotifyEmailCodeRequest, StartIdentityBindingRequest, ToggleNotifyEmailRequest, UpdateProfileRequest (+11 more)
 
 ### Community 899 - "BuildAnthropicDigestChain"
-Cohesion: 0.10
-Nodes (37): AnthropicSessionTTL(), BuildAnthropicDigestChain(), canonicalAnthropicDigestJSON(), GenerateAnthropicDigestSessionKey(), rolePrefix(), mustParseAnthropicDigestRequest(), TestAnthropicSessionTTL(), TestBuildAnthropicDigestChain_CanonicalJSON() (+29 more)
+Cohesion: 0.21
+Nodes (21): AnthropicSessionTTL(), BuildAnthropicDigestChain(), canonicalAnthropicDigestJSON(), GenerateAnthropicDigestSessionKey(), rolePrefix(), mustParseAnthropicDigestRequest(), TestAnthropicSessionTTL(), TestBuildAnthropicDigestChain_CanonicalJSON() (+13 more)
 
 ### Community 900 - "aes_encryptor_test.go"
 Cohesion: 0.22
@@ -10963,32 +10934,32 @@ Cohesion: 0.13
 Nodes (4): NewGeminiTokenCache(), TestGeminiTokenCache_DeleteAccessToken_RedisError(), geminiTokenCache, GeminiTokenCacheSuite
 
 ### Community 904 - "testConfig"
-Cohesion: 0.09
-Nodes (34): TestDiagnoseModelAvailabilityForPlatform_EmptyMappingAllowsAll(), TestDiagnoseModelAvailabilityForPlatform_EmptyPlatform_AlwaysAvailable(), TestDiagnoseModelAvailabilityForPlatform_ExplicitMappingMatches(), TestDiagnoseModelAvailabilityForPlatform_NoAccountsInPool(), TestDiagnoseModelAvailabilityForPlatform_NoMatchingModel_ReturnsNotFoundSignal(), TestDiagnoseModelAvailabilityForPlatform_NoModel_AlwaysAvailable(), TestDiagnoseModelAvailabilityForPlatform_WildcardMappingMatches(), TestDiagnoseModelAvailabilityForPlatform_WrongPlatformFiltersOut() (+26 more)
+Cohesion: 0.07
+Nodes (36): TestDiagnoseModelAvailabilityForPlatform_EmptyMappingAllowsAll(), TestDiagnoseModelAvailabilityForPlatform_EmptyPlatform_AlwaysAvailable(), TestDiagnoseModelAvailabilityForPlatform_ExplicitMappingMatches(), TestDiagnoseModelAvailabilityForPlatform_NoAccountsInPool(), TestDiagnoseModelAvailabilityForPlatform_NoMatchingModel_ReturnsNotFoundSignal(), TestDiagnoseModelAvailabilityForPlatform_NoModel_AlwaysAvailable(), TestDiagnoseModelAvailabilityForPlatform_WildcardMappingMatches(), TestDiagnoseModelAvailabilityForPlatform_WrongPlatformFiltersOut() (+28 more)
 
 ### Community 905 - "Docker Deployment (Recommended)"
 Cohesion: 0.10
 Nodes (20): Backend state and API, Beginner Getting Started Guide Implementation Plan, Discovery, prompt, and authentication return, File Map, Frontend state, content, and shared configuration, Global Constraints, Guide route and UI, Task 10: Add the Built-In Homepage Discovery Layer (+12 more)
 
 ### Community 906 - "NewRateLimitService"
-Cohesion: 0.03
-Nodes (55): TestApplyErrorPolicy(), TestApplyErrorPolicy_GeminiRateLimitBypassesCustomSkip(), TestCheckErrorPolicy(), TestHandleUpstreamError_PoolModeCustomErrorCodesOverride(), TestCheckErrorPolicy_GeminiAccounts(), TestGeminiErrorPolicyIntegration(), TestCheckErrorPolicy_401_DBFallback_DBError_FirstHit(), TestCheckErrorPolicy_401_DBFallback_Escalates() (+47 more)
+Cohesion: 0.04
+Nodes (51): newRetryParams(), saveAndSetBaseURLs(), TestCustomErrorCode599_SkippedErrors_Return500_NoRateLimit(), TestRetryLoop_ErrorPolicy_CustomErrorCodes(), TestRetryLoop_ErrorPolicy_NilRateLimitService(), TestRetryLoop_ErrorPolicy_NoPolicy_OriginalBehavior(), TestRetryLoop_ErrorPolicy_TempUnschedulable(), TestApplyErrorPolicy() (+43 more)
 
 ### Community 909 - "OpenAIGatewayService"
-Cohesion: 0.13
-Nodes (3): OpenAIGatewayService, OpenAIWSPerformanceMetricsSnapshot, OpenAIWSPoolMetricsSnapshot
+Cohesion: 0.11
+Nodes (4): OpenAIGatewayService, OpenAIWSPerformanceMetricsSnapshot, OpenAIWSPoolMetricsSnapshot, OpenAIWSRetryMetricsSnapshot
 
 ### Community 911 - "ExtractContentModerationInput"
-Cohesion: 0.12
-Nodes (35): addGeminiModerationImage(), addModerationImage(), addModerationImageData(), addModerationText(), collectAnthropicUserContentValue(), collectContentValue(), collectLastAnthropicUserMessage(), collectLastGeminiContent() (+27 more)
+Cohesion: 0.11
+Nodes (37): contentModerationTestHasAuditInput(), addGeminiModerationImage(), addModerationImage(), addModerationImageData(), addModerationText(), collectAnthropicUserContentValue(), collectContentValue(), collectLastAnthropicUserMessage() (+29 more)
 
 ### Community 912 - "NewSubscriptionMaintenanceQueue"
 Cohesion: 0.18
 Nodes (10): NewSubscriptionMaintenanceQueue(), TestNewSubscriptionMaintenanceQueue_NegativeParams(), TestNewSubscriptionMaintenanceQueue_ZeroParams(), TestSubscriptionMaintenanceQueue_ConcurrentEnqueueAndStop(), TestSubscriptionMaintenanceQueue_Stop_Idempotent(), TestSubscriptionMaintenanceQueue_TryEnqueue_AfterStop(), TestSubscriptionMaintenanceQueue_TryEnqueue_NilTask(), TestSubscriptionMaintenanceQueue_TryEnqueue_PanicDoesNotKillWorker() (+2 more)
 
 ### Community 913 - "analytics51la.ts"
-Cohesion: 0.21
-Nodes (11): finalizeProxyQualityResult(), proxyQualityBaseConnectivityPass(), proxyQualityFirstCFRay(), proxyQualityGrade(), proxyQualityOverallStatus(), runProxyQualityTarget(), TestFinalizeProxyQualityResult_ScoreAndGrade(), TestRunProxyQualityTarget_AllowedStatusPass() (+3 more)
+Cohesion: 0.15
+Nodes (9): captureEnvOr(), TestClickHouseArchiveRoundTrip(), archiveCreateTableDDL(), b2u8(), newClickHouseArchiveWriter(), TestCreateTableDDLContainsRawColumns(), ArchiveWriter, clickHouseArchiveWriter (+1 more)
 
 ### Community 914 - "auth_identity_payment_migrations_regression_test.go"
 Cohesion: 0.15
@@ -11003,20 +10974,20 @@ Cohesion: 0.67
 Nodes (3): UsageCleanupFilters, UsageCleanupRepository, UsageCleanupTask
 
 ### Community 917 - "groupsImagePricing.ts"
-Cohesion: 0.16
-Nodes (20): defaultImagePricePlaceholders, defaultVideoPricePlaceholders, getDefaultImagePreviewPrice(), getDefaultVideoPreviewPrice(), getImagePricePlaceholder(), getVideoPricePlaceholder(), imagePricingI18nKey(), imagePricingPlatforms (+12 more)
+Cohesion: 0.24
+Nodes (13): defaultImagePricePlaceholders, defaultVideoPricePlaceholders, getDefaultImagePreviewPrice(), getDefaultVideoPreviewPrice(), getImagePricePlaceholder(), getVideoPricePlaceholder(), imagePricingI18nKey(), imagePricingPlatforms (+5 more)
 
 ### Community 918 - "bedrock_request.go"
 Cohesion: 0.17
-Nodes (21): mustNewClient(), TestClient_ExchangeCode_无ClientSecret(), TestClient_FetchAvailableModels_404Fallback_RealCall(), TestClient_FetchAvailableModels_AllURLsFail_RealCall(), TestClient_FetchAvailableModels_ContextCanceled_RealCall(), TestClient_FetchAvailableModels_EmptyModels_RealCall(), TestClient_FetchAvailableModels_HTTPError_RealCall(), TestClient_FetchAvailableModels_InvalidJSON_RealCall() (+13 more)
+Nodes (17): BuildGeminiDigestChain(), FormatGeminiSessionValue(), GenerateGeminiDigestSessionKey(), GenerateGeminiPrefixHash(), ParseGeminiSessionValue(), shortHash(), TestBuildGeminiDigestChain(), TestDigestChainDifferentSysInstruction() (+9 more)
 
 ### Community 920 - "AnnouncementUpsertOne"
-Cohesion: 0.16
-Nodes (4): PromoCodeUsage, PromoCodeUsageEdges, PromoCodeUsages, NewPromoCodeUsageClient()
+Cohesion: 0.06
+Nodes (11): PromoCodeUsage, PromoCodeUsageClient, PromoCodeUsageDelete, PromoCodeUsageDeleteOne, PromoCodeUsageEdges, promocodeusageOption, PromoCodeUsages, NewPromoCodeUsageClient() (+3 more)
 
 ### Community 921 - "ValidateURLFormat"
-Cohesion: 0.16
-Nodes (16): main(), runMainServer(), runSetupServer(), OptionsFromConfig(), cliValidateDBName(), cliValidateEmail(), cliValidateHostname(), cliValidatePort() (+8 more)
+Cohesion: 0.14
+Nodes (18): main(), runMainServer(), runSetupServer(), OptionsFromConfig(), cliValidateDBName(), cliValidateEmail(), cliValidateHostname(), cliValidatePort() (+10 more)
 
 ### Community 922 - "wrapReleaseOnDone"
 Cohesion: 0.33
@@ -11048,27 +11019,31 @@ Nodes (17): ByCreatedAt(), ByDeletedAt(), ByDescription(), ByDisplayOrder(), ByE
 
 ### Community 931 - ".AddUsageRecordIDs"
 Cohesion: 0.10
-Nodes (25): authAPI, appStore, authStore, contactInfo, errorMessage, fetchHistory(), formatHistoryValue(), formatSubscriptionDuration() (+17 more)
+Nodes (24): appStore, authStore, contactInfo, errorMessage, fetchHistory(), formatHistoryValue(), formatSubscriptionDuration(), getHistoryItemTitle() (+16 more)
+
+### Community 932 - "settingRepository"
+Cohesion: 0.22
+Nodes (16): disableOpenAITraining(), extractEntitlementExpiresAt(), extractPlanType(), fetchChatGPTAccountInfo(), fetchChatGPTSubscriptionExpiresAt(), fillAccountInfo(), hasChatGPTAccountDeactivatedMarker(), isUsableChatGPTAccountCandidate() (+8 more)
 
 ### Community 933 - "deriveOpenAIContentSessionSeed"
-Cohesion: 0.18
-Nodes (12): attachOpenAILegacySessionHashToGin(), deriveOpenAISessionHashes(), DeriveSessionHashFromSeed(), openAIStickyCompatStats(), TestGetStickySessionAccountID_FallbackToLegacyKey(), TestSetStickySessionAccountID_DualWriteOldDisabled(), TestSetStickySessionAccountID_DualWriteOldEnabled(), TestSnapshotOpenAICompatibilityFallbackMetrics() (+4 more)
-
-### Community 934 - "openAIImagesFailoverAccountRepo"
 Cohesion: 0.20
-Nodes (3): openAIImagesFailoverAccountRepo, openAIImagesFailoverHTTPUpstream, TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhenExhausted()
+Nodes (11): attachOpenAILegacySessionHashToGin(), deriveOpenAISessionHashes(), DeriveSessionHashFromSeed(), openAIStickyCompatStats(), TestGetStickySessionAccountID_FallbackToLegacyKey(), TestSetStickySessionAccountID_DualWriteOldDisabled(), TestSetStickySessionAccountID_DualWriteOldEnabled(), withOpenAILegacySessionHash() (+3 more)
 
 ### Community 936 - "NewDashboardService"
-Cohesion: 0.16
-Nodes (15): TestDashboardService_AggDisabled_UsesUsageLogsFallback(), TestDashboardService_CacheDisabled_SkipsCache(), TestDashboardService_CacheHitFresh(), TestDashboardService_CacheHitStale_TriggersAsyncRefresh(), TestDashboardService_CacheMiss_StoresCache(), TestDashboardService_CacheParseError_EvictsAndRefetches(), TestDashboardService_CacheParseError_RepoFailure(), TestDashboardService_StatsStaleFalseWhenFresh() (+7 more)
+Cohesion: 0.17
+Nodes (14): TestDashboardService_AggDisabled_UsesUsageLogsFallback(), TestDashboardService_CacheDisabled_SkipsCache(), TestDashboardService_CacheHitFresh(), TestDashboardService_CacheHitStale_TriggersAsyncRefresh(), TestDashboardService_CacheMiss_StoresCache(), TestDashboardService_CacheParseError_EvictsAndRefetches(), TestDashboardService_CacheParseError_RepoFailure(), TestDashboardService_StatsStaleFalseWhenFresh() (+6 more)
+
+### Community 937 - ".Save"
+Cohesion: 0.21
+Nodes (18): parseTime(), explicitOpenAISessionID(), grokQuotaRetryAfterActive(), grokQuotaSnapshotStaleForPause(), openAICodexSnapshotStaleForPause(), openAIQuotaAutoPauseSettingsFromContext(), openAIQuotaWindowReset(), prioritizeOpenAICompactAccounts() (+10 more)
 
 ### Community 938 - ".Execute"
-Cohesion: 0.30
-Nodes (14): appendSortedAttrs(), builderWriteByte(), builderWriteString(), logIdempotencyAudit(), logIdempotencyMetric(), recordIdempotencyClaim(), recordIdempotencyConflict(), recordIdempotencyProcessingDuration() (+6 more)
+Cohesion: 0.11
+Nodes (32): idempotencyStoreUnavailableMode, executeAdminIdempotent(), executeAdminIdempotentJSONFailOpenOnStoreUnavailable(), executeAdminIdempotentJSONWithMode(), BuildIdempotencyFingerprint(), DefaultIdempotencyCoordinator(), DefaultSystemOperationIdempotencyTTL(), NormalizeIdempotencyKey() (+24 more)
 
 ### Community 939 - "kiro_cache_emulation_test.go"
-Cohesion: 0.10
-Nodes (18): IsSupportedBatchImageProvider(), NewBatchImageID(), TestCanTransitionBatchImageJob(), TestIsSupportedBatchImageProvider(), TestIsTerminalBatchImageJobStatus(), TestNewBatchImageID(), BatchImageCounts, BatchImageEvent (+10 more)
+Cohesion: 0.09
+Nodes (21): CanTransitionBatchImageJob(), IsSupportedBatchImageProvider(), IsTerminalBatchImageJobStatus(), NewBatchImageID(), TestCanTransitionBatchImageJob_PR5DirectIndexing(), TestCanTransitionBatchImageJob(), TestIsSupportedBatchImageProvider(), TestIsTerminalBatchImageJobStatus() (+13 more)
 
 ### Community 941 - "NewOpenAICodexClientRestrictionDetector"
 Cohesion: 0.22
@@ -11077,6 +11052,10 @@ Nodes (18): extractRegistrationEmailDomain(), formatRegistrationEmailSuffixWhite
 ### Community 942 - "UserAttributeDefinitionUpdate"
 Cohesion: 0.05
 Nodes (11): UserAPIKeyRoute, UserAPIKeyRouteClient, UserAPIKeyRouteDelete, UserAPIKeyRouteDeleteOne, UserAPIKeyRouteEdges, userapikeyrouteOption, UserAPIKeyRoutes, NewUserAPIKeyRouteClient() (+3 more)
+
+### Community 944 - "Authentication Views Usage Examples"
+Cohesion: 0.15
+Nodes (10): assertJSONTokenOrder(), TestEnforceCacheControlLimit_CountsToolsAndPreservesMessageAnchorsFirst(), TestEnforceCacheControlLimit_PreservesTopLevelFieldOrder(), TestGatewayCacheTTLGlobalSetting_RequestInjectionScope(), TestGatewayCacheTTLGlobalSetting_TargetResolution(), TestInjectAnthropicCacheControlTTL1h_OnlyUpdatesExistingEphemeralCacheControl(), TestInjectClaudeCodePrompt_PreservesFieldOrder(), TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder() (+2 more)
 
 ### Community 946 - "getRuleSearchKey"
 Cohesion: 0.10
@@ -11087,8 +11066,8 @@ Cohesion: 0.10
 Nodes (20): Backend billing path, Backend data model and migrations, Backend DTOs and user APIs, Backend payment and subscription services, File Structure, Frontend types, API, and UI, Implementation Tasks, Self-Review Checklist (+12 more)
 
 ### Community 948 - "UsageCleanupTaskCreateBulk"
-Cohesion: 0.14
-Nodes (10): persistAccountCredentials(), GeminiTokenCacheKey(), NewGeminiTokenProvider(), NewGeminiTokenRefresher(), TestGeminiProviderRefreshPolicy(), GeminiProviderRefreshPolicy(), TestGeminiTokenCacheKey(), ProvideGeminiTokenProvider() (+2 more)
+Cohesion: 0.17
+Nodes (6): GeminiTokenCacheKey(), NewGeminiTokenProvider(), NewGeminiTokenRefresher(), TestGeminiTokenCacheKey(), GeminiTokenProvider, GeminiTokenRefresher
 
 ### Community 950 - "request_transformer.go"
 Cohesion: 0.12
@@ -11107,20 +11086,20 @@ Cohesion: 0.21
 Nodes (16): OrderOption, ByContent(), ByCreatedAt(), ByCreatedBy(), ByEndsAt(), ByID(), ByNotifyMode(), ByReads() (+8 more)
 
 ### Community 954 - "anthropic_to_responses_response.go"
-Cohesion: 0.05
-Nodes (62): AnthropicEventToResponsesState, GatewayService, GatewayService, GatewayService, NormalizeModelID(), BenchmarkParseClaudeUsageFromResponseBody(), TestExtractAnthropicSSEDataLine(), TestParseClaudeUsageFromResponseBody() (+54 more)
+Cohesion: 0.19
+Nodes (24): AnthropicEventToResponsesState, TestAnthropicEventToResponses_CacheTokensFromMessageDelta(), TestAnthropicEventToResponses_CacheTokensRoundTripFromMessageStart(), TestAnthropicToResponsesResponse_CacheTokensUseOpenAIInputSemantics(), TestAnthropicToResponsesResponse_NoCacheTokens(), AnthropicEventToResponsesEvents(), anthropicStopReasonToResponsesStatus(), AnthropicToResponsesResponse() (+16 more)
 
 ### Community 955 - "handleVisibilityChange"
 Cohesion: 0.13
 Nodes (15): isValidAttributeType(), NewUserAttributeService(), validateDefinitionPattern(), validationError(), CreateAttributeDefinitionInput, UpdateAttributeDefinitionInput, UpdateUserAttributeInput, UserAttributeDefinition (+7 more)
 
 ### Community 956 - "DashboardAggregationService"
-Cohesion: 0.18
-Nodes (19): BenchmarkOpenAIUsageExtractLegacy(), BenchmarkOpenAIUsageExtractOptimized(), benchmarkOpenAIUsageJSONBytes(), benchmarkToolContinuationRequestBody(), BenchmarkToolContinuationValidationLegacy(), BenchmarkToolContinuationValidationOptimized(), benchmarkWSIngressPayloadBytes(), BenchmarkWSIngressPayloadParseLegacy() (+11 more)
+Cohesion: 0.15
+Nodes (11): ptrFloat64WS(), ptrIntWS(), TestAdminService_ListAccounts_ExhaustedCodexExtraDoesNotSetRateLimit(), TestOpenAIGatewayService_GetSchedulableAccount_ExhaustedCodexExtraDoesNotSetRateLimit(), TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ExhaustedSnapshotDoesNotSetRateLimit(), TestOpenAIGatewayService_UpdateCodexUsageSnapshot_NonExhaustedSnapshotDoesNotSetRateLimit(), TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ThrottlesExtraWrites(), TestOpenAIWSErrorHTTPStatusFromRaw_UsageLimitReachedIs429() (+3 more)
 
 ### Community 957 - "gateway_account_selection_test.go"
-Cohesion: 0.12
-Nodes (32): makeAccWithLoad(), TestFilterByMinLoadRate_Empty(), TestFilterByMinLoadRate_SelectsMinLoadRate(), TestFilterByMinPriority_Empty(), TestFilterByMinPriority_SelectsMinPriority(), TestSelectByLRU_EarliestTimeWins(), TestSelectByLRU_Empty(), TestSelectByLRU_NilLastUsedAtWins() (+24 more)
+Cohesion: 0.06
+Nodes (57): makeAccWithLoad(), TestFilterByMinLoadRate_Empty(), TestFilterByMinLoadRate_SelectsMinLoadRate(), TestFilterByMinPriority_Empty(), TestFilterByMinPriority_SelectsMinPriority(), TestSelectByLRU_EarliestTimeWins(), TestSelectByLRU_Empty(), TestSelectByLRU_NilLastUsedAtWins() (+49 more)
 
 ### Community 958 - "BatchImageItemUpsertBulk"
 Cohesion: 0.14
@@ -11128,47 +11107,47 @@ Nodes (9): backendModeAllowsAuthPath(), BackendModeAuthGuard(), BackendModeUserG
 
 ### Community 959 - "NewGrokQuotaFetcher"
 Cohesion: 0.19
-Nodes (16): TestMergeBalanceHistoryCodesIncludesAffiliateTransfersByDefault(), TestMergeBalanceHistoryCodesPaginatesAfterCombiningSources(), adminAuthIdentityProviderKeyRank(), buildAdminBoundAuthIdentity(), canonicalAdminAuthIdentityProviderKey(), cloneAdminAuthIdentityMetadata(), compatibleAdminAuthIdentityProviderKeys(), hasAdminAuthIdentityChannelOwnershipConflict() (+8 more)
+Nodes (11): opsRepository, fillOpsErrorTrendBuckets(), fillOpsThroughputBuckets(), opsBucketExprForError(), opsBucketExprForUsage(), opsBucketLabel(), opsFloorToBucketStart(), OpsErrorTrendPoint (+3 more)
 
 ### Community 960 - "httputil.go"
-Cohesion: 0.09
-Nodes (29): PaymentConfigService, PaymentConfigService, buildVisibleMethodSourceAvailability(), derefStr(), formatBoolOrEmpty(), formatNonNegativeFloat(), formatPositiveFloat(), formatPositiveFloatExact() (+21 more)
-
-### Community 961 - "AntigravityOAuthHandler"
-Cohesion: 0.18
-Nodes (16): BindErrorPassthroughService(), newNonFailoverPassthroughRule(), TestApplyErrorPassthroughRule_NoBoundService(), TestApplyErrorPassthroughRule_NoSkipMonitoringDoesNotSetContextKey(), TestApplyErrorPassthroughRule_SkipMonitoringSetsContextKey(), TestGatewayHandleErrorResponse_AppliesRuleFor422(), TestGeminiWriteGeminiMappedError_AppliesRuleFor422(), TestGeminiWriteGeminiMappedError_SetsResponseCommitted() (+8 more)
+Cohesion: 0.12
+Nodes (21): PaymentConfigService, buildVisibleMethodSourceAvailability(), derefStr(), formatBoolOrEmpty(), formatNonNegativeFloat(), formatPositiveFloat(), formatPositiveFloatExact(), formatPositiveInt() (+13 more)
 
 ### Community 962 - "channelmonitorrequesttemplate.go"
 Cohesion: 0.20
 Nodes (15): OrderOption, Provider, ByAPIMode(), ByBodyOverrideMode(), ByCreatedAt(), ByDescription(), ByID(), ByMonitors() (+7 more)
 
 ### Community 966 - "convertGolden"
-Cohesion: 0.21
-Nodes (7): ClaudeOAuthClient, CookieAuthInput, ExchangeCodeInput, GenerateAuthURLResult, OAuthService, OpenAIOAuthClient, TokenInfo
+Cohesion: 0.19
+Nodes (8): ClaudeOAuthClient, CookieAuthInput, ExchangeCodeInput, GenerateAuthURLResult, GrokOAuthClient, OAuthService, OpenAIOAuthClient, TokenInfo
 
 ### Community 969 - ".DingTalkOAuthCallback"
 Cohesion: 0.07
-Nodes (32): AuthHandler, completeDingTalkOAuthRequest, DingTalkStaffInfo, buildDingTalkAuthorizeURL(), buildDingTalkSyntheticEmail(), buildDingTalkUpstreamClaims(), checkDingTalkCorpAllowed(), clearDingTalkCookie() (+24 more)
+Nodes (32): AuthHandler, completeDingTalkOAuthRequest, buildDingTalkAuthorizeURL(), buildDingTalkSyntheticEmail(), buildDingTalkUpstreamClaims(), checkDingTalkCorpAllowed(), clearDingTalkCookie(), decideDingTalkStep34Strategy() (+24 more)
 
 ### Community 970 - "where.go"
 Cohesion: 0.05
 Nodes (11): OrderOption, ByAccountField(), ByAccountID(), ByCreatedAt(), ByGroupField(), ByGroupID(), ByPriority(), newAccountStep() (+3 more)
 
 ### Community 971 - "kiroUsageCooldownStore"
-Cohesion: 0.13
-Nodes (4): UserSubscription, UserSubscriptionEdges, UserSubscriptions, NewUserSubscriptionClient()
+Cohesion: 0.05
+Nodes (11): UserSubscription, UserSubscriptionClient, UserSubscriptionDelete, UserSubscriptionDeleteOne, UserSubscriptionEdges, usersubscriptionOption, UserSubscriptions, NewUserSubscriptionClient() (+3 more)
 
 ### Community 972 - "refreshTokenCache"
 Cohesion: 0.25
 Nodes (5): NewRefreshTokenCache(), refreshTokenKey(), tokenFamilyKey(), userRefreshTokensKey(), refreshTokenCache
 
 ### Community 973 - "newRuntimeSettingRepoStub"
-Cohesion: 0.09
-Nodes (34): CurrentLevel(), makeOverlayService(), TestComputeEffective_BadJSONFallsBackToCfg(), TestComputeEffective_EmptyScheduleFallbackToCfg(), TestComputeEffective_FallbackToCfgWhenSettingsAbsent(), TestComputeEffective_NegativeRetentionFallsBackToCfg(), TestComputeEffective_SettingsOverridesAll(), TestRefreshEffectiveBeforeRun_UpdatesSnapshot() (+26 more)
+Cohesion: 0.07
+Nodes (42): OpsService, CurrentLevel(), makeOverlayService(), TestComputeEffective_BadJSONFallsBackToCfg(), TestComputeEffective_EmptyScheduleFallbackToCfg(), TestComputeEffective_FallbackToCfgWhenSettingsAbsent(), TestComputeEffective_NegativeRetentionFallsBackToCfg(), TestComputeEffective_SettingsOverridesAll() (+34 more)
+
+### Community 974 - "AdminComplianceGuard"
+Cohesion: 0.18
+Nodes (14): TestBatchImageProviderRegistry_ReturnsGeminiAPI(), NewBatchImageProviderRegistryFromConfig(), NewDefaultBatchImageProviderRegistry(), TestBatchImageProviderRegistry_ReturnsVertex(), NewBatchImagePublicService(), BatchImageInput, BatchImageInputItem, BatchImageProvider (+6 more)
 
 ### Community 975 - "web_chat_service_test.go"
-Cohesion: 0.05
-Nodes (41): forwardedChatCompletionMessages(), newTestGinContext(), newWebChatServiceWithStubs(), requireOrderedEvents(), TestWebChatCancelMessageCancelsActiveAssistantDispatch(), TestWebChatCancelMessageRejectsNonCancelableMessages(), TestWebChatSend_AnthropicWebSearchAutoUsesResponsesAPI(), TestWebChatSend_BlocksUnsupportedContextBeforeBilling() (+33 more)
+Cohesion: 0.06
+Nodes (40): forwardedChatCompletionMessages(), newTestGinContext(), newWebChatServiceWithStubs(), requireOrderedEvents(), TestWebChatCancelMessageCancelsActiveAssistantDispatch(), TestWebChatCancelMessageRejectsNonCancelableMessages(), TestWebChatResponseCapture_ExtractAssistantProcessFromChatCompletionsStream(), TestWebChatResponseCapture_ExtractAssistantProcessFromResponsesStreamReplacesFinalArguments() (+32 more)
 
 ### Community 976 - "identityadoptiondecision.go"
 Cohesion: 0.21
@@ -11191,20 +11170,20 @@ Cohesion: 0.12
 Nodes (16): Antigravity サポート, Claude Code の設定, Nginx リバースプロキシに関する注意, Sub2API, エコシステム, シンプルモード, スター履歴, ❤️ スポンサー (+8 more)
 
 ### Community 982 - "batch_update_credentials_test.go"
-Cohesion: 0.07
-Nodes (22): opsRepository, opsRepository, opsRepository, opsNullJSONMap(), scanOpsAlertEvent(), opsNullBool(), opsNullFloat64(), opsNullTime() (+14 more)
+Cohesion: 0.05
+Nodes (34): opsRepository, opsRepository, opsRepository, buildOpsAlertEventsWhere(), opsNullJSONMap(), scanOpsAlertEvent(), TestBuildOpsErrorLogsWhere_QueryUsesQualifiedColumns(), TestBuildOpsErrorLogsWhere_UserQueryUsesExistsSubquery() (+26 more)
 
 ### Community 984 - "TLSFingerprintProfileService"
 Cohesion: 0.24
 Nodes (4): NewTLSFingerprintProfileService(), TLSFingerprintProfileCache, TLSFingerprintProfileRepository, TLSFingerprintProfileService
 
 ### Community 985 - "getHeaderRaw"
-Cohesion: 0.15
-Nodes (11): buildClientConfigFiles(), ClientConfigFile, ClientConfigInput, gatewayRoots(), SupportedGuideClient, SupportedGuideOS, WindowsGuideShell, expectCodexFileContract() (+3 more)
+Cohesion: 0.11
+Nodes (26): ClientConfigFile, EXAMPLE_MODELS, GatewayEndpoints, resolveGatewayEndpoints(), SupportedGuideOS, buildCcSwitchClaudeFile(), buildCcSwitchCodexFile(), buildClientConfigFiles() (+18 more)
 
 ### Community 989 - "NewAdminService"
-Cohesion: 0.10
-Nodes (15): ConcurrencyHelper, SSEPingFormat, UserMsgQueueHelper, BenchmarkNextBackoff(), TestNextBackoff_BoundedByInitialBackoff(), TestNextBackoff_BoundedByMaxBackoff(), TestNextBackoff_ConvergesToMaxBackoff(), TestNextBackoff_ExponentialGrowth() (+7 more)
+Cohesion: 0.18
+Nodes (4): ConcurrencyHelper, TestCalculateMaxWait_Scenarios(), CalculateMaxWait(), TestCalculateMaxWait()
 
 ### Community 994 - "ChannelMonitorRequestTemplateUpsertBulk"
 Cohesion: 0.22
@@ -11215,16 +11194,16 @@ Cohesion: 0.20
 Nodes (30): check_dependencies(), check_root(), configure_server(), create_user(), detect_platform(), download_and_extract(), enable_autostart(), get_latest_version() (+22 more)
 
 ### Community 996 - ".defaults"
-Cohesion: 0.19
-Nodes (14): getRuntimeDocument(), getRuntimeHostname(), getRuntimeWindow(), init51laAnalytics(), Init51laAnalyticsOptions, LA_COLLECT_CONFIG, LaCollectConfig, LaCollectQueue (+6 more)
+Cohesion: 0.18
+Nodes (9): TestDiceCoefficient(), diceCoefficient(), getBigrams(), GetClaudeCodeVersion(), isMessagesCountTokensPath(), normalizePrompt(), SetClaudeCodeVersion(), TestSetGetClaudeCodeVersion() (+1 more)
 
 ### Community 998 - "userAPIKeyRouteRepository"
-Cohesion: 0.16
-Nodes (16): TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(), TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(), buildSchedulerMetadataAccount(), filterSchedulerAccountGroups(), filterSchedulerCredentials(), filterSchedulerExtra(), filterSchedulerGroupIDs(), newSchedulerCacheUnit() (+8 more)
+Cohesion: 0.23
+Nodes (8): Account, antigravityModelRateLimitKeys(), isAnthropicFableModel(), isAntigravityGeminiModel(), OpenAIImageGenerationIntentFromContext(), openAIImageGenerationRateLimitApplies(), resolveFinalAntigravityModelKey(), TestIsAnthropicFableModel()
 
-### Community 1000 - "ValidateDingTalkConfig"
-Cohesion: 0.27
-Nodes (13): OpenAICompactClientStreamKeyForTest(), OpenAICompactSessionSeedKeyForTest(), newCompactBodySignalTestContext(), TestNormalizeOpenAIResponsesCompactRequest_BodySignalTrailingSlashPromoted(), TestNormalizeOpenAIResponsesCompactRequest_CodexDirectAliasPromoted(), TestNormalizeOpenAIResponsesCompactRequest_NonRemoteV2BodySignalPromoted(), TestNormalizeOpenAIResponsesCompactRequest_NoTriggerUntouched(), TestNormalizeOpenAIResponsesCompactRequest_PathBasedNoDoubleSuffix() (+5 more)
+### Community 999 - "ChannelMonitorHistoryUpsertBulk"
+Cohesion: 0.16
+Nodes (4): AccountGroup, AccountGroupEdges, AccountGroups, NewAccountGroupClient()
 
 ### Community 1002 - "UsageLogDelete"
 Cohesion: 0.35
@@ -11234,17 +11213,13 @@ Nodes (17): newOpenAIImageGenerationControlChannelService(), newOpenAIImageGener
 Cohesion: 0.22
 Nodes (15): ByBonusAmount(), ByCode(), ByCreatedAt(), ByExpiresAt(), ByID(), ByMaxUses(), ByNotes(), ByStatus() (+7 more)
 
-### Community 1004 - "userHandlerRefreshTokenCacheStub"
-Cohesion: 0.23
-Nodes (16): adminAuth(), extractJWTFromWebSocketSubprotocol(), isWebSocketUpgradeRequest(), NewAdminAuthMiddleware(), validateAdminAPIKey(), validateJWTForAdmin(), AbortWithError(), MarkOpsClientBusinessLimited() (+8 more)
-
 ### Community 1006 - "UsageCleanupTaskUpdateOne"
 Cohesion: 0.05
 Nodes (5): BatchImageEventCreate, BatchImageEventCreateBulk, BatchImageEventUpsert, BatchImageEventUpsertBulk, BatchImageEventUpsertOne
 
 ### Community 1008 - "UserDelete"
-Cohesion: 0.17
-Nodes (9): authSourceSignupSettings(), TestParseDefaultSubscriptions_NormalizesValues(), mergeProviderDefaultGrantSettings(), parseDefaultSubscriptions(), parseProviderDefaultGrantSettings(), writeProviderDefaultGrantUpdates(), authSourceDefaultKeySet, AuthSourceDefaultSettings (+1 more)
+Cohesion: 0.31
+Nodes (5): OpenAIOAuthService, resolveChatGPTSubscriptionAccountID(), shouldApplyChatGPTAccountInfoPlanType(), OpenAIExchangeCodeInput, OpenAITokenInfo
 
 ### Community 1011 - "UpdateCacheSuite"
 Cohesion: 0.15
@@ -11259,16 +11234,16 @@ Cohesion: 0.31
 Nodes (12): CleanJSONSchema(), cleanJSONSchemaRecursive(), DeepCleanUndefined(), deepCopy(), extractBestSchemaFromUnion(), extractDefs(), flattenRefs(), hasKey() (+4 more)
 
 ### Community 1015 - "ChannelMonitorRunner"
-Cohesion: 0.15
-Nodes (4): AuthIdentities, AuthIdentity, AuthIdentityEdges, NewAuthIdentityClient()
+Cohesion: 0.05
+Nodes (11): AuthIdentities, AuthIdentity, AuthIdentityClient, AuthIdentityDelete, AuthIdentityDeleteOne, AuthIdentityEdges, authidentityOption, NewAuthIdentityClient() (+3 more)
 
 ### Community 1016 - "gateway_claude_oauth_body.go"
-Cohesion: 0.05
-Nodes (61): buildBillingAttributionText(), computeClaudeCodeFingerprint(), extractFirstUserText(), assertJSONTokenOrder(), TestEnforceCacheControlLimit_CountsToolsAndPreservesMessageAnchorsFirst(), TestEnforceCacheControlLimit_PreservesTopLevelFieldOrder(), TestGatewayCacheTTLGlobalSetting_RequestInjectionScope(), TestGatewayCacheTTLGlobalSetting_TargetResolution() (+53 more)
+Cohesion: 0.07
+Nodes (50): buildBillingAttributionText(), computeClaudeCodeFingerprint(), extractFirstUserText(), buildClaudeOAuthSystemPromptBlocksJSON(), buildJSONArrayRaw(), collectCacheControlPaths(), decodeClaudeOAuthSystemPromptCacheControl(), defaultClaudeOAuthExpansionPrompt() (+42 more)
 
 ### Community 1017 - "stubApiKeyCache"
-Cohesion: 0.15
-Nodes (4): ChannelMonitor, ChannelMonitorEdges, ChannelMonitors, NewChannelMonitorClient()
+Cohesion: 0.05
+Nodes (11): ChannelMonitor, ChannelMonitorClient, ChannelMonitorDelete, ChannelMonitorDeleteOne, ChannelMonitorEdges, channelmonitorOption, ChannelMonitors, NewChannelMonitorClient() (+3 more)
 
 ### Community 1018 - "Authentication Views Visual Guide"
 Cohesion: 0.18
@@ -11284,23 +11259,23 @@ Nodes (5): { appState, authState, fetchPublicSettingsMock, checkAuthMock, getPub
 
 ### Community 1024 - "四、常见坑点 & 解决方案"
 Cohesion: 0.20
-Nodes (14): beginnerGuideStatePtr(), TestBeginnerGuideStateUnavailableWithoutNarrowRepository(), TestPatchBeginnerGuideStateKeepsCompletedMonotonic(), TestPatchBeginnerGuideStateLeavesProgressUnchangedWhenOmitted(), TestPatchBeginnerGuideStatePersistsValidProgress(), TestPatchBeginnerGuideStatePreservesOriginalCompletionTimestamp(), TestPatchBeginnerGuideStateRejectsEligibleAndUnknownPromptStates(), TestPatchBeginnerGuideStateTransitions() (+6 more)
+Nodes (19): beginnerGuideStatePtr(), BeginnerGuidePromptState, BeginnerGuideState, Context, T, TestBeginnerGuideStateUnavailableWithoutNarrowRepository(), TestPatchBeginnerGuideStateKeepsCompletedMonotonic(), TestPatchBeginnerGuideStateLeavesProgressUnchangedWhenOmitted() (+11 more)
 
 ### Community 1025 - "上游模型调用全量归档（ClickHouse）实现计划"
 Cohesion: 0.23
 Nodes (15): ActiveTTL(), NewStore(), StateTTL(), TestClearEarliestTransientCooldownEmptyKeysIsSafe(), TestClearEarliestTransientCooldownUnavailableStore(), ensureKiroCooldownDockerAvailable(), kiroCooldownDockerAvailable(), kiroCooldownUserHomeDir() (+7 more)
 
 ### Community 1026 - "captureCore"
-Cohesion: 0.17
-Nodes (19): RestartService(), RestartServiceAsync(), getStatus(), install(), RegisterRoutes(), setupGuard(), testDatabase(), testRedis() (+11 more)
+Cohesion: 0.23
+Nodes (16): install(), RegisterRoutes(), setupGuard(), testDatabase(), testRedis(), validateDBName(), validateEmail(), validateHostname() (+8 more)
 
 ### Community 1027 - "EvaluateEngineFingerprint"
 Cohesion: 0.29
 Nodes (11): DefaultEngineFingerprintSignalsJSON(), engineSignalMatches(), EvaluateEngineFingerprint(), ParseEngineFingerprintSignals(), hdr(), TestEvaluateEngineFingerprint_DefaultSeed(), TestEvaluateEngineFingerprint_Rules(), TestParseAndValidateEngineFingerprintSignals() (+3 more)
 
 ### Community 1028 - "batch_image_provider_vertex_test.go"
-Cohesion: 0.12
-Nodes (24): BuildVertexBatchJSONL(), newTestVertexProvider(), requireVertexJSONLLine(), TestBuildVertexBatchJSONL_RejectsDuplicateCustomIDs(), TestBuildVertexBatchJSONL_RejectsEmptyPrompt(), TestBuildVertexBatchJSONL_WritesReferenceImages(), TestBuildVertexBatchJSONL_WritesValidLinesAndPreservesCustomID(), TestVertexProvider_CancelCallsClient() (+16 more)
+Cohesion: 0.11
+Nodes (27): batchImageProviderInputError(), BuildVertexBatchJSONL(), newTestVertexProvider(), requireVertexJSONLLine(), TestBuildVertexBatchJSONL_RejectsDuplicateCustomIDs(), TestBuildVertexBatchJSONL_RejectsEmptyPrompt(), TestBuildVertexBatchJSONL_WritesReferenceImages(), TestBuildVertexBatchJSONL_WritesValidLinesAndPreservesCustomID() (+19 more)
 
 ### Community 1029 - "userapikeyroute.go"
 Cohesion: 0.23
@@ -11315,8 +11290,8 @@ Cohesion: 0.22
 Nodes (6): NewDashboardAggregationService(), truncateToDayUTC(), TestUsageCleanupServiceExecuteTaskDashboardRecomputeError(), TestUsageCleanupServiceExecuteTaskDashboardRecomputeSuccess(), DashboardAggregationRepository, DashboardAggregationService
 
 ### Community 1034 - ".Save"
-Cohesion: 0.28
-Nodes (15): classifyKiroBadRequest(), classifyKiroError(), classifyKiroHTTPError(), isNetErr(), looksLikeKiroBadRequestAuthError(), looksLikeKiroBadRequestInvalidModelError(), looksLikeKiroBadRequestSchemaError(), looksLikeKiroBadRequestToolPairingError() (+7 more)
+Cohesion: 0.14
+Nodes (13): Chosen Product Shape, Deferred Decisions, Endpoint Page Contract, Frontend Architecture, Goals, LINX2 API Documentation Design, Localization, Non-Goals (+5 more)
 
 ### Community 1035 - "groupsModelsList.ts"
 Cohesion: 0.20
@@ -11327,8 +11302,8 @@ Cohesion: 0.60
 Nodes (3): Create(), NewSchema(), Schema
 
 ### Community 1037 - "oauth_test.go"
-Cohesion: 0.09
-Nodes (34): BuildAuthorizationURL(), ForwardBaseURLs(), GenerateCodeChallenge(), NewSessionStore(), NewURLAvailability(), TestBuildAuthorizationURL_参数数量(), TestBuildAuthorizationURL_参数验证(), TestBuildAuthorizationURL_特殊字符编码() (+26 more)
+Cohesion: 0.05
+Nodes (62): OAuthSession, SessionStore, UserAgentVersionResolver, base64URLEncode(), BuildAuthorizationURL(), BuildUserAgent(), ForwardBaseURLs(), GenerateCodeChallenge() (+54 more)
 
 ### Community 1039 - "newAuthPendingIdentityServiceTestClient"
 Cohesion: 0.12
@@ -11351,32 +11326,32 @@ Cohesion: 0.33
 Nodes (4): mutateWithClient(), softDeleteKey, SoftDeleteMixin, Mutator
 
 ### Community 1045 - "可配置滚动公告栏 Implementation Plan"
-Cohesion: 0.27
-Nodes (7): BillingMode, filterValidIntervals(), intervalToModelPricing(), TestGPT56ExplicitZeroCacheWritePriceIsPreserved(), ModelPricingResolver, PricingInput, ResolvedPricing
+Cohesion: 0.16
+Nodes (14): closeSortModal(), confirmDelete(), getValidHiddenColumnKeys(), handlePageChange(), handlePageSizeChange(), handleSearch(), handleSort(), loadCapacitySummary() (+6 more)
 
 ### Community 1046 - "UserAttributeDefinitionClient"
 Cohesion: 0.14
 Nodes (4): fakeSchedulerCache, newTestGatewayHandler(), TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform(), TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedSchedulingV1()
 
 ### Community 1047 - "NewConcurrencyHelper"
-Cohesion: 0.15
-Nodes (23): ConcurrencyError, WaitQueueFullError, newHelperTestContext(), TestAcquireAccountSlotWithWaitTimeout_ImmediateAttemptBeforeBackoff(), TestAcquireUserSlotWithWait_ImmediateAcquireSkipsWaitQueue(), TestAcquireUserSlotWithWait_RequestCancelDecrementsWaitQueue(), TestAcquireUserSlotWithWait_TimeoutDecrementsWaitQueue(), TestAcquireUserSlotWithWait_TracksAPIKeySlot() (+15 more)
+Cohesion: 0.25
+Nodes (6): ConcurrencyError, WaitQueueFullError, TestIsClaudeCodeClient_Context(), SetClaudeCodeClient(), claudeCodeBodyMapFromParsedRequest(), SetClaudeCodeClientContext()
 
 ### Community 1049 - "webchatattachment.go"
 Cohesion: 0.23
 Nodes (14): ByContentType(), ByConversationID(), ByCreatedAt(), ByFilename(), ByID(), ByKind(), ByMessageID(), BySha256() (+6 more)
 
 ### Community 1050 - "paymentResumeLookupProvider"
-Cohesion: 0.33
-Nodes (4): BatchImageHandler, batchImageError(), batchImageOwnerFromContext(), NewBatchImageHandler()
+Cohesion: 0.23
+Nodes (6): NewGroupService(), CreateGroupRequest, GroupRepository, GroupService, GroupSortOrderUpdate, UpdateGroupRequest
 
 ### Community 1051 - "webchatmessage.go"
 Cohesion: 0.23
 Nodes (14): ByContentText(), ByConversationID(), ByCreatedAt(), ByErrorCode(), ByErrorMessage(), ByID(), ByModel(), ByProvider() (+6 more)
 
 ### Community 1053 - "newDashboardRequestTypeTestRouter"
-Cohesion: 0.22
-Nodes (13): newSnapshotCache(), TestBuildETagFromAny_UnmarshalablePayload(), TestParseBoolQueryWithDefault(), TestSnapshotCache_DefaultTTL(), TestSnapshotCache_ETagDeterministic(), TestSnapshotCache_ETagFormat(), TestSnapshotCache_Expiration(), TestSnapshotCache_GetEmptyKey() (+5 more)
+Cohesion: 0.16
+Nodes (17): snapshotCache, snapshotCacheEntry, snapshotCacheLoadResult, buildETagFromAny(), newSnapshotCache(), TestBuildETagFromAny_UnmarshalablePayload(), TestParseBoolQueryWithDefault(), TestSnapshotCache_DefaultTTL() (+9 more)
 
 ### Community 1054 - "openai_gateway_compact_body_signal_test.go"
 Cohesion: 0.18
@@ -11395,8 +11370,8 @@ Cohesion: 0.27
 Nodes (4): NewSessionLimitCache(), sessionLimitKey(), windowCostKey(), sessionLimitCache
 
 ### Community 1058 - "announcementread.go"
-Cohesion: 0.33
-Nodes (4): ApplicationError, Status, Clone(), Reason()
+Cohesion: 0.20
+Nodes (5): TestAccountSupportsOpenAIEndpointCapability(), isOfficialGrokAPIBaseURL(), isOfficialGrokBaseURL(), isOfficialGrokCLIBaseURL(), OpenAIEndpointCapability
 
 ### Community 1059 - "ops_request_details.go"
 Cohesion: 0.29
@@ -11415,12 +11390,8 @@ Cohesion: 0.16
 Nodes (6): TestGrokTokenProviderRefreshesExpiredTokenOnRequestPath(), TestGrokTokenProviderRefreshFailureUnschedulesWithRedactedReason(), NewGrokTokenRefresher(), GrokOAuthTokenService, grokTokenCacheForProviderTest, GrokTokenRefresher
 
 ### Community 1065 - "EditAccountModal.spec.ts"
-Cohesion: 0.23
-Nodes (14): NewAirwallex(), normalizeAirwallexAPIBase(), normalizeAirwallexCountryCode(), mustTestAirwallexProvider(), signedAirwallexHeaders(), TestAirwallexAuthErrorIncludesCredentialGuidance(), TestAirwallexCreatePaymentUsesConfiguredCurrency(), TestAirwallexCreatePaymentUsesServerAmountAndStableRequestID() (+6 more)
-
-### Community 1066 - "Layout Components"
-Cohesion: 0.40
-Nodes (8): OpsService, applyOpsRuntimeLogConfig(), defaultOpsRuntimeLogConfig(), normalizeOpsRuntimeLogConfig(), TestApplyRuntimeLogConfigHelpers(), TestDefaultNormalizeAndValidateRuntimeLogConfig(), validateOpsRuntimeLogConfig(), OpsRuntimeLogConfig
+Cohesion: 0.14
+Nodes (21): NewAirwallex(), mustTestAirwallexProvider(), signedAirwallexHeaders(), TestAirwallexAuthErrorIncludesCredentialGuidance(), TestAirwallexCreatePaymentUsesConfiguredCurrency(), TestAirwallexCreatePaymentUsesServerAmountAndStableRequestID(), TestAirwallexQueryOrderMapsSucceeded(), TestAirwallexRefundRejectsUnsettledStatus() (+13 more)
 
 ### Community 1067 - "handleCreateGroup"
 Cohesion: 0.13
@@ -11444,23 +11415,23 @@ Nodes (13): OrderOption, ByChannel(), ByChannelAppID(), ByChannelSubject(), ByCr
 
 ### Community 1073 - "Stripe"
 Cohesion: 0.07
-Nodes (35): Currency, Event, confirmAlipay(), mountPaymentElement(), FenToYuan(), TestAmountToMinorUnitRejectsUnsupportedPrecision(), TestFenToYuan(), TestFormatAmountForCurrency() (+27 more)
+Nodes (33): Currency, Event, confirmAlipay(), mountPaymentElement(), FenToYuan(), TestAmountToMinorUnitRejectsUnsupportedPrecision(), TestFenToYuan(), TestFormatAmountForCurrency() (+25 more)
 
 ### Community 1074 - "BatchImageJobClient"
 Cohesion: 0.14
 Nodes (9): isAntigravityInternalServerError(), TestApplyInternal500Penalty(), TestHandleInternal500RetryExhausted(), TestIsAntigravityInternalServerError(), TestResetInternal500Counter(), internal500AccountRepoStub, mockInternal500Cache, setErrorCall (+1 more)
 
 ### Community 1075 - ".SeatSummariesForPlans"
-Cohesion: 0.10
-Nodes (9): AuthService, PaymentConfigService, IsNotFound(), TestGetUserErrorRequestDetail_DeletedKeyOwnerAccess(), TestGetUserErrorRequestDetail_OwnershipEnforced(), newPlanSeatSummary(), EmailOAuthIdentityInput, PlanSeatSummary (+1 more)
+Cohesion: 0.40
+Nodes (3): PaymentConfigService, newPlanSeatSummary(), PlanSeatSummary
 
 ### Community 1076 - "方式二：Docker Compose（推荐）"
 Cohesion: 0.05
-Nodes (29): AdjustSubscriptionRequest, AssignSubscriptionRequest, BatchUpdateConcurrencyRequest, BindUserAuthIdentityChannelRequest, BindUserAuthIdentityRequest, BulkAssignSubscriptionRequest, CreateUserRequest, PlatformQuotaInput (+21 more)
+Nodes (28): AdjustSubscriptionRequest, AssignSubscriptionRequest, BatchUpdateConcurrencyRequest, BindUserAuthIdentityChannelRequest, BindUserAuthIdentityRequest, BulkAssignSubscriptionRequest, CreateUserRequest, PlatformQuotaInput (+20 more)
 
 ### Community 1078 - ".Save"
-Cohesion: 0.16
-Nodes (4): UserAllowedGroup, UserAllowedGroupEdges, UserAllowedGroups, NewUserAllowedGroupClient()
+Cohesion: 0.32
+Nodes (12): accountStatsPricingRuleRequest, accountStatsPricingRuleResponse, channelModelPricingRequest, channelModelPricingResponse, channelResponse, createChannelRequest, pricingIntervalRequest, pricingIntervalResponse (+4 more)
 
 ### Community 1080 - "txDriver"
 Cohesion: 0.16
@@ -11476,7 +11447,7 @@ Nodes (7): PromoCodeClient, PromoCodeDelete, PromoCodeDeleteOne, promocodeOption
 
 ### Community 1083 - "邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得"
 Cohesion: 0.05
-Nodes (63): AggregateFunc, clientCtxKey, ConstraintError, NotFoundError, NotLoadedError, NotSingularError, OrderFunc, queryHook (+55 more)
+Nodes (59): BindErrorPassthroughService(), newNonFailoverPassthroughRule(), TestApplyErrorPassthroughRule_NoBoundService(), TestApplyErrorPassthroughRule_NoSkipMonitoringDoesNotSetContextKey(), TestApplyErrorPassthroughRule_SkipMonitoringSetsContextKey(), TestGatewayHandleErrorResponse_AppliesRuleFor422(), TestGeminiWriteGeminiMappedError_AppliesRuleFor422(), TestGeminiWriteGeminiMappedError_SetsResponseCommitted() (+51 more)
 
 ### Community 1084 - "where.go"
 Cohesion: 0.07
@@ -11487,12 +11458,12 @@ Cohesion: 0.23
 Nodes (15): openAIQuotaHeadroomFactor(), openAIQuotaHeadroomSnapshotStale(), openAIQuotaWindowResetAny(), openAIPlanScores(), openAIQuotaHeadroomTestScheduler(), openAIResetTestScheduler(), TestBuildOpenAIAccountLoadPlan_QuotaHeadroomPrefersHigher7dRemaining(), TestBuildOpenAIAccountLoadPlan_QuotaHeadroomZeroNoEffect() (+7 more)
 
 ### Community 1086 - "File Structure"
-Cohesion: 0.19
-Nodes (9): OAuthSession, SessionStore, NewSessionStore(), TestSessionStore_ConcurrentAccess(), TestSessionStore_Delete(), TestSessionStore_GetExpired(), TestSessionStore_GetNotFound(), TestSessionStore_SetAndGet() (+1 more)
+Cohesion: 0.31
+Nodes (9): PaymentConfigService, applySeatSummaryToPublicPlanResponse(), cloneFloat64Ptr(), cloneIntPtr(), clonePublicPlan(), clonePublicPlans(), publicPlanResponseFromEnt(), splitPlanFeatures() (+1 more)
 
 ### Community 1087 - "wechatOAuthSettingRepoStub"
-Cohesion: 0.18
-Nodes (12): bedrockReadUint16(), bedrockReadUint32(), extractBedrockChunkData(), extractEventStreamHeaderValue(), newBedrockEventStreamDecoder(), TestBedrockEventStreamDecoder(), TestBuildBedrockURL(), TestExtractBedrockChunkData() (+4 more)
+Cohesion: 0.20
+Nodes (11): bedrockReadUint16(), bedrockReadUint32(), extractBedrockChunkData(), extractEventStreamHeaderValue(), newBedrockEventStreamDecoder(), TestBedrockEventStreamDecoder(), TestExtractBedrockChunkData(), TestExtractEventStreamHeaderValue() (+3 more)
 
 ### Community 1088 - "webchatconversation.go"
 Cohesion: 0.25
@@ -11511,8 +11482,8 @@ Cohesion: 0.12
 Nodes (10): TestTruncateBody_ExactBoundary(), TestTruncateBody_Long(), TestTruncateBody_Short(), truncateBody(), NewTavilyProvider(), TestTavilyProvider_Name(), TavilyProvider, tavilyRequest (+2 more)
 
 ### Community 1092 - "collectStreamEvents"
-Cohesion: 0.28
-Nodes (6): DingTalkAPIError, DingTalkClient, dingTalkClientConfig, DingTalkDeptInfo, DingTalkUserTokenResp, parseDingTalkErr()
+Cohesion: 0.26
+Nodes (7): DingTalkAPIError, DingTalkClient, dingTalkClientConfig, DingTalkDeptInfo, DingTalkStaffInfo, DingTalkUserTokenResp, parseDingTalkErr()
 
 ### Community 1093 - ".Int"
 Cohesion: 0.49
@@ -11531,20 +11502,12 @@ Cohesion: 0.15
 Nodes (21): getEnv(), requireClaudeAPIKey(), requireGeminiAPIKey(), testClaudeMessage(), TestClaudeMessages(), TestClaudeMessagesWithComplexTools(), TestClaudeMessagesWithGeminiModel(), TestClaudeMessagesWithNoSignature() (+13 more)
 
 ### Community 1098 - "ChannelMonitorRequestTemplateService"
-Cohesion: 0.11
-Nodes (29): isSupportedProvider(), applyMonitorAdvancedUpdate(), applyMonitorUpdate(), validateCreateParams(), applyTemplateUpdate(), defaultBodyMode(), emptyHeadersIfNil(), IsForbiddenHeaderName() (+21 more)
+Cohesion: 0.14
+Nodes (19): applyMonitorAdvancedUpdate(), applyTemplateUpdate(), defaultBodyMode(), emptyHeadersIfNil(), IsForbiddenHeaderName(), NewChannelMonitorRequestTemplateService(), validateBodyModeForProtocol(), validateBodyModeParams() (+11 more)
 
 ### Community 1099 - "newAuthServiceForRegisterTurnstileTest"
 Cohesion: 0.21
 Nodes (4): UsageRecordSubmitMode, UsageRecordTask, UsageRecordWorkerPool, UsageRecordWorkerPoolStats
-
-### Community 1100 - "TokenRefreshService"
-Cohesion: 0.14
-Nodes (15): base64URLEncode(), GenerateCodeChallenge(), GenerateCodeVerifier(), GenerateRandomBytes(), GenerateSessionID(), GenerateState(), TestBase64URLEncode(), TestGenerateCodeChallenge() (+7 more)
-
-### Community 1101 - ".GetDashboardStats"
-Cohesion: 0.29
-Nodes (14): accumulateFunctionArgumentDeltas(), chatToolCallChunkJSON(), collectSSEDataPayloads(), completedWithFunctionCallsJSON(), findSSEEvent(), functionArgsDeltaJSON(), functionArgsDoneJSON(), outputItemDoneJSON() (+6 more)
 
 ### Community 1102 - "HasCompactionTriggerInInput"
 Cohesion: 0.24
@@ -11559,8 +11522,8 @@ Cohesion: 0.13
 Nodes (15): 1. 配置 kiro 账号(账号编辑弹窗,需勾选 `mixed_scheduling`), 2. 把 kiro 账号绑定到 anthropic 分组, 3. 现有用户**零感知**生效, Kiro ↔ Anthropic 混合调度, 一句话功能, 关键日志, 前端核心文件, 后端核心文件 (+7 more)
 
 ### Community 1105 - "groupsMessagesDispatch.ts"
-Cohesion: 0.14
-Nodes (22): OpenAIMessagesDispatchModelConfig, createDefaultMessagesDispatchFormState(), messagesDispatchConfigToFormState(), MessagesDispatchFormState, messagesDispatchFormStateToConfig(), MessagesDispatchMappingRow, resetMessagesDispatchFormState(), buildModelsListConfig() (+14 more)
+Cohesion: 0.22
+Nodes (13): OpenAIMessagesDispatchModelConfig, createDefaultMessagesDispatchFormState(), messagesDispatchConfigToFormState(), MessagesDispatchFormState, messagesDispatchFormStateToConfig(), MessagesDispatchMappingRow, resetMessagesDispatchFormState(), clearAllAccountSearchState() (+5 more)
 
 ### Community 1106 - "Web Chat"
 Cohesion: 0.13
@@ -11594,25 +11557,21 @@ Nodes (4): NewChannelMonitorRunner(), ChannelMonitorRunner, monitorRunnerSvc, sc
 Cohesion: 0.15
 Nodes (22): generateChallenge(), randIntInRange(), validateChallenge(), answerFromChallengePrompt(), answerFromOpenAIRequest(), setupFakeAnthropic(), setupFakeOpenAI(), swapMonitorHTTPClient() (+14 more)
 
-### Community 1116 - "image_concurrency_limiter_test.go"
-Cohesion: 0.22
-Nodes (3): TestImageConcurrencyLimiter_MaxWaitingRequestsRejectsOverflow(), TestOpenAIGatewayHandlerResponses_ImageIntentRejectedByImageConcurrency(), TestOpenAIGatewayHandlerResponses_TextOnlyNotRejectedByImageConcurrency()
-
 ### Community 1117 - "pagination.go"
 Cohesion: 0.36
 Nodes (8): DailyCheckInClaimResult, DailyCheckInStatus, checkInUseCaseFake, newCheckInHandlerContext(), TestCheckInHandler_ClaimMapsDuplicate(), TestCheckInHandler_ClaimPassesAuthenticatedRole(), TestCheckInHandler_ClaimRejectsMissingRole(), TestCheckInHandler_GetStatus()
 
 ### Community 1118 - "accountEligibleForMixedPlatform"
-Cohesion: 0.20
-Nodes (5): CreateUsageCleanupTaskRequest, searchUsersAdminStub, UsageHandler, TestAdminUsageSearchUsers_IncludesDeletedAndFlags(), NewUsageHandler()
+Cohesion: 0.29
+Nodes (11): easyPaySign(), easyPayVerifySign(), TestEasyPaySignConsistentOutput(), TestEasyPaySignEmptyParams(), TestEasyPaySignExcludesEmptyValues(), TestEasyPaySignExcludesSignAndSignType(), TestEasyPaySignSortOrder(), TestEasyPayVerifySignTampered() (+3 more)
 
 ### Community 1119 - "PaymentConfigService"
 Cohesion: 0.22
 Nodes (11): TestReconcileCachedTokens_AlreadyHasCacheRead(), TestReconcileCachedTokens_CachedTokensZero(), TestReconcileCachedTokens_KimiStyle(), TestReconcileCachedTokens_MissingCacheReadField(), TestReconcileCachedTokens_NilUsage(), TestReconcileCachedTokens_NoCachedTokens(), TestStreamingReconcile_MessageDelta(), TestStreamingReconcile_MessageDelta_NativeClaude() (+3 more)
 
 ### Community 1120 - "device.ts"
-Cohesion: 0.14
-Nodes (3): TestAdminService_BulkUpdateAccounts_PartialFailureIDs(), TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(), accountRepoStubForBulkUpdate
+Cohesion: 0.27
+Nodes (10): isSupportedProvider(), applyMonitorUpdate(), validateCreateParams(), normalizeEndpoint(), normalizeModels(), validateEndpoint(), validateInterval(), validateJitter() (+2 more)
 
 ### Community 1123 - "webhookHandlerProviderStub"
 Cohesion: 0.14
@@ -11630,17 +11589,21 @@ Nodes (13): apiClientPost, clearPendingAuthSession, completeOIDCOAuthRegistratio
 Cohesion: 0.18
 Nodes (5): AdminComplianceGuard(), isAdminComplianceBypassPath(), TestAdminComplianceGuardBlocksAdminRouteWhenMissing(), TestAdminComplianceGuardBypassesComplianceEndpoint(), complianceGuardRepoStub
 
+### Community 1127 - ".Save"
+Cohesion: 0.31
+Nodes (12): newTestValidator(), TestSystemPromptSimilarity(), TestValidate_ClaudeCLIUserAgent(), TestValidate_MaxTokensOneHaikuBypass(), TestValidate_MessagesPath_FullValid(), TestValidate_MessagesPath_InvalidMetadataUserID(), TestValidate_MessagesPath_InvalidSystemPrompt(), TestValidate_MessagesPath_MissingHeaders() (+4 more)
+
 ### Community 1128 - "RedeemCodeClient"
-Cohesion: 0.18
-Nodes (12): idempotencyStoreUnavailableMode, SystemHandler, systemUpdateService, executeAdminIdempotent(), executeAdminIdempotentJSON(), executeAdminIdempotentJSONFailOpenOnStoreUnavailable(), executeAdminIdempotentJSONWithMode(), buildSystemOperationID() (+4 more)
+Cohesion: 0.15
+Nodes (8): SystemHandler, systemUpdateService, buildSystemOperationID(), NewSystemHandler(), RestartService(), RestartServiceAsync(), SystemOperationLock, SystemOperationLockService
 
 ### Community 1130 - "usagecleanuptask.go"
 Cohesion: 0.26
 Nodes (12): ByCanceledAt(), ByCanceledBy(), ByCreatedAt(), ByCreatedBy(), ByDeletedRows(), ByErrorMessage(), ByFinishedAt(), ByID() (+4 more)
 
 ### Community 1132 - "bmSettingRepo"
-Cohesion: 0.25
-Nodes (7): ActivityStartAtEQ(), CheckInDateEQ(), dailyCheckInClaimEntityToService(), TestCheckInRepository_ConcurrentClaim(), isDailyCheckInUniqueConstraint(), NewCheckInRepository(), checkInRepository
+Cohesion: 0.33
+Nodes (6): ActivityStartAtEQ(), CheckInDateEQ(), dailyCheckInClaimEntityToService(), isDailyCheckInUniqueConstraint(), NewCheckInRepository(), checkInRepository
 
 ### Community 1133 - "UserPlatformQuotaClient"
 Cohesion: 0.08
@@ -11667,20 +11630,16 @@ Cohesion: 0.12
 Nodes (24): buildNS(), NewDigestSessionStore(), TestDigestSessionStore_CacheItemCountStable(), TestDigestSessionStore_ConcurrentSafety(), TestDigestSessionStore_DifferentGroupID(), TestDigestSessionStore_DifferentPrefixHash(), TestDigestSessionStore_DifferentSessionsNoInterference(), TestDigestSessionStore_EmptyDigestChain() (+16 more)
 
 ### Community 1143 - "cyberOrderingTestRepo"
-Cohesion: 0.27
-Nodes (4): OpenAIGatewayService, isGrokOAuthAccount(), isOpenAIAccount(), isOpenAIOAuthAccount()
+Cohesion: 0.24
+Nodes (5): OpenAIGatewayService, isGrokOAuthAccount(), isOpenAIAccount(), isOpenAIOAuthAccount(), parseOpenAIRateLimitResetTime()
 
 ### Community 1144 - "compilerOptions"
 Cohesion: 0.09
 Nodes (22): compilerOptions, allowImportingTsExtensions, isolatedModules, jsx, lib, module, moduleResolution, noEmit (+14 more)
 
 ### Community 1145 - "ChannelMonitorService"
-Cohesion: 0.13
-Nodes (8): ChannelMonitorService, extractOrigin(), pingEndpointOrigin(), NewChannelMonitorService(), ProvideChannelMonitorService(), ChannelMonitorRepository, ChannelMonitorUpdateParams, MonitorScheduler
-
-### Community 1147 - "方法2: Docker Compose（推奨）"
-Cohesion: 0.24
-Nodes (7): createOpenAIReqClient(), newOpenAINoProxyHintError(), NewOpenAIOAuthClient(), shouldReturnOpenAINoProxyHint(), TestNewOpenAIOAuthClient_DefaultTokenURL(), TestCreateOpenAIReqClient_Timeout120Seconds(), openaiOAuthService
+Cohesion: 0.15
+Nodes (7): ChannelMonitorService, extractOrigin(), pingEndpointOrigin(), NewChannelMonitorService(), ProvideChannelMonitorService(), ChannelMonitorRepository, MonitorScheduler
 
 ### Community 1148 - "userPlatformQuotaRepoStub"
 Cohesion: 0.26
@@ -11691,16 +11650,16 @@ Cohesion: 0.08
 Nodes (17): OpsService, isSensitiveKey(), TestIsSensitiveKey_TokenBudgetKeysNotRedacted(), TestSanitizeAndTrimJSONPayload_PreservesTokenBudgetFields(), TestShrinkToEssentials_IncludesThinking(), redactSensitiveJSON(), sanitizeAndTrimJSONPayload(), sanitizeErrorBodyForStorage() (+9 more)
 
 ### Community 1150 - "systemHandlerUpdateServiceStub"
-Cohesion: 0.20
-Nodes (14): saveBlob(), apiKeyForJob(), applyJobApiKey(), canDeleteRecord(), closeMoreMenu(), deleteJob(), deleteSelectedJobs(), downloadJob() (+6 more)
+Cohesion: 0.11
+Nodes (31): saveBlob(), apiKeyForJob(), applyFilters(), applyJobApiKey(), batchImageAdminError(), batchImageErrorMessage(), batchImageErrorReference(), batchImagePlainError() (+23 more)
 
 ### Community 1151 - "authSourceDefaultsRepoStub"
 Cohesion: 0.18
 Nodes (3): TestSettingService_GetAuthSourceDefaultSettings_ParsesValuesAndDefaults(), TestSettingService_UpdateAuthSourceDefaultSettings_PersistsAllKeys(), authSourceDefaultsRepoStub
 
 ### Community 1153 - "chatcompletions_to_responses.go"
-Cohesion: 0.19
-Nodes (12): TestBillingErrorDetails_APIKeyRateLimitStillMaps(), TestBillingErrorDetails_BillingServiceUnavailableMapsTo503(), TestBillingErrorDetails_MapsGroupRPMExceededToTooManyRequests(), TestBillingErrorDetails_MapsUserRPMExceededToTooManyRequests(), TestBillingErrorDetails_SubscriptionQuotaErrorsMapToTooManyRequests(), TestBillingErrorDetails_T10_QuotaExhaustedReturns429WithRetryAfter(), TestBillingErrorDetails_UnknownErrorFallsBackTo403(), TestExtractQuotaResetSeconds_T19_HappyPath() (+4 more)
+Cohesion: 0.24
+Nodes (6): NewSessionStore(), TestBuildAuthorizationURLForPlatform_OpenAI(), TestSessionStore_Stop_Concurrent(), TestSessionStore_Stop_Idempotent(), OAuthSession, SessionStore
 
 ### Community 1157 - "AnnouncementTargeting"
 Cohesion: 0.21
@@ -11711,11 +11670,11 @@ Cohesion: 0.18
 Nodes (16): claudeEncoding, CountTokens(), fallbackTokenCount(), getTokenizer(), newTokenizer(), parseBPERanks(), TestCountTokensMatchesAnthropicReferenceExamples(), countKiroSemanticJSONTokens() (+8 more)
 
 ### Community 1159 - ".Save"
-Cohesion: 0.36
-Nodes (9): ExtractCloudflareRayID(), extractNestedString(), extractRootString(), ExtractUpstreamErrorCodeAndMessage(), firstNonEmpty(), FormatCloudflareChallengeMessage(), IsCloudflareChallengeResponse(), TruncateBody() (+1 more)
+Cohesion: 0.32
+Nodes (10): clampFloat64(), computeBusinessHealth(), computeDashboardHealthScore(), computeInfraHealth(), stringPtr(), TestComputeBusinessHealth(), TestComputeDashboardHealthScore_DegradesOnBadSignals(), TestComputeDashboardHealthScore_IdleReturns100() (+2 more)
 
 ### Community 1160 - "ProxyClient"
-Cohesion: 0.05
+Cohesion: 0.06
 Nodes (11): Proxies, Proxy, ProxyClient, ProxyDelete, ProxyDeleteOne, ProxyEdges, proxyOption, NewProxyClient() (+3 more)
 
 ### Community 1161 - "pnpm Audit Exceptions"
@@ -11730,10 +11689,6 @@ Nodes (9): marshalEvent(), TestWire_ArgumentsDonePresentEvenEmpty(), TestWire_Co
 Cohesion: 0.33
 Nodes (9): ForeignKey, findForeignKeyByColumn(), findForeignKeyBySymbol(), findIndexByName(), foreignKeyColumns(), TestAccountsParentAccountForeignKey(), TestAuthIdentityFoundationForeignKeyOnDeleteActions(), TestPaymentOrdersOutTradeNoPartialUniqueIndex() (+1 more)
 
-### Community 1167 - "AuthIdentity"
-Cohesion: 0.25
-Nodes (7): adminServiceImpl, NewProxyExitInfoProber(), NewAdminService(), AdminService, ProxyExitInfoProber, ProxyLatencyCache, ProxyLatencyInfo
-
 ### Community 1168 - "PendingAuthSession"
 Cohesion: 0.20
 Nodes (9): OpenAIGatewayService, TestCopyOpenAIUsageFromResponsesUsageTrustsCanonicalCacheCreationValue(), TestResponsesUsageFromCCUsagePreservesCacheWriteDetails(), TestResponsesUsageFromCCUsageProjectsAccumulatedWireDetails(), TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(), logCCStreamMissingDoneSentinel(), responsesUsageFromCCUsage(), writeOpenAIResponsesFallbackError() (+1 more)
@@ -11746,21 +11701,17 @@ Nodes (9): containsModelNotFoundKeyword(), isModelNotFoundError(), isOpenAICodex
 Cohesion: 0.14
 Nodes (14): Kiro ↔ Anthropic 混合调度 Implementation Plan, Section 2 — 账号级 Kiro 配置（保真）, Section 3 — auto-sticky 稳定 hash（方案 A）, Section 4 — 前端, Section 5 — 集成验证与回归, Task 10: GroupSelector 放行 kiro+mixed 选 anthropic 组 + i18n, Task 11: 端到端回归 + 全量验证, Task 4: 账号级 kiro 配置读取方法 (+6 more)
 
-### Community 1174 - ".Save"
-Cohesion: 0.18
-Nodes (9): containerRef, emit, props, renderWidget(), scriptLoaded, TurnstileAPI, TurnstileRenderOptions, widgetId (+1 more)
-
 ### Community 1175 - "Layout Component Examples"
-Cohesion: 0.05
-Nodes (37): BatchAPIKeysUsageRequest, BatchUsersUsageRequest, DashboardAggregationBackfillRequest, dashboardSnapshotV2CacheKey, dashboardSnapshotV2Filters, dashboardSnapshotV2Response, dashboardSnapshotV2Stats, DashboardHandler (+29 more)
+Cohesion: 0.03
+Nodes (69): BatchAPIKeysUsageRequest, BatchUsersUsageRequest, DashboardAggregationBackfillRequest, dashboardEntityTrendCacheKey, dashboardModelGroupCacheKey, dashboardSnapshotV2CacheKey, dashboardSnapshotV2Filters, dashboardSnapshotV2Response (+61 more)
 
 ### Community 1178 - "PaymentOrderExpiryService"
 Cohesion: 0.19
 Nodes (5): DefaultPagination(), NormalizeSortOrder(), TestNormalizeSortOrder(), PaginationParams, PaginationResult
 
 ### Community 1179 - "openAIAccountTestRepo"
-Cohesion: 0.20
-Nodes (7): registerRoutes(), SetupRouter(), RegisterCommonRoutes(), TestRegisterCheckInRoutes_RegistersUserAndAdminContracts(), registerCheckInRoutes(), RegisterUserRoutes(), RegisterPaymentRoutes()
+Cohesion: 0.24
+Nodes (6): registerRoutes(), SetupRouter(), RegisterCommonRoutes(), TestRegisterCheckInRoutes_RegistersUserAndAdminContracts(), registerCheckInRoutes(), RegisterUserRoutes()
 
 ### Community 1181 - "stubAntigravityAccountRepo"
 Cohesion: 0.25
@@ -11779,8 +11730,8 @@ Cohesion: 0.22
 Nodes (16): canLoadItemPreview(), cleanupPreviewCache(), createThumbnailBlob(), deleteCachedPreview(), getCachedPreviewBlob(), hydrateCachedItemPreviews(), idbRequest(), itemPreviewKey() (+8 more)
 
 ### Community 1188 - "English"
-Cohesion: 0.22
-Nodes (7): BatchSetGroupRateMultipliersRequest, BatchSetGroupRPMOverridesRequest, CreateGroupRequest, optionalLimitField, UpdateGroupRequest, UpdateSortOrderRequest, NewGroupHandler()
+Cohesion: 0.31
+Nodes (9): buildModelsListConfig(), normalizeSupportedModelScopesForPlatform(), convertRoutingRulesToApiFormat(), handleCreateGroup(), handleUpdateGroup(), normalizeKiroStickySessionTTL(), normalizeOptionalLimit(), normalizeRateMultiplier() (+1 more)
 
 ### Community 1190 - "docker-deploy.sh"
 Cohesion: 0.25
@@ -11790,17 +11741,25 @@ Nodes (17): command_exists(), configure_caddy_if_requested(), install_caddy_if_n
 Cohesion: 0.25
 Nodes (5): CreatePromoCodeRequest, PromoHandler, UpdatePromoCodeRequest, NewPromoHandler(), PromoCodeFromService()
 
+### Community 1194 - "ChannelMonitorRequestTemplate"
+Cohesion: 0.18
+Nodes (11): detailItemRowClass(), detailRootBatchId(), friendlyItemError(), isChildDetailItem(), isRecoveredOriginalFailure(), itemDisplayStatusBadgeClass(), itemDisplayStatusLabel(), itemResultClass() (+3 more)
+
 ### Community 1195 - "IdentityAdoptionDecision"
 Cohesion: 0.38
 Nodes (10): requireColumn(), requireColumnDefaultContains(), requireConstraintDefinitionContains(), requireForeignKeyAbsent(), requireForeignKeyOnDelete(), requireIndex(), requireIndexAbsent(), requirePartialUniqueIndexDefinition() (+2 more)
 
+### Community 1196 - "Group"
+Cohesion: 0.29
+Nodes (9): NewEasyPay(), TestEasyPayQueryOrderStatusMapping(), newTestEasyPay(), TestEasyPayCustomMethodsResolveCIDFromConfiguredUpstreamType(), TestEasyPayCustomMethodsUseConfiguredUpstreamType(), TestEasyPayRefundNormalizesAPIBaseAndSendsOutTradeNoOnly(), TestEasyPayRefundResponseErrors(), TestEasyPayRefundRetriesWithTradeNoWhenOutTradeNoNotFound() (+1 more)
+
 ### Community 1199 - "UserSubscription"
-Cohesion: 0.22
-Nodes (4): createScheduledTestPlanRequest, ScheduledTestHandler, updateScheduledTestPlanRequest, NewScheduledTestHandler()
+Cohesion: 0.05
+Nodes (21): AntigravityExchangeCodeRequest, AntigravityGenerateAuthURLRequest, AntigravityOAuthHandler, AntigravityRefreshTokenRequest, createScheduledTestPlanRequest, GeminiExchangeCodeRequest, GeminiGenerateAuthURLRequest, GeminiOAuthHandler (+13 more)
 
 ### Community 1200 - "paymentRoutesSettingRepo"
-Cohesion: 0.33
-Nodes (6): isBase64Char(), SanitizeBodyForLogs(), truncateBase64InMessage(), createGeminiReqClient(), NewGeminiOAuthClient(), geminiOAuthClient
+Cohesion: 0.18
+Nodes (5): TestCheckErrorPolicy_GeminiAccounts(), TestGeminiErrorPolicyIntegration(), TestHandleGeminiUpstreamError_GoogleOneCapacityExhaustedUsesTierCooldown(), NewGeminiQuotaService(), geminiErrorPolicyRepo
 
 ### Community 1201 - "captureHandlerStructuredLog"
 Cohesion: 0.40
@@ -11815,8 +11774,8 @@ Cohesion: 0.33
 Nodes (8): TestHasCompactionTriggerInInput_CompactTriggerOnly(), TestHasCompactionTriggerInInput_DetectsCompactSignal(), TestHasCompactionTriggerInInput_EmptyBody(), TestHasCompactionTriggerInInput_EmptyInput(), TestHasCompactionTriggerInInput_NoInputField(), TestHasCompactionTriggerInInput_NoTrigger(), TestHasCompactionTriggerInInput_StringInput(), HasCompactionTriggerInInput()
 
 ### Community 1204 - "SessionStore"
-Cohesion: 0.21
-Nodes (7): bridgeSlogLocked(), newSlogZapHandler(), newCaptureCore(), TestSlogZapHandler_Handle_DoesNotAppendTimeField(), captureCore, capturedWrite, captureState
+Cohesion: 0.25
+Nodes (8): resolveKiroCacheEmulation(), resolveKiroEndpointMode(), resolveKiroStickySessionTTLSeconds(), TestResolveKiroCacheEmulation(), TestResolveKiroEndpointMode(), TestResolveKiroStickySessionTTLSeconds(), TestIsKiroGroup(), isKiroGroup()
 
 ### Community 1205 - "codeassist_types.go"
 Cohesion: 0.25
@@ -11827,24 +11786,20 @@ Cohesion: 0.32
 Nodes (4): NewAccountUpstreamUserAgentRepository(), TestAccountUpstreamUserAgentRepositoryListByAccountIDOrdersNewestFirst(), TestAccountUpstreamUserAgentRepositoryRecordUpsertsAndIncrementsSeenCount(), accountUpstreamUserAgentRepository
 
 ### Community 1207 - "initializeApplication"
-Cohesion: 0.03
-Nodes (90): Application, Application, AdminHandlers, BuildInfo, Handlers, ProvideDefaultLoadBalancer(), ProvideEncryptionKey(), ProvideRegistry() (+82 more)
+Cohesion: 0.04
+Nodes (86): Application, Application, AdminHandlers, BuildInfo, Handlers, ProvideDefaultLoadBalancer(), ProvideEncryptionKey(), ProvideRegistry() (+78 more)
 
 ### Community 1210 - "tlsFingerprintProfileCache"
-Cohesion: 0.28
-Nodes (5): GeminiExchangeCodeRequest, GeminiGenerateAuthURLRequest, GeminiOAuthHandler, deriveGeminiRedirectURI(), NewGeminiOAuthHandler()
-
-### Community 1215 - ".SetConversationID"
 Cohesion: 0.25
-Nodes (7): TokenResponse, getClientSecret(), TestGetClientSecret_环境变量为空(), TestGetClientSecret_环境变量含空格(), TestGetClientSecret_环境变量有前后空格(), TestGetClientSecret_环境变量未设置(), TestGetClientSecret_环境变量设置()
+Nodes (7): newUserGroupRateResolver(), TestGatewayServiceGetUserGroupRateMultiplier_FallbacksAndUsesExistingResolver(), TestNewUserGroupRateResolver_Defaults(), TestUserGroupRateResolverResolve_FallbackForNilResolverAndInvalidIDs(), TestUserGroupRateResolverResolve_InvalidCacheEntryLoadsRepoAndCaches(), userGroupRateResolver, userGroupRateResolverRepoStub
 
 ### Community 1218 - ".Save"
-Cohesion: 0.28
-Nodes (5): Cmder, DialHook, ProcessHook, ProcessPipelineHook, prefixHook
+Cohesion: 0.33
+Nodes (3): Context, Setting, settingHandlerPublicRepoStub
 
 ### Community 1219 - "DefaultModelMapping"
-Cohesion: 0.50
-Nodes (4): TestTierIDToPlanType(), TierIDToPlanType(), NormalizeAntigravitySubscription(), AntigravitySubscriptionResult
+Cohesion: 0.20
+Nodes (9): Beginner-guide behavior, CC Switch, CC Switch and OpenCode Guide Expansion Design, Configuration behavior, Goal, Non-goals, OpenCode, Scope (+1 more)
 
 ### Community 1220 - "defaultSparkShadowModelMapping"
 Cohesion: 0.14
@@ -11855,24 +11810,24 @@ Cohesion: 0.17
 Nodes (15): addToDirective(), directiveHasValue(), enhanceCSPPolicy(), GenerateNonce(), GetNonceFromContext(), isAPIRoutePath(), SecurityHeaders(), BenchmarkGenerateNonce() (+7 more)
 
 ### Community 1222 - "error_passthrough_service_test.go"
-Cohesion: 0.10
-Nodes (29): cloneRules(), newCachedRuleForTest(), newMockErrorPassthroughCache(), newPassthroughRuleForWritePathTest(), newTestService(), TestCreate_ForceRefreshCacheAfterWrite(), TestDelete_ForceRefreshCacheAfterWrite(), TestErrorPassthroughRule_Validate() (+21 more)
-
-### Community 1224 - "File Structure"
-Cohesion: 0.22
-Nodes (8): Catalog Representation, Goal, GPT-5.6 Model Marketplace Design, Implementation, Ordering, Out of Scope, Scope, Testing
+Cohesion: 0.07
+Nodes (35): ensureBodyLower(), NewErrorPassthroughService(), cloneRules(), newCachedRuleForTest(), newMockErrorPassthroughCache(), newPassthroughRuleForWritePathTest(), newTestService(), TestCreate_ForceRefreshCacheAfterWrite() (+27 more)
 
 ### Community 1226 - "enrichShadowParentInfo"
 Cohesion: 0.33
 Nodes (4): AccountHandler, enrichShadowParentInfo(), ptrInt64(), TestEnrichShadowParentInfo()
 
 ### Community 1227 - "openai_json_optimization_benchmark_test.go"
-Cohesion: 0.22
-Nodes (3): TestValidateKiroCreditUnitPriceFromExtra(), ValidateKiroCreditUnitPriceFromExtra(), createAccountKiroCreditRepoStub
+Cohesion: 0.33
+Nodes (4): OpsHandler, isOpsRealtimeRequestCanceled(), parseOpsRealtimeWindow(), TestParseOpsRealtimeWindow()
 
 ### Community 1230 - "Database Migrations"
-Cohesion: 0.06
-Nodes (26): OpenAIGatewayService, OpenAIGatewayService, newOpenAIChatSilentRefusalDetector(), newOpenAISilentRefusalFailoverError(), openAISilentRefusalErrorBody(), TestBuildOpenAIChatCompletionsURL(), TestEnsureOpenAIChatStreamUsage(), TestExtractCCStreamUsageFallsBackToResponsesFields() (+18 more)
+Cohesion: 0.27
+Nodes (7): TestEnsureOpenAIChatStreamUsage(), ensureOpenAIChatStreamUsage(), extractCCUsageFromJSONBytes(), nonNegativeFirstValidGJSONFloat(), nonNegativeFirstValidGJSONInt(), parseCCUsageFromGJSON(), parsedCCUsage
+
+### Community 1232 - ".Save"
+Cohesion: 0.22
+Nodes (9): Advanced capabilities, API Reference, Client integration, Information Architecture, Left navigation, Platform, Quickstart, Right table of contents (+1 more)
 
 ### Community 1233 - "ChannelMonitor"
 Cohesion: 0.48
@@ -11887,20 +11842,20 @@ Cohesion: 0.15
 Nodes (12): 10. Electronic Signature, 11. General Provisions, 1. Definitions, 2. Grant of Copyright License, 3. Moral Rights, 4. Grant of Patent License, 5. Representations and Warranties, 6. No Warranty (+4 more)
 
 ### Community 1236 - "Icon.vue"
-Cohesion: 0.25
-Nodes (7): KiroExchangeCodeRequest, KiroGenerateAuthURLRequest, KiroGenerateIDCAuthURLRequest, KiroImportTokenRequest, KiroRefreshTokenRequest, KiroStartExternalIDPAuthRequest, NewKiroOAuthHandler()
-
-### Community 1238 - "classifyOpenAITransportError"
-Cohesion: 0.47
-Nodes (4): classifyOpenAITransportError(), errString(), TestClassifyOpenAITransportError(), openAITransportErrorClass
+Cohesion: 0.14
+Nodes (8): KiroExchangeCodeRequest, KiroGenerateAuthURLRequest, KiroGenerateIDCAuthURLRequest, KiroImportTokenRequest, KiroOAuthHandler, KiroRefreshTokenRequest, KiroStartExternalIDPAuthRequest, NewKiroOAuthHandler()
 
 ### Community 1239 - "mockTokenCacheForRefreshAPI"
 Cohesion: 0.15
 Nodes (12): `/api/v1/chat/models`, `/api/v1/settings/model-catalog`, Web Chat 动态模型目录与模型广场开放, 主要实现文件, 前端数据流, 后端抗刷缓存, 数据契约, 权限和入口 (+4 more)
 
+### Community 1240 - "request_body_parse_log_test.go"
+Cohesion: 0.39
+Nodes (8): BenchmarkNextBackoff(), TestNextBackoff_BoundedByInitialBackoff(), TestNextBackoff_BoundedByMaxBackoff(), TestNextBackoff_ConvergesToMaxBackoff(), TestNextBackoff_ExponentialGrowth(), TestNextBackoff_HasJitter(), TestNextBackoff_InitialValueGrows(), nextBackoff()
+
 ### Community 1241 - "marshalEvent"
-Cohesion: 0.50
-Nodes (4): snapshotCache, snapshotCacheEntry, snapshotCacheLoadResult, buildETagFromAny()
+Cohesion: 0.22
+Nodes (8): Catalog Representation, Goal, GPT-5.6 Model Marketplace Design, Implementation, Ordering, Out of Scope, Scope, Testing
 
 ### Community 1242 - "RedactCredentials"
 Cohesion: 0.16
@@ -11910,17 +11865,25 @@ Nodes (15): isCredentialValuePresent(), RedactCredentials(), TestRedactCredentia
 Cohesion: 0.19
 Nodes (27): TestAuthIdentityCompatBackfillMigration_AllowsLongReportTypes(), prepareLegacyExternalIdentitiesTable(), TestAuthIdentityLegacyExternalBackfillMigration(), TestAuthIdentityLegacyExternalBackfillMigration_IsSafeWhenLegacyTableMissing(), TestAuthIdentityLegacyExternalBackfillMigration_SkipsAmbiguousCanonicalSubjects(), TestAuthIdentityLegacyExternalMigrations_ChainHandlesMalformedAndNonObjectMetadata(), TestAuthIdentityLegacyExternalMigrations_ReportAmbiguousCanonicalSubjectsWithoutWinnerAttribution(), TestAuthIdentityLegacyExternalSafetyMigration_IsSafeWhenLegacyTableMissing() (+19 more)
 
+### Community 1244 - "batchImageDownloadLimiter"
+Cohesion: 0.22
+Nodes (9): Access, Deployment Versions, Easy Migration (Local Directory Version), Manual Deployment, Method 2: Docker Compose (Recommended), Prerequisites, Quick Start (One-Click Deployment), Upgrade (+1 more)
+
 ### Community 1245 - "channel_monitor_checker.go"
 Cohesion: 0.22
 Nodes (17): bodyMergeDenyKey(), bodyOverrideMode(), buildRequestBody(), callProvider(), checkAPIMode(), extractOpenAIResponsesText(), finalizeOperationalOrDegraded(), hasNonEmptyBodyValue() (+9 more)
+
+### Community 1246 - "proxyLatencyCache"
+Cohesion: 0.50
+Nodes (7): dockerAvailable(), ensureDockerAvailable(), performRequest(), startRedis(), TestRateLimiterFixesMissingTTL(), TestRateLimiterSetsTTLAndDoesNotRefresh(), userHomeDir()
 
 ### Community 1249 - "codex_image_generation_bridge.go"
 Cohesion: 0.25
 Nodes (7): Account, Channel, boolOverrideFromMap(), boolOverridePtr(), normalizeCodexImageGenerationExplicitToolPolicy(), platformBoolOverride(), stringOverrideFromMap()
 
 ### Community 1251 - ".ForwardAsAnthropic"
-Cohesion: 0.29
-Nodes (7): emit, filteredGroups, handleChange(), isSearchable, Props, searchText, { t }
+Cohesion: 0.54
+Nodes (7): newVertexBetaTestContext(), newVertexServiceAccount(), TestFilterVertexBetaTokens(), TestVertexBetaFilter_BlocksViaBetaPolicy(), TestVertexBetaFilter_BodySanitizeKeysOnFinalBeta(), TestVertexBetaFilter_DropsHeaderWhenAllUnsupported(), TestVertexBetaFilter_StripsUnsupportedClaudeCodeTokens()
 
 ### Community 1252 - "openAIPassthroughFailoverRepo"
 Cohesion: 0.15
@@ -11942,10 +11905,6 @@ Nodes (24): newShadowTestGinCtx(), TestAccountTestServiceSkipsShadow(), TestEnsu
 Cohesion: 0.38
 Nodes (9): collectStreamEvents(), TestStream_ReasoningOnlyBlankDoesNotSynthesizeVisibleText(), TestStream_ReasoningOnlySynthesizesVisibleText(), TestStream_ReasoningOpensItemBeforeDelta(), TestStream_ReasoningThenContentDoesNotDuplicateFallbackText(), TestStream_ReasoningThenToolCallDoesNotSynthesizeVisibleText(), TestStream_SSEWireComplete(), TestStream_ToolCallArgumentsInFirstChunkNotDoubled() (+1 more)
 
-### Community 1261 - "KiroTokenRefresher"
-Cohesion: 0.27
-Nodes (9): TestBuildOpsErrorLogsWhere_QueryUsesQualifiedColumns(), TestBuildOpsErrorLogsWhere_UserQueryUsesExistsSubquery(), TestBuildOpsErrorLogsWhere_CyberPolicyStatusExemption(), TestBuildOpsErrorLogsWhere_ErrorTypeRequestTypeAndUpstreamKind(), TestBuildOpsErrorLogsWhere_MatchDeletedKeyOwner(), TestBuildOpsErrorLogsWhere_ModelFuzzy(), TestBuildOpsErrorLogsWhere_UserScopedFilters(), buildOpsErrorLogsWhere() (+1 more)
-
 ### Community 1262 - "Sub2API Configuration Schema"
 Cohesion: 0.18
 Nodes (11): Mirrored Model Pricing Fallback, Asynchronous ClickHouse Capture Archive, Billing Circuit Breaker, Sub2API Configuration Schema, Gateway Scheduling Configuration, Gemini OAuth Configuration, OpenAI WebSocket Routing, Pricing Data Source Configuration (+3 more)
@@ -11963,8 +11922,8 @@ Cohesion: 0.39
 Nodes (6): TestValidateDingTalkConfig_Disabled_Skip(), TestValidateDingTalkConfig_HappyPath_None(), TestValidateDingTalkConfig_V1_InternalOnlyRequiresInternalAppType(), TestValidateDingTalkConfig_V3_InternalOnlyAllowsEmptyCorpID(), TestValidateDingTalkConfig_V4_DingTalkAppKind(), ValidateDingTalkConfig()
 
 ### Community 1266 - ".SetRateLimitedAt"
-Cohesion: 0.32
-Nodes (7): CreateProvider(), decodeIkunPayKey(), NewIkunPay(), normalizeIkunPayAPIBase(), parseIkunPayPrivateKey(), parseIkunPayPublicKey(), TestNewIkunPayDefaultsAPIBaseAndFactoryCreatesProvider()
+Cohesion: 0.29
+Nodes (6): CC Switch and OpenCode Guide Expansion Implementation Plan, Global Constraints, Task 1: Shared configuration generators and key modal, Task 2: Beginner-guide contracts, curriculum, and persistence, Task 3: Beginner-guide rendering and configuration reuse, Task 4: Verification and graph refresh
 
 ### Community 1267 - ".SetRateLimitResetAt"
 Cohesion: 0.18
@@ -11987,8 +11946,8 @@ Cohesion: 0.18
 Nodes (10): Codex API Key Example Hardening Design, Configuration generation, Design, Error prevention, Existing Behavior, Objective, Scope, Success Criteria (+2 more)
 
 ### Community 1276 - ".SetSessionWindowStart"
-Cohesion: 0.39
-Nodes (6): applyDBPoolSettings(), clampDBPoolDuration(), clampDBPoolSettings(), TestApplyDBPoolSettings(), TestClampDBPoolSettings(), dbPoolSettings
+Cohesion: 0.21
+Nodes (9): applyDBPoolSettings(), clampDBPoolDuration(), clampDBPoolSettings(), TestApplyDBPoolSettings(), TestClampDBPoolSettings(), InitEnt(), ensureSimpleModeAdminConcurrency(), ProvideEnt() (+1 more)
 
 ### Community 1277 - "TestResolveFallbackTarget"
 Cohesion: 0.18
@@ -12011,16 +11970,16 @@ Cohesion: 0.47
 Nodes (8): loggedFields(), newObservedLogger(), TestLogRequestBodyParseFailure_DerivesErrorWhenNil(), TestLogRequestBodyParseFailure_EscapesControlCharacters(), TestLogRequestBodyParseFailure_LargeBodyBoundedSnippets(), TestLogRequestBodyParseFailure_NilLoggerNoPanic(), TestLogRequestBodyParseFailure_ShortBodyHasNoTail(), ObservedLogs
 
 ### Community 1292 - "ErrorPassthroughRuleUpsertOne"
-Cohesion: 0.22
-Nodes (4): TestAccountEligibleForMixedPlatform(), TestMixedSchedulingPlatforms(), accountEligibleForMixedPlatform(), mixedSchedulingPlatforms()
+Cohesion: 0.43
+Nodes (7): buildImageFinalPricePreview(), buildVideoFinalPricePreview(), buildWebSearchFinalPricePreview(), formatImagePricePreview(), formatVideoPricePreview(), normalizePreviewNumber(), parsePreviewPrice()
 
 ### Community 1293 - "PageHandler"
 Cohesion: 0.19
 Nodes (10): PageHandler, cleanPageImageRelativePath(), isPathWithinBase(), NewPageHandler(), RegisterPageRoutes(), resolvePageImagePath(), mustEvalSymlinks(), TestCleanPageImageRelativePath() (+2 more)
 
 ### Community 1294 - "NewClient"
-Cohesion: 0.22
-Nodes (9): applyChildCounts(), applyFilters(), handlePageChange(), listOptions(), loadApiKeys(), loadBatchJobs(), openCreateModal(), refreshPage() (+1 more)
+Cohesion: 0.29
+Nodes (4): failingReadCloser, TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(), TestOpenAIGatewayHandlerImages_ReadBodyErrorLogsSafeRequestSummary(), IntoContext()
 
 ### Community 1297 - "contentModerationHashCache"
 Cohesion: 0.24
@@ -12031,12 +11990,8 @@ Cohesion: 0.12
 Nodes (16): userUsageRepoCapture, TestUserUsageListSortDefaults(), TestUserUsageListSortParams(), newUserUsageRequestTypeTestRouter(), TestUserUsageDashboardModelsOmitsAccountCost(), TestUserUsageDashboardModelsRejectsAdminModelSources(), TestUserUsageListAdvancedFilters(), TestUserUsageListAllowsVideoBillingMode() (+8 more)
 
 ### Community 1299 - ".SetBackupProxyID"
-Cohesion: 0.25
-Nodes (5): TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(), TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(), TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(), TestExtractOpenAICodexProbeUpdatesAccepts429WithCodexHeaders(), accountUsageCodexProbeRepo
-
-### Community 1300 - "Section 3 — auto-sticky 稳定 hash（方案 A）"
-Cohesion: 0.25
-Nodes (3): TestUpdateAccount_DisableOveragesClearsAICreditsKey(), TestUpdateAccount_FixedWeeklyResetClearsLegacyRollingUsage(), updateAccountOveragesRepoStub
+Cohesion: 0.29
+Nodes (6): TotpDisableRequest, TotpEnableRequest, TotpSetupRequest, TotpSetupResponse, TotpStatusResponse, NewTotpHandler()
 
 ### Community 1301 - "Sub2API"
 Cohesion: 0.40
@@ -12047,12 +12002,12 @@ Cohesion: 0.09
 Nodes (3): groupRepoStub, sparkShadowGroupRepoStub, sparkShadowValidatingGroupRepoStub
 
 ### Community 1303 - ".SetGroupID"
-Cohesion: 0.29
-Nodes (4): openAIFailoverCachedBodyTestAccount(), TestGetOpenAIRequestBodyMap_IgnoresLegacyContextCache(), TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(), panicOnReadCloser
+Cohesion: 0.43
+Nodes (5): anthropicCompatMessageToolIDs(), applyAnthropicCompatFullReplayGuard(), expandAnthropicCompatTrimBoundary(), TestApplyAnthropicCompatFullReplayGuard_KeepsToolBoundaryIntact(), TestApplyAnthropicCompatFullReplayGuard_TrimsOldMessages()
 
 ### Community 1309 - ".SetProxyFallbackOriginID"
-Cohesion: 0.25
-Nodes (8): Credentials, NewBedrockSigner(), NewBedrockSignerFromAccount(), sha256Hash(), TestFilterBetaTokens(), TestNewBedrockSignerFromAccount_DefaultRegion(), BedrockSigner, Signer
+Cohesion: 0.29
+Nodes (7): Credentials, NewBedrockSigner(), NewBedrockSignerFromAccount(), sha256Hash(), TestNewBedrockSignerFromAccount_DefaultRegion(), BedrockSigner, Signer
 
 ### Community 1311 - "gateway_group_isolation_test.go"
 Cohesion: 0.20
@@ -12065,6 +12020,10 @@ Nodes (8): OpsErrorDistributionItem, OpsErrorDistributionResponse, OpsErrorTrend
 ### Community 1314 - "PromoService"
 Cohesion: 0.13
 Nodes (6): NewPromoService(), CreatePromoCodeInput, PromoCode, PromoCodeUsage, PromoService, UpdatePromoCodeInput
+
+### Community 1315 - ".SetTempUnschedulableUntil"
+Cohesion: 0.33
+Nodes (6): Catalog and content tests, Component tests, Regression verification, Route and navigation tests, Shared content tests, Testing Strategy
 
 ### Community 1320 - "ops_settings_models.go"
 Cohesion: 0.09
@@ -12095,15 +12054,15 @@ Cohesion: 0.39
 Nodes (7): ByCreatedAt(), ByDescription(), ByEnableGrease(), ByID(), ByName(), ByUpdatedAt(), OrderOption
 
 ### Community 1333 - "oauth_test.go"
-Cohesion: 0.15
-Nodes (24): OAuthConfig, BuildAuthorizationURL(), EffectiveOAuthConfig(), hasRestrictedScope(), TestBuildAuthorizationURL(), TestBuildAuthorizationURL_EmptyRedirectURI(), TestBuildAuthorizationURL_UsesBuiltinSecretFallback(), TestBuildAuthorizationURL_WithProjectID() (+16 more)
+Cohesion: 0.07
+Nodes (48): OAuthConfig, OAuthSession, SessionStore, base64URLEncode(), BuildAuthorizationURL(), EffectiveOAuthConfig(), GenerateCodeChallenge(), GenerateCodeVerifier() (+40 more)
 
 ### Community 1342 - "account_service_delete_test.go"
 Cohesion: 0.53
 Nodes (4): TestAccountService_Delete_CheckError(), TestAccountService_Delete_DeleteError(), TestAccountService_Delete_NotFound(), TestAccountService_Delete_Success()
 
 ### Community 1345 - ".SetEndsAt"
-Cohesion: 0.09
+Cohesion: 0.08
 Nodes (7): AnnouncementClient, AnnouncementDelete, AnnouncementDeleteOne, announcementOption, newAnnouncementMutation(), withAnnouncement(), withAnnouncementID()
 
 ### Community 1346 - "CORS"
@@ -12151,12 +12110,12 @@ Cohesion: 0.43
 Nodes (6): OrderOption, ByCreatedAt(), ByEventHash(), ByEventType(), ByID(), ByJobID()
 
 ### Community 1361 - "getSharedReqClient"
-Cohesion: 0.29
-Nodes (12): buildReqClientKey(), CreatePrivacyReqClient(), getSharedReqClient(), forceHTTPVersion(), TestCreateGeminiReqClient_ForceHTTP2Disabled(), TestGetSharedReqClient_ForceHTTP2SeparatesCache(), TestGetSharedReqClient_IgnoresNonClientCache(), TestGetSharedReqClient_ImpersonateAndProxy() (+4 more)
+Cohesion: 0.13
+Nodes (19): createOpenAIReqClient(), newOpenAINoProxyHintError(), NewOpenAIOAuthClient(), shouldReturnOpenAINoProxyHint(), TestNewOpenAIOAuthClient_DefaultTokenURL(), buildReqClientKey(), CreatePrivacyReqClient(), getSharedReqClient() (+11 more)
 
 ### Community 1362 - "registration_email_policy.go"
-Cohesion: 0.26
-Nodes (11): IsRegistrationEmailSuffixAllowed(), isValidRegistrationEmailDomain(), normalizeRegistrationEmailSuffix(), NormalizeRegistrationEmailSuffixWhitelist(), registrationEmailDomainMatchesWildcard(), RegistrationEmailSuffix(), splitEmailForPolicy(), TestIsRegistrationEmailSuffixAllowed() (+3 more)
+Cohesion: 0.22
+Nodes (12): IsRegistrationEmailSuffixAllowed(), isValidRegistrationEmailDomain(), normalizeRegistrationEmailSuffix(), NormalizeRegistrationEmailSuffixWhitelist(), ParseRegistrationEmailSuffixWhitelist(), registrationEmailDomainMatchesWildcard(), RegistrationEmailSuffix(), splitEmailForPolicy() (+4 more)
 
 ### Community 1363 - ".SetRateLimit5h"
 Cohesion: 0.17
@@ -12167,12 +12126,44 @@ Cohesion: 0.17
 Nodes (11): sub2api 上游同步工作流, 归档字段, 必须先问用户的情况, 执行契约, 推送与 CI 门禁, 测试与基线规则, 状态流程, 独立 subagent 复审协议 (+3 more)
 
 ### Community 1366 - ".SetWindow7dStart"
-Cohesion: 0.11
+Cohesion: 0.12
 Nodes (11): AdminPaymentOrderResult, adminPlanResponse, AdminProcessRefundRequest, PaymentHandler, applySeatSummaryToAdminPlan(), newAdminPlanResponse(), parseIDParam(), sanitizeAdminPaymentOrderForResponse() (+3 more)
+
+### Community 1371 - "NormalizeAntigravitySubscription"
+Cohesion: 0.40
+Nodes (5): BuildAuthorizationURL(), BuildAuthorizationURLForPlatform(), OAuthClientConfigByPlatform(), normalizeOpenAIOAuthPlatform(), OpenAIAuthURLResult
+
+### Community 1372 - "PaymentAuditLog"
+Cohesion: 0.40
+Nodes (4): buildRedisOptions(), InitRedis(), TestBuildRedisOptions(), ProvideRedis()
+
+### Community 1373 - "SecuritySecret"
+Cohesion: 0.33
+Nodes (5): Beginner Guide Platform Installation Implementation Plan, Global Constraints, Task 1: Lock the six platform installation contracts, Task 2: Render the warning and Windows primary download action, Task 3: Verify the scoped change and refresh the knowledge graph
+
+### Community 1374 - "Setting"
+Cohesion: 0.60
+Nodes (4): CompositeLit, compositeLiteralHasKey(), isOpenAIRecordUsageInputLiteral(), TestOpenAIRecordUsageInputsCarryQuotaPlatform()
+
+### Community 1375 - ".SetErrorCode"
+Cohesion: 0.40
+Nodes (5): Anthropic envelope, Error Documentation, Gateway authentication and billing envelope, OpenAI envelope, Streaming failures
+
+### Community 1377 - "WebChatArtifact"
+Cohesion: 0.40
+Nodes (4): Answer, Outcome, Q: Implement Task 3 typed API documentation catalog using the shared endpoint contract and locale patterns, Source Nodes
+
+### Community 1378 - "WebChatAttachment"
+Cohesion: 0.40
+Nodes (4): Answer, Outcome, Q: How are the API docs catalog, examples, clipboard composable, locale keys, and component tests structured for Task 4?, Source Nodes
 
 ### Community 1379 - "securitysecret.go"
 Cohesion: 0.43
 Nodes (6): ByCreatedAt(), ByID(), ByKey(), ByUpdatedAt(), ByValue(), OrderOption
+
+### Community 1382 - "Web Chat 动态模型目录与模型广场开放"
+Cohesion: 0.40
+Nodes (4): Global Constraints, GPT-5.6 Model Marketplace Implementation Plan, Task 1: Add and Verify the GPT-5.6 Catalog Entries, Task 2: Refresh the Knowledge Graph and Run Final Verification
 
 ### Community 1383 - "newAdminUsageRequestTypeTestRouter"
 Cohesion: 0.21
@@ -12191,12 +12182,8 @@ Cohesion: 0.25
 Nodes (7): KIRO 专项复核, 上游同步：sub2api 0.1.153 后续更新（截至 7d239d62e）, 冲突处理与本地行为保护, 合并范围与主要上游功能, 审查、推送与回滚, 本地验证, 独立 review 修复闭环
 
 ### Community 1390 - "group_peak_rate_test.go"
-Cohesion: 0.32
-Nodes (11): at(), mustLoad(), newPeakGroup(), TestPeakMultiplier_GatewayBillingSequence(), TestPeakMultiplier_SnapshotRoundTrip(), TestPeakMultiplierAt_Boundaries(), TestPeakMultiplierAt_DisabledOrUnconfigured(), TestPeakMultiplierAt_NilReceiver() (+3 more)
-
-### Community 1391 - "openAIWSBlockingConn"
-Cohesion: 0.39
-Nodes (3): NewSessionStore(), OAuthSession, SessionStore
+Cohesion: 0.36
+Nodes (10): at(), mustLoad(), newPeakGroup(), TestPeakMultiplier_GatewayBillingSequence(), TestPeakMultiplier_SnapshotRoundTrip(), TestPeakMultiplierAt_Boundaries(), TestPeakMultiplierAt_DisabledOrUnconfigured(), TestPeakMultiplierAt_NilReceiver() (+2 more)
 
 ### Community 1392 - "openAIWSPingFailConn"
 Cohesion: 0.18
@@ -12219,8 +12206,12 @@ Cohesion: 0.36
 Nodes (7): assert_exists(), assert_missing(), fail(), FAKE_CONTAINER_STATE, PATH, apple-container-test.sh script, SUB2API_ENV_FILE
 
 ### Community 1403 - "管理员启用步骤"
-Cohesion: 0.05
-Nodes (54): TestNormalizeAnnouncementInterval(), ParseRegistrationEmailSuffixWhitelist(), TestValidateCodexClientEntriesJSON(), TestValidateCodexWhitelistEntriesJSON(), TestValidateEngineFingerprintSignalsJSON_ServiceWrapper(), buildLoginAgreementRevision(), clampChannelMonitorInterval(), codexClientEntriesContain() (+46 more)
+Cohesion: 0.67
+Nodes (3): AdminAPIKeyHandler, AdminUpdateAPIKeyGroupRequest, NewAdminAPIKeyHandler()
+
+### Community 1404 - ".defaults"
+Cohesion: 0.50
+Nodes (3): CreateBackupRequest, RestoreBackupRequest, NewBackupHandler()
 
 ### Community 1406 - "AppShellLinear.spec.ts"
 Cohesion: 0.25
@@ -12271,8 +12262,8 @@ Cohesion: 0.10
 Nodes (4): TestAccount_ResolveOpenAIResponsesWebSocketV2Mode(), normalizeOpenAICompactMode(), normalizeOpenAIWSIngressDefaultMode(), normalizeOpenAIWSIngressMode()
 
 ### Community 1435 - "IdentityAdoptionDecisionClient"
-Cohesion: 0.06
-Nodes (11): IdentityAdoptionDecision, IdentityAdoptionDecisionClient, IdentityAdoptionDecisionDelete, IdentityAdoptionDecisionDeleteOne, IdentityAdoptionDecisionEdges, identityadoptiondecisionOption, IdentityAdoptionDecisions, NewIdentityAdoptionDecisionClient() (+3 more)
+Cohesion: 0.16
+Nodes (4): IdentityAdoptionDecision, IdentityAdoptionDecisionEdges, IdentityAdoptionDecisions, NewIdentityAdoptionDecisionClient()
 
 ### Community 1437 - ".SetStatus"
 Cohesion: 0.43
@@ -12311,8 +12302,16 @@ Cohesion: 0.29
 Nodes (4): appStore, authStore, NavigationGuard, routerHarness
 
 ### Community 1459 - "client_test.go"
-Cohesion: 0.05
-Nodes (32): redirectRoundTripper, roundTripperFunc, IsConnectionError(), NewAPIRequest(), NewAPIRequestWithURL(), newTestClientWithRedirect(), TestClient_ExchangeCode_ContextCanceled_RealCall(), TestClient_ExchangeCode_InvalidJSON_RealCall() (+24 more)
+Cohesion: 0.04
+Nodes (60): redirectRoundTripper, roundTripperFunc, timeoutError, extractProjectIDFromOnboardResponse(), IsConnectionError(), NewAPIRequest(), NewAPIRequestWithURL(), shouldFallbackToNextURL() (+52 more)
+
+### Community 1460 - ".SetTargeting"
+Cohesion: 0.50
+Nodes (4): Context and Evidence, Local implementation, Production verification, Reference product
+
+### Community 1462 - ".SetBilledAmount"
+Cohesion: 0.50
+Nodes (4): Deferred endpoint, Documented endpoints, Explicit exclusions, Public API Reference Scope
 
 ### Community 1464 - ".SetErrorMessage"
 Cohesion: 0.33
@@ -12322,13 +12321,13 @@ Nodes (3): Model, DefaultModelIDs(), TestDefaultModelsContainsLatestClaudeModels
 Cohesion: 0.33
 Nodes (5): HostEQ(), PasswordEQ(), PasswordIsNil(), PortEQ(), UsernameIsNil()
 
-### Community 1468 - "GroupUpdateOne"
-Cohesion: 0.05
-Nodes (63): NormalizeResponsesSupportMode(), ResolveResponsesSupport(), ShouldUseResponsesAPI(), TestNormalizeResponsesSupportMode(), TestResolveResponsesSupport(), TestShouldUseResponsesAPI(), deriveAnthropicCacheControlPromptCacheKey(), deriveAnthropicCompatPromptCacheKey() (+55 more)
+### Community 1466 - ".SetProviderSourceObject"
+Cohesion: 0.50
+Nodes (4): Desktop, Mobile, Responsive and Accessibility Behavior, Tablet
 
-### Community 1469 - ".SetSourceByteLength"
-Cohesion: 0.40
-Nodes (3): KeyedDebouncedSearchContext, useKeyedDebouncedSearch(), UseKeyedDebouncedSearchOptions
+### Community 1468 - "GroupUpdateOne"
+Cohesion: 0.16
+Nodes (21): deriveOpenAIContentSessionSeed(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_DeveloperRole(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_DifferentFirstUserDiffers(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_DifferentModelDiffers(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_DifferentSystemDiffers(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_StableAcrossTurns(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_StructuredContent(), TestDeriveOpenAIContentSessionSeed_ChatCompletions_WithFunctions() (+13 more)
 
 ### Community 1474 - "compositeLiteralHasKey"
 Cohesion: 0.38
@@ -12339,20 +12338,16 @@ Cohesion: 0.53
 Nodes (5): deriveSignatureKey(), generateClaudeSignature(), hashKey(), thinkingSignature(), sigCacheEntry
 
 ### Community 1477 - "openAIFastPolicyRepoStub"
-Cohesion: 0.04
-Nodes (71): OpenAIGatewayService, TestContainsBetaToken(), containsBetaToken(), NewOpenAIWSClientCloseError(), newOpenAIGatewayServiceWithSettings(), openAIFastFilterPriorityPolicy(), TestApplyOpenAIFastPolicyToBody_AllRuleStripsOfficialTiers(), TestApplyOpenAIFastPolicyToBody_BlockReturnsTypedError() (+63 more)
+Cohesion: 0.07
+Nodes (46): TestContainsBetaToken(), containsBetaToken(), newOpenAIGatewayServiceWithSettings(), openAIFastFilterPriorityPolicy(), TestApplyOpenAIFastPolicyToBody_AllRuleStripsOfficialTiers(), TestApplyOpenAIFastPolicyToBody_BlockReturnsTypedError(), TestApplyOpenAIFastPolicyToBody_DefaultPassesPriorityAndFast(), TestApplyOpenAIFastPolicyToBody_ExplicitFilterRemovesField() (+38 more)
 
 ### Community 1478 - "HTTPUpstreamProfileFromContext"
-Cohesion: 0.15
-Nodes (8): TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersistsSupport(), TestAccountTestService_OpenAIImageAPIKeyUsesConfiguredV1BaseURL(), TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(), HTTPUpstreamProfileFromContext(), TestOpenAIGatewayServiceForwardImages_OAuthPassesNAndReturnsAllImages(), TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(), TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(), httpUpstreamProfileContextKey
+Cohesion: 0.14
+Nodes (9): TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersistsSupport(), TestAccountTestService_OpenAIImageAPIKeyUsesConfiguredV1BaseURL(), TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(), HTTPUpstreamProfileFromContext(), TestOpenAIGatewayServiceForwardImages_OAuthPassesNAndReturnsAllImages(), TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDownstream(), TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(), TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath() (+1 more)
 
 ### Community 1480 - ".SetSubmittedAt"
 Cohesion: 0.48
 Nodes (6): mustParseMixedKiroRequest(), mustParseNativeKiroRequest(), TestGenerateSessionHash_MixedKiroStableHash(), TestGenerateSessionHash_NativeKiroAutoStickyOff(), TestGenerateSessionHash_NativeKiroAutoStickyOn(), TestGenerateSessionHash_PlainAnthropicUnchanged()
-
-### Community 1481 - ".SetMonitorID"
-Cohesion: 0.25
-Nodes (8): DefaultEffortForThinkingEnabled(), NormalizeClaudeOutputEffort(), TestApplyThinkingEnabledFallback(), TestDefaultEffortForThinkingEnabled(), TestNormalizeClaudeOutputEffort(), strPtr(), TestOpsServiceRecordErrorBatch_FallsBackToSingleInsert(), TestOpsServiceRecordErrorBatch_SanitizesAndBatches()
 
 ### Community 1485 - "newUserEntRepo"
 Cohesion: 0.43
@@ -12365,10 +12360,6 @@ Nodes (5): chatResponseFormatToResponsesTextFormat(), normalizedRawJSON(), rawJS
 ### Community 1489 - "resolveOpenAIForwardModel"
 Cohesion: 0.47
 Nodes (5): DefaultModelIDs(), DefaultModelMapping(), DefaultModels(), TestDefaultModelMappingIncludesGrokAliases(), Model
-
-### Community 1490 - ".SetSumLatencyMs"
-Cohesion: 0.40
-Nodes (5): filterEmptyPartsFromGeminiRequest(), WithForwardGeminiSession(), TestAntigravityGatewayService_ForwardGemini_ClearsStickySessionOnGeminiRateLimit(), ForwardGeminiOption, forwardGeminiOptions
 
 ### Community 1491 - ".SetCustomID"
 Cohesion: 0.40
@@ -12383,28 +12374,20 @@ Cohesion: 0.33
 Nodes (5): intPtrHelper(), TestEffectiveLoadFactor_NegativeLoadFactor_FallbackToConcurrency(), TestEffectiveLoadFactor_PositiveLoadFactor(), TestEffectiveLoadFactor_ZeroLoadFactor_FallbackToConcurrency(), TestEffectiveLoadFactor_ZeroLoadFactor_ZeroConcurrency()
 
 ### Community 1504 - ".SetImageRateMultiplier"
-Cohesion: 0.62
-Nodes (6): resetDashboardReadCachesForTest(), TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(), TestDashboardHandler_GetUsageTrend_UsesCache(), TestDashboardHandler_GetUserUsageTrend_UsesCache(), TestDashboardHandler_SnapshotModelAndGroupCachesIncludeModelFilter(), NewDashboardHandler()
+Cohesion: 0.26
+Nodes (7): dashboardUsageRepoCacheProbe, resetDashboardReadCachesForTest(), TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(), TestDashboardHandler_GetUsageTrend_UsesCache(), TestDashboardHandler_GetUserUsageTrend_UsesCache(), TestDashboardHandler_SnapshotModelAndGroupCachesIncludeModelFilter(), NewDashboardHandler()
 
 ### Community 1506 - ".SetKiroEndpointMode"
 Cohesion: 0.38
 Nodes (5): OpsErrorLog, OpsErrorLogDetail, OpsErrorLogFilter, OpsErrorLogList, OpsSystemLog
-
-### Community 1510 - ".AddAPIKeyRouteIDs"
-Cohesion: 0.33
-Nodes (5): Beginner Guide Platform Installation Implementation Plan, Global Constraints, Task 1: Lock the six platform installation contracts, Task 2: Render the warning and Windows primary download action, Task 3: Verify the scoped change and refresh the knowledge graph
-
-### Community 1512 - ".RemoveAccountIDs"
-Cohesion: 0.33
-Nodes (4): main(), ProvideConfig(), LoadForBootstrap(), TestLoadForBootstrapAllowsMissingJWTSecret()
 
 ### Community 1514 - ".SetImagePrice4k"
 Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: How does the beginner getting-started guide connect homepage discovery, dashboard prompt state, API key selection, and shared client configuration?, Source Nodes
 
 ### Community 1526 - "LINX2.AI 部署与运营合规承诺"
-Cohesion: 0.12
-Nodes (13): CreateShadowRequest, OpenAICodexPATCreateRequest, OpenAIExchangeCodeRequest, OpenAIGenerateAuthURLRequest, OpenAIOAuthHandler, OpenAIRefreshTokenRequest, buildOpenAICodexPATAccountName(), oauthPlatformFromPath() (+5 more)
+Cohesion: 0.38
+Nodes (6): isOpenAIPersonalAccessTokenCredentialSet(), NormalizeOpenAIPersonalAccessTokenCredentials(), openAICredentialString(), TestNormalizeOpenAIPersonalAccessTokenCredentialsRemovesOAuthFields(), isOpenAIPersonalAccessTokenAuthMode(), openAICodexPATWhoamiResponse
 
 ### Community 1529 - "user_platform_quota_port.go"
 Cohesion: 0.50
@@ -12420,7 +12403,7 @@ Nodes (7): Docker Compose, Environment Variables, Links, Quick Start, Sub2API Do
 
 ### Community 1535 - "AppSidebar.spec.ts"
 Cohesion: 0.02
-Nodes (95): renderMarkdownContent(), renderMarkdown(), acceptTypes, emit, error, handleUpload(), innerSizeClass, placeholderSizeClass (+87 more)
+Nodes (96): renderMarkdownContent(), renderMarkdown(), acceptTypes, emit, error, handleUpload(), innerSizeClass, placeholderSizeClass (+88 more)
 
 ### Community 1536 - "docUrlSanitization.spec.ts"
 Cohesion: 0.40
@@ -12464,7 +12447,7 @@ Nodes (7): Example 1: Dashboard Page, Example 2: Login Page, Example 3: API Keys
 
 ### Community 1564 - ".ListActive"
 Cohesion: 0.25
-Nodes (7): Authentication Views Visual Guide, Breakpoints, Dark Mode Considerations, Layout Structure, Mobile Optimizations, Print Styles, Responsive Design
+Nodes (7): Authentication Views Visual Guide, Dark Mode Considerations, Error Icon, Icons, Layout Structure, Loading Spinner, Print Styles
 
 ### Community 1590 - "CleanGeminiNativeThoughtSignatures"
 Cohesion: 0.17
@@ -12518,17 +12501,9 @@ Nodes (4): newLeaderLockTestCache(), TestLeaderLockCache_AcquireContendedRelease
 Cohesion: 0.70
 Nodes (4): _extract_text(), find_boundaries(), main(), process_chunk()
 
-### Community 1630 - ".SetCountLatency"
-Cohesion: 0.60
-Nodes (5): newAnnouncementTestHandler(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsBothTextsEmpty(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsLongID(), TestSettingHandler_UpdateSettings_AnnouncementBannersRejectsTooMany(), TestSettingHandler_UpdateSettings_AnnouncementBannersRoundTrip()
-
 ### Community 1631 - "调度行为"
 Cohesion: 0.53
 Nodes (3): NewProxyLatencyCache(), proxyLatencyKey(), proxyLatencyCache
-
-### Community 1644 - ".SetOperationalCount"
-Cohesion: 0.40
-Nodes (3): ParseSchedulerBucket(), SchedulerBucket, SchedulerCache
 
 ### Community 1645 - ".SetSumLatencyMs"
 Cohesion: 0.50
@@ -12537,10 +12512,6 @@ Nodes (3): EndsAtGT(), EndsAtIsNil(), StartsAtIsNil()
 ### Community 1648 - ".SetSumPingLatencyMs"
 Cohesion: 0.50
 Nodes (4): UserAPIKeyRoute, UserAPIKeyRouteRepository, UserAPIKeyRoutes, UserAPIKeyRouteUpdate
-
-### Community 1653 - ".SetTotalChecks"
-Cohesion: 0.08
-Nodes (18): TestAntigravityProviderRefreshPolicy(), TestBackgroundRefreshPolicy_DefaultSkips(), TestClaudeProviderRefreshPolicy(), TestOpenAIProviderRefreshPolicy(), AntigravityProviderRefreshPolicy(), ClaudeProviderRefreshPolicy(), DefaultBackgroundRefreshPolicy(), OpenAIProviderRefreshPolicy() (+10 more)
 
 ### Community 1654 - ".SetKiroStickySessionTTLSeconds"
 Cohesion: 0.60
@@ -12551,12 +12522,8 @@ Cohesion: 0.40
 Nodes (4): Global Constraints, GPT Image 2 Python SDK Streaming Example Implementation Plan, Task 1: Stream GPT Image 2 Output in the Dedicated Python SDK Tab, Task 2: Expose GPT Image 2 for Unified Keys and Wrap Client Tabs
 
 ### Community 1658 - ".SetStatus"
-Cohesion: 0.50
+Cohesion: 0.67
 Nodes (3): AcceptAdminComplianceRequest, ComplianceHandler, NewComplianceHandler()
-
-### Community 1660 - ".SetAccountID"
-Cohesion: 0.40
-Nodes (4): Global Constraints, GPT-5.6 Model Marketplace Implementation Plan, Task 1: Add and Verify the GPT-5.6 Catalog Entries, Task 2: Refresh the Knowledge Graph and Run Final Verification
 
 ### Community 1662 - ".SetAccountRateMultiplier"
 Cohesion: 0.33
@@ -12642,9 +12609,21 @@ Nodes (3): Digital Wallet, Payment, Payment Icon
 Cohesion: 0.67
 Nodes (3): CTok.ai, CTok.ai Partner Logo, ETok.ai Brand
 
+### Community 2040 - ".SetCode"
+Cohesion: 1.00
+Nodes (3): applyForcedCodexInstructionsTemplate(), renderForcedCodexInstructionsTemplate(), forcedCodexInstructionsTemplateData
+
+### Community 2043 - ".SetExpiresAt"
+Cohesion: 0.67
+Nodes (3): Canonical routes, Entry Points and Route Policy, Navigation
+
+### Community 2045 - ".SetErrorCodes"
+Cohesion: 0.67
+Nodes (3): Canonical sources, Consumption rules, Content Ownership and Consistency
+
 ### Community 2188 - ".ClearUsedAt"
-Cohesion: 0.83
-Nodes (3): BenchmarkOpenAIAccountSchedulerSelectTopK(), buildOpenAISchedulerBenchmarkCandidates(), selectTopKOpenAICandidatesBySortBenchmark()
+Cohesion: 0.11
+Nodes (17): BenchmarkOpenAIAccountSchedulerSelectTopK(), buildOpenAISchedulerBenchmarkCandidates(), selectTopKOpenAICandidatesBySortBenchmark(), buildOpenAIWeightedSelectionOrder(), deriveOpenAISelectionSeed(), isOpenAIAccountCandidateBetter(), newOpenAISelectionRNG(), selectTopKOpenAICandidates() (+9 more)
 
 ### Community 2190 - ".ClearUser"
 Cohesion: 0.50
@@ -12654,9 +12633,9 @@ Nodes (3): TempUnschedCache, TempUnschedState, TimeoutCounterCache
 Cohesion: 0.67
 Nodes (3): recordUsageParseFailure(), SnapshotMetrics(), MetricsSnapshot
 
-### Community 2797 - "SubscriptionPlan"
+### Community 2786 - "PaymentOrder"
 Cohesion: 0.67
-Nodes (3): Error Icon, Icons, Loading Spinner
+Nodes (3): Breakpoints, Mobile Optimizations, Responsive Design
 
 ### Community 2799 - "UsageCleanupTask"
 Cohesion: 0.67
@@ -12731,18 +12710,18 @@ Cohesion: 0.50
 Nodes (3): AnnouncementListFilters, AnnouncementReadRepository, AnnouncementRepository
 
 ## Knowledge Gaps
-- **7329 isolated node(s):** `Application`, `Accounts`, `AccountGroups`, `Announcements`, `AnnouncementReads` (+7324 more)
+- **7489 isolated node(s):** `Application`, `Accounts`, `AccountGroups`, `Announcements`, `AnnouncementReads` (+7484 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **7213 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **7207 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Errorf()` connect `Errorf` to `.Hooks`, `New`, `UserSubscriptionMutation`, `extractI18nErrorMessage`, `ChannelStatusView.vue`, `L`, `.Where`, `WebChatMessageMutation`, `GroupMutation`, `gemini_messages_compat_service.go`, `As`, `.ProxyResponsesWebSocketFromClient`, `PendingAuthSessionMutation`, `UsageLogMutation`, `UserMutation`, `BatchImageJobMutation`, `ChannelMonitorMutation`, `PaymentOrderMutation`, `Context`, `PromoCodeMutation`, `AccountMutation`, `AnnouncementMutation`, `SettingService`, `SubscriptionPlanMutation`, `BatchImageItemMutation`, `SubscriptionPlanCard.vue`, `APIKeyMutation`, `.Forward`, `PaymentView.spec.ts`, `AccountUpdate`, `auth_linuxdo_oauth.go`, `UserSubscriptionQuery`, `newConversationCapturePool`, `account_handler.go`, `StripePaymentView.vue`, `Wxpay`, `IsNotFound`, `.handleStreamingResponse`, `GroupCreate`, `content_moderation.go`, `Success`, `EmailService`, `openai_images.go`, `AnnouncementReadQuery`, `PendingAuthSessionQuery`, `ProxyQuery`, `AuthIdentityChannelQuery`, `ChannelMonitorRequestTemplateQuery`, `UserAttributeDefinitionQuery`, `payment_fulfillment_test.go`, `clientFromContext`, `extractApiErrorMessage`, `ProxyMutation`, `LegacyPrintf`, `openai_account_scheduler.go`, `UserQuery`, `.Dialect`, `ChannelMonitorDailyRollupMutation`, `openai_gateway_request_body.go`, `BatchImageItemQuery`, `.defaults`, `ErrorFrom`, `.Update`, `account_codex_import.go`, `payment_order_result_test.go`, `.ClearGroupID`, `.Update`, `UsageLogCreate`, `SubscriptionService`, `ikunpay_test.go`, `AccountTestService`, `upstream_models.go`, `channel_monitor_aggregator.go`, `payment_resume_service_test.go`, `GroupQuery`, `PaymentQRDialog.vue`, `adminServiceImpl`, `.describeGrokComposerImage`, `.GetAccessToken`, `oauth_refresh_api_test.go`, `SetupWizardView.vue`, `config.go`, `batch_image_provider_vertex.go`, `IdempotencyRecordMutation`, `openai_gateway_grok_test.go`, `UserAPIKeyRouteCreate`, `UserAttributeValueCreate`, `ChannelMonitorHistoryClient`, `PromoCodeUsageCreate`, `NewSubscriptionService`, `Group`, `DashboardHandler`, `UserAPIKeyRouteClient`, `ErrorPassthroughRuleUpdate`, `PaymentAuditLogCreate`, `PaymentConfigService`, `AccountCreate`, `PromoCodesView.vue`, `websearch.go`, `httpUpstreamService`, `BillingCacheService`, `.Update`, `batch_image_download.go`, `openai_compact_stream_bridge_test.go`, `isKiroDirectModeAccount`, `usageLogRepository`, `AccountGroupCreate`, `AnnouncementReadCreate`, `SupportedModelChip.vue`, `EasyPay`, `BatchImageItemClient`, `web_chat_capabilities.go`, `ErrorPassthroughRuleClient`, `load_balancer.go`, `AccountQuery`, `UsageCleanupTaskClient`, `AuthService`, `FilterSignatureSensitiveBlocksForRetry`, `SecuritySecretCreate`, `.ForwardGemini`, `UsageLogQuery`, `account_usage_service.go`, `.getDashboardOverviewPreaggregated`, `channel_service.go`, `NewRegistry`, `openai_images_test.go`, `PaymentResultView.vue`, `BillingService`, `rawChatCompletionsTestConfig`, `user_service.go`, `setting_handler.go`, `PaymentProviderInstanceUpdate`, `notification_email_service.go`, `SettingCreate`, `GatewayService`, `APIKeyService`, `ChannelMonitorRequestTemplateUpdate`, `WebChatArtifactUpdate`, `newOpenAIGatewayServiceWithSettings`, `.Update`, `.evaluateOnce`, `Query`, `UserAllowedGroupCreate`, `PaymentService`, `AuthIdentityQuery`, `ChannelMonitorQuery`, `airwallex.go`, `update_service_test.go`, `.Is`, `.ForwardGrokMedia`, `openai_gateway_scheduling.go`, `ChannelMonitorUpsertBulk`, `auth_oidc_oauth.go`, `Account`, `.executeKiroUpstreamWithParsed`, `UserAttributeService`, `IdentityAdoptionDecisionQuery`, `PromoCodeUsageQuery`, `RedeemCodeQuery`, `querierAll`, `UserAttributeValueQuery`, `.buildOpenAIWSHeaders`, `.Update`, `.Delete`, `user_profile_identity_repo.go`, `ModelTagInput.vue`, `concurrencyCache`, `adminServiceImpl`, `EmptyState.vue`, `.Query`, `UserCreate`, `payment_service.go`, `UserAttributeValueClient`, `AnnouncementQuery`, `setContextOp`, `ChannelMonitorDailyRollupQuery`, `ChannelMonitorHistoryQuery`, `PaymentOrderQuery`, `PromoCodeQuery`, `UserPlatformQuotaQuery`, `InternalServer`, `.Update`, `integration_harness_test.go`, `ServiceUnavailable`, `client.go`, `chatcompletions_responses_bridge.go`, `PaymentAuditLogQuery`, `PaymentService`, `UserUpdate`, `scanWithInterceptors`, `DashboardService`, `MonitorTemplateManagerDialog.vue`, `usage_log_repo.go`, `BatchImageEventQuery`, `SettingQuery`, `stubGroupRepoForAvailable`, `RedeemService`, `RedeemCodeRepoSuite`, `TotpService`, `ErrorPassthroughRuleQuery`, `IdempotencyRecordQuery`, `PaymentProviderInstanceQuery`, `SecuritySecretQuery`, `SubscriptionPlanQuery`, `TLSFingerprintProfileQuery`, `UsageCleanupTaskQuery`, `WebChatArtifactQuery`, `WebChatAttachmentQuery`, `WebChatConversationQuery`, `WebChatMessageQuery`, `gateway_upstream_request.go`, `billingCache`, `BackupService`, `redeemCodeRepository`, `UserSubscriptionCreate`, `ProxyUpsertBulk`, `account_repo_test.go`, `oauth.go`, `NewOAuthService`, `newUsageLogRepositoryWithSQL`, `AuthIdentityChannelCreate`, `WebChatMessageCreate`, `admin_helpers_test.go`, `TxFromContext`, `ModelCatalog.vue`, `account_data.go`, `newAnnouncementSortTestRouter`, `ChannelMonitorView.vue`, `NewRequestBodyRef`, `registrationEmailPolicy.ts`, `ops_settings.go`, `web_chat_storage_test.go`, `buildModelMappingObject`, `store.go`, `TestSchedulerSnapshotOutboxReplay`, `.Save`, `TLSFingerprintProfileCreate`, `gemini_quota.go`, `OpsCleanupService`, `BuildWebChatCompletionsPayload`, `SubscriptionPlanCreate`, `testEntClient`, `Profile`, `NewIdempotencyCoordinator`, `mustNewClient`, `gemini_session_test.go`, `emailSyncRepoStub`, `ConcurrencyService`, `crs_sync_service.go`, `gemini_oauth_service_test.go`, `GetClient`, `kiro_http_helpers.go`, `OpsMetricsCollector`, `antigravity_rate_limit_test.go`, `findCookie`, `redeemCodeRepoStub`, `account.go`, `idempotencyCleanupRepoStub`, `setup.go`, `BatchImageEventUpdate`, `ChannelMonitorCreate`, `auth_pending_identity_service.go`, `PaymentProviderInstanceClient`, `auth_service_platform_quota_test.go`, `newDefaultOpenAIWSClientDialer`, `ScheduledTestService`, `.GetDashboardOverview`, `withHooks`, `userAPIKeyRouteGroupRepoStub`, `ProxyCreate`, `UsageLog`, `newPaymentConfigServiceTestClient`, `promoCodeRepository`, `BatchImageItemCreate`, `Manager`, `PendingAuthSessionUpsertBulk`, `UserPlatformQuotaUpsertBulk`, `newMockSettingRepo`, `payment_config_limits_test.go`, `PricingService`, `ResponsesEventToChatChunks`, `logger.go`, `TestProvideCleanup_WithMinimalDependencies_NoPanic`, `UserAttributeDefinitionCreate`, `ProxyUpdateOne`, `error.go`, `ChannelMonitorRequestTemplateClient`, `translator.go`, `RedactText`, `oauth.go`, `APIKeyService`, `channelmonitor.go`, `Parse`, `channel.go`, `Account`, `WebChatArtifactCreate`, `MarkOpsClientBusinessLimited`, `PricingServiceSuite`, `mockGeminiProxyRepo`, `usageCleanupRepository`, `usage_cleanup.go`, `user_platform_quota_repo.go`, `.AcceptAdminCompliance`, `AuthIdentityChannelClient`, `error_policy_integration_test.go`, `redeemRepoStub`, `WebChatAttachmentCreate`, `emailCache`, `.IsOpenAI`, `UserProfileIdentityRepoSuite`, `gateway_websearch_emulation.go`, `User`, `dashboardAggregationRepository`, `schedulerCache`, `anthropic_responses_test.go`, `settings_view.go`, `ChannelMonitorRequestTemplateCreate`, `client.go`, `PaymentProviderInstanceCreate`, `UserPlatformQuotaCreate`, `classifyNoAccountErrorFromGin`, `UserMsgQueueCacheSuite`, `newSQLMock`, `PaymentOrderCreate`, `IdentityAdoptionDecisionUpsertBulk`, `.handleNotify`, `ResponsesToAnthropicRequest`, `batchImageError`, `.IsQuotaExceeded`, `manager_test.go`, `fakeRepoForAdapter`, `.Exec`, `AnnouncementCreate`, `websearch_config_test.go`, `.Save`, `newInProcessTransport`, `.SetFinishedAt`, `buildContentModerationAccountDisabledEmailBody`, `Group`, `oauth.go`, `WebChatMessageUpdate`, `SubscriptionPlanUpdate`, `NewClaudeCodeValidator`, `TurnstileService`, `.Update`, `newWebChatRepoTestClient`, `aes_encryptor_test.go`, `apiKeyCache`, `NewBillingService`, `NewSubscriptionMaintenanceQueue`, `slogAttrToZapField`, `AnnouncementUpsertOne`, `ValidateURLFormat`, `settingRepository`, `UserAttributeDefinitionUpdate`, `ops_user_error.go`, `request_transformer.go`, `anthropic_to_responses_response.go`, `handleVisibilityChange`, `httputil.go`, `channelmonitorrequesttemplate.go`, `PaymentProviderInstanceUpsertBulk`, `convertGolden`, `UserAttributeDefinitionCreateBulk`, `.DingTalkOAuthCallback`, `kiroUsageCooldownStore`, `refreshTokenCache`, `ChannelMonitorDailyRollupCreateBulk`, `batch_update_credentials_test.go`, `openAIWSCaptureConn`, `NewAdminService`, `.SetStartsAt`, `Layout Components Integration Guide`, `ChannelMonitorHistoryUpsertBulk`, `.Exec`, `RedeemCodeUpsertBulk`, `UsageCleanupTaskUpdateOne`, `UserDelete`, `.Exec`, `WebChatConversationUpsertBulk`, `antigravity_internal500_penalty_test.go`, `ChannelMonitorRunner`, `gateway_claude_oauth_body.go`, `stubApiKeyCache`, `security_secret_bootstrap_test.go`, `bedrock_stream.go`, `captureCore`, `EvaluateEngineFingerprint`, `HomeView.spec.ts`, `SoftDeleteMixin`, `支付系统配置指南`, `announcementread.go`, `ops_request_details.go`, `EditAccountModal.spec.ts`, `Layout Components`, `邀请返现改造设计：固定金额 · 仅首充达标 · 双方各得`, `Stripe`, `.SeatSummariesForPlans`, `usage_log_types.go`, `.Save`, `applyMigrationsFS`, `PromoCodeClient`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `ReadRequestBodyWithPrealloc`, `NewBraveProvider`, `truncateBody`, `e2e_gateway_test.go`, `ChannelMonitorRequestTemplateService`, `.Save`, `ChannelMonitorHistoryCreate`, `UserPlatformQuotaClient`, `.Save`, `ChannelMonitorService`, `Method 2: Docker Compose (Recommended)`, `Model Marketplace Implementation Plan`, `paymentOrderLifecycleQueryProvider`, `CountTokens`, `ProxyClient`, `timeoutCounterCache`, `PendingAuthSession`, `Layout Component Examples`, `English`, `ChannelMonitorRequestTemplate`, `Group`, `paymentRoutesSettingRepo`, `initializeApplication`, `.SetConversationID`, `security_headers_test.go`, `gateway_scheduling.go`, `openai_json_optimization_benchmark_test.go`, `TLSFingerprintProfileUpsertBulk`, `Database Migrations`, `channel_monitor_checker.go`, `proxyLatencyCache`, `gateway_session_hash_mixed_kiro_test.go`, `.SetRateLimitedAt`, `Sub2API`, `.SetProxyFallbackOriginID`, `PromoService`, `Sub2API`, `oauth_test.go`, `.SetEndsAt`, `anthropicWindowLimitRepo`, `TLSFingerprintProfileUpdate`, `UsageLogCreateBulk`, `registration_email_policy.go`, `NewTimingWheelService`, `管理员启用步骤`, `.SetSourceByteOffset`, `responsesInputToChatMessages`, `IdentityAdoptionDecisionClient`, `Anthropic OAuth 默认模型映射`, `client_test.go`, `GroupUpdateOne`, `openAIFastPolicyRepoStub`, `.SetProviderOutputRef`, `SubscriptionPlanUpsertBulk`, `.SetSortOrder`, `auth_identity_schema_test.go`, `.Save`, `.Exec`, `.SetVideoPrice1080p`, `Section 1 — 调度准入`, `.SetErrorCount`, `.SetAdoptDisplayName`, `.SetBatchImageDiscountMultiplier`, `.SetDailyWindowStart`, `.SetMonthlyLimitUsd`, `.SetMessagesDispatchModelConfig`, `Animations`?**
+- **Why does `Errorf()` connect `Errorf` to `.Hooks`, `New`, `UserSubscriptionMutation`, `extractI18nErrorMessage`, `L`, `WebChatMessageMutation`, `GroupMutation`, `gemini_messages_compat_service.go`, `As`, `.ProxyResponsesWebSocketFromClient`, `PendingAuthSessionMutation`, `UsageLogMutation`, `UserMutation`, `BatchImageJobMutation`, `ChannelMonitorMutation`, `PaymentOrderMutation`, `Context`, `PromoCodeMutation`, `AccountMutation`, `AnnouncementMutation`, `SettingService`, `SubscriptionPlanMutation`, `.Update`, `BatchImageItemMutation`, `SubscriptionPlanCard.vue`, `APIKeyMutation`, `.Forward`, `PaymentView.spec.ts`, `AccountUpdate`, `UserSubscriptionQuery`, `account_handler.go`, `StripePaymentView.vue`, `Wxpay`, `IsNotFound`, `.handleStreamingResponse`, `GroupCreate`, `content_moderation.go`, `Success`, `EmailService`, `openai_images.go`, `AnnouncementReadQuery`, `PendingAuthSessionQuery`, `ProxyQuery`, `AuthIdentityChannelQuery`, `ChannelMonitorRequestTemplateQuery`, `UserAttributeDefinitionQuery`, `payment_fulfillment_test.go`, `clientFromContext`, `extractApiErrorMessage`, `ProxyMutation`, `LegacyPrintf`, `openai_account_scheduler.go`, `UserQuery`, `.Dialect`, `ChannelMonitorDailyRollupMutation`, `openai_gateway_request_body.go`, `BatchImageItemQuery`, `ErrorFrom`, `account_codex_import.go`, `payment_order_result_test.go`, `.ClearGroupID`, `SubscriptionService`, `ikunpay_test.go`, `AccountTestService`, `upstream_models.go`, `channel_monitor_aggregator.go`, `.Update`, `payment_resume_service_test.go`, `GroupQuery`, `PaymentQRDialog.vue`, `adminServiceImpl`, `.describeGrokComposerImage`, `.GetAccessToken`, `oauth_refresh_api_test.go`, `SetupWizardView.vue`, `config.go`, `batch_image_provider_vertex.go`, `IdempotencyRecordMutation`, `openai_gateway_grok_test.go`, `UserAPIKeyRouteCreate`, `UserAttributeValueCreate`, `ChannelMonitorHistoryClient`, `PromoCodeUsageCreate`, `NewSubscriptionService`, `Group`, `DashboardHandler`, `UserAPIKeyRouteClient`, `ErrorPassthroughRuleUpdate`, `PaymentAuditLogCreate`, `PaymentConfigService`, `AccountCreate`, `PromoCodesView.vue`, `websearch.go`, `httpUpstreamService`, `batch_image_download.go`, `openai_compact_stream_bridge_test.go`, `isKiroDirectModeAccount`, `AccountGroupCreate`, `AnnouncementReadCreate`, `SupportedModelChip.vue`, `EasyPay`, `BatchImageItemClient`, `web_chat_capabilities.go`, `load_balancer.go`, `AccountQuery`, `UsageCleanupTaskClient`, `FilterSignatureSensitiveBlocksForRetry`, `Now`, `SecuritySecretCreate`, `.ForwardGemini`, `UsageLogQuery`, `account_usage_service.go`, `.getDashboardOverviewPreaggregated`, `channel_service.go`, `NewRegistry`, `openai_images_test.go`, `PaymentResultView.vue`, `BillingService`, `rawChatCompletionsTestConfig`, `user_service.go`, `setting_handler.go`, `PaymentProviderInstanceUpdate`, `notification_email_service.go`, `SettingCreate`, `GatewayService`, `WebChatService`, `APIKeyService`, `ChannelMonitorRequestTemplateUpdate`, `WebChatArtifactUpdate`, `newOpenAIGatewayServiceWithSettings`, `.evaluateOnce`, `Query`, `UserAllowedGroupCreate`, `PaymentService`, `AuthIdentityQuery`, `ChannelMonitorQuery`, `airwallex.go`, `update_service_test.go`, `.Is`, `.ForwardGrokMedia`, `openai_gateway_scheduling.go`, `ChannelMonitorUpsertBulk`, `auth_oidc_oauth.go`, `.executeKiroUpstreamWithParsed`, `UserAttributeService`, `IdentityAdoptionDecisionQuery`, `PromoCodeUsageQuery`, `RedeemCodeQuery`, `querierAll`, `UserAttributeValueQuery`, `.buildOpenAIWSHeaders`, `.Delete`, `user_profile_identity_repo.go`, `concurrency_service_test.go`, `ModelTagInput.vue`, `concurrencyCache`, `adminServiceImpl`, `EmptyState.vue`, `.Query`, `payment_service.go`, `UserAttributeValueClient`, `AnnouncementQuery`, `setContextOp`, `ChannelMonitorDailyRollupQuery`, `ChannelMonitorHistoryQuery`, `PaymentOrderQuery`, `PromoCodeQuery`, `UserPlatformQuotaQuery`, `InternalServer`, `integration_harness_test.go`, `ServiceUnavailable`, `UpdateService`, `client.go`, `chatcompletions_responses_bridge.go`, `PaymentAuditLogQuery`, `PaymentService`, `UserUpdate`, `scanWithInterceptors`, `DashboardService`, `usage_log_repo.go`, `BatchImageEventQuery`, `SettingQuery`, `stubGroupRepoForAvailable`, `RedeemService`, `TotpService`, `ErrorPassthroughRuleQuery`, `IdempotencyRecordQuery`, `PaymentProviderInstanceQuery`, `SecuritySecretQuery`, `SubscriptionPlanQuery`, `TLSFingerprintProfileQuery`, `UsageCleanupTaskQuery`, `WebChatArtifactQuery`, `WebChatAttachmentQuery`, `WebChatConversationQuery`, `WebChatMessageQuery`, `gateway_upstream_request.go`, `billingCache`, `BackupService`, `redeemCodeRepository`, `UserSubscriptionCreate`, `groupRepository`, `ProxyUpsertBulk`, `account_repo_test.go`, `oauth.go`, `NewOAuthService`, `AuthIdentityChannelCreate`, `WebChatMessageCreate`, `admin_helpers_test.go`, `TxFromContext`, `ModelCatalog.vue`, `account_data.go`, `newAnnouncementSortTestRouter`, `ChannelMonitorView.vue`, `NewRequestBodyRef`, `registrationEmailPolicy.ts`, `web_chat_storage_test.go`, `Pinia Stores Documentation`, `TotpSetupModal.vue`, `AnnouncementClient`, `store.go`, `TestSchedulerSnapshotOutboxReplay`, `.Save`, `TLSFingerprintProfileCreate`, `OpsCleanupService`, `BuildWebChatCompletionsPayload`, `SubscriptionPlanCreate`, `testEntClient`, `Profile`, `mustNewClient`, `ChannelMonitorDailyRollupCreate`, `gemini_session_test.go`, `emailSyncRepoStub`, `ConcurrencyService`, `crs_sync_service.go`, `request_metadata.go`, `gemini_oauth_service_test.go`, `GetClient`, `kiro_http_helpers.go`, `OpsMetricsCollector`, `antigravity_rate_limit_test.go`, `findCookie`, `redeemCodeRepoStub`, `batch_image_processor.go`, `idempotencyCleanupRepoStub`, `setup.go`, `BatchImageEventUpdate`, `ChannelMonitorCreate`, `auth_pending_identity_service.go`, `PaymentProviderInstanceClient`, `auth_service_platform_quota_test.go`, `newDefaultOpenAIWSClientDialer`, `ScheduledTestService`, `.GetDashboardOverview`, `withHooks`, `userAPIKeyRouteGroupRepoStub`, `ProxyCreate`, `newPaymentConfigServiceTestClient`, `promoCodeRepository`, `WebChatAttachmentClient`, `BatchImageItemCreate`, `Manager`, `PendingAuthSessionUpsertBulk`, `UserPlatformQuotaUpsertBulk`, `newMockSettingRepo`, `payment_config_limits_test.go`, `PricingService`, `ResponsesEventToChatChunks`, `logger.go`, `TestProvideCleanup_WithMinimalDependencies_NoPanic`, `SettingUpdate`, `UserAttributeDefinitionCreate`, `error.go`, `ChannelMonitorRequestTemplateClient`, `translator.go`, `RedactText`, `oauth.go`, `APIKeyService`, `testSettingRepo`, `channelmonitor.go`, `Parse`, `channel.go`, `Account`, `WebChatArtifactCreate`, `MarkOpsClientBusinessLimited`, `PricingServiceSuite`, `mockGeminiProxyRepo`, `usageCleanupRepository`, `usage_cleanup.go`, `user_platform_quota_repo.go`, `.AcceptAdminCompliance`, `gemini_types.go`, `AuthIdentityChannelClient`, `error_policy_integration_test.go`, `WebChatAttachmentCreate`, `emailCache`, `gateway_websearch_emulation.go`, `Result`, `User`, `dashboardAggregationRepository`, `userHandlerEmailCacheStub`, `schedulerCache`, `anthropic_responses_test.go`, `settings_view.go`, `ChannelMonitorRequestTemplateCreate`, `client.go`, `UserPlatformQuotaCreate`, `classifyNoAccountErrorFromGin`, `UserMsgQueueCacheSuite`, `newSQLMock`, `PaymentOrderCreate`, `IdentityAdoptionDecisionUpsertBulk`, `.handleNotify`, `payment_config_plans_validation_test.go`, `ResponsesToAnthropicRequest`, `.IsQuotaExceeded`, `openai_sticky_compat.go`, `manager_test.go`, `fakeRepoForAdapter`, `ratelimit_service_anthropic_test.go`, `.Exec`, `AnnouncementCreate`, `websearch_config_test.go`, `.Save`, `newInProcessTransport`, `newAuthRoutesTestRouter`, `.SetFinishedAt`, `buildContentModerationAccountDisabledEmailBody`, `Group`, `oauth.go`, `WebChatMessageUpdate`, `SubscriptionPlanUpdate`, `TurnstileService`, `runProxyQualityTarget`, `.Update`, `FromError`, `newWebChatRepoTestClient`, `aes_encryptor_test.go`, `apiKeyCache`, `NewBillingService`, `NewSubscriptionMaintenanceQueue`, `analytics51la.ts`, `slogAttrToZapField`, `AnnouncementUpsertOne`, `ValidateURLFormat`, `.Save`, `.Execute`, `UserAttributeDefinitionUpdate`, `ops_user_error.go`, `request_transformer.go`, `handleVisibilityChange`, `NewGrokQuotaFetcher`, `httputil.go`, `channelmonitorrequesttemplate.go`, `ChannelMonitorRequestTemplateUpsertOne`, `PaymentProviderInstanceUpsertBulk`, `convertGolden`, `UserAttributeDefinitionCreateBulk`, `.DingTalkOAuthCallback`, `kiroUsageCooldownStore`, `refreshTokenCache`, `newRuntimeSettingRepoStub`, `ChannelMonitorDailyRollupCreateBulk`, `batch_update_credentials_test.go`, `openAIWSCaptureConn`, `NewAdminService`, `.SetStartsAt`, `Layout Components Integration Guide`, `.defaults`, `ChannelMonitorHistoryUpsertBulk`, `.Exec`, `RedeemCodeUpsertBulk`, `UsageCleanupTaskUpdateOne`, `.Exec`, `WebChatConversationUpsertBulk`, `antigravity_internal500_penalty_test.go`, `ChannelMonitorRunner`, `gateway_claude_oauth_body.go`, `stubApiKeyCache`, `security_secret_bootstrap_test.go`, `bedrock_stream.go`, `captureCore`, `EvaluateEngineFingerprint`, `batch_image_provider_vertex_test.go`, `HomeView.spec.ts`, `oauth_test.go`, `SoftDeleteMixin`, `支付系统配置指南`, `paymentResumeLookupProvider`, `ops_request_details.go`, `EditAccountModal.spec.ts`, `Stripe`, `.SeatSummariesForPlans`, `usage_log_types.go`, `applyMigrationsFS`, `PromoCodeClient`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `File Structure`, `ReadRequestBodyWithPrealloc`, `NewBraveProvider`, `truncateBody`, `e2e_gateway_test.go`, `ChannelMonitorRequestTemplateService`, `.GetDashboardStats`, `.Save`, `ChannelMonitorHistoryCreate`, `image_concurrency_limiter_test.go`, `device.ts`, `UserPlatformQuotaClient`, `.Save`, `ChannelMonitorService`, `Method 2: Docker Compose (Recommended)`, `Model Marketplace Implementation Plan`, `paymentOrderLifecycleQueryProvider`, `CountTokens`, `ProxyClient`, `timeoutCounterCache`, `PendingAuthSession`, `.Save`, `Layout Component Examples`, `Group`, `initializeApplication`, `security_headers_test.go`, `gateway_scheduling.go`, `classifyOpenAITransportError`, `channel_monitor_checker.go`, `gateway_session_hash_mixed_kiro_test.go`, `.SetSessionWindowStart`, `Sub2API`, `.SetProxyFallbackOriginID`, `PromoService`, `Sub2API`, `oauth_test.go`, `ChannelMonitorHistoryUpsertOne`, `.SetEndsAt`, `anthropicWindowLimitRepo`, `TLSFingerprintProfileUpdate`, `UsageLogCreateBulk`, `registration_email_policy.go`, `NewTimingWheelService`, `.SetSourceByteOffset`, `responsesInputToChatMessages`, `IdentityAdoptionDecisionClient`, `Anthropic OAuth 默认模型映射`, `client_test.go`, `openAIFastPolicyRepoStub`, `.SetFailCount`, `.SetProviderOutputRef`, `SubscriptionPlanUpsertBulk`, `.SetSortOrder`, `auth_identity_schema_test.go`, `.Save`, `.Exec`, `.SetVideoPrice1080p`, `Section 1 — 调度准入`, `.SetErrorCount`, `.SetDailyWindowStart`, `.SetMonthlyLimitUsd`, `.SetMessagesDispatchModelConfig`, `Animations`, `.SetCode`?**
   _High betweenness centrality (0.346) - this node is a cross-community bridge._
-- **Why does `New()` connect `New` to `.Hooks`, `UserSubscriptionMutation`, `extractI18nErrorMessage`, `L`, `.Where`, `WebChatMessageMutation`, `GroupMutation`, `gemini_messages_compat_service.go`, `As`, `.ProxyResponsesWebSocketFromClient`, `PendingAuthSessionMutation`, `UsageLogMutation`, `UserMutation`, `BatchImageJobMutation`, `ChannelMonitorMutation`, `PaymentOrderMutation`, `Context`, `mustCreateAccount`, `PromoCodeMutation`, `AccountMutation`, `AnnouncementMutation`, `SubscriptionPlanMutation`, `OpenAIGatewayService`, `BatchImageItemMutation`, `SubscriptionPlanCard.vue`, `APIKeyMutation`, `gateway_service.go`, `auth_linuxdo_oauth.go`, `encodeCookieValue`, `Wxpay`, `openai_gateway_service_test.go`, `.handleStreamingResponse`, `content_moderation.go`, `openai_images.go`, `ops_error_logger.go`, `payment_fulfillment_test.go`, `extractApiErrorMessage`, `ProxyMutation`, `LegacyPrintf`, `openai_account_scheduler.go`, `ChannelMonitorDailyRollupMutation`, `openai_gateway_request_body.go`, `.close`, `scanSingleRow`, `account_codex_import.go`, `payment_order_result_test.go`, `mockAccountRepoForPlatform`, `openai_gateway_record_usage_test.go`, `UsageLogCreate`, `.parseUserUsageFilters`, `AccountTestService`, `NewBatchImageWorker`, `emailBindUserRepoStub`, `NewSettingService`, `.GetAccessToken`, `payment_resume_service_test.go`, `adminServiceImpl`, `.describeGrokComposerImage`, `.GetAccessToken`, `oauth_refresh_api_test.go`, `SetupWizardView.vue`, `config.go`, `batch_image_provider_vertex.go`, `testPtrFloat64`, `IdempotencyRecordMutation`, `DefaultBackgroundRefreshPolicy`, `openai_gateway_grok_test.go`, `openai_compat_model_test.go`, `UserAPIKeyRouteCreate`, `ChannelMonitorHistoryClient`, `PromoCodeUsageCreate`, `Group`, `UserAPIKeyRouteClient`, `PaymentAuditLogCreate`, `PromoCodesView.vue`, `httpUpstreamService`, `.Update`, `openai_compact_stream_bridge_test.go`, `usageLogRepository`, `token_refresh_service_test.go`, `AccountGroupCreate`, `AnnouncementReadCreate`, `SupportedModelChip.vue`, `gateway_usage_billing.go`, `mockAccountRepoForGemini`, `BatchImageItemClient`, `account_handler_available_models_test.go`, `userRepository`, `Now`, `NewOpenAIWSProtocolResolver`, `SecuritySecretCreate`, `user_handler_get_deleted_test.go`, `.ForwardGemini`, `NewRegistry`, `openai_images_test.go`, `.forwardAsRawChatCompletions`, `subscriptionExpiryRepoStub`, `rawChatCompletionsTestConfig`, `notification_email_service.go`, `SettingCreate`, `GatewayService`, `WebChatService`, `channel_handler_test.go`, `admin_service_spark_shadow_test.go`, `.Update`, `UserAllowedGroupCreate`, `openai_gateway_handler_test.go`, `batch_image_provider_gemini.go`, `update_service_test.go`, `.Is`, `.ForwardGrokMedia`, `ChannelMonitorUpsertBulk`, `Relay`, `auth_oidc_oauth.go`, `UserAttributeService`, `newFakeBatchImageRepository`, `.buildOpenAIWSHeaders`, `.Update`, `apiKeyRepoStub`, `concurrency_service_test.go`, `NewSchedulerSnapshotService`, `.Accept`, `Newf`, `adminServiceImpl`, `gemini_v1beta_handler.go`, `usage_billing_repo.go`, `UserAttributeValueClient`, `Code`, `IdentityAdoptionDecisionUpdate`, `.Update`, `BatchImageEventClient`, `Errorf`, `PromoCodeUsageUpdate`, `ServiceUnavailable`, `embed_test.go`, `UpdateService`, `client.go`, `PaymentService`, `DashboardService`, `MonitorTemplateManagerDialog.vue`, `TestBatchImageMVPFlow`, `openai_gateway_count_tokens.go`, `stubGroupRepoForAvailable`, `RedeemService`, `RedeemCodeRepoSuite`, `TotpService`, `paginationResultFromTotal`, `UserAttributeValueUpdate`, `billingCache`, `BackupService`, `redeemCodeRepository`, `ProxyUpsertBulk`, `account_repo_test.go`, `oauth.go`, `WebChatMessageCreate`, `admin_helpers_test.go`, `ModelCatalog.vue`, `account_data.go`, `newAnnouncementSortTestRouter`, `ChannelMonitorView.vue`, `AccountGroupUpdate`, `PaymentHandler`, `gateway_anthropic_apikey_passthrough_test.go`, `web_chat_storage_test.go`, `auth_handler.go`, `.Reason`, `TestSchedulerSnapshotOutboxReplay`, `.Save`, `TLSFingerprintProfileCreate`, `SubscriptionPlanCreate`, `testEntClient`, `NewIdempotencyCoordinator`, `mustNewClient`, `gemini_session_test.go`, `response.go`, `ConcurrencyService`, `kiro_cache_emulation.go`, `GetClient`, `kiro_http_helpers.go`, `antigravity_rate_limit_test.go`, `findCookie`, `redeemCodeRepoStub`, `batchImageQueue`, `billingCacheWorkerStub`, `fakeBatchImageRepository`, `user_platform_quota_flusher_test.go`, `NewConcurrencyService`, `BatchImageEventUpdate`, `PaymentProviderInstanceClient`, `newDefaultOpenAIWSClientDialer`, `newOpenAIWSConnPool`, `data_management_handler.go`, `.GetDashboardOverview`, `withHooks`, `UsageLog`, `openai_ws_state_store.go`, `PendingAuthSessionUpsertBulk`, `UserPlatformQuotaUpsertBulk`, `user_platform_quota_admin_test.go`, `logger.go`, `rate_limiter.go`, `NewAccountUsageService`, `ChannelMonitorRequestTemplateClient`, `fakeWebChatService`, `HTTPUpstreamSuite`, `oauth.go`, `Parse`, `userGroupRateRepoStubForListUsers`, `newJWTTestEnv`, `billingCacheMissStub`, `mockGeminiProxyRepo`, `usage_cleanup.go`, `buildLogger`, `openai_oauth_passthrough_test.go`, `chat.ts`, `AuthIdentityChannelClient`, `error_policy_integration_test.go`, `KiroTokenProvider`, `auth_service_register_test.go`, `UserProfileIdentityRepoSuite`, `groupRepoNoop`, `gateway_websearch_emulation.go`, `MonitorAdvancedRequestConfig.vue`, `userHandlerEmailCacheStub`, `.WriteString`, `comboCacheAndStore`, `setting_service_backend_mode_test.go`, `ModelWhitelistSelector.vue`, `client.go`, `PaymentProviderInstanceCreate`, `UserPlatformQuotaCreate`, `account_quota_reset_test.go`, `openai_account_runtime_block_fastpath_test.go`, `IdentityAdoptionDecisionUpsertBulk`, `.handleNotify`, `NewUserService`, `NewOpsService`, `ratelimit_service_anthropic_test.go`, `channel_service_test.go`, `content_moderation_test.go`, `.Exec`, `antigravity_single_account_retry_test.go`, `.Save`, `newInProcessTransport`, `dependencies`, `.SetFinishedAt`, `setupRedeemExportRouter`, `ip.go`, `oauth.go`, `openai_ws_ratelimit_signal_test.go`, `billing_cache_service_rpm_test.go`, `newResetQuotaSvc`, `mockGroupRepoForGemini`, `.Update`, `FromError`, `UserAllowedGroupUpdate`, `newWebChatRepoTestClient`, `UsageCleanupTaskCreate`, `testConfig`, `NewRateLimitService`, `auth_identity_payment_migrations_regression_test.go`, `ValidateURLFormat`, `AnnouncementReadUpdate`, `NewDashboardService`, `UserAttributeDefinitionUpdate`, `UsageCleanupTaskCreateBulk`, `request_transformer.go`, `anthropic_to_responses_response.go`, `BatchImageItemUpsertBulk`, `PaymentProviderInstanceUpsertBulk`, `newRuntimeSettingRepoStub`, `web_chat_service_test.go`, `openAIWSCaptureConn`, `Layout Components Integration Guide`, `ChannelMonitorRequestTemplateUpsertBulk`, `ChannelMonitorHistoryUpsertBulk`, `.Exec`, `RedeemCodeUpsertBulk`, `UsageCleanupTaskUpdateOne`, `.Exec`, `WebChatConversationUpsertBulk`, `gateway_claude_oauth_body.go`, `security_secret_bootstrap_test.go`, `bedrock_stream.go`, `上游模型调用全量归档（ClickHouse）实现计划`, `batch_image_provider_vertex_test.go`, `.SetCredentials`, `支付系统配置指南`, `NewConcurrencyHelper`, `paymentResumeLookupProvider`, `openai_gateway_compact_body_signal_test.go`, `admin_service_apikey_test.go`, `decompress_response_test.go`, `announcementread.go`, `token_refresher_test.go`, `EditAccountModal.spec.ts`, `Layout Components`, `newSystemHandlerTestRouter`, `邀请返现改造设计：固定金额 · 仅首充达标 · 双方各得`, `Stripe`, `BatchImageJobClient`, `applyMigrationsFS`, `txDriver`, `PromoCodeClient`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `ReadRequestBodyWithPrealloc`, `account_data_handler_test.go`, `newStubAdminService`, `accountEligibleForMixedPlatform`, `device.ts`, `GrokTokenRefresher`, `UserPlatformQuotaClient`, `NewDigestSessionStore`, `ChannelMonitorService`, `Method 2: Docker Compose (Recommended)`, `方法2: Docker Compose（推奨）`, `chatcompletions_to_responses.go`, `ProxyClient`, `Layout Component Examples`, `openAIAccountTestRepo`, `errorPassthroughCache`, `Group`, `SessionStore`, `NewAccountUpstreamUserAgentRepository`, `initializeApplication`, `security_headers_test.go`, `error_passthrough_service_test.go`, `gateway_scheduling.go`, `TLSFingerprintProfileUpsertBulk`, `classifyOpenAITransportError`, `batchImageDownloadLimiter`, `TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream`, `gateway_session_hash_mixed_kiro_test.go`, `NewOpenAIOAuthService`, `gemini_multiplatform_test.go`, `.GetAccountAvailability`, `mockGatewayCacheForGemini`, `.SetAPIKeyEncrypted`, `newUserUsageRequestTypeTestRouter`, `ops_settings_models.go`, `Sub2API`, `oauth_test.go`, `account_service_delete_test.go`, `.SetEndsAt`, `embed_off.go`, `UsageLogCreateBulk`, `newAdminUsageRequestTypeTestRouter`, `NewTimingWheelService`, `openAIWSWriteBlockingConn`, `IdentityAdoptionDecisionClient`, `translator_test.go`, `extractThinkingBlocksWithSignature`, `openAIFastPolicyRepoStub`, `.SetMonitorID`, `SubscriptionPlanUpsertBulk`, `.SetImageRateMultiplier`, `.Save`, `.SetTotalChecks`, `.SetImageSize`, `.SetBrowserSessionKey`, `Animations`, `mockGatewayCacheForPlatform`?**
+- **Why does `New()` connect `New` to `.Hooks`, `UserSubscriptionMutation`, `extractI18nErrorMessage`, `ChannelStatusView.vue`, `L`, `.Where`, `WebChatMessageMutation`, `GroupMutation`, `gemini_messages_compat_service.go`, `As`, `.ProxyResponsesWebSocketFromClient`, `PendingAuthSessionMutation`, `UsageLogMutation`, `UserMutation`, `BatchImageJobMutation`, `ChannelMonitorMutation`, `PaymentOrderMutation`, `Context`, `mustCreateAccount`, `PromoCodeMutation`, `AccountMutation`, `AnnouncementMutation`, `SubscriptionPlanMutation`, `.Update`, `OpenAIGatewayService`, `BatchImageItemMutation`, `SubscriptionPlanCard.vue`, `APIKeyMutation`, `.Forward`, `gateway_service.go`, `encodeCookieValue`, `Wxpay`, `openai_gateway_service_test.go`, `.handleStreamingResponse`, `GroupCreate`, `content_moderation.go`, `EmailService`, `openai_images.go`, `ops_error_logger.go`, `payment_fulfillment_test.go`, `extractApiErrorMessage`, `ProxyMutation`, `LegacyPrintf`, `openai_account_scheduler.go`, `ChannelMonitorDailyRollupMutation`, `openai_gateway_request_body.go`, `.close`, `scanSingleRow`, `account_codex_import.go`, `payment_order_result_test.go`, `mockAccountRepoForPlatform`, `openai_gateway_record_usage_test.go`, `.parseUserUsageFilters`, `AccountTestService`, `NewBatchImageWorker`, `emailBindUserRepoStub`, `NewSettingService`, `.Update`, `.GetAccessToken`, `payment_resume_service_test.go`, `adminServiceImpl`, `.describeGrokComposerImage`, `.GetAccessToken`, `oauth_refresh_api_test.go`, `SetupWizardView.vue`, `batch_image_provider_vertex.go`, `testPtrFloat64`, `IdempotencyRecordMutation`, `DefaultBackgroundRefreshPolicy`, `openai_compat_model_test.go`, `UserAPIKeyRouteCreate`, `UserAttributeValueCreate`, `ChannelMonitorHistoryClient`, `PromoCodeUsageCreate`, `Group`, `UserAPIKeyRouteClient`, `PaymentAuditLogCreate`, `PromoCodesView.vue`, `httpUpstreamService`, `openai_compact_stream_bridge_test.go`, `token_refresh_service_test.go`, `AccountGroupCreate`, `AnnouncementReadCreate`, `SupportedModelChip.vue`, `gateway_usage_billing.go`, `mockAccountRepoForGemini`, `BatchImageItemClient`, `account_handler_available_models_test.go`, `userRepository`, `Now`, `NewOpenAIWSProtocolResolver`, `SecuritySecretCreate`, `user_handler_get_deleted_test.go`, `.ForwardGemini`, `NewRegistry`, `openai_images_test.go`, `.forwardAsRawChatCompletions`, `PaymentResultView.vue`, `subscriptionExpiryRepoStub`, `rawChatCompletionsTestConfig`, `notification_email_service.go`, `SettingCreate`, `WebChatService`, `channel_handler_test.go`, `admin_service_spark_shadow_test.go`, `UserAllowedGroupCreate`, `openai_gateway_handler_test.go`, `batch_image_provider_gemini.go`, `update_service_test.go`, `.Is`, `.ForwardGrokMedia`, `ChannelMonitorUpsertBulk`, `Relay`, `auth_oidc_oauth.go`, `newFakeBatchImageRepository`, `.buildOpenAIWSHeaders`, `apiKeyRepoStub`, `concurrency_service_test.go`, `NewSchedulerSnapshotService`, `.Accept`, `Newf`, `adminServiceImpl`, `.Query`, `gemini_v1beta_handler.go`, `usage_billing_repo.go`, `UserAttributeValueClient`, `redeem_handler_test.go`, `IdentityAdoptionDecisionUpdate`, `InternalServer`, `BatchImageEventClient`, `Errorf`, `PromoCodeUsageUpdate`, `NewAPIKeyService`, `ServiceUnavailable`, `embed_test.go`, `client.go`, `PaymentService`, `DashboardService`, `TestBatchImageMVPFlow`, `openai_gateway_count_tokens.go`, `stubGroupRepoForAvailable`, `RedeemService`, `TotpService`, `paginationResultFromTotal`, `UserAttributeValueUpdate`, `billingCache`, `BackupService`, `redeemCodeRepository`, `groupRepository`, `ProxyUpsertBulk`, `account_repo_test.go`, `WebChatMessageCreate`, `admin_helpers_test.go`, `ModelCatalog.vue`, `account_data.go`, `newAnnouncementSortTestRouter`, `ChannelMonitorView.vue`, `AccountGroupUpdate`, `PaymentHandler`, `gateway_anthropic_apikey_passthrough_test.go`, `web_chat_storage_test.go`, `Pinia Stores Documentation`, `TotpSetupModal.vue`, `.Reason`, `TestSchedulerSnapshotOutboxReplay`, `.Save`, `TLSFingerprintProfileCreate`, `SubscriptionPlanCreate`, `NewIdempotencyCoordinator`, `mustNewClient`, `ChannelMonitorDailyRollupCreate`, `gemini_session_test.go`, `response.go`, `ConcurrencyService`, `request_metadata.go`, `kiro_cache_emulation.go`, `GetClient`, `kiro_http_helpers.go`, `antigravity_rate_limit_test.go`, `findCookie`, `redeemCodeRepoStub`, `batchImageQueue`, `billingCacheWorkerStub`, `batch_image_processor.go`, `fakeBatchImageRepository`, `user_platform_quota_flusher_test.go`, `NewConcurrencyService`, `PaymentProviderInstanceClient`, `api_key_service_web_chat_test.go`, `newDefaultOpenAIWSClientDialer`, `newOpenAIWSConnPool`, `data_management_handler.go`, `.GetDashboardOverview`, `openai_ws_state_store.go`, `WebChatAttachmentClient`, `PendingAuthSessionUpsertBulk`, `UserPlatformQuotaUpsertBulk`, `user_platform_quota_admin_test.go`, `logger.go`, `UserAttributeDefinitionCreate`, `rate_limiter.go`, `NewAccountUsageService`, `ChannelMonitorRequestTemplateClient`, `fakeWebChatService`, `HTTPUpstreamSuite`, `oauth.go`, `Parse`, `userGroupRateRepoStubForListUsers`, `newJWTTestEnv`, `billingCacheMissStub`, `mockGeminiProxyRepo`, `usage_cleanup.go`, `buildLogger`, `openai_oauth_passthrough_test.go`, `chat.ts`, `AuthIdentityChannelClient`, `error_policy_integration_test.go`, `KiroTokenProvider`, `auth_service_register_test.go`, `groupRepoNoop`, `gateway_websearch_emulation.go`, `MonitorAdvancedRequestConfig.vue`, `userHandlerEmailCacheStub`, `.WriteString`, `ParseMetadataUserID`, `comboCacheAndStore`, `setting_service_backend_mode_test.go`, `ModelWhitelistSelector.vue`, `NewSettingHandler`, `ChannelMonitorRequestTemplateCreate`, `client.go`, `account_quota_reset_test.go`, `openai_account_runtime_block_fastpath_test.go`, `IdentityAdoptionDecisionUpsertBulk`, `.handleNotify`, `NewUserService`, `NewOpsService`, `ratelimit_service_anthropic_test.go`, `channel_service_test.go`, `content_moderation_test.go`, `.Exec`, `antigravity_single_account_retry_test.go`, `.Save`, `newInProcessTransport`, `newAuthRoutesTestRouter`, `dependencies`, `.SetFinishedAt`, `setupRedeemExportRouter`, `ip.go`, `oauth.go`, `userMemoryIdempotencyRepoStub`, `openai_ws_ratelimit_signal_test.go`, `billing_cache_service_rpm_test.go`, `newResetQuotaSvc`, `runProxyQualityTarget`, `mockGroupRepoForGemini`, `FromError`, `UserAllowedGroupUpdate`, `newWebChatRepoTestClient`, `UsageCleanupTaskCreate`, `testConfig`, `NewRateLimitService`, `auth_identity_payment_migrations_regression_test.go`, `AnnouncementUpsertOne`, `ValidateURLFormat`, `AnnouncementReadUpdate`, `NewDashboardService`, `.Execute`, `UserAttributeDefinitionUpdate`, `Authentication Views Usage Examples`, `UsageCleanupTaskCreateBulk`, `request_transformer.go`, `gateway_account_selection_test.go`, `BatchImageItemUpsertBulk`, `ChannelMonitorRequestTemplateUpsertOne`, `PaymentProviderInstanceUpsertBulk`, `kiroUsageCooldownStore`, `newRuntimeSettingRepoStub`, `web_chat_service_test.go`, `ChannelMonitorDailyRollupCreateBulk`, `openAIWSCaptureConn`, `Layout Components Integration Guide`, `ChannelMonitorRequestTemplateUpsertBulk`, `.Exec`, `RedeemCodeUpsertBulk`, `UsageCleanupTaskUpdateOne`, `UserDelete`, `.Exec`, `WebChatConversationUpsertBulk`, `ChannelMonitorRunner`, `stubApiKeyCache`, `security_secret_bootstrap_test.go`, `bedrock_stream.go`, `上游模型调用全量归档（ClickHouse）实现计划`, `batch_image_provider_vertex_test.go`, `.SetCredentials`, `支付系统配置指南`, `openai_gateway_compact_body_signal_test.go`, `admin_service_apikey_test.go`, `decompress_response_test.go`, `token_refresher_test.go`, `EditAccountModal.spec.ts`, `newSystemHandlerTestRouter`, `Stripe`, `BatchImageJobClient`, `applyMigrationsFS`, `txDriver`, `PromoCodeClient`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `ReadRequestBodyWithPrealloc`, `account_data_handler_test.go`, `newStubAdminService`, `ChannelMonitorHistoryCreate`, `GrokTokenRefresher`, `UserPlatformQuotaClient`, `NewDigestSessionStore`, `ChannelMonitorService`, `Model Marketplace Implementation Plan`, `ProxyClient`, `Layout Component Examples`, `openAIAccountTestRepo`, `errorPassthroughCache`, `NewAccountUpstreamUserAgentRepository`, `initializeApplication`, `tlsFingerprintProfileCache`, `security_headers_test.go`, `error_passthrough_service_test.go`, `gateway_scheduling.go`, `proxyLatencyCache`, `TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream`, `gateway_session_hash_mixed_kiro_test.go`, `NewOpenAIOAuthService`, `gemini_multiplatform_test.go`, `.GetAccountAvailability`, `mockGatewayCacheForGemini`, `.SetAPIKeyEncrypted`, `NewClient`, `newUserUsageRequestTypeTestRouter`, `ops_settings_models.go`, `Sub2API`, `oauth_test.go`, `ChannelMonitorHistoryUpsertOne`, `account_service_delete_test.go`, `.SetEndsAt`, `embed_off.go`, `getSharedReqClient`, `newAdminUsageRequestTypeTestRouter`, `NewTimingWheelService`, `openAIWSWriteBlockingConn`, `translator_test.go`, `extractThinkingBlocksWithSignature`, `SubscriptionPlanUpsertBulk`, `.SetImageRateMultiplier`, `.Save`, `.SetImageSize`, `Animations`, `.SetCode`?**
   _High betweenness centrality (0.212) - this node is a cross-community bridge._
-- **Why does `Now()` connect `Now` to `四、常见坑点 & 解决方案`, `上游模型调用全量归档（ClickHouse）实现计划`, `New`, `.Reason`, `store.go`, `extractI18nErrorMessage`, `.SetCredentials`, `settings.ts`, `L`, `oauth_test.go`, `.Where`, `gemini_quota.go`, `OpsCleanupService`, `gemini_messages_compat_service.go`, `testEntClient`, `.close`, `SoftDeleteMixin`, `NewIdempotencyCoordinator`, `.ProxyResponsesWebSocketFromClient`, `ops_request_details.go`, `mustCreateAccount`, `ConcurrencyService`, `crs_sync_service.go`, `ops_ws_handler.go`, `EditAccountModal.spec.ts`, `token_refresher_test.go`, `IsBadRequest`, `adminServiceImpl`, `.GetConcurrencyStats`, `gemini_oauth_service_test.go`, `kiro_cache_emulation.go`, `Layout Components`, `OpenAIGatewayService`, `BatchImageJobClient`, `antigravity_rate_limit_test.go`, `方式二：Docker Compose（推荐）`, `OpsMetricsCollector`, `CleanGeminiNativeThoughtSignatures`, `findCookie`, `PaymentView.spec.ts`, `.SeatSummariesForPlans`, `batchImageQueue`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `gateway_service.go`, `PromoCodeUpdateOne`, `File Structure`, `newConversationCapturePool`, `user_platform_quota_flusher_test.go`, `fakeBatchImageRepository`, `encodeCookieValue`, `NewConcurrencyService`, `collectStreamEvents`, `setup.go`, `auth_pending_identity_service.go`, `e2e_gateway_test.go`, `newAuthServiceForRegisterTurnstileTest`, `.GetDashboardStats`, `.handleStreamingResponse`, `newDefaultOpenAIWSClientDialer`, `newOpenAIWSConnPool`, `ScheduledTestService`, `stubAdminService`, `newStubAdminService`, `content_moderation.go`, `Success`, `user_platform_quotas_handler_test.go`, `EmailService`, `runCheckForModel`, `ChatView.spec.ts`, `pagination.go`, `TLSFingerprintProfileMutation`, `ops_error_logger.go`, `Manager`, `.GetDashboardOverview`, `newTestBillingService`, `clientFromContext`, `payment_fulfillment_test.go`, `userAPIKeyRouteGroupRepoStub`, `.SetErrorMessage`, `LegacyPrintf`, `RedeemCodeClient`, `payment_handler.go`, `openai_account_scheduler.go`, `newPaymentConfigServiceTestClient`, `bmSettingRepo`, `.SetModel`, `openai_ws_state_store.go`, `Account`, `.Save`, `WebChatAttachmentClient`, `promoCodeRepository`, `.SetTotalChecks`, `NewDigestSessionStore`, `cyberOrderingTestRepo`, `openai_gateway_request_body.go`, `ChannelMonitorService`, `ErrorFrom`, `scanSingleRow`, `gateway_websearch_emulation_test.go`, `account_codex_import.go`, `newMockSettingRepo`, `.close`, `ops_service.go`, `chatcompletions_to_responses.go`, `PricingService`, `ResponsesEventToChatChunks`, `logger.go`, `TestProvideCleanup_WithMinimalDependencies_NoPanic`, `payment_order_result_test.go`, `.handleStreamingResponse`, `SettingUpdate`, `oauthPendingFlowPromoRepoStub`, `AdminPaymentPlansView.vue`, `KiroToolUse`, `PendingAuthSession`, `openai_gateway_record_usage_test.go`, `SubscriptionPlanClient`, `Layout Component Examples`, `.parseUserUsageFilters`, `SubscriptionService`, `ikunpay_test.go`, `translator.go`, `accountRepoStubForClearAccountError`, `AccountTestService`, `HTTPUpstreamSuite`, `oauth.go`, `emailBindUserRepoStub`, `SettingRepoSuite`, `.GetAccessToken`, `payment_resume_service_test.go`, `PaymentQRDialog.vue`, `.describeGrokComposerImage`, `.GetAccessToken`, `userGroupRateRepoStubForListUsers`, `captureHandlerStructuredLog`, `oauth_refresh_api_test.go`, `mappers.go`, `initializeApplication`, `DefaultBackgroundRefreshPolicy`, `RateLimitService`, `MarkOpsClientBusinessLimited`, `openai_gateway_grok_test.go`, `UserAttributeValueCreate`, `usage_cleanup.go`, `defaultSparkShadowModelMapping`, `NewIdentityService`, `buildLogger`, `user_platform_quota_repo.go`, `.AcceptAdminCompliance`, `openai_oauth_passthrough_test.go`, `chat.ts`, `AuthIdentityChannelClient`, `Database Migrations`, `error_policy_integration_test.go`, `batch_image_public.go`, `PaymentConfigService`, `ChannelMonitor`, `SettingService`, `gateway_tool_rewrite_test.go`, `marshalEvent`, `websearch.go`, `httpUpstreamService`, `KiroTokenProvider`, `BillingCacheService`, `redeemRepoStub`, `isKiroDirectModeAccount`, `usageLogRepository`, `token_refresh_service_test.go`, `NewOpenAIOAuthService`, `gateway_usage_billing.go`, `dashboardAggregationRepository`, `MonitorAdvancedRequestConfig.vue`, `schedulerCache`, `ParseMetadataUserID`, `gemini_multiplatform_test.go`, `load_balancer.go`, `where.go`, `setting_service_backend_mode_test.go`, `AuthService`, `userRepository`, `ModelWhitelistSelector.vue`, `NewOpenAIWSProtocolResolver`, `ResponsesEventToAnthropicEvents`, `.GetAccountAvailability`, `account_usage_service.go`, `.getDashboardOverviewPreaggregated`, `channel_service.go`, `NewRegistry`, `openai_images_test.go`, `.forwardAsRawChatCompletions`, `account_quota_reset_test.go`, `.RecordUsage`, `openai_account_runtime_block_fastpath_test.go`, `newSQLMock`, `.SetBackupProxyID`, `Section 3 — auto-sticky 稳定 hash（方案 A）`, `notification_email_service.go`, `account_stats_pricing_test.go`, `GatewayService`, `sessionWindowMockRepo`, `chatcompletions_responses_test.go`, `channel_handler_test.go`, `NewUserService`, `.SetProxyFallbackOriginID`, `APIKeyService`, `batch_image_provider.go`, `PromoService`, `UserSubscription`, `WebChatService`, `batchImageRepository`, `newOpenAIGatewayServiceWithSettings`, `.evaluateOnce`, `auth_linuxdo_oauth.go`, `NewOpsService`, `manager_test.go`, `PaymentService`, `UserSubscriptionRepoSuite`, `balance_notify_service_test.go`, `content_moderation_test.go`, `airwallex.go`, `update_service_test.go`, `.Is`, `antigravity_single_account_retry_test.go`, `openai_gateway_scheduling.go`, `websearch_config_test.go`, `PaymentAuditLogMutation`, `.executeKiroUpstreamWithParsed`, `IsNotFound`, `.SetWindow7dStart`, `UsageCleanupService`, `newFakeBatchImageRepository`, `user_profile_identity_repo.go`, `apiKeyRepoStub`, `concurrency_service_test.go`, `NewSchedulerSnapshotService`, `IsWindowExpired`, `ModelTagInput.vue`, `concurrencyCache`, `NewTimingWheelService`, `adminServiceImpl`, `PublicPlanResponse`, `Newf`, `EmptyState.vue`, `payment_service.go`, `redeem_handler_test.go`, `Code`, `.Less`, `testConfig`, `NewRateLimitService`, `InternalServer`, `analytics51la.ts`, `auth_identity_payment_migrations_regression_test.go`, `BatchImageEventClient`, `Errorf`, `responsesInputToChatMessages`, `integration_harness_test.go`, `wrapReleaseOnDone`, `UpdateService`, `SchedulerSnapshotService`, `client.go`, `channel_monitor_runner_test.go`, `NewDashboardService`, `DashboardService`, `.Execute`, `UserRepoSuite`, `TestBatchImageMVPFlow`, `openai_gateway_count_tokens.go`, `RedeemService`, `RedeemCodeRepoSuite`, `APIKeyRepoSuite`, `TotpService`, `.SetBilledAmount`, `anthropic_to_responses_response.go`, `GroupUpdateOne`, `gateway_account_selection_test.go`, `NewGrokQuotaFetcher`, `httputil.go`, `AntigravityOAuthHandler`, `convertGolden`, `.SetRequestHash`, `.DingTalkOAuthCallback`, `.SetMonitorID`, `billingCache`, `newRuntimeSettingRepoStub`, `newUserEntRepo`, `BackupService`, `web_chat_service_test.go`, `.ProbeUsage`, `.SetSumLatencyMs`, `account_repo_test.go`, `oauth.go`, `batch_update_credentials_test.go`, `newUsageLogRepositoryWithSQL`, `UserMessageQueueService`, `WebChatMessageCreate`, `.SetImageRateMultiplier`, `TxFromContext`, `account_data.go`, `newAnnouncementSortTestRouter`, `UsageLogDelete`, `NewRequestBodyRef`, `registrationEmailPolicy.ts`, `gateway_anthropic_apikey_passthrough_test.go`, `ops_settings.go`, `web_chat_storage_test.go`, `cleanupRepoStub`?**
+- **Why does `Now()` connect `Now` to `四、常见坑点 & 解决方案`, `上游模型调用全量归档（ClickHouse）实现计划`, `New`, `.Reason`, `store.go`, `extractI18nErrorMessage`, `.SetCredentials`, `settings.ts`, `ChannelStatusView.vue`, `L`, `oauth_test.go`, `.Where`, `gemini_quota.go`, `OpsCleanupService`, `gemini_messages_compat_service.go`, `testEntClient`, `.close`, `SoftDeleteMixin`, `NewIdempotencyCoordinator`, `.ProxyResponsesWebSocketFromClient`, `newDashboardRequestTypeTestRouter`, `ops_request_details.go`, `mustCreateAccount`, `ConcurrencyService`, `crs_sync_service.go`, `ops_ws_handler.go`, `EditAccountModal.spec.ts`, `token_refresher_test.go`, `IsBadRequest`, `adminServiceImpl`, `.GetConcurrencyStats`, `gemini_oauth_service_test.go`, `kiro_cache_emulation.go`, `SettingService`, `kiro_http_helpers.go`, `BatchImageJobClient`, `antigravity_rate_limit_test.go`, `OpsMetricsCollector`, `.SeatSummariesForPlans`, `CleanGeminiNativeThoughtSignatures`, `findCookie`, `PaymentView.spec.ts`, `.Forward`, `batchImageQueue`, `billingCacheWorkerStub`, `邀请返现改造实现计划：固定金额 · 仅首充达标 · 双方各得`, `PromoCodeUpdateOne`, `newConversationCapturePool`, `fakeBatchImageRepository`, `user_platform_quota_flusher_test.go`, `gateway_service.go`, `encodeCookieValue`, `NewConcurrencyService`, `collectStreamEvents`, `setup.go`, `auth_pending_identity_service.go`, `File Structure`, `e2e_gateway_test.go`, `newAuthServiceForRegisterTurnstileTest`, `.handleStreamingResponse`, `newDefaultOpenAIWSClientDialer`, `newOpenAIWSConnPool`, `ScheduledTestService`, `stubAdminService`, `newStubAdminService`, `content_moderation.go`, `Success`, `user_platform_quotas_handler_test.go`, `EmailService`, `runCheckForModel`, `ChatView.spec.ts`, `pagination.go`, `ops_error_logger.go`, `.GetDashboardOverview`, `newTestBillingService`, `clientFromContext`, `payment_fulfillment_test.go`, `LegacyPrintf`, `RedeemCodeClient`, `payment_handler.go`, `openai_account_scheduler.go`, `newPaymentConfigServiceTestClient`, `promoCodeRepository`, `openai_ws_state_store.go`, `Account`, `Manager`, `NewDigestSessionStore`, `cyberOrderingTestRepo`, `.close`, `ChannelMonitorService`, `ErrorFrom`, `scanSingleRow`, `gateway_websearch_emulation_test.go`, `account_codex_import.go`, `newMockSettingRepo`, `ops_service.go`, `PricingService`, `ResponsesEventToChatChunks`, `logger.go`, `TestProvideCleanup_WithMinimalDependencies_NoPanic`, `.Save`, `.handleStreamingResponse`, `SettingUpdate`, `oauthPendingFlowPromoRepoStub`, `payment_order_result_test.go`, `.ClearUsedAt`, `AdminPaymentPlansView.vue`, `KiroToolUse`, `PendingAuthSession`, `openai_gateway_record_usage_test.go`, `SubscriptionPlanClient`, `Layout Component Examples`, `SubscriptionService`, `ikunpay_test.go`, `AccountTestService`, `accountRepoStubForClearAccountError`, `HTTPUpstreamSuite`, `NewBatchImageWorker`, `oauth.go`, `emailBindUserRepoStub`, `NewSettingService`, `.GetAccessToken`, `payment_resume_service_test.go`, `testSettingRepo`, `RedeemCodeUpdateOne`, `PaymentQRDialog.vue`, `adminServiceImpl`, `.describeGrokComposerImage`, `.GetAccessToken`, `userGroupRateRepoStubForListUsers`, `captureHandlerStructuredLog`, `paymentRoutesSettingRepo`, `mappers.go`, `batch_image_provider_vertex.go`, `oauth_refresh_api_test.go`, `UserPlatformQuota`, `DefaultBackgroundRefreshPolicy`, `RateLimitService`, `MarkOpsClientBusinessLimited`, `openai_gateway_grok_test.go`, `PaymentService`, `usage_cleanup.go`, `defaultSparkShadowModelMapping`, `NewIdentityService`, `buildLogger`, `user_platform_quota_repo.go`, `UserAttributeValueCreate`, `.AcceptAdminCompliance`, `openai_oauth_passthrough_test.go`, `openai_json_optimization_benchmark_test.go`, `gemini_types.go`, `AuthIdentityChannelClient`, `chat.ts`, `DashboardHandler`, `error_policy_integration_test.go`, `batch_image_public.go`, `ChannelMonitor`, `websearch.go`, `httpUpstreamService`, `KiroTokenProvider`, `redeemRepoStub`, `isKiroDirectModeAccount`, `token_refresh_service_test.go`, `.IsOpenAI`, `gateway_websearch_emulation.go`, `NewOpenAIOAuthService`, `gateway_usage_billing.go`, `dashboardAggregationRepository`, `MonitorAdvancedRequestConfig.vue`, `schedulerCache`, `ParseMetadataUserID`, `gemini_multiplatform_test.go`, `load_balancer.go`, `where.go`, `setting_service_backend_mode_test.go`, `.SetSessionWindowStart`, `userRepository`, `ModelWhitelistSelector.vue`, `NewOpenAIWSProtocolResolver`, `ResponsesEventToAnthropicEvents`, `.GetAccountAvailability`, `account_usage_service.go`, `.getDashboardOverviewPreaggregated`, `channel_service.go`, `NewRegistry`, `openai_images_test.go`, `.forwardAsRawChatCompletions`, `account_quota_reset_test.go`, `.RecordUsage`, `openai_account_runtime_block_fastpath_test.go`, `newSQLMock`, `user_service.go`, `notification_email_service.go`, `account_stats_pricing_test.go`, `GatewayService`, `sessionWindowMockRepo`, `chatcompletions_responses_test.go`, `channel_handler_test.go`, `NewUserService`, `.SetProxyFallbackOriginID`, `APIKeyService`, `batch_image_provider.go`, `PromoService`, `UserSubscription`, `WebChatService`, `batchImageRepository`, `newOpenAIGatewayServiceWithSettings`, `.evaluateOnce`, `NewOpsService`, `manager_test.go`, `oauth_test.go`, `PaymentService`, `UserSubscriptionRepoSuite`, `balance_notify_service_test.go`, `content_moderation_test.go`, `airwallex.go`, `update_service_test.go`, `.Is`, `antigravity_single_account_retry_test.go`, `PromoCodeUsageClient`, `openai_gateway_scheduling.go`, `websearch_config_test.go`, `PaymentAuditLogMutation`, `.executeKiroUpstreamWithParsed`, `IsNotFound`, `.SetWindow7dStart`, `NormalizeAntigravitySubscription`, `UsageCleanupService`, `newFakeBatchImageRepository`, `user_profile_identity_repo.go`, `apiKeyRepoStub`, `concurrency_service_test.go`, `NewSchedulerSnapshotService`, `runProxyQualityTarget`, `IsWindowExpired`, `.SetIssuer`, `ModelTagInput.vue`, `concurrencyCache`, `NewTimingWheelService`, `adminServiceImpl`, `PublicPlanResponse`, `Newf`, `EmptyState.vue`, `payment_service.go`, `redeem_handler_test.go`, `.Less`, `testConfig`, `NewRateLimitService`, `InternalServer`, `analytics51la.ts`, `auth_identity_payment_migrations_regression_test.go`, `BatchImageEventClient`, `Errorf`, `responsesInputToChatMessages`, `integration_harness_test.go`, `wrapReleaseOnDone`, `ServiceUnavailable`, `SchedulerSnapshotService`, `client.go`, `channel_monitor_runner_test.go`, `settingRepository`, `NewDashboardService`, `.Save`, `DashboardService`, `kiro_cache_emulation_test.go`, `UserRepoSuite`, `TestBatchImageMVPFlow`, `.Execute`, `openai_gateway_count_tokens.go`, `RedeemService`, `RedeemCodeRepoSuite`, `TotpService`, `anthropic_to_responses_response.go`, `DashboardAggregationService`, `gateway_account_selection_test.go`, `convertGolden`, `.SetRequestHash`, `.DingTalkOAuthCallback`, `billingCache`, `newRuntimeSettingRepoStub`, `newUserEntRepo`, `BackupService`, `web_chat_service_test.go`, `.ProbeUsage`, `account_repo_test.go`, `oauth.go`, `batch_update_credentials_test.go`, `newUsageLogRepositoryWithSQL`, `UserMessageQueueService`, `WebChatMessageCreate`, `.SetImageRateMultiplier`, `userAPIKeyRouteRepository`, `account_data.go`, `newAnnouncementSortTestRouter`, `UsageLogDelete`, `NewRequestBodyRef`, `registrationEmailPolicy.ts`, `UserDelete`, `gateway_anthropic_apikey_passthrough_test.go`, `web_chat_storage_test.go`, `TotpSetupModal.vue`, `cleanupRepoStub`, `auth_handler.go`?**
   _High betweenness centrality (0.133) - this node is a cross-community bridge._
 - **Are the 2876 inferred relationships involving `Errorf()` (e.g. with `.refreshSingleAccount()` and `.UnmarshalJSON()`) actually correct?**
   _`Errorf()` has 2876 INFERRED edges - model-reasoned connections that need verification._

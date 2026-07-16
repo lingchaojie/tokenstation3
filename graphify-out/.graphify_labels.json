@@ -9204,5 +9204,13 @@
   "9202": "RateLimitService",
   "9203": "SettingService",
   "9204": "UserPlatformQuotaRepository",
-  "9205": "UserService"
+  "9205": "UserService",
+  "9206": ".SetSignatureAlgorithms",
+  "9207": ".SetSupportedVersions",
+  "9208": ".Where",
+  "9209": "PublicModelCatalogModel",
+  "9210": "PublicModelCatalogPriceLine",
+  "9211": "PublicModelCatalogPricing",
+  "9212": "PublicModelCatalogProvider",
+  "9213": "T"
 }
