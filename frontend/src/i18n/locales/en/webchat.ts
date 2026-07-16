@@ -25,6 +25,8 @@ export default {
     noConversations: 'No conversations yet.',
     rename: 'Rename',
     renameConversation: 'Rename conversation',
+    saveRename: 'Save title',
+    cancelRename: 'Cancel rename',
     deleteAction: 'Delete',
     deleteConversation: 'Delete conversation',
     untitledChat: 'Untitled chat',

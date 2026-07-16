@@ -694,6 +694,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function generateConversationTitle(conversationId: number): Promise<WebChatConversation> {
+    const conversation = await chatAPI.generateConversationTitle(conversationId)
+    upsertConversation(conversation)
+    if (currentConversation.value?.conversation.id === conversation.id) {
+      currentConversation.value.conversation = conversation
+    }
+    return conversation
+  }
+
   async function deleteConversation(conversationId: number): Promise<void> {
     try {
       error.value = null
@@ -912,6 +921,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     const model = selectedModel.value
+    const hadConversation = Boolean(currentConversation.value?.conversation)
     const conversation = currentConversation.value?.conversation ?? await createConversation(text.slice(0, 80))
     const attachments = [...pendingAttachments.value]
     const request: SendWebChatMessageRequest = {
@@ -976,6 +986,13 @@ export const useChatStore = defineStore('chat', () => {
           await openConversation(conversation.id)
         } catch {
           // Keep the completed streamed message visible even if the post-stream artifact refresh fails.
+        }
+      }
+      if (!hadConversation) {
+        try {
+          await generateConversationTitle(conversation.id)
+        } catch {
+          // Title generation should never make a completed chat response look failed.
         }
       }
     } catch (err) {
@@ -1043,6 +1060,7 @@ export const useChatStore = defineStore('chat', () => {
     selectModel,
     openConversation,
     createConversation,
+    generateConversationTitle,
     renameConversation,
     deleteConversation,
     uploadAttachment,

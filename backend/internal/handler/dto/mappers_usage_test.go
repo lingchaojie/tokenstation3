@@ -50,7 +50,7 @@ func TestUsageLogFromService_PrefersRequestTypeForLegacyFields(t *testing.T) {
 	require.True(t, adminDTO.OpenAIWSMode)
 }
 
-func TestUsageLogFromService_HidesWebChatAPIKey(t *testing.T) {
+func TestUsageLogFromService_ReturnsSanitizedWebChatAPIKey(t *testing.T) {
 	t.Parallel()
 
 	log := &service.UsageLog{
@@ -67,14 +67,18 @@ func TestUsageLogFromService_HidesWebChatAPIKey(t *testing.T) {
 
 	out := UsageLogFromService(log)
 	require.Equal(t, int64(20), out.APIKeyID)
-	require.Nil(t, out.APIKey)
+	require.NotNil(t, out.APIKey)
+	require.Equal(t, int64(20), out.APIKey.ID)
+	require.Equal(t, "Web Chat", out.APIKey.Name)
+	require.Equal(t, service.APIKeyTypeWebChat, out.APIKey.KeyType)
+	require.Empty(t, out.APIKey.Key)
 
 	body, err := json.Marshal(out)
 	require.NoError(t, err)
 	require.NotContains(t, string(body), "wc_secret")
 }
 
-func TestUsageLogFromServiceAdmin_HidesWebChatAPIKey(t *testing.T) {
+func TestUsageLogFromServiceAdmin_ReturnsSanitizedWebChatAPIKey(t *testing.T) {
 	t.Parallel()
 
 	log := &service.UsageLog{
@@ -91,7 +95,11 @@ func TestUsageLogFromServiceAdmin_HidesWebChatAPIKey(t *testing.T) {
 
 	out := UsageLogFromServiceAdmin(log)
 	require.Equal(t, int64(21), out.APIKeyID)
-	require.Nil(t, out.APIKey)
+	require.NotNil(t, out.APIKey)
+	require.Equal(t, int64(21), out.APIKey.ID)
+	require.Equal(t, "Web Chat", out.APIKey.Name)
+	require.Equal(t, service.APIKeyTypeWebChat, out.APIKey.KeyType)
+	require.Empty(t, out.APIKey.Key)
 
 	body, err := json.Marshal(out)
 	require.NoError(t, err)

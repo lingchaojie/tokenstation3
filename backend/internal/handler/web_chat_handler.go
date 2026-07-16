@@ -29,6 +29,7 @@ type WebChatService interface {
 	OpenArtifact(ctx context.Context, userID, artifactID int64) (io.ReadCloser, service.WebChatDownloadMeta, error)
 	ListModels(ctx context.Context, userID int64) ([]service.WebChatModelCapability, error)
 	SendMessage(c *gin.Context, in service.WebChatSendInput) (*service.WebChatSendResult, error)
+	GenerateConversationTitle(c *gin.Context, userID, conversationID int64) (*service.WebChatConversation, error)
 	CancelMessage(ctx context.Context, userID, conversationID, messageID int64) error
 }
 
@@ -184,6 +185,23 @@ func (h *WebChatHandler) DeleteConversation(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"deleted": true})
+}
+
+func (h *WebChatHandler) GenerateConversationTitle(c *gin.Context) {
+	subject, ok := webChatAuthSubject(c)
+	if !ok {
+		return
+	}
+	conversationID, ok := webChatIDParam(c, "id")
+	if !ok {
+		return
+	}
+	conversation, err := h.service.GenerateConversationTitle(c, subject.UserID, conversationID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, conversation)
 }
 
 func (h *WebChatHandler) SendMessage(c *gin.Context) {

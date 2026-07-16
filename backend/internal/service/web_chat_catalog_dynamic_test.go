@@ -212,3 +212,28 @@ func TestResolveWebChatCatalog_DatedKeyRoutingPreserved(t *testing.T) {
 		t.Fatalf("claude family should support thinking")
 	}
 }
+
+func TestResolveWebChatCatalog_SortsModelsByReleaseDateWithinProvider(t *testing.T) {
+	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeOpenAI: 6}}
+	al := stubAccountLister{byGroup: map[int64][]Account{
+		6: {acctWithMapping(PlatformOpenAI, "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-custom")},
+	}}
+
+	got, err := resolveWebChatCatalog(context.Background(), gr, al)
+
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 models, got %d: %+v", len(got), got)
+	}
+	if got[0].Model != "gpt-5.6-sol" || got[0].ReleasedAt != "2026-07-09" {
+		t.Fatalf("first model=%s released_at=%s, want gpt-5.6-sol 2026-07-09", got[0].Model, got[0].ReleasedAt)
+	}
+	if got[1].Model != "gpt-5.4" || got[1].ReleasedAt != "2026-05-01" {
+		t.Fatalf("second model=%s released_at=%s, want gpt-5.4 2026-05-01", got[1].Model, got[1].ReleasedAt)
+	}
+	if got[2].Model != "gpt-5.6-custom" || got[2].ReleasedAt != "" {
+		t.Fatalf("unknown model=%s released_at=%s, want gpt-5.6-custom with empty release", got[2].Model, got[2].ReleasedAt)
+	}
+}

@@ -11,6 +11,7 @@ type WebChatModelCapability struct {
 	KeyType                      string   `json:"key_type"`
 	Model                        string   `json:"model"`
 	DisplayName                  string   `json:"display_name"`
+	ReleasedAt                   string   `json:"released_at,omitempty"`
 	SupportsText                 bool     `json:"supports_text"`
 	SupportsImageInput           bool     `json:"supports_image_input"`
 	SupportsFileContext          bool     `json:"supports_file_context"`
@@ -37,6 +38,7 @@ type WebChatCatalogModel struct {
 	Provider    string
 	ModelName   string
 	DisplayName string
+	ReleasedAt  string
 	Modalities  []string
 	Features    []string
 	PriceStatus string
@@ -68,6 +70,7 @@ func DefaultWebChatCatalogModels() []WebChatCatalogModel {
 			Provider:    provider,
 			ModelName:   model.ModelName,
 			DisplayName: model.DisplayName,
+			ReleasedAt:  model.ReleasedAt,
 			Modalities:  append([]string(nil), model.Modalities...),
 			Features:    append([]string(nil), model.Features...),
 			PriceStatus: model.PriceStatus,
@@ -123,6 +126,7 @@ func WebChatModelCapabilityFromCatalogModel(model WebChatCatalogModel) (WebChatM
 		KeyType:                      route.KeyType,
 		Model:                        model.ModelName,
 		DisplayName:                  model.DisplayName,
+		ReleasedAt:                   model.ReleasedAt,
 		SupportsText:                 true,
 		SupportsImageInput:           supportsImageInput,
 		SupportsFileContext:          true,
