@@ -382,7 +382,10 @@ export const useChatStore = defineStore('chat', () => {
 
   const currentMessages = computed(() => currentConversation.value?.messages ?? [])
   const selectedModelSupportsThinking = computed(() => Boolean(selectedModel.value?.supports_thinking))
-  const selectedModelSupportsWebSearch = computed(() => Boolean(selectedModel.value?.supports_web_search))
+  const selectedModelHasConfigurableWebSearch = computed(() => {
+    const model = selectedModel.value
+    return Boolean(model?.supports_web_search && model.provider.trim().toLowerCase() !== 'openai')
+  })
   const selectedModelSupportsImageGeneration = computed(() => Boolean(selectedModel.value?.supports_image_generation))
   const thinkingEffortOptions = computed<WebChatThinkingEffort[]>(() => {
     const efforts = selectedModel.value?.thinking_efforts ?? []
@@ -605,7 +608,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function reconcileWebSearchSettings(): void {
-    if (!selectedModelSupportsWebSearch.value) {
+    if (!selectedModelHasConfigurableWebSearch.value) {
       webSearchEnabled.value = false
     }
   }
@@ -924,7 +927,7 @@ export const useChatStore = defineStore('chat', () => {
         effort: activeThinkingEffort.value,
       }
     }
-    if (selectedModelSupportsWebSearch.value && webSearchEnabled.value) {
+    if (selectedModelHasConfigurableWebSearch.value && webSearchEnabled.value) {
       request.web_search = {
         enabled: true,
       }
@@ -1025,7 +1028,7 @@ export const useChatStore = defineStore('chat', () => {
     error,
     currentMessages,
     selectedModelSupportsThinking,
-    selectedModelSupportsWebSearch,
+    selectedModelHasConfigurableWebSearch,
     thinkingEffortOptions,
     selectedModelSupportsImageGeneration,
     imageGenerationSizeOptions,

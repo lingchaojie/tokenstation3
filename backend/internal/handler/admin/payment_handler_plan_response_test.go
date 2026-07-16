@@ -51,6 +51,7 @@ func TestAdminUpdatePlanDoesNotExposeLegacyGroupID(t *testing.T) {
 		SetName("Legacy Plan").
 		SetDescription("legacy").
 		SetPrice(25).
+		SetCurrency("NZD").
 		SetValidityDays(30).
 		SetValidityUnit("day").
 		SetFeatures("legacy").
@@ -73,5 +74,6 @@ func TestAdminUpdatePlanDoesNotExposeLegacyGroupID(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	body := recorder.Body.String()
 	require.Contains(t, body, "Updated Legacy Plan")
+	require.Contains(t, body, `"currency":"NZD"`)
 	require.NotContains(t, body, "group_id")
 }

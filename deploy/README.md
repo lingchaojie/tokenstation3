@@ -79,6 +79,9 @@ DOMAIN=www.example.com sudo -E ./docker-deploy.sh
 # Recommended: apex redirects to www
 DOMAIN=www.example.com APEX_DOMAIN=example.com sudo -E ./docker-deploy.sh
 
+# Add independent HTTPS hostnames that proxy to the same app
+DOMAIN=www.example.com APEX_DOMAIN=example.com ADDITIONAL_DOMAINS=yundu.example.com,api.example.com sudo -E ./docker-deploy.sh
+
 # Start services for this sudo-created deployment
 sudo docker compose up -d
 ```
@@ -92,7 +95,9 @@ docker compose up -d
 
 Do not rerun `docker-deploy.sh` with `DOMAIN` in an existing deployment unless you intend to answer the overwrite prompt and regenerate deployment files/secrets. To add a domain later without touching `.env` or data directories, configure Caddy manually using the snippet below.
 
-`DOMAIN` is the host users should open in the browser. `APEX_DOMAIN` is optional; when set, it redirects permanently to `DOMAIN`.
+`DOMAIN` is the host users should open in the browser. `APEX_DOMAIN` is optional; when set, it redirects permanently to `DOMAIN`. `ADDITIONAL_DOMAINS` accepts comma- or whitespace-separated hostnames. Each additional hostname gets its own Caddy reverse-proxy block to the same app port and needs its own DNS record pointing to the server.
+
+These three values are shell inputs to `docker-deploy.sh` during fresh/manual deployment preparation; Docker Compose does not consume them. The generated host Caddy configuration persists across Docker and admin binary updates. The admin updater does not run this script or mutate host Caddy, so it cannot add or reconstruct these blocks. `ADDITIONAL_DOMAINS` reconstructs them only when an operator runs fresh/manual preparation; make later changes directly in Caddy instead of rerunning the deployment script in an existing deployment directory.
 
 The generated Caddy site configuration is stored at `/etc/caddy/sub2api/sub2api.caddy` and imported by `/etc/caddy/Caddyfile`:
 
@@ -275,7 +280,7 @@ docker compose -f docker-compose.local.yml down
 rm -rf data/ postgres_data/ redis_data/
 ```
 
-> **Custom domain note:** Docker updates do not overwrite `/etc/caddy/sub2api/sub2api.caddy` or its import in `/etc/caddy/Caddyfile`. If you configured `DOMAIN`/`APEX_DOMAIN`, keep using the same update commands for your deployment type; you do not need to reconfigure the domain unless you rebuild the server, change DNS/IPs, change `SERVER_PORT`, or manually replace the Caddy config.
+> **Custom domain note:** Docker and admin binary updates do not overwrite `/etc/caddy/sub2api/sub2api.caddy` or its import in `/etc/caddy/Caddyfile`. The admin updater does not run `docker-deploy.sh` or mutate host Caddy. If you configured `DOMAIN`/`APEX_DOMAIN`/`ADDITIONAL_DOMAINS`, keep using the same update commands for your deployment type; the deployment script reconstructs those blocks only during fresh/manual preparation.
 
 For **named volumes version** (repo `docker-compose.yml`):
 
@@ -308,8 +313,9 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
-| `DOMAIN` | No | - | Optional deployment-script input: configure Caddy for this public hostname |
-| `APEX_DOMAIN` | No | - | Optional deployment-script input: redirect this hostname to `DOMAIN` |
+| `DOMAIN` | No | - | Optional `docker-deploy.sh` shell input (not Compose-consumed): configure Caddy for this public hostname |
+| `APEX_DOMAIN` | No | - | Optional `docker-deploy.sh` shell input (not Compose-consumed): redirect this hostname to `DOMAIN` |
+| `ADDITIONAL_DOMAINS` | No | - | Optional comma- or whitespace-separated `docker-deploy.sh` shell input (not Compose-consumed): add independent Caddy reverse-proxy hostnames |
 | `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
 | `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
 | `TZ` | No | `Asia/Shanghai` | Timezone |

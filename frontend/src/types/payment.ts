@@ -121,11 +121,13 @@ export interface SubscriptionPlan {
   virtual_seat_total?: number | null
   name: string
   description: string
-  price: number
-  original_price?: number
-  seven_day_quota_usd?: number | null
-  /** Allows admin plan edits to explicitly clear nullable quota fields when supported by API */
-  clear_seven_day_quota_usd?: boolean
+	price: number
+	original_price?: number
+	seven_day_quota_usd?: number | null
+	/** Allows admin plan edits to explicitly clear nullable quota fields when supported by API */
+	clear_seven_day_quota_usd?: boolean
+	/** Display-only ISO 4217 currency label (e.g. "NZD"); empty means no label */
+	currency?: string
   validity_days: number
   validity_unit: string
   /** Stored as JSON string in backend; API layer should parse before use */

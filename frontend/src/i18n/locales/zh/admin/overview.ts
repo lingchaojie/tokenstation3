@@ -372,7 +372,7 @@ export default {
 
     affiliates: {
       invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
-      rebatesDescription: '查看每一笔产生返利的充值订单',
+      rebatesDescription: '统一查看旧充值返利与新的邀请双方奖励审计记录',
       transfersDescription: '查看返利额度转入账户余额的提取流水',
       checkIn: {
         title: '签到配置',
@@ -417,10 +417,22 @@ export default {
         user: '用户',
         affCode: '邀请码',
         order: '订单',
+        source: '来源',
+        rewardRole: '奖励角色',
+        sources: {
+          legacy: '旧返利流水',
+          rewardCredit: '奖励余额',
+        },
+        roles: {
+          inviter: '邀请方奖励',
+          invitee: '受邀方奖励',
+        },
         totalRebate: '累计返利',
         orderAmount: '充值金额',
         payAmount: '支付金额',
         rebateAmount: '返利金额',
+        remainingAmount: '剩余金额',
+        expiresAt: '到期时间',
         paymentType: '支付方式',
         orderStatus: '订单状态',
         transferAmount: '提取金额',
@@ -435,7 +447,7 @@ export default {
       overview: {
         title: '用户返利概览',
         affCode: '邀请码',
-        rebateRate: '返利比例',
+        inviterReward: '邀请方奖励金额',
         invitedCount: '邀请人数',
         rebatedInviteeCount: '已产生返利人数',
         availableQuota: '可提余额',
@@ -809,6 +821,7 @@ export default {
         "确定要删除订阅分组 '{name}' 吗？此操作会让所有绑定此订阅的用户的 API Key 失效，并删除所有相关的订阅记录。此操作无法撤销。",
       columns: {
         name: '名称',
+        id: 'ID',
         platform: '平台',
         rateMultiplier: '费率倍数',
         rpmOverride: 'RPM 覆盖',

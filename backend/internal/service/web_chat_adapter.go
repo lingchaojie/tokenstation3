@@ -252,9 +252,12 @@ func validateWebChatAdapterContext(caps WebChatModelCapability, messages []WebCh
 			case WebChatAttachmentKindImage:
 				summary.ImageAttachmentCount++
 			case WebChatAttachmentKindFile:
-				if attachment.TextPreview != nil && strings.TrimSpace(*attachment.TextPreview) != "" {
-					summary.FileAttachmentCount++
+				if !webChatAttachmentAllowedForProvider(caps.Provider, attachment) {
+					return fmt.Errorf("%w: file %s is not supported by provider %s", ErrWebChatUnsupportedContext, webChatAttachmentDisplayName(attachment), caps.Provider)
 				}
+				summary.FileAttachmentCount++
+			default:
+				return fmt.Errorf("%w: attachment %s has unsupported kind %s", ErrWebChatUnsupportedContext, webChatAttachmentDisplayName(attachment), attachment.Kind)
 			}
 		}
 	}
@@ -325,7 +328,7 @@ func buildWebChatImageDataURL(ctx context.Context, storage WebChatStorage, attac
 	if len(data) > webChatMaxUploadBytes {
 		return "", ErrWebChatUploadRejected
 	}
-	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.ContentType, nil)
+	contentType, kind, _, err := classifyWebChatUploadContentType(attachment.Filename, attachment.ContentType, data)
 	if err != nil || kind != WebChatAttachmentKindImage {
 		return "", ErrWebChatUploadRejected
 	}

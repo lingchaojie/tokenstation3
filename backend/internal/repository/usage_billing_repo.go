@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -172,6 +174,12 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 }
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
+	if funded, err := applyUsageBillingRewardLayer(ctx, tx, cmd, result); err != nil {
+		return err
+	} else if funded {
+		return r.applyUsageBillingQuotas(ctx, tx, cmd, result)
+	}
+
 	if cmd.SubscriptionCost > 0 && cmd.SubscriptionID != nil {
 		if cmd.SubscriptionSevenDayLimitUSD == nil {
 			if cmd.AllowBalanceFallback && cmd.BalanceFallbackCost > 0 {
@@ -181,8 +189,9 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 				}
 				result.NewBalance = &newBalance
 				result.BillingType = service.BillingTypeBalance
+				result.FundingSource = service.UsageFundingAccount
 				result.BalanceOverdrafted = !sufficient
-				return nil
+				return r.applyUsageBillingQuotas(ctx, tx, cmd, result)
 			}
 			return service.ErrWeeklyLimitExceeded
 		}
@@ -198,6 +207,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 		if appliedSubscription {
 			result.BillingType = service.BillingTypeSubscription
+			result.FundingSource = service.UsageFundingSubscription
 		} else if cmd.AllowBalanceFallback && cmd.BalanceFallbackCost > 0 {
 			newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceFallbackCost)
 			if err != nil {
@@ -205,6 +215,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 			}
 			result.NewBalance = &newBalance
 			result.BillingType = service.BillingTypeBalance
+			result.FundingSource = service.UsageFundingAccount
 			result.BalanceOverdrafted = !sufficient
 		} else {
 			return service.ErrWeeklyLimitExceeded
@@ -218,8 +229,14 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 		result.NewBalance = &newBalance
 		result.BillingType = service.BillingTypeBalance
+		result.FundingSource = service.UsageFundingAccount
 		result.BalanceOverdrafted = !sufficient
 	}
+
+	return r.applyUsageBillingQuotas(ctx, tx, cmd, result)
+}
+
+func (r *usageBillingRepository) applyUsageBillingQuotas(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
 
 	if cmd.APIKeyQuotaCost > 0 {
 		exhausted, err := incrementUsageBillingAPIKeyQuota(ctx, tx, cmd.APIKeyID, cmd.APIKeyQuotaCost)
@@ -244,6 +261,168 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	return nil
+}
+
+func applyUsageBillingRewardLayer(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) (bool, error) {
+	if cmd == nil || result == nil {
+		return false, nil
+	}
+	amount := cmd.BalanceCost
+	if cmd.SubscriptionID != nil && cmd.SubscriptionCost > 0 {
+		amount = cmd.SubscriptionCost
+	}
+	if amount <= 0 {
+		return false, nil
+	}
+
+	now := time.Now().UTC()
+	if _, err := expireRewardCreditsForUserTx(ctx, tx, cmd.UserID, now); err != nil {
+		return false, err
+	}
+
+	newBalance, funded, err := tryConsumeRewardLayer(
+		ctx,
+		tx,
+		cmd.UserID,
+		[]service.RewardCreditType{service.RewardCreditDailyCheckIn},
+		amount,
+		cmd.RequestID,
+		now,
+	)
+	if err != nil {
+		return false, err
+	}
+	if funded {
+		result.NewBalance = &newBalance
+		result.BillingType = service.BillingTypeBalance
+		result.FundingSource = service.UsageFundingDailyCheckIn
+		return true, nil
+	}
+
+	newBalance, funded, err = tryConsumeRewardLayer(
+		ctx,
+		tx,
+		cmd.UserID,
+		[]service.RewardCreditType{service.RewardCreditAffiliateInviter, service.RewardCreditAffiliateInvitee},
+		amount,
+		cmd.RequestID,
+		now,
+	)
+	if err != nil {
+		return false, err
+	}
+	if funded {
+		result.NewBalance = &newBalance
+		result.BillingType = service.BillingTypeBalance
+		result.FundingSource = service.UsageFundingAffiliate
+		return true, nil
+	}
+	return false, nil
+}
+
+type usageRewardCreditLot struct {
+	id        int64
+	remaining float64
+}
+
+func tryConsumeRewardLayer(
+	ctx context.Context,
+	tx *sql.Tx,
+	userID int64,
+	creditTypes []service.RewardCreditType,
+	amount float64,
+	eventKey string,
+	now time.Time,
+) (float64, bool, error) {
+	if amount <= 0 || len(creditTypes) == 0 {
+		return 0, false, nil
+	}
+
+	args := []any{userID, now}
+	placeholders := make([]string, 0, len(creditTypes))
+	for _, creditType := range creditTypes {
+		args = append(args, creditType)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, remaining_amount::double precision
+FROM user_reward_credits
+WHERE user_id = $1
+  AND expires_at > $2
+  AND remaining_amount > 0
+  AND expired_at IS NULL
+  AND credit_type IN (`+strings.Join(placeholders, ", ")+`)
+ORDER BY expires_at ASC, id ASC
+FOR UPDATE`, args...)
+	if err != nil {
+		return 0, false, err
+	}
+	lots := make([]usageRewardCreditLot, 0)
+	total := 0.0
+	for rows.Next() {
+		var lot usageRewardCreditLot
+		if err := rows.Scan(&lot.id, &lot.remaining); err != nil {
+			_ = rows.Close()
+			return 0, false, err
+		}
+		lots = append(lots, lot)
+		total += lot.remaining
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, err
+	}
+	if total+1e-9 < amount {
+		return 0, false, nil
+	}
+
+	left := amount
+	for _, lot := range lots {
+		if left <= 1e-9 {
+			break
+		}
+		consumed := lot.remaining
+		if consumed > left {
+			consumed = left
+		}
+		updated, err := tx.ExecContext(ctx, `
+UPDATE user_reward_credits
+SET remaining_amount = remaining_amount - $1,
+    consumed_at = CASE WHEN remaining_amount - $1 <= 1e-9 THEN COALESCE(consumed_at, $2) ELSE consumed_at END,
+    updated_at = $2
+WHERE id = $3 AND remaining_amount + 1e-9 >= $1`, consumed, now, lot.id)
+		if err != nil {
+			return 0, false, err
+		}
+		affected, err := updated.RowsAffected()
+		if err != nil {
+			return 0, false, err
+		}
+		if affected != 1 {
+			return 0, false, errors.New("reward credit changed while locked")
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_reward_credit_events (
+    credit_id, user_id, event_type, event_key, amount, request_id, created_at
+)
+VALUES ($1, $2, 'consume', $3, $4, $3, $5)`, lot.id, userID, eventKey, consumed, now); err != nil {
+			return 0, false, err
+		}
+		left -= consumed
+	}
+
+	var newBalance float64
+	err = tx.QueryRowContext(ctx, `
+UPDATE users
+SET balance = balance - $1, updated_at = $2
+WHERE id = $3 AND deleted_at IS NULL
+RETURNING balance`, amount, now, userID).Scan(&newBalance)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, service.ErrUserNotFound
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return newBalance, true, nil
 }
 
 func shouldApplyUsageBillingAccountQuota(cmd *service.UsageBillingCommand) bool {
@@ -348,7 +527,15 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 		UPDATE users
 		SET balance = balance - $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
+		WHERE id = $2
+		  AND deleted_at IS NULL
+		  AND balance - COALESCE((
+			SELECT SUM(rc.remaining_amount + rc.reserved_amount)
+			FROM user_reward_credits rc
+			WHERE rc.user_id = users.id
+			  AND rc.expired_at IS NULL
+			  AND (rc.remaining_amount > 0 OR rc.reserved_amount > 0)
+		  ), 0) >= $1
 		RETURNING balance
 	`, amount, userID).Scan(&newBalance)
 	if err == nil {
@@ -378,17 +565,43 @@ func reserveUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 	if cmd.HoldAmount <= 0 {
 		return &service.BatchImageBalanceHoldResult{}, nil
 	}
+	if cmd.BatchID != "" {
+		now := time.Now().UTC()
+		if _, err := expireRewardCreditsForUserTx(ctx, tx, cmd.UserID, now); err != nil {
+			return nil, err
+		}
+		if result, funded, err := tryReserveBatchImageRewardLayer(ctx, tx, cmd,
+			[]service.RewardCreditType{service.RewardCreditDailyCheckIn}, service.UsageFundingDailyCheckIn, now); err != nil {
+			return nil, err
+		} else if funded {
+			return result, nil
+		}
+		if result, funded, err := tryReserveBatchImageRewardLayer(ctx, tx, cmd,
+			[]service.RewardCreditType{service.RewardCreditAffiliateInviter, service.RewardCreditAffiliateInvitee}, service.UsageFundingAffiliate, now); err != nil {
+			return nil, err
+		} else if funded {
+			return result, nil
+		}
+	}
 	var balance, frozen float64
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
 		SET balance = balance - $1,
 			frozen_balance = COALESCE(frozen_balance, 0) + $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
+		WHERE id = $2
+		  AND deleted_at IS NULL
+		  AND balance - COALESCE((
+			SELECT SUM(rc.remaining_amount + rc.reserved_amount)
+			FROM user_reward_credits rc
+			WHERE rc.user_id = users.id
+			  AND rc.expired_at IS NULL
+			  AND (rc.remaining_amount > 0 OR rc.reserved_amount > 0)
+		  ), 0) >= $1
 		RETURNING balance, frozen_balance
 	`, cmd.HoldAmount, cmd.UserID).Scan(&balance, &frozen)
 	if err == nil {
-		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
+		return &service.BatchImageBalanceHoldResult{FundingSource: service.UsageFundingAccount, NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -408,6 +621,19 @@ func captureUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 	if cmd.ActualAmount-cmd.HoldAmount > 0.00000001 {
 		return nil, service.ErrBatchImageSettlementCostExceedsHold
 	}
+	if cmd.BatchID != "" {
+		now := time.Now().UTC()
+		if _, err := expireRewardCreditsForUserTx(ctx, tx, cmd.UserID, now); err != nil {
+			return nil, err
+		}
+		allocations, err := loadBatchImageRewardAllocations(ctx, tx, cmd.UserID, service.BatchImageHoldRequestID(cmd.BatchID))
+		if err != nil {
+			return nil, err
+		}
+		if len(allocations) > 0 {
+			return settleBatchImageRewardAllocations(ctx, tx, cmd, allocations, now)
+		}
+	}
 	var balance, frozen float64
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
@@ -420,7 +646,7 @@ func captureUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		RETURNING balance, frozen_balance
 	`, cmd.HoldAmount, cmd.ActualAmount, cmd.UserID).Scan(&balance, &frozen)
 	if err == nil {
-		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
+		return &service.BatchImageBalanceHoldResult{FundingSource: service.UsageFundingAccount, NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -447,6 +673,21 @@ func releaseUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		logger.LegacyPrintf("repository.usage_billing", "[BatchImage] release skipped, hold was never reserved: batch=%s", cmd.BatchID)
 		return &service.BatchImageBalanceHoldResult{}, nil
 	}
+	if cmd.BatchID != "" {
+		now := time.Now().UTC()
+		if _, err := expireRewardCreditsForUserTx(ctx, tx, cmd.UserID, now); err != nil {
+			return nil, err
+		}
+		allocations, err := loadBatchImageRewardAllocations(ctx, tx, cmd.UserID, service.BatchImageHoldRequestID(cmd.BatchID))
+		if err != nil {
+			return nil, err
+		}
+		if len(allocations) > 0 {
+			releaseCmd := *cmd
+			releaseCmd.ActualAmount = 0
+			return settleBatchImageRewardAllocations(ctx, tx, &releaseCmd, allocations, now)
+		}
+	}
 	var balance, frozen float64
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
@@ -457,7 +698,7 @@ func releaseUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		RETURNING balance, frozen_balance
 	`, cmd.HoldAmount, cmd.UserID).Scan(&balance, &frozen)
 	if err == nil {
-		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
+		return &service.BatchImageBalanceHoldResult{FundingSource: service.UsageFundingAccount, NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -468,6 +709,313 @@ func releaseUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		return nil, service.ErrUserNotFound
 	}
 	return nil, errors.New("batch image frozen balance is insufficient")
+}
+
+func tryReserveBatchImageRewardLayer(
+	ctx context.Context,
+	tx *sql.Tx,
+	cmd *service.BatchImageBalanceHoldCommand,
+	creditTypes []service.RewardCreditType,
+	fundingSource service.UsageFundingSource,
+	now time.Time,
+) (*service.BatchImageBalanceHoldResult, bool, error) {
+	args := []any{cmd.UserID, now}
+	placeholders := make([]string, 0, len(creditTypes))
+	for _, creditType := range creditTypes {
+		args = append(args, creditType)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, remaining_amount::double precision, expires_at
+FROM user_reward_credits
+WHERE user_id = $1
+  AND expires_at > $2
+  AND remaining_amount > 0
+  AND expired_at IS NULL
+  AND credit_type IN (`+strings.Join(placeholders, ", ")+`)
+ORDER BY expires_at ASC, id ASC
+FOR UPDATE`, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	type reservableLot struct {
+		id        int64
+		remaining float64
+		expiresAt time.Time
+	}
+	lots := make([]reservableLot, 0)
+	total := 0.0
+	for rows.Next() {
+		var lot reservableLot
+		if err := rows.Scan(&lot.id, &lot.remaining, &lot.expiresAt); err != nil {
+			_ = rows.Close()
+			return nil, false, err
+		}
+		lots = append(lots, lot)
+		total += lot.remaining
+	}
+	if err := rows.Close(); err != nil {
+		return nil, false, err
+	}
+	if total+1e-9 < cmd.HoldAmount {
+		return nil, false, nil
+	}
+
+	holdKey := service.BatchImageHoldRequestID(cmd.BatchID)
+	left := cmd.HoldAmount
+	for _, lot := range lots {
+		if left <= 1e-9 {
+			break
+		}
+		reserved := lot.remaining
+		if reserved > left {
+			reserved = left
+		}
+		updated, err := tx.ExecContext(ctx, `
+UPDATE user_reward_credits
+SET remaining_amount = remaining_amount - $1,
+    reserved_amount = reserved_amount + $1,
+    updated_at = $2
+WHERE id = $3 AND remaining_amount + 1e-9 >= $1`, reserved, now, lot.id)
+		if err != nil {
+			return nil, false, err
+		}
+		affected, err := updated.RowsAffected()
+		if err != nil {
+			return nil, false, err
+		}
+		if affected != 1 {
+			return nil, false, errors.New("reward credit changed while locked")
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO batch_image_reward_allocations (
+    hold_key, credit_id, user_id, reserved_amount, captured_amount,
+    released_amount, expires_at_snapshot, created_at, updated_at
+)
+VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $6)`, holdKey, lot.id, cmd.UserID, reserved, lot.expiresAt, now); err != nil {
+			return nil, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_reward_credit_events (
+    credit_id, user_id, event_type, event_key, amount, request_id, batch_id, created_at
+)
+VALUES ($1, $2, 'reserve', $3, $4, $3, $5, $6)`, lot.id, cmd.UserID, cmd.RequestID, reserved, cmd.BatchID, now); err != nil {
+			return nil, false, err
+		}
+		left -= reserved
+	}
+
+	var balance, frozen float64
+	err = tx.QueryRowContext(ctx, `
+UPDATE users
+SET balance = balance - $1,
+    frozen_balance = COALESCE(frozen_balance, 0) + $1,
+    updated_at = $2
+WHERE id = $3 AND deleted_at IS NULL
+RETURNING balance, frozen_balance`, cmd.HoldAmount, now, cmd.UserID).Scan(&balance, &frozen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, service.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &service.BatchImageBalanceHoldResult{
+		FundingSource: fundingSource,
+		NewBalance:    &balance,
+		FrozenBalance: &frozen,
+	}, true, nil
+}
+
+type batchImageRewardAllocation struct {
+	id                int64
+	creditID          int64
+	creditType        service.RewardCreditType
+	reservedAmount    float64
+	capturedAmount    float64
+	releasedAmount    float64
+	expiresAtSnapshot time.Time
+}
+
+func loadBatchImageRewardAllocations(ctx context.Context, tx *sql.Tx, userID int64, holdKey string) ([]batchImageRewardAllocation, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT a.id, a.credit_id, rc.credit_type,
+       a.reserved_amount::double precision,
+       a.captured_amount::double precision,
+       a.released_amount::double precision,
+       a.expires_at_snapshot
+FROM batch_image_reward_allocations a
+JOIN user_reward_credits rc ON rc.id = a.credit_id
+WHERE a.hold_key = $1 AND a.user_id = $2
+ORDER BY a.expires_at_snapshot ASC, a.id ASC
+FOR UPDATE OF a, rc`, holdKey, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	allocations := make([]batchImageRewardAllocation, 0)
+	for rows.Next() {
+		var allocation batchImageRewardAllocation
+		if err := rows.Scan(
+			&allocation.id,
+			&allocation.creditID,
+			&allocation.creditType,
+			&allocation.reservedAmount,
+			&allocation.capturedAmount,
+			&allocation.releasedAmount,
+			&allocation.expiresAtSnapshot,
+		); err != nil {
+			return nil, err
+		}
+		allocations = append(allocations, allocation)
+	}
+	return allocations, rows.Err()
+}
+
+func settleBatchImageRewardAllocations(
+	ctx context.Context,
+	tx *sql.Tx,
+	cmd *service.BatchImageBalanceHoldCommand,
+	allocations []batchImageRewardAllocation,
+	now time.Time,
+) (*service.BatchImageBalanceHoldResult, error) {
+	actualLeft := cmd.ActualAmount
+	totalOutstanding := 0.0
+	for _, allocation := range allocations {
+		outstanding := allocation.reservedAmount - allocation.capturedAmount - allocation.releasedAmount
+		if outstanding > 1e-9 {
+			totalOutstanding += outstanding
+		}
+	}
+	if actualLeft-totalOutstanding > 1e-9 {
+		return nil, errors.New("batch image reward reservation is insufficient")
+	}
+
+	fundingSource := service.UsageFundingAffiliate
+	if allocations[0].creditType == service.RewardCreditDailyCheckIn {
+		fundingSource = service.UsageFundingDailyCheckIn
+	}
+	restoreTotal := 0.0
+	for _, allocation := range allocations {
+		outstanding := allocation.reservedAmount - allocation.capturedAmount - allocation.releasedAmount
+		if outstanding <= 1e-9 {
+			continue
+		}
+		captured := outstanding
+		if captured > actualLeft {
+			captured = actualLeft
+		}
+		actualLeft -= captured
+		unused := outstanding - captured
+		restored := unused
+		expired := 0.0
+		if !allocation.expiresAtSnapshot.After(now) {
+			expired = unused
+			restored = 0
+		}
+
+		creditUpdate, err := tx.ExecContext(ctx, `
+UPDATE user_reward_credits
+SET reserved_amount = reserved_amount - $1,
+    remaining_amount = remaining_amount + $2,
+    consumed_at = CASE
+        WHEN $3 > 0 AND remaining_amount + $2 <= 1e-9 AND reserved_amount - $1 <= 1e-9
+        THEN COALESCE(consumed_at, $4)
+        ELSE consumed_at
+    END,
+    expired_at = CASE
+        WHEN $5 > 0 AND remaining_amount + $2 <= 1e-9 AND reserved_amount - $1 <= 1e-9
+        THEN COALESCE(expired_at, $4)
+        ELSE expired_at
+    END,
+    updated_at = $4
+WHERE id = $6 AND reserved_amount + 1e-9 >= $1`, outstanding, restored, captured, now, expired, allocation.creditID)
+		if err != nil {
+			return nil, err
+		}
+		creditRows, err := creditUpdate.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if creditRows != 1 {
+			return nil, errors.New("batch image reward reservation changed while locked")
+		}
+		allocationUpdate, err := tx.ExecContext(ctx, `
+UPDATE batch_image_reward_allocations
+SET captured_amount = captured_amount + $1,
+    released_amount = released_amount + $2,
+    updated_at = $3
+WHERE id = $4`, captured, unused, now, allocation.id)
+		if err != nil {
+			return nil, err
+		}
+		allocationRows, err := allocationUpdate.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if allocationRows != 1 {
+			return nil, errors.New("batch image reward allocation changed while locked")
+		}
+		if captured > 1e-9 {
+			if err := insertBatchImageRewardEvent(ctx, tx, allocation.creditID, cmd, "capture", captured, now); err != nil {
+				return nil, err
+			}
+		}
+		if restored > 1e-9 {
+			if err := insertBatchImageRewardEvent(ctx, tx, allocation.creditID, cmd, "release", restored, now); err != nil {
+				return nil, err
+			}
+			restoreTotal += restored
+		}
+		if expired > 1e-9 {
+			if err := insertBatchImageRewardEvent(ctx, tx, allocation.creditID, cmd, "expire", expired, now); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	var balance, frozen float64
+	err := tx.QueryRowContext(ctx, `
+UPDATE users
+SET balance = balance + $1,
+    frozen_balance = COALESCE(frozen_balance, 0) - $2,
+    updated_at = $3
+WHERE id = $4
+  AND deleted_at IS NULL
+  AND COALESCE(frozen_balance, 0) + 1e-9 >= $2
+RETURNING balance, frozen_balance`, restoreTotal, totalOutstanding, now, cmd.UserID).Scan(&balance, &frozen)
+	if errors.Is(err, sql.ErrNoRows) {
+		if exists, existsErr := userExistsForBilling(ctx, tx, cmd.UserID); existsErr != nil {
+			return nil, existsErr
+		} else if !exists {
+			return nil, service.ErrUserNotFound
+		}
+		return nil, errors.New("batch image frozen balance is insufficient")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &service.BatchImageBalanceHoldResult{
+		FundingSource: fundingSource,
+		NewBalance:    &balance,
+		FrozenBalance: &frozen,
+	}, nil
+}
+
+func insertBatchImageRewardEvent(
+	ctx context.Context,
+	tx *sql.Tx,
+	creditID int64,
+	cmd *service.BatchImageBalanceHoldCommand,
+	eventType string,
+	amount float64,
+	now time.Time,
+) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO user_reward_credit_events (
+    credit_id, user_id, event_type, event_key, amount, request_id, batch_id, created_at
+)
+VALUES ($1, $2, $3, $4, $5, $4, $6, $7)`, creditID, cmd.UserID, eventType, cmd.RequestID, amount, cmd.BatchID, now)
+	return err
 }
 
 // batchImageHoldClaimExists 检查 hold request id 是否已在 dedup（或归档）表中被 claim，

@@ -7,7 +7,22 @@ export default {
     buySubscription: '去购买订阅',
     subscriptionRemaining: '剩余 {remaining} / {total}',
     rechargeBalance: '充值余额',
-    balanceOrderHint: '优先消耗订阅额度，再使用充值余额。',
+    balanceOrderHint: '按签到奖励、邀请奖励、订阅额度、充值余额的顺序扣除。',
+    rewardBalance: {
+      daily: '签到余额 {amount}，{expiresAt} 到期',
+      affiliate: '邀请余额 {amount}，最早 {expiresAt} 到期',
+      detailCount: '{count} 笔明细',
+      detailsAria: '查看邀请奖励明细',
+      dialogTitle: '邀请奖励明细',
+      closeAria: '关闭邀请奖励明细',
+      loading: '正在加载奖励明细…',
+      empty: '暂无邀请奖励明细',
+      loadError: '邀请奖励明细加载失败',
+      inviterRole: '邀请方奖励',
+      inviteeRole: '受邀方奖励',
+      expiresAt: '{expiresAt} 到期',
+      pageStatus: '第 {page} / {pages} 页',
+    },
     balanceFallbackToggle: {
       title: '月卡用完后使用余额',
       enabledHint: '开启后，月卡 7 日额度用完会自动扣充值余额继续请求。',
@@ -138,6 +153,7 @@ export default {
     editKey: '编辑密钥',
     deleteKey: '删除密钥',
     deleteConfirmMessage: "确定要删除 '{name}' 吗？此操作无法撤销。",
+    id: 'ID',
     apiKey: 'API 密钥',
     group: '分组',
     currentConcurrency: '当前并发',
@@ -193,16 +209,25 @@ export default {
         note: 'WorkBuddy 使用 OpenAI 兼容的 Chat Completions 接口；请保持 url 以 /chat/completions 结尾，并避免把 name 改成展示名。',
         hint: '配置文件路径：macOS/Linux 为 ~/.workbuddy/models.json，Windows 为 %userprofile%\\.workbuddy\\models.json。保存后如未出现模型，请重启 WorkBuddy。',
       },
+      ccSwitch: {
+        description: '在 CC Switch 中选择对应应用，点击右上角 +，添加 Custom 供应商，并粘贴下方字段。',
+        note: '保存后点击“启用”。除 Claude Code 外，通常需要完全退出并重启目标客户端才能生效。',
+        hint: '请把各字段填入 CC Switch 的供应商表单；不要直接修改 ~/.cc-switch/cc-switch.db。',
+      },
       title: '使用 API 密钥',
       description: '将以下环境变量添加到您的终端配置文件或直接在终端中运行。',
       copy: '复制',
       copied: '已复制',
       note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。',
       noGroupTitle: '请先分配分组',
-      noGroupDescription:
-        '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
-      openai: {
-        description: '请同时保存下方的 config.toml 和 auth.json 到 Codex CLI 配置目录，两个文件缺一不可。',
+	  noGroupDescription:
+		'此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
+	  openai: {
+		description: '请同时保存下方的 config.toml 和 auth.json 到 Codex CLI 配置目录，两个文件缺一不可。',
+		authModeTitle: 'Codex 认证模式',
+		authModeDescription: '兼容模式保留旧版 Codex 配置；API Key Mode 用于启用客户端图片执行器。',
+		authModeLegacy: '兼容模式',
+		authModeApiKey: 'API Key Mode',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',
         note: '如果 auth.json 已存在，请只合并 OPENAI_API_KEY 字段，不要覆盖其他登录信息。不要把真实密钥写入 env_key；本示例使用 auth.json。保存后请完全退出并重启 Codex，再创建一个新会话。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。',
         noteWindows:
@@ -218,7 +243,8 @@ export default {
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
-        opencode: 'OpenCode'
+        opencode: 'OpenCode',
+        ccSwitch: 'CC Switch'
       },
       antigravity: {
         description: '为 Antigravity 分组配置 API 访问。请根据您使用的客户端选择对应的配置方式。',
@@ -238,8 +264,8 @@ export default {
       grok: {
         description: '配置 Grok Build 或 OpenCode，让 Responses API 请求通过当前 Sub2API Grok 分组发送。',
         configTomlHint: '如已有 config.toml，请先备份再合并此模型配置。保存后运行 grok inspect 验证生效配置。',
-        note: '保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。',
-        noteWindows: '保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。'
+        note: '保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 grok。',
+        noteWindows: '保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 grok。'
       },
       opencode: {
         description: '将以下配置写入 OpenCode 配置文件，使用当前支持的 Claude 或 OpenAI 模型通过此 API 密钥访问网关。',
@@ -478,7 +504,8 @@ export default {
     providers: {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
-      gemini: 'Gemini'
+      gemini: 'Gemini',
+      grok: 'Grok'
     },
     extraModelsHeader: '附加模型',
     extraModelsEmpty: '无附加模型',
@@ -581,9 +608,17 @@ export default {
   },
 
   affiliate: {
-    rewardIntro: '邀请好友注册，其首充满 {threshold} 后，你获得 {inviter}、好友获得 {invitee}（仅首充一次）',
     title: '邀请返利',
-    description: '邀请新用户注册，并将返利额度转入账户余额',
+    description: '分享邀请码或邀请链接给新用户，奖励会直接进入有期限的 Token 余额。',
+    immediateTitle: '邀请立刻获得返现',
+    immediateRewardIntro: '你获得 {inviter}，好友获得 {invitee}',
+    firstRechargeTitle: '邀请好友首充得返现',
+    firstRechargeRewardIntro: '好友首充满 {threshold}，你获得 {inviter}，好友获得 {invitee}',
+    validityHint: '奖励到账后 {days} 天有效',
+    limit: {
+      reached: '邀请方奖励已达 {count}/{limit} 上限',
+      inviteeStillRewarded: '你仍可继续分享；新好友注册后仍可获得受邀方奖励。',
+    },
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
     copyCode: '复制邀请码',
@@ -621,11 +656,10 @@ export default {
       }
     },
     tips: {
-      title: '使用说明',
-      line1: '将邀请码或邀请链接分享给新用户。',
-      line2: '被邀请用户首充达标后，你可获得 {reward} 的返利额度。',
-      line3: '返利额度可随时转入账户余额。',
-      line4: '新产生的返利需要经过冻结期后才能提现。'
+      title: '活动规则',
+      immediate: '好友注册并绑定邀请码后，双方奖励立即到账。',
+      firstRecharge: '好友首次充值达到 {threshold} 后，双方奖励到账；订阅充值无条件达标。',
+      validity: '每笔奖励自到账起 {days} 天有效，到期自动清零。'
     }
   },
 

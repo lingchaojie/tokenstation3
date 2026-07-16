@@ -6,9 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
-	"mime"
 	"mime/multipart"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -671,7 +669,8 @@ func (s *WebChatService) uploadAttachmentFromReader(ctx context.Context, in Uplo
 		return nil, ErrWebChatUploadRejected
 	}
 
-	contentType, kind, textPreviewEnabled, err := classifyWebChatUploadContentType(in.ContentType, body)
+	filename := sanitizeWebChatDisplayFilename(in.Filename)
+	contentType, kind, textPreviewEnabled, err := classifyWebChatUploadContentType(filename, in.ContentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +683,7 @@ func (s *WebChatService) uploadAttachmentFromReader(ctx context.Context, in Uplo
 
 	saved, err := s.storage.Save(ctx, WebChatStorageSaveInput{
 		UserID:      in.UserID,
-		Filename:    in.Filename,
+		Filename:    filename,
 		ContentType: contentType,
 		Reader:      bytes.NewReader(body),
 		MaxBytes:    webChatMaxUploadBytes,
@@ -709,58 +708,6 @@ func (s *WebChatService) uploadAttachmentFromReader(ctx context.Context, in Uplo
 		return nil, err
 	}
 	return attachment, nil
-}
-
-func classifyWebChatUploadContentType(raw string, body []byte) (string, string, bool, error) {
-	contentType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
-	if err != nil && strings.TrimSpace(raw) != "" {
-		return "", "", false, ErrWebChatUploadRejected
-	}
-	if contentType == "" || isGenericWebChatUploadContentType(contentType) {
-		contentType = http.DetectContentType(body)
-		if parsed, _, parseErr := mime.ParseMediaType(contentType); parseErr == nil {
-			contentType = parsed
-		}
-	}
-	contentType = strings.ToLower(contentType)
-
-	switch contentType {
-	case "image/png", "image/jpeg", "image/webp", "image/gif":
-		return contentType, WebChatAttachmentKindImage, false, nil
-	case "text/plain", "text/markdown", "application/json", "text/csv":
-		if !webChatBodyLooksText(body) {
-			return "", "", false, ErrWebChatUploadRejected
-		}
-		return contentType, WebChatAttachmentKindFile, true, nil
-	case "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-		return contentType, WebChatAttachmentKindFile, false, nil
-	default:
-		return "", "", false, ErrWebChatUploadRejected
-	}
-}
-
-func isGenericWebChatUploadContentType(contentType string) bool {
-	switch strings.ToLower(strings.TrimSpace(contentType)) {
-	case "", "application/octet-stream", "binary/octet-stream", "application/x-binary":
-		return true
-	default:
-		return false
-	}
-}
-
-func webChatBodyLooksText(body []byte) bool {
-	if len(body) == 0 {
-		return true
-	}
-	if !utf8.Valid(body) {
-		return false
-	}
-	for _, b := range body {
-		if b == 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func boundedUTF8Preview(body []byte, maxBytes int) string {

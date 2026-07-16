@@ -54,6 +54,8 @@ const REQUIRED_LOCALE_PATHS = [
   'gettingStarted.chrome.closeStepMenu',
   'gettingStarted.clients.claude_code',
   'gettingStarted.clients.codex',
+  'gettingStarted.clients.opencode',
+  'gettingStarted.clients.cc_switch',
   'gettingStarted.operatingSystems.macos',
   'gettingStarted.operatingSystems.windows',
   'gettingStarted.operatingSystems.linux',
@@ -94,6 +96,8 @@ const REQUIRED_LOCALE_PATHS = [
   'gettingStarted.installation.explanation',
   'gettingStarted.installation.expectedResult',
   'gettingStarted.installation.restartShell',
+  'gettingStarted.installation.downloadDesktop',
+  'gettingStarted.installation.cliFallback',
   'gettingStarted.installation.officialSource',
   'gettingStarted.apiKey.anonymousTitle',
   'gettingStarted.apiKey.anonymousDescription',
@@ -133,7 +137,8 @@ const REQUIRED_LOCALE_PATHS = [
   'gettingStarted.completion.usage',
   'gettingStarted.warnings.progressUnavailable',
   'gettingStarted.warnings.progressSaveFailed',
-  'gettingStarted.warnings.promptSaveFailed'
+  'gettingStarted.warnings.promptSaveFailed',
+  'gettingStarted.warnings.networkAccess'
 ] as const
 
 function recursiveLeafPaths(value: unknown, prefix = ''): string[] {
@@ -170,32 +175,88 @@ describe('beginner guide curriculum contract', () => {
     expect(GUIDE_STEP_IDS).toEqual(APPROVED_STEP_IDS)
   })
 
-  it('supports exactly Claude Code and Codex on macOS, Windows, and Linux', () => {
-    expect(GUIDE_CLIENT_IDS).toEqual(['claude_code', 'codex'])
+  it('supports the four requested clients on macOS, Windows, and Linux', () => {
+    expect(GUIDE_CLIENT_IDS).toEqual(['claude_code', 'codex', 'opencode', 'cc_switch'])
     expect(GUIDE_OS_IDS).toEqual(['macos', 'windows', 'linux'])
-    expect(GUIDE_VARIANTS).toHaveLength(6)
+    expect(GUIDE_VARIANTS).toHaveLength(12)
     expect(GUIDE_VARIANTS.map(({ client, os }) => `${client}:${os}`)).toEqual([
       'claude_code:macos',
       'claude_code:windows',
       'claude_code:linux',
       'codex:macos',
       'codex:windows',
-      'codex:linux'
+      'codex:linux',
+      'opencode:macos',
+      'opencode:windows',
+      'opencode:linux',
+      'cc_switch:macos',
+      'cc_switch:windows',
+      'cc_switch:linux'
     ])
   })
 
-  it('keeps the official native installer commands exact', () => {
-    const commands = Object.fromEntries(
-      GUIDE_VARIANTS.map(({ client, os, installCommand }) => [`${client}:${os}`, installCommand])
+  it('maps every client and OS to the exact official install action', () => {
+    const installations = Object.fromEntries(
+      GUIDE_VARIANTS.map(({ client, os, installCommand, desktopDownloadUrl }) => [
+        `${client}:${os}`,
+        {
+          command: installCommand,
+          desktopDownloadUrl: desktopDownloadUrl ?? null
+        }
+      ])
     )
 
-    expect(commands).toEqual({
-      'claude_code:macos': 'curl -fsSL https://claude.ai/install.sh | bash',
-      'claude_code:windows': 'irm https://claude.ai/install.ps1 | iex',
-      'claude_code:linux': 'curl -fsSL https://claude.ai/install.sh | bash',
-      'codex:macos': 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
-      'codex:windows': 'irm https://chatgpt.com/codex/install.ps1 | iex',
-      'codex:linux': 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+    expect(installations).toEqual({
+      'claude_code:macos': {
+        command: 'curl -fsSL https://claude.ai/install.sh | bash',
+        desktopDownloadUrl: null
+      },
+      'claude_code:windows': {
+        command: 'irm https://claude.ai/install.ps1 | iex',
+        desktopDownloadUrl:
+          'https://claude.ai/api/desktop/win32/x64/setup/latest/redirect?utm_source=claude_code&utm_medium=docs'
+      },
+      'claude_code:linux': {
+        command: 'curl -fsSL https://claude.ai/install.sh | bash',
+        desktopDownloadUrl: null
+      },
+      'codex:macos': {
+        command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+        desktopDownloadUrl: null
+      },
+      'codex:windows': {
+        command: 'npm install -g @openai/codex',
+        desktopDownloadUrl:
+          'https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi'
+      },
+      'codex:linux': {
+        command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+        desktopDownloadUrl: null
+      },
+      'opencode:macos': {
+        command: 'curl -fsSL https://opencode.ai/install | bash',
+        desktopDownloadUrl: 'https://opencode.ai/download'
+      },
+      'opencode:windows': {
+        command: 'npm install -g opencode-ai',
+        desktopDownloadUrl: 'https://opencode.ai/download'
+      },
+      'opencode:linux': {
+        command: 'curl -fsSL https://opencode.ai/install | bash',
+        desktopDownloadUrl: 'https://opencode.ai/download'
+      },
+      'cc_switch:macos': {
+        command: 'brew install --cask cc-switch',
+        desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest'
+      },
+      'cc_switch:windows': {
+        command: undefined,
+        desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest'
+      },
+      'cc_switch:linux': {
+        command: undefined,
+        desktopDownloadUrl: 'https://github.com/farion1231/cc-switch/releases/latest'
+      }
     })
   })
 
@@ -212,12 +273,24 @@ describe('beginner guide curriculum contract', () => {
         expect(variant.officialSourceUrl).toBe(
           'https://code.claude.com/docs/en/installation'
         )
-      } else {
+      } else if (variant.client === 'codex') {
         expect(variant.verifyCommand).toBe('codex --version')
         expect(variant.launchCommand).toBe('codex')
         expect(variant.diagnosticCommands).toEqual(['codex login status', 'codex doctor'])
         expect(variant.officialSourceUrl).toBe(
-          'https://learn.chatgpt.com/docs/codex/cli/install'
+          'https://learn.chatgpt.com/docs/codex/cli'
+        )
+      } else if (variant.client === 'opencode') {
+        expect(variant.verifyCommand).toBe('opencode --version')
+        expect(variant.launchCommand).toBe('opencode')
+        expect(variant.diagnosticCommands).toEqual(['opencode auth list'])
+        expect(variant.officialSourceUrl).toBe('https://opencode.ai/docs')
+      } else {
+        expect(variant.verifyCommand).toBeUndefined()
+        expect(variant.launchCommand).toBeUndefined()
+        expect(variant.diagnosticCommands).toEqual([])
+        expect(variant.officialSourceUrl).toBe(
+          'https://github.com/farion1231/cc-switch#download--installation'
         )
       }
     }
@@ -231,13 +304,20 @@ describe('beginner guide curriculum contract', () => {
       zhLocale
     }).toLowerCase()
 
-    for (const forbidden of ['opencode', 'workbuddy', 'gemini cli', 'coming soon']) {
+    for (const forbidden of ['workbuddy', 'gemini cli', 'coming soon']) {
       expect(serialized).not.toContain(forbidden)
     }
   })
 })
 
 describe('beginner guide locales', () => {
+  it('advertises all four supported clients from the dashboard entry point', () => {
+    for (const locale of [enLocale, zhLocale]) {
+      expect(locale.gettingStarted.dashboard.quickActionDescription).toContain('OpenCode')
+      expect(locale.gettingStarted.dashboard.quickActionDescription).toContain('CC Switch')
+    }
+  })
+
   it('keeps the English and Chinese recursive key sets identical and complete', () => {
     const enPaths = recursiveLeafPaths(enLocale).sort()
     const zhPaths = recursiveLeafPaths(zhLocale).sort()
@@ -259,9 +339,9 @@ describe('beginner guide locales', () => {
     const commandValues = [
       ...new Set(
         GUIDE_VARIANTS.flatMap((variant) => [
-          variant.installCommand,
-          variant.verifyCommand,
-          variant.launchCommand,
+          ...(variant.installCommand ? [variant.installCommand] : []),
+          ...(variant.verifyCommand ? [variant.verifyCommand] : []),
+          ...(variant.launchCommand ? [variant.launchCommand] : []),
           ...variant.diagnosticCommands
         ])
       )
@@ -270,7 +350,7 @@ describe('beginner guide locales', () => {
       ...new Set(GUIDE_VARIANTS.map(({ officialSourceUrl }) => officialSourceUrl))
     ]
     const launchCommands = [
-      ...new Set(GUIDE_VARIANTS.map(({ launchCommand }) => launchCommand))
+      ...new Set(GUIDE_VARIANTS.flatMap(({ launchCommand }) => launchCommand ? [launchCommand] : []))
     ]
 
     for (const structuredValue of [...commandValues, ...officialSourceUrls]) {

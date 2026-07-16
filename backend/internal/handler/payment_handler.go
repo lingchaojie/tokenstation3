@@ -61,6 +61,7 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 			ID:   int64(p.ID),
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
+			Currency:         p.Currency,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
 			ProductName: p.ProductName, ForSale: p.ForSale, SortOrder: p.SortOrder,
 			VirtualSeatStart: p.VirtualSeatStart,
@@ -109,6 +110,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			ID:   int64(p.ID),
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			SevenDayQuotaUSD: p.SevenDayQuotaUsd,
+			Currency:         p.Currency,
 			ValidityDays:     p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: parseFeatures(p.Features),
 			ProductName:      p.ProductName,
 			VirtualSeatStart: p.VirtualSeatStart,
@@ -140,6 +142,7 @@ type planWithPlatform struct {
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
 	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	Currency         string   `json:"currency,omitempty"`
 	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
 	ValidityDays     int      `json:"validity_days"`
 	ValidityUnit     string   `json:"validity_unit"`
@@ -177,6 +180,7 @@ type checkoutPlan struct {
 	Description      string   `json:"description"`
 	Price            float64  `json:"price"`
 	OriginalPrice    *float64 `json:"original_price,omitempty"`
+	Currency         string   `json:"currency,omitempty"`
 	SevenDayQuotaUSD *float64 `json:"seven_day_quota_usd"`
 	ValidityDays     int      `json:"validity_days"`
 	ValidityUnit     string   `json:"validity_unit"`

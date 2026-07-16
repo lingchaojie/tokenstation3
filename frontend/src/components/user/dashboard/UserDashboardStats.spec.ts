@@ -26,6 +26,9 @@ const messages = vi.hoisted(() => ({
   'dashboard.output': 'Output',
   'dashboard.performance': 'Performance',
   'dashboard.rechargeBalance': 'Recharge balance',
+  'dashboard.rewardBalance.daily': 'Check-in {amount}, expires {expiresAt}',
+  'dashboard.rewardBalance.affiliate': 'Invite rewards {amount}, earliest expiry {expiresAt}',
+  'dashboard.rewardBalance.detailCount': '{count} details',
   'dashboard.requests': 'Requests',
   'dashboard.standard': 'Standard',
   'dashboard.subscriptionBalance': 'Subscription balance',
@@ -86,6 +89,13 @@ vi.mock('@/stores/auth', () => ({
 
 vi.mock('@/components/icons/Icon.vue', () => ({
   default: { template: '<span class="icon-stub" />' },
+}))
+
+vi.mock('@/components/user/RewardBalanceBreakdown.vue', () => ({
+  default: {
+    props: ['summary'],
+    template: '<div v-if="summary" data-testid="dashboard-reward-breakdown">{{ summary.daily_check_in.amount }} / {{ summary.affiliate.amount }}</div>',
+  },
 }))
 
 config.global.stubs = {
@@ -226,6 +236,24 @@ describe('UserDashboardStats', () => {
     expect(text).toContain('$25.00')
     expect(text).toContain('Subscription quota is used before recharge balance.')
     expect(text).not.toContain('Balance$25.00available')
+  })
+
+  it('keeps total balance unchanged and shows reward balance bullets when present', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: {
+        stats,
+        balance: 25,
+        isSimple: false,
+        rewardBalances: {
+          daily_check_in: { amount: 5, expires_at: '2030-01-02T16:00:00Z' },
+          affiliate: { amount: 10, earliest_expires_at: '2030-01-08T00:00:00Z', credit_count: 1 },
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('$25.00')
+    expect(wrapper.text()).not.toContain('$40.00')
+    expect(wrapper.get('[data-testid="dashboard-reward-breakdown"]').text()).toBe('5 / 10')
   })
 
   it('hides standard cost comparison by default for regular users', () => {

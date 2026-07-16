@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 )
 
@@ -118,9 +120,12 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	}
 	useResponsesPayload := webChatUseResponsesPayload(input)
 	var body []byte
-	if useResponsesPayload {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(input.Capabilities.Provider), "openai"):
+		body, err = BuildOpenAIWebChatResponsesPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, payloadOptions)
+	case useResponsesPayload:
 		body, err = BuildWebChatResponsesPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, payloadOptions)
-	} else {
+	default:
 		body, err = BuildWebChatCompletionsPayload(ctx, s.storage, input.Capabilities, input.Messages, input.Stream, payloadOptions)
 	}
 	if err != nil {
@@ -260,18 +265,16 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 }
 
 func webChatUseResponsesPayload(input webChatDispatchInput) bool {
+	if strings.EqualFold(strings.TrimSpace(input.Capabilities.Provider), "openai") {
+		return true
+	}
 	if !input.Capabilities.SupportsWebSearch {
 		return false
 	}
 	if !input.WebSearch.Configured && !input.WebSearch.Enabled {
 		return false
 	}
-	switch input.Capabilities.Platform {
-	case PlatformOpenAI, PlatformAnthropic:
-		return true
-	default:
-		return false
-	}
+	return input.Capabilities.Platform == PlatformAnthropic
 }
 
 func (s *WebChatService) webChatAvailableGroup(ctx context.Context, userID int64, platform string) (*Group, error) {
@@ -342,16 +345,33 @@ func (s *WebChatService) forwardWebChatOpenAIResponses(ctx context.Context, c *g
 	if s.openAIGatewayService == nil {
 		return nil, nil, ErrNoAvailableAccounts
 	}
-	selection, err := s.openAIGatewayService.SelectAccountWithLoadAwareness(ctx, &group.ID, "", input.Model, nil)
-	if err != nil {
-		return nil, nil, err
+	excludedAccountIDs := make(map[int64]struct{})
+	for {
+		selection, err := s.openAIGatewayService.SelectAccountWithLoadAwareness(ctx, &group.ID, "", input.Model, excludedAccountIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if selection == nil || selection.Account == nil {
+			releaseWebChatSelection(selection)
+			return nil, nil, ErrNoAvailableAccounts
+		}
+		account := selection.Account
+		if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+			releaseWebChatSelection(selection)
+			if _, alreadyExcluded := excludedAccountIDs[account.ID]; alreadyExcluded {
+				return nil, nil, ErrNoAvailableAccounts
+			}
+			excludedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
+		if !selection.Acquired {
+			releaseWebChatSelection(selection)
+			return nil, nil, ErrNoAvailableAccounts
+		}
+		defer releaseWebChatSelection(selection)
+		result, err := s.openAIGatewayService.Forward(ctx, c, account, body)
+		return result, account, err
 	}
-	defer releaseWebChatSelection(selection)
-	if selection == nil || !selection.Acquired || selection.Account == nil {
-		return nil, nil, ErrNoAvailableAccounts
-	}
-	result, err := s.openAIGatewayService.Forward(ctx, c, selection.Account, body)
-	return result, selection.Account, err
 }
 
 func (s *WebChatService) forwardWebChatGemini(ctx context.Context, c *gin.Context, group *Group, body []byte, parsed *ParsedRequest, input webChatDispatchInput) (*ForwardResult, *Account, error) {

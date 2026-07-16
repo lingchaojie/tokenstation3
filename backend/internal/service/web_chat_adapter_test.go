@@ -15,8 +15,8 @@ func TestBuildWebChatCompletionsPayload_IncludesTextImageAndFilePreview(t *testi
 		Role:        WebChatRoleUser,
 		ContentText: "Explain this image and notes",
 		Attachments: []WebChatAttachment{
-			{Kind: WebChatAttachmentKindImage, ContentType: "image/png", StorageKey: "u/1/image.png"},
-			{Kind: WebChatAttachmentKindFile, ContentType: "text/plain", TextPreview: webChatStringPtr("notes")},
+			{Kind: WebChatAttachmentKindImage, Filename: "image.png", ContentType: "image/png", StorageKey: "u/1/image.png"},
+			{Kind: WebChatAttachmentKindFile, Filename: "notes.txt", ContentType: "text/plain", TextPreview: webChatStringPtr("notes")},
 		},
 	}}
 
@@ -34,7 +34,7 @@ func TestBuildWebChatCompletionsPayload_IncludesTextImageAndFilePreview(t *testi
 		"stream":true,
 		"stream_options":{"include_usage":true},
 		"messages":[{"role":"user","content":[
-			{"type":"text","text":"Explain this image and notes\n\nAttached file notes:\nnotes"},
+			{"type":"text","text":"Explain this image and notes\n\nAttached file notes.txt:\nnotes"},
 			{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}
 		]}]
 	}`, string(payload))
@@ -144,9 +144,9 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 		ContentText: "What is new in AI today?",
 	}}
 	caps := WebChatModelCapability{
-		Provider:          "openai",
-		Platform:          PlatformOpenAI,
-		Model:             "gpt-5.5",
+		Provider:          "anthropic",
+		Platform:          PlatformAnthropic,
+		Model:             "claude-sonnet-4",
 		SupportsText:      true,
 		SupportsWebSearch: true,
 	}
@@ -157,7 +157,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{
-		"model":"gpt-5.5",
+		"model":"claude-sonnet-4",
 		"stream":true,
 		"include":["reasoning.encrypted_content"],
 		"store":false,
@@ -172,7 +172,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{
-		"model":"gpt-5.5",
+		"model":"claude-sonnet-4",
 		"stream":true,
 		"include":["reasoning.encrypted_content"],
 		"store":false,
@@ -186,6 +186,7 @@ type fakeWebChatStorage struct {
 	t            *testing.T
 	files        map[string][]byte
 	metaSizes    map[string]int64
+	openErrors   map[string]error
 	expectedKeys []string
 	openedKeys   []string
 }
@@ -196,6 +197,7 @@ func TestBuildWebChatCompletionsPayload_UnsupportedImageContextDoesNotOpenStorag
 		ContentText: "Explain this image",
 		Attachments: []WebChatAttachment{{
 			Kind:        WebChatAttachmentKindImage,
+			Filename:    "image.png",
 			ContentType: "image/png",
 			StorageKey:  "u/1/image.png",
 		}},
@@ -227,8 +229,9 @@ func TestBuildWebChatCompletionsPayload_OmitsBinaryFilesAndStreamOptionsWhenNotS
 	storage := fakeWebChatStorageWithoutOpens(t)
 
 	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
-		Model:        "gpt-5",
-		SupportsText: true,
+		Model:               "gpt-5",
+		SupportsText:        true,
+		SupportsFileContext: true,
 	}, messages, false)
 
 	require.NoError(t, err)
@@ -270,6 +273,7 @@ func TestBuildWebChatCompletionsPayload_RejectsOversizedImageRead(t *testing.T) 
 		Role: WebChatRoleUser,
 		Attachments: []WebChatAttachment{{
 			Kind:        WebChatAttachmentKindImage,
+			Filename:    "large.png",
 			ContentType: "image/png",
 			StorageKey:  "u/1/large.png",
 		}},
@@ -310,6 +314,64 @@ func TestBuildWebChatCompletionsPayload_SanitizesFilePreviewFilename(t *testing.
 		"stream":false,
 		"messages":[{"role":"user","content":"Use the notes\n\nAttached file bad_name.txt:\nhello"}]
 	}`, string(payload))
+}
+
+func TestBuildWebChatCompletionsPayload_RejectsOpenAIOnlyFileForAnthropic(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, Attachments: []WebChatAttachment{{
+		Kind: WebChatAttachmentKindFile, Filename: "slides.pptx",
+		ContentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	}}}}, false)
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.Nil(t, payload)
+	storage.requireOpened()
+}
+
+func TestBuildWebChatCompletionsPayload_KeepsLegacyDOCXForAnthropic(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsText: true, SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "Summarize", Attachments: []WebChatAttachment{{
+		Kind: WebChatAttachmentKindFile, Filename: "notes.docx",
+		ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	}}}}, false)
+
+	require.NoError(t, err)
+	require.Contains(t, string(payload), "Summarize")
+	storage.requireOpened()
+}
+
+func TestBuildWebChatCompletionsPayload_RejectsUnknownAttachmentKindBeforeStorage(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsText: true, SupportsImageInput: true, SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "Analyze this", Attachments: []WebChatAttachment{{
+		Kind: "audio", Filename: "recording.mp3", ContentType: "audio/mpeg",
+	}}}}, false)
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.Nil(t, payload)
+	storage.requireOpened()
+}
+
+func TestBuildWebChatCompletionsPayload_RejectsFileKindWithImageRegistryMetadataBeforeStorage(t *testing.T) {
+	storage := fakeWebChatStorageWithoutOpens(t)
+	payload, err := BuildWebChatCompletionsPayload(context.Background(), storage, WebChatModelCapability{
+		Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4",
+		SupportsText: true, SupportsImageInput: true, SupportsFileContext: true,
+	}, []WebChatMessage{{Role: WebChatRoleUser, ContentText: "Analyze this", Attachments: []WebChatAttachment{{
+		Kind: WebChatAttachmentKindFile, Filename: "photo.png", ContentType: "image/png",
+	}}}}, false)
+
+	require.ErrorIs(t, err, ErrWebChatUnsupportedContext)
+	require.Nil(t, payload)
+	storage.requireOpened()
 }
 
 func fakeWebChatStorageWithoutOpens(t *testing.T) *fakeWebChatStorage {
@@ -359,9 +421,12 @@ func (s *fakeWebChatStorage) Open(_ context.Context, key string) (io.ReadCloser,
 	}
 	expectedKey := s.expectedKeys[len(s.openedKeys)]
 	require.Equal(s.t, expectedKey, key)
+	s.openedKeys = append(s.openedKeys, key)
+	if openErr := s.openErrors[key]; openErr != nil {
+		return nil, WebChatStoredFileMeta{}, openErr
+	}
 	data, ok := s.files[key]
 	require.Truef(s.t, ok, "missing fake storage data for key %q", key)
-	s.openedKeys = append(s.openedKeys, key)
 	return io.NopCloser(bytes.NewReader(data)), WebChatStoredFileMeta{
 		StorageKey: key,
 		SizeBytes:  s.metaSizes[key],

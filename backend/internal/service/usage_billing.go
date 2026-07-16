@@ -12,6 +12,15 @@ import (
 var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
 var ErrUsageBillingRequestConflict = errors.New("usage billing request fingerprint conflict")
 
+type UsageFundingSource string
+
+const (
+	UsageFundingDailyCheckIn UsageFundingSource = "daily_check_in"
+	UsageFundingAffiliate    UsageFundingSource = "affiliate"
+	UsageFundingSubscription UsageFundingSource = "subscription"
+	UsageFundingAccount      UsageFundingSource = "account"
+)
+
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
 	RequestID          string
@@ -131,6 +140,7 @@ type UsageBillingApplyResult struct {
 	Applied              bool
 	APIKeyQuotaExhausted bool
 	BillingType          int8
+	FundingSource        UsageFundingSource
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
 	BalanceOverdrafted   bool               // true when the sufficient-balance guard missed and debt was still recorded
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
@@ -180,6 +190,7 @@ func buildBatchImageBalanceHoldFingerprint(c *BatchImageBalanceHoldCommand) stri
 
 type BatchImageBalanceHoldResult struct {
 	Applied       bool
+	FundingSource UsageFundingSource
 	NewBalance    *float64
 	FrozenBalance *float64
 }

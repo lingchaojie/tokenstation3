@@ -28,6 +28,105 @@ type userHandlerRepoStub struct {
 	beginnerGuideUpdateUserID int64
 }
 
+type userHandlerRewardCreditRepoStub struct {
+	summary    service.RewardBalanceSummary
+	expired    float64
+	items      []service.RewardCredit
+	total      int64
+	lastFilter service.RewardCreditListFilter
+}
+
+func (s *userHandlerRewardCreditRepoStub) Grant(context.Context, service.RewardCreditGrant) (service.RewardCreditGrantResult, error) {
+	panic("unexpected Grant call")
+}
+func (s *userHandlerRewardCreditRepoStub) GetSummary(context.Context, int64, time.Time) (service.RewardBalanceSummary, error) {
+	return s.summary, nil
+}
+func (s *userHandlerRewardCreditRepoStub) ListCredits(_ context.Context, filter service.RewardCreditListFilter) ([]service.RewardCredit, int64, error) {
+	s.lastFilter = filter
+	return s.items, s.total, nil
+}
+func (s *userHandlerRewardCreditRepoStub) ExpireUser(context.Context, int64, time.Time) (float64, error) {
+	return s.expired, nil
+}
+func (s *userHandlerRewardCreditRepoStub) ExpireBatch(context.Context, time.Time, int) ([]service.RewardCreditExpiryResult, error) {
+	panic("unexpected ExpireBatch call")
+}
+
+func TestUserHandlerProfileIncludesRewardBalancesAndReloadsExpiredBalance(t *testing.T) {
+	expiresAt := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	repo := &userHandlerRepoStub{user: &service.User{
+		ID: 42, Email: "reward-profile@example.com", Username: "reward", Role: service.RoleUser, Status: service.StatusActive, Balance: 10,
+	}}
+	rewardRepo := &userHandlerRewardCreditRepoStub{
+		expired: 5,
+		summary: service.RewardBalanceSummary{
+			DailyCheckIn: service.DailyRewardBalanceSummary{Amount: 3, ExpiresAt: &expiresAt},
+			Affiliate:    service.AffiliateRewardBalanceSummary{Amount: 7, EarliestExpiresAt: &expiresAt, CreditCount: 2},
+		},
+	}
+	handler := NewUserHandler(service.NewUserService(repo, nil, nil, nil), nil, nil, nil, nil, nil)
+	handler.SetRewardCreditService(service.NewRewardCreditService(rewardRepo, nil, nil))
+	stale := *repo.user
+	stale.Balance = 15
+
+	got, err := handler.buildUserProfileResponse(context.Background(), 42, &stale)
+
+	require.NoError(t, err)
+	require.InDelta(t, 10, got.Balance, 1e-9)
+	require.InDelta(t, 3, got.RewardBalances.DailyCheckIn.Amount, 1e-9)
+	require.Equal(t, &expiresAt, got.RewardBalances.DailyCheckIn.ExpiresAt)
+	require.InDelta(t, 7, got.RewardBalances.Affiliate.Amount, 1e-9)
+	require.Equal(t, 2, got.RewardBalances.Affiliate.CreditCount)
+}
+
+func TestUserHandlerListRewardCreditsScopesCurrentUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rewardRepo := &userHandlerRewardCreditRepoStub{
+		total: 1,
+		items: []service.RewardCredit{{ID: 9, UserID: 42, CreditType: service.RewardCreditAffiliateInviter, RoleLabel: service.RewardCreditRoleInviter}},
+	}
+	handler := NewUserHandler(nil, nil, nil, nil, nil, nil)
+	handler.SetRewardCreditService(service.NewRewardCreditService(rewardRepo, nil, nil))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/user/reward-credits?type=affiliate&status=active&page=1&page_size=20", nil)
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+
+	handler.ListRewardCredits(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(42), rewardRepo.lastFilter.UserID)
+	require.Equal(t, []service.RewardCreditType{service.RewardCreditAffiliateInviter, service.RewardCreditAffiliateInvitee}, rewardRepo.lastFilter.CreditTypes)
+	var resp struct {
+		Data struct {
+			Total    int64                  `json:"total"`
+			Page     int                    `json:"page"`
+			PageSize int                    `json:"page_size"`
+			Items    []service.RewardCredit `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.EqualValues(t, 1, resp.Data.Total)
+	require.Equal(t, 1, resp.Data.Page)
+	require.Equal(t, 20, resp.Data.PageSize)
+	require.Len(t, resp.Data.Items, 1)
+}
+
+func TestUserHandlerListRewardCreditsRejectsInvalidQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewUserHandler(nil, nil, nil, nil, nil, nil)
+	handler.SetRewardCreditService(service.NewRewardCreditService(&userHandlerRewardCreditRepoStub{}, nil, nil))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/user/reward-credits?type=daily&status=active&page=1&page_size=101", nil)
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+
+	handler.ListRewardCredits(c)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
 func (s *userHandlerRepoStub) Create(context.Context, *service.User) error { return nil }
 func (s *userHandlerRepoStub) GetByID(context.Context, int64) (*service.User, error) {
 	cloned := *s.user

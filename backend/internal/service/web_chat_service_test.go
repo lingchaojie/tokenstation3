@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -136,6 +137,9 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 		UpstreamModel: openAIImagesResponsesMainModel,
 		Stream:        true,
 		ImageCount:    1,
+		// Gateway producer coverage is exercised by
+		// TestOpenAIGatewayService_ResponsesStreamingImageResultsSurviveNativeAndOAuthPassthrough.
+		// This stub isolates the WebChat artifact consumer and persistence path.
 		imageResults: []openAIResponsesImageResult{{
 			Result:        "aGVsbG8=",
 			RevisedPrompt: "draw a small icon",
@@ -173,10 +177,54 @@ func TestWebChatSend_SavesOpenAIImageResultsAsArtifacts(t *testing.T) {
 	require.Equal(t, "generated-image-1.webp", svc.createdArtifacts[0].Filename)
 	require.Equal(t, "image/webp", svc.createdArtifacts[0].ContentType)
 	require.Equal(t, WebChatArtifactSourceImageOutput, svc.createdArtifacts[0].Source)
-	requireOrderedEvents(t, svc.events, "forward_openai", "record_openai_usage", "usage_lookup")
+	requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
+	require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
+	require.Equal(t, "image_generation", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "image_generation", gjson.GetBytes(svc.forwardedBody, "tool_choice.type").String())
+	require.False(t, gjson.GetBytes(svc.forwardedBody, "tools.#(type==\"web_search\")").Exists())
 }
 
-func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
+func TestWebChatSend_DropsOversizedOpenAIImageResultsBeforeArtifactSave(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive, AllowImageGeneration: true}}
+	svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+	oversizedBase64 := strings.Repeat("A", 4*((webChatMaxUploadBytes+1+2)/3))
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID:     "openai_req_oversized",
+		Model:         "gpt-image-2",
+		UpstreamModel: openAIImagesResponsesMainModel,
+		Stream:        true,
+		ImageCount:    1,
+		imageResults: []openAIResponsesImageResult{{
+			Result:       "data:image/png;base64," + oversizedBase64,
+			OutputFormat: "png",
+			Size:         "1024x1024",
+		}},
+	}
+
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID:         42,
+		User:           user,
+		ConversationID: 7,
+		Model:          "gpt-image-2",
+		Provider:       "openai",
+		Text:           "draw an oversized image",
+		Stream:         true,
+		ImageGeneration: WebChatImageGenerationConfig{
+			Enabled:      true,
+			Size:         "1024x1024",
+			OutputFormat: "png",
+		},
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, svc.savedFiles)
+	require.Empty(t, svc.createdArtifacts)
+}
+
+func TestWebChatSend_OpenAIAlwaysUsesResponsesWithAutomaticSearch(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
 	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
@@ -196,7 +244,6 @@ func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
 		Provider:       "openai",
 		Text:           "search today's AI news",
 		Stream:         true,
-		WebSearch:      WebChatWebSearchConfig{Enabled: true},
 		GinContext:     newTestGinContext(context.Background()),
 	})
 
@@ -205,9 +252,232 @@ func TestWebChatSend_OpenAIWebSearchUsesResponsesAPI(t *testing.T) {
 	requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
 	require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
 	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
-	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tool_choice.type").String())
-	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content.0.text").String())
 	require.Equal(t, "Done.", *svc.finalUpdate.ContentText)
+}
+
+func TestWebChatSend_OpenAIIgnoresLegacyDisabledSearchConfig(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID: "openai_req", Model: "gpt-5.5", UpstreamModel: "gpt-5.5", Stream: true,
+	}
+
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID: 42, User: user, ConversationID: 7,
+		Model: "gpt-5.5", Provider: "openai", Text: "answer", Stream: true,
+		WebSearch:  WebChatWebSearchConfig{Configured: true, Enabled: false},
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+}
+
+func TestForwardWebChatOpenAIResponsesSkipsAPIKeyWithoutNativeResponses(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	unsupportedReleases := 0
+	supportedReleases := 0
+	svc.openAISelections = []*AccountSelectionResult{
+		{
+			Account: &Account{
+				ID: 700, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: false},
+			},
+			Acquired: false,
+		},
+		{
+			Account: &Account{
+				ID: 701, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: false},
+			},
+			Acquired: true,
+			ReleaseFunc: func() {
+				unsupportedReleases++
+			},
+		},
+		{
+			Account: &Account{
+				ID: 702, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: true},
+			},
+			Acquired: true,
+			ReleaseFunc: func() {
+				supportedReleases++
+			},
+		},
+	}
+	body := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_file","filename":"paper.pdf","file_data":"data:application/pdf;base64,JVBERg=="}]}],"tools":[{"type":"web_search"}],"tool_choice":"auto"}`)
+
+	result, account, err := svc.forwardWebChatOpenAIResponses(
+		context.Background(),
+		newTestGinContext(context.Background()),
+		&Group{ID: 11, Platform: PlatformOpenAI},
+		body,
+		webChatDispatchInput{Model: "gpt-5.5"},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, int64(702), account.ID)
+	require.Equal(t, int64(702), svc.openAIForwardAccountID)
+	require.Equal(t, 1, unsupportedReleases)
+	require.Equal(t, 1, supportedReleases)
+	require.Len(t, svc.openAISelectionExclusions, 3)
+	require.Empty(t, svc.openAISelectionExclusions[0])
+	require.Contains(t, svc.openAISelectionExclusions[1], int64(700))
+	require.Contains(t, svc.openAISelectionExclusions[2], int64(700))
+	require.Contains(t, svc.openAISelectionExclusions[2], int64(701))
+	require.Equal(t, "input_file", gjson.GetBytes(svc.forwardedBody, "input.0.content.0.type").String())
+	require.Equal(t, "web_search", gjson.GetBytes(svc.forwardedBody, "tools.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
+}
+
+func TestWebChatDispatchOpenAIResponsesFailsWhenOnlyAccountLacksNativeResponses(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	releases := 0
+	svc.openAISelections = []*AccountSelectionResult{{
+		Account: &Account{
+			ID: 701, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: false},
+		},
+		Acquired:    true,
+		ReleaseFunc: func() { releases++ },
+	}}
+
+	result, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:               &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID:     7,
+		AssistantMessageID: 101,
+		Model:              "gpt-5.5",
+		Provider:           "openai",
+		Capabilities: WebChatModelCapability{
+			Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true, SupportsWebSearch: true,
+		},
+		Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "search"}},
+		Stream:   true,
+	})
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, result)
+	require.Equal(t, 1, releases)
+	require.Equal(t, 2, svc.openAISelectCalls)
+	require.NotContains(t, svc.events, "forward_openai_responses")
+	require.Nil(t, svc.openAIRecordUsageInput)
+}
+
+func TestForwardWebChatOpenAIResponsesAcceptsNativeResponsesAccounts(t *testing.T) {
+	tests := []struct {
+		name    string
+		account *Account
+	}{
+		{
+			name:    "oauth",
+			account: &Account{ID: 711, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		},
+		{
+			name: "supported API key",
+			account: &Account{
+				ID: 712, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: true},
+			},
+		},
+		{
+			name:    "unknown API key",
+			account: &Account{ID: 713, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.openAISelections = []*AccountSelectionResult{{Account: tt.account, Acquired: true}}
+
+			result, account, err := svc.forwardWebChatOpenAIResponses(
+				context.Background(),
+				newTestGinContext(context.Background()),
+				&Group{ID: 11, Platform: PlatformOpenAI},
+				[]byte(`{"model":"gpt-5.5","input":"hello"}`),
+				webChatDispatchInput{Model: "gpt-5.5"},
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tt.account.ID, account.ID)
+			require.Equal(t, tt.account.ID, svc.openAIForwardAccountID)
+			require.Equal(t, 1, svc.openAISelectCalls)
+		})
+	}
+}
+
+func TestWebChatDispatch_OpenAIFileOnlyAndMixedInputsUseNativeResponses(t *testing.T) {
+	pdf := []byte("%PDF-1.7\n%%EOF")
+	png := []byte("\x89PNG\r\n\x1a\n")
+	cases := []struct {
+		name     string
+		messages []WebChatMessage
+		files    map[string][]byte
+		keys     []string
+		assert   func(*testing.T, []byte)
+	}{
+		{
+			name: "file only",
+			messages: []WebChatMessage{{Role: WebChatRoleUser, Attachments: []WebChatAttachment{{
+				Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf",
+			}}}},
+			files: map[string][]byte{"paper.pdf": pdf},
+			keys:  []string{"paper.pdf"},
+			assert: func(t *testing.T, body []byte) {
+				require.Equal(t, "input_file", gjson.GetBytes(body, "input.0.content.0.type").String())
+				require.Equal(t, "auto", gjson.GetBytes(body, "input.0.content.0.detail").String())
+			},
+		},
+		{
+			name: "mixed",
+			messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "compare", Attachments: []WebChatAttachment{
+				{Kind: WebChatAttachmentKindImage, Filename: "diagram.png", ContentType: "image/png", StorageKey: "diagram.png"},
+				{Kind: WebChatAttachmentKindFile, Filename: "paper.pdf", ContentType: "application/pdf", StorageKey: "paper.pdf"},
+			}}},
+			files: map[string][]byte{"diagram.png": png, "paper.pdf": pdf},
+			keys:  []string{"diagram.png", "paper.pdf"},
+			assert: func(t *testing.T, body []byte) {
+				require.Equal(t, "input_text", gjson.GetBytes(body, "input.0.content.0.type").String())
+				require.Equal(t, "input_image", gjson.GetBytes(body, "input.0.content.1.type").String())
+				require.Equal(t, "input_file", gjson.GetBytes(body, "input.0.content.2.type").String())
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+			metaSizes := make(map[string]int64, len(tc.files))
+			for key, data := range tc.files {
+				metaSizes[key] = int64(len(data))
+			}
+			svc.storage = &fakeWebChatStorage{t: t, files: tc.files, metaSizes: metaSizes, expectedKeys: tc.keys}
+
+			_, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: "gpt-5.5", Provider: "openai",
+				Capabilities: WebChatModelCapability{
+					Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5",
+					SupportsText: true, SupportsImageInput: true, SupportsFileContext: true, SupportsWebSearch: true,
+				},
+				Messages: tc.messages, Stream: true,
+			})
+
+			require.NoError(t, err)
+			requireOrderedEvents(t, svc.events, "forward_openai_responses", "record_openai_usage", "usage_lookup")
+			require.Equal(t, "/v1/responses", svc.openAIRecordUsageInput.UpstreamEndpoint)
+			tc.assert(t, svc.forwardedBody)
+		})
+	}
 }
 
 func TestWebChatSend_AnthropicWebSearchAutoUsesResponsesAPI(t *testing.T) {
@@ -714,6 +984,10 @@ type webChatServiceTestDouble struct {
 	forwardedBody               []byte
 	selection                   *AccountSelectionResult
 	openAISelection             *AccountSelectionResult
+	openAISelections            []*AccountSelectionResult
+	openAISelectionExclusions   []map[int64]struct{}
+	openAISelectCalls           int
+	openAIForwardAccountID      int64
 	availableGroups             []Group
 	releaseCount                int
 	repo                        *webChatRepoStub
@@ -1016,7 +1290,20 @@ type webChatOpenAIGatewayServiceStub struct {
 	double *webChatServiceTestDouble
 }
 
-func (s *webChatOpenAIGatewayServiceStub) SelectAccountWithLoadAwareness(context.Context, *int64, string, string, map[int64]struct{}) (*AccountSelectionResult, error) {
+func (s *webChatOpenAIGatewayServiceStub) SelectAccountWithLoadAwareness(_ context.Context, _ *int64, _ string, _ string, excluded map[int64]struct{}) (*AccountSelectionResult, error) {
+	snapshot := make(map[int64]struct{}, len(excluded))
+	for id := range excluded {
+		snapshot[id] = struct{}{}
+	}
+	s.double.openAISelectionExclusions = append(s.double.openAISelectionExclusions, snapshot)
+	selectionIndex := s.double.openAISelectCalls
+	s.double.openAISelectCalls++
+	if s.double.openAISelections != nil {
+		if selectionIndex >= len(s.double.openAISelections) {
+			return nil, ErrNoAvailableAccounts
+		}
+		return s.double.openAISelections[selectionIndex], nil
+	}
 	return s.double.openAISelection, nil
 }
 
@@ -1035,8 +1322,11 @@ func (s *webChatOpenAIGatewayServiceStub) ForwardAsChatCompletions(_ context.Con
 	return s.double.openAIForwardResult, nil
 }
 
-func (s *webChatOpenAIGatewayServiceStub) Forward(_ context.Context, c *gin.Context, _ *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *webChatOpenAIGatewayServiceStub) Forward(_ context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	s.double.events = append(s.double.events, "forward_openai_responses")
+	if account != nil {
+		s.double.openAIForwardAccountID = account.ID
+	}
 	s.double.forwardedBody = append([]byte(nil), body...)
 	if _, err := c.Writer.WriteString("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done.\"}\n\n"); err != nil {
 		return nil, err
@@ -1169,7 +1459,8 @@ func (s webChatStorageStub) Save(_ context.Context, in WebChatStorageSaveInput) 
 }
 
 func (webChatStorageStub) Open(context.Context, string) (io.ReadCloser, WebChatStoredFileMeta, error) {
-	return io.NopCloser(strings.NewReader("image")), WebChatStoredFileMeta{SizeBytes: 5}, nil
+	png := string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	return io.NopCloser(strings.NewReader(png)), WebChatStoredFileMeta{SizeBytes: int64(len(png))}, nil
 }
 
 func (webChatStorageStub) Delete(context.Context, string) error {

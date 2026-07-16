@@ -534,6 +534,16 @@ async function openGeneralTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openFeaturesTab(wrapper: ReturnType<typeof mountView>) {
+  const featuresTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.features"));
+
+  expect(featuresTabButton).toBeDefined();
+  await featuresTabButton?.trigger("click");
+  await flushPromises();
+}
+
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
@@ -661,6 +671,69 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(payload).not.toHaveProperty("payment_visible_method_wxpay_source");
     expect(payload).not.toHaveProperty("payment_visible_method_alipay_enabled");
     expect(payload).not.toHaveProperty("payment_visible_method_wxpay_enabled");
+  });
+
+  it("submits the admin recharge affiliate rebate setting", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      affiliate_enabled: true,
+      affiliate_admin_recharge_enabled: true,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        affiliate_admin_recharge_enabled: true,
+      }),
+    );
+  });
+
+  it("renders and submits fixed rewards alongside percentage rebate settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      affiliate_enabled: true,
+      affiliate_first_recharge_threshold: 0,
+      affiliate_inviter_reward: 10,
+      affiliate_invitee_reward: 5,
+      affiliate_reward_validity_days: 7,
+      affiliate_inviter_reward_limit: 0,
+      affiliate_rebate_freeze_hours: 48,
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openFeaturesTab(wrapper);
+
+    expect((wrapper.get('[data-testid="affiliate-first-recharge-threshold"]').element as HTMLInputElement).value).toBe('0');
+    expect((wrapper.get('[data-testid="affiliate-inviter-reward"]').element as HTMLInputElement).value).toBe('10');
+    expect((wrapper.get('[data-testid="affiliate-invitee-reward"]').element as HTMLInputElement).value).toBe('5');
+    expect((wrapper.get('[data-testid="affiliate-reward-validity-days"]').element as HTMLInputElement).value).toBe('7');
+    expect((wrapper.get('[data-testid="affiliate-inviter-reward-limit"]').element as HTMLInputElement).value).toBe('0');
+    expect((wrapper.get('[data-testid="affiliate-rebate-freeze-hours"]').element as HTMLInputElement).value).toBe('48');
+    expect(wrapper.text()).toContain('admin.settings.features.affiliate.immediateModeHint');
+
+    const thresholdInput = wrapper.get('[data-testid="affiliate-first-recharge-threshold"]');
+    await thresholdInput.setValue('20');
+    expect(wrapper.text()).toContain('admin.settings.features.affiliate.firstRechargeModeHint');
+    await thresholdInput.setValue('0');
+
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      affiliate_first_recharge_threshold: 0,
+      affiliate_inviter_reward: 10,
+      affiliate_invitee_reward: 5,
+      affiliate_reward_validity_days: 7,
+      affiliate_inviter_reward_limit: 0,
+      affiliate_rebate_freeze_hours: 48,
+    }));
   });
 
   it("submits Anthropic cache TTL injection gateway setting", async () => {

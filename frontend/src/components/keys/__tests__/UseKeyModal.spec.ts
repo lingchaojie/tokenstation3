@@ -213,7 +213,7 @@ describe('UseKeyModal', () => {
 
     const grokConfig = wrapper.findAll('pre code')
       .map((code) => code.text())
-      .find((content) => content.includes('[model."sub2api-grok"]'))
+      .find((content) => content.includes('[model."grok"]'))
     expect(grokConfig).toBeDefined()
     expect(grokConfig).toContain('model = "grok-4.5"')
     expect(grokConfig).toContain('base_url = "https://example.com/v1"')
@@ -247,7 +247,95 @@ describe('UseKeyModal', () => {
     expect(parsed.provider.grok.models['gpt-5.6']).toBeUndefined()
   })
 
-  it('orders OpenAI usage tabs with Claude Code, Codex, OpenCode, then SDK examples', () => {
+  it('keeps legacy OpenAI Codex authentication as the default', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
+    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
+
+    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+      'true'
+    )
+    expect(configToml).toBeDefined()
+    expect(configToml).toContain('requires_openai_auth = true')
+    expect(configToml).not.toContain('x-openai-actor-authorization')
+    expect(configToml).not.toContain('env_key')
+    expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
+  })
+
+  it('renders API Key Mode authorization in OpenAI Codex config', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const apiKeyMode = wrapper.get('[data-testid="codex-auth-mode-api-key"]')
+    await apiKeyMode.trigger('click')
+    await nextTick()
+
+    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
+    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
+
+    expect(apiKeyMode.attributes('aria-checked')).toBe('true')
+    expect(configToml).toBeDefined()
+    expect(configToml).toContain('requires_openai_auth = false')
+    expect(configToml).toContain(
+      'http_headers = { "x-openai-actor-authorization" = "local-image-extension" }'
+    )
+    expect(configToml).not.toContain('env_key')
+    expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
+  })
+
+  it('resets Codex authentication mode when the modal reopens or platform changes', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+      'true'
+    )
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain(
+      'requires_openai_auth = true'
+    )
+
+    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.setProps({ platform: 'gemini' })
+    await wrapper.setProps({ platform: 'openai' })
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+      'true'
+    )
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain(
+      'x-openai-actor-authorization'
+    )
+  })
+
+  it('orders OpenAI usage tabs with primary clients first and WorkBuddy last among them', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -273,10 +361,11 @@ describe('UseKeyModal', () => {
     expect(tabLabels).toEqual([
       'keys.useKeyModal.cliTabs.claudeCode',
       'keys.useKeyModal.cliTabs.codexCli',
-      'keys.useKeyModal.cliTabs.workBuddy',
       'keys.useKeyModal.cliTabs.opencode',
+      'keys.useKeyModal.cliTabs.ccSwitch',
       'keys.useKeyModal.cliTabs.openaiPythonSdk',
-      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk',
+      'keys.useKeyModal.cliTabs.workBuddy'
     ])
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
   })
@@ -307,17 +396,51 @@ describe('UseKeyModal', () => {
     expect(tabLabels).toEqual([
       'keys.useKeyModal.cliTabs.claudeCode',
       'keys.useKeyModal.cliTabs.codexCli',
-      'keys.useKeyModal.cliTabs.workBuddy',
       'keys.useKeyModal.cliTabs.opencode',
+      'keys.useKeyModal.cliTabs.ccSwitch',
       'keys.keyTypes.anthropic keys.useKeyModal.cliTabs.anthropicPythonSdk',
       'keys.keyTypes.openai keys.useKeyModal.cliTabs.openaiPythonSdk',
-      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'
+      'keys.useKeyModal.cliTabs.openaiImagen2PythonSdk',
+      'keys.useKeyModal.cliTabs.workBuddy'
     ])
     expect(clientNav.classes()).toEqual(
       expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
     )
     expect(clientNav.classes()).not.toContain('space-x-6')
     expect(clientNav.classes()).not.toContain('overflow-x-auto')
+  })
+
+  it('renders official manual CC Switch provider fields without shell tabs', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1/',
+        platform: 'unified'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const ccSwitchTab = wrapper.findAll('nav[aria-label="Client"] button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.ccSwitch')
+    )
+    expect(ccSwitchTab).toBeDefined()
+    await ccSwitchTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('nav[aria-label="Tabs"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('keys.useKeyModal.ccSwitch.description')
+    expect(wrapper.text()).toContain('keys.useKeyModal.ccSwitch.note')
+    expect(generatedFiles(wrapper)).toEqual([
+      {
+        path: 'CC Switch → Claude Code → Custom',
+        content: expect.stringContaining('Endpoint: https://example.com')
+      },
+      {
+        path: 'CC Switch → Codex → Custom',
+        content: expect.stringContaining('Wire API: responses')
+      }
+    ])
   })
 
   it('renders WorkBuddy models.json with gateway-supported model ids', async () => {

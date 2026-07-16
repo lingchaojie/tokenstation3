@@ -618,6 +618,396 @@ func TestUsageBillingRepositoryApply_RequestFingerprintConflict(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrUsageBillingRequestConflict)
 }
 
+func TestUsageBillingRepositoryApply_RewardFundingUsesFirstCompleteLayer(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	usageRepo := NewUsageBillingRepository(client, integrationDB)
+	rewardRepo := NewRewardCreditRepository(client, integrationDB)
+	now := time.Now().UTC()
+
+	newUserAndKey := func(t *testing.T, ownBalance float64) (*service.User, *service.APIKey) {
+		t.Helper()
+		user := mustCreateUser(t, client, &service.User{
+			Email:        fmt.Sprintf("usage-reward-layer-%d-%s@example.com", time.Now().UnixNano(), uuid.NewString()),
+			PasswordHash: "hash",
+			Balance:      ownBalance,
+		})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{
+			UserID: user.ID,
+			Key:    "sk-usage-reward-layer-" + uuid.NewString(),
+			Name:   "reward-layer",
+		})
+		return user, apiKey
+	}
+
+	grant := func(t *testing.T, userID int64, creditType service.RewardCreditType, source string, amount float64, expiresAt time.Time) int64 {
+		t.Helper()
+		result, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+			UserID:     userID,
+			CreditType: creditType,
+			SourceKey:  source,
+			Amount:     amount,
+			GrantedAt:  now,
+			ExpiresAt:  expiresAt,
+		})
+		require.NoError(t, err)
+		return result.CreditID
+	}
+
+	remaining := func(t *testing.T, creditID int64) float64 {
+		t.Helper()
+		var amount float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx,
+			"SELECT remaining_amount FROM user_reward_credits WHERE id = $1", creditID,
+		).Scan(&amount))
+		return amount
+	}
+
+	t.Run("daily check-in fully covers and lower layers remain untouched", func(t *testing.T) {
+		user, apiKey := newUserAndKey(t, 100)
+		dailyID := grant(t, user.ID, service.RewardCreditDailyCheckIn, "daily:"+uuid.NewString(), 10, now.Add(time.Hour))
+		affiliateID := grant(t, user.ID, service.RewardCreditAffiliateInviter, "affiliate:"+uuid.NewString(), 20, now.Add(24*time.Hour))
+
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID, BalanceCost: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingDailyCheckIn, result.FundingSource)
+		require.InDelta(t, 2, remaining(t, dailyID), 0.000001)
+		require.InDelta(t, 20, remaining(t, affiliateID), 0.000001)
+	})
+
+	t.Run("insufficient daily stays whole while affiliate lots combine FIFO", func(t *testing.T) {
+		user, apiKey := newUserAndKey(t, 100)
+		dailyID := grant(t, user.ID, service.RewardCreditDailyCheckIn, "daily:"+uuid.NewString(), 3, now.Add(time.Hour))
+		firstAffiliateID := grant(t, user.ID, service.RewardCreditAffiliateInvitee, "affiliate:"+uuid.NewString(), 5, now.Add(2*time.Hour))
+		secondAffiliateID := grant(t, user.ID, service.RewardCreditAffiliateInviter, "affiliate:"+uuid.NewString(), 5, now.Add(3*time.Hour))
+
+		requestID := uuid.NewString()
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID, BalanceCost: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, result.FundingSource)
+		require.InDelta(t, 3, remaining(t, dailyID), 0.000001)
+		require.InDelta(t, 0, remaining(t, firstAffiliateID), 0.000001)
+		require.InDelta(t, 2, remaining(t, secondAffiliateID), 0.000001)
+
+		var consumed float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM user_reward_credit_events
+			WHERE request_id = $1 AND event_type = 'consume'`, requestID).Scan(&consumed))
+		require.InDelta(t, 8, consumed, 0.000001)
+
+		replay, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID, BalanceCost: 8,
+		})
+		require.NoError(t, err)
+		require.False(t, replay.Applied)
+		require.InDelta(t, 2, remaining(t, secondAffiliateID), 0.000001)
+	})
+
+	t.Run("insufficient reward layers do not combine and account records debt", func(t *testing.T) {
+		user, apiKey := newUserAndKey(t, 0)
+		dailyID := grant(t, user.ID, service.RewardCreditDailyCheckIn, "daily:"+uuid.NewString(), 5, now.Add(time.Hour))
+		affiliateID := grant(t, user.ID, service.RewardCreditAffiliateInvitee, "affiliate:"+uuid.NewString(), 5, now.Add(2*time.Hour))
+
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID, BalanceCost: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAccount, result.FundingSource)
+		require.True(t, result.BalanceOverdrafted)
+		require.InDelta(t, 5, remaining(t, dailyID), 0.000001)
+		require.InDelta(t, 5, remaining(t, affiliateID), 0.000001)
+		require.NotNil(t, result.NewBalance)
+		require.InDelta(t, 2, *result.NewBalance, 0.000001)
+	})
+
+	t.Run("expired reward is lazily cleared and cannot fund the request", func(t *testing.T) {
+		user, apiKey := newUserAndKey(t, 100)
+		expiredGrant, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+			UserID: user.ID, CreditType: service.RewardCreditDailyCheckIn,
+			SourceKey: "expired:" + uuid.NewString(), Amount: 10,
+			GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+		})
+		require.NoError(t, err)
+
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID, BalanceCost: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAccount, result.FundingSource)
+		require.InDelta(t, 0, remaining(t, expiredGrant.CreditID), 0.000001)
+		require.NotNil(t, result.NewBalance)
+		require.InDelta(t, 92, *result.NewBalance, 0.000001)
+	})
+}
+
+func TestUsageBillingRepositoryApply_RewardsPrecedeSubscriptionAndFallbackHonorsSwitch(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	usageRepo := NewUsageBillingRepository(client, integrationDB)
+	rewardRepo := NewRewardCreditRepository(client, integrationDB)
+	now := time.Now().UTC()
+	limit := 5.0
+
+	newFixture := func(t *testing.T, weeklyUsage float64, ownBalance float64) (*service.User, *service.APIKey, *service.UserSubscription) {
+		t.Helper()
+		user := mustCreateUser(t, client, &service.User{
+			Email: fmt.Sprintf("usage-reward-sub-%d-%s@example.com", time.Now().UnixNano(), uuid.NewString()), PasswordHash: "hash", Balance: ownBalance,
+		})
+		group := mustCreateGroup(t, client, &service.Group{
+			Name: "usage-reward-sub-" + uuid.NewString(), Platform: service.PlatformAnthropic, SubscriptionType: service.SubscriptionTypeSubscription,
+		})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &group.ID, Key: "sk-usage-reward-sub-" + uuid.NewString(), Name: "reward-sub"})
+		subscription := mustCreateSubscription(t, client, &service.UserSubscription{UserID: user.ID, GroupID: group.ID, SevenDayLimitUSD: &limit, WeeklyUsageUSD: weeklyUsage})
+		_, err := integrationDB.ExecContext(ctx, "UPDATE user_subscriptions SET seven_day_limit_usd = $1, weekly_usage_usd = $2 WHERE id = $3", limit, weeklyUsage, subscription.ID)
+		require.NoError(t, err)
+		return user, apiKey, subscription
+	}
+
+	grantRewards := func(t *testing.T, userID int64, daily, affiliate float64) {
+		t.Helper()
+		for _, item := range []struct {
+			creditType service.RewardCreditType
+			amount     float64
+			expiresAt  time.Time
+		}{
+			{service.RewardCreditDailyCheckIn, daily, now.Add(time.Hour)},
+			{service.RewardCreditAffiliateInviter, affiliate, now.Add(24 * time.Hour)},
+		} {
+			if item.amount <= 0 {
+				continue
+			}
+			_, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+				UserID: userID, CreditType: item.creditType, SourceKey: "reward:" + uuid.NewString(), Amount: item.amount, GrantedAt: now, ExpiresAt: item.expiresAt,
+			})
+			require.NoError(t, err)
+		}
+	}
+
+	t.Run("subscription is used only after both reward layers are insufficient", func(t *testing.T) {
+		user, apiKey, subscription := newFixture(t, 0, 100)
+		grantRewards(t, user.ID, 1, 1)
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID,
+			SubscriptionID: &subscription.ID, SubscriptionCost: 4, SubscriptionSevenDayLimitUSD: &limit,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingSubscription, result.FundingSource)
+
+		var weeklyUsage float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT weekly_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&weeklyUsage))
+		require.InDelta(t, 4, weeklyUsage, 0.000001)
+	})
+
+	t.Run("subscription insufficiency does not use account when fallback is off", func(t *testing.T) {
+		user, apiKey, subscription := newFixture(t, 4, 100)
+		grantRewards(t, user.ID, 1, 1)
+		_, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID,
+			SubscriptionID: &subscription.ID, SubscriptionCost: 2, SubscriptionSevenDayLimitUSD: &limit,
+		})
+		require.ErrorIs(t, err, service.ErrWeeklyLimitExceeded)
+
+		var balance float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+		require.InDelta(t, 102, balance, 0.000001)
+	})
+
+	t.Run("subscription insufficiency uses account when fallback is on", func(t *testing.T) {
+		user, apiKey, subscription := newFixture(t, 4, 100)
+		grantRewards(t, user.ID, 1, 1)
+		result, err := usageRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID: uuid.NewString(), APIKeyID: apiKey.ID, UserID: user.ID,
+			SubscriptionID: &subscription.ID, SubscriptionCost: 2, BalanceFallbackCost: 2,
+			AllowBalanceFallback: true, SubscriptionSevenDayLimitUSD: &limit,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAccount, result.FundingSource)
+		require.NotNil(t, result.NewBalance)
+		require.InDelta(t, 100, *result.NewBalance, 0.000001)
+	})
+}
+
+func TestUsageBillingRepositoryBatchImage_RewardHoldCaptureAndExpiry(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	usageRepo := NewUsageBillingRepository(client, integrationDB)
+	rewardRepo := NewRewardCreditRepository(client, integrationDB)
+	now := time.Now().UTC()
+
+	newFixture := func(t *testing.T) (*service.User, *service.APIKey, int64, int64, int64) {
+		t.Helper()
+		user := mustCreateUser(t, client, &service.User{
+			Email: fmt.Sprintf("batch-reward-%d-%s@example.com", time.Now().UnixNano(), uuid.NewString()), PasswordHash: "hash", Balance: 100,
+		})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-batch-reward-" + uuid.NewString(), Name: "batch-reward"})
+		grant := func(creditType service.RewardCreditType, amount float64, expiry time.Time) int64 {
+			result, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+				UserID: user.ID, CreditType: creditType, SourceKey: "batch:" + uuid.NewString(), Amount: amount,
+				GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: expiry,
+			})
+			require.NoError(t, err)
+			return result.CreditID
+		}
+		dailyID := grant(service.RewardCreditDailyCheckIn, 3, now.Add(time.Hour))
+		firstAffiliateID := grant(service.RewardCreditAffiliateInvitee, 5, now.Add(2*time.Hour))
+		secondAffiliateID := grant(service.RewardCreditAffiliateInviter, 5, now.Add(3*time.Hour))
+		return user, apiKey, dailyID, firstAffiliateID, secondAffiliateID
+	}
+
+	creditAmounts := func(t *testing.T, creditID int64) (float64, float64) {
+		t.Helper()
+		var remaining, reserved float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT remaining_amount, reserved_amount FROM user_reward_credits WHERE id = $1`, creditID).Scan(&remaining, &reserved))
+		return remaining, reserved
+	}
+
+	userAmounts := func(t *testing.T, userID int64) (float64, float64) {
+		t.Helper()
+		var balance, frozen float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT balance, frozen_balance FROM users WHERE id = $1`, userID).Scan(&balance, &frozen))
+		return balance, frozen
+	}
+
+	t.Run("affiliate lots reserve FIFO and capture returns unexpired remainder", func(t *testing.T) {
+		user, apiKey, dailyID, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-" + uuid.NewString()
+		hold := &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		}
+		reserved, err := usageRepo.ReserveBatchImageBalance(ctx, hold)
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, reserved.FundingSource)
+
+		dailyRemaining, dailyReserved := creditAmounts(t, dailyID)
+		require.InDelta(t, 3, dailyRemaining, 0.000001)
+		require.InDelta(t, 0, dailyReserved, 0.000001)
+		firstRemaining, firstReserved := creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved := creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 0, firstRemaining, 0.000001)
+		require.InDelta(t, 5, firstReserved, 0.000001)
+		require.InDelta(t, 2, secondRemaining, 0.000001)
+		require.InDelta(t, 3, secondReserved, 0.000001)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 105, balance, 0.000001)
+		require.InDelta(t, 8, frozen, 0.000001)
+
+		captured, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, captured.FundingSource)
+		firstRemaining, firstReserved = creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved = creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 0, firstRemaining, 0.000001)
+		require.InDelta(t, 0, firstReserved, 0.000001)
+		require.InDelta(t, 4, secondRemaining, 0.000001)
+		require.InDelta(t, 0, secondReserved, 0.000001)
+		balance, frozen = userAmounts(t, user.ID)
+		require.InDelta(t, 107, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		replay, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.False(t, replay.Applied)
+	})
+
+	t.Run("expired reserved remainder is not restored on capture", func(t *testing.T) {
+		user, apiKey, _, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-expired-" + uuid.NewString()
+		_, err := usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE user_reward_credits SET expires_at = $1 WHERE id IN ($2, $3)`,
+			now.Add(-time.Hour), firstAffiliateID, secondAffiliateID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE batch_image_reward_allocations SET expires_at_snapshot = $1 WHERE hold_key = $2`,
+			now.Add(-time.Hour), service.BatchImageHoldRequestID(batchID))
+		require.NoError(t, err)
+
+		result, err := usageRepo.CaptureBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageCaptureRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8, ActualAmount: 6,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, result.FundingSource)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 103, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		var expiredEvents float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM user_reward_credit_events
+			WHERE batch_id = $1 AND event_type = 'expire'`, batchID).Scan(&expiredEvents))
+		require.InDelta(t, 2, expiredEvents, 0.000001)
+	})
+
+	t.Run("expired reward hold is discarded on release", func(t *testing.T) {
+		user, apiKey, _, firstAffiliateID, secondAffiliateID := newFixture(t)
+		batchID := "imgbatch-reward-release-expired-" + uuid.NewString()
+		_, err := usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE user_reward_credits SET expires_at = $1 WHERE id IN ($2, $3)`,
+			now.Add(-time.Hour), firstAffiliateID, secondAffiliateID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(ctx,
+			`UPDATE batch_image_reward_allocations SET expires_at_snapshot = $1 WHERE hold_key = $2`,
+			now.Add(-time.Hour), service.BatchImageHoldRequestID(batchID))
+		require.NoError(t, err)
+
+		released, err := usageRepo.ReleaseBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageReleaseRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 8,
+		})
+		require.NoError(t, err)
+		require.Equal(t, service.UsageFundingAffiliate, released.FundingSource)
+		balance, frozen := userAmounts(t, user.ID)
+		require.InDelta(t, 103, balance, 0.000001)
+		require.InDelta(t, 0, frozen, 0.000001)
+
+		var expiredEvents float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM user_reward_credit_events
+			WHERE batch_id = $1 AND event_type = 'expire'`, batchID).Scan(&expiredEvents))
+		require.InDelta(t, 8, expiredEvents, 0.000001)
+	})
+
+	t.Run("reserve never combines daily affiliate and account layers", func(t *testing.T) {
+		user, apiKey, dailyID, firstAffiliateID, secondAffiliateID := newFixture(t)
+		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET balance = balance - 100 WHERE id = $1`, user.ID)
+		require.NoError(t, err)
+		batchID := "imgbatch-reward-no-cross-layer-" + uuid.NewString()
+		_, err = usageRepo.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID, UserID: user.ID, BatchID: batchID, HoldAmount: 12,
+		})
+		require.ErrorIs(t, err, service.ErrBatchImageInsufficientBalance)
+
+		dailyRemaining, dailyReserved := creditAmounts(t, dailyID)
+		firstRemaining, firstReserved := creditAmounts(t, firstAffiliateID)
+		secondRemaining, secondReserved := creditAmounts(t, secondAffiliateID)
+		require.InDelta(t, 3, dailyRemaining, 0.000001)
+		require.InDelta(t, 0, dailyReserved, 0.000001)
+		require.InDelta(t, 5, firstRemaining, 0.000001)
+		require.InDelta(t, 0, firstReserved, 0.000001)
+		require.InDelta(t, 5, secondRemaining, 0.000001)
+		require.InDelta(t, 0, secondReserved, 0.000001)
+	})
+}
+
 func TestUsageBillingRepositoryApply_UpdatesAccountQuota(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

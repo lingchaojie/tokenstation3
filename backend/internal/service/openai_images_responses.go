@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +30,9 @@ type openAIResponsesImageResult struct {
 	Background    string
 	Quality       string
 	Model         string
+	itemID        string
+	dedupKey      string
+	resultHash    string
 }
 
 type OpenAIImagesUpstreamError struct {
@@ -141,10 +146,16 @@ func openAIImagesUpstreamErrorResponseBody(err *OpenAIImagesUpstreamError) []byt
 }
 
 func openAIResponsesImageResultKey(itemID string, result openAIResponsesImageResult) string {
-	if strings.TrimSpace(result.Result) != "" {
-		return strings.TrimSpace(result.OutputFormat) + "|" + strings.TrimSpace(result.Result)
+	if trimmed := strings.TrimSpace(itemID); trimmed != "" && len(trimmed) <= 256 {
+		return "item:" + trimmed
 	}
-	return "item:" + strings.TrimSpace(itemID)
+	if trimmed := strings.TrimSpace(result.itemID); trimmed != "" && len(trimmed) <= 256 {
+		return "item:" + trimmed
+	}
+	if hash := openAIResponsesImageResultHash(result.Result); hash != "" {
+		return "sha256:" + hash
+	}
+	return ""
 }
 
 func appendOpenAIResponsesImageResultDedup(results *[]openAIResponsesImageResult, seen map[string]struct{}, itemID string, result openAIResponsesImageResult) bool {
@@ -158,8 +169,98 @@ func appendOpenAIResponsesImageResultDedup(results *[]openAIResponsesImageResult
 		}
 		seen[key] = struct{}{}
 	}
+	if trimmed := strings.TrimSpace(itemID); trimmed != "" {
+		result.itemID = trimmed
+	}
+	result.dedupKey = key
+	result.resultHash = openAIResponsesImageResultHash(result.Result)
 	*results = append(*results, result)
 	return true
+}
+
+func openAIResponsesImageResultHash(raw string) string {
+	payload, _, ok := parseOpenAIResponsesImageResultBase64(raw)
+	if !ok {
+		payload = strings.TrimSpace(raw)
+	}
+	if payload == "" {
+		return ""
+	}
+	h := sha256.New()
+	_, _ = io.Copy(h, strings.NewReader(payload))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func parseOpenAIResponsesImageResultBase64(raw string) (payload string, contentType string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	if !strings.HasPrefix(raw, "data:") {
+		return raw, "", true
+	}
+	header, payload, found := strings.Cut(raw, ",")
+	if !found || !strings.Contains(strings.ToLower(header), ";base64") {
+		return "", "", false
+	}
+	mediaType := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:"))
+	return strings.TrimSpace(payload), mediaType, true
+}
+
+func openAIResponsesImageResultFitsDecodedLimit(raw string, maxDecodedBytes int) bool {
+	if maxDecodedBytes <= 0 {
+		return true
+	}
+	payload, _, ok := parseOpenAIResponsesImageResultBase64(raw)
+	if !ok {
+		return false
+	}
+	decodedBytes, ok := openAIBase64DecodedSize(payload)
+	return ok && decodedBytes <= int64(maxDecodedBytes)
+}
+
+func openAIBase64DecodedSize(payload string) (int64, bool) {
+	var encodedBytes, padding int64
+	sawPadding := false
+	for i := 0; i < len(payload); i++ {
+		ch := payload[i]
+		switch {
+		case ch == '\r' || ch == '\n':
+			continue
+		case ch == '=':
+			sawPadding = true
+			padding++
+			if padding > 2 {
+				return 0, false
+			}
+		case ch >= 'A' && ch <= 'Z', ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '+', ch == '/':
+			if sawPadding {
+				return 0, false
+			}
+		default:
+			return 0, false
+		}
+		encodedBytes++
+	}
+	if encodedBytes == 0 {
+		return 0, false
+	}
+	if padding > 0 {
+		if encodedBytes%4 != 0 {
+			return 0, false
+		}
+		return encodedBytes/4*3 - padding, true
+	}
+	switch encodedBytes % 4 {
+	case 0:
+		return encodedBytes / 4 * 3, true
+	case 2:
+		return encodedBytes/4*3 + 1, true
+	case 3:
+		return encodedBytes/4*3 + 2, true
+	default:
+		return 0, false
+	}
 }
 
 func mergeOpenAIResponsesImageMeta(dst *openAIResponsesImageResult, src openAIResponsesImageResult) {
@@ -454,6 +555,7 @@ func extractOpenAIImagesFromResponsesCompleted(payload []byte) ([]openAIResponse
 				Size:          strings.TrimSpace(item.Get("size").String()),
 				Background:    strings.TrimSpace(item.Get("background").String()),
 				Quality:       strings.TrimSpace(item.Get("quality").String()),
+				itemID:        strings.TrimSpace(item.Get("id").String()),
 			}
 			if len(results) == 0 {
 				firstMeta = entry
@@ -491,8 +593,105 @@ func extractOpenAIImageFromResponsesOutputItemDone(payload []byte) (openAIRespon
 		Size:          strings.TrimSpace(item.Get("size").String()),
 		Background:    strings.TrimSpace(item.Get("background").String()),
 		Quality:       strings.TrimSpace(item.Get("quality").String()),
+		itemID:        strings.TrimSpace(item.Get("id").String()),
 	}
 	return entry, strings.TrimSpace(item.Get("id").String()), true, nil
+}
+
+func appendOrMergeOpenAIResponsesImageResult(results *[]openAIResponsesImageResult, seen map[string]struct{}, itemID string, result openAIResponsesImageResult) {
+	if results == nil {
+		return
+	}
+	key := openAIResponsesImageResultKey(itemID, result)
+	resultHash := openAIResponsesImageResultHash(result.Result)
+	for i := range *results {
+		existing := &(*results)[i]
+		if (key == "" || existing.dedupKey != key) && (resultHash == "" || existing.resultHash != resultHash) {
+			continue
+		}
+		if revisedPrompt := strings.TrimSpace(result.RevisedPrompt); revisedPrompt != "" {
+			existing.RevisedPrompt = revisedPrompt
+		}
+		mergeOpenAIResponsesImageMeta(existing, result)
+		return
+	}
+	appendOpenAIResponsesImageResultDedup(results, seen, itemID, result)
+}
+
+func collectOpenAIResponsesImageResultsFromEventPayload(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}) {
+	collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload, results, seen, 0)
+}
+
+func collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload []byte, results *[]openAIResponsesImageResult, seen map[string]struct{}, maxDecodedBytes int) {
+	if len(payload) == 0 || results == nil || !gjson.ValidBytes(payload) {
+		return
+	}
+	responseMeta, _, hasResponseMeta := extractOpenAIResponsesImageMetaFromLifecycleEvent(payload)
+	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
+	case "response.output_item.done":
+		result, itemID, ok, err := extractOpenAIImageFromResponsesOutputItemDone(payload)
+		if err == nil && ok && openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
+			appendOrMergeOpenAIResponsesImageResult(results, seen, itemID, result)
+		}
+	case "response.completed":
+		completedResults, _, _, _, err := extractOpenAIImagesFromResponsesCompleted(payload)
+		if err != nil {
+			return
+		}
+		for _, result := range completedResults {
+			if !openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
+				continue
+			}
+			if hasResponseMeta {
+				mergeOpenAIResponsesImageMeta(&result, responseMeta)
+			}
+			appendOrMergeOpenAIResponsesImageResult(results, seen, result.itemID, result)
+		}
+	}
+}
+
+func collectOpenAIResponsesImageResultsFromSSEBodyBounded(body string, maxDecodedBytes int) []openAIResponsesImageResult {
+	results := make([]openAIResponsesImageResult, 0, 1)
+	seen := make(map[string]struct{})
+	forEachOpenAISSEDataPayload(body, func(payload []byte) {
+		collectOpenAIResponsesImageResultsFromEventPayloadBounded(payload, &results, seen, maxDecodedBytes)
+	})
+	return results
+}
+
+func collectOpenAIResponsesImageResultsFromJSONResponseBounded(body []byte, maxDecodedBytes int) []openAIResponsesImageResult {
+	if !gjson.ValidBytes(body) || !gjson.GetBytes(body, "output").IsArray() {
+		return nil
+	}
+	results := make([]openAIResponsesImageResult, 0, 1)
+	seen := make(map[string]struct{})
+	responseMeta := openAIResponsesImageResult{
+		OutputFormat: strings.TrimSpace(gjson.GetBytes(body, "tools.0.output_format").String()),
+		Size:         strings.TrimSpace(gjson.GetBytes(body, "tools.0.size").String()),
+		Background:   strings.TrimSpace(gjson.GetBytes(body, "tools.0.background").String()),
+		Quality:      strings.TrimSpace(gjson.GetBytes(body, "tools.0.quality").String()),
+		Model:        strings.TrimSpace(gjson.GetBytes(body, "tools.0.model").String()),
+	}
+	for _, item := range gjson.GetBytes(body, "output").Array() {
+		if item.Get("type").String() != "image_generation_call" {
+			continue
+		}
+		result := openAIResponsesImageResult{
+			Result:        strings.TrimSpace(item.Get("result").String()),
+			RevisedPrompt: strings.TrimSpace(item.Get("revised_prompt").String()),
+			OutputFormat:  strings.TrimSpace(item.Get("output_format").String()),
+			Size:          strings.TrimSpace(item.Get("size").String()),
+			Background:    strings.TrimSpace(item.Get("background").String()),
+			Quality:       strings.TrimSpace(item.Get("quality").String()),
+			itemID:        strings.TrimSpace(item.Get("id").String()),
+		}
+		if result.Result == "" || !openAIResponsesImageResultFitsDecodedLimit(result.Result, maxDecodedBytes) {
+			continue
+		}
+		mergeOpenAIResponsesImageMeta(&result, responseMeta)
+		appendOrMergeOpenAIResponsesImageResult(&results, seen, result.itemID, result)
+	}
+	return results
 }
 
 func collectOpenAIImagesFromResponsesBody(body []byte) ([]openAIResponsesImageResult, int64, []byte, openAIResponsesImageResult, bool, error) {
@@ -565,12 +764,14 @@ func collectOpenAIImagesFromResponsesBody(body []byte) ([]openAIResponsesImageRe
 		return nil, 0, nil, openAIResponsesImageResult{}, false, collectErr
 	}
 	if len(finalResults) > 0 {
+		reconcileOpenAIResponsesImageResultSizes(finalResults, &finalMeta)
 		return finalResults, createdAt, usageRaw, finalMeta, true, nil
 	}
 
 	if len(fallbackResults) > 0 {
 		firstMeta := fallbackResults[0]
 		mergeOpenAIResponsesImageMeta(&firstMeta, responseMeta)
+		reconcileOpenAIResponsesImageResultSizes(fallbackResults, &firstMeta)
 		return fallbackResults, createdAt, usageRaw, firstMeta, foundFinal, nil
 	}
 	return nil, createdAt, usageRaw, openAIResponsesImageResult{}, foundFinal, nil
@@ -1010,9 +1211,13 @@ func buildOpenAIImagesStreamErrorBodyFromUpstream(err *OpenAIImagesUpstreamError
 }
 
 func writeOpenAIImagesUpstreamErrorResponse(c *gin.Context, err *OpenAIImagesUpstreamError) bool {
-	if c == nil || c.Writer == nil || c.Writer.Written() || err == nil {
+	if c == nil || c.Writer == nil || err == nil {
 		return false
 	}
+	if c.Writer.Written() && OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) >= 0 {
+		return false
+	}
+	StopOpenAIImagesJSONKeepaliveCommitted(c)
 	errorObj := gin.H{
 		"type":    err.clientErrorType(),
 		"message": err.clientMessage(),
@@ -1176,7 +1381,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	var sseData openAISSEDataAccumulator
 	var processDataErr error
 	processDataDone := false
-	writerSizeBeforeResponse := c.Writer.Size()
+	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 
 	processData := func(dataBytes []byte) {
 		if processDataDone || processDataErr != nil {
@@ -1258,6 +1463,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				mergeOpenAIResponsesImageMeta(&img, streamMeta)
 				appendOpenAIResponsesImageResultDedup(&finalResults, finalSeen, "", img)
 			}
+			reconcileOpenAIResponsesImageResultSizes(finalResults, nil)
 			if len(finalResults) == 0 {
 				outputErr := fmt.Errorf("upstream did not return image output")
 				// 软失败：response.completed 事件里没有图片。记录上游诊断摘要到 ops，
@@ -1320,8 +1526,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 		}
 		if len(pendingResults) > 0 {
 			eventName := streamPrefix + ".completed"
-			for _, img := range pendingResults {
-				mergeOpenAIResponsesImageMeta(&img, streamMeta)
+			finalResults := append([]openAIResponsesImageResult(nil), pendingResults...)
+			for i := range finalResults {
+				mergeOpenAIResponsesImageMeta(&finalResults[i], streamMeta)
+			}
+			reconcileOpenAIResponsesImageResultSizes(finalResults, nil)
+			for _, img := range finalResults {
 				key := openAIResponsesImageResultKey("", img)
 				if _, exists := emitted[key]; exists {
 					continue
@@ -1331,7 +1541,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, eventName, payload)
 			}
 			imageCount = len(emitted)
-			imageOutputSizes = openAIResponsesImageResultSizes(pendingResults)
+			imageOutputSizes = openAIResponsesImageResultSizes(finalResults)
 			return nil
 		}
 
@@ -1560,6 +1770,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
+		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
+		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			expectedTaskID := account.GetCredential("task_id")
+			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
+				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
+			}
+			return s.forwardOpenAIImagesOAuth(markAgentIdentityTaskRecoveryTried(ctx), c, account, parsed, channelMappedModel)
+		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -1591,7 +1809,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		imageOutputSizes []string
 		firstTokenMs     *int
 	)
-	writerSizeBeforeResponse := c.Writer.Size()
+	// 与 handleOpenAIImagesOAuthResponseError 的比较端同口径：排除非流式 JSON
+	// keepalive 心跳字节，避免 failover 第 2 轮起把上一轮心跳残留误判为已写响应。
+	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 	if parsed.Stream {
 		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
 		if err != nil {
@@ -1672,7 +1892,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthResponseError(
 	}
 
 	retryable := IsOpenAIImagesRetryableUpstreamError(upstreamErr)
-	responseWritten := c != nil && c.Writer != nil && c.Writer.Size() != writerSizeBeforeResponse
+	responseWritten := c != nil && c.Writer != nil && OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeResponse
 	kind := "http_error"
 	if retryable {
 		kind = "failover"

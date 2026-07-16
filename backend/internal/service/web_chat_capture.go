@@ -66,6 +66,14 @@ func withWebChatStreamCapture(ctx context.Context, capture *webChatStreamCapture
 	return context.WithValue(ctx, webChatStreamCaptureContextKey{}, capture)
 }
 
+func hasWebChatStreamCapture(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	capture, _ := ctx.Value(webChatStreamCaptureContextKey{}).(*webChatStreamCapture)
+	return capture != nil
+}
+
 func captureWebChatStreamBytes(ctx context.Context, p []byte) {
 	if ctx == nil {
 		return

@@ -58,6 +58,12 @@ const configPaths = computed(() => {
   if (props.variant.client === 'claude_code') {
     return [`${root}${separator}.claude${separator}settings.json`]
   }
+  if (props.variant.client === 'opencode') {
+    return [`${root}${separator}.config${separator}opencode${separator}opencode.json`]
+  }
+  if (props.variant.client === 'cc_switch') {
+    return ['CC Switch → Providers']
+  }
   return [
     `${root}${separator}.codex${separator}config.toml`,
     `${root}${separator}.codex${separator}auth.json`

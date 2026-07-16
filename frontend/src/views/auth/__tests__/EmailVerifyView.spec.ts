@@ -454,6 +454,44 @@ describe('EmailVerifyView', () => {
     expect(pushMock).toHaveBeenCalledWith('/dashboard')
   })
 
+  it('preserves the YUNDU affiliate code through verified email registration', async () => {
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'yundu-user@example.com',
+        password: 'secret-456',
+        aff_code: 'YUNDU',
+      })
+    )
+    registerMock.mockResolvedValue({})
+
+    const wrapper = mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('#code').setValue('654321')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(registerMock).toHaveBeenCalledWith({
+      email: 'yundu-user@example.com',
+      password: 'secret-456',
+      verify_code: '654321',
+      turnstile_token: undefined,
+      promo_code: undefined,
+      invitation_code: undefined,
+      aff_code: 'YUNDU',
+    })
+  })
+
   it('returns verified email registration to the beginner guide', async () => {
     sessionStorage.setItem(
       'register_data',

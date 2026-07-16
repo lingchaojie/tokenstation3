@@ -1,6 +1,6 @@
 import type { GroupPlatform } from '@/types'
 
-export type SupportedGuideClient = 'claude_code' | 'codex'
+export type SupportedGuideClient = 'claude_code' | 'codex' | 'opencode' | 'cc_switch'
 export type SupportedGuideOS = 'macos' | 'windows' | 'linux'
 export type WindowsGuideShell = 'powershell' | 'cmd'
 
@@ -12,6 +12,7 @@ export interface ClientConfigInput {
   baseUrl: string
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
+  codexAuthMode?: 'legacy' | 'api-key'
 }
 
 export interface ClientConfigFile {
@@ -24,6 +25,84 @@ export interface ClientConfigFile {
 function gatewayRoots(baseUrl: string): { bare: string; v1: string } {
   const bare = baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
   return { bare, v1: `${bare}/v1` }
+}
+
+function openCodePath(os: SupportedGuideOS): string {
+  return os === 'windows'
+    ? '%userprofile%\\.config\\opencode\\opencode.json'
+    : '~/.config/opencode/opencode.json'
+}
+
+function buildOpenCodeFile(
+  input: ClientConfigInput,
+  provider: 'anthropic' | 'openai',
+  baseUrl: string,
+  pathSuffix?: string
+): ClientConfigFile {
+  const isAnthropic = provider === 'anthropic'
+  const model = isAnthropic ? 'claude-fable-5' : 'gpt-5.5'
+  const content = JSON.stringify(
+    {
+      $schema: 'https://opencode.ai/config.json',
+      model: `${provider}/${model}`,
+      provider: {
+        [provider]: {
+          npm: isAnthropic ? '@ai-sdk/anthropic' : '@ai-sdk/openai',
+          options: {
+            baseURL: baseUrl,
+            apiKey: input.apiKey
+          },
+          models: {
+            [model]: {
+              name: isAnthropic ? 'Claude Fable 5' : 'GPT-5.5'
+            }
+          }
+        }
+      },
+      ...(!isAnthropic
+        ? {
+            agent: {
+              build: { options: { store: false } },
+              plan: { options: { store: false } }
+            }
+          }
+        : {})
+    },
+    null,
+    2
+  )
+
+  return {
+    path: `${openCodePath(input.os)}${pathSuffix ? ` (${pathSuffix})` : ''}`,
+    content,
+    hintKey: 'keys.useKeyModal.opencode.hint'
+  }
+}
+
+function buildCcSwitchClaudeFile(endpoint: string, apiKey: string): ClientConfigFile {
+  return {
+    path: 'CC Switch → Claude Code → Custom',
+    content: `App: Claude Code
+Preset: Custom
+Name: TokenStation
+Endpoint: ${endpoint}
+API Key: ${apiKey}`,
+    hintKey: 'keys.useKeyModal.ccSwitch.hint'
+  }
+}
+
+function buildCcSwitchCodexFile(endpoint: string, apiKey: string): ClientConfigFile {
+  return {
+    path: 'CC Switch → Codex → Custom',
+    content: `App: Codex
+Preset: Custom
+Name: TokenStation
+Endpoint: ${endpoint}
+API Key: ${apiKey}
+Model: gpt-5.5
+Wire API: responses`,
+    hintKey: 'keys.useKeyModal.ccSwitch.hint'
+  }
 }
 
 export function buildClientConfigFiles(input: ClientConfigInput): ClientConfigFile[] {
@@ -74,7 +153,39 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     ]
   }
 
+  if (input.client === 'opencode') {
+    if (input.platform === 'unified') {
+      return [
+        buildOpenCodeFile(input, 'anthropic', v1, 'Claude'),
+        buildOpenCodeFile(input, 'openai', v1, 'OpenAI')
+      ]
+    }
+    if (input.platform === 'anthropic' || input.platform === 'antigravity') {
+      const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity/v1` : v1
+      return [buildOpenCodeFile(input, 'anthropic', endpoint)]
+    }
+    return [buildOpenCodeFile(input, 'openai', v1)]
+  }
+
+  if (input.client === 'cc_switch') {
+    if (input.platform === 'unified') {
+      return [
+        buildCcSwitchClaudeFile(bare, input.apiKey),
+        buildCcSwitchCodexFile(v1, input.apiKey)
+      ]
+    }
+    if (input.platform === 'anthropic' || input.platform === 'antigravity') {
+      const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity` : bare
+      return [buildCcSwitchClaudeFile(endpoint, input.apiKey)]
+    }
+    return [buildCcSwitchCodexFile(v1, input.apiKey)]
+  }
+
   const configDir = input.os === 'windows' ? '%userprofile%\\.codex' : '~/.codex'
+  const providerAuthConfig = input.codexAuthMode === 'api-key'
+    ? `requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
+    : 'requires_openai_auth = true'
   const configContent = `model_provider = "OpenAI"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
@@ -87,7 +198,7 @@ windows_wsl_setup_acknowledged = true
 name = "OpenAI"
 base_url = "${v1}"
 wire_api = "responses"
-requires_openai_auth = true
+${providerAuthConfig}
 
 [features]
 goals = true`

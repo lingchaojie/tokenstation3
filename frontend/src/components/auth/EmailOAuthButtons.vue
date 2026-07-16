@@ -31,7 +31,12 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import GitHubMark from './GitHubMark.vue'
 import GoogleMark from './GoogleMark.vue'
-import { resolveAffiliateReferralCode, storeOAuthAffiliateCode } from '@/utils/oauthAffiliate'
+import { useAppStore } from '@/stores'
+import { storeOAuthAffiliateCode } from '@/utils/oauthAffiliate'
+import {
+  getPromotionOAuthOrigin,
+  resolvePromotionAffiliateCode
+} from '@/utils/promotionChannel'
 
 type EmailOAuthProvider = 'github' | 'google'
 const EMAIL_OAUTH_PENDING_PROVIDER_KEY = 'email_oauth_pending_provider'
@@ -46,6 +51,7 @@ const props = withDefaults(defineProps<{
   showDivider: true
 })
 
+const appStore = useAppStore()
 const route = useRoute()
 const { t } = useI18n()
 
@@ -72,16 +78,41 @@ function providerLabel(provider: EmailOAuthProvider): string {
 
 function startLogin(provider: EmailOAuthProvider): void {
   const redirectTo = (route.query.redirect as string) || '/dashboard'
-  const affiliateCode = resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code)
-  storeOAuthAffiliateCode(affiliateCode)
-  window.sessionStorage.setItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY, provider)
+  const affiliateCode = resolvePromotionAffiliateCode([
+    props.affCode,
+    route.query.aff,
+    route.query.aff_code
+  ])
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
-  const normalized = apiBase.replace(/\/$/, '')
+  const normalized = apiBase.replace(/\/+$/, '')
+  const promotionOrigin = getPromotionOAuthOrigin()
+  let startBase = normalized
+  if (promotionOrigin) {
+    try {
+      const resolvedBase = new URL(normalized, `${promotionOrigin}/`)
+      const serializedBase = resolvedBase.toString()
+      if (
+        (resolvedBase.protocol !== 'http:' && resolvedBase.protocol !== 'https:') ||
+        resolvedBase.search ||
+        resolvedBase.hash ||
+        serializedBase.includes('?') ||
+        serializedBase.includes('#')
+      ) {
+        throw new Error('Invalid OAuth API base URL')
+      }
+      startBase = serializedBase.replace(/\/+$/, '')
+    } catch {
+      appStore.showError(t('auth.loginFailed'))
+      return
+    }
+  }
   const params = new URLSearchParams({ redirect: redirectTo })
   if (affiliateCode) {
     params.set('aff_code', affiliateCode)
   }
-  const startURL = `${normalized}/auth/oauth/${provider}/start?${params.toString()}`
+  const startURL = `${startBase}/auth/oauth/${provider}/start?${params.toString()}`
+  storeOAuthAffiliateCode(affiliateCode)
+  window.sessionStorage.setItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY, provider)
   window.location.href = startURL
 }
 </script>

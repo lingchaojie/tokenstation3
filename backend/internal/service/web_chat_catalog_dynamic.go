@@ -134,5 +134,10 @@ func buildWebChatCapability(provider, routingKey, base string, catalog map[strin
 		caps.SupportsThinking = fam.SupportsThinking
 		caps.ThinkingEfforts = fam.ThinkingEfforts
 	}
+	if isOpenAIWebChatGPTTextModel(provider, base, caps.SupportsImageGeneration) {
+		caps.SupportsImageInput = true
+		caps.SupportsFileContext = true
+		caps.SupportsWebSearch = true
+	}
 	return caps
 }

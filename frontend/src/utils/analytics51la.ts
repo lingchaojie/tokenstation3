@@ -22,7 +22,7 @@ export const LA_COLLECT_CONFIG = {
 } as const
 
 const LA_COLLECT_SCRIPT_ID = 'LA_COLLECT'
-const OFFICIAL_HOSTNAMES = new Set(['linx2.ai', 'www.linx2.ai'])
+const OFFICIAL_HOSTNAMES = new Set(['linx2.ai', 'www.linx2.ai', 'yundu.linx2.ai'])
 
 export interface ShouldEnable51laAnalyticsOptions {
   hostname?: string

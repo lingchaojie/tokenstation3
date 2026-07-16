@@ -205,6 +205,9 @@ let disposed = false
 function isCompatible(apiKey: ApiKey): boolean {
   if (apiKey.key_type === 'unified') return true
   if (props.client === 'codex') return apiKey.key_type === 'openai'
+  if (props.client === 'opencode' || props.client === 'cc_switch') {
+    return apiKey.key_type === 'anthropic' || apiKey.key_type === 'openai'
+  }
   if (apiKey.key_type === 'anthropic') return true
   return (
     apiKey.key_type === 'openai' &&

@@ -54,6 +54,24 @@ type UserPlatformQuotaCacheEntry struct {
 	MonthlyWindowStart *time.Time
 }
 
+const BillingBalanceSnapshotSchemaV1 = 1
+
+type BillingBalanceSnapshot struct {
+	SchemaVersion          int        `json:"schema_version"`
+	TotalBalance           float64    `json:"total_balance"`
+	DailyRewardBalance     float64    `json:"daily_reward_balance"`
+	AffiliateRewardBalance float64    `json:"affiliate_reward_balance"`
+	AccountBalance         float64    `json:"account_balance"`
+	NextRewardExpiresAt    *time.Time `json:"next_reward_expires_at,omitempty"`
+}
+
+// BillingBalanceSnapshotCache is an optional extension implemented by caches
+// that understand the individual, non-combinable funding layers.
+type BillingBalanceSnapshotCache interface {
+	GetUserBalanceSnapshot(context.Context, int64) (BillingBalanceSnapshot, error)
+	SetUserBalanceSnapshot(context.Context, int64, BillingBalanceSnapshot) error
+}
+
 // BillingCache defines cache operations for billing service
 type BillingCache interface {
 	// Balance operations
@@ -153,14 +171,15 @@ type UsageTokens struct {
 
 // CostBreakdown 费用明细
 type CostBreakdown struct {
-	InputCost         float64
-	OutputCost        float64
-	ImageOutputCost   float64
-	CacheCreationCost float64
-	CacheReadCost     float64
-	TotalCost         float64
-	ActualCost        float64 // 应用倍率后的实际费用
-	BillingMode       string  // 计费模式（"token"/"per_request"/"image"），由 CalculateCostUnified 填充
+	InputCost                 float64
+	OutputCost                float64
+	ImageOutputCost           float64
+	CacheCreationCost         float64
+	CacheReadCost             float64
+	TotalCost                 float64
+	ActualCost                float64 // 应用倍率后的实际费用
+	BillingMode               string  // 计费模式（"token"/"per_request"/"image"），由 CalculateCostUnified 填充
+	LongContextBillingApplied bool
 }
 
 // ErrModelPricingUnavailable indicates that none of the configured pricing
@@ -903,16 +922,17 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 
 // CostInput 统一计费输入
 type CostInput struct {
-	Ctx            context.Context
-	Model          string
-	GroupID        *int64 // 用于渠道定价查找
-	Tokens         UsageTokens
-	RequestCount   int    // 按次计费时使用
-	SizeTier       string // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
-	RateMultiplier float64
-	ServiceTier    string                // "priority","flex","" 等
-	Resolver       *ModelPricingResolver // 定价解析器
-	Resolved       *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
+	Ctx                       context.Context
+	Model                     string
+	GroupID                   *int64 // 用于渠道定价查找
+	Tokens                    UsageTokens
+	RequestCount              int    // 按次计费时使用
+	SizeTier                  string // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
+	RateMultiplier            float64
+	ServiceTier               string                // "priority","flex","" 等
+	Resolver                  *ModelPricingResolver // 定价解析器
+	Resolved                  *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
+	LongContextBillingEnabled *bool
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -920,7 +940,18 @@ type CostInput struct {
 func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, error) {
 	if input.Resolver == nil {
 		// 无 Resolver，回退到旧路径
-		return s.calculateCostInternal(input.Model, input.Tokens, input.RateMultiplier, input.ServiceTier, nil)
+		applyLongContextBilling := true
+		if input.LongContextBillingEnabled != nil {
+			applyLongContextBilling = *input.LongContextBillingEnabled
+		}
+		return s.calculateCostInternalWithPolicy(
+			input.Model,
+			input.Tokens,
+			input.RateMultiplier,
+			input.ServiceTier,
+			nil,
+			applyLongContextBilling,
+		)
 	}
 
 	// 优先使用预解析结果，避免重复 Resolve 调用
@@ -967,6 +998,9 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 
 	// 长上下文定价仅在无区间定价时应用（区间定价已包含上下文分层）
 	applyLongCtx := len(resolved.Intervals) == 0
+	if input.LongContextBillingEnabled != nil {
+		applyLongCtx = applyLongCtx && *input.LongContextBillingEnabled
+	}
 
 	return s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx), nil
 }
@@ -1007,7 +1041,10 @@ func (s *BillingService) computeTokenBreakdown(
 		tierMultiplier = serviceTierCostMultiplier(serviceTier)
 	}
 
-	if applyLongCtx && s.shouldApplySessionLongContextPricing(tokens, pricing) {
+	longContextPricingEligible := applyLongCtx && s.shouldApplySessionLongContextPricing(tokens, pricing)
+	var baselineCost *CostBreakdown
+	if longContextPricingEligible {
+		baselineCost = s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, false)
 		inputPrice *= pricing.LongContextInputMultiplier
 		outputPrice *= pricing.LongContextOutputMultiplier
 		// 缓存读取本质上是输入侧的复用，应与 input 一同应用长上下文倍率；
@@ -1071,6 +1108,7 @@ func (s *BillingService) computeTokenBreakdown(
 	bd.TotalCost = bd.InputCost + bd.OutputCost + bd.ImageOutputCost +
 		bd.CacheCreationCost + bd.CacheReadCost
 	bd.ActualCost = bd.TotalCost * rateMultiplier
+	bd.LongContextBillingApplied = baselineCost != nil && bd.ActualCost > baselineCost.ActualCost
 
 	return bd
 }
@@ -1130,7 +1168,28 @@ func (s *BillingService) CalculateCostWithServiceTier(model string, tokens Usage
 	return s.calculateCostInternal(model, tokens, rateMultiplier, serviceTier, nil)
 }
 
+func (s *BillingService) calculateCostWithServiceTierPolicy(
+	model string,
+	tokens UsageTokens,
+	rateMultiplier float64,
+	serviceTier string,
+	longContextBillingEnabled bool,
+) (*CostBreakdown, error) {
+	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, nil, longContextBillingEnabled)
+}
+
 func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing) (*CostBreakdown, error) {
+	return s.calculateCostInternalWithPolicy(model, tokens, rateMultiplier, serviceTier, channelPricing, true)
+}
+
+func (s *BillingService) calculateCostInternalWithPolicy(
+	model string,
+	tokens UsageTokens,
+	rateMultiplier float64,
+	serviceTier string,
+	channelPricing *ChannelModelPricing,
+	longContextBillingEnabled bool,
+) (*CostBreakdown, error) {
 	var pricing *ModelPricing
 	var err error
 	if channelPricing != nil {
@@ -1142,8 +1201,7 @@ func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens,
 		return nil, err
 	}
 
-	// 旧路径始终检查长上下文定价（无区间定价概念）
-	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, true), nil
+	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, longContextBillingEnabled), nil
 }
 
 func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *ModelPricing) *ModelPricing {
@@ -1274,13 +1332,14 @@ func (s *BillingService) CalculateCostWithLongContext(model string, tokens Usage
 
 	// 合并成本
 	return &CostBreakdown{
-		InputCost:         inRangeCost.InputCost + outRangeCost.InputCost,
-		OutputCost:        inRangeCost.OutputCost,
-		ImageOutputCost:   inRangeCost.ImageOutputCost,
-		CacheCreationCost: inRangeCost.CacheCreationCost,
-		CacheReadCost:     inRangeCost.CacheReadCost + outRangeCost.CacheReadCost,
-		TotalCost:         inRangeCost.TotalCost + outRangeCost.TotalCost,
-		ActualCost:        inRangeCost.ActualCost + outRangeCost.ActualCost,
+		InputCost:                 inRangeCost.InputCost + outRangeCost.InputCost,
+		OutputCost:                inRangeCost.OutputCost,
+		ImageOutputCost:           inRangeCost.ImageOutputCost,
+		CacheCreationCost:         inRangeCost.CacheCreationCost,
+		CacheReadCost:             inRangeCost.CacheReadCost + outRangeCost.CacheReadCost,
+		TotalCost:                 inRangeCost.TotalCost + outRangeCost.TotalCost,
+		ActualCost:                inRangeCost.ActualCost + outRangeCost.ActualCost,
+		LongContextBillingApplied: outRangeCost.ActualCost > 0,
 	}, nil
 }
 

@@ -183,7 +183,7 @@
         </div>
 
         <!-- Affiliate Code Input (Optional) -->
-        <div>
+        <div v-if="settingsLoaded && affiliateEnabled">
           <label for="aff_code" class="input-label">
             {{ t('auth.affiliateCodeLabel') }}
           </label>
@@ -193,6 +193,8 @@
             type="text"
             autocomplete="off"
             :disabled="registrationActionDisabled"
+            :readonly="promotionAffiliateLocked"
+            :aria-readonly="promotionAffiliateLocked"
             class="input"
             :placeholder="t('auth.affiliateCodePlaceholder')"
           />
@@ -273,7 +275,7 @@
 
         <EmailOAuthButtons
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="affiliateEnabled ? formData.aff_code : ''"
           :github-enabled="githubOAuthEnabled"
           :google-enabled="googleOAuthEnabled"
           :show-divider="false"
@@ -282,20 +284,20 @@
         <LinuxDoOAuthSection
           v-if="linuxdoOAuthEnabled"
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="affiliateEnabled ? formData.aff_code : ''"
           :show-divider="false"
         />
         <WechatOAuthSection
           v-if="wechatOAuthEnabled"
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="affiliateEnabled ? formData.aff_code : ''"
           :show-divider="false"
         />
         <OidcOAuthSection
           v-if="oidcOAuthEnabled"
           :disabled="registrationActionDisabled"
           :provider-name="oidcOAuthProviderName"
-          :aff-code="formData.aff_code"
+          :aff-code="affiliateEnabled ? formData.aff_code : ''"
           :show-divider="false"
         />
       </div>
@@ -343,9 +345,13 @@ import {
 } from '@/utils/registrationEmailPolicy'
 import {
   clearAffiliateReferralCode,
-  loadAffiliateReferralCode,
-  resolveAffiliateReferralCode
+  clearAllAffiliateReferralCodes,
+  loadAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
+import {
+  getCurrentPromotionChannel,
+  resolvePromotionAffiliateCode
+} from '@/utils/promotionChannel'
 import type { LoginAgreementDocument } from '@/types'
 import { resolvePostAuthRedirect } from '@/router/authRedirect'
 
@@ -358,6 +364,7 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const appStore = useAppStore()
+const promotionAffiliateLocked = computed(() => getCurrentPromotionChannel() !== null)
 
 // ==================== State ====================
 
@@ -371,6 +378,7 @@ const registrationEnabled = ref<boolean>(true)
 const emailVerifyEnabled = ref<boolean>(false)
 const promoCodeEnabled = ref<boolean>(true)
 const invitationCodeEnabled = ref<boolean>(false)
+const affiliateEnabled = ref<boolean>(false)
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
 const siteName = ref<string>('LINX2.AI')
@@ -461,24 +469,38 @@ watch(validationToastMessage, (value, previousValue) => {
 })
 
 function syncAffiliateReferralCode(): string {
-  const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
+  if (!affiliateEnabled.value) {
+    return ''
+  }
+  const code = resolvePromotionAffiliateCode([route.query.aff, route.query.aff_code])
   if (code) {
     formData.aff_code = code
   }
   return code
 }
 
+async function clearDisabledAffiliateReferral(): Promise<void> {
+  formData.aff_code = ''
+  clearAllAffiliateReferralCodes()
+  if (!('aff' in route.query) && !('aff_code' in route.query)) {
+    return
+  }
+  const query = { ...route.query }
+  delete query.aff
+  delete query.aff_code
+  await router.replace({ query })
+}
+
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
-  syncAffiliateReferralCode()
-
   try {
     const settings = await getPublicSettings()
     registrationEnabled.value = settings.registration_enabled
     emailVerifyEnabled.value = settings.email_verify_enabled
     promoCodeEnabled.value = settings.promo_code_enabled
     invitationCodeEnabled.value = settings.invitation_code_enabled
+    affiliateEnabled.value = settings.affiliate_enabled === true
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
     siteName.value = settings.site_name || 'LINX2.AI'
@@ -502,7 +524,11 @@ onMounted(async () => {
         await validatePromoCodeDebounced(promoParam)
       }
     }
-    syncAffiliateReferralCode()
+    if (affiliateEnabled.value) {
+      syncAffiliateReferralCode()
+    } else {
+      await clearDisabledAffiliateReferral()
+    }
   } catch (error) {
     console.error('Failed to load public settings:', error)
     loginAgreementEnabled.value = false
@@ -515,7 +541,14 @@ onMounted(async () => {
 watch(
   () => [route.query.aff, route.query.aff_code],
   () => {
-    syncAffiliateReferralCode()
+    if (!settingsLoaded.value) {
+      return
+    }
+    if (affiliateEnabled.value) {
+      syncAffiliateReferralCode()
+    } else {
+      void clearDisabledAffiliateReferral()
+    }
   }
 )
 
@@ -876,7 +909,9 @@ async function handleRegister(): Promise<void> {
   isLoading.value = true
 
   try {
-    const affCode = formData.aff_code.trim() || loadAffiliateReferralCode()
+    const affCode = affiliateEnabled.value
+      ? resolvePromotionAffiliateCode([formData.aff_code, loadAffiliateReferralCode()])
+      : ''
     if (affCode) {
       formData.aff_code = affCode
     }

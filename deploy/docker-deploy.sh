@@ -23,6 +23,9 @@ NC='\033[0m' # No Color
 # GitHub raw content base URL
 GITHUB_RAW_URL="${GITHUB_RAW_URL:-https://raw.githubusercontent.com/lingchaojie/tokenstation3/release/deploy}"
 CUSTOM_DOMAIN_CONFIGURED=0
+CONFIGURED_PRIMARY_DOMAIN=""
+CONFIGURED_APEX_DOMAIN=""
+CONFIGURED_ADDITIONAL_DOMAINS=""
 
 # Print colored message
 print_info() {
@@ -79,6 +82,116 @@ validate_domain_name() {
     esac
 
     printf '%s' "$name" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+}
+
+normalize_domain_name() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Print validated additional domains, one normalized hostname per line.
+normalize_additional_domains() {
+    local raw="$1"
+    local primary_domain=""
+    local apex_domain=""
+    local domain=""
+    local normalized_domain=""
+    local -a domains=()
+    local -A seen_domains=()
+
+    primary_domain="$(normalize_domain_name "$2")"
+    apex_domain="$(normalize_domain_name "$3")"
+    IFS=$' \t\r\n,' read -r -d '' -a domains < <(printf '%s\0' "$raw")
+
+    for domain in "${domains[@]}"; do
+        normalized_domain="$(normalize_domain_name "$domain")"
+
+        if ! validate_domain_name "$normalized_domain"; then
+            return 1
+        fi
+        if [ "$normalized_domain" = "$primary_domain" ] || \
+            { [ -n "$apex_domain" ] && [ "$normalized_domain" = "$apex_domain" ]; }; then
+            return 1
+        fi
+        if [ -n "${seen_domains[$normalized_domain]+set}" ]; then
+            return 1
+        fi
+
+        seen_domains["$normalized_domain"]=1
+        printf '%s\n' "$normalized_domain"
+    done
+}
+
+# Validate requested Caddy domains before deployment preparation mutates files.
+preflight_requested_domains() {
+    local domain="${DOMAIN:-}"
+    local apex_domain="${APEX_DOMAIN:-}"
+    local additional_domains=""
+
+    CUSTOM_DOMAIN_CONFIGURED=0
+    CONFIGURED_PRIMARY_DOMAIN=""
+    CONFIGURED_APEX_DOMAIN=""
+    CONFIGURED_ADDITIONAL_DOMAINS=""
+
+    if [ -z "$domain" ]; then
+        return 0
+    fi
+
+    if ! validate_domain_name "$domain"; then
+        print_error "Invalid DOMAIN: ${domain}"
+        print_error "Use a hostname such as www.example.com, without https:// or paths."
+        return 1
+    fi
+
+    if [ -n "$apex_domain" ] && ! validate_domain_name "$apex_domain"; then
+        print_error "Invalid APEX_DOMAIN: ${apex_domain}"
+        print_error "Use a hostname such as example.com, without https:// or paths."
+        return 1
+    fi
+
+    domain="$(normalize_domain_name "$domain")"
+    apex_domain="$(normalize_domain_name "$apex_domain")"
+
+    if [ -n "$apex_domain" ] && [ "$domain" = "$apex_domain" ]; then
+        print_error "DOMAIN and APEX_DOMAIN must be different hostnames."
+        print_error "Hostname comparisons are case-insensitive."
+        return 1
+    fi
+
+    if ! additional_domains="$(normalize_additional_domains "${ADDITIONAL_DOMAINS:-}" "$domain" "$apex_domain")"; then
+        print_error "Invalid ADDITIONAL_DOMAINS."
+        print_error "Use unique hostnames separated by commas or whitespace, without https:// or paths."
+        return 1
+    fi
+
+    CONFIGURED_PRIMARY_DOMAIN="$domain"
+    CONFIGURED_APEX_DOMAIN="$apex_domain"
+    CONFIGURED_ADDITIONAL_DOMAINS="$additional_domains"
+}
+
+# Render the complete managed Caddy config without changing the filesystem.
+render_managed_caddyfile() {
+    local domain="$1"
+    local apex_domain="$2"
+    local upstream_port="$3"
+    local additional_domains="${4:-}"
+    local additional_domain=""
+
+    printf '%s\n' \
+        '# Managed by Sub2API/TokenStation docker-deploy.sh.' \
+        '# To change domains after deployment, edit this file and reload Caddy.'
+
+    if [ -n "$apex_domain" ]; then
+        printf '%s {\n\tredir https://%s{uri} permanent\n}\n\n' "$apex_domain" "$domain"
+    fi
+
+    printf '%s {\n\treverse_proxy 127.0.0.1:%s\n}\n' "$domain" "$upstream_port"
+
+    while IFS= read -r additional_domain || [ -n "$additional_domain" ]; do
+        if [ -z "$additional_domain" ]; then
+            continue
+        fi
+        printf '\n%s {\n\treverse_proxy 127.0.0.1:%s\n}\n' "$additional_domain" "$upstream_port"
+    done <<< "$additional_domains"
 }
 
 # Validate a TCP port without triggering Bash integer errors.
@@ -244,20 +357,23 @@ restore_caddy_backups() {
     fi
 }
 
-# Write managed Caddy config for DOMAIN and optional APEX_DOMAIN without replacing unrelated sites.
+# Write managed Caddy config without replacing unrelated sites.
 write_caddyfile() {
     local domain="$1"
     local apex_domain="$2"
     local upstream_port="$3"
-    local caddyfile="/etc/caddy/Caddyfile"
-    local managed_dir="/etc/caddy/sub2api"
-    local managed_caddyfile="${managed_dir}/sub2api.caddy"
+    local additional_domains="${4:-}"
+    local caddyfile="${5:-/etc/caddy/Caddyfile}"
+    local managed_caddyfile="${6:-/etc/caddy/sub2api/sub2api.caddy}"
+    local managed_dir=""
     local import_line="import ${managed_caddyfile}"
     local timestamp=""
     local caddyfile_backup=""
     local managed_caddyfile_backup=""
     local caddyfile_existed="0"
     local managed_caddyfile_existed="0"
+
+    managed_dir="$(dirname "$managed_caddyfile")"
 
     if [ "$(id -u)" -ne 0 ]; then
         print_warning "DOMAIN is set, but writing ${caddyfile} requires root privileges."
@@ -292,36 +408,10 @@ write_caddyfile() {
         print_info "Backed up existing managed Caddy config to ${managed_caddyfile_backup}"
     fi
 
-    if [ -n "$apex_domain" ]; then
-        if ! cat > "$managed_caddyfile" <<EOF
-# Managed by Sub2API/TokenStation docker-deploy.sh.
-# To change domains after deployment, edit this file and reload Caddy.
-${apex_domain} {
-	redir https://${domain}{uri} permanent
-}
-
-${domain} {
-	reverse_proxy 127.0.0.1:${upstream_port}
-}
-EOF
-        then
-            print_warning "Unable to write ${managed_caddyfile}."
-            restore_caddy_backups "$caddyfile" "$managed_caddyfile" "$caddyfile_backup" "$managed_caddyfile_backup" "$caddyfile_existed" "$managed_caddyfile_existed"
-            return 1
-        fi
-    else
-        if ! cat > "$managed_caddyfile" <<EOF
-# Managed by Sub2API/TokenStation docker-deploy.sh.
-# To change domains after deployment, edit this file and reload Caddy.
-${domain} {
-	reverse_proxy 127.0.0.1:${upstream_port}
-}
-EOF
-        then
-            print_warning "Unable to write ${managed_caddyfile}."
-            restore_caddy_backups "$caddyfile" "$managed_caddyfile" "$caddyfile_backup" "$managed_caddyfile_backup" "$caddyfile_existed" "$managed_caddyfile_existed"
-            return 1
-        fi
+    if ! render_managed_caddyfile "$domain" "$apex_domain" "$upstream_port" "$additional_domains" > "$managed_caddyfile"; then
+        print_warning "Unable to write ${managed_caddyfile}."
+        restore_caddy_backups "$caddyfile" "$managed_caddyfile" "$caddyfile_backup" "$managed_caddyfile_backup" "$caddyfile_existed" "$managed_caddyfile_existed"
+        return 1
     fi
 
     if [ ! -f "$caddyfile" ]; then
@@ -375,27 +465,25 @@ EOF
 
 # Configure Caddy only when DOMAIN is explicitly provided.
 configure_caddy_if_requested() {
-    local domain="${DOMAIN:-}"
-    local apex_domain="${APEX_DOMAIN:-}"
+    local domain=""
+    local apex_domain=""
+    local additional_domains=""
+    local additional_domain=""
     local upstream_port=""
+
+    if ! preflight_requested_domains; then
+        exit 1
+    fi
+
+    domain="$CONFIGURED_PRIMARY_DOMAIN"
+    apex_domain="$CONFIGURED_APEX_DOMAIN"
+    additional_domains="$CONFIGURED_ADDITIONAL_DOMAINS"
 
     if [ -z "$domain" ]; then
         return 0
     fi
 
     print_info "DOMAIN is set: ${domain}"
-
-    if ! validate_domain_name "$domain"; then
-        print_error "Invalid DOMAIN: ${domain}"
-        print_error "Use a hostname such as www.example.com, without https:// or paths."
-        exit 1
-    fi
-
-    if [ -n "$apex_domain" ] && ! validate_domain_name "$apex_domain"; then
-        print_error "Invalid APEX_DOMAIN: ${apex_domain}"
-        print_error "Use a hostname such as example.com, without https:// or paths."
-        exit 1
-    fi
 
     sync_server_port_env
     sync_bind_host_env
@@ -412,7 +500,7 @@ configure_caddy_if_requested() {
         print_error "Install Caddy manually, or run DOMAIN setup with sudo in a fresh deployment directory."
         exit 1
     }
-    write_caddyfile "$domain" "$apex_domain" "$upstream_port" || {
+    write_caddyfile "$domain" "$apex_domain" "$upstream_port" "$additional_domains" || {
         print_error "DOMAIN was provided, but Caddy configuration failed."
         print_error "Fix the warnings above or configure Caddy manually."
         exit 1
@@ -425,6 +513,11 @@ configure_caddy_if_requested() {
     if [ -n "$apex_domain" ]; then
         print_info "  - Point DNS for ${apex_domain} to this server as well."
     fi
+    while IFS= read -r additional_domain || [ -n "$additional_domain" ]; do
+        if [ -n "$additional_domain" ]; then
+            print_info "  - Point DNS for ${additional_domain} to this server as well."
+        fi
+    done <<< "$additional_domains"
     print_info "  - Caddy app config is stored in /etc/caddy/sub2api/sub2api.caddy and imported by /etc/caddy/Caddyfile."
     print_info "  - The app port is bound to BIND_HOST=$(grep -E '^BIND_HOST=' .env | tail -n 1 | cut -d '=' -f 2-) for this deployment."
     print_info "  - Future app updates only need: docker compose pull && docker compose up -d"
@@ -432,6 +525,10 @@ configure_caddy_if_requested() {
 
 # Main installation function
 main() {
+    if ! preflight_requested_domains; then
+        exit 1
+    fi
+
     echo ""
     echo "=========================================="
     echo "  Sub2API Deployment Preparation"
@@ -559,11 +656,18 @@ main() {
     echo "     http://localhost:8080"
     echo ""
     if [ "$CUSTOM_DOMAIN_CONFIGURED" = "1" ]; then
+        local additional_domain=""
+
         echo "  Custom domain:"
-        echo "     https://${DOMAIN}"
-        if [ -n "${APEX_DOMAIN:-}" ]; then
-            echo "     https://${APEX_DOMAIN} redirects to https://${DOMAIN}"
+        echo "     https://${CONFIGURED_PRIMARY_DOMAIN}"
+        if [ -n "$CONFIGURED_APEX_DOMAIN" ]; then
+            echo "     https://${CONFIGURED_APEX_DOMAIN} redirects to https://${CONFIGURED_PRIMARY_DOMAIN}"
         fi
+        while IFS= read -r additional_domain || [ -n "$additional_domain" ]; do
+            if [ -n "$additional_domain" ]; then
+                echo "     https://${additional_domain}"
+            fi
+        done <<< "$CONFIGURED_ADDITIONAL_DOMAINS"
         echo ""
     else
         echo "  Optional custom domain: enable during initial preparation,"
@@ -575,5 +679,7 @@ main() {
     echo ""
 }
 
-# Run main function
-main "$@"
+# Run main function unless the script is being sourced for tests.
+if [ "${DOCKER_DEPLOY_SOURCE_ONLY:-0}" != "1" ]; then
+    main "$@"
+fi

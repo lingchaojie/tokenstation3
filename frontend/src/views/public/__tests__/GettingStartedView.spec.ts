@@ -275,6 +275,78 @@ describe('GettingStartedView', () => {
     expect(keysAPI.list).not.toHaveBeenCalled()
   })
 
+  it('shows the network-access warning at the top of the Chinese guide', async () => {
+    const { wrapper } = mountView('zh')
+    await settle()
+
+    expect(wrapper.get('[data-testid="guide-network-warning"]').text()).toContain(
+      '操作可能需要魔法梯子。'
+    )
+  })
+
+  it('shows the official Windows desktop download before the Codex CLI fallback', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'codex',
+        os: 'windows',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    const download = wrapper.get('[data-testid="guide-desktop-download"]')
+    expect(download.attributes('href')).toBe(
+      'https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi'
+    )
+    expect(download.text()).toContain('Download the desktop app')
+    expect(wrapper.get('[data-testid="guide-cli-fallback"]').text()).toContain(
+      'Prefer the command line? Use this CLI fallback:'
+    )
+    expect(wrapper.get('[data-testid="guide-command-block"]').text()).toContain(
+      'npm install -g @openai/codex'
+    )
+  })
+
+  it('shows only the official CLI command for a macOS installation', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'claude_code',
+        os: 'macos',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="guide-desktop-download"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="guide-cli-fallback"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="guide-command-block"]').text()).toContain(
+      'curl -fsSL https://claude.ai/install.sh | bash'
+    )
+  })
+
+  it('shows the official CC Switch desktop release without a fabricated CLI fallback', async () => {
+    setAnonymousProgress(
+      progress({
+        client: 'cc_switch',
+        os: 'windows',
+        currentStep: 'install',
+        completedSteps: ['understand', 'choose', 'terminal']
+      })
+    )
+    const { wrapper } = mountView()
+    await settle()
+
+    expect(wrapper.get('[data-testid="guide-desktop-download"]').attributes('href')).toBe(
+      'https://github.com/farion1231/cc-switch/releases/latest'
+    )
+    expect(wrapper.find('[data-testid="guide-cli-fallback"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="guide-command-block"]').exists()).toBe(false)
+  })
+
   it('initializes account-scoped progress for an authenticated visitor', async () => {
     mountAuthenticatedView()
     await settle()
@@ -593,7 +665,7 @@ describe('GettingStartedView', () => {
     await settle()
 
     expect(wrapper.findAll('[data-client-option]').map((node) => node.attributes('data-client-option')))
-      .toEqual(['claude_code', 'codex'])
+      .toEqual(['claude_code', 'codex', 'opencode', 'cc_switch'])
     expect(wrapper.findAll('[data-os-option]').map((node) => node.attributes('data-os-option')))
       .toEqual(['macos', 'windows', 'linux'])
   })
@@ -610,7 +682,7 @@ describe('GettingStartedView', () => {
     ])
 
     const options = wrapper.findAll('[data-client-option], [data-os-option]')
-    expect(options).toHaveLength(5)
+    expect(options).toHaveLength(7)
     for (const option of options) {
       expect(option.element.tagName).toBe('BUTTON')
       expect(option.attributes('type')).toBe('button')

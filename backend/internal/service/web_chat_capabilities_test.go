@@ -64,8 +64,9 @@ func TestWebChatCapabilities_DerivesOpenAIWebSearchForTextModel(t *testing.T) {
 	})
 
 	require.True(t, ok)
-	require.Equal(t, PlatformOpenAI, caps.Platform)
 	require.True(t, caps.SupportsText)
+	require.True(t, caps.SupportsImageInput)
+	require.True(t, caps.SupportsFileContext)
 	require.True(t, caps.SupportsThinking)
 	require.True(t, caps.SupportsWebSearch)
 	require.False(t, caps.SupportsImageGeneration)
@@ -198,6 +199,21 @@ func TestResolveWebChatCatalog_OpenAIImageModelDoesNotInheritGPTThinking(t *test
 	require.False(t, got[0].SupportsWebSearch)
 	require.Equal(t, []string{"low", "medium", "high"}, got[0].ImageGenerationQualities)
 	require.Equal(t, []string{"opaque", "auto"}, got[0].ImageGenerationBackgrounds)
+}
+
+func TestResolveWebChatCatalog_OpenAIGPTFallbackGetsNativeInputsAndSearch(t *testing.T) {
+	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeOpenAI: 2}}
+	al := stubAccountLister{byGroup: map[int64][]Account{
+		2: {acctWithMapping(PlatformOpenAI, "gpt-5.6-custom")},
+	}}
+
+	got, err := resolveWebChatCatalog(context.Background(), gr, al)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.True(t, got[0].SupportsImageInput)
+	require.True(t, got[0].SupportsFileContext)
+	require.True(t, got[0].SupportsWebSearch)
 }
 
 func TestWebChatModelDefaultCapabilityResolverRejectsUnsupportedCatalogEntries(t *testing.T) {

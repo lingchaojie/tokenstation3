@@ -6,6 +6,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +90,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // inbound_endpoint
 			sqlmock.AnyArg(), // upstream_endpoint
 			log.CacheTTLOverridden,
+			log.LongContextBillingApplied,
 			sqlmock.AnyArg(), // channel_id
 			sqlmock.AnyArg(), // model_mapping_chain
 			sqlmock.AnyArg(), // billing_tier
@@ -175,6 +178,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			log.CacheTTLOverridden,
+			log.LongContextBillingApplied,
 			sqlmock.AnyArg(), // channel_id
 			sqlmock.AnyArg(), // model_mapping_chain
 			sqlmock.AnyArg(), // billing_tier
@@ -244,6 +248,100 @@ func TestPrepareUsageLogInsert_ArgCountMatchesTypes(t *testing.T) {
 	})
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+}
+
+func TestUsageLogRepositoryCreate_PlaceholderCountMatchesPreparedArgs(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: time.Date(2025, 1, 5, 13, 0, 0, 0, time.UTC),
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(_, actualSQL string) error {
+			return validateUsageLogStaticInsertShape(actualSQL, len(prepared.args))
+		},
+	)))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("usage log insert").
+		WithArgs(anySliceToDriverValues(prepared.args)...).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).
+			AddRow(int64(101), prepared.createdAt))
+
+	repo := &usageLogRepository{sql: db}
+	log := &service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: prepared.createdAt,
+	}
+	inserted, err := repo.Create(context.Background(), log)
+
+	require.NoError(t, err)
+	require.True(t, inserted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecUsageLogInsertNoResult_PlaceholdersMatchPreparedArgs(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-fallback-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: time.Date(2025, 1, 5, 14, 0, 0, 0, time.UTC),
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(_, actualSQL string) error {
+			return validateUsageLogStaticInsertShape(actualSQL, len(prepared.args))
+		},
+	)))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec("usage log fallback insert").
+		WithArgs(anySliceToDriverValues(prepared.args)...).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	require.NoError(t, execUsageLogInsertNoResult(context.Background(), db, prepared))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func validateUsageLogStaticInsertShape(query string, wantCount int) error {
+	match := regexp.MustCompile(`(?is)INSERT\s+INTO\s+usage_logs\s*\((.*?)\)\s*VALUES\s*\((.*?)\)`).FindStringSubmatch(query)
+	if len(match) != 3 {
+		return fmt.Errorf("usage log INSERT columns/VALUES shape not found")
+	}
+	columns := splitTrimmedCSV(match[1])
+	values := splitTrimmedCSV(match[2])
+	wantColumns := splitTrimmedCSV(usageLogSelectColumns)[1:] // INSERT omits generated id.
+	if !reflect.DeepEqual(columns, wantColumns) {
+		return fmt.Errorf("usage log INSERT columns do not match scan/argument order: got %v want %v", columns, wantColumns)
+	}
+	if len(columns) != wantCount || len(values) != wantCount {
+		return fmt.Errorf("usage log INSERT shape count mismatch: columns=%d values=%d args=%d", len(columns), len(values), wantCount)
+	}
+	for i, value := range values {
+		want := fmt.Sprintf("$%d", i+1)
+		if value != want {
+			return fmt.Errorf("usage log INSERT placeholder %d = %q, want %q", i+1, value, want)
+		}
+	}
+	return nil
+}
+
+func splitTrimmedCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func TestPrepareUsageLogInsert_PersistsImageSizeMetadata(t *testing.T) {
@@ -815,6 +913,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			false,
+			false,
 			sql.NullInt64{},
 			sql.NullString{},
 			sql.NullString{},
@@ -887,6 +986,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			false,
+			false,
 			sql.NullInt64{},   // channel_id
 			sql.NullString{},  // model_mapping_chain
 			sql.NullString{},  // billing_tier
@@ -943,6 +1043,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			false,
+			false,
 			sql.NullInt64{},   // channel_id
 			sql.NullString{},  // model_mapping_chain
 			sql.NullString{},  // billing_tier
@@ -998,6 +1099,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
+			false,
 			false,
 			sql.NullInt64{},   // channel_id
 			sql.NullString{},  // model_mapping_chain

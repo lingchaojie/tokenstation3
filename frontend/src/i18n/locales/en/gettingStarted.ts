@@ -17,7 +17,8 @@ export default {
     },
     dashboard: {
       quickActionTitle: 'Beginner Guide',
-      quickActionDescription: 'Set up Claude Code or Codex and complete your first task.',
+      quickActionDescription:
+        'Set up Claude Code, Codex CLI, OpenCode, or CC Switch and complete your first task.',
       sidebarLabel: 'Beginner Guide'
     },
     welcome: {
@@ -44,7 +45,9 @@ export default {
     },
     clients: {
       claude_code: 'Claude Code',
-      codex: 'Codex'
+      codex: 'Codex CLI',
+      opencode: 'OpenCode',
+      cc_switch: 'CC Switch'
     },
     operatingSystems: {
       macos: 'macOS',
@@ -135,6 +138,8 @@ export default {
         'The installation finishes without an error and the version command prints a version number.',
       restartShell:
         'If the command is not found after installation, close this terminal, open a new one, and run the version check again. Your files are not affected.',
+      downloadDesktop: 'Download the desktop app',
+      cliFallback: 'Prefer the command line? Use this CLI fallback:',
       officialSource: 'Open the official installation instructions'
     },
     apiKey: {
@@ -190,6 +195,7 @@ export default {
       usage: 'View Usage'
     },
     warnings: {
+      networkAccess: 'Some steps may require a VPN or proxy, depending on your network.',
       progressUnavailable:
         'The saved guide progress could not be loaded. You can keep using the guide and retry later.',
       progressSaveFailed:

@@ -20,10 +20,17 @@ FRONTEND_CRITICAL_VITEST := \
 	src/views/user/__tests__/CheckInView.spec.ts \
 	src/views/admin/affiliates/__tests__/AdminCheckInConfigView.spec.ts \
 	src/components/layout/__tests__/AppSidebar.spec.ts \
-	src/router/__tests__/checkInRoute.spec.ts
+	src/router/__tests__/checkInRoute.spec.ts \
+	src/views/auth/__tests__/RegisterViewAffiliate.spec.ts \
+	src/views/user/__tests__/AffiliateView.spec.ts \
+	src/components/user/__tests__/RewardBalanceBreakdown.spec.ts \
+	src/components/layout/__tests__/AppHeaderRewardBalance.spec.ts \
+	src/views/admin/affiliates/__tests__/AdminAffiliateRebatesView.spec.ts \
+	src/router/__tests__/feature-access.spec.ts
 
 FRONTEND_WEBCHAT_VITEST := \
 	src/utils/__tests__/webChatModelName.spec.ts \
+	src/utils/__tests__/webChatAttachmentAccept.spec.ts \
 	src/components/chat/__tests__/chatStore.spec.ts \
 	src/components/chat/__tests__/ChatView.spec.ts \
 	src/components/chat/__tests__/MessageList.spec.ts

@@ -50,6 +50,57 @@
           </nav>
         </div>
 
+        <!-- Codex Authentication Mode -->
+        <div
+          v-if="showCodexAuthMode"
+          class="rounded-lg border border-gray-200 p-3 dark:border-dark-700"
+        >
+          <div class="mb-2">
+            <p class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ t('keys.useKeyModal.openai.authModeTitle') }}
+            </p>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('keys.useKeyModal.openai.authModeDescription') }}
+            </p>
+          </div>
+          <div
+            class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
+            role="radiogroup"
+            :aria-label="t('keys.useKeyModal.openai.authModeTitle')"
+          >
+            <button
+              type="button"
+              role="radio"
+              data-testid="codex-auth-mode-legacy"
+              :aria-checked="codexAuthMode === 'legacy'"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                codexAuthMode === 'legacy'
+                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+              ]"
+              @click="codexAuthMode = 'legacy'"
+            >
+              {{ t('keys.useKeyModal.openai.authModeLegacy') }}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              data-testid="codex-auth-mode-api-key"
+              :aria-checked="codexAuthMode === 'api-key'"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                codexAuthMode === 'api-key'
+                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+              ]"
+              @click="codexAuthMode = 'api-key'"
+            >
+              {{ t('keys.useKeyModal.openai.authModeApiKey') }}
+            </button>
+          </div>
+        </div>
+
         <!-- OS/Shell Tabs -->
         <div v-if="showShellTabs" class="border-b border-gray-200 dark:border-dark-700">
           <nav class="-mb-px flex space-x-4" aria-label="Tabs">
@@ -177,6 +228,8 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
+type CodexAuthMode = 'legacy' | 'api-key'
+const codexAuthMode = ref<CodexAuthMode>('legacy')
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -197,7 +250,14 @@ const defaultClientTab = computed(() => {
 watch(() => props.platform, () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
+  codexAuthMode.value = 'legacy'
 }, { immediate: true })
+
+watch(() => props.show, (show) => {
+  if (show) {
+    codexAuthMode.value = 'legacy'
+  }
+})
 
 // Reset shell tab when client changes
 watch(activeClientTab, () => {
@@ -274,11 +334,12 @@ const clientTabs = computed((): TabConfig[] => {
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: `${t('keys.keyTypes.anthropic')} ${t('keys.useKeyModal.cliTabs.anthropicPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-python-sdk', label: `${t('keys.keyTypes.openai')} ${t('keys.useKeyModal.cliTabs.openaiPythonSdk')}`, icon: TerminalIcon },
         { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
       ]
     case 'openai': {
       const tabs: TabConfig[] = []
@@ -287,10 +348,11 @@ const clientTabs = computed((): TabConfig[] => {
       }
       tabs.push(
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'openai-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiPythonSdk'), icon: TerminalIcon },
         { id: 'openai-imagen2-python-sdk', label: t('keys.useKeyModal.cliTabs.openaiImagen2PythonSdk'), icon: TerminalIcon },
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
       )
       return tabs
     }
@@ -313,9 +375,10 @@ const clientTabs = computed((): TabConfig[] => {
     default:
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
-        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+        { id: 'cc_switch', label: t('keys.useKeyModal.cliTabs.ccSwitch'), icon: TerminalIcon },
         { id: 'anthropic-python-sdk', label: t('keys.useKeyModal.cliTabs.anthropicPythonSdk'), icon: TerminalIcon },
-        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+        { id: 'workbuddy', label: t('keys.useKeyModal.cliTabs.workBuddy'), icon: TerminalIcon }
       ]
   }
 })
@@ -335,7 +398,16 @@ const openaiTabs: TabConfig[] = [
 
 const pythonSdkTabs = new Set(['anthropic-python-sdk', 'openai-python-sdk', 'openai-imagen2-python-sdk'])
 
-const showShellTabs = computed(() => activeClientTab.value !== 'opencode' && !pythonSdkTabs.has(activeClientTab.value))
+const showShellTabs = computed(() =>
+  activeClientTab.value !== 'opencode' &&
+  activeClientTab.value !== 'cc_switch' &&
+  !pythonSdkTabs.has(activeClientTab.value)
+)
+
+const showCodexAuthMode = computed(() =>
+  props.platform === 'openai' &&
+  (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws')
+)
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
@@ -348,6 +420,9 @@ const currentTabs = computed(() => {
 const platformDescription = computed(() => {
   if (activeClientTab.value === 'opencode') {
     return t('keys.useKeyModal.opencode.description')
+  }
+  if (activeClientTab.value === 'cc_switch') {
+    return t('keys.useKeyModal.ccSwitch.description')
   }
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.description')
@@ -378,6 +453,9 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (activeClientTab.value === 'cc_switch') {
+    return t('keys.useKeyModal.ccSwitch.note')
+  }
   if (activeClientTab.value === 'workbuddy') {
     return t('keys.useKeyModal.workBuddy.note')
   }
@@ -477,7 +555,8 @@ const currentFiles = computed((): FileConfig[] => {
       apiKey,
       baseUrl: sharedBaseUrl,
       allowMessagesDispatch: props.allowMessagesDispatch,
-      windowsShell
+      windowsShell,
+      codexAuthMode: codexAuthMode.value
     }).map(({ hintKey, ...file }) => hintKey
       ? { ...file, hint: t(hintKey) }
       : file)
@@ -506,6 +585,18 @@ const currentFiles = computed((): FileConfig[] => {
       default:
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
     }
+  }
+
+  if (activeClientTab.value === 'cc_switch' && props.platform) {
+    return buildClientConfigFiles({
+      client: 'cc_switch',
+      os: 'macos',
+      platform: props.platform,
+      apiKey,
+      baseUrl
+    }).map(({ hintKey, ...file }) => hintKey
+      ? { ...file, hint: t(hintKey) }
+      : file)
   }
 
   if (activeClientTab.value === 'workbuddy') {
@@ -708,14 +799,14 @@ function generateOpenAIPythonSdkFile(baseUrl: string, apiKey: string): FileConfi
     content: `from openai import OpenAI
 
 client = OpenAI(
-    api_key="${apiKey}",
-    base_url="${baseUrl}",
+	api_key="${apiKey}",
+	base_url="${baseUrl}",
 )
 
 stream = client.responses.create(
-    model="gpt-5.5",
-    input="Hello, GPT",
-    stream=True,
+	model="gpt-5.5",
+	input="Hello, GPT",
+	stream=True,
 )
 
 for event in stream:
@@ -767,14 +858,13 @@ function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.grok' : '~/.grok'
   const configContent = `[models]
-default = "sub2api-grok"
-web_search = "sub2api-grok"
+default = "grok"
+web_search = "grok"
 
-[model."sub2api-grok"]
+[model."grok"]
 model = "grok-4.5"
 base_url = "${baseUrl}"
-name = "Grok 4.5 via Sub2API"
-description = "Grok 4.5 through a Sub2API Grok group"
+name = "Grok 4.5"
 api_key = "${apiKey}"
 api_backend = "responses"
 context_window = 1000000
@@ -786,6 +876,7 @@ supports_backend_search = true`
     hint: t('keys.useKeyModal.grok.configTomlHint')
   }]
 }
+
 function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {
   const provider: Record<string, any> = {
     [platform]: {
@@ -1165,7 +1256,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].models = openaiModels
   } else if (platform === 'grok') {
     provider[platform].npm = '@ai-sdk/openai'
-    provider[platform].name = 'Grok via Sub2API'
+    provider[platform].name = 'Grok'
     provider[platform].models = grokModels
   }
 

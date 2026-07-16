@@ -74,7 +74,7 @@ func validBeginnerGuideProgress() *BeginnerGuideProgress {
 }
 
 func TestValidateBeginnerGuideProgressAcceptsSupportedClientsAndOperatingSystems(t *testing.T) {
-	for _, client := range []string{"claude_code", "codex"} {
+	for _, client := range []string{"claude_code", "codex", "opencode", "cc_switch"} {
 		for _, operatingSystem := range []string{"macos", "windows", "linux"} {
 			t.Run(client+"_"+operatingSystem, func(t *testing.T) {
 				progress := validBeginnerGuideProgress()

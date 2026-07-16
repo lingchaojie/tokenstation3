@@ -24,15 +24,26 @@ const (
 
 // Affiliate rebate settings
 const (
-	AffiliateEnabledDefault           = false // 邀请返利总开关默认关闭
-	AffiliateRebateFreezeHoursDefault = 0     // 0 = 不冻结（向后兼容）
-	AffiliateRebateFreezeHoursMax     = 720   // 最大 30 天
+	AffiliateRebateRateDefault          = 20.0
+	AffiliateRebateRateMin              = 0.0
+	AffiliateRebateRateMax              = 100.0
+	AffiliateEnabledDefault             = false // 邀请返利总开关默认关闭
+	AffiliateRebateFreezeHoursDefault   = 0     // 0 = 不冻结（向后兼容）
+	AffiliateRebateFreezeHoursMax       = 720   // 最大 30 天
+	AffiliateRebateDurationDaysDefault  = 0     // 0 = 永久有效
+	AffiliateRebateDurationDaysMax      = 3650  // ~10 年
+	AffiliateRebatePerInviteeCapDefault = 0.0   // 0 = 无上限
+	AdminRechargeRebateEnabledDefault   = false // 管理员充值默认不产生返利
 
-	// 首充固定奖励模型（替代旧的按比例返现）
-	AffiliateFirstRechargeThresholdDefault = 20.0      // 首充达标阈值（USD，订阅无条件达标）
-	AffiliateInviterRewardDefault          = 5.0       // 邀请方奖励（进返利余额 aff_quota）
-	AffiliateInviteeRewardDefault          = 5.0       // 被邀请方奖励（进账户余额）
+	// 本地固定奖励模型：阈值为 0 时注册即发放，大于 0 时首充达标发放。
+	AffiliateFirstRechargeThresholdDefault = 0.0       // 0 = 注册后立即发放奖励
+	AffiliateInviterRewardDefault          = 10.0      // 邀请方奖励
+	AffiliateInviteeRewardDefault          = 5.0       // 被邀请方奖励
 	AffiliateRewardMax                     = 1000000.0 // 奖励/阈值上限，防误配
+	AffiliateRewardValidityDaysDefault     = 7         // 奖励到账后有效天数
+	AffiliateRewardValidityDaysMax         = 3650      // 最长 10 年
+	AffiliateInviterRewardLimitDefault     = 0         // 0 = 不限制邀请方获奖次数
+	AffiliateInviterRewardLimitMax         = 1000000   // 防误配
 )
 
 // Platform constants
@@ -167,10 +178,16 @@ const (
 	SettingKeyFrontendURL                      = "frontend_url"                        // 前端基础URL，用于生成邮件中的重置密码链接
 	SettingKeyInvitationCodeEnabled            = "invitation_code_enabled"             // 是否启用邀请码注册
 	SettingKeyAffiliateEnabled                 = "affiliate_enabled"                   // 邀请返利功能总开关
+	SettingKeyAffiliateRebateRate              = "affiliate_rebate_rate"               // 邀请返利比例（百分比，0-100）
 	SettingKeyAffiliateRebateFreezeHours       = "affiliate_rebate_freeze_hours"       // 返利冻结期（小时，0=不冻结）
+	SettingKeyAffiliateRebateDurationDays      = "affiliate_rebate_duration_days"      // 返利有效期（天，0=永久）
+	SettingKeyAffiliateRebatePerInviteeCap     = "affiliate_rebate_per_invitee_cap"    // 单人返利上限（0=无上限）
+	SettingKeyAffiliateAdminRechargeEnabled    = "affiliate_admin_recharge_enabled"    // 管理员充值是否产生返利
 	SettingKeyAffiliateFirstRechargeThreshold  = "affiliate_first_recharge_threshold"  // 首充达标阈值（USD）
 	SettingKeyAffiliateInviterReward           = "affiliate_inviter_reward"            // 邀请方奖励（进返利余额）
 	SettingKeyAffiliateInviteeReward           = "affiliate_invitee_reward"            // 被邀请方奖励（进账户余额）
+	SettingKeyAffiliateRewardValidityDays      = "affiliate_reward_validity_days"      // 邀请奖励到账后的有效天数
+	SettingKeyAffiliateInviterRewardLimit      = "affiliate_inviter_reward_limit"      // 每个邀请方最多获奖次数（0=不限）
 	SettingKeyDailyCheckInEnabled              = "daily_check_in_enabled"              // 每日签到活动总开关
 	SettingKeyDailyCheckInStartAt              = "daily_check_in_start_at"             // 每日签到活动开始时间（UTC RFC3339）
 	SettingKeyDailyCheckInDurationDays         = "daily_check_in_duration_days"        // 每日签到活动持续天数

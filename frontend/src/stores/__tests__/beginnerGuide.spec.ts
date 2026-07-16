@@ -119,6 +119,19 @@ describe('useBeginnerGuideStore', () => {
     expect(store.showPrompt).toBe(false)
   })
 
+  it.each(['opencode', 'cc_switch'] as const)(
+    'accepts and persists the %s client selection',
+    async (client) => {
+      const store = useBeginnerGuideStore()
+      await store.initialize({ authenticated: false, userId: null, enteringGuide: true })
+
+      await store.selectClient(client)
+
+      expect(store.progress.client).toBe(client)
+      expect(JSON.parse(localStorage.getItem(ANONYMOUS_PROGRESS_KEY) ?? '{}').client).toBe(client)
+    }
+  )
+
   it('serializes exactly the five allowed progress fields from hostile input', async () => {
     localStorage.setItem(
       ANONYMOUS_PROGRESS_KEY,
