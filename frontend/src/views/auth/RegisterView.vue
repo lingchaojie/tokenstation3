@@ -193,6 +193,8 @@
             type="text"
             autocomplete="off"
             :disabled="registrationActionDisabled"
+            :readonly="promotionAffiliateLocked"
+            :aria-readonly="promotionAffiliateLocked"
             class="input"
             :placeholder="t('auth.affiliateCodePlaceholder')"
           />
@@ -343,9 +345,12 @@ import {
 } from '@/utils/registrationEmailPolicy'
 import {
   clearAffiliateReferralCode,
-  loadAffiliateReferralCode,
-  resolveAffiliateReferralCode
+  loadAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
+import {
+  getCurrentPromotionChannel,
+  resolvePromotionAffiliateCode
+} from '@/utils/promotionChannel'
 import type { LoginAgreementDocument } from '@/types'
 import { resolvePostAuthRedirect } from '@/router/authRedirect'
 
@@ -358,6 +363,7 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const appStore = useAppStore()
+const promotionAffiliateLocked = computed(() => getCurrentPromotionChannel() !== null)
 
 // ==================== State ====================
 
@@ -461,7 +467,7 @@ watch(validationToastMessage, (value, previousValue) => {
 })
 
 function syncAffiliateReferralCode(): string {
-  const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
+  const code = resolvePromotionAffiliateCode([route.query.aff, route.query.aff_code])
   if (code) {
     formData.aff_code = code
   }
@@ -876,7 +882,7 @@ async function handleRegister(): Promise<void> {
   isLoading.value = true
 
   try {
-    const affCode = formData.aff_code.trim() || loadAffiliateReferralCode()
+    const affCode = resolvePromotionAffiliateCode([formData.aff_code, loadAffiliateReferralCode()])
     if (affCode) {
       formData.aff_code = affCode
     }
