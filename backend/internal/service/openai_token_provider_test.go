@@ -156,6 +156,29 @@ func TestOpenAITokenProvider_CacheHit(t *testing.T) {
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.setCalled))
 }
 
+func TestOpenAITokenProvider_RejectsAgentIdentityWithStaleOAuthCredentials(t *testing.T) {
+	account := &Account{
+		ID:       99,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":     OpenAIAuthModeAgentIdentity,
+			"access_token":  "stale-access-token",
+			"refresh_token": "stale-refresh-token",
+			"expires_at":    time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &refreshAPIAccountRepo{account: account}
+	executor := &refreshAPIExecutorStub{needsRefresh: true}
+	provider := NewOpenAITokenProvider(repo, nil, nil)
+	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, nil), executor)
+
+	token, err := provider.GetAccessToken(context.Background(), account)
+	require.ErrorContains(t, err, "agent identity accounts do not use OAuth access tokens")
+	require.Empty(t, token)
+	require.Zero(t, executor.refreshCalls, "Agent Identity must not enter the request-path OAuth refresher")
+}
+
 func TestOpenAITokenProvider_CacheMiss_FromCredentials(t *testing.T) {
 	cache := newOpenAITokenCacheStub()
 	// Token expires in far future, no refresh needed

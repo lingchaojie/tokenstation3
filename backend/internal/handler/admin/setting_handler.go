@@ -269,10 +269,16 @@ func (h *SettingHandler) buildSystemSettingsPayload(
 
 		DefaultConcurrency:              settings.DefaultConcurrency,
 		DefaultBalance:                  settings.DefaultBalance,
+		AffiliateRebateRate:             settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:      settings.AffiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:     settings.AffiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:    settings.AffiliateRebatePerInviteeCap,
+		AdminRechargeRebateEnabled:      settings.AdminRechargeRebateEnabled,
 		AffiliateFirstRechargeThreshold: settings.AffiliateFirstRechargeThreshold,
 		AffiliateInviterReward:          settings.AffiliateInviterReward,
 		AffiliateInviteeReward:          settings.AffiliateInviteeReward,
+		AffiliateRewardValidityDays:     settings.AffiliateRewardValidityDays,
+		AffiliateInviterRewardLimit:     settings.AffiliateInviterRewardLimit,
 		DefaultUserRPMLimit:             settings.DefaultUserRPMLimit,
 		DefaultSubscriptions:            defaultSubscriptions,
 		DefaultAnthropicGroupID:         settings.DefaultAnthropicGroupID,
@@ -583,10 +589,16 @@ type UpdateSettingsRequest struct {
 	// 默认配置
 	DefaultConcurrency                        int                               `json:"default_concurrency"`
 	DefaultBalance                            float64                           `json:"default_balance"`
+	AffiliateRebateRate                       *float64                          `json:"affiliate_rebate_rate"`
 	AffiliateRebateFreezeHours                *int                              `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays               *int                              `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap              *float64                          `json:"affiliate_rebate_per_invitee_cap"`
+	AdminRechargeRebateEnabled                *bool                             `json:"affiliate_admin_recharge_enabled"`
 	AffiliateFirstRechargeThreshold           *float64                          `json:"affiliate_first_recharge_threshold"`
 	AffiliateInviterReward                    *float64                          `json:"affiliate_inviter_reward"`
 	AffiliateInviteeReward                    *float64                          `json:"affiliate_invitee_reward"`
+	AffiliateRewardValidityDays               *int                              `json:"affiliate_reward_validity_days"`
+	AffiliateInviterRewardLimit               *int                              `json:"affiliate_inviter_reward_limit"`
 	DefaultUserRPMLimit                       int                               `json:"default_user_rpm_limit"`
 	DefaultSubscriptions                      []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
 	DefaultAnthropicGroupID                   *int64                            `json:"default_anthropic_group_id"`
@@ -834,6 +846,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.DefaultBalance < 0 {
 		req.DefaultBalance = 0
 	}
+	affiliateRebateRate := previousSettings.AffiliateRebateRate
+	if req.AffiliateRebateRate != nil {
+		affiliateRebateRate = *req.AffiliateRebateRate
+	}
+	if affiliateRebateRate < service.AffiliateRebateRateMin {
+		affiliateRebateRate = service.AffiliateRebateRateMin
+	}
+	if affiliateRebateRate > service.AffiliateRebateRateMax {
+		affiliateRebateRate = service.AffiliateRebateRateMax
+	}
 	affiliateRebateFreezeHours := previousSettings.AffiliateRebateFreezeHours
 	if req.AffiliateRebateFreezeHours != nil {
 		affiliateRebateFreezeHours = *req.AffiliateRebateFreezeHours
@@ -843,6 +865,27 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if affiliateRebateFreezeHours > service.AffiliateRebateFreezeHoursMax {
 		affiliateRebateFreezeHours = service.AffiliateRebateFreezeHoursMax
+	}
+	affiliateRebateDurationDays := previousSettings.AffiliateRebateDurationDays
+	if req.AffiliateRebateDurationDays != nil {
+		affiliateRebateDurationDays = *req.AffiliateRebateDurationDays
+	}
+	if affiliateRebateDurationDays < 0 {
+		affiliateRebateDurationDays = service.AffiliateRebateDurationDaysDefault
+	}
+	if affiliateRebateDurationDays > service.AffiliateRebateDurationDaysMax {
+		affiliateRebateDurationDays = service.AffiliateRebateDurationDaysMax
+	}
+	affiliateRebatePerInviteeCap := previousSettings.AffiliateRebatePerInviteeCap
+	if req.AffiliateRebatePerInviteeCap != nil {
+		affiliateRebatePerInviteeCap = *req.AffiliateRebatePerInviteeCap
+	}
+	if affiliateRebatePerInviteeCap < 0 {
+		affiliateRebatePerInviteeCap = service.AffiliateRebatePerInviteeCapDefault
+	}
+	adminRechargeRebateEnabled := previousSettings.AdminRechargeRebateEnabled
+	if req.AdminRechargeRebateEnabled != nil {
+		adminRechargeRebateEnabled = *req.AdminRechargeRebateEnabled
 	}
 	affiliateFirstRechargeThreshold := previousSettings.AffiliateFirstRechargeThreshold
 	if req.AffiliateFirstRechargeThreshold != nil {
@@ -855,6 +898,22 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	affiliateInviteeReward := previousSettings.AffiliateInviteeReward
 	if req.AffiliateInviteeReward != nil {
 		affiliateInviteeReward = *req.AffiliateInviteeReward
+	}
+	affiliateRewardValidityDays := previousSettings.AffiliateRewardValidityDays
+	if req.AffiliateRewardValidityDays != nil {
+		affiliateRewardValidityDays = *req.AffiliateRewardValidityDays
+		if affiliateRewardValidityDays < 1 || affiliateRewardValidityDays > service.AffiliateRewardValidityDaysMax {
+			response.BadRequest(c, "Affiliate reward validity days must be between 1 and 3650")
+			return
+		}
+	}
+	affiliateInviterRewardLimit := previousSettings.AffiliateInviterRewardLimit
+	if req.AffiliateInviterRewardLimit != nil {
+		affiliateInviterRewardLimit = *req.AffiliateInviterRewardLimit
+		if affiliateInviterRewardLimit < 0 || affiliateInviterRewardLimit > service.AffiliateInviterRewardLimitMax {
+			response.BadRequest(c, "Affiliate inviter reward limit must be between 0 and 1000000")
+			return
+		}
 	}
 	// 通用表格配置：兼容旧客户端未传字段时保留当前值。
 	if req.TableDefaultPageSize <= 0 {
@@ -1798,10 +1857,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AnnouncementBannerIntervalMs:           announcementIntervalMs,
 		DefaultConcurrency:                     req.DefaultConcurrency,
 		DefaultBalance:                         req.DefaultBalance,
+		AffiliateRebateRate:                    affiliateRebateRate,
 		AffiliateRebateFreezeHours:             affiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:            affiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:           affiliateRebatePerInviteeCap,
+		AdminRechargeRebateEnabled:             adminRechargeRebateEnabled,
 		AffiliateFirstRechargeThreshold:        affiliateFirstRechargeThreshold,
 		AffiliateInviterReward:                 affiliateInviterReward,
 		AffiliateInviteeReward:                 affiliateInviteeReward,
+		AffiliateRewardValidityDays:            affiliateRewardValidityDays,
+		AffiliateInviterRewardLimit:            affiliateInviterRewardLimit,
 		DefaultUserRPMLimit:                    req.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
 		DefaultAnthropicGroupID:                optionalInt64FromRequest(req.DefaultAnthropicGroupID, req.defaultAnthropicGroupIDPresent, previousSettings.DefaultAnthropicGroupID),
@@ -2535,8 +2600,20 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.DefaultBalance != after.DefaultBalance {
 		changed = append(changed, "default_balance")
 	}
+	if before.AffiliateRebateRate != after.AffiliateRebateRate {
+		changed = append(changed, "affiliate_rebate_rate")
+	}
 	if before.AffiliateRebateFreezeHours != after.AffiliateRebateFreezeHours {
 		changed = append(changed, "affiliate_rebate_freeze_hours")
+	}
+	if before.AffiliateRebateDurationDays != after.AffiliateRebateDurationDays {
+		changed = append(changed, "affiliate_rebate_duration_days")
+	}
+	if before.AffiliateRebatePerInviteeCap != after.AffiliateRebatePerInviteeCap {
+		changed = append(changed, "affiliate_rebate_per_invitee_cap")
+	}
+	if before.AdminRechargeRebateEnabled != after.AdminRechargeRebateEnabled {
+		changed = append(changed, "affiliate_admin_recharge_enabled")
 	}
 	if before.AffiliateFirstRechargeThreshold != after.AffiliateFirstRechargeThreshold {
 		changed = append(changed, "affiliate_first_recharge_threshold")
@@ -2546,6 +2623,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AffiliateInviteeReward != after.AffiliateInviteeReward {
 		changed = append(changed, "affiliate_invitee_reward")
+	}
+	if before.AffiliateRewardValidityDays != after.AffiliateRewardValidityDays {
+		changed = append(changed, "affiliate_reward_validity_days")
+	}
+	if before.AffiliateInviterRewardLimit != after.AffiliateInviterRewardLimit {
+		changed = append(changed, "affiliate_inviter_reward_limit")
 	}
 	if !equalDefaultSubscriptions(before.DefaultSubscriptions, after.DefaultSubscriptions) {
 		changed = append(changed, "default_subscriptions")

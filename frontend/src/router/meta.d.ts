@@ -56,6 +56,12 @@ declare module 'vue-router' {
     requiresRiskControl?: boolean
 
     /**
+     * Whether this route requires the affiliate activity to be enabled
+     * @default false
+     */
+    requiresAffiliate?: boolean
+
+    /**
      * i18n key for the page title
      */
     titleKey?: string

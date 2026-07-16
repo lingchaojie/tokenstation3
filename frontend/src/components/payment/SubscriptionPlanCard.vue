@@ -28,13 +28,14 @@
             {{ displayDescription }}
           </p>
         </div>
-        <div data-testid="plan-price-block" :class="['shrink-0 text-right', limitedSeatLabel ? 'mt-2 self-start' : '']">
-          <div class="flex items-baseline gap-1">
-            <span :class="['text-3xl font-semibold tracking-[-0.05em] text-gray-950 dark:text-linear-ink', textClass]">{{ priceLabel }}</span>
-          </div>
-          <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
-          <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
-            <span class="text-xs text-gray-400 line-through dark:text-dark-500">¥{{ plan.original_price }}</span>
+		<div data-testid="plan-price-block" :class="['shrink-0 text-right', limitedSeatLabel ? 'mt-2 self-start' : '']">
+		  <div class="flex items-baseline gap-1">
+			<span :class="['text-3xl font-semibold tracking-[-0.05em] text-gray-950 dark:text-linear-ink', textClass]">{{ priceLabel }}</span>
+			<span v-if="plan.currency" class="text-xs font-medium text-gray-400 dark:text-dark-500">{{ plan.currency }}</span>
+		  </div>
+		  <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
+		  <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
+			<span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ originalPriceLabel }}<template v-if="plan.currency"> {{ plan.currency }}</template></span>
             <span :class="['rounded px-1 py-0.5 text-[10px] font-semibold', discountClass]">{{ discountText }}</span>
           </div>
         </div>
@@ -207,7 +208,8 @@ function handleSelect() {
   if (isDisabled.value) return
   emit('select', props.plan, actionIntent.value)
 }
-const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? formatMonthlyPlanCny(props.plan.price))
+const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? (props.plan.currency ? String(props.plan.price) : formatMonthlyPlanCny(props.plan.price)))
+const originalPriceLabel = computed(() => props.plan.currency ? String(props.plan.original_price ?? '') : `¥${props.plan.original_price ?? ''}`)
 const sevenDayQuotaLabel = computed(() => {
   if (monthlyDisplay.value) return monthlyDisplay.value.quotaLabel
   return props.plan.seven_day_quota_usd != null ? `${formatMonthlyPlanUsd(props.plan.seven_day_quota_usd)} / 7 ${t('payment.days')}` : ''

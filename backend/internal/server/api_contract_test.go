@@ -68,6 +68,10 @@ func TestAPIContracts(t *testing.T) {
 					"balance_notify_threshold": null,
 					"balance_notify_extra_emails": null,
 					"total_recharged": 0,
+					"reward_balances": {
+						"daily_check_in": {"amount": 0, "expires_at": null},
+						"affiliate": {"amount": 0, "credit_count": 0, "earliest_expires_at": null}
+					},
 					"linuxdo_bound": false,
 					"oidc_bound": false,
 					"wechat_bound": false,
@@ -712,6 +716,7 @@ func TestAPIContracts(t *testing.T) {
 						"total_cost": 0.5,
 						"actual_cost": 0.5,
 						"rate_multiplier": 1,
+						"long_context_billing_applied": false,
 						"billing_type": 0,
 							"stream": true,
 							"duration_ms": 100,
@@ -951,10 +956,16 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_oidc_platform_quotas": null,
 					"auth_source_default_wechat_platform_quotas": null,
 					"auth_source_default_dingtalk_platform_quotas": null,
+					"affiliate_rebate_rate": 20,
 					"affiliate_rebate_freeze_hours": 0,
-					"affiliate_first_recharge_threshold": 20,
-					"affiliate_inviter_reward": 5,
+					"affiliate_first_recharge_threshold": 0,
+					"affiliate_inviter_reward": 10,
 					"affiliate_invitee_reward": 5,
+					"affiliate_reward_validity_days": 7,
+					"affiliate_inviter_reward_limit": 0,
+					"affiliate_rebate_duration_days": 0,
+					"affiliate_rebate_per_invitee_cap": 0,
+					"affiliate_admin_recharge_enabled": false,
 					"default_user_rpm_limit": 0,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
@@ -1232,10 +1243,16 @@ func TestAPIContracts(t *testing.T) {
 					"default_balance": 0,
 					"default_anthropic_group_id": null,
 					"default_openai_group_id": null,
+					"affiliate_rebate_rate": 20,
 					"affiliate_rebate_freeze_hours": 0,
-					"affiliate_first_recharge_threshold": 20,
-					"affiliate_inviter_reward": 5,
+					"affiliate_first_recharge_threshold": 0,
+					"affiliate_inviter_reward": 10,
 					"affiliate_invitee_reward": 5,
+					"affiliate_reward_validity_days": 7,
+					"affiliate_inviter_reward_limit": 0,
+					"affiliate_rebate_duration_days": 0,
+					"affiliate_rebate_per_invitee_cap": 0,
+					"affiliate_admin_recharge_enabled": false,
 					"default_user_rpm_limit": 0,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
@@ -1502,7 +1519,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingService := service.NewSettingService(settingRepo, cfg)
 	apiKeyService.SetProviderRouting(nil, stubDefaultAPIKeyGroupSettings{keyType: service.APIKeyTypeAnthropic, groupID: 10})
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
@@ -1859,6 +1876,10 @@ type stubAccountRepo struct {
 }
 
 func (s *stubAccountRepo) Create(ctx context.Context, account *service.Account) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) CreateWithAccountGroups(ctx context.Context, account *service.Account, groups []service.AccountGroup) error {
 	return errors.New("not implemented")
 }
 

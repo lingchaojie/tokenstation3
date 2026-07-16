@@ -7,7 +7,22 @@ export default {
     buySubscription: 'Buy subscription',
     subscriptionRemaining: '{remaining} remaining of {total}',
     rechargeBalance: 'Recharge balance',
-    balanceOrderHint: 'Subscription quota is used before recharge balance.',
+    balanceOrderHint: 'Check-in rewards, invite rewards, subscription quota, and recharge balance are used in order.',
+    rewardBalance: {
+      daily: 'Check-in balance {amount}, expires {expiresAt}',
+      affiliate: 'Invite balance {amount}, earliest expiry {expiresAt}',
+      detailCount: '{count} details',
+      detailsAria: 'View invite reward details',
+      dialogTitle: 'Invite reward details',
+      closeAria: 'Close invite reward details',
+      loading: 'Loading reward details…',
+      empty: 'No invite reward details',
+      loadError: 'Could not load invite reward details',
+      inviterRole: 'Inviter reward',
+      inviteeRole: 'Invitee reward',
+      expiresAt: 'Expires {expiresAt}',
+      pageStatus: 'Page {page} of {pages}',
+    },
     balanceFallbackToggle: {
       title: 'Use balance after monthly card quota',
       enabledHint: 'When on, requests continue by deducting recharge balance after the monthly card 7-day quota is used up.',
@@ -138,6 +153,7 @@ export default {
     editKey: 'Edit API Key',
     deleteKey: 'Delete API Key',
     deleteConfirmMessage: "Are you sure you want to delete '{name}'? This action cannot be undone.",
+    id: 'ID',
     apiKey: 'API Key',
     group: 'Group',
     currentConcurrency: 'Current Concurrency',
@@ -205,9 +221,13 @@ export default {
       copied: 'Copied',
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       noGroupTitle: 'Please assign a group first',
-      noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
-      openai: {
-        description: 'Save both config.toml and auth.json below in the Codex CLI config directory; both files are required.',
+	  noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
+	  openai: {
+		description: 'Save both config.toml and auth.json below in the Codex CLI config directory; both files are required.',
+		authModeTitle: 'Codex authentication mode',
+		authModeDescription: 'Compatibility mode keeps the existing setup for older Codex clients. API Key Mode enables the client-side image executor.',
+		authModeLegacy: 'Compatibility mode',
+		authModeApiKey: 'API Key Mode',
         configTomlHint: 'Make sure the following content is at the beginning of the config.toml file',
         note: 'If auth.json already exists, merge only the OPENAI_API_KEY property instead of overwriting other sign-in data. Do not put the literal key in env_key; this example uses auth.json. Fully quit and restart Codex after saving, then create a new conversation. On macOS/Linux, run mkdir -p ~/.codex if the directory does not exist.',
         noteWindows: 'If auth.json already exists, merge only the OPENAI_API_KEY property instead of overwriting other sign-in data. Do not put the literal key in env_key; this example uses auth.json. Fully quit and restart Codex after saving, then create a new conversation. Press Win+R and enter %userprofile%\\.codex; create the directory first if it does not exist.',
@@ -240,8 +260,8 @@ export default {
       grok: {
         description: 'Configure Grok Build or OpenCode to send Responses API traffic through your Sub2API Grok group.',
         configTomlHint: 'Back up an existing config.toml before merging this model entry. Run grok inspect after saving to verify the effective configuration.',
-        note: 'Save the file as ~/.grok/config.toml, then run grok inspect and select sub2api-grok from /model.',
-        noteWindows: 'Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select sub2api-grok from /model.',
+        note: 'Save the file as ~/.grok/config.toml, then run grok inspect and select grok from /model.',
+        noteWindows: 'Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select grok from /model.',
       },
       opencode: {
         description: 'Add the following OpenCode config to use this API key with the currently supported Claude or OpenAI models.',
@@ -479,7 +499,8 @@ export default {
     providers: {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
-      gemini: 'Gemini'
+      gemini: 'Gemini',
+      grok: 'Grok'
     },
     extraModelsHeader: 'Extra Models',
     extraModelsEmpty: 'No extra models',
@@ -582,9 +603,17 @@ export default {
   },
 
   affiliate: {
-    rewardIntro: 'Invite a friend to sign up. Once their first recharge reaches {threshold}, you earn {inviter} and your friend earns {invitee} (first recharge only).',
     title: 'Affiliate Rebates',
-    description: 'Invite new users and convert your rebate quota into account balance',
+    description: 'Share your code or link with new users. Rewards go directly to expiring Token credit.',
+    immediateTitle: 'Earn rewards immediately',
+    immediateRewardIntro: 'You receive {inviter}; your friend receives {invitee}',
+    firstRechargeTitle: 'Earn after a qualifying first recharge',
+    firstRechargeRewardIntro: 'When your friend first recharges {threshold}, you receive {inviter} and they receive {invitee}',
+    validityHint: 'Rewards remain valid for {days} days after grant',
+    limit: {
+      reached: 'Inviter rewards have reached the {count}/{limit} cap',
+      inviteeStillRewarded: 'You can keep sharing. New friends can still receive the invitee reward.',
+    },
     yourCode: 'Your Affiliate Code',
     inviteLink: 'Invite Link',
     copyCode: 'Copy Code',
@@ -622,11 +651,10 @@ export default {
       }
     },
     tips: {
-      title: 'How It Works',
-      line1: 'Share your affiliate code or invite link with new users.',
-      line2: 'When an invitee completes a qualifying first recharge, you receive {reward} of rebate quota.',
-      line3: 'Transfer rebate quota to balance at any time.',
-      line4: 'Newly earned rebates may have a waiting period before they can be transferred.'
+      title: 'Campaign Rules',
+      immediate: 'Both rewards are granted as soon as your friend registers with the invite code.',
+      firstRecharge: 'Both rewards are granted when the first recharge reaches {threshold}; subscriptions always qualify.',
+      validity: 'Each reward remains valid for {days} days after grant and is cleared at expiry.'
     }
   },
 

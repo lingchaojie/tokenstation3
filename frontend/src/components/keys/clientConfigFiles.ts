@@ -12,6 +12,7 @@ export interface ClientConfigInput {
   baseUrl: string
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
+  codexAuthMode?: 'legacy' | 'api-key'
 }
 
 export interface ClientConfigFile {
@@ -181,6 +182,10 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   }
 
   const configDir = input.os === 'windows' ? '%userprofile%\\.codex' : '~/.codex'
+  const providerAuthConfig = input.codexAuthMode === 'api-key'
+    ? `requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
+    : 'requires_openai_auth = true'
   const configContent = `model_provider = "OpenAI"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
@@ -193,7 +198,7 @@ windows_wsl_setup_acknowledged = true
 name = "OpenAI"
 base_url = "${v1}"
 wire_api = "responses"
-requires_openai_auth = true
+${providerAuthConfig}
 
 [features]
 goals = true`

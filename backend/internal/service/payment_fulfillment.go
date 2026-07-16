@@ -763,31 +763,12 @@ func (s *PaymentService) subscriptionHasOrderNote(ctx context.Context, userID in
 	return false
 }
 
-// countPriorSucceededRecharges 统计用户在 excludeOrderID 之外的成功充值订单数
-// （order_type ∈ {balance, subscription}，status ∈ {PAID, RECHARGING, COMPLETED}）。
-// 返回 0 表示当前订单为首充。必须在履约事务上下文内调用（ctx 携带 tx）。
-func (s *PaymentService) countPriorSucceededRecharges(ctx context.Context, userID, excludeOrderID int64) (int, error) {
-	client := s.entClient
-	if tx := dbent.TxFromContext(ctx); tx != nil {
-		client = tx.Client()
-	}
-	n, err := client.PaymentOrder.Query().
-		Where(
-			paymentorder.UserIDEQ(userID),
-			paymentorder.IDNEQ(excludeOrderID),
-			paymentorder.OrderTypeIn(payment.OrderTypeBalance, payment.OrderTypeSubscription),
-			paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted),
-		).
-		Count(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("count prior recharges: %w", err)
-	}
-	return n, nil
-}
-
 func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *dbent.PaymentOrder) error {
+	if o == nil {
+		return nil
+	}
 	baseAmount := affiliateRebateBaseAmount(o)
-	if o == nil || baseAmount <= 0 {
+	if baseAmount <= 0 && o.OrderType != payment.OrderTypeSubscription {
 		return nil
 	}
 	if s.affiliateService == nil {
@@ -815,27 +796,12 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 		return nil
 	}
 
-	// 串行化同一被邀请人的首充结算：加行锁后再计数，防并发订单重复发放。
-	// 第二个并发结算会阻塞至第一个提交，随后其计数看到兄弟订单而正确跳过。
-	if err := s.affiliateService.LockInviteeForSettlement(txCtx, o.UserID); err != nil {
-		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-			"error": err.Error(),
-		})
-		return fmt.Errorf("lock invitee for settlement: %w", err)
-	}
-
-	priorCount, err := s.countPriorSucceededRecharges(txCtx, o.UserID, o.ID)
-	if err != nil {
-		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
-			"error": err.Error(),
-		})
-		return fmt.Errorf("count prior recharges: %w", err)
-	}
-	isFirstRecharge := priorCount == 0
 	isSubscription := o.OrderType == payment.OrderTypeSubscription
 
 	sourceOrderID := o.ID
-	result, err := s.affiliateService.GrantFirstRechargeReward(txCtx, o.UserID, baseAmount, isSubscription, isFirstRecharge, &sourceOrderID)
+	// Every successful order may attempt settlement. The repository locks the
+	// relationship and only the first pending event can resolve it.
+	result, err := s.affiliateService.GrantFirstRechargeReward(txCtx, o.UserID, baseAmount, isSubscription, true, &sourceOrderID)
 	if err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
 			"error": err.Error(),
@@ -844,12 +810,15 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	}
 
 	if !result.Qualified {
-		reason := "not first recharge or below threshold or no inviter"
+		reason := "relationship already resolved, activity disabled, below threshold, or no inviter"
 		if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_SKIPPED", map[string]any{
-			"baseAmount":      baseAmount,
-			"isFirstRecharge": isFirstRecharge,
-			"isSubscription":  isSubscription,
-			"reason":          reason,
+			"baseAmount":            baseAmount,
+			"resolved":              result.Resolved,
+			"inviter_rewarded":      result.InviterRewarded,
+			"invitee_rewarded":      result.InviteeRewarded,
+			"inviter_limit_reached": result.InviterLimitReached,
+			"isSubscription":        isSubscription,
+			"reason":                reason,
 		}); err != nil {
 			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": err.Error()})
 			return fmt.Errorf("update affiliate rebate skipped audit: %w", err)
@@ -862,11 +831,14 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	}
 
 	if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_APPLIED", map[string]any{
-		"baseAmount":     baseAmount,
-		"inviterID":      result.InviterID,
-		"inviterReward":  result.InviterReward,
-		"inviteeReward":  result.InviteeReward,
-		"isSubscription": isSubscription,
+		"baseAmount":            baseAmount,
+		"inviterID":             result.InviterID,
+		"inviterReward":         result.InviterReward,
+		"inviteeReward":         result.InviteeReward,
+		"inviter_rewarded":      result.InviterRewarded,
+		"invitee_rewarded":      result.InviteeRewarded,
+		"inviter_limit_reached": result.InviterLimitReached,
+		"isSubscription":        isSubscription,
 	}); err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{"error": err.Error()})
 		return fmt.Errorf("update affiliate rebate applied audit: %w", err)
@@ -877,9 +849,8 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 		return fmt.Errorf("commit affiliate rebate tx: %w", err)
 	}
 
-	// 提交后失效被邀请方余额缓存（best-effort）
-	if result.InviteeReward > 0 {
-		s.affiliateService.InvalidateUserBalanceCache(ctx, o.UserID)
+	if result.InviterRewarded || result.InviteeRewarded {
+		s.affiliateService.invalidateRewardCaches(ctx, o.UserID, result)
 	}
 	return nil
 }

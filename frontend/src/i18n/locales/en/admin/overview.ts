@@ -372,7 +372,7 @@ export default {
 
     affiliates: {
       invitesDescription: 'View site-wide inviter and invitee relationships',
-      rebatesDescription: 'View recharge orders that generated affiliate rebates',
+      rebatesDescription: 'Audit legacy recharge rebates and new rewards for both invite roles',
       transfersDescription: 'View affiliate quota transfers into account balance',
       checkIn: {
         title: 'Check-in Settings',
@@ -417,10 +417,22 @@ export default {
         user: 'User',
         affCode: 'Invite Code',
         order: 'Order',
+        source: 'Source',
+        rewardRole: 'Reward Role',
+        sources: {
+          legacy: 'Legacy Rebate',
+          rewardCredit: 'Reward Credit',
+        },
+        roles: {
+          inviter: 'Inviter Reward',
+          invitee: 'Invitee Reward',
+        },
         totalRebate: 'Total Rebate',
         orderAmount: 'Top-up Amount',
         payAmount: 'Paid Amount',
         rebateAmount: 'Rebate Amount',
+        remainingAmount: 'Remaining',
+        expiresAt: 'Expires At',
         paymentType: 'Payment Method',
         orderStatus: 'Order Status',
         transferAmount: 'Transfer Amount',
@@ -435,7 +447,7 @@ export default {
       overview: {
         title: 'Affiliate User Overview',
         affCode: 'Invite Code',
-        rebateRate: 'Rebate Rate',
+        inviterReward: 'Inviter Reward Amount',
         invitedCount: 'Invited Users',
         rebatedInviteeCount: 'Rebated Invitees',
         availableQuota: 'Available Quota',
@@ -816,6 +828,7 @@ export default {
       public: 'Public',
       columns: {
         name: 'Name',
+        id: 'ID',
         platform: 'Platform',
         rateMultiplier: 'Rate Multiplier',
         rpmOverride: 'RPM Override',

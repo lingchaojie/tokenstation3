@@ -90,6 +90,20 @@ func (_c *SubscriptionPlanCreate) SetNillableSevenDayQuotaUsd(v *float64) *Subsc
 	return _c
 }
 
+// SetCurrency sets the "currency" field.
+func (_c *SubscriptionPlanCreate) SetCurrency(v string) *SubscriptionPlanCreate {
+	_c.mutation.SetCurrency(v)
+	return _c
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_c *SubscriptionPlanCreate) SetNillableCurrency(v *string) *SubscriptionPlanCreate {
+	if v != nil {
+		_c.SetCurrency(*v)
+	}
+	return _c
+}
+
 // SetValidityDays sets the "validity_days" field.
 func (_c *SubscriptionPlanCreate) SetValidityDays(v int) *SubscriptionPlanCreate {
 	_c.mutation.SetValidityDays(v)
@@ -283,6 +297,10 @@ func (_c *SubscriptionPlanCreate) defaults() {
 		v := subscriptionplan.DefaultDescription
 		_c.mutation.SetDescription(v)
 	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		v := subscriptionplan.DefaultCurrency
+		_c.mutation.SetCurrency(v)
+	}
 	if _, ok := _c.mutation.ValidityDays(); !ok {
 		v := subscriptionplan.DefaultValidityDays
 		_c.mutation.SetValidityDays(v)
@@ -332,6 +350,14 @@ func (_c *SubscriptionPlanCreate) check() error {
 	}
 	if _, ok := _c.mutation.Price(); !ok {
 		return &ValidationError{Name: "price", err: errors.New(`ent: missing required field "SubscriptionPlan.price"`)}
+	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		return &ValidationError{Name: "currency", err: errors.New(`ent: missing required field "SubscriptionPlan.currency"`)}
+	}
+	if v, ok := _c.mutation.Currency(); ok {
+		if err := subscriptionplan.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "SubscriptionPlan.currency": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.ValidityDays(); !ok {
 		return &ValidationError{Name: "validity_days", err: errors.New(`ent: missing required field "SubscriptionPlan.validity_days"`)}
@@ -432,6 +458,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 	if value, ok := _c.mutation.SevenDayQuotaUsd(); ok {
 		_spec.SetField(subscriptionplan.FieldSevenDayQuotaUsd, field.TypeFloat64, value)
 		_node.SevenDayQuotaUsd = &value
+	}
+	if value, ok := _c.mutation.Currency(); ok {
+		_spec.SetField(subscriptionplan.FieldCurrency, field.TypeString, value)
+		_node.Currency = value
 	}
 	if value, ok := _c.mutation.ValidityDays(); ok {
 		_spec.SetField(subscriptionplan.FieldValidityDays, field.TypeInt, value)
@@ -640,6 +670,18 @@ func (u *SubscriptionPlanUpsert) AddSevenDayQuotaUsd(v float64) *SubscriptionPla
 // ClearSevenDayQuotaUsd clears the value of the "seven_day_quota_usd" field.
 func (u *SubscriptionPlanUpsert) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsert {
 	u.SetNull(subscriptionplan.FieldSevenDayQuotaUsd)
+	return u
+}
+
+// SetCurrency sets the "currency" field.
+func (u *SubscriptionPlanUpsert) SetCurrency(v string) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldCurrency, v)
+	return u
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateCurrency() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldCurrency)
 	return u
 }
 
@@ -986,6 +1028,20 @@ func (u *SubscriptionPlanUpsertOne) UpdateSevenDayQuotaUsd() *SubscriptionPlanUp
 func (u *SubscriptionPlanUpsertOne) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearSevenDayQuotaUsd()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *SubscriptionPlanUpsertOne) SetCurrency(v string) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateCurrency() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateCurrency()
 	})
 }
 
@@ -1526,6 +1582,20 @@ func (u *SubscriptionPlanUpsertBulk) UpdateSevenDayQuotaUsd() *SubscriptionPlanU
 func (u *SubscriptionPlanUpsertBulk) ClearSevenDayQuotaUsd() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.ClearSevenDayQuotaUsd()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *SubscriptionPlanUpsertBulk) SetCurrency(v string) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateCurrency() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateCurrency()
 	})
 }
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,14 @@ type UserHandler struct {
 	emailService          *service.EmailService
 	emailCache            service.EmailCache
 	affiliateService      *service.AffiliateService
+	rewardCreditService   *service.RewardCreditService
 	userPlatformQuotaRepo service.UserPlatformQuotaRepository
+}
+
+func (h *UserHandler) SetRewardCreditService(rewardCreditService *service.RewardCreditService) {
+	if h != nil {
+		h.rewardCreditService = rewardCreditService
+	}
 }
 
 // NewUserHandler creates a new UserHandler
@@ -86,6 +94,7 @@ type UpdateProfileRequest struct {
 
 type userProfileResponse struct {
 	dto.User
+	RewardBalances    dto.RewardBalanceSummary               `json:"reward_balances"`
 	AvatarURL         string                                 `json:"avatar_url,omitempty"`
 	AvatarSource      *userProfileSourceContext              `json:"avatar_source,omitempty"`
 	UsernameSource    *userProfileSourceContext              `json:"username_source,omitempty"`
@@ -100,6 +109,64 @@ type userProfileResponse struct {
 	OIDCBound         bool                                   `json:"oidc_bound"`
 	WeChatBound       bool                                   `json:"wechat_bound"`
 	DingTalkBound     bool                                   `json:"dingtalk_bound"`
+}
+
+func (h *UserHandler) ListRewardCredits(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.rewardCreditService == nil {
+		response.InternalError(c, "Reward credit service not configured")
+		return
+	}
+
+	creditType := strings.TrimSpace(c.Query("type"))
+	if creditType == "" {
+		creditType = "affiliate"
+	}
+	status := strings.TrimSpace(c.Query("status"))
+	if status == "" {
+		status = service.RewardCreditStatusActive
+	}
+	page, ok := positiveQueryInt(c, "page", 1)
+	if !ok {
+		response.BadRequest(c, "Invalid reward credit query")
+		return
+	}
+	pageSize, ok := positiveQueryInt(c, "page_size", 20)
+	if !ok || pageSize > 100 {
+		response.BadRequest(c, "Invalid reward credit query")
+		return
+	}
+
+	items, total, err := h.rewardCreditService.ListCredits(c.Request.Context(), service.RewardCreditQuery{
+		UserID:   subject.UserID,
+		Type:     creditType,
+		Status:   status,
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+func positiveQueryInt(c *gin.Context, key string, defaultValue int) (int, bool) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return defaultValue, true
+	}
+	value, err := strconv.Atoi(raw)
+	return value, err == nil && value > 0
 }
 
 type userProfileSourceContext struct {
@@ -211,27 +278,6 @@ func (h *UserHandler) GetAffiliate(c *gin.Context) {
 		return
 	}
 	response.Success(c, detail)
-}
-
-// TransferAffiliateQuota transfers all available affiliate quota into current balance.
-// POST /api/v1/user/aff/transfer
-func (h *UserHandler) TransferAffiliateQuota(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-
-	transferred, balance, err := h.affiliateService.TransferAffiliateQuota(c.Request.Context(), subject.UserID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, gin.H{
-		"transferred_quota": transferred,
-		"balance":           balance,
-	})
 }
 
 type StartIdentityBindingRequest struct {
@@ -533,11 +579,27 @@ func (h *UserHandler) ToggleNotifyEmail(c *gin.Context) {
 }
 
 func (h *UserHandler) buildUserProfileResponse(ctx context.Context, userID int64, user *service.User) (userProfileResponse, error) {
+	rewardBalances := dto.RewardBalanceSummary{}
+	if h.rewardCreditService != nil {
+		summary, expired, err := h.rewardCreditService.ExpireUserAndGetSummary(ctx, userID)
+		if err != nil {
+			return userProfileResponse{}, err
+		}
+		rewardBalances = dto.RewardBalanceSummaryFromService(summary)
+		if expired > 0 {
+			user, err = h.userService.GetByID(ctx, userID)
+			if err != nil {
+				return userProfileResponse{}, err
+			}
+		}
+	}
 	identities, err := h.userService.GetProfileIdentitySummaries(ctx, userID, user)
 	if err != nil {
 		return userProfileResponse{}, err
 	}
-	return userProfileResponseFromService(user, identities), nil
+	result := userProfileResponseFromService(user, identities)
+	result.RewardBalances = rewardBalances
+	return result, nil
 }
 
 func userProfileResponseFromService(user *service.User, identities service.UserIdentitySummarySet) userProfileResponse {

@@ -11,6 +11,7 @@
       <UserDashboardStats
         :stats="stats"
         :balance="user?.balance || 0"
+        :reward-balances="user?.reward_balances"
         :is-simple="authStore.isSimpleMode"
         :show-standard-costs="showStandardCosts"
         :subscription-balance="subscriptionStore.subscriptionBalanceSummary"

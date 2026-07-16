@@ -99,6 +99,20 @@ func ProvideWebChatHandler(webChatService *service.WebChatService) *WebChatHandl
 	return NewWebChatHandler(webChatService)
 }
 
+func ProvideUserHandler(
+	userService *service.UserService,
+	authService *service.AuthService,
+	emailService *service.EmailService,
+	emailCache service.EmailCache,
+	affiliateService *service.AffiliateService,
+	userPlatformQuotaRepo service.UserPlatformQuotaRepository,
+	rewardCreditService *service.RewardCreditService,
+) *UserHandler {
+	handler := NewUserHandler(userService, authService, emailService, emailCache, affiliateService, userPlatformQuotaRepo)
+	handler.SetRewardCreditService(rewardCreditService)
+	return handler
+}
+
 // ProvideAdminSettingHandler creates admin.SettingHandler with notification template APIs.
 func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, notificationEmailService *service.NotificationEmailService) *admin.SettingHandler {
 	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, paymentConfigService, paymentService, userAttributeService)
@@ -157,7 +171,7 @@ func ProvideHandlers(
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
 	NewAuthHandler,
-	NewUserHandler,
+	ProvideUserHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,
 	NewRedeemHandler,
@@ -179,7 +193,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
 	admin.NewGroupHandler,
-	admin.NewAccountHandler,
+	admin.ProvideAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,
 	admin.NewBackupHandler,
