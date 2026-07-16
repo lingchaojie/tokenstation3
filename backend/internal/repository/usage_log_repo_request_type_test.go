@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,6 +247,49 @@ func TestPrepareUsageLogInsert_ArgCountMatchesTypes(t *testing.T) {
 	})
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+}
+
+func TestUsageLogRepositoryCreate_PlaceholderCountMatchesPreparedArgs(t *testing.T) {
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: time.Date(2025, 1, 5, 13, 0, 0, 0, time.UTC),
+	})
+	lastPlaceholder := fmt.Sprintf("$%d", len(prepared.args))
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(
+		func(_, actualSQL string) error {
+			if !strings.Contains(actualSQL, lastPlaceholder) {
+				return fmt.Errorf("usage log insert is missing final placeholder %s", lastPlaceholder)
+			}
+			return nil
+		},
+	)))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("usage log insert").
+		WithArgs(anySliceToDriverValues(prepared.args)...).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).
+			AddRow(int64(101), prepared.createdAt))
+
+	repo := &usageLogRepository{sql: db}
+	log := &service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		AccountID: 3,
+		RequestID: "req-placeholder-count",
+		Model:     "gpt-5.4",
+		CreatedAt: prepared.createdAt,
+	}
+	inserted, err := repo.Create(context.Background(), log)
+
+	require.NoError(t, err)
+	require.True(t, inserted)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPrepareUsageLogInsert_PersistsImageSizeMetadata(t *testing.T) {

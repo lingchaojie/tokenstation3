@@ -652,6 +652,36 @@ func TestResolveAccountStatsCost_ApplyPricingToAccountStats_UsesTotalCost(t *tes
 	require.InDelta(t, 0.75, *result, 1e-12)
 }
 
+func TestResolveAccountStatsCost_LongContextProviderPricingPrecedesApplyPricing(t *testing.T) {
+	channel := &Channel{
+		ID:                         1,
+		Status:                     StatusActive,
+		ApplyPricingToAccountStats: true,
+	}
+	cs := newTestChannelServiceForStats(t, channel, 10, PlatformOpenAI)
+	bs := newTestBillingServiceWithPrices(map[string]*ModelPricing{
+		"gpt-5.6-sol": {
+			InputPricePerToken:          0.001,
+			OutputPricePerToken:         0.002,
+			CacheReadPricePerToken:      0.0001,
+			LongContextInputThreshold:   100,
+			LongContextInputMultiplier:  2,
+			LongContextOutputMultiplier: 1.5,
+		},
+	})
+	tokens := UsageTokens{InputTokens: 101, OutputTokens: 10, CacheReadTokens: 5}
+
+	result := resolveAccountStatsCost(
+		context.Background(),
+		cs, bs,
+		1, 10, "gpt-5.6-sol",
+		tokens, 1, 0.1115,
+	)
+
+	require.NotNil(t, result)
+	require.InDelta(t, 0.233, *result, 1e-12)
+}
+
 func TestResolveAccountStatsCost_ApplyPricingToAccountStats_ZeroTotalCost_ReturnsNil(t *testing.T) {
 	channel := &Channel{
 		ID:                         1,

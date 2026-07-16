@@ -1128,6 +1128,62 @@ func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillingDisabledByDefaul
 	require.Equal(t, 1, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_LongContextOptOutKeepsProviderAccountStatsCost(t *testing.T) {
+	const groupID int64 = 541
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(
+		usageRepo,
+		&openAIRecordUsageUserRepoStub{},
+		&openAIRecordUsageSubRepoStub{},
+		nil,
+	)
+	channelCache := newEmptyChannelCache()
+	channelCache.channelByGroupID[groupID] = &Channel{
+		ID:                         54,
+		Status:                     StatusActive,
+		ApplyPricingToAccountStats: true,
+	}
+	channelCache.groupPlatform[groupID] = PlatformOpenAI
+	channelCache.loadedAt = time.Now()
+	svc.channelService = &ChannelService{}
+	svc.channelService.cache.Store(channelCache)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_gpt54_provider_long_context",
+			Usage: OpenAIUsage{
+				InputTokens:  300000,
+				OutputTokens: 2000,
+			},
+			Model:    "gpt-5.4-2026-03-05",
+			Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      10541,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				Platform:       PlatformOpenAI,
+				RateMultiplier: 1,
+			},
+		},
+		User: &User{ID: 20541},
+		Account: &Account{
+			ID:       30541,
+			Platform: PlatformOpenAI,
+			Extra:    map[string]any{"openai_long_context_billing_enabled": false},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.False(t, usageRepo.lastLog.LongContextBillingApplied)
+	require.NotNil(t, usageRepo.lastLog.AccountStatsCost)
+	expectedProviderInput := 300000 * 2.5e-6 * 2.0
+	expectedProviderOutput := 2000 * 15e-6 * 1.5
+	require.InDelta(t, expectedProviderInput+expectedProviderOutput, *usageRepo.lastLog.AccountStatsCost, 1e-10)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillingEnabledPerAccount(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
