@@ -147,6 +147,36 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Empty(t, req.Header.Get("Anthropic-Beta"))
 }
 
+func TestNewKiroJSONRequestPreservesLegacyAndCanonicalExternalIDPHeaders(t *testing.T) {
+	for _, provider := range []string{"Internal", kiropkg.ProviderExternalIdp} {
+		t.Run(provider, func(t *testing.T) {
+			account := &Account{
+				Platform: PlatformKiro,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"auth_method": "external_idp",
+					"provider":    provider,
+				},
+			}
+
+			req, err := newKiroJSONRequest(
+				context.Background(),
+				"https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+				[]byte(`{"ok":true}`),
+				"access-token",
+				"account-key",
+				buildKiroMachineID(account),
+				"",
+				account,
+			)
+			require.NoError(t, err)
+			require.Equal(t, "EXTERNAL_IDP", req.Header.Get("TokenType"))
+			require.Equal(t, "true", req.Header.Get("redirect-for-internal"))
+			require.Empty(t, req.Header["tokentype"])
+		})
+	}
+}
+
 func TestNewKiroJSONRequestAddsProfileArnHeaderForMCP(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{

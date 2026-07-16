@@ -42,6 +42,53 @@ const (
 	SocialProviderGitHub SocialProvider = "Github"
 )
 
+const (
+	ProviderGoogle      = "Google"
+	ProviderGithub      = "Github"
+	ProviderBuilderId   = "BuilderId"
+	ProviderEnterprise  = "Enterprise"
+	ProviderExternalIdp = "ExternalIdp"
+)
+
+func IsValidKiroProvider(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case ProviderGoogle, ProviderGithub, ProviderBuilderId, ProviderEnterprise, ProviderExternalIdp:
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveIDCProvider(startURL string) string {
+	switch strings.TrimSpace(startURL) {
+	case "", BuilderIDStartURL:
+		return ProviderBuilderId
+	default:
+		return ProviderEnterprise
+	}
+}
+
+func normalizeKiroExpiresAt(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("expiresAt is empty")
+	}
+
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.Local().Format(time.RFC3339), nil
+		}
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
+		parsed, err := time.ParseInLocation(layout, value, time.UTC)
+		if err == nil {
+			return parsed.Local().Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("invalid expiresAt format: %q", raw)
+}
+
 type AuthSession struct {
 	State        string
 	CodeVerifier string
@@ -501,7 +548,7 @@ func ExchangeIDCAuthCode(ctx context.Context, proxyURL, clientID, clientSecret, 
 		ProfileArn:   resp.ProfileArn,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "idc",
-		Provider:     "AWS",
+		Provider:     resolveIDCProvider(startURL),
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		StartURL:     startURL,
@@ -511,7 +558,7 @@ func ExchangeIDCAuthCode(ctx context.Context, proxyURL, clientID, clientSecret, 
 	return token, nil
 }
 
-func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refreshToken, region, startURL string) (*TokenData, error) {
+func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refreshToken, region, startURL, provider string) (*TokenData, error) {
 	if region == "" {
 		region = defaultIDCRegion
 	}
@@ -537,11 +584,14 @@ func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refr
 		ProfileArn:   resp.ProfileArn,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "idc",
-		Provider:     "AWS",
+		Provider:     strings.TrimSpace(provider),
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		StartURL:     startURL,
 		Region:       region,
+	}
+	if token.Provider == "" {
+		token.Provider = resolveIDCProvider(startURL)
 	}
 	token.Email = FetchOIDCUserEmail(ctx, proxyURL, token.AccessToken, region)
 	return token, nil
@@ -585,13 +635,33 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
 		token.AuthMethod = "idc"
 	}
+	token.Provider = strings.TrimSpace(token.Provider)
+	if !IsValidKiroProvider(token.Provider) {
+		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise/ExternalIdp)", token.Provider)
+	}
 	if token.AuthMethod == "idc" {
-		if strings.TrimSpace(token.Provider) == "" {
-			token.Provider = "AWS"
+		if strings.TrimSpace(token.Region) == "" {
+			token.Region = defaultIDCRegion
+		}
+	} else if token.AuthMethod == "external_idp" {
+		token.Provider = ProviderExternalIdp
+		token.RefreshToken = strings.TrimSpace(token.RefreshToken)
+		token.ClientID = strings.TrimSpace(token.ClientID)
+		token.IssuerURL = strings.TrimSpace(token.IssuerURL)
+		token.Scopes = strings.TrimSpace(token.Scopes)
+		if token.RefreshToken == "" || token.ClientID == "" || token.IssuerURL == "" || token.Scopes == "" {
+			return nil, fmt.Errorf("kiro external_idp import requires refreshToken, clientId, issuerUrl, and scopes")
 		}
 		if strings.TrimSpace(token.Region) == "" {
 			token.Region = defaultIDCRegion
 		}
+	}
+	if strings.TrimSpace(token.ExpiresAt) != "" {
+		normalized, err := normalizeKiroExpiresAt(token.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse kiro token expiresAt: %w", err)
+		}
+		token.ExpiresAt = normalized
 	}
 	return &token, nil
 }
@@ -683,7 +753,7 @@ func externalIDPTokenData(resp externalIDPTokenResponse, issuerURL, clientID str
 		RefreshToken: refreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "external_idp",
-		Provider:     "Internal",
+		Provider:     ProviderExternalIdp,
 		ClientID:     strings.TrimSpace(clientID),
 		Email:        strings.TrimSpace(loginHint),
 		Region:       defaultIDCRegion,

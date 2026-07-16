@@ -4,6 +4,7 @@ package kiro
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -140,7 +141,7 @@ func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
 	if gotForm.Get("redirect_uri") != "http://localhost:49153/oauth/callback" {
 		t.Fatalf("redirect_uri = %q", gotForm.Get("redirect_uri"))
 	}
-	if token.AuthMethod != "external_idp" || token.Provider != "Internal" {
+	if token.AuthMethod != "external_idp" || token.Provider != ProviderExternalIdp {
 		t.Fatalf("token auth = %q/%q", token.AuthMethod, token.Provider)
 	}
 	if token.AccessToken != "access-token" || token.RefreshToken != "refresh-token" {
@@ -186,6 +187,7 @@ func TestParseImportedTokenInfersIDCAuthMetadataFromClientCredentials(t *testing
 	token, err := ParseImportedToken(`{
 		"accessToken": "access-token",
 		"refreshToken": "refresh-token",
+		"provider": "BuilderId",
 		"clientId": "client-id",
 		"clientSecret": "client-secret"
 	}`, "")
@@ -196,8 +198,8 @@ func TestParseImportedTokenInfersIDCAuthMetadataFromClientCredentials(t *testing
 	if token.AuthMethod != "idc" {
 		t.Fatalf("AuthMethod = %q, want idc", token.AuthMethod)
 	}
-	if token.Provider != "AWS" {
-		t.Fatalf("Provider = %q, want AWS", token.Provider)
+	if token.Provider != ProviderBuilderId {
+		t.Fatalf("Provider = %q, want %q", token.Provider, ProviderBuilderId)
 	}
 	if token.Region != defaultIDCRegion {
 		t.Fatalf("Region = %q, want %q", token.Region, defaultIDCRegion)
@@ -208,6 +210,7 @@ func TestParseImportedTokenInfersIDCAuthMetadataFromDeviceRegistration(t *testin
 	token, err := ParseImportedToken(`{
 		"accessToken": "access-token",
 		"refreshToken": "refresh-token",
+		"provider": "Enterprise",
 		"clientIdHash": "client-id-hash"
 	}`, `{
 		"clientId": "client-id",
@@ -225,5 +228,200 @@ func TestParseImportedTokenInfersIDCAuthMetadataFromDeviceRegistration(t *testin
 	}
 	if token.AuthMethod != "idc" {
 		t.Fatalf("AuthMethod = %q, want idc", token.AuthMethod)
+	}
+}
+
+func TestParseImportedTokenRejectsMissingOrInvalidProvider(t *testing.T) {
+	tests := []struct {
+		name      string
+		tokenJSON string
+	}{
+		{
+			name:      "missing",
+			tokenJSON: `{"accessToken":"access-token","authMethod":"social"}`,
+		},
+		{
+			name:      "blank",
+			tokenJSON: `{"accessToken":"access-token","authMethod":"social","provider":"  "}`,
+		},
+		{
+			name:      "legacy AWS",
+			tokenJSON: `{"accessToken":"access-token","authMethod":"idc","provider":"AWS","clientId":"client-id","clientSecret":"client-secret"}`,
+		},
+		{
+			name:      "legacy Internal",
+			tokenJSON: `{"accessToken":"access-token","authMethod":"external_idp","provider":"Internal","refreshToken":"refresh-token","clientId":"client-id","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}`,
+		},
+		{
+			name:      "unknown",
+			tokenJSON: `{"accessToken":"access-token","authMethod":"social","provider":"GitLab"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseImportedToken(tt.tokenJSON, ""); err == nil {
+				t.Fatal("ParseImportedToken() error = nil, want provider validation error")
+			}
+		})
+	}
+}
+
+func TestParseImportedTokenAcceptsCanonicalProviders(t *testing.T) {
+	for _, provider := range []string{
+		ProviderGoogle,
+		ProviderGithub,
+		ProviderBuilderId,
+		ProviderEnterprise,
+		ProviderExternalIdp,
+	} {
+		t.Run(provider, func(t *testing.T) {
+			token, err := ParseImportedToken(`{"accessToken":"access-token","provider":"`+provider+`"}`, "")
+			if err != nil {
+				t.Fatalf("ParseImportedToken() error = %v", err)
+			}
+			if token.Provider != provider {
+				t.Fatalf("Provider = %q, want %q", token.Provider, provider)
+			}
+		})
+	}
+}
+
+func TestParseImportedTokenNormalizesExpiresAt(t *testing.T) {
+	tests := []struct {
+		name      string
+		expiresAt string
+		want      time.Time
+	}{
+		{
+			name:      "RFC3339 UTC",
+			expiresAt: "2026-06-29T09:33:49Z",
+			want:      time.Date(2026, time.June, 29, 9, 33, 49, 0, time.UTC),
+		},
+		{
+			name:      "RFC3339Nano UTC",
+			expiresAt: "2026-06-29T09:33:49.114Z",
+			want:      time.Date(2026, time.June, 29, 9, 33, 49, 0, time.UTC),
+		},
+		{
+			name:      "RFC3339 offset",
+			expiresAt: "2026-06-29T16:56:19+08:00",
+			want:      time.Date(2026, time.June, 29, 8, 56, 19, 0, time.UTC),
+		},
+		{
+			name:      "naive seconds as UTC",
+			expiresAt: "2026-09-27T08:46:31",
+			want:      time.Date(2026, time.September, 27, 8, 46, 31, 0, time.UTC),
+		},
+		{
+			name:      "naive fractional seconds as UTC",
+			expiresAt: "2026-09-27T08:46:31.070",
+			want:      time.Date(2026, time.September, 27, 8, 46, 31, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := ParseImportedToken(`{
+				"accessToken":"access-token",
+				"authMethod":"social",
+				"provider":"Google",
+				"expiresAt":"`+tt.expiresAt+`"
+			}`, "")
+			if err != nil {
+				t.Fatalf("ParseImportedToken() error = %v", err)
+			}
+			parsed, err := time.Parse(time.RFC3339, token.ExpiresAt)
+			if err != nil {
+				t.Fatalf("ExpiresAt = %q, want RFC3339: %v", token.ExpiresAt, err)
+			}
+			if !parsed.Equal(tt.want) {
+				t.Fatalf("ExpiresAt instant = %s, want %s", parsed, tt.want)
+			}
+			if token.ExpiresAt != tt.want.Local().Format(time.RFC3339) {
+				t.Fatalf("ExpiresAt = %q, want local RFC3339 %q", token.ExpiresAt, tt.want.Local().Format(time.RFC3339))
+			}
+		})
+	}
+}
+
+func TestParseImportedTokenRejectsInvalidExpiresAt(t *testing.T) {
+	_, err := ParseImportedToken(`{
+		"accessToken":"access-token",
+		"authMethod":"social",
+		"provider":"Google",
+		"expiresAt":"not-a-time"
+	}`, "")
+	if err == nil {
+		t.Fatal("ParseImportedToken() error = nil, want expiresAt validation error")
+	}
+}
+
+func TestParseImportedTokenValidatesExternalIdpRefreshFields(t *testing.T) {
+	valid := map[string]string{
+		"refreshToken": "refresh-token",
+		"clientId":     "client-id",
+		"issuerUrl":    "https://login.microsoftonline.com/tenant/v2.0",
+		"scopes":       "openid offline_access",
+	}
+	for _, missing := range []string{"refreshToken", "clientId", "issuerUrl", "scopes"} {
+		t.Run("missing "+missing, func(t *testing.T) {
+			fields := make(map[string]string, len(valid))
+			for key, value := range valid {
+				fields[key] = value
+			}
+			delete(fields, missing)
+			raw, err := json.Marshal(map[string]string{
+				"accessToken":  "access-token",
+				"authMethod":   "external_idp",
+				"provider":     ProviderExternalIdp,
+				"refreshToken": fields["refreshToken"],
+				"clientId":     fields["clientId"],
+				"issuerUrl":    fields["issuerUrl"],
+				"scopes":       fields["scopes"],
+			})
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if _, err := ParseImportedToken(string(raw), ""); err == nil {
+				t.Fatalf("ParseImportedToken() error = nil, want missing %s error", missing)
+			}
+		})
+	}
+
+	token, err := ParseImportedToken(`{
+		"accessToken":"access-token",
+		"refreshToken":" refresh-token ",
+		"authMethod":"external_idp",
+		"provider":"Google",
+		"clientId":" client-id ",
+		"issuerUrl":" https://login.microsoftonline.com/tenant/v2.0 ",
+		"scopes":" openid offline_access "
+	}`, "")
+	if err != nil {
+		t.Fatalf("ParseImportedToken() error = %v", err)
+	}
+	if token.Provider != ProviderExternalIdp || token.RefreshToken != "refresh-token" || token.ClientID != "client-id" || token.IssuerURL != "https://login.microsoftonline.com/tenant/v2.0" || token.Scopes != "openid offline_access" {
+		t.Fatalf("external_idp metadata = %#v", token)
+	}
+}
+
+func TestResolveIDCProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		startURL string
+		want     string
+	}{
+		{name: "empty", want: ProviderBuilderId},
+		{name: "Builder ID", startURL: BuilderIDStartURL, want: ProviderBuilderId},
+		{name: "trimmed Builder ID", startURL: "  " + BuilderIDStartURL + "  ", want: ProviderBuilderId},
+		{name: "enterprise", startURL: "https://d-1234567890.awsapps.com/start", want: ProviderEnterprise},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveIDCProvider(tt.startURL); got != tt.want {
+				t.Fatalf("resolveIDCProvider(%q) = %q, want %q", tt.startURL, got, tt.want)
+			}
+		})
 	}
 }

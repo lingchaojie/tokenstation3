@@ -79,7 +79,7 @@ func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
 	session, ok := svc.sessionStore.Get("session-external")
 	require.True(t, ok)
 	require.Equal(t, "external_idp", session.AuthType)
-	require.Equal(t, "Internal", session.Provider)
+	require.Equal(t, kiropkg.ProviderExternalIdp, session.Provider)
 	require.Equal(t, "http://localhost:49153/oauth/callback", session.RedirectURI)
 	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0", session.IssuerURL)
 	require.Equal(t, []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"}, session.Scopes)

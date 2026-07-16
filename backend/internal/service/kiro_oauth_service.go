@@ -260,7 +260,7 @@ func (s *KiroOAuthService) StartExternalIDPAuth(ctx context.Context, input *Kiro
 	}
 	session.ProxyURL = proxyURL
 	session.AuthType = "external_idp"
-	session.Provider = "Internal"
+	session.Provider = kiropkg.ProviderExternalIdp
 	session.RedirectURI = kiroExternalIDPRedirectURI
 	session.ClientID = callback.ClientID
 	session.IssuerURL = callback.IssuerURL
@@ -342,7 +342,7 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 		if clientID == "" || clientSecret == "" {
 			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
 		}
-		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL)
+		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, clientID, clientSecret, refreshToken, input.Region, input.StartURL, input.Provider)
 	case "external_idp":
 		clientID := strings.TrimSpace(input.ClientID)
 		issuerURL := strings.TrimSpace(input.IssuerURL)

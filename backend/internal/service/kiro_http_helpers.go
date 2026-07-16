@@ -293,7 +293,8 @@ func applyKiroConditionalHeaders(req *http.Request, account *Account) {
 	if strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "external_idp") {
 		req.Header.Set("TokenType", "EXTERNAL_IDP")
 	}
-	if strings.EqualFold(strings.TrimSpace(account.GetCredential("provider")), "Internal") {
+	provider := strings.TrimSpace(account.GetCredential("provider"))
+	if strings.EqualFold(provider, "Internal") || strings.EqualFold(provider, kiropkg.ProviderExternalIdp) {
 		req.Header.Set("redirect-for-internal", "true")
 	}
 }
