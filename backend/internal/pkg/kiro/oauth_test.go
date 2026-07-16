@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -123,6 +124,218 @@ func TestValidateExternalIdpEndpointRejectsUnsafeURLs(t *testing.T) {
 	}
 }
 
+func TestValidateExternalIdpRoleURLs(t *testing.T) {
+	valid := []struct {
+		name string
+		url  string
+		fn   func(string) error
+	}{
+		{name: "public issuer", url: "https://login.microsoftonline.com/tenant-id/v2.0", fn: validateExternalIdpIssuerURL},
+		{name: "us discovery", url: "https://login.microsoftonline.us/tenant-id/v2.0/.well-known/openid-configuration", fn: validateExternalIdpDiscoveryURL},
+		{name: "china authorize", url: "https://login.partner.microsoftonline.cn/tenant-id/oauth2/v2.0/authorize", fn: validateExternalIdpAuthorizationEndpoint},
+		{name: "public token", url: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token", fn: validateExternalIdpTokenEndpoint},
+	}
+	for _, tt := range valid {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.fn(tt.url); err != nil {
+				t.Fatalf("validate %q: %v", tt.url, err)
+			}
+		})
+	}
+
+	invalidCommon := []string{
+		"https://user:password@login.microsoftonline.com/tenant-id/v2.0",
+		"https://login.microsoftonline.com:8443/tenant-id/v2.0",
+		"https://login.microsoftonline.com/tenant-id/v2.0#fragment",
+	}
+	for _, rawURL := range invalidCommon {
+		t.Run("unsafe issuer "+rawURL, func(t *testing.T) {
+			if err := validateExternalIdpIssuerURL(rawURL); err == nil {
+				t.Fatalf("validateExternalIdpIssuerURL(%q) error = nil", rawURL)
+			}
+		})
+	}
+
+	invalidRoles := []struct {
+		name string
+		url  string
+		fn   func(string) error
+	}{
+		{name: "issuer query", url: "https://login.microsoftonline.com/tenant-id/v2.0?next=value", fn: validateExternalIdpIssuerURL},
+		{name: "issuer missing version", url: "https://login.microsoftonline.com/tenant-id", fn: validateExternalIdpIssuerURL},
+		{name: "issuer arbitrary path", url: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0", fn: validateExternalIdpIssuerURL},
+		{name: "discovery query", url: "https://login.microsoftonline.com/tenant-id/v2.0/.well-known/openid-configuration?next=value", fn: validateExternalIdpDiscoveryURL},
+		{name: "discovery arbitrary path", url: "https://login.microsoftonline.com/tenant-id/.well-known/openid-configuration", fn: validateExternalIdpDiscoveryURL},
+		{name: "authorize swapped with token", url: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token", fn: validateExternalIdpAuthorizationEndpoint},
+		{name: "authorize arbitrary path", url: "https://login.microsoftonline.com/tenant-id/authorize", fn: validateExternalIdpAuthorizationEndpoint},
+		{name: "token swapped with authorize", url: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/authorize", fn: validateExternalIdpTokenEndpoint},
+		{name: "token arbitrary path", url: "https://login.microsoftonline.com/not-a-token-endpoint", fn: validateExternalIdpTokenEndpoint},
+		{name: "token query", url: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token?next=value", fn: validateExternalIdpTokenEndpoint},
+	}
+	for _, tt := range invalidRoles {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.fn(tt.url); err == nil {
+				t.Fatalf("validate %q error = nil, want role rejection", tt.url)
+			}
+		})
+	}
+}
+
+func TestValidateExternalIdpDiscoveryRequiresIssuerHostAndTenant(t *testing.T) {
+	issuer := "https://login.microsoftonline.com/tenant-id/v2.0"
+	for _, discovery := range []externalIdpDiscoveryResponse{
+		{
+			AuthorizationEndpoint: "https://login.microsoftonline.us/tenant-id/oauth2/v2.0/authorize",
+			TokenEndpoint:         "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		},
+		{
+			AuthorizationEndpoint: "https://login.microsoftonline.com/other-tenant/oauth2/v2.0/authorize",
+			TokenEndpoint:         "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		},
+		{
+			AuthorizationEndpoint: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/authorize",
+			TokenEndpoint:         "https://login.microsoftonline.com/other-tenant/oauth2/v2.0/token",
+		},
+	} {
+		discovery := discovery
+		if err := validateExternalIdpDiscoveryForIssuer(issuer, &discovery); err == nil {
+			t.Fatalf("validateExternalIdpDiscoveryForIssuer(%#v) error = nil, want mismatch rejection", discovery)
+		}
+	}
+}
+
+type externalIdpRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn externalIdpRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestDiscoverExternalIdpEnforcesRedirectLimit(t *testing.T) {
+	previousFactory := newExternalIdpHTTPClient
+	defer func() { newExternalIdpHTTPClient = previousFactory }()
+
+	roundTrips := 0
+	newExternalIdpHTTPClient = func(proxyURL string) (*http.Client, error) {
+		if proxyURL != "http://proxy.example:8080" {
+			t.Fatalf("proxyURL = %q", proxyURL)
+		}
+		return &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: externalIdpRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				roundTrips++
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header: http.Header{
+						"Location": []string{"https://login.microsoftonline.com/tenant-id/v2.0/.well-known/openid-configuration"},
+					},
+					Body:    io.NopCloser(strings.NewReader("redirect")),
+					Request: req,
+				}, nil
+			}),
+		}, nil
+	}
+
+	_, err := DiscoverExternalIdp(
+		context.Background(),
+		"http://proxy.example:8080",
+		"https://login.microsoftonline.com/tenant-id/v2.0",
+	)
+	if err == nil || !strings.Contains(err.Error(), "redirect limit") {
+		t.Fatalf("DiscoverExternalIdp() error = %v, want redirect limit", err)
+	}
+	if roundTrips != externalIdpMaxDiscoveryRedirects+1 {
+		t.Fatalf("roundTrips = %d, want %d", roundTrips, externalIdpMaxDiscoveryRedirects+1)
+	}
+}
+
+func TestExternalIdpResponseBodiesAreBounded(t *testing.T) {
+	t.Run("discovery exact limit", func(t *testing.T) {
+		payload := `{"authorization_endpoint":"https://login.microsoftonline.com/tenant-id/oauth2/v2.0/authorize","token_endpoint":"https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token"}`
+		payload += strings.Repeat(" ", externalIdpDiscoveryBodyLimit-len(payload))
+		withExternalIdpRoundTripper(t, externalIdpRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload)), Request: req}, nil
+		}))
+		_, err := DiscoverExternalIdp(context.Background(), "", "https://login.microsoftonline.com/tenant-id/v2.0")
+		if err != nil {
+			t.Fatalf("DiscoverExternalIdp() exact-limit error = %v", err)
+		}
+	})
+
+	t.Run("discovery overflow", func(t *testing.T) {
+		withExternalIdpRoundTripper(t, externalIdpRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(strings.Repeat("x", externalIdpDiscoveryBodyLimit+1))), Request: req}, nil
+		}))
+		_, err := DiscoverExternalIdp(context.Background(), "", "https://login.microsoftonline.com/tenant-id/v2.0")
+		if err == nil || !strings.Contains(err.Error(), "body exceeds") {
+			t.Fatalf("DiscoverExternalIdp() overflow error = %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       func() string
+	}{
+		{
+			name:       "token exact limit",
+			statusCode: http.StatusOK,
+			body: func() string {
+				payload := `{"access_token":"access-token","refresh_token":"refresh-token"}`
+				return payload + strings.Repeat(" ", externalIdpTokenBodyLimit-len(payload))
+			},
+		},
+		{
+			name:       "token overflow",
+			statusCode: http.StatusOK,
+			body:       func() string { return strings.Repeat("x", externalIdpTokenBodyLimit+1) },
+		},
+		{
+			name:       "token error overflow",
+			statusCode: http.StatusBadRequest,
+			body:       func() string { return strings.Repeat("x", externalIdpTokenBodyLimit+1) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body()))
+			}))
+			defer server.Close()
+			previousEndpoint := externalIDPTokenEndpointOverride
+			externalIDPTokenEndpointOverride = server.URL
+			defer func() { externalIDPTokenEndpointOverride = previousEndpoint }()
+
+			_, err := RefreshExternalIDPTokenAtEndpoint(
+				context.Background(),
+				"",
+				"https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+				"https://login.microsoftonline.com/tenant-id/v2.0",
+				"client-id",
+				[]string{"openid", "offline_access"},
+				"refresh-token",
+				"",
+			)
+			if strings.Contains(tc.name, "overflow") {
+				if err == nil || !strings.Contains(err.Error(), "body exceeds") {
+					t.Fatalf("RefreshExternalIDPTokenAtEndpoint() overflow error = %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("RefreshExternalIDPTokenAtEndpoint() exact-limit error = %v", err)
+			}
+		})
+	}
+}
+
+func withExternalIdpRoundTripper(t *testing.T, transport http.RoundTripper) {
+	t.Helper()
+	previousFactory := newExternalIdpHTTPClient
+	newExternalIdpHTTPClient = func(string) (*http.Client, error) {
+		return &http.Client{Timeout: 30 * time.Second, Transport: transport}, nil
+	}
+	t.Cleanup(func() { newExternalIdpHTTPClient = previousFactory })
+}
+
 func TestDiscoverExternalIdpRejectsUnsafeIssuerBeforeRequest(t *testing.T) {
 	_, err := DiscoverExternalIdp(context.Background(), "", "https://login.example.com/tenant/v2.0")
 	if err == nil || !strings.Contains(err.Error(), "allow-listed") {
@@ -207,8 +420,94 @@ func TestExchangeExternalIDPAuthCodePostsMicrosoftTokenForm(t *testing.T) {
 	if token.IssuerURL != "https://login.microsoftonline.com/tenant-id/v2.0" || token.Scopes != "scope-a offline_access" {
 		t.Fatalf("metadata = %q %q", token.IssuerURL, token.Scopes)
 	}
-	if token.TokenEndpoint != server.URL {
-		t.Fatalf("TokenEndpoint = %q, want %q", token.TokenEndpoint, server.URL)
+	if token.TokenEndpoint != "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token" {
+		t.Fatalf("TokenEndpoint = %q", token.TokenEndpoint)
+	}
+}
+
+func TestExternalIDPTokenRequestsRejectRedirectsWithoutLeakingForms(t *testing.T) {
+	operations := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{
+			name: "authorization code exchange",
+			run: func(ctx context.Context) error {
+				_, err := ExchangeExternalIDPAuthCodeAtEndpoint(
+					ctx,
+					"",
+					"https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+					"https://login.microsoftonline.com/tenant/v2.0",
+					"client-id",
+					[]string{"openid", "offline_access"},
+					"secret-auth-code",
+					"secret-code-verifier",
+					"http://localhost:3128/oauth/callback",
+					"user@example.com",
+				)
+				return err
+			},
+		},
+		{
+			name: "refresh token",
+			run: func(ctx context.Context) error {
+				_, err := RefreshExternalIDPTokenAtEndpoint(
+					ctx,
+					"",
+					"https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+					"https://login.microsoftonline.com/tenant/v2.0",
+					"client-id",
+					[]string{"openid", "offline_access"},
+					"secret-refresh-token",
+					"user@example.com",
+				)
+				return err
+			},
+		},
+	}
+
+	for _, operation := range operations {
+		for _, status := range []int{
+			http.StatusMovedPermanently,
+			http.StatusFound,
+			http.StatusSeeOther,
+			http.StatusTemporaryRedirect,
+			http.StatusPermanentRedirect,
+		} {
+			t.Run(fmt.Sprintf("%s/%d", operation.name, status), func(t *testing.T) {
+				var targetCalls int
+				var leakedBody string
+				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					targetCalls++
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Fatalf("read redirected request body: %v", err)
+					}
+					leakedBody = string(body)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"access_token":"redirected-access-token","refresh_token":"redirected-refresh-token"}`))
+				}))
+				defer target.Close()
+
+				redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Location", target.URL+"/stolen")
+					w.WriteHeader(status)
+				}))
+				defer redirector.Close()
+
+				previousEndpoint := externalIDPTokenEndpointOverride
+				externalIDPTokenEndpointOverride = redirector.URL
+				defer func() { externalIDPTokenEndpointOverride = previousEndpoint }()
+
+				err := operation.run(context.Background())
+				if err == nil {
+					t.Fatal("token request error = nil, want redirect rejection")
+				}
+				if targetCalls != 0 {
+					t.Fatalf("redirect target calls = %d, want 0; leaked body = %q", targetCalls, leakedBody)
+				}
+			})
+		}
 	}
 }
 

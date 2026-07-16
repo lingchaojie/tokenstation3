@@ -4,12 +4,25 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/stretchr/testify/require"
 )
+
+type kiroOAuthProxyRepo struct {
+	proxyRepoStub
+	proxy *Proxy
+	err   error
+	calls int
+}
+
+func (r *kiroOAuthProxyRepo) GetByID(_ context.Context, _ int64) (*Proxy, error) {
+	r.calls++
+	return r.proxy, r.err
+}
 
 func TestKiroIDCAuthRedirectURIUsesLoopbackIP(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:9876/oauth/callback", kiroIDCRedirectURI)
@@ -93,6 +106,119 @@ func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
 	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/token", session.TokenEndpoint)
 	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0", session.IssuerURL)
 	require.Equal(t, []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"}, session.Scopes)
+}
+
+func TestKiroOAuthService_StartExternalIDPAuthFailsClosedOnProxyLookupError(t *testing.T) {
+	repoErr := errors.New("proxy repository unavailable")
+	repo := &kiroOAuthProxyRepo{err: repoErr}
+	discoveryCalls := 0
+	previousDiscover := kiroDiscoverExternalIdp
+	kiroDiscoverExternalIdp = func(context.Context, string, string) (string, string, error) {
+		discoveryCalls++
+		return "", "", nil
+	}
+	t.Cleanup(func() { kiroDiscoverExternalIdp = previousDiscover })
+
+	svc := NewKiroOAuthService(repo)
+	svc.sessionStore.Set("session-external", &kiropkg.AuthSession{
+		State:        "state-external",
+		CodeVerifier: "verifier-external",
+		CreatedAt:    time.Now(),
+		AuthType:     "social",
+		Provider:     string(kiropkg.SocialProviderGoogle),
+		RedirectURI:  kiroSocialRedirectURI,
+		ProxyURL:     "http://existing-proxy.example:8080",
+	})
+	proxyID := int64(42)
+	_, err := svc.StartExternalIDPAuth(context.Background(), &KiroStartExternalIDPAuthInput{
+		SessionID:   "session-external",
+		CallbackURL: "http://localhost:49153/signin/callback?login_option=external_idp&issuer_url=https%3A%2F%2Flogin.microsoftonline.com%2Ftenant-id%2Fv2.0&client_id=client-id&state=state-external&scopes=openid+offline_access",
+		ProxyID:     &proxyID,
+	})
+	require.ErrorIs(t, err, repoErr)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, discoveryCalls)
+	session, ok := svc.sessionStore.Get("session-external")
+	require.True(t, ok)
+	require.Equal(t, "http://existing-proxy.example:8080", session.ProxyURL)
+	require.Equal(t, "social", session.AuthType)
+}
+
+func TestKiroOAuthService_ExchangeExternalIDPFailsClosedWhenProxyNotFound(t *testing.T) {
+	repo := &kiroOAuthProxyRepo{}
+	exchangeCalls := 0
+	previousExchange := kiroExchangeExternalIdpAtEndpoint
+	kiroExchangeExternalIdpAtEndpoint = func(context.Context, string, string, string, string, []string, string, string, string, string) (*kiropkg.TokenData, error) {
+		exchangeCalls++
+		return &kiropkg.TokenData{AccessToken: "unexpected"}, nil
+	}
+	t.Cleanup(func() { kiroExchangeExternalIdpAtEndpoint = previousExchange })
+
+	svc := NewKiroOAuthService(repo)
+	svc.sessionStore.Set("external-session", &kiropkg.AuthSession{
+		State:         "state-external",
+		CodeVerifier:  "verifier-external",
+		CreatedAt:     time.Now(),
+		AuthType:      "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		RedirectURI:   kiroExternalIdpRedirectURI,
+		ProxyURL:      "http://existing-proxy.example:8080",
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant-id/v2.0",
+		Scopes:        []string{"openid", "offline_access"},
+	})
+	proxyID := int64(404)
+	_, err := svc.ExchangeCode(context.Background(), &KiroExchangeCodeInput{
+		SessionID: "external-session",
+		State:     "state-external",
+		Code:      "auth-code",
+		ProxyID:   &proxyID,
+	})
+	require.ErrorIs(t, err, ErrProxyNotFound)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, exchangeCalls)
+	session, ok := svc.sessionStore.Get("external-session")
+	require.True(t, ok)
+	require.Equal(t, "http://existing-proxy.example:8080", session.ProxyURL)
+}
+
+func TestKiroOAuthService_RefreshExternalIDPFailsClosedOnProxyLookupError(t *testing.T) {
+	repoErr := errors.New("proxy lookup failed")
+	repo := &kiroOAuthProxyRepo{err: repoErr}
+	refreshCalls := 0
+	previousRefresh := kiroRefreshExternalIdpAtEndpoint
+	kiroRefreshExternalIdpAtEndpoint = func(context.Context, string, string, string, string, []string, string, string) (*kiropkg.TokenData, error) {
+		refreshCalls++
+		return &kiropkg.TokenData{AccessToken: "unexpected"}, nil
+	}
+	t.Cleanup(func() { kiroRefreshExternalIdpAtEndpoint = previousRefresh })
+
+	svc := NewKiroOAuthService(repo)
+	proxyID := int64(42)
+	_, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:    "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		RefreshToken:  "refresh-token",
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant-id/v2.0",
+		Scopes:        "openid offline_access",
+		ProxyID:       &proxyID,
+	})
+	require.ErrorIs(t, err, repoErr)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, refreshCalls)
+}
+
+func TestKiroOAuthService_GenerateAuthURLRejectsConfiguredProxyWithoutRepository(t *testing.T) {
+	proxyID := int64(42)
+	svc := NewKiroOAuthService(nil)
+	_, err := svc.GenerateAuthURL(context.Background(), &KiroGenerateAuthURLInput{
+		Provider: string(kiropkg.SocialProviderGoogle),
+		ProxyID:  &proxyID,
+	})
+	require.Error(t, err)
 }
 
 func TestKiroExternalIdpBuildAccountCredentialsPreservesDiscoveredMetadata(t *testing.T) {

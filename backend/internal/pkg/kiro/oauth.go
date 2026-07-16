@@ -21,13 +21,16 @@ import (
 )
 
 const (
-	socialAuthPortalURL = "https://app.kiro.dev"
-	socialAuthEndpoint  = "https://prod.us-east-1.auth.desktop.kiro.dev"
-	defaultIDCRegion    = "us-east-1"
-	BuilderIDStartURL   = "https://view.awsapps.com/start"
-	sessionTTL          = 10 * time.Minute
-	sessionCleanupEvery = 32
-	sessionCleanupMin   = 32
+	socialAuthPortalURL              = "https://app.kiro.dev"
+	socialAuthEndpoint               = "https://prod.us-east-1.auth.desktop.kiro.dev"
+	defaultIDCRegion                 = "us-east-1"
+	BuilderIDStartURL                = "https://view.awsapps.com/start"
+	sessionTTL                       = 10 * time.Minute
+	sessionCleanupEvery              = 32
+	sessionCleanupMin                = 32
+	externalIdpMaxDiscoveryRedirects = 3
+	externalIdpDiscoveryBodyLimit    = 1 << 20
+	externalIdpTokenBodyLimit        = 256 << 10
 )
 
 var allowedExternalIdpHostSuffixes = []string{
@@ -40,6 +43,7 @@ var (
 	socialAuthEndpointURL            = socialAuthEndpoint
 	oidcEndpointOverride             = ""
 	externalIDPTokenEndpointOverride = ""
+	newExternalIdpHTTPClient         = newHTTPClient
 )
 
 type SocialProvider string
@@ -360,8 +364,15 @@ func BuildExternalIDPAuthURL(input ExternalIDPAuthURLInput) (string, error) {
 		if err != nil {
 			return "", err
 		}
-	} else if err := validateExternalIdpEndpoint(endpoint); err != nil {
-		return "", err
+	} else {
+		if err := validateExternalIdpAuthorizationEndpoint(endpoint); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(input.IssuerURL) != "" {
+			if err := validateExternalIdpEndpointMatchesIssuer(input.IssuerURL, endpoint, "authorization_endpoint"); err != nil {
+				return "", err
+			}
+		}
 	}
 	clientID := strings.TrimSpace(input.ClientID)
 	if clientID == "" {
@@ -409,18 +420,28 @@ func DiscoverExternalIdp(ctx context.Context, proxyURL, issuerURL string) (*exte
 	if issuer == "" {
 		return nil, fmt.Errorf("kiro external_idp issuer_url is required")
 	}
-	if err := validateExternalIdpEndpoint(issuer); err != nil {
+	if err := validateExternalIdpIssuerURL(issuer); err != nil {
+		return nil, err
+	}
+	discoveryURL := issuer + "/.well-known/openid-configuration"
+	if err := validateExternalIdpDiscoveryURL(discoveryURL); err != nil {
 		return nil, err
 	}
 
-	client, err := newHTTPClient(proxyURL)
+	client, err := newExternalIdpHTTPClient(proxyURL)
 	if err != nil {
 		return nil, err
 	}
-	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
-		return validateExternalIdpEndpoint(req.URL.String())
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > externalIdpMaxDiscoveryRedirects {
+			return fmt.Errorf("external IdP discovery redirect limit exceeded")
+		}
+		if err := validateExternalIdpDiscoveryURL(req.URL.String()); err != nil {
+			return err
+		}
+		return validateExternalIdpEndpointMatchesIssuer(issuer, req.URL.String(), "discovery redirect")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, issuer+"/.well-known/openid-configuration", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +450,7 @@ func DiscoverExternalIdp(ctx context.Context, proxyURL, issuerURL string) (*exte
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readExternalIdpResponseBody(resp.Body, externalIdpDiscoveryBodyLimit, "discovery")
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +462,7 @@ func DiscoverExternalIdp(ctx context.Context, proxyURL, issuerURL string) (*exte
 	if err := json.Unmarshal(body, &discovery); err != nil {
 		return nil, fmt.Errorf("parse external IdP discovery document failed: %w", err)
 	}
-	if err := validateExternalIdpDiscovery(&discovery); err != nil {
+	if err := validateExternalIdpDiscoveryForIssuer(issuer, &discovery); err != nil {
 		return nil, err
 	}
 	return &discovery, nil
@@ -456,36 +477,140 @@ func validateExternalIdpDiscovery(discovery *externalIdpDiscoveryResponse) error
 	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" {
 		return fmt.Errorf("external IdP discovery document missing authorization_endpoint or token_endpoint")
 	}
-	if err := validateExternalIdpEndpoint(discovery.AuthorizationEndpoint); err != nil {
+	if err := validateExternalIdpAuthorizationEndpoint(discovery.AuthorizationEndpoint); err != nil {
 		return fmt.Errorf("unsafe external IdP authorization_endpoint: %w", err)
 	}
-	if err := validateExternalIdpEndpoint(discovery.TokenEndpoint); err != nil {
+	if err := validateExternalIdpTokenEndpoint(discovery.TokenEndpoint); err != nil {
 		return fmt.Errorf("unsafe external IdP token_endpoint: %w", err)
 	}
 	return nil
 }
 
+func validateExternalIdpDiscoveryForIssuer(issuerURL string, discovery *externalIdpDiscoveryResponse) error {
+	if err := validateExternalIdpIssuerURL(issuerURL); err != nil {
+		return err
+	}
+	if err := validateExternalIdpDiscovery(discovery); err != nil {
+		return err
+	}
+	if err := validateExternalIdpEndpointMatchesIssuer(issuerURL, discovery.AuthorizationEndpoint, "authorization_endpoint"); err != nil {
+		return err
+	}
+	return validateExternalIdpEndpointMatchesIssuer(issuerURL, discovery.TokenEndpoint, "token_endpoint")
+}
+
 func validateExternalIdpEndpoint(rawURL string) error {
+	_, err := parseExternalIdpURL(rawURL)
+	return err
+}
+
+func validateExternalIdpIssuerURL(rawURL string) error {
+	parsed, err := parseExternalIdpURL(rawURL)
+	if err != nil {
+		return err
+	}
+	return validateExternalIdpPath(parsed, "issuer", []string{"tenant", "v2.0"})
+}
+
+func validateExternalIdpDiscoveryURL(rawURL string) error {
+	parsed, err := parseExternalIdpURL(rawURL)
+	if err != nil {
+		return err
+	}
+	return validateExternalIdpPath(parsed, "discovery", []string{"tenant", "v2.0", ".well-known", "openid-configuration"})
+}
+
+func validateExternalIdpAuthorizationEndpoint(rawURL string) error {
+	parsed, err := parseExternalIdpURL(rawURL)
+	if err != nil {
+		return err
+	}
+	return validateExternalIdpPath(parsed, "authorization_endpoint", []string{"tenant", "oauth2", "v2.0", "authorize"})
+}
+
+func validateExternalIdpTokenEndpoint(rawURL string) error {
+	parsed, err := parseExternalIdpURL(rawURL)
+	if err != nil {
+		return err
+	}
+	return validateExternalIdpPath(parsed, "token_endpoint", []string{"tenant", "oauth2", "v2.0", "token"})
+}
+
+func parseExternalIdpURL(rawURL string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
-		return fmt.Errorf("invalid external IdP URL %q: %w", rawURL, err)
+		return nil, fmt.Errorf("invalid external IdP URL %q: %w", rawURL, err)
 	}
 	if !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
-		return fmt.Errorf("external IdP URL must use https: %q", rawURL)
+		return nil, fmt.Errorf("external IdP URL must use https: %q", rawURL)
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("external IdP URL must not contain userinfo: %q", rawURL)
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return nil, fmt.Errorf("external IdP URL must use the default HTTPS port: %q", rawURL)
+	}
+	if parsed.Fragment != "" {
+		return nil, fmt.Errorf("external IdP URL must not contain a fragment: %q", rawURL)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return nil, fmt.Errorf("external IdP URL must not contain a query: %q", rawURL)
 	}
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
 	if host == "" {
-		return fmt.Errorf("external IdP URL has no host: %q", rawURL)
+		return nil, fmt.Errorf("external IdP URL has no host: %q", rawURL)
 	}
 	if net.ParseIP(host) != nil {
-		return fmt.Errorf("external IdP URL host must not be an IP literal: %q", rawURL)
+		return nil, fmt.Errorf("external IdP URL host must not be an IP literal: %q", rawURL)
 	}
 	for _, suffix := range allowedExternalIdpHostSuffixes {
 		if strings.HasSuffix(host, suffix) {
-			return nil
+			return parsed, nil
 		}
 	}
-	return fmt.Errorf("external IdP host %q is not allow-listed", host)
+	return nil, fmt.Errorf("external IdP host %q is not allow-listed", host)
+}
+
+func validateExternalIdpPath(parsed *url.URL, role string, pattern []string) error {
+	if parsed.RawPath != "" {
+		return fmt.Errorf("external IdP %s URL must not use an encoded path", role)
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) != len(pattern) {
+		return fmt.Errorf("external IdP %s URL has unsupported path %q", role, parsed.Path)
+	}
+	for index, expected := range pattern {
+		segment := segments[index]
+		if expected == "tenant" {
+			if segment == "" || segment == "." || segment == ".." || strings.TrimSpace(segment) != segment {
+				return fmt.Errorf("external IdP %s URL has invalid tenant path", role)
+			}
+			continue
+		}
+		if segment != expected {
+			return fmt.Errorf("external IdP %s URL has unsupported path %q", role, parsed.Path)
+		}
+	}
+	return nil
+}
+
+func validateExternalIdpEndpointMatchesIssuer(issuerURL, endpointURL, role string) error {
+	issuer, err := parseExternalIdpURL(issuerURL)
+	if err != nil {
+		return err
+	}
+	endpoint, err := parseExternalIdpURL(endpointURL)
+	if err != nil {
+		return err
+	}
+	issuerSegments := strings.Split(strings.Trim(issuer.Path, "/"), "/")
+	endpointSegments := strings.Split(strings.Trim(endpoint.Path, "/"), "/")
+	if len(issuerSegments) < 1 || len(endpointSegments) < 1 ||
+		!strings.EqualFold(issuer.Hostname(), endpoint.Hostname()) ||
+		!strings.EqualFold(issuerSegments[0], endpointSegments[0]) {
+		return fmt.Errorf("external IdP %s must match issuer host and tenant", role)
+	}
+	return nil
 }
 
 func isMicrosoftExternalIDPEndpoint(rawURL string) bool {
@@ -511,7 +636,7 @@ func ExchangeExternalIDPAuthCode(ctx context.Context, proxyURL, issuerURL, clien
 }
 
 func ExchangeExternalIDPAuthCodeAtEndpoint(ctx context.Context, proxyURL, tokenEndpoint, issuerURL, clientID string, scopes []string, code, codeVerifier, redirectURI, loginHint string) (*TokenData, error) {
-	tokenURL, err := externalIDPRequestTokenEndpoint(tokenEndpoint)
+	tokenURL, err := externalIDPRequestTokenEndpoint(tokenEndpoint, issuerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +668,7 @@ func RefreshExternalIDPToken(ctx context.Context, proxyURL, issuerURL, clientID 
 }
 
 func RefreshExternalIDPTokenAtEndpoint(ctx context.Context, proxyURL, tokenEndpoint, issuerURL, clientID string, scopes []string, refreshToken, loginHint string) (*TokenData, error) {
-	tokenURL, err := externalIDPRequestTokenEndpoint(tokenEndpoint)
+	tokenURL, err := externalIDPRequestTokenEndpoint(tokenEndpoint, issuerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -795,11 +920,14 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 		if token.RefreshToken == "" || token.ClientID == "" || token.TokenEndpoint == "" || token.IssuerURL == "" || token.Scopes == "" {
 			return nil, fmt.Errorf("kiro external_idp import requires refreshToken, clientId, tokenEndpoint, issuerUrl, and scopes")
 		}
-		if err := validateExternalIdpEndpoint(token.TokenEndpoint); err != nil {
+		if err := validateExternalIdpTokenEndpoint(token.TokenEndpoint); err != nil {
 			return nil, fmt.Errorf("unsafe kiro external_idp tokenEndpoint: %w", err)
 		}
-		if err := validateExternalIdpEndpoint(token.IssuerURL); err != nil {
+		if err := validateExternalIdpIssuerURL(token.IssuerURL); err != nil {
 			return nil, fmt.Errorf("unsafe kiro external_idp issuerUrl: %w", err)
+		}
+		if err := validateExternalIdpEndpointMatchesIssuer(token.IssuerURL, token.TokenEndpoint, "tokenEndpoint"); err != nil {
+			return nil, err
 		}
 		if strings.TrimSpace(token.Region) == "" {
 			token.Region = defaultIDCRegion
@@ -834,9 +962,6 @@ func externalIDPAuthorizeEndpoint(issuerURL string) (string, error) {
 }
 
 func externalIDPTokenEndpoint(issuerURL string) (string, error) {
-	if strings.TrimSpace(externalIDPTokenEndpointOverride) != "" {
-		return strings.TrimRight(strings.TrimSpace(externalIDPTokenEndpointOverride), "/"), nil
-	}
 	base, err := normalizeExternalIDPIssuerBase(issuerURL)
 	if err != nil {
 		return "", err
@@ -844,13 +969,19 @@ func externalIDPTokenEndpoint(issuerURL string) (string, error) {
 	return base + "/oauth2/v2.0/token", nil
 }
 
-func externalIDPRequestTokenEndpoint(tokenEndpoint string) (string, error) {
+func externalIDPRequestTokenEndpoint(tokenEndpoint, issuerURL string) (string, error) {
+	endpoint := strings.TrimSpace(tokenEndpoint)
+	if err := validateExternalIdpTokenEndpoint(endpoint); err != nil {
+		return "", err
+	}
+	if err := validateExternalIdpIssuerURL(issuerURL); err != nil {
+		return "", err
+	}
+	if err := validateExternalIdpEndpointMatchesIssuer(issuerURL, endpoint, "token_endpoint"); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(externalIDPTokenEndpointOverride) != "" {
 		return strings.TrimRight(strings.TrimSpace(externalIDPTokenEndpointOverride), "/"), nil
-	}
-	endpoint := strings.TrimSpace(tokenEndpoint)
-	if err := validateExternalIdpEndpoint(endpoint); err != nil {
-		return "", err
 	}
 	return endpoint, nil
 }
@@ -860,16 +991,10 @@ func normalizeExternalIDPIssuerBase(issuerURL string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("external idp issuer_url is required")
 	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("parse external idp issuer_url failed: %w", err)
-	}
-	if parsed.Scheme != "https" || parsed.Host == "" {
-		return "", fmt.Errorf("external idp issuer_url must be an https url")
-	}
-	if err := validateExternalIdpEndpoint(raw); err != nil {
+	if err := validateExternalIdpIssuerURL(raw); err != nil {
 		return "", err
 	}
+	parsed, _ := url.Parse(raw)
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	parsed.Path = strings.TrimSuffix(parsed.Path, "/v2.0")
@@ -988,9 +1113,14 @@ func doJSON(ctx context.Context, proxyURL, method, rawURL string, payload any, o
 }
 
 func doForm(ctx context.Context, proxyURL, rawURL string, form url.Values, out any) error {
-	client, err := newHTTPClient(proxyURL)
+	client, err := newExternalIdpHTTPClient(proxyURL)
 	if err != nil {
 		return err
+	}
+	// Token requests contain authorization codes or refresh tokens. Never replay
+	// them to a redirect target, even when the target also looks allowlisted.
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -1005,7 +1135,7 @@ func doForm(ctx context.Context, proxyURL, rawURL string, form url.Values, out a
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readExternalIdpResponseBody(resp.Body, externalIdpTokenBodyLimit, "token")
 	if err != nil {
 		return err
 	}
@@ -1020,6 +1150,18 @@ func doForm(ctx context.Context, proxyURL, rawURL string, form url.Values, out a
 		return nil
 	}
 	return json.Unmarshal(respBody, out)
+}
+
+func readExternalIdpResponseBody(body io.Reader, limit int, role string) ([]byte, error) {
+	limited := io.LimitReader(body, int64(limit)+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("external IdP %s response body exceeds %d bytes", role, limit)
+	}
+	return data, nil
 }
 
 func newHTTPClient(rawProxyURL string) (*http.Client, error) {

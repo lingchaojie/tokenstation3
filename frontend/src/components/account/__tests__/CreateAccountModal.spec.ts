@@ -6,10 +6,12 @@ const {
   createAccountMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  kiroImportTokenMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  kiroImportTokenMock: vi.fn(),
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -39,11 +41,15 @@ vi.mock('@/api/admin', () => ({
     tlsFingerprintProfiles: {
       list: vi.fn().mockResolvedValue([]),
     },
+    kiro: {
+      importToken: kiroImportTokenMock,
+    },
   },
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue([]),
+  getKiroDefaultModelMapping: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -134,6 +140,16 @@ async function openCodexImportStep(toggleClicks = 0) {
   return wrapper
 }
 
+async function openKiroImportStep() {
+  const wrapper = mountModal()
+  await selectButtonByText(wrapper, 'Kiro')
+  await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importTitle')
+  await wrapper.get('form#create-account-form input[type="text"]').setValue('Kiro import')
+  await wrapper.get('form#create-account-form').trigger('submit.prevent')
+  await flushPromises()
+  return wrapper
+}
+
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     createAccountMock.mockReset().mockResolvedValue({})
@@ -146,6 +162,16 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    kiroImportTokenMock.mockReset().mockResolvedValue({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      auth_method: 'external_idp',
+      provider: 'ExternalIdp',
+      client_id: 'client-id',
+      token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      issuer_url: 'https://login.microsoftonline.com/tenant-id/v2.0',
+      scopes: 'openid offline_access',
+    })
   })
 
   it('sends false explicitly for normal OpenAI account creation by default', async () => {
@@ -237,6 +263,61 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await flushPromises()
 
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
+  })
+
+  it('switches Kiro import provider controls and only requires device registration for IDC providers', async () => {
+    const wrapper = await openKiroImportStep()
+
+    expect(wrapper.find('input[value="Google"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="Github"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="BuilderId"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="Enterprise"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="ExternalIdp"]').exists()).toBe(true)
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+
+    await wrapper.get('input[value="BuilderId"]').setValue()
+    expect(wrapper.findAll('textarea')).toHaveLength(2)
+
+    await wrapper.get('input[value="ExternalIdp"]').setValue()
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+    expect(wrapper.get('textarea').attributes('placeholder')).toContain('"tokenEndpoint"')
+  })
+
+  it.each([
+    ['invalid JSON', '{not-json'],
+    ['provider mismatch', '{"provider":"Github","accessToken":"access-token"}'],
+  ])('rejects Kiro import %s before calling the API', async (_name, tokenJSON) => {
+    const wrapper = await openKiroImportStep()
+    await wrapper.get('textarea').setValue(tokenJSON)
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importAndUpdate')
+    await flushPromises()
+
+    expect(kiroImportTokenMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('creates ExternalIdp imports with the independently selected API region', async () => {
+    const wrapper = await openKiroImportStep()
+    await wrapper.get('input[value="ExternalIdp"]').setValue()
+    await wrapper.get('textarea').setValue(JSON.stringify({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      authMethod: 'external_idp',
+      provider: 'ExternalIdp',
+      clientId: 'client-id',
+      tokenEndpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      issuerUrl: 'https://login.microsoftonline.com/tenant-id/v2.0',
+      scopes: 'openid offline_access',
+    }))
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importAndUpdate')
+    await flushPromises()
+
+    expect(kiroImportTokenMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      provider: 'ExternalIdp',
+      token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      api_region: 'us-east-1',
+    })
   })
 
   it('sends explicit false for Codex PAT import after the toggle is changed back', async () => {

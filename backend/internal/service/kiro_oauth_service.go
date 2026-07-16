@@ -30,6 +30,7 @@ var kiroDiscoverExternalIdp = func(ctx context.Context, proxyURL, issuerURL stri
 
 var kiroRefreshExternalIdpAtEndpoint = kiropkg.RefreshExternalIDPTokenAtEndpoint
 var kiroRefreshExternalIdpLegacy = kiropkg.RefreshExternalIDPToken
+var kiroExchangeExternalIdpAtEndpoint = kiropkg.ExchangeExternalIDPAuthCodeAtEndpoint
 
 type KiroOAuthService struct {
 	sessionStore *kiropkg.SessionStore
@@ -152,7 +153,10 @@ func (s *KiroOAuthService) GenerateAuthURL(ctx context.Context, input *KiroGener
 		return nil, fmt.Errorf("generate code verifier failed: %w", err)
 	}
 	sessionID := kiropkg.GenerateSessionID()
-	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	proxyURL, err := s.resolveProxyURL(ctx, input.ProxyID)
+	if err != nil {
+		return nil, err
+	}
 	s.sessionStore.Set(sessionID, &kiropkg.AuthSession{
 		State:        state,
 		CodeVerifier: codeVerifier,
@@ -179,7 +183,11 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroExchange
 	}
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxyURL, _ = s.resolveProxyURL(ctx, input.ProxyID)
+		var err error
+		proxyURL, err = s.resolveProxyURL(ctx, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	switch session.AuthType {
@@ -198,7 +206,7 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroExchange
 		s.sessionStore.Delete(input.SessionID)
 		return toKiroTokenInfo(token), nil
 	case "external_idp":
-		token, err := kiropkg.ExchangeExternalIDPAuthCodeAtEndpoint(
+		token, err := kiroExchangeExternalIdpAtEndpoint(
 			ctx,
 			proxyURL,
 			session.TokenEndpoint,
@@ -257,7 +265,10 @@ func (s *KiroOAuthService) StartExternalIDPAuth(ctx context.Context, input *Kiro
 	}
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
-		proxyURL, _ = s.resolveProxyURL(ctx, input.ProxyID)
+		proxyURL, err = s.resolveProxyURL(ctx, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	authorizationEndpoint, tokenEndpoint, err := kiroDiscoverExternalIdp(ctx, proxyURL, callback.IssuerURL)
 	if err != nil {
@@ -317,7 +328,10 @@ func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGe
 	if err != nil {
 		return nil, fmt.Errorf("generate code verifier failed: %w", err)
 	}
-	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	proxyURL, err := s.resolveProxyURL(ctx, input.ProxyID)
+	if err != nil {
+		return nil, err
+	}
 	reg, err := kiropkg.RegisterIDCClient(ctx, proxyURL, kiroIDCRedirectURI, startURL, region)
 	if err != nil {
 		return nil, err
@@ -346,7 +360,10 @@ func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGe
 }
 
 func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshTokenInput) (*KiroTokenInfo, error) {
-	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
+	proxyURL, err := s.resolveProxyURL(ctx, input.ProxyID)
+	if err != nil {
+		return nil, err
+	}
 	refreshToken := strings.TrimSpace(input.RefreshToken)
 	if refreshToken == "" {
 		return nil, fmt.Errorf("kiro refresh token is required")
@@ -354,7 +371,6 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 	authMethod := resolveKiroRefreshAuthMethod(input.AuthMethod, input.ClientID, input.ClientSecret)
 
 	var token *kiropkg.TokenData
-	var err error
 	switch authMethod {
 	case "idc":
 		clientID := strings.TrimSpace(input.ClientID)
@@ -531,12 +547,18 @@ func toKiroTokenInfo(token *kiropkg.TokenData) *KiroTokenInfo {
 }
 
 func (s *KiroOAuthService) resolveProxyURL(ctx context.Context, proxyID *int64) (string, error) {
-	if proxyID == nil || s.proxyRepo == nil {
+	if proxyID == nil {
 		return "", nil
 	}
+	if s.proxyRepo == nil {
+		return "", fmt.Errorf("resolve kiro proxy %d: proxy repository unavailable", *proxyID)
+	}
 	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-	if err != nil || proxy == nil {
-		return "", err
+	if err != nil {
+		return "", fmt.Errorf("resolve kiro proxy %d: %w", *proxyID, err)
+	}
+	if proxy == nil {
+		return "", fmt.Errorf("resolve kiro proxy %d: %w", *proxyID, ErrProxyNotFound)
 	}
 	return proxy.URL(), nil
 }
