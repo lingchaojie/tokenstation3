@@ -154,6 +154,46 @@ describe('EmailOAuthButtons', () => {
     expect(window.sessionStorage.getItem('email_oauth_pending_provider')).toBeNull()
   })
 
+  it.each([
+    ['a query', 'https://api.example.com/api/v1?tenant=x'],
+    ['a fragment', 'https://api.example.com/api/v1#fragment'],
+    ['a non-http protocol', 'ftp://api.example.com/api/v1'],
+  ])(
+    'rejects an API base with %s without storing pending oauth state on yundu',
+    async (_label, apiBase) => {
+      vi.stubEnv('VITE_API_BASE_URL', apiBase)
+      routeState.query = { redirect: '/dashboard', aff: 'OTHER' }
+      locationState.current = {
+        href: 'https://yundu.linx2.ai/register?aff=OTHER',
+        hostname: 'yundu.linx2.ai',
+      }
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: locationState.current,
+      })
+      const wrapper = mount(EmailOAuthButtons, {
+        props: {
+          affCode: 'OTHER',
+          githubEnabled: true,
+          googleEnabled: false,
+        },
+        global: {
+          stubs: {
+            GitHubMark: true,
+            GoogleMark: true,
+          },
+        },
+      })
+
+      await wrapper.get('button').trigger('click')
+
+      expect(showErrorMock).toHaveBeenCalledWith('auth.loginFailed')
+      expect(locationState.current.href).toBe('https://yundu.linx2.ai/register?aff=OTHER')
+      expect(window.sessionStorage.getItem('oauth_aff_code')).toBeNull()
+      expect(window.sessionStorage.getItem('email_oauth_pending_provider')).toBeNull()
+    }
+  )
+
   it('preserves an absolute API base and removes repeated trailing slashes on yundu', async () => {
     vi.stubEnv('VITE_API_BASE_URL', 'https://api.example.com/api/v1///')
     routeState.query = { redirect: '/dashboard', aff: 'OTHER' }

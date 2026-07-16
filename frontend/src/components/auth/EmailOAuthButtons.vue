@@ -89,7 +89,15 @@ function startLogin(provider: EmailOAuthProvider): void {
   let startBase = normalized
   if (promotionOrigin) {
     try {
-      startBase = new URL(normalized, `${promotionOrigin}/`).toString().replace(/\/+$/, '')
+      const resolvedBase = new URL(normalized, `${promotionOrigin}/`)
+      if (
+        (resolvedBase.protocol !== 'http:' && resolvedBase.protocol !== 'https:') ||
+        resolvedBase.search ||
+        resolvedBase.hash
+      ) {
+        throw new Error('Invalid OAuth API base URL')
+      }
+      startBase = resolvedBase.toString().replace(/\/+$/, '')
     } catch {
       appStore.showError(t('auth.loginFailed'))
       return
