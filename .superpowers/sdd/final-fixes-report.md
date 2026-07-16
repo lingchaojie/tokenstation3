@@ -54,9 +54,19 @@ This pass addressed the final review findings for the API documentation surface.
 - Split the code-copy feedback timer coverage so the two-second reset and unmount cancellation are independently verified; unmount clears exactly one pending timer.
 - Existing implementation already satisfied both behaviors once the missing regression coverage was added.
 
+### 7. The homepage header still overflowed at 320 px
+
+- Real-browser measurement isolated the remaining width pressure to the full header CTA: at 320 px the action group was 264.6 px wide, the CTA alone was 108.6 px, and its right edge landed at 340.6 px.
+- Below 360 px, the CTA is now a fixed 40 px icon control. Visitor state shows an arrow icon; authenticated state preserves the visible user initial.
+- The complete localized label remains in the DOM as screen-reader-only text and the link keeps its localized `aria-label`. At 360 px and wider, the original full label and padding return.
+- The API Docs, locale, and theme controls retain their existing size and behavior; desktop navigation and custom-home branches are unchanged.
+- TDD evidence: the visitor and authenticated responsive/semantic assertions failed against the old CTA classes, then all 22 HomeView tests passed after the minimal implementation.
+- Browser evidence: Google Chrome at 320, 360, and 390 px reported `scrollWidth === clientWidth`; every header control was inside the viewport; exactly one `/docs` link was visible; and both the CTA and Docs link were successfully clicked. The direct and in-app docs hash smoke tests also continued to pass at 320 px.
+
 ## Verification
 
 - API docs/navigation/locale/shared focused suite: 23 files, 241 tests passed.
+- Follow-up homepage/API Docs focused suite: 10 files, 85 tests passed.
 - Full frontend suite: 226 files, 1680 tests passed.
 - Frontend lint: passed.
 - Frontend typecheck: passed.

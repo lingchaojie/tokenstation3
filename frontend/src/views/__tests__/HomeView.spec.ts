@@ -751,10 +751,22 @@ describe('HomeView landing page', () => {
 
     const headerCta = wrapper.get('header a[href="/admin/dashboard"]')
     const userInitial = headerCta.get('.ui-avatar-identity-sm')
+    const headerCtaLabel = headerCta.get('span[data-testid="header-cta-label"]')
     expect(userInitial.text()).toBe('A')
     expect(userInitial.classes()).not.toContain('bg-white/15')
     expect(headerCta.text()).toContain('进入控制台')
     expect(headerCta.attributes('aria-label')).toBe('进入控制台')
+    expect(headerCta.classes()).toEqual(expect.arrayContaining([
+      'w-10',
+      'px-0',
+      'min-[360px]:w-auto',
+      'min-[360px]:px-4',
+    ]))
+    expect(headerCtaLabel.classes()).toEqual(expect.arrayContaining([
+      'sr-only',
+      'min-[360px]:not-sr-only',
+    ]))
+    expect(headerCta.find('.header-cta-mobile-icon').exists()).toBe(false)
     expect(wrapper.text()).toContain('控制台')
   })
 
@@ -767,7 +779,18 @@ describe('HomeView landing page', () => {
 
     expect(headerCta.attributes('aria-label')).toBe('立即开始')
     expect(headerCta.classes()).toContain('h-10')
+    expect(headerCta.classes()).toEqual(expect.arrayContaining([
+      'w-10',
+      'px-0',
+      'min-[360px]:w-auto',
+      'min-[360px]:px-4',
+    ]))
     expect(headerCtaLabel.text()).toBe('立即开始')
+    expect(headerCtaLabel.classes()).toEqual(expect.arrayContaining([
+      'sr-only',
+      'min-[360px]:not-sr-only',
+    ]))
+    expect(headerCta.get('.header-cta-mobile-icon').classes()).toContain('min-[360px]:hidden')
   })
 
   it('hides model-branch chat and marketplace entries from visitors', async () => {

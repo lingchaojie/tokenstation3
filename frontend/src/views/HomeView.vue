@@ -102,7 +102,7 @@
           <router-link
             :to="isAuthenticated ? dashboardPath : '/login'"
             :aria-label="isAuthenticated ? t('home.goToDashboard') : t('home.getStarted')"
-            class="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400"
+            class="inline-flex h-10 w-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary-500 px-0 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-400 min-[360px]:w-auto min-[360px]:px-4"
           >
             <span
               v-if="isAuthenticated && userInitial"
@@ -110,7 +110,14 @@
             >
               {{ userInitial }}
             </span>
-            <span data-testid="header-cta-label">
+            <Icon
+              v-if="!isAuthenticated || !userInitial"
+              name="arrowRight"
+              size="sm"
+              class="header-cta-mobile-icon min-[360px]:hidden"
+              aria-hidden="true"
+            />
+            <span data-testid="header-cta-label" class="sr-only min-[360px]:not-sr-only">
               {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
             </span>
           </router-link>
