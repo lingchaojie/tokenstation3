@@ -28,6 +28,18 @@ type kiroEndpointConfig struct {
 	Name      string
 }
 
+var (
+	buildKiroPayloadWithRequestContext = kiropkg.BuildKiroPayloadWithRequestContext
+	estimateKiroClaudeInputTokens      = kiropkg.EstimateClaudeInputTokens
+)
+
+func kiroProfileArnForEndpoint(account *Account, endpoint kiroEndpointConfig) string {
+	if endpoint.Name == "KiroRuntime" {
+		return kiroResolveProfileArnForKRS(account)
+	}
+	return kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
+}
+
 const kiroInvalidModelTempUnschedDuration = time.Minute
 
 const (
@@ -327,8 +339,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
+		inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
 		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		headers := make(http.Header)
@@ -352,14 +364,14 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
-			return nil, inputTokens, err
+			return nil, 0, err
 		}
-		return nil, inputTokens, err
+		return nil, 0, err
 	}
+	inputTokens := resolveKiroInputTokens(ctx, anthropicBody, requestCtx)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	inputTokens = resolveKiroInputTokens(ctx, anthropicBody, requestCtx)
 	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
 	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
@@ -418,22 +430,26 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	maxRetries := 2
+	if len(endpoints) == 0 {
+		return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
+	}
+	baseProfileArn := kiroProfileArnForEndpoint(account, endpoints[0])
+	buildResult, err := s.buildKiroPayloadForAccountWithArn(
+		ctx, account, parsed, anthropicBody, modelID, currentToken,
+		requestModel, headers, baseProfileArn,
+	)
+	if err != nil {
+		return nil, requestCtx, err
+	}
+	requestCtx = buildResult.Context
 
 	for idx, endpoint := range endpoints {
-		profileArn := kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
-		if endpoint.Name == "KiroRuntime" {
-			profileArn = kiroResolveProfileArnForKRS(account)
-		}
-		buildResult, err := s.buildKiroPayloadForAccountWithArn(
-			ctx, account, parsed, anthropicBody, modelID, currentToken,
-			requestModel, headers, profileArn,
-		)
+		profileArn := kiroProfileArnForEndpoint(account, endpoint)
+		payload, err := s.retargetKiroPayloadForProfile(account, parsed, anthropicBody, modelID, buildResult.Payload, baseProfileArn, profileArn)
 		if err != nil {
 			return nil, requestCtx, err
 		}
-		payload := buildResult.Payload
-		requestCtx = buildResult.Context
-		logKiroStatelessReplay(account, buildResult.Payload)
+		logKiroStatelessReplay(account, payload)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, machineID, endpoint.AmzTarget, account)
@@ -527,16 +543,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 						currentToken = refreshedToken
 						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccountWithArn(
-							ctx, account, parsed, anthropicBody, modelID, currentToken,
-							requestModel, headers, profileArn,
-						)
-						if err != nil {
-							return nil, requestCtx, err
-						}
-						payload = buildResult.Payload
-						requestCtx = buildResult.Context
-						logKiroStatelessReplay(account, buildResult.Payload)
 						if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -636,7 +642,7 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, 
 	_ = s
 	_ = token
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(ctx, anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := buildKiroPayloadWithRequestContext(ctx, anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 	if err != nil {
 		return nil, err
 	}
@@ -646,6 +652,28 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, 
 		}
 	}
 	return buildResult, nil
+}
+
+func (s *GatewayService) retargetKiroPayloadForProfile(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID string, payload []byte, currentProfileArn, nextProfileArn string) ([]byte, error) {
+	if currentProfileArn == nextProfileArn {
+		return payload, nil
+	}
+	var err error
+	if nextProfileArn == "" {
+		payload, err = sjson.DeleteBytes(payload, "profileArn")
+	} else {
+		payload, err = sjson.SetBytes(payload, "profileArn", nextProfileArn)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, nextProfileArn); stableID != "" {
+		payload, err = sjson.SetBytes(payload, "conversationState.conversationId", stableID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
 }
 
 func stableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
@@ -819,7 +847,7 @@ func estimateKiroInputTokensForRequest(ctx context.Context, body []byte, mappedM
 	}
 	preparedBody := prepareKiroPayloadBodyForRequestModel(body, requestModel)
 	modelID := kiropkg.MapModel(mappedModel)
-	if tokens, err := kiropkg.EstimateClaudeInputTokens(ctx, preparedBody, modelID, "AI_EDITOR", headers); err == nil {
+	if tokens, err := estimateKiroClaudeInputTokens(ctx, preparedBody, modelID, "AI_EDITOR", headers); err == nil {
 		return tokens
 	}
 	tokens := len(body) / 4

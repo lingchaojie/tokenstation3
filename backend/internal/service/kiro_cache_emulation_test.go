@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -154,6 +155,70 @@ func TestKiroCacheEmulationPrefixPartialHit(t *testing.T) {
 	}
 }
 
+func TestKiroCacheProfileRejectsToolHeavyRequestBelowTranslatedMinimum(t *testing.T) {
+	body := kiroToolCacheRequestBody(t, "same", "same", 7)
+	profile, ok := buildKiroCacheProfile(context.Background(), body, "claude-sonnet-4-6", 443)
+	if ok || profile != nil {
+		t.Fatalf("translated total below cache minimum must not be cacheable: %+v", profile)
+	}
+}
+
+func TestKiroCacheProfileNormalizesSemanticBlockWeightsToTranslatedTotal(t *testing.T) {
+	body := kiroToolCacheRequestBody(t, strings.Repeat("large semantic description ", 150), "small", 2)
+	const translatedTotal = 2400
+	profile, ok := buildKiroCacheProfile(context.Background(), body, "claude-sonnet-4-6", translatedTotal)
+	if !ok {
+		t.Fatal("tool-heavy request above the translated minimum should be cacheable")
+	}
+	if len(profile.blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(profile.blocks))
+	}
+	previous := 0
+	for index, block := range profile.blocks {
+		if block.cumulativeTokens < previous {
+			t.Fatalf("block %d cumulative tokens regressed: previous=%d current=%d", index, previous, block.cumulativeTokens)
+		}
+		previous = block.cumulativeTokens
+	}
+	if got := profile.blocks[len(profile.blocks)-1].cumulativeTokens; got != translatedTotal {
+		t.Fatalf("last normalized cumulative tokens = %d, want authoritative total %d", got, translatedTotal)
+	}
+	if profile.blocks[0].cumulativeTokens <= translatedTotal/2 {
+		t.Fatalf("semantic tool weight was not preserved during normalization: %+v", profile.blocks)
+	}
+}
+
+func TestKiroCacheEmulationPartialHitUsesNormalizedTranslatedAllocation(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := kiroCacheAccount(601, "refresh-normalized", "access-normalized")
+	group := kiroCacheGroup(1)
+	firstBody := kiroToolCacheRequestBody(t, strings.Repeat("stable semantic prefix ", 150), "tail-one", 2)
+	secondBody := kiroToolCacheRequestBody(t, strings.Repeat("stable semantic prefix ", 150), "tail-two", 2)
+	const translatedTotal = 2400
+
+	profile, ok := buildKiroCacheProfile(context.Background(), firstBody, "claude-sonnet-4-6", translatedTotal)
+	if !ok || len(profile.blocks) != 2 {
+		t.Fatalf("unexpected normalized profile: %+v", profile)
+	}
+	wantPrefix := profile.blocks[0].cumulativeTokens
+	if wantPrefix < profile.minCacheable || wantPrefix >= translatedTotal {
+		t.Fatalf("test fixture did not produce a cacheable partial prefix: prefix=%d min=%d total=%d", wantPrefix, profile.minCacheable, translatedTotal)
+	}
+
+	first := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, firstBody, "claude-sonnet-4-6", translatedTotal)
+	if first == nil || first.CacheCreationInputTokens != translatedTotal {
+		t.Fatalf("unexpected initial cache creation: %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, secondBody, "claude-sonnet-4-6", translatedTotal)
+	if second == nil || second.CacheReadInputTokens != wantPrefix || second.CacheCreationInputTokens != translatedTotal-wantPrefix {
+		t.Fatalf("partial hit did not use normalized translated allocation: got=%+v prefix=%d total=%d", second, wantPrefix, translatedTotal)
+	}
+	if second.InputTokens+second.CacheReadInputTokens+second.CacheCreationInputTokens != translatedTotal {
+		t.Fatalf("partial hit token buckets do not balance: %+v", second)
+	}
+}
+
 func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	bodyWithoutMetadata := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello world"}]}`)
 	bodyWithMetadata := []byte(`{"model":"claude-sonnet-4-6","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":"hello world"}]}`)
@@ -220,8 +285,10 @@ func TestKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	if got := anthropictokenizer.CountTokens("你好世界"); got != 1 {
 		t.Fatalf("cjk tokens = %d, want 1", got)
 	}
-	if kiroTokensPerTool != 150 {
-		t.Fatalf("tool tokens = %d, want 150", kiroTokensPerTool)
+	smallToolTokens := countKiroToolDefinitionTokens(map[string]any{"name": "x", "description": "small", "input_schema": map[string]any{"type": "object"}})
+	largeToolTokens := countKiroToolDefinitionTokens(map[string]any{"name": "x", "description": strings.Repeat("semantic description ", 100), "input_schema": map[string]any{"type": "object"}})
+	if smallToolTokens < kiroTokensPerToolBase || largeToolTokens <= smallToolTokens {
+		t.Fatalf("tool semantic tokens were not measured: small=%d large=%d", smallToolTokens, largeToolTokens)
 	}
 	if got := countKiroMessageContentTokens(context.Background(), map[string]any{"thinking": "abc def"}); got != 1 {
 		t.Fatalf("thinking tokens = %d, want 1", got)
@@ -360,4 +427,33 @@ func kiroCacheMultiMessageBody(prefixLabel, tailLabel string) []byte {
 	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
 	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 160)
 	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":%q}]}]}`, prefix, tail))
+}
+
+func kiroToolCacheRequestBody(t *testing.T, firstDescription, tailLabel string, count int) []byte {
+	t.Helper()
+	tools := make([]map[string]any, 0, count)
+	for index := 0; index < count; index++ {
+		description := "small"
+		if index == 0 {
+			description = firstDescription
+		}
+		if index == count-1 {
+			description += " " + tailLabel
+		}
+		tools = append(tools, map[string]any{
+			"name":          fmt.Sprintf("tool_%d", index),
+			"description":   description,
+			"input_schema":  map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}},
+			"cache_control": map[string]any{"type": "ephemeral"},
+		})
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []any{},
+		"tools":    tools,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

@@ -106,6 +106,16 @@ type imageTokenCacheEntry struct {
 	createdAt time.Time
 }
 
+// kiroLoadedImage is retained only by an active bounded fetch flight and its
+// waiters. The process-wide cache stores tokens only, never image bodies.
+type kiroLoadedImage struct {
+	Format string
+	Bytes  []byte
+	Tokens int
+}
+
+var kiroRemoteImageLoader = loadKiroRemoteImage
+
 var imageTokenEstimates = struct {
 	sync.Mutex
 	entries map[string]imageTokenCacheEntry
@@ -113,7 +123,8 @@ var imageTokenEstimates = struct {
 
 type imageTokenFlight struct {
 	done   chan struct{}
-	tokens int
+	result kiroLoadedImage
+	ok     bool
 }
 
 var imageTokenFetches = struct {
@@ -144,7 +155,11 @@ func EstimateImageTokens(ctx context.Context, mediaType, source string) int {
 		if err != nil {
 			return kiroImageTokenFallback
 		}
-		return estimateRemoteImageTokens(ctx, parsed.String())
+		result, ok := loadRemoteImage(ctx, parsed.String(), true)
+		if !ok || result.Tokens < 1 {
+			return kiroImageTokenFallback
+		}
+		return result.Tokens
 	}
 
 	if data, ok := imageDataURLPayload(source); ok {
@@ -156,12 +171,28 @@ func EstimateImageTokens(ctx context.Context, mediaType, source string) int {
 	return kiroImageTokenFallback
 }
 
-func estimateRemoteImageTokens(ctx context.Context, rawURL string) int {
+func loadKiroRemoteImage(ctx context.Context, rawURL string) (kiroLoadedImage, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return kiroLoadedImage{}, false
+	}
+	parsed, err := validateKiroRemoteImageURL(rawURL)
+	if err != nil {
+		return kiroLoadedImage{}, false
+	}
+	return loadRemoteImage(ctx, parsed.String(), false)
+}
+
+func loadRemoteImage(ctx context.Context, rawURL string, allowTokenCache bool) (kiroLoadedImage, bool) {
 	digest := sha256.Sum256([]byte(rawURL))
 	key := string(digest[:])
 	now := kiroImageTokenNow()
-	if tokens, ok := loadImageTokenCache(key, now); ok {
-		return tokens
+	if allowTokenCache {
+		if tokens, ok := loadImageTokenCache(key, now); ok {
+			return kiroLoadedImage{Tokens: tokens}, true
+		}
 	}
 
 	for {
@@ -175,16 +206,18 @@ func estimateRemoteImageTokens(ctx context.Context, rawURL string) int {
 		select {
 		case imageTokenFetches.slots <- struct{}{}:
 		case <-ctx.Done():
-			return kiroImageTokenFallback
+			return kiroLoadedImage{}, false
 		}
 		if ctx.Err() != nil {
 			<-imageTokenFetches.slots
-			return kiroImageTokenFallback
+			return kiroLoadedImage{}, false
 		}
 
-		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
-			<-imageTokenFetches.slots
-			return tokens
+		if allowTokenCache {
+			if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+				<-imageTokenFetches.slots
+				return kiroLoadedImage{Tokens: tokens}, true
+			}
 		}
 
 		imageTokenFetches.Lock()
@@ -195,10 +228,12 @@ func estimateRemoteImageTokens(ctx context.Context, rawURL string) int {
 		}
 		// Close the cache/flight race: workers publish cache entries before
 		// removing their flight, so a miss here is safe to admit as new work.
-		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
-			imageTokenFetches.Unlock()
-			<-imageTokenFetches.slots
-			return tokens
+		if allowTokenCache {
+			if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+				imageTokenFetches.Unlock()
+				<-imageTokenFetches.slots
+				return kiroLoadedImage{Tokens: tokens}, true
+			}
 		}
 		flight = &imageTokenFlight{done: make(chan struct{})}
 		imageTokenFetches.flights[key] = flight
@@ -211,62 +246,67 @@ func estimateRemoteImageTokens(ctx context.Context, rawURL string) int {
 
 func runImageTokenFlight(key, rawURL string, flight *imageTokenFlight) {
 	ctx, cancel := context.WithTimeout(context.Background(), kiroRemoteImageTimeout)
-	tokens, ok := fetchRemoteImageTokens(ctx, rawURL)
+	result, ok := fetchRemoteImage(ctx, rawURL)
 	cancel()
 	ttl := kiroImageTokenSuccessTTL
 	if !ok {
-		tokens = kiroImageTokenFallback
+		result = kiroLoadedImage{Tokens: kiroImageTokenFallback}
 		ttl = kiroImageTokenFailureTTL
 	}
-	storeImageTokenCache(key, tokens, ttl, kiroImageTokenNow())
+	storeImageTokenCache(key, result.Tokens, ttl, kiroImageTokenNow())
 
 	imageTokenFetches.Lock()
-	flight.tokens = tokens
+	flight.result = result
+	flight.ok = ok
 	delete(imageTokenFetches.flights, key)
 	close(flight.done)
 	imageTokenFetches.Unlock()
 	<-imageTokenFetches.slots
 }
 
-func awaitImageTokenFlight(ctx context.Context, flight *imageTokenFlight) int {
+func awaitImageTokenFlight(ctx context.Context, flight *imageTokenFlight) (kiroLoadedImage, bool) {
 	select {
 	case <-ctx.Done():
-		return kiroImageTokenFallback
+		return kiroLoadedImage{}, false
 	case <-flight.done:
-		if flight.tokens < 1 {
-			return kiroImageTokenFallback
+		if flight.result.Tokens < 1 {
+			return kiroLoadedImage{}, false
 		}
-		return flight.tokens
+		return flight.result, flight.ok
 	}
 }
 
-func fetchRemoteImageTokens(ctx context.Context, rawURL string) (int, bool) {
+func fetchRemoteImage(ctx context.Context, rawURL string) (kiroLoadedImage, bool) {
 	parsed, err := validateKiroRemoteImageURL(rawURL)
 	if err != nil {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 	resp, err := kiroImageTokenHTTPClient.Do(req)
 	if err != nil {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
 	if resp.ContentLength > kiroRemoteImageMaxBytes {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, kiroRemoteImageMaxBytes+1))
 	if err != nil || len(body) == 0 || len(body) > kiroRemoteImageMaxBytes {
-		return 0, false
+		return kiroLoadedImage{}, false
 	}
-	return estimateImageBytesTokens(ctx, body)
+	format, tokens, ok := inspectImageBytes(ctx, body)
+	if !ok {
+		return kiroLoadedImage{}, false
+	}
+	return kiroLoadedImage{Format: format, Bytes: body, Tokens: tokens}, true
 }
 
 func newKiroImageTokenHTTPClient() *http.Client {
@@ -452,18 +492,35 @@ func estimateImageBytesTokens(ctx context.Context, data []byte) (int, bool) {
 	if len(data) == 0 || len(data) > kiroRemoteImageMaxBytes {
 		return 0, false
 	}
-	return estimateImageReaderTokens(ctx, bytes.NewReader(data))
+	_, tokens, ok := inspectImageReader(ctx, bytes.NewReader(data))
+	return tokens, ok
 }
 
 func estimateImageReaderTokens(ctx context.Context, reader io.Reader) (int, bool) {
+	_, tokens, ok := inspectImageReader(ctx, reader)
+	return tokens, ok
+}
+
+func inspectImageBytes(ctx context.Context, data []byte) (string, int, bool) {
+	if len(data) == 0 || len(data) > kiroRemoteImageMaxBytes {
+		return "", 0, false
+	}
+	return inspectImageReader(ctx, bytes.NewReader(data))
+}
+
+func inspectImageReader(ctx context.Context, reader io.Reader) (string, int, bool) {
 	if ctx.Err() != nil {
-		return 0, false
+		return "", 0, false
 	}
-	cfg, _, err := image.DecodeConfig(reader)
+	cfg, format, err := image.DecodeConfig(reader)
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || ctx.Err() != nil {
-		return 0, false
+		return "", 0, false
 	}
-	return imageTokensForDimensions(cfg.Width, cfg.Height), true
+	format = normalizeKiroImageFormat(format)
+	if format == "" {
+		return "", 0, false
+	}
+	return format, imageTokensForDimensions(cfg.Width, cfg.Height), true
 }
 
 func imageTokensForDimensions(width, height int) int {

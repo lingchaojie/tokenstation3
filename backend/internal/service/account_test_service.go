@@ -416,7 +416,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	currentToken := token
 	profileArn := kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(ctx, preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+	buildResult, err := buildKiroPayloadWithRequestContext(ctx, preparedBody, modelID, profileArn, "AI_EDITOR", nil)
 	if err != nil {
 		return nil, kiropkg.KiroRequestContext{}, err
 	}
@@ -462,12 +462,6 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 						currentToken = refreshedToken
 						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = kiropkg.BuildKiroPayloadWithRequestContext(ctx, preparedBody, modelID, profileArn, "AI_EDITOR", nil)
-						if err != nil {
-							return nil, requestCtx, err
-						}
-						payload = buildResult.Payload
-						requestCtx = buildResult.Context
 						continue
 					}
 				}

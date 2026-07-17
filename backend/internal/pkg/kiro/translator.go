@@ -63,8 +63,7 @@ const (
 )
 
 var (
-	kiroRemoteImageHTTPClient = &http.Client{Timeout: kiroRemoteImageTimeout}
-	requiredToolFields        = map[string][][]string{
+	requiredToolFields = map[string][][]string{
 		"write":              {{"filePath", "file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
 		"fswrite":            {{"path"}, {"content"}},
@@ -464,7 +463,7 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 	}
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
 
-	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
+	history, currentUserMsg, currentToolResults := processMessages(ctx, filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
@@ -2208,7 +2207,7 @@ func normalizeSchemaChild(key string, value any) any {
 	return value
 }
 
-func processMessages(messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
+func processMessages(ctx context.Context, messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
 	messagesArray := mergeAdjacentMessages(messages)
 
 	var history []KiroHistoryMessage
@@ -2221,7 +2220,7 @@ func processMessages(messages []gjson.Result, modelID, origin string, requestCtx
 		switch role {
 		case "user":
 			keepImages := last || len(messagesArray)-1-i <= kiroHistoryImageKeepCount
-			userMsg, toolResults := buildUserMessageStruct(msg, modelID, origin, keepImages)
+			userMsg, toolResults := buildUserMessageStruct(ctx, msg, modelID, origin, keepImages)
 			if strings.TrimSpace(userMsg.Content) == "" {
 				if len(toolResults) > 0 {
 					userMsg.Content = "Tool results provided."
@@ -2389,7 +2388,7 @@ func deduplicateToolResults(toolResults []KiroToolResult) []KiroToolResult {
 	return out
 }
 
-func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
+func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
 	content := msg.Get("content")
 	var contentBuilder strings.Builder
 	var toolResults []KiroToolResult
@@ -2405,10 +2404,16 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 			case "image":
 				mediaType := part.Get("source.media_type").String()
 				data := part.Get("source.data").String()
-				image, ok := buildKiroImage(mediaType, data)
+				sourceURL := strings.TrimSpace(part.Get("source.url").String())
+				image, ok := KiroImage{}, false
+				if sourceURL != "" && strings.TrimSpace(data) == "" {
+					image, ok = buildKiroImageFromURL(ctx, sourceURL)
+				} else {
+					image, ok = buildKiroImage(ctx, mediaType, data)
+				}
 				if !ok {
-					if url := strings.TrimSpace(part.Get("source.url").String()); url != "" {
-						appendImageURLFallback(&contentBuilder, url)
+					if sourceURL != "" {
+						appendImageURLFallback(&contentBuilder, sourceURL)
 					}
 					continue
 				}
@@ -2425,7 +2430,7 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 				if url == "" {
 					url = strings.TrimSpace(part.Get("source.url").String())
 				}
-				if image, ok := buildKiroImageFromURL(url); ok {
+				if image, ok := buildKiroImageFromURL(ctx, url); ok {
 					if keepImages {
 						images = append(images, image)
 					} else {
@@ -2501,8 +2506,8 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 	return userMsg, toolResults
 }
 
-func buildKiroImage(mediaType, data string) (KiroImage, bool) {
-	if image, ok := buildKiroImageFromURL(data); ok {
+func buildKiroImage(ctx context.Context, mediaType, data string) (KiroImage, bool) {
+	if image, ok := buildKiroImageFromURL(ctx, data); ok {
 		return image, true
 	}
 	format := ""
@@ -2520,11 +2525,11 @@ func buildKiroImage(mediaType, data string) (KiroImage, bool) {
 	}, true
 }
 
-func buildKiroImageFromURL(url string) (KiroImage, bool) {
+func buildKiroImageFromURL(ctx context.Context, url string) (KiroImage, bool) {
 	url = strings.TrimSpace(url)
 	lowerURL := strings.ToLower(url)
 	if strings.HasPrefix(lowerURL, "http://") || strings.HasPrefix(lowerURL, "https://") {
-		return buildKiroImageFromRemoteURL(url)
+		return buildKiroImageFromRemoteURL(ctx, url)
 	}
 	if !strings.HasPrefix(lowerURL, "data:") {
 		return KiroImage{}, false
@@ -2542,44 +2547,17 @@ func buildKiroImageFromURL(url string) (KiroImage, bool) {
 	if semi := strings.IndexByte(mediaType, ';'); semi >= 0 {
 		mediaType = mediaType[:semi]
 	}
-	return buildKiroImage(mediaType, data)
+	return buildKiroImage(ctx, mediaType, data)
 }
 
-func buildKiroImageFromRemoteURL(url string) (KiroImage, bool) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return KiroImage{}, false
-	}
-	req.Header.Set("Accept", "image/*,*/*;q=0.8")
-	resp, err := kiroRemoteImageHTTPClient.Do(req)
-	if err != nil {
-		return KiroImage{}, false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return KiroImage{}, false
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, kiroRemoteImageMaxBytes+1))
-	if err != nil || len(body) == 0 || len(body) > kiroRemoteImageMaxBytes {
-		return KiroImage{}, false
-	}
-	mediaType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
-	format := ""
-	if strings.HasPrefix(strings.ToLower(mediaType), "image/") {
-		format = normalizeKiroImageFormat(strings.TrimPrefix(strings.ToLower(mediaType), "image/"))
-	}
-	if format == "" {
-		detected := strings.TrimSpace(strings.Split(http.DetectContentType(body), ";")[0])
-		if strings.HasPrefix(strings.ToLower(detected), "image/") {
-			format = normalizeKiroImageFormat(strings.TrimPrefix(strings.ToLower(detected), "image/"))
-		}
-	}
-	if format == "" {
+func buildKiroImageFromRemoteURL(ctx context.Context, url string) (KiroImage, bool) {
+	loaded, ok := kiroRemoteImageLoader(ctx, url)
+	if !ok || loaded.Format == "" || len(loaded.Bytes) == 0 {
 		return KiroImage{}, false
 	}
 	return KiroImage{
-		Format: format,
-		Source: KiroImageSource{Bytes: base64.StdEncoding.EncodeToString(body)},
+		Format: loaded.Format,
+		Source: KiroImageSource{Bytes: base64.StdEncoding.EncodeToString(loaded.Bytes)},
 	}, true
 }
 

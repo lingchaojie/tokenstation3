@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
@@ -420,6 +421,149 @@ func TestEstimateImageTokensCallerCancellationDoesNotPoisonSharedFetch(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("healthy follower did not receive the shared fetch result")
 	}
+}
+
+func TestBuildKiroPayloadRemoteImageRejectsUnsafeTargetsBeforeTranslationTransport(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	var dials atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("unsafe target must not be dialed")
+	})
+
+	oldLoader := kiroRemoteImageLoader
+	var loaderCalls atomic.Int32
+	kiroRemoteImageLoader = func(ctx context.Context, rawURL string) (kiroLoadedImage, bool) {
+		loaderCalls.Add(1)
+		return loadKiroRemoteImage(ctx, rawURL)
+	}
+	t.Cleanup(func() { kiroRemoteImageLoader = oldLoader })
+
+	for _, rawURL := range []string{
+		"http://169.254.169.254/latest/meta-data",
+		"http://metadata.google.internal/latest/meta-data",
+		"http://10.0.0.8/private.png",
+	} {
+		body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":%q}}]}]}`, rawURL))
+		result, err := BuildKiroPayloadWithRequestContext(context.Background(), body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, result.Payload)
+	}
+
+	require.Equal(t, int32(3), loaderCalls.Load(), "all translator URL paths must use the common safe loader")
+	require.Zero(t, dials.Load(), "unsafe URLs must be rejected before the transport")
+}
+
+func TestBuildKiroPayloadRemoteImageHonorsCanceledCallerBeforeTranslationTransport(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	var dials atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("canceled caller must not dial")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"http://images.example.com/image.png"}}]}]}`)
+	result, err := BuildKiroPayloadWithRequestContext(ctx, body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Payload)
+	require.Zero(t, dials.Load())
+}
+
+func TestBuildKiroPayloadRemoteImageCancellationStopsTranslationWait(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseFetch()
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		startedOnce.Do(func() { close(started) })
+		<-release
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"http://images.example.com/slow.png"}}]}]}`)
+	resultCh := make(chan *KiroBuildResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := BuildKiroPayloadWithRequestContext(ctx, body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+		resultCh <- result
+		errCh <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("translator did not enter the safe remote loader")
+	}
+
+	startedAt := time.Now()
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		require.NotNil(t, <-resultCh)
+		require.Less(t, time.Since(startedAt), 500*time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("translator did not honor caller cancellation")
+	}
+	releaseFetch()
+}
+
+func TestBuildKiroPayloadRemoteImageFetchesOnceAndSeedsTokenCache(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	var requests atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		requests.Add(1)
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	const rawURL = "http://images.example.com/image.png"
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"` + rawURL + `"}}]}]}`)
+	result, err := BuildKiroPayloadWithRequestContext(context.Background(), body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), requests.Load(), "translation and its visual estimate must share one safe fetch")
+	require.Contains(t, string(result.Payload), base64.StdEncoding.EncodeToString(pngBody))
+
+	require.Equal(t, 54, EstimateImageTokens(context.Background(), "", rawURL))
+	require.Equal(t, int32(1), requests.Load(), "cache flattening must reuse the token-only result without another GET")
+}
+
+func TestBuildKiroPayloadAnthropicURLImageSourceUsesSafeLoader(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	var requests atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		requests.Add(1)
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"http://images.example.com/image.png"}}]}]}`)
+	result, err := BuildKiroPayloadWithRequestContext(context.Background(), body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, int32(1), requests.Load())
+	require.Contains(t, string(result.Payload), base64.StdEncoding.EncodeToString(pngBody))
 }
 
 func TestImageTokenHTTPClientHasBoundedTimeout(t *testing.T) {
