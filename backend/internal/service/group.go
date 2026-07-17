@@ -199,8 +199,9 @@ func normalizeKiroCacheEmulationFields(g *Group) {
 
 // Kiro 推理 endpoint 模式取值。
 const (
-	KiroEndpointModeQ   = "q"
-	KiroEndpointModeKRS = "krs"
+	KiroEndpointModeQ    = "q"
+	KiroEndpointModeKRS  = "krs"
+	KiroEndpointModeAuto = "auto"
 )
 
 // EffectiveKiroEndpointMode 返回当前 group 实际使用的 Kiro endpoint 模式。
@@ -210,8 +211,8 @@ func (g *Group) EffectiveKiroEndpointMode() string {
 		return KiroEndpointModeQ
 	}
 	switch g.KiroEndpointMode {
-	case KiroEndpointModeKRS:
-		return KiroEndpointModeKRS
+	case KiroEndpointModeKRS, KiroEndpointModeAuto:
+		return g.KiroEndpointMode
 	default:
 		return KiroEndpointModeQ
 	}
@@ -231,7 +232,7 @@ func normalizeKiroEndpointFields(g *Group) {
 		return
 	}
 	switch g.KiroEndpointMode {
-	case KiroEndpointModeKRS:
+	case KiroEndpointModeKRS, KiroEndpointModeAuto:
 	default:
 		g.KiroEndpointMode = KiroEndpointModeQ
 	}

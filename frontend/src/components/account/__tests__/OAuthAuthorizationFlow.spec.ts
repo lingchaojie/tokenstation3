@@ -75,4 +75,23 @@ describe('OAuthAuthorizationFlow', () => {
     expect(wrapper.find('input[value="https://example.com/authorize"]').exists()).toBe(true)
     expect(wrapper.find('input[value="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize"]').exists()).toBe(true)
   })
+
+  it('clears the portal callback before accepting the external IdP callback', async () => {
+    const wrapper = mountFlow({
+      isKiroExternalIdp: false,
+      externalIdpStage: 'portal'
+    })
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('kiro://kiro.aws.amazon.com/signin/redirect?code=portal-code')
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('portal-code')
+
+    await wrapper.setProps({
+      isKiroExternalIdp: true,
+      externalIdpStage: 'idp'
+    })
+    await nextTick()
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+  })
 })

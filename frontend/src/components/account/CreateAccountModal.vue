@@ -563,6 +563,19 @@
         </div>
       </div>
 
+      <div
+        v-if="
+          form.platform === 'kiro' &&
+          (accountCategory === 'oauth-based' || accountCategory === 'apikey')
+        "
+        class="space-y-2"
+        data-testid="kiro-api-region-select-create"
+      >
+        <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
+        <Select v-model="kiroAPIRegion" :options="kiroAPIRegionOptions" />
+        <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
+      </div>
+
       <div v-if="form.platform === 'kiro' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')" class="space-y-2">
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
         <input
@@ -3512,12 +3525,28 @@
     <div v-else class="space-y-5">
       <div v-if="isKiroImportMode" class="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/20">
         <div>
-          <label class="input-label">{{ t('admin.accounts.oauth.kiro.tokenJsonLabel') }}</label>
-          <textarea v-model="kiroTokenJson" rows="8" class="input font-mono text-xs" placeholder='{"accessToken":"...","refreshToken":"..."}'></textarea>
-          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.tokenJsonHint') }}</p>
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.importProviderLabel') }}</label>
+          <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <label
+              v-for="opt in kiroImportProviderOptions"
+              :key="opt"
+              class="flex cursor-pointer items-center rounded-lg border px-3 py-2"
+              :class="kiroImportProvider === opt
+                ? 'border-primary-500 bg-primary-50 dark:border-primary-400 dark:bg-primary-900/20'
+                : 'border-gray-200 dark:border-dark-600'"
+            >
+              <input v-model="kiroImportProvider" type="radio" :value="opt" class="mr-2 text-primary-600 focus:ring-primary-500" />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ opt }}</span>
+            </label>
+          </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accounts.oauth.kiro.deviceRegistrationLabel') }}</label>
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.tokenJsonLabel') }} <span class="text-red-500">*</span></label>
+          <textarea v-model="kiroTokenJson" rows="8" class="input font-mono text-xs" :placeholder="kiroImportTokenPlaceholder"></textarea>
+          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.tokenJsonHint') }}</p>
+        </div>
+        <div v-if="kiroImportNeedsDeviceRegistration">
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.deviceRegistrationLabel') }} <span class="text-red-500">*</span></label>
           <textarea v-model="kiroDeviceRegistrationJson" rows="6" class="input font-mono text-xs" placeholder='{"clientId":"...","clientSecret":"..."}'></textarea>
           <p class="input-hint">{{ t('admin.accounts.oauth.kiro.deviceRegistrationHint') }}</p>
         </div>
@@ -3550,6 +3579,8 @@
         :initial-input-method="'manual'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
+        :is-kiro-external-idp="form.platform === 'kiro' && kiroOAuth.externalIdpStage.value === 'idp'"
+        :external-idp-stage="kiroOAuth.externalIdpStage.value"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
         @validate-refresh-token="handleValidateRefreshToken"
@@ -3944,7 +3975,8 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  KiroEndpointMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3967,6 +3999,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { DEFAULT_KIRO_API_REGION, buildKiroAPIRegionOptions } from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import {
@@ -4262,13 +4295,39 @@ const kiroAccountType = ref<'oauth' | 'idc' | 'import'>('oauth')
 const kiroOAuthProvider = ref<'google' | 'github'>('google')
 const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
+const kiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
+const kiroImportProvider = ref<'Google' | 'Github' | 'BuilderId' | 'Enterprise' | 'ExternalIdp'>('Google')
+const kiroImportProviderOptions = ['Google', 'Github', 'BuilderId', 'Enterprise', 'ExternalIdp'] as const
+const kiroImportNeedsDeviceRegistration = computed(
+  () => kiroImportProvider.value === 'BuilderId' || kiroImportProvider.value === 'Enterprise'
+)
+const kiroImportTokenPlaceholder = computed(() => {
+  if (kiroImportProvider.value === 'ExternalIdp') {
+    return '{"accessToken":"...","refreshToken":"...","authMethod":"external_idp","provider":"ExternalIdp","clientId":"...","tokenEndpoint":"https://login.microsoftonline.com/tenant/oauth2/v2.0/token","issuerUrl":"https://login.microsoftonline.com/tenant/v2.0","scopes":"openid offline_access"}'
+  }
+  return kiroImportNeedsDeviceRegistration.value
+    ? `{"accessToken":"...","refreshToken":"...","clientIdHash":"...","authMethod":"idc","provider":"${kiroImportProvider.value}"}`
+    : `{"accessToken":"...","refreshToken":"...","authMethod":"social","provider":"${kiroImportProvider.value}"}`
+})
 const kiroModelMappings = ref<ModelMapping[]>([])
 const kiroCreditUnitPriceUsd = ref(0)
 const kiroPresetMappings = computed(() => getPresetMappingsByPlatform('kiro'))
+const kiroAPIRegionOptions = computed(() =>
+  buildKiroAPIRegionOptions(kiroAPIRegion.value, (region, legacy) => {
+    if (legacy) {
+      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+    }
+    const regionLabelKey =
+      region === 'us-east-1'
+        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
+        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
+    return `${region} - ${t(regionLabelKey)}`
+  }).map(option => ({ ...option }))
+)
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs'>('q')
+const kiroEndpointMode = ref<KiroEndpointMode>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)
@@ -4276,6 +4335,7 @@ const kiroStickyTtlSeconds = ref(3600)
 const kiroEndpointModeOptions = computed(() => [
   { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
   { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
+  { value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') },
 ])
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 
@@ -4384,7 +4444,7 @@ function buildKiroMixedExtra(): Record<string, unknown> | undefined {
   if (!mixedScheduling.value) return undefined
   return {
     mixed_scheduling: true,
-    kiro_endpoint_mode: kiroEndpointMode.value === 'krs' ? 'krs' : 'q',
+    kiro_endpoint_mode: kiroEndpointMode.value,
     kiro_cache_emulation_enabled: kiroCacheEmulationEnabled.value,
     kiro_cache_emulation_ratio: Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0)),
     kiro_auto_sticky_enabled: kiroAutoStickyEnabled.value,
@@ -5189,8 +5249,15 @@ const resetForm = () => {
   kiroOAuthProvider.value = 'google'
   kiroIDCStartUrl.value = 'https://view.awsapps.com/start'
   kiroIDCRegion.value = 'us-east-1'
+  kiroAPIRegion.value = DEFAULT_KIRO_API_REGION
   kiroModelMappings.value = []
   kiroCreditUnitPriceUsd.value = 0
+  mixedScheduling.value = false
+  kiroEndpointMode.value = 'q'
+  kiroCacheEmulationEnabled.value = false
+  kiroCacheEmulationRatio.value = 1
+  kiroAutoStickyEnabled.value = true
+  kiroStickyTtlSeconds.value = 3600
   resetKiroOAuthLocalState()
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5476,10 +5543,12 @@ const resetKiroOAuthLocalState = () => {
   kiroOAuth.resetState()
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
+  kiroImportProvider.value = 'Google'
 }
 
 const buildKiroCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown> => {
   const credentials = kiroOAuth.buildCredentials(tokenInfo)
+  credentials.api_region = kiroAPIRegion.value
   if (kiroAccountType.value === 'idc') {
     const startUrl =
       typeof tokenInfo.start_url === 'string' && tokenInfo.start_url.trim()
@@ -5530,7 +5599,8 @@ const handleSubmit = async () => {
     }
 
     const credentials: Record<string, unknown> = {
-      api_key: apiKeyValue.value.trim()
+      api_key: apiKeyValue.value.trim(),
+      api_region: kiroAPIRegion.value
     }
 
     const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)
@@ -6868,11 +6938,40 @@ const handleExchangeCode = async () => {
 }
 
 const handleKiroImport = async () => {
-  if (!isKiroImportMode.value || !kiroTokenJson.value.trim()) return
+  if (!isKiroImportMode.value) return
+  if (!kiroTokenJson.value.trim()) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.tokenJsonRequired')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+  if (kiroImportNeedsDeviceRegistration.value && !kiroDeviceRegistrationJson.value.trim()) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.deviceRegistrationRequired')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+
+  let parsedProvider = ''
+  try {
+    parsedProvider = String(JSON.parse(kiroTokenJson.value)?.provider ?? '').trim()
+  } catch {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.tokenJsonInvalid')
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
+  if (parsedProvider !== kiroImportProvider.value) {
+    kiroOAuth.error.value = t('admin.accounts.oauth.kiro.providerMismatch', {
+      selected: kiroImportProvider.value,
+      actual: parsedProvider || '-'
+    })
+    appStore.showError(kiroOAuth.error.value)
+    return
+  }
 
   const tokenInfo = await kiroOAuth.importToken(
     kiroTokenJson.value,
-    kiroDeviceRegistrationJson.value || undefined
+    kiroImportNeedsDeviceRegistration.value
+      ? kiroDeviceRegistrationJson.value.trim()
+      : undefined
   )
   if (!tokenInfo) return
 

@@ -9,6 +9,28 @@
       <div class="flex-1">
         <h4 class="mb-3 font-semibold text-blue-900 dark:text-blue-200">{{ oauthTitle }}</h4>
 
+        <div v-if="isKiroExternalIdp" class="mb-4">
+          <div class="flex items-center gap-2 text-xs font-medium">
+            <span class="rounded-full bg-emerald-100 px-3 py-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+              {{ t('admin.accounts.oauth.kiro.extIdpStagePortal') }}
+            </span>
+            <Icon name="arrowRight" size="xs" class="text-gray-400" />
+            <span
+              :class="[
+                'rounded-full px-3 py-1',
+                externalIdpStage === 'idp'
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-gray-100 text-gray-400 dark:bg-dark-600 dark:text-gray-500'
+              ]"
+            >
+              {{ t('admin.accounts.oauth.kiro.extIdpStageIdp') }}
+            </span>
+          </div>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.oauth.kiro.extIdpStageHint') }}
+          </p>
+        </div>
+
         <!-- Auth Method Selection -->
         <div v-if="showMethodSelection" class="mb-4">
           <label class="mb-2 block text-sm font-medium text-blue-800 dark:text-blue-300">
@@ -874,6 +896,8 @@ interface Props {
   initialInputMethod?: AuthInputMethod
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
+  isKiroExternalIdp?: boolean
+  externalIdpStage?: 'portal' | 'idp'
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -898,7 +922,9 @@ const props = withDefaults(defineProps<Props>(), {
   showManualOption: true,
   initialInputMethod: 'manual',
   platform: 'anthropic',
-  showProjectId: true
+  showProjectId: true,
+  isKiroExternalIdp: false,
+  externalIdpStage: 'portal'
 })
 
 const emit = defineEmits<{
@@ -1070,6 +1096,15 @@ watch(authCodeInput, (newVal) => {
     }
   }
 })
+
+watch(
+  () => props.externalIdpStage,
+  (stage, prev) => {
+    if (props.platform === 'kiro' && stage === 'idp' && prev === 'portal') {
+      authCodeInput.value = ''
+    }
+  }
+)
 
 // Methods
 const handleGenerateUrl = () => {

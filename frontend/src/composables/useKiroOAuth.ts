@@ -56,6 +56,7 @@ export function useKiroOAuth() {
   const state = ref('')
   const loading = ref(false)
   const error = ref('')
+  const externalIdpStage = ref<'portal' | 'idp'>('portal')
 
   const resetState = () => {
     authUrl.value = ''
@@ -64,6 +65,7 @@ export function useKiroOAuth() {
     state.value = ''
     loading.value = false
     error.value = ''
+    externalIdpStage.value = 'portal'
   }
 
   const generateAuthUrl = async (
@@ -76,6 +78,7 @@ export function useKiroOAuth() {
     externalIDPAuthUrl.value = ''
     sessionId.value = ''
     state.value = ''
+    externalIdpStage.value = 'portal'
 
     try {
       const response = await adminAPI.kiro.generateAuthUrl({
@@ -148,6 +151,7 @@ export function useKiroOAuth() {
       externalIDPAuthUrl.value = response.auth_url
       sessionId.value = response.session_id
       state.value = response.state
+      externalIdpStage.value = 'idp'
       return true
     } catch (err: any) {
       error.value = err.response?.data?.detail || t('admin.accounts.oauth.authFailed')
@@ -202,6 +206,7 @@ export function useKiroOAuth() {
     startUrl?: string
     region?: string
     profileArn?: string
+    tokenEndpoint?: string
     issuerUrl?: string
     scopes?: string
     email?: string
@@ -219,6 +224,7 @@ export function useKiroOAuth() {
         start_url: payload.startUrl,
         region: payload.region,
         profile_arn: payload.profileArn,
+        token_endpoint: payload.tokenEndpoint,
         issuer_url: payload.issuerUrl,
         scopes: payload.scopes,
         email: payload.email,
@@ -266,6 +272,7 @@ export function useKiroOAuth() {
     assignIfPresent(creds, 'email', tokenInfo.email)
     assignIfPresent(creds, 'start_url', tokenInfo.start_url)
     assignIfPresent(creds, 'region', tokenInfo.region)
+    assignIfPresent(creds, 'token_endpoint', tokenInfo.token_endpoint)
     assignIfPresent(creds, 'issuer_url', tokenInfo.issuer_url)
     assignIfPresent(creds, 'scopes', tokenInfo.scopes)
     return creds
@@ -278,6 +285,7 @@ export function useKiroOAuth() {
     state,
     loading,
     error,
+    externalIdpStage,
     resetState,
     generateAuthUrl,
     generateIDCAuthUrl,

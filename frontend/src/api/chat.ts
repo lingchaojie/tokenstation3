@@ -41,6 +41,7 @@ export interface WebChatModel {
   key_type: string
   model: string
   display_name: string
+  released_at?: string
   supports_text: boolean
   supports_image_input: boolean
   supports_file_context: boolean
@@ -330,6 +331,11 @@ export async function updateChatConversation(
   return data
 }
 
+export async function generateChatConversationTitle(id: number): Promise<WebChatConversation> {
+  const { data } = await apiClient.post<WebChatConversation>(`${CHAT_API_BASE}/conversations/${id}/title/generate`)
+  return data
+}
+
 export async function deleteChatConversation(id: number): Promise<void> {
   await apiClient.delete(`${CHAT_API_BASE}/conversations/${id}`)
 }
@@ -419,6 +425,7 @@ export const chatAPI = {
   getConversation: getChatConversation,
   createConversation: createChatConversation,
   updateConversation: updateChatConversation,
+  generateConversationTitle: generateChatConversationTitle,
   deleteConversation: deleteChatConversation,
   uploadAttachment: uploadChatAttachment,
   cancelMessage: cancelChatMessage,

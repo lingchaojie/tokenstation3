@@ -43,7 +43,7 @@ func TestRefreshIDCTokenInvalidGrantReturnsTypedError(t *testing.T) {
 	oidcEndpointOverride = server.URL
 	t.Cleanup(func() { oidcEndpointOverride = previous })
 
-	_, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "revoked-refresh-token", "us-east-1", BuilderIDStartURL)
+	_, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "revoked-refresh-token", "us-east-1", BuilderIDStartURL, ProviderBuilderId)
 	require.Error(t, err)
 
 	var invalid *RefreshTokenInvalidError
@@ -98,8 +98,41 @@ func TestRefreshIDCTokenPreservesProfileArn(t *testing.T) {
 	oidcEndpointOverride = server.URL
 	t.Cleanup(func() { oidcEndpointOverride = previous })
 
-	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", BuilderIDStartURL)
+	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", BuilderIDStartURL, ProviderBuilderId)
 	require.NoError(t, err)
 	require.Equal(t, profileArn, token.ProfileArn)
 	require.Equal(t, "kiro@example.com", token.Email)
+}
+
+func TestRefreshIDCTokenPreservesStoredEnterpriseProvider(t *testing.T) {
+	testRefreshIDCProvider(t, "", ProviderEnterprise, ProviderEnterprise)
+}
+
+func TestRefreshIDCTokenPreservesLegacyAWSProvider(t *testing.T) {
+	testRefreshIDCProvider(t, BuilderIDStartURL, "AWS", "AWS")
+}
+
+func testRefreshIDCProvider(t *testing.T, startURL, provider, want string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accessToken":"access-token","refreshToken":"refresh-token","expiresIn":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", startURL, provider)
+	require.NoError(t, err)
+	require.Equal(t, want, token.Provider)
 }

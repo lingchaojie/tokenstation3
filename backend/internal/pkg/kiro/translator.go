@@ -43,6 +43,10 @@ const (
 	embeddedToolCallPrefix     = "[Called "
 	minFrameSize               = 16
 	maxEventMsgSize            = 10 << 20
+	maxStreamingToolStateCount = 256
+	maxStreamingToolIDLen      = 256
+	maxStreamingToolJSONDepth  = 256
+	maxStreamingToolInputBytes = maxEventMsgSize
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
 	editToolDescriptionSuffix  = "IMPORTANT: If new content exceeds 50 lines, split it into multiple Edit calls, replacing or appending no more than 50 lines per call. If appending, use a unique placeholder and remove it in the final chunk."
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
@@ -59,10 +63,8 @@ const (
 )
 
 var (
-	trailingCommaPattern      = regexp.MustCompile(`,\s*([}\]])`)
-	kiroRemoteImageHTTPClient = &http.Client{Timeout: kiroRemoteImageTimeout}
-	requiredToolFields        = map[string][][]string{
-		"write":              {{"file_path", "path"}, {"content"}},
+	requiredToolFields = map[string][][]string{
+		"write":              {{"filePath", "file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
 		"fswrite":            {{"path"}, {"content"}},
 		"create_file":        {{"path"}, {"content"}},
@@ -228,6 +230,18 @@ type KiroToolUse struct {
 	TruncatedRaw string         `json:"-"`
 }
 
+type toolUseSource uint8
+
+const (
+	toolUseSourceStreaming toolUseSource = iota
+	toolUseSourceAggregate
+)
+
+type toolUseSourceRecord struct {
+	digest [sha256.Size]byte
+	source toolUseSource
+}
+
 type toolUseState struct {
 	ToolUseID   string
 	Name        string
@@ -378,6 +392,16 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 }
 
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	return BuildKiroPayloadWithRequestContext(context.Background(), claudeBody, modelID, profileArn, origin, headers)
+}
+
+// BuildKiroPayloadWithRequestContext translates an Anthropic request and uses
+// the caller's Go context for visual-token estimation.
+// BuildKiroPayloadWithContext remains the background-context compatibility API.
+func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
 	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
@@ -439,7 +463,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	}
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
 
-	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
+	history, currentUserMsg, currentToolResults := processMessages(ctx, filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
@@ -509,12 +533,22 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		InferenceConfig:              inferenceConfig,
 		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
 	}
-	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(payload)
+	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(ctx, payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
+}
+
+// EstimateClaudeInputTokens translates an Anthropic request into the exact
+// Kiro payload shape and returns that payload's authoritative input estimate.
+func EstimateClaudeInputTokens(ctx context.Context, claudeBody []byte, modelID, origin string, headers http.Header) (int, error) {
+	result, err := BuildKiroPayloadWithRequestContext(ctx, claudeBody, modelID, "", origin, headers)
+	if err != nil {
+		return 0, err
+	}
+	return result.Context.EstimatedInputTokens, nil
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
@@ -542,11 +576,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	textBlockOpen := false
 	thinkingBlockOpen := false
 	processedIDs := make(map[string]bool)
-	emittedToolContents := make(map[string]bool)
-	streamingToolBlockIndices := make(map[string]int)
-	streamingToolStarted := make(map[string]bool)
+	trackedToolIDs := make(map[string]struct{})
+	toolSourcesByID := make(map[string]toolUseSourceRecord)
+	streamingToolNames := make(map[string]string)
 	streamingToolStopped := make(map[string]bool)
+	streamingToolInputBuf := make(map[string]*strings.Builder)
+	streamingToolInvalid := make(map[string]bool)
+	streamingToolBufferedBytes := 0
 	currentStreamingToolID := ""
+	toolBlockEmitted := false
 	pendingAssistantText := ""
 	lastContentFragment := ""
 	pendingLeadingWhitespace := ""
@@ -559,6 +597,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
 	var outputTextBuf strings.Builder
+	var emitTextDelta func(text string, allowWhitespace bool) error
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -566,6 +605,18 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return err
 		}
 		_, err = io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n")
+		return err
+	}
+	writeToolInputEvent := func(data any) error {
+		var payload bytes.Buffer
+		encoder := json.NewEncoder(&payload)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(data); err != nil {
+			return err
+		}
+		encoded := payload.String()
+		encoded = strings.TrimSuffix(encoded, "\n")
+		_, err := io.WriteString(w, "event: content_block_delta\ndata: "+encoded+"\n\n")
 		return err
 	}
 	ensureMessageStart := func() error {
@@ -634,37 +685,127 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		thinkingBlockOpen = false
 		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": thinkingBlockIndex})
 	}
-	closeStreamingTool := func(toolUseID string) error {
-		if toolUseID == "" || !streamingToolStarted[toolUseID] || streamingToolStopped[toolUseID] {
-			return nil
+	admitToolID := func(toolUseID string) bool {
+		if strings.TrimSpace(toolUseID) == "" || len(toolUseID) > maxStreamingToolIDLen {
+			return false
+		}
+		if _, ok := trackedToolIDs[toolUseID]; ok {
+			return true
+		}
+		if len(trackedToolIDs) >= maxStreamingToolStateCount {
+			return false
+		}
+		trackedToolIDs[toolUseID] = struct{}{}
+		return true
+	}
+	isTrackedToolID := func(toolUseID string) bool {
+		_, ok := trackedToolIDs[toolUseID]
+		return ok
+	}
+	consumeSameIDToolMirror := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) bool {
+		record, ok := toolSourcesByID[toolUseID]
+		if !ok || record.source == source || record.digest != digest {
+			return false
+		}
+		delete(toolSourcesByID, toolUseID)
+		return true
+	}
+	consumeToolMirror := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) bool {
+		if _, ok := toolSourcesByID[toolUseID]; ok {
+			return consumeSameIDToolMirror(toolUseID, digest, source)
+		}
+		for outstandingID, record := range toolSourcesByID {
+			if record.source != source && record.digest == digest {
+				delete(toolSourcesByID, outstandingID)
+				return true
+			}
+		}
+		return false
+	}
+	recordToolSource := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) {
+		toolSourcesByID[toolUseID] = toolUseSourceRecord{digest: digest, source: source}
+	}
+	canReconcileStreamingTool := func(toolUseID string) bool {
+		record, ok := toolSourcesByID[toolUseID]
+		return ok && record.source == toolUseSourceAggregate
+	}
+	prepareStreamingTool := func(toolUseID string) bool {
+		if !admitToolID(toolUseID) {
+			return false
+		}
+		if processedIDs[toolUseID] {
+			if !canReconcileStreamingTool(toolUseID) {
+				return false
+			}
+			delete(streamingToolStopped, toolUseID)
+		}
+		return !streamingToolStopped[toolUseID]
+	}
+	releaseStreamingToolBuffer := func(toolUseID string) {
+		if buf := streamingToolInputBuf[toolUseID]; buf != nil {
+			streamingToolBufferedBytes -= buf.Len()
+			if streamingToolBufferedBytes < 0 {
+				streamingToolBufferedBytes = 0
+			}
+		}
+		delete(streamingToolInputBuf, toolUseID)
+	}
+	discardStreamingTool := func(toolUseID string) {
+		if toolUseID == "" || !isTrackedToolID(toolUseID) {
+			return
 		}
 		streamingToolStopped[toolUseID] = true
 		if currentStreamingToolID == toolUseID {
 			currentStreamingToolID = ""
 		}
-		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": streamingToolBlockIndices[toolUseID]})
+		delete(streamingToolNames, toolUseID)
+		releaseStreamingToolBuffer(toolUseID)
+		delete(streamingToolInvalid, toolUseID)
 	}
-	closeOpenStreamingTool := func() error {
-		return closeStreamingTool(currentStreamingToolID)
-	}
-	startStreamingToolUse := func(toolUseID, name string) error {
-		if toolUseID == "" || name == "" || streamingToolStopped[toolUseID] {
+	closeStreamingTool := func(toolUseID string) error {
+		if toolUseID == "" || !isTrackedToolID(toolUseID) || streamingToolStopped[toolUseID] {
 			return nil
 		}
-		if currentStreamingToolID != "" && currentStreamingToolID != toolUseID {
-			if err := closeOpenStreamingTool(); err != nil {
+		streamingToolStopped[toolUseID] = true
+
+		name := streamingToolNames[toolUseID]
+		buf := streamingToolInputBuf[toolUseID]
+		invalid := streamingToolInvalid[toolUseID]
+		discardStreamingTool(toolUseID)
+		if invalid || name == "" || buf == nil {
+			return nil
+		}
+
+		structuredOutput := isStructuredOutputToolName(name, requestCtx)
+		responseName := normalizeResponseToolName(restoreResponseToolName(name, requestCtx))
+		inputJSON, _, ok := normalizeStreamingToolInput(responseName, buf.String())
+		if !ok {
+			return nil
+		}
+		digest, ok := toolUseContentDigestFromJSON(responseName, inputJSON)
+		if !ok {
+			return nil
+		}
+		if processedIDs[toolUseID] {
+			consumeSameIDToolMirror(toolUseID, digest, toolUseSourceStreaming)
+			return nil
+		}
+		processedIDs[toolUseID] = true
+		if consumeToolMirror(toolUseID, digest, toolUseSourceStreaming) {
+			return nil
+		}
+		if structuredOutput {
+			if stopReason == "" || stopReason == "tool_use" {
+				stopReason = "end_turn"
+			}
+			if err := emitTextDelta(inputJSON, true); err != nil {
 				return err
 			}
-		}
-		if stopReason == "" {
-			stopReason = "tool_use"
+			recordToolSource(toolUseID, digest, toolUseSourceStreaming)
+			return nil
 		}
 		if err := ensureMessageStart(); err != nil {
 			return err
-		}
-		if firstDelta == nil {
-			delta := time.Since(start)
-			firstDelta = &delta
 		}
 		if err := closeThinking(); err != nil {
 			return err
@@ -672,74 +813,128 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := closeText(); err != nil {
 			return err
 		}
-		blockIndex, ok := streamingToolBlockIndices[toolUseID]
-		if !ok {
-			contentBlockIndex++
-			blockIndex = contentBlockIndex
-			streamingToolBlockIndices[toolUseID] = blockIndex
+		if firstDelta == nil {
+			delta := time.Since(start)
+			firstDelta = &delta
 		}
-		currentStreamingToolID = toolUseID
-		if streamingToolStarted[toolUseID] {
-			return nil
-		}
-		streamingToolStarted[toolUseID] = true
-		return writeEvent("content_block_start", map[string]any{
+		contentBlockIndex++
+		blockIndex := contentBlockIndex
+		if err := writeEvent("content_block_start", map[string]any{
 			"type":  "content_block_start",
 			"index": blockIndex,
 			"content_block": map[string]any{
 				"type":  "tool_use",
 				"id":    toolUseID,
-				"name":  restoreResponseToolName(name, requestCtx),
+				"name":  responseName,
 				"input": map[string]any{},
 			},
-		})
-	}
-	emitStreamingToolInput := func(toolUseID, name, fragment string) error {
-		if fragment == "" {
-			return nil
-		}
-		if err := startStreamingToolUse(toolUseID, name); err != nil {
+		}); err != nil {
 			return err
 		}
-		if toolUseID == "" || !streamingToolStarted[toolUseID] || streamingToolStopped[toolUseID] {
-			return nil
-		}
-		_, _ = outputTextBuf.WriteString(fragment)
-		return writeEvent("content_block_delta", map[string]any{
+		if err := writeToolInputEvent(map[string]any{
 			"type":  "content_block_delta",
-			"index": streamingToolBlockIndices[toolUseID],
+			"index": blockIndex,
 			"delta": map[string]any{
 				"type":         "input_json_delta",
-				"partial_json": fragment,
+				"partial_json": inputJSON,
 			},
-		})
+		}); err != nil {
+			return err
+		}
+		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": blockIndex}); err != nil {
+			return err
+		}
+		recordToolSource(toolUseID, digest, toolUseSourceStreaming)
+		toolBlockEmitted = true
+		_, _ = outputTextBuf.WriteString(inputJSON)
+		if stopReason == "" {
+			stopReason = "tool_use"
+		}
+		return nil
+	}
+	closeOpenStreamingTool := func() error {
+		return closeStreamingTool(currentStreamingToolID)
+	}
+	bufferStreamingToolInput := func(toolUseID, name, fragment string, snapshot bool) error {
+		if !prepareStreamingTool(toolUseID) {
+			return nil
+		}
+		if currentStreamingToolID != "" && currentStreamingToolID != toolUseID {
+			if err := closeOpenStreamingTool(); err != nil {
+				return err
+			}
+		}
+		currentStreamingToolID = toolUseID
+		if name != "" {
+			if len(name) > kiroMaxToolNameLen {
+				streamingToolInvalid[toolUseID] = true
+				releaseStreamingToolBuffer(toolUseID)
+				return nil
+			}
+			streamingToolNames[toolUseID] = name
+		}
+		if snapshot {
+			delete(streamingToolInvalid, toolUseID)
+		} else if streamingToolInvalid[toolUseID] {
+			return nil
+		}
+		buf, ok := streamingToolInputBuf[toolUseID]
+		if !ok {
+			buf = &strings.Builder{}
+			streamingToolInputBuf[toolUseID] = buf
+		}
+		if snapshot {
+			streamingToolBufferedBytes -= buf.Len()
+			buf.Reset()
+		}
+		if len(fragment) > maxStreamingToolInputBytes-buf.Len() ||
+			len(fragment) > maxStreamingToolInputBytes-streamingToolBufferedBytes {
+			streamingToolInvalid[toolUseID] = true
+			releaseStreamingToolBuffer(toolUseID)
+			return nil
+		}
+		_, _ = buf.WriteString(fragment)
+		streamingToolBufferedBytes += len(fragment)
+		return nil
+	}
+	markStreamingToolInvalid := func(toolUseID, name string) error {
+		if !prepareStreamingTool(toolUseID) {
+			return nil
+		}
+		if currentStreamingToolID != "" && currentStreamingToolID != toolUseID {
+			if err := closeOpenStreamingTool(); err != nil {
+				return err
+			}
+		}
+		currentStreamingToolID = toolUseID
+		if name != "" && len(name) <= kiroMaxToolNameLen {
+			streamingToolNames[toolUseID] = name
+		}
+		streamingToolInvalid[toolUseID] = true
+		releaseStreamingToolBuffer(toolUseID)
+		return nil
 	}
 	processStreamingToolInput := func(toolUseID, name, fragment string, inputMap map[string]any) error {
 		if toolUseID == "" {
 			return nil
 		}
-		if err := startStreamingToolUse(toolUseID, name); err != nil {
-			return err
-		}
+		snapshot := false
 		if inputMap != nil {
-			encoded, err := json.Marshal(inputMap)
-			if err != nil {
-				return err
+			encoded, ok := marshalBoundedJSONObject(inputMap, maxStreamingToolInputBytes)
+			if !ok {
+				return markStreamingToolInvalid(toolUseID, name)
 			}
-			fragment = string(encoded)
+			fragment = encoded
+			snapshot = true
 		}
-		return emitStreamingToolInput(toolUseID, name, fragment)
+		return bufferStreamingToolInput(toolUseID, name, fragment, snapshot)
 	}
 	processStreamingToolStop := func(toolUseID string) error {
 		if toolUseID == "" {
 			toolUseID = currentStreamingToolID
 		}
-		if toolUseID == "" {
+		if !isTrackedToolID(toolUseID) {
 			return nil
-		}
-		processedIDs[toolUseID] = true
-		if stopReason == "" {
-			stopReason = "tool_use"
 		}
 		return closeStreamingTool(toolUseID)
 	}
@@ -793,7 +988,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			},
 		})
 	}
-	emitTextDelta := func(text string, allowWhitespace bool) error {
+	emitTextDelta = func(text string, allowWhitespace bool) error {
 		if stopSequenceMatched != "" {
 			return nil
 		}
@@ -829,18 +1024,36 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return writeTextDelta(text, true)
 	}
 	emitToolUse := func(tool KiroToolUse) error {
-		if !shouldEmitToolUse(tool, emittedToolContents) {
+		structuredOutput := isStructuredOutputToolName(tool.Name, requestCtx)
+		tool.Name = normalizeResponseToolName(restoreResponseToolName(tool.Name, requestCtx))
+		if !isEmittableToolUse(tool) || !admitToolID(tool.ToolUseID) {
 			return nil
 		}
-		if isStructuredOutputToolName(tool.Name, requestCtx) {
-			inputJSON, err := json.Marshal(tool.Input)
-			if err != nil {
-				inputJSON = []byte("{}")
-			}
+		inputJSON, ok := marshalBoundedJSONObject(tool.Input, maxStreamingToolInputBytes)
+		if !ok {
+			return nil
+		}
+		digest, ok := toolUseContentDigestFromJSON(tool.Name, inputJSON)
+		if !ok {
+			return nil
+		}
+		if processedIDs[tool.ToolUseID] {
+			consumeSameIDToolMirror(tool.ToolUseID, digest, toolUseSourceAggregate)
+			return nil
+		}
+		processedIDs[tool.ToolUseID] = true
+		if consumeToolMirror(tool.ToolUseID, digest, toolUseSourceAggregate) {
+			return nil
+		}
+		if structuredOutput {
 			if stopReason == "" || stopReason == "tool_use" {
 				stopReason = "end_turn"
 			}
-			return emitTextDelta(string(inputJSON), true)
+			if err := emitTextDelta(inputJSON, true); err != nil {
+				return err
+			}
+			recordToolSource(tool.ToolUseID, digest, toolUseSourceAggregate)
+			return nil
 		}
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
@@ -861,25 +1074,29 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			"content_block": map[string]any{
 				"type":  "tool_use",
 				"id":    tool.ToolUseID,
-				"name":  restoreResponseToolName(tool.Name, requestCtx),
+				"name":  tool.Name,
 				"input": map[string]any{},
 			},
 		}); err != nil {
 			return err
 		}
-		inputJSON, _ := json.Marshal(tool.Input)
-		_, _ = outputTextBuf.Write(inputJSON)
-		if err := writeEvent("content_block_delta", map[string]any{
+		_, _ = outputTextBuf.WriteString(inputJSON)
+		if err := writeToolInputEvent(map[string]any{
 			"type":  "content_block_delta",
 			"index": contentBlockIndex,
 			"delta": map[string]any{
 				"type":         "input_json_delta",
-				"partial_json": string(inputJSON),
+				"partial_json": inputJSON,
 			},
 		}); err != nil {
 			return err
 		}
-		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex})
+		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex}); err != nil {
+			return err
+		}
+		recordToolSource(tool.ToolUseID, digest, toolUseSourceAggregate)
+		toolBlockEmitted = true
+		return nil
 	}
 	flushPendingAssistantText := func() error {
 		text, embeddedTools, pending := drainEmbeddedToolText(pendingAssistantText)
@@ -1067,9 +1284,16 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		// 上游中间帧若透传 pause_turn/refusal/stop_sequence 等新值会让客户端误判为终态
 		// 其余值忽略,等流真正 EOF 时由后续兜底分支按 tool_use/end_turn 处理
 		if evt.SourceStopReason != "" {
-			switch strings.ToLower(strings.TrimSpace(evt.SourceStopReason)) {
-			case "end_turn", "tool_use", "max_tokens":
-				stopReason = evt.SourceStopReason
+			sourceStopReason := strings.ToLower(strings.TrimSpace(evt.SourceStopReason))
+			switch sourceStopReason {
+			case "max_tokens":
+				if stopReason != "stop_sequence" {
+					stopReason = sourceStopReason
+				}
+			case "end_turn", "tool_use":
+				if stopReason != "max_tokens" && stopReason != "stop_sequence" {
+					stopReason = sourceStopReason
+				}
 			}
 		}
 		switch evt.Type {
@@ -1095,10 +1319,17 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			// 不可对每个片段单独包 <thinking></thinking>，否则每片会各自开关一个块导致碎片化。
 			return emitThinkingDelta(evt.Reasoning)
 		case kiroSemanticAssistantTU:
-			if evt.ToolUse == nil || processedIDs[evt.ToolUse.ToolUseID] {
+			if evt.ToolUse == nil {
 				return nil
 			}
-			processedIDs[evt.ToolUse.ToolUseID] = true
+			structuredOutput := isStructuredOutputToolName(evt.ToolUse.Name, requestCtx)
+			if (!structuredOutput && !isEmittableToolUse(*evt.ToolUse)) || evt.ToolUse.IsTruncated {
+				return nil
+			}
+			if !admitToolID(evt.ToolUse.ToolUseID) {
+				return nil
+			}
+			discardStreamingTool(evt.ToolUse.ToolUseID)
 			if err := flushThinkingAtBoundary(); err != nil {
 				return err
 			}
@@ -1145,7 +1376,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 
 		var event map[string]any
-		if err := json.Unmarshal(msg.Payload, &event); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
+		decoder.UseNumber()
+		if err := decoder.Decode(&event); err != nil {
+			continue
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
 			continue
 		}
 
@@ -1186,10 +1423,18 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 	}
 	usage = resolveKiroUsage(usage, inputTokens)
-	if stopReason == "" {
-		if len(emittedToolContents) > 0 {
+	switch stopReason {
+	case "max_tokens", "stop_sequence":
+	case "":
+		if toolBlockEmitted {
 			stopReason = "tool_use"
 		} else {
+			stopReason = "end_turn"
+		}
+	default:
+		if toolBlockEmitted {
+			stopReason = "tool_use"
+		} else if stopReason == "tool_use" {
 			stopReason = "end_turn"
 		}
 	}
@@ -1985,7 +2230,7 @@ func normalizeSchemaChild(key string, value any) any {
 	return value
 }
 
-func processMessages(messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
+func processMessages(ctx context.Context, messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
 	messagesArray := mergeAdjacentMessages(messages)
 
 	var history []KiroHistoryMessage
@@ -1998,7 +2243,7 @@ func processMessages(messages []gjson.Result, modelID, origin string, requestCtx
 		switch role {
 		case "user":
 			keepImages := last || len(messagesArray)-1-i <= kiroHistoryImageKeepCount
-			userMsg, toolResults := buildUserMessageStruct(msg, modelID, origin, keepImages)
+			userMsg, toolResults := buildUserMessageStruct(ctx, msg, modelID, origin, keepImages)
 			if strings.TrimSpace(userMsg.Content) == "" {
 				if len(toolResults) > 0 {
 					userMsg.Content = "Tool results provided."
@@ -2166,7 +2411,7 @@ func deduplicateToolResults(toolResults []KiroToolResult) []KiroToolResult {
 	return out
 }
 
-func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
+func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
 	content := msg.Get("content")
 	var contentBuilder strings.Builder
 	var toolResults []KiroToolResult
@@ -2182,10 +2427,17 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 			case "image":
 				mediaType := part.Get("source.media_type").String()
 				data := part.Get("source.data").String()
-				image, ok := buildKiroImage(mediaType, data)
+				sourceURL := strings.TrimSpace(part.Get("source.url").String())
+				var image KiroImage
+				var ok bool
+				if sourceURL != "" && strings.TrimSpace(data) == "" {
+					image, ok = buildKiroImageFromURL(ctx, sourceURL)
+				} else {
+					image, ok = buildKiroImage(ctx, mediaType, data)
+				}
 				if !ok {
-					if url := strings.TrimSpace(part.Get("source.url").String()); url != "" {
-						appendImageURLFallback(&contentBuilder, url)
+					if sourceURL != "" {
+						appendImageURLFallback(&contentBuilder, sourceURL)
 					}
 					continue
 				}
@@ -2202,7 +2454,7 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 				if url == "" {
 					url = strings.TrimSpace(part.Get("source.url").String())
 				}
-				if image, ok := buildKiroImageFromURL(url); ok {
+				if image, ok := buildKiroImageFromURL(ctx, url); ok {
 					if keepImages {
 						images = append(images, image)
 					} else {
@@ -2278,8 +2530,8 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 	return userMsg, toolResults
 }
 
-func buildKiroImage(mediaType, data string) (KiroImage, bool) {
-	if image, ok := buildKiroImageFromURL(data); ok {
+func buildKiroImage(ctx context.Context, mediaType, data string) (KiroImage, bool) {
+	if image, ok := buildKiroImageFromURL(ctx, data); ok {
 		return image, true
 	}
 	format := ""
@@ -2297,11 +2549,11 @@ func buildKiroImage(mediaType, data string) (KiroImage, bool) {
 	}, true
 }
 
-func buildKiroImageFromURL(url string) (KiroImage, bool) {
+func buildKiroImageFromURL(ctx context.Context, url string) (KiroImage, bool) {
 	url = strings.TrimSpace(url)
 	lowerURL := strings.ToLower(url)
 	if strings.HasPrefix(lowerURL, "http://") || strings.HasPrefix(lowerURL, "https://") {
-		return buildKiroImageFromRemoteURL(url)
+		return buildKiroImageFromRemoteURL(ctx, url)
 	}
 	if !strings.HasPrefix(lowerURL, "data:") {
 		return KiroImage{}, false
@@ -2319,44 +2571,18 @@ func buildKiroImageFromURL(url string) (KiroImage, bool) {
 	if semi := strings.IndexByte(mediaType, ';'); semi >= 0 {
 		mediaType = mediaType[:semi]
 	}
-	return buildKiroImage(mediaType, data)
+	return buildKiroImage(ctx, mediaType, data)
 }
 
-func buildKiroImageFromRemoteURL(url string) (KiroImage, bool) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return KiroImage{}, false
-	}
-	req.Header.Set("Accept", "image/*,*/*;q=0.8")
-	resp, err := kiroRemoteImageHTTPClient.Do(req)
-	if err != nil {
-		return KiroImage{}, false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return KiroImage{}, false
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, kiroRemoteImageMaxBytes+1))
-	if err != nil || len(body) == 0 || len(body) > kiroRemoteImageMaxBytes {
-		return KiroImage{}, false
-	}
-	mediaType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
-	format := ""
-	if strings.HasPrefix(strings.ToLower(mediaType), "image/") {
-		format = normalizeKiroImageFormat(strings.TrimPrefix(strings.ToLower(mediaType), "image/"))
-	}
-	if format == "" {
-		detected := strings.TrimSpace(strings.Split(http.DetectContentType(body), ";")[0])
-		if strings.HasPrefix(strings.ToLower(detected), "image/") {
-			format = normalizeKiroImageFormat(strings.TrimPrefix(strings.ToLower(detected), "image/"))
-		}
-	}
-	if format == "" {
+func buildKiroImageFromRemoteURL(ctx context.Context, url string) (KiroImage, bool) {
+	loaded, ok := kiroRemoteImageLoader(ctx, url)
+	defer loaded.Release()
+	if !ok || loaded.Format == "" || len(loaded.Bytes) == 0 {
 		return KiroImage{}, false
 	}
 	return KiroImage{
-		Format: format,
-		Source: KiroImageSource{Bytes: base64.StdEncoding.EncodeToString(body)},
+		Format: loaded.Format,
+		Source: KiroImageSource{Bytes: base64.StdEncoding.EncodeToString(loaded.Bytes)},
 	}, true
 }
 
@@ -2860,7 +3086,13 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 
 		var event map[string]any
-		if err := json.Unmarshal(msg.Payload, &event); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
+		decoder.UseNumber()
+		if err := decoder.Decode(&event); err != nil {
+			continue
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
 			continue
 		}
 		if sr := readStopReason(event); sr != "" {
@@ -2943,10 +3175,12 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			usage.TotalTokens = total
 		}
 	}
-	if stopReason == "" {
+	switch stopReason {
+	case "max_tokens", "stop_sequence":
+	default:
 		if hasUsableToolUses(toolUses) {
 			stopReason = "tool_use"
-		} else {
+		} else if stopReason == "" || stopReason == "tool_use" {
 			stopReason = "end_turn"
 		}
 	}
@@ -2988,7 +3222,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 	}
 	usableTools := 0
 	for _, tool := range toolUses {
-		if tool.IsTruncated {
+		if !isEmittableToolUse(tool) {
 			continue
 		}
 		usableTools++
@@ -3007,10 +3241,12 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 	if len(blocks) == 0 {
 		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
 	}
-	if stopReason == "" {
+	switch stopReason {
+	case "max_tokens", "stop_sequence":
+	default:
 		if usableTools > 0 {
 			stopReason = "tool_use"
-		} else {
+		} else if stopReason == "" || stopReason == "tool_use" {
 			stopReason = "end_turn"
 		}
 	}
@@ -3623,9 +3859,11 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		toolUseID := getString(tu, "toolUseId")
 		name := getString(tu, "name")
 		isStop, _ := tu["stop"].(bool)
+		inputSeen := false
 		if inputRaw, ok := tu["input"]; ok {
 			switch v := inputRaw.(type) {
 			case string:
+				inputSeen = true
 				if toolUseID != "" && name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
@@ -3645,6 +3883,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 					})
 				}
 			case map[string]any:
+				inputSeen = true
 				if toolUseID != "" && name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
@@ -3664,6 +3903,14 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 					})
 				}
 			}
+		}
+		if !inputSeen && toolUseID != "" && name != "" {
+			out = append(out, kiroSemanticEvent{
+				Type:             kiroSemanticToolUse,
+				ToolUseID:        toolUseID,
+				ToolName:         name,
+				SourceStopReason: sourceStopReason,
+			})
 		}
 		if isStop {
 			out = append(out, kiroSemanticEvent{
@@ -3693,6 +3940,194 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 	return out
 }
 
+func marshalBoundedJSONObject(input map[string]any, maxBytes int) (string, bool) {
+	if input == nil || maxBytes <= 0 {
+		return "", false
+	}
+	size, ok := boundedJSONEncodedSize(input, maxBytes, 0)
+	if !ok || size > maxBytes {
+		return "", false
+	}
+	var buf bytes.Buffer
+	buf.Grow(size + 1)
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(input); err != nil {
+		return "", false
+	}
+	encoded := buf.Bytes()
+	if len(encoded) == 0 || encoded[len(encoded)-1] != '\n' {
+		return "", false
+	}
+	encoded = encoded[:len(encoded)-1]
+	if len(encoded) != size || len(encoded) > maxBytes {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+func boundedJSONEncodedSize(value any, limit, depth int) (int, bool) {
+	if limit < 0 || depth > maxStreamingToolJSONDepth {
+		return 0, false
+	}
+	add := func(total, amount int) (int, bool) {
+		if amount < 0 || total > limit-amount {
+			return 0, false
+		}
+		return total + amount, true
+	}
+	switch v := value.(type) {
+	case nil:
+		return 4, limit >= 4
+	case bool:
+		if v {
+			return 4, limit >= 4
+		}
+		return 5, limit >= 5
+	case string:
+		return boundedJSONStringEncodedSize(v, limit)
+	case json.Number:
+		if len(v) > limit {
+			return 0, false
+		}
+		encoded, err := json.Marshal(v)
+		if err != nil || len(encoded) > limit {
+			return 0, false
+		}
+		return len(encoded), true
+	case map[string]any:
+		total := 2
+		if total > limit {
+			return 0, false
+		}
+		index := 0
+		for key, item := range v {
+			if index > 0 {
+				var ok bool
+				total, ok = add(total, 1)
+				if !ok {
+					return 0, false
+				}
+			}
+			keySize, ok := boundedJSONStringEncodedSize(key, limit-total)
+			if !ok {
+				return 0, false
+			}
+			total, ok = add(total, keySize+1)
+			if !ok {
+				return 0, false
+			}
+			itemSize, ok := boundedJSONEncodedSize(item, limit-total, depth+1)
+			if !ok {
+				return 0, false
+			}
+			total, ok = add(total, itemSize)
+			if !ok {
+				return 0, false
+			}
+			index++
+		}
+		return total, true
+	case []any:
+		total := 2
+		if total > limit {
+			return 0, false
+		}
+		for i, item := range v {
+			if i > 0 {
+				var ok bool
+				total, ok = add(total, 1)
+				if !ok {
+					return 0, false
+				}
+			}
+			itemSize, ok := boundedJSONEncodedSize(item, limit-total, depth+1)
+			if !ok {
+				return 0, false
+			}
+			total, ok = add(total, itemSize)
+			if !ok {
+				return 0, false
+			}
+		}
+		return total, true
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil || len(encoded) > limit {
+			return 0, false
+		}
+		return len(encoded), true
+	}
+}
+
+func boundedJSONStringEncodedSize(value string, limit int) (int, bool) {
+	total := 2
+	if total > limit {
+		return 0, false
+	}
+	for i := 0; i < len(value); {
+		ch := value[i]
+		amount := 1
+		if ch < utf8.RuneSelf {
+			switch ch {
+			case '"', '\\', '\b', '\f', '\n', '\r', '\t':
+				amount = 2
+			default:
+				if ch < 0x20 {
+					amount = 6
+				}
+			}
+			i++
+		} else {
+			r, size := utf8.DecodeRuneInString(value[i:])
+			if r == utf8.RuneError && size == 1 {
+				amount = 6
+			} else if r == '\u2028' || r == '\u2029' {
+				amount = 6
+			} else {
+				amount = size
+			}
+			i += size
+		}
+		if total > limit-amount {
+			return 0, false
+		}
+		total += amount
+	}
+	return total, true
+}
+
+func normalizeStreamingToolInput(name, raw string) (string, map[string]any, bool) {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		return "", nil, false
+	}
+	var ok bool
+	normalized, ok = escapeControlCharsInStringsBounded(normalized, maxStreamingToolInputBytes)
+	if !ok {
+		return "", nil, false
+	}
+	normalized = removeTrailingCommasOutsideStrings(normalized)
+	decoder := json.NewDecoder(strings.NewReader(normalized))
+	decoder.UseNumber()
+	var input map[string]any
+	if err := decoder.Decode(&input); err != nil || input == nil {
+		return "", nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return "", nil, false
+	}
+	if hasMissingRequiredFields(name, input) {
+		return "", nil, false
+	}
+	encoded, ok := marshalBoundedJSONObject(input, maxStreamingToolInputBytes)
+	if !ok {
+		return "", nil, false
+	}
+	return encoded, input, true
+}
+
 func repairJSON(input string) string {
 	str := strings.TrimSpace(input)
 	if str == "" {
@@ -3703,7 +4138,7 @@ func repairJSON(input string) string {
 		return str
 	}
 	str = escapeControlCharsInStrings(str)
-	str = trailingCommaPattern.ReplaceAllString(str, "$1")
+	str = removeTrailingCommasOutsideStrings(str)
 	openBraces, openBrackets, inString := jsonBalance(str)
 	if inString {
 		str += `"`
@@ -3722,36 +4157,121 @@ func repairJSON(input string) string {
 }
 
 func escapeControlCharsInStrings(input string) string {
+	result, _ := escapeControlCharsInStringsBounded(input, 0)
+	return result
+}
+
+func escapeControlCharsInStringsBounded(input string, maxBytes int) (string, bool) {
 	var out strings.Builder
+	out.Grow(len(input))
+	writeString := func(value string) bool {
+		if maxBytes > 0 && len(value) > maxBytes-out.Len() {
+			return false
+		}
+		_, _ = out.WriteString(value)
+		return true
+	}
+	writeByte := func(ch byte) bool {
+		if maxBytes > 0 && out.Len() >= maxBytes {
+			return false
+		}
+		_ = out.WriteByte(ch)
+		return true
+	}
+	writeEscapedControl := func(ch byte) bool {
+		switch ch {
+		case '\n':
+			return writeString("\\n")
+		case '\r':
+			return writeString("\\r")
+		case '\t':
+			return writeString("\\t")
+		default:
+			const hex = "0123456789abcdef"
+			return writeString("\\u00" + string([]byte{hex[ch>>4], hex[ch&0x0f]}))
+		}
+	}
 	inString := false
 	escape := false
 	for i := 0; i < len(input); i++ {
 		ch := input[i]
 		if escape {
-			_ = out.WriteByte(ch)
+			if inString && ch < 0x20 {
+				if !writeByte('\\') || !writeEscapedControl(ch) {
+					return "", false
+				}
+			} else {
+				if !writeByte(ch) {
+					return "", false
+				}
+			}
 			escape = false
 			continue
 		}
 		if ch == '\\' {
-			_ = out.WriteByte(ch)
+			if !writeByte(ch) {
+				return "", false
+			}
 			escape = true
 			continue
 		}
 		if ch == '"' {
 			inString = !inString
+			if !writeByte(ch) {
+				return "", false
+			}
+			continue
+		}
+		if inString && ch < 0x20 {
+			if !writeEscapedControl(ch) {
+				return "", false
+			}
+			continue
+		}
+		if !writeByte(ch) {
+			return "", false
+		}
+	}
+	return out.String(), true
+}
+
+func removeTrailingCommasOutsideStrings(input string) string {
+	var out strings.Builder
+	out.Grow(len(input))
+	inString := false
+	escape := false
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		if inString {
+			_ = out.WriteByte(ch)
+			if escape {
+				escape = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escape = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inString = true
 			_ = out.WriteByte(ch)
 			continue
 		}
-		if inString {
-			switch ch {
-			case '\n':
-				_, _ = out.WriteString("\\n")
-				continue
-			case '\r':
-				_, _ = out.WriteString("\\r")
-				continue
-			case '\t':
-				_, _ = out.WriteString("\\t")
+		if ch == ',' {
+			next := i + 1
+			for next < len(input) {
+				switch input[next] {
+				case ' ', '\t', '\n', '\r':
+					next++
+					continue
+				}
+				break
+			}
+			if next < len(input) && (input[next] == '}' || input[next] == ']') {
 				continue
 			}
 		}
@@ -3801,11 +4321,21 @@ func finalizeRawToolUse(toolUseID, name, rawInput string) KiroToolUse {
 	}
 	rawInput = strings.TrimSpace(rawInput)
 	tool.TruncatedRaw = rawInput
+	decoded := false
 	repaired := repairJSON(rawInput)
 	if strings.TrimSpace(repaired) != "" {
-		_ = json.Unmarshal([]byte(repaired), &tool.Input)
+		decoder := json.NewDecoder(strings.NewReader(repaired))
+		decoder.UseNumber()
+		var input map[string]any
+		if err := decoder.Decode(&input); err == nil && input != nil {
+			var trailing any
+			if err := decoder.Decode(&trailing); err == io.EOF {
+				tool.Input = input
+				decoded = true
+			}
+		}
 	}
-	tool.IsTruncated = isTruncatedToolUse(tool.Name, rawInput, tool.Input)
+	tool.IsTruncated = !decoded || isTruncatedToolUse(tool.Name, rawInput, tool.Input)
 	return tool
 }
 
@@ -3830,24 +4360,13 @@ func normalizeResponseToolName(name string) string {
 	return name
 }
 
-func shouldEmitToolUse(tool KiroToolUse, emittedToolContents map[string]bool) bool {
-	if tool.IsTruncated {
-		return false
-	}
-	key := toolUseContentKey(tool)
-	if key == "" {
-		return false
-	}
-	if emittedToolContents[key] {
-		return false
-	}
-	emittedToolContents[key] = true
-	return true
+func isEmittableToolUse(tool KiroToolUse) bool {
+	return !tool.IsTruncated && strings.TrimSpace(tool.ToolUseID) != "" && strings.TrimSpace(tool.Name) != ""
 }
 
 func hasUsableToolUses(toolUses []KiroToolUse) bool {
 	for _, tool := range toolUses {
-		if !tool.IsTruncated {
+		if isEmittableToolUse(tool) {
 			return true
 		}
 	}
@@ -3856,7 +4375,7 @@ func hasUsableToolUses(toolUses []KiroToolUse) bool {
 
 func deduplicateToolUses(toolUses []KiroToolUse) []KiroToolUse {
 	seenIDs := make(map[string]bool)
-	seenContent := make(map[string]bool)
+	seenContent := make(map[[sha256.Size]byte]bool)
 	out := make([]KiroToolUse, 0, len(toolUses))
 	for _, tool := range toolUses {
 		if tool.ToolUseID != "" {
@@ -3865,25 +4384,42 @@ func deduplicateToolUses(toolUses []KiroToolUse) []KiroToolUse {
 			}
 			seenIDs[tool.ToolUseID] = true
 		}
-		key := toolUseContentKey(tool)
-		if key != "" && seenContent[key] {
+		digest, ok := toolUseContentDigest(tool)
+		if ok && seenContent[digest] {
 			continue
 		}
-		if key != "" {
-			seenContent[key] = true
+		if ok {
+			seenContent[digest] = true
 		}
 		out = append(out, tool)
 	}
 	return out
 }
 
-func toolUseContentKey(tool KiroToolUse) string {
+func toolUseContentDigest(tool KiroToolUse) ([sha256.Size]byte, bool) {
 	name := strings.TrimSpace(tool.Name)
 	if name == "" {
-		return ""
+		return [sha256.Size]byte{}, false
 	}
-	inputJSON, _ := json.Marshal(tool.Input)
-	return name + ":" + string(inputJSON)
+	inputJSON, ok := marshalBoundedJSONObject(tool.Input, maxStreamingToolInputBytes)
+	if !ok {
+		return [sha256.Size]byte{}, false
+	}
+	return toolUseContentDigestFromJSON(name, inputJSON)
+}
+
+func toolUseContentDigestFromJSON(name, inputJSON string) ([sha256.Size]byte, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return [sha256.Size]byte{}, false
+	}
+	hash := sha256.New()
+	_, _ = io.WriteString(hash, name)
+	_, _ = hash.Write([]byte{0})
+	_, _ = io.WriteString(hash, inputJSON)
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, true
 }
 
 func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUse, pending string) {
@@ -4136,9 +4672,9 @@ func readToolUses(primary, fallback map[string]any) []KiroToolUse {
 		if !ok {
 			continue
 		}
-		input := map[string]any{}
-		if value, ok := tool["input"].(map[string]any); ok {
-			input = value
+		input, ok := tool["input"].(map[string]any)
+		if !ok || input == nil {
+			continue
 		}
 		out = append(out, finalizeStructuredToolUse(getString(tool, "toolUseId"), getString(tool, "name"), input))
 	}

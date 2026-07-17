@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +26,18 @@ type kiroEndpointConfig struct {
 	URL       string
 	AmzTarget string
 	Name      string
+}
+
+var (
+	buildKiroPayloadWithRequestContext = kiropkg.BuildKiroPayloadWithRequestContext
+	estimateKiroClaudeInputTokens      = kiropkg.EstimateClaudeInputTokens
+)
+
+func kiroProfileArnForEndpoint(account *Account, endpoint kiroEndpointConfig) string {
+	if endpoint.Name == "KiroRuntime" {
+		return kiroResolveProfileArnForKRS(account)
+	}
+	return kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
 }
 
 const kiroInvalidModelTempUnschedDuration = time.Minute
@@ -192,8 +203,8 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if err != nil {
 		return nil, err
 	}
-	if tokenType != "oauth" {
-		return nil, fmt.Errorf("kiro requires oauth token, got %s", tokenType)
+	if tokenType != "oauth" && tokenType != "apikey" {
+		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 	if isOnlyWebSearchToolInBody(body) {
 		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
@@ -267,13 +278,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		})
 		return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 	}
-	inputTokens := resolveKiroInputTokens(body, requestCtx)
+	inputTokens := resolveKiroInputTokens(ctx, body, requestCtx)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, false)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, parsed.Group, body, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
 	if err != nil {
@@ -328,9 +339,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	inputTokens := estimateKiroInputTokens(anthropicBody)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
-		cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+		inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
+		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
@@ -353,20 +364,20 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
-			return nil, inputTokens, err
+			return nil, 0, err
 		}
-		return nil, inputTokens, err
+		return nil, 0, err
 	}
+	inputTokens := resolveKiroInputTokens(ctx, anthropicBody, requestCtx)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	inputTokens = resolveKiroInputTokens(anthropicBody, requestCtx)
 	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
 	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		stashKiroCaptureHeaders(c, resp)
 	}
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
 	pr, pw := io.Pipe()
@@ -415,20 +426,31 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	buildResult, err := s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
-	if err != nil {
-		return nil, requestCtx, err
-	}
-	payload := buildResult.Payload
-	requestCtx = buildResult.Context
-	logKiroStatelessReplay(account, buildResult.Payload)
-
-	endpoints := buildKiroEndpoints(account, kiroEndpointModeForRequest(account, parsed))
+	endpoints := buildKiroEndpoints(account, mode)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	maxRetries := 2
+	if len(endpoints) == 0 {
+		return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
+	}
+	baseProfileArn := kiroProfileArnForEndpoint(account, endpoints[0])
+	buildResult, err := s.buildKiroPayloadForAccountWithArn(
+		ctx, account, parsed, anthropicBody, modelID, currentToken,
+		requestModel, headers, baseProfileArn,
+	)
+	if err != nil {
+		return nil, requestCtx, err
+	}
+	requestCtx = buildResult.Context
 
 	for idx, endpoint := range endpoints {
+		profileArn := kiroProfileArnForEndpoint(account, endpoint)
+		payload, err := s.retargetKiroPayloadForProfile(account, parsed, anthropicBody, modelID, buildResult.Payload, baseProfileArn, profileArn)
+		if err != nil {
+			return nil, requestCtx, err
+		}
+		logKiroStatelessReplay(account, payload)
+
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, machineID, endpoint.AmzTarget, account)
 			if err != nil {
@@ -521,13 +543,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 						currentToken = refreshedToken
 						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers)
-						if err != nil {
-							return nil, requestCtx, err
-						}
-						payload = buildResult.Payload
-						requestCtx = buildResult.Context
-						logKiroStatelessReplay(account, buildResult.Payload)
 						if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -585,12 +600,19 @@ func buildKiroEndpoints(account *Account, mode string) []kiroEndpointConfig {
 		}
 	}
 	region := kiroAPIRegion(account)
-	return []kiroEndpointConfig{
+	endpoints := []kiroEndpointConfig{
 		{
 			URL:  fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
 			Name: "AmazonQ",
 		},
 	}
+	if mode == KiroEndpointModeAuto {
+		endpoints = append(endpoints, kiroEndpointConfig{
+			URL:  kiroKRSEndpointURL,
+			Name: "KiroRuntime",
+		})
+	}
+	return endpoints
 }
 
 // kiroEndpointModeForRequest 从 ParsedRequest 取 group 配置的 Kiro endpoint 模式；
@@ -610,14 +632,11 @@ func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string 
 	return resolveKiroEndpointMode(account, parsed.Group)
 }
 
-func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
+func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string) (*kiropkg.KiroBuildResult, error) {
 	_ = s
-	_ = ctx
 	_ = token
-	mode := kiroEndpointModeForRequest(account, parsed)
-	profileArn := kiroResolveProfileArnForPayload(account, mode)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := buildKiroPayloadWithRequestContext(ctx, anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 	if err != nil {
 		return nil, err
 	}
@@ -627,6 +646,28 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 		}
 	}
 	return buildResult, nil
+}
+
+func (s *GatewayService) retargetKiroPayloadForProfile(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID string, payload []byte, currentProfileArn, nextProfileArn string) ([]byte, error) {
+	if currentProfileArn == nextProfileArn {
+		return payload, nil
+	}
+	var err error
+	if nextProfileArn == "" {
+		payload, err = sjson.DeleteBytes(payload, "profileArn")
+	} else {
+		payload, err = sjson.SetBytes(payload, "profileArn", nextProfileArn)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, nextProfileArn); stableID != "" {
+		payload, err = sjson.SetBytes(payload, "conversationState.conversationId", stableID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
 }
 
 func stableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
@@ -789,13 +830,19 @@ func resetHTTPResponseBody(resp *http.Response, body []byte) {
 	resp.ContentLength = int64(len(body))
 }
 
-func estimateKiroInputTokens(body []byte) int {
+func estimateKiroInputTokens(ctx context.Context, body []byte) int {
+	requestModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	return estimateKiroInputTokensForRequest(ctx, body, requestModel, requestModel, nil)
+}
+
+func estimateKiroInputTokensForRequest(ctx context.Context, body []byte, mappedModel, requestModel string, headers http.Header) int {
 	if len(body) == 0 {
 		return 0
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err == nil {
-		return countKiroInputTokensFromPayload(payload)
+	preparedBody := prepareKiroPayloadBodyForRequestModel(body, requestModel)
+	modelID := kiropkg.MapModel(mappedModel)
+	if tokens, err := estimateKiroClaudeInputTokens(ctx, preparedBody, modelID, "AI_EDITOR", headers); err == nil {
+		return tokens
 	}
 	tokens := len(body) / 4
 	if tokens == 0 {
@@ -804,11 +851,11 @@ func estimateKiroInputTokens(body []byte) int {
 	return tokens
 }
 
-func resolveKiroInputTokens(body []byte, requestCtx kiropkg.KiroRequestContext) int {
+func resolveKiroInputTokens(ctx context.Context, body []byte, requestCtx kiropkg.KiroRequestContext) int {
 	if requestCtx.EstimatedInputTokens > 0 {
 		return requestCtx.EstimatedInputTokens
 	}
-	return estimateKiroInputTokens(body)
+	return estimateKiroInputTokens(ctx, body)
 }
 
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {

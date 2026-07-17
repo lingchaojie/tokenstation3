@@ -4,12 +4,25 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/stretchr/testify/require"
 )
+
+type kiroOAuthProxyRepo struct {
+	proxyRepoStub
+	proxy *Proxy
+	err   error
+	calls int
+}
+
+func (r *kiroOAuthProxyRepo) GetByID(_ context.Context, _ int64) (*Proxy, error) {
+	r.calls++
+	return r.proxy, r.err
+}
 
 func TestKiroIDCAuthRedirectURIUsesLoopbackIP(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:9876/oauth/callback", kiroIDCRedirectURI)
@@ -20,7 +33,7 @@ func TestKiroSocialAuthRedirectURIUsesLoopbackIP(t *testing.T) {
 }
 
 func TestKiroExternalIDPAuthRedirectURIUsesOAuthCallback(t *testing.T) {
-	require.Equal(t, "http://localhost:49153/oauth/callback", kiroExternalIDPRedirectURI)
+	require.Equal(t, "http://localhost:3128/oauth/callback", kiroExternalIdpRedirectURI)
 }
 
 func TestBuildKiroSocialExchangeRedirectURIUsesProviderDefault(t *testing.T) {
@@ -55,6 +68,14 @@ func TestKiroOAuthService_ExchangeCodeRejectsExpiredSession(t *testing.T) {
 }
 
 func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
+	previousDiscover := kiroDiscoverExternalIdp
+	kiroDiscoverExternalIdp = func(_ context.Context, proxyURL, issuerURL string) (string, string, error) {
+		require.Equal(t, "http://proxy.example:8080", proxyURL)
+		require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0", issuerURL)
+		return "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/authorize", "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/token", nil
+	}
+	t.Cleanup(func() { kiroDiscoverExternalIdp = previousDiscover })
+
 	svc := NewKiroOAuthService(nil)
 	svc.sessionStore.Set("session-external", &kiropkg.AuthSession{
 		State:        "state-external",
@@ -63,6 +84,7 @@ func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
 		AuthType:     "social",
 		Provider:     string(kiropkg.SocialProviderGoogle),
 		RedirectURI:  kiroSocialRedirectURI,
+		ProxyURL:     "http://proxy.example:8080",
 	})
 
 	result, err := svc.StartExternalIDPAuth(context.Background(), &KiroStartExternalIDPAuthInput{
@@ -73,16 +95,217 @@ func TestKiroOAuthService_StartExternalIDPAuthBuildsMicrosoftURL(t *testing.T) {
 	require.Equal(t, "session-external", result.SessionID)
 	require.Equal(t, "state-external", result.State)
 	require.Contains(t, result.AuthURL, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/authorize?")
-	require.Contains(t, result.AuthURL, "redirect_uri=http%3A%2F%2Flocalhost%3A49153%2Foauth%2Fcallback")
+	require.Contains(t, result.AuthURL, "redirect_uri=http%3A%2F%2Flocalhost%3A3128%2Foauth%2Fcallback")
 	require.Contains(t, result.AuthURL, "login_hint=phoebe.baral%40mrdev.cyou")
 
 	session, ok := svc.sessionStore.Get("session-external")
 	require.True(t, ok)
 	require.Equal(t, "external_idp", session.AuthType)
-	require.Equal(t, "Internal", session.Provider)
-	require.Equal(t, "http://localhost:49153/oauth/callback", session.RedirectURI)
+	require.Equal(t, kiropkg.ProviderExternalIdp, session.Provider)
+	require.Equal(t, "http://localhost:3128/oauth/callback", session.RedirectURI)
+	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/oauth2/v2.0/token", session.TokenEndpoint)
 	require.Equal(t, "https://login.microsoftonline.com/1f44574f-f8aa-40cf-8e43-e6bff9b4298a/v2.0", session.IssuerURL)
 	require.Equal(t, []string{"api://e491fadf-0239-44f9-be3b-d3e1ff193c79/codewhisperer:conversations", "offline_access"}, session.Scopes)
+}
+
+func TestKiroOAuthService_StartExternalIDPAuthFailsClosedOnProxyLookupError(t *testing.T) {
+	repoErr := errors.New("proxy repository unavailable")
+	repo := &kiroOAuthProxyRepo{err: repoErr}
+	discoveryCalls := 0
+	previousDiscover := kiroDiscoverExternalIdp
+	kiroDiscoverExternalIdp = func(context.Context, string, string) (string, string, error) {
+		discoveryCalls++
+		return "", "", nil
+	}
+	t.Cleanup(func() { kiroDiscoverExternalIdp = previousDiscover })
+
+	svc := NewKiroOAuthService(repo)
+	svc.sessionStore.Set("session-external", &kiropkg.AuthSession{
+		State:        "state-external",
+		CodeVerifier: "verifier-external",
+		CreatedAt:    time.Now(),
+		AuthType:     "social",
+		Provider:     string(kiropkg.SocialProviderGoogle),
+		RedirectURI:  kiroSocialRedirectURI,
+		ProxyURL:     "http://existing-proxy.example:8080",
+	})
+	proxyID := int64(42)
+	_, err := svc.StartExternalIDPAuth(context.Background(), &KiroStartExternalIDPAuthInput{
+		SessionID:   "session-external",
+		CallbackURL: "http://localhost:49153/signin/callback?login_option=external_idp&issuer_url=https%3A%2F%2Flogin.microsoftonline.com%2Ftenant-id%2Fv2.0&client_id=client-id&state=state-external&scopes=openid+offline_access",
+		ProxyID:     &proxyID,
+	})
+	require.ErrorIs(t, err, repoErr)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, discoveryCalls)
+	session, ok := svc.sessionStore.Get("session-external")
+	require.True(t, ok)
+	require.Equal(t, "http://existing-proxy.example:8080", session.ProxyURL)
+	require.Equal(t, "social", session.AuthType)
+}
+
+func TestKiroOAuthService_ExchangeExternalIDPFailsClosedWhenProxyNotFound(t *testing.T) {
+	repo := &kiroOAuthProxyRepo{}
+	exchangeCalls := 0
+	previousExchange := kiroExchangeExternalIdpAtEndpoint
+	kiroExchangeExternalIdpAtEndpoint = func(context.Context, string, string, string, string, []string, string, string, string, string) (*kiropkg.TokenData, error) {
+		exchangeCalls++
+		return &kiropkg.TokenData{AccessToken: "unexpected"}, nil
+	}
+	t.Cleanup(func() { kiroExchangeExternalIdpAtEndpoint = previousExchange })
+
+	svc := NewKiroOAuthService(repo)
+	svc.sessionStore.Set("external-session", &kiropkg.AuthSession{
+		State:         "state-external",
+		CodeVerifier:  "verifier-external",
+		CreatedAt:     time.Now(),
+		AuthType:      "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		RedirectURI:   kiroExternalIdpRedirectURI,
+		ProxyURL:      "http://existing-proxy.example:8080",
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant-id/v2.0",
+		Scopes:        []string{"openid", "offline_access"},
+	})
+	proxyID := int64(404)
+	_, err := svc.ExchangeCode(context.Background(), &KiroExchangeCodeInput{
+		SessionID: "external-session",
+		State:     "state-external",
+		Code:      "auth-code",
+		ProxyID:   &proxyID,
+	})
+	require.ErrorIs(t, err, ErrProxyNotFound)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, exchangeCalls)
+	session, ok := svc.sessionStore.Get("external-session")
+	require.True(t, ok)
+	require.Equal(t, "http://existing-proxy.example:8080", session.ProxyURL)
+}
+
+func TestKiroOAuthService_RefreshExternalIDPFailsClosedOnProxyLookupError(t *testing.T) {
+	repoErr := errors.New("proxy lookup failed")
+	repo := &kiroOAuthProxyRepo{err: repoErr}
+	refreshCalls := 0
+	previousRefresh := kiroRefreshExternalIdpAtEndpoint
+	kiroRefreshExternalIdpAtEndpoint = func(context.Context, string, string, string, string, []string, string, string) (*kiropkg.TokenData, error) {
+		refreshCalls++
+		return &kiropkg.TokenData{AccessToken: "unexpected"}, nil
+	}
+	t.Cleanup(func() { kiroRefreshExternalIdpAtEndpoint = previousRefresh })
+
+	svc := NewKiroOAuthService(repo)
+	proxyID := int64(42)
+	_, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:    "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		RefreshToken:  "refresh-token",
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant-id/v2.0",
+		Scopes:        "openid offline_access",
+		ProxyID:       &proxyID,
+	})
+	require.ErrorIs(t, err, repoErr)
+	require.Equal(t, 1, repo.calls)
+	require.Zero(t, refreshCalls)
+}
+
+func TestKiroOAuthService_GenerateAuthURLRejectsConfiguredProxyWithoutRepository(t *testing.T) {
+	proxyID := int64(42)
+	svc := NewKiroOAuthService(nil)
+	_, err := svc.GenerateAuthURL(context.Background(), &KiroGenerateAuthURLInput{
+		Provider: string(kiropkg.SocialProviderGoogle),
+		ProxyID:  &proxyID,
+	})
+	require.Error(t, err)
+}
+
+func TestKiroExternalIdpBuildAccountCredentialsPreservesDiscoveredMetadata(t *testing.T) {
+	svc := NewKiroOAuthService(nil)
+	credentials := svc.BuildAccountCredentials(&KiroTokenInfo{
+		AuthMethod:    "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant/v2.0",
+		Scopes:        "openid offline_access",
+	})
+	require.Equal(t, "https://login.microsoftonline.com/tenant/oauth2/v2.0/token", credentials["token_endpoint"])
+	require.Equal(t, "https://login.microsoftonline.com/tenant/v2.0", credentials["issuer_url"])
+	require.Equal(t, "openid offline_access", credentials["scopes"])
+}
+
+func TestKiroExternalIdpRefreshUsesStoredTokenEndpoint(t *testing.T) {
+	previousRefresh := kiroRefreshExternalIdpAtEndpoint
+	kiroRefreshExternalIdpAtEndpoint = func(_ context.Context, proxyURL, tokenEndpoint, issuerURL, clientID string, scopes []string, refreshToken, loginHint string) (*kiropkg.TokenData, error) {
+		require.Empty(t, proxyURL)
+		require.Equal(t, "https://login.microsoftonline.com/tenant/oauth2/v2.0/token", tokenEndpoint)
+		require.Equal(t, "https://login.microsoftonline.com/tenant/v2.0", issuerURL)
+		require.Equal(t, "client-id", clientID)
+		require.Equal(t, []string{"openid", "offline_access"}, scopes)
+		require.Equal(t, "refresh-token", refreshToken)
+		return &kiropkg.TokenData{
+			AccessToken:   "new-access-token",
+			RefreshToken:  refreshToken,
+			AuthMethod:    "external_idp",
+			Provider:      kiropkg.ProviderExternalIdp,
+			ClientID:      clientID,
+			TokenEndpoint: tokenEndpoint,
+			IssuerURL:     issuerURL,
+			Scopes:        "openid offline_access",
+		}, nil
+	}
+	t.Cleanup(func() { kiroRefreshExternalIdpAtEndpoint = previousRefresh })
+
+	svc := NewKiroOAuthService(nil)
+	token, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:    "external_idp",
+		Provider:      kiropkg.ProviderExternalIdp,
+		RefreshToken:  "refresh-token",
+		ClientID:      "client-id",
+		TokenEndpoint: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+		IssuerURL:     "https://login.microsoftonline.com/tenant/v2.0",
+		Scopes:        "openid offline_access",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://login.microsoftonline.com/tenant/oauth2/v2.0/token", token.TokenEndpoint)
+	require.Equal(t, kiropkg.ProviderExternalIdp, token.Provider)
+}
+
+func TestKiroExternalIdpRefreshKeepsLegacyInternalIssuerFallback(t *testing.T) {
+	previousRefresh := kiroRefreshExternalIdpLegacy
+	kiroRefreshExternalIdpLegacy = func(_ context.Context, proxyURL, issuerURL, clientID string, scopes []string, refreshToken, loginHint string) (*kiropkg.TokenData, error) {
+		require.Empty(t, proxyURL)
+		require.Equal(t, "https://login.microsoftonline.com/tenant/v2.0", issuerURL)
+		return &kiropkg.TokenData{AccessToken: "legacy-access-token", RefreshToken: refreshToken}, nil
+	}
+	t.Cleanup(func() { kiroRefreshExternalIdpLegacy = previousRefresh })
+
+	svc := NewKiroOAuthService(nil)
+	token, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:   "external_idp",
+		Provider:     "Internal",
+		RefreshToken: "refresh-token",
+		ClientID:     "client-id",
+		IssuerURL:    "https://login.microsoftonline.com/tenant/v2.0",
+		Scopes:       "openid offline_access",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "legacy-access-token", token.AccessToken)
+}
+
+func TestKiroExternalIdpRefreshRejectsCanonicalCredentialWithoutTokenEndpoint(t *testing.T) {
+	svc := NewKiroOAuthService(nil)
+	_, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:   "external_idp",
+		Provider:     kiropkg.ProviderExternalIdp,
+		RefreshToken: "refresh-token",
+		ClientID:     "client-id",
+		IssuerURL:    "https://login.microsoftonline.com/tenant/v2.0",
+		Scopes:       "openid offline_access",
+	})
+	require.EqualError(t, err, "kiro external_idp refresh requires token_endpoint")
 }
 
 func TestKiroOAuthService_RefreshTokenRejectsMissingRefreshToken(t *testing.T) {

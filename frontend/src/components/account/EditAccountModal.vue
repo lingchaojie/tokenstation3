@@ -834,6 +834,11 @@
       </div>
 
       <div v-if="isKiroAccount && !isKiroRelay" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-4 space-y-2" data-testid="kiro-api-region-select-edit">
+          <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
+          <Select v-model="editKiroAPIRegion" :options="kiroAPIRegionOptions" />
+          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
+        </div>
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
         <input
           v-model.number="kiroCreditUnitPriceUsd"
@@ -2818,7 +2823,8 @@ import type {
   CheckMixedChannelResponse,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  KiroEndpointMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2847,7 +2853,12 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import { isKiroRelayAccount } from '@/utils/kiroAccount'
+import {
+  DEFAULT_KIRO_API_REGION,
+  buildKiroAPIRegionOptions,
+  isKiroRelayAccount,
+  resolveKiroAPIRegion
+} from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -2895,7 +2906,7 @@ const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (props.account.platform === 'kiro') return t('admin.accounts.kiro.baseUrlHint')
+  if (props.account.platform === 'kiro') return t('admin.accounts.kiro.relayBaseUrlHint')
   if (props.account.platform === 'grok') return ''
   return t('admin.accounts.baseUrlHint')
 })
@@ -2935,6 +2946,19 @@ const editApiKey = ref('')
 const kiroCreditUnitPriceUsd = ref(0)
 const editKiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const editKiroIDCRegion = ref('us-east-1')
+const editKiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
+const kiroAPIRegionOptions = computed(() =>
+  buildKiroAPIRegionOptions(editKiroAPIRegion.value, (region, legacy) => {
+    if (legacy) {
+      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+    }
+    const regionLabelKey =
+      region === 'us-east-1'
+        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
+        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
+    return `${region} - ${t(regionLabelKey)}`
+  }).map(option => ({ ...option }))
+)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3014,7 +3038,7 @@ const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs'>('q')
+const kiroEndpointMode = ref<KiroEndpointMode>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)
@@ -3022,6 +3046,7 @@ const kiroStickyTtlSeconds = ref(3600)
 const kiroEndpointModeOptions = computed(() => [
   { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
   { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
+  { value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') },
 ])
 
 function normalizeKiroTtlSeconds(v: number): number {
@@ -3568,6 +3593,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     credentials.region.trim()
       ? credentials.region.trim()
       : 'us-east-1'
+  editKiroAPIRegion.value = resolveKiroAPIRegion(credentials?.api_region)
   antigravityProjectId.value =
     newAccount.platform === 'antigravity' &&
     newAccount.type === 'oauth' &&
@@ -3582,7 +3608,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = extra?.mixed_scheduling === true
   allowOverages.value = extra?.allow_overages === true
   // Backfill kiro mixed-scheduling config
-  kiroEndpointMode.value = extra?.kiro_endpoint_mode === 'krs' ? 'krs' : 'q'
+  kiroEndpointMode.value =
+    extra?.kiro_endpoint_mode === 'krs' || extra?.kiro_endpoint_mode === 'auto'
+      ? extra.kiro_endpoint_mode
+      : 'q'
   kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
   kiroCacheEmulationRatio.value = typeof extra?.kiro_cache_emulation_ratio === 'number' ? extra.kiro_cache_emulation_ratio : 1
   // auto-sticky 缺省视为开启（与后端/分组默认一致）：老账号无此字段时不应丢失粘性
@@ -4423,6 +4452,9 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.base_url
       }
+      if (props.account.platform === 'kiro' && !isKiroRelay.value) {
+        newCredentials.api_region = editKiroAPIRegion.value
+      }
 
       // Handle API key
       // 后端响应已脱敏：currentCredentials 不会再包含 api_key 原文。
@@ -4684,6 +4716,7 @@ const handleSubmit = async () => {
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       delete newCredentials.preferred_endpoint
+      newCredentials.api_region = editKiroAPIRegion.value
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
       if (modelMapping) {
@@ -4713,7 +4746,7 @@ const handleSubmit = async () => {
       newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
       if (mixedScheduling.value) {
         newExtra.mixed_scheduling = true
-        newExtra.kiro_endpoint_mode = kiroEndpointMode.value === 'krs' ? 'krs' : 'q'
+        newExtra.kiro_endpoint_mode = kiroEndpointMode.value
         newExtra.kiro_cache_emulation_enabled = kiroCacheEmulationEnabled.value
         newExtra.kiro_cache_emulation_ratio = Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0))
         newExtra.kiro_auto_sticky_enabled = kiroAutoStickyEnabled.value

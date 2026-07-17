@@ -32,6 +32,7 @@ func TestWebChatCapabilities_DerivesCapabilitiesFromCatalogModel(t *testing.T) {
 		Provider:    "qwen",
 		ModelName:   "qwen3.5-plus",
 		DisplayName: "Qwen3.5 Plus",
+		ReleasedAt:  "2026-01-01",
 		Modalities:  []string{"text"},
 		Features:    []string{"Vision Input", "agentic coding"},
 		PriceStatus: "confirmed",
@@ -51,6 +52,7 @@ func TestWebChatCapabilities_DerivesCapabilitiesFromCatalogModel(t *testing.T) {
 	require.False(t, caps.SupportsWebSearch)
 	require.Equal(t, []string{"low", "medium", "high", "xhigh"}, caps.ThinkingEfforts)
 	require.Equal(t, "confirmed", caps.PriceStatus)
+	require.Equal(t, "2026-01-01", caps.ReleasedAt)
 }
 
 func TestWebChatCapabilities_DerivesOpenAIWebSearchForTextModel(t *testing.T) {
@@ -261,5 +263,6 @@ func TestWebChatCapabilities_DefaultCatalogDerivedFromPublicRoutableModels(t *te
 		require.Equal(t, publicModel.Modalities, model.Modalities)
 		require.Equal(t, publicModel.Features, model.Features)
 		require.Equal(t, publicModel.PriceStatus, model.PriceStatus)
+		require.Equal(t, publicModel.ReleasedAt, model.ReleasedAt)
 	}
 }

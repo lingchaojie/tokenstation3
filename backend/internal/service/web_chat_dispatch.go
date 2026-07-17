@@ -54,6 +54,8 @@ type webChatDispatchInput struct {
 	User               *User
 	ConversationID     int64
 	AssistantMessageID int64
+	UsageClientID      string
+	InboundEndpoint    string
 	Model              string
 	Provider           string
 	Capabilities       WebChatModelCapability
@@ -142,12 +144,18 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	upstreamCapture := newWebChatStreamCapture(4 << 20)
 	c.Writer = downstreamCapture
 
-	usageClientID := fmt.Sprintf("webchat-message-%d", input.AssistantMessageID)
+	usageClientID := strings.TrimSpace(input.UsageClientID)
+	if usageClientID == "" {
+		usageClientID = fmt.Sprintf("webchat-message-%d", input.AssistantMessageID)
+	}
 	usageCtx := context.WithValue(ctx, ctxkey.ClientRequestID, usageClientID)
 	usageCtx = withWebChatStreamCapture(usageCtx, upstreamCapture)
 	postDispatchCtx := context.WithValue(context.WithoutCancel(ctx), ctxkey.ClientRequestID, usageClientID)
 	usageRequestID := "client:" + usageClientID
 	inboundEndpoint := fmt.Sprintf("/api/v1/chat/conversations/%d/messages", input.ConversationID)
+	if strings.TrimSpace(input.InboundEndpoint) != "" {
+		inboundEndpoint = strings.TrimSpace(input.InboundEndpoint)
+	}
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
 	usageRecorded := false
 	artifactCandidates := make([]WebChatArtifactCandidate, 0, 1)
@@ -168,6 +176,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		}
 		if result != nil {
 			artifactCandidates = append(artifactCandidates, webChatArtifactCandidatesFromOpenAIImageResults(result.imageResults)...)
+			applyWebChatOpenAIUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		}
 		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, &OpenAIRecordUsageInput{
 			Result:             result,
@@ -200,6 +209,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if err != nil {
 			return nil, err
 		}
+		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
@@ -224,6 +234,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if err != nil {
 			return nil, err
 		}
+		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
@@ -275,6 +286,37 @@ func webChatUseResponsesPayload(input webChatDispatchInput) bool {
 		return false
 	}
 	return input.Capabilities.Platform == PlatformAnthropic
+}
+
+func applyWebChatOpenAIUsageReasoningEffort(result *OpenAIForwardResult, caps WebChatModelCapability, thinking WebChatThinkingConfig) {
+	if result == nil || result.ReasoningEffort != nil {
+		return
+	}
+	result.ReasoningEffort = defaultWebChatUsageReasoningEffort(caps, thinking)
+}
+
+func applyWebChatUsageReasoningEffort(result *ForwardResult, caps WebChatModelCapability, thinking WebChatThinkingConfig) {
+	if result == nil || result.ReasoningEffort != nil {
+		return
+	}
+	result.ReasoningEffort = defaultWebChatUsageReasoningEffort(caps, thinking)
+}
+
+func defaultWebChatUsageReasoningEffort(caps WebChatModelCapability, thinking WebChatThinkingConfig) *string {
+	if !caps.SupportsThinking {
+		return nil
+	}
+	if effort, ok := normalizeWebChatThinkingEffort(caps, thinking); ok {
+		return &effort
+	}
+	if thinking.Enabled {
+		return DefaultEffortForThinkingEnabled(caps.Model)
+	}
+	if len(caps.ThinkingEfforts) > 0 {
+		effort := "medium"
+		return &effort
+	}
+	return nil
 }
 
 func (s *WebChatService) webChatAvailableGroup(ctx context.Context, userID int64, platform string) (*Group, error) {

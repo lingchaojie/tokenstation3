@@ -36,6 +36,15 @@ func TestAccountKiroConfigDefaults(t *testing.T) {
 	require.Equal(t, KiroEndpointModeQ, bad.KiroEndpointMode())
 }
 
+func TestAccountKiroEndpointModeAuto(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Extra:    map[string]any{"kiro_endpoint_mode": "auto"},
+	}
+
+	require.Equal(t, "auto", account.KiroEndpointMode())
+}
+
 func TestAccountKiroConfigNonKiroReturnsDefaults(t *testing.T) {
 	// 非 kiro 账号即使 Extra 里带了 kiro 配置，也必须返回默认值（与 group.go 语义一致）
 	acc := &Account{Platform: PlatformAnthropic, Extra: map[string]any{

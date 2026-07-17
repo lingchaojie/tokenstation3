@@ -6,8 +6,32 @@ KIRO gateway work in this repository tracks `https://github.com/nianzs/sub2api`.
 Use the nianzs fork as the reference for KIRO forwarding, request translation,
 response parsing, OAuth/IDC login, refresh behavior, cache emulation, cooldown,
 usage/credits, and admin account workflows. The current reference commit is
-`88a5666b478e234cace9090e0d5f483f1146cb96`; update this line only when
+`006af638390c0e929204a2486d696c302ad5bc07`; update this line only when
 intentionally adopting a newer KIRO implementation.
+
+## Dual-Upstream Provenance
+
+TokenStation3 follows `Wei-Shaw/sub2api` for the general product and
+`nianzs/sub2api` as a KIRO reference fork. Because nianzs periodically merges
+Wei-Shaw, every KIRO audit must pin both coordinates, inspect merge parents,
+and classify capabilities semantically. A commit is not excluded merely
+because its subject is not KIRO-specific. First determine whether it is already
+present through TokenStation3's normal Wei-Shaw sync, locally equivalent, later
+modified by nianzs, or genuinely absent. Genuinely absent general product
+features require a user scope decision; nianzs follow-up fixes still require
+separate review even when the Wei-Shaw feature is already local.
+
+Use these commands to make the provenance audit reproducible:
+
+```bash
+git show -s --format='%H %P %s' "$MERGE_SHA"
+git log --reverse --no-merges "$OLD_KIRO..$NEW_KIRO"
+git log --left-right --cherry-mark --oneline "dev...$REFERENCE_SHA"
+git show "$COMMIT_SHA" | git patch-id --stable
+git diff --name-status "$BASE_SHA..$REFERENCE_SHA"
+git diff dev "$REFERENCE_SHA" -- "${CAPABILITY_PATHS[@]}"
+git merge-base --is-ancestor "$COMMIT_SHA" dev
+```
 
 ## KIRO Sync Scope
 

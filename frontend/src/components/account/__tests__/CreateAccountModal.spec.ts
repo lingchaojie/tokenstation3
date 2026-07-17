@@ -6,10 +6,12 @@ const {
   createAccountMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  kiroImportTokenMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  kiroImportTokenMock: vi.fn(),
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -39,11 +41,15 @@ vi.mock('@/api/admin', () => ({
     tlsFingerprintProfiles: {
       list: vi.fn().mockResolvedValue([]),
     },
+    kiro: {
+      importToken: kiroImportTokenMock,
+    },
   },
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue([]),
+  getKiroDefaultModelMapping: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -81,6 +87,33 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `,
 })
 
+const SelectStub = defineComponent({
+  name: 'SelectStub',
+  inheritAttrs: false,
+  props: {
+    modelValue: { type: [String, Number, Boolean], default: null },
+    options: { type: Array, default: () => [] },
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <label>
+      <select
+        v-bind="$attrs"
+        :value="modelValue"
+        @change="$emit('update:modelValue', $event.target.value)"
+      >
+        <option
+          v-for="option in options"
+          :key="String(option.value)"
+          :value="option.value"
+        >
+          {{ option.label }}
+        </option>
+      </select>
+    </label>
+  `,
+})
+
 function mountModal() {
   return mount(CreateAccountModal, {
     props: { show: true, proxies: [], groups: [] },
@@ -89,7 +122,7 @@ function mountModal() {
         BaseDialog: BaseDialogStub,
         OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
         ConfirmDialog: true,
-        Select: true,
+        Select: SelectStub,
         Icon: true,
         PlatformIcon: true,
         ProxySelector: true,
@@ -106,6 +139,21 @@ async function selectButtonByText(wrapper: ReturnType<typeof mountModal>, text: 
   const button = wrapper.findAll('button').find((candidate) => candidate.text().includes(text))
   expect(button).toBeDefined()
   await button?.trigger('click')
+}
+
+function checkboxByLabel(wrapper: ReturnType<typeof mountModal>, text: string) {
+  const label = wrapper.findAll('label').find(candidate => candidate.text().includes(text))
+  expect(label, `missing checkbox label: ${text}`).toBeDefined()
+  return label!.get('input[type="checkbox"]')
+}
+
+function kiroEndpointModeSelect(wrapper: ReturnType<typeof mountModal>) {
+  const select = wrapper.findAllComponents(SelectStub).find(candidate => {
+    const options = candidate.props('options') as Array<{ value?: unknown }>
+    return options.some(option => option.value === 'auto')
+  })
+  expect(select, 'missing Kiro endpoint mode select').toBeDefined()
+  return select!.get('select')
 }
 
 async function submitApiKeyAccount(platform: 'openai' | 'anthropic', enableLongContextBilling = false) {
@@ -134,6 +182,16 @@ async function openCodexImportStep(toggleClicks = 0) {
   return wrapper
 }
 
+async function openKiroImportStep() {
+  const wrapper = mountModal()
+  await selectButtonByText(wrapper, 'Kiro')
+  await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importTitle')
+  await wrapper.get('form#create-account-form input[type="text"]').setValue('Kiro import')
+  await wrapper.get('form#create-account-form').trigger('submit.prevent')
+  await flushPromises()
+  return wrapper
+}
+
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     createAccountMock.mockReset().mockResolvedValue({})
@@ -146,6 +204,16 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    kiroImportTokenMock.mockReset().mockResolvedValue({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      auth_method: 'external_idp',
+      provider: 'ExternalIdp',
+      client_id: 'client-id',
+      token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      issuer_url: 'https://login.microsoftonline.com/tenant-id/v2.0',
+      scopes: 'openid offline_access',
+    })
   })
 
   it('sends false explicitly for normal OpenAI account creation by default', async () => {
@@ -237,6 +305,97 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await flushPromises()
 
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
+  })
+
+  it('switches Kiro import provider controls and only requires device registration for IDC providers', async () => {
+    const wrapper = await openKiroImportStep()
+
+    expect(wrapper.find('input[value="Google"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="Github"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="BuilderId"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="Enterprise"]').exists()).toBe(true)
+    expect(wrapper.find('input[value="ExternalIdp"]').exists()).toBe(true)
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+
+    await wrapper.get('input[value="BuilderId"]').setValue()
+    expect(wrapper.findAll('textarea')).toHaveLength(2)
+
+    await wrapper.get('input[value="ExternalIdp"]').setValue()
+    expect(wrapper.findAll('textarea')).toHaveLength(1)
+    expect(wrapper.get('textarea').attributes('placeholder')).toContain('"tokenEndpoint"')
+  })
+
+  it.each([
+    ['invalid JSON', '{not-json'],
+    ['provider mismatch', '{"provider":"Github","accessToken":"access-token"}'],
+  ])('rejects Kiro import %s before calling the API', async (_name, tokenJSON) => {
+    const wrapper = await openKiroImportStep()
+    await wrapper.get('textarea').setValue(tokenJSON)
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importAndUpdate')
+    await flushPromises()
+
+    expect(kiroImportTokenMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('creates ExternalIdp imports with the independently selected API region', async () => {
+    const wrapper = await openKiroImportStep()
+    await wrapper.get('input[value="ExternalIdp"]').setValue()
+    await wrapper.get('textarea').setValue(JSON.stringify({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      authMethod: 'external_idp',
+      provider: 'ExternalIdp',
+      clientId: 'client-id',
+      tokenEndpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      issuerUrl: 'https://login.microsoftonline.com/tenant-id/v2.0',
+      scopes: 'openid offline_access',
+    }))
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importAndUpdate')
+    await flushPromises()
+
+    expect(kiroImportTokenMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      provider: 'ExternalIdp',
+      token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
+      api_region: 'us-east-1',
+    })
+  })
+
+  it('resets Kiro mixed endpoint settings across close and reopen before serializing a new account', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kiro')
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(true)
+    await kiroEndpointModeSelect(wrapper).setValue('auto')
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.stickyRouting').setValue(false)
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').setValue(true)
+    await wrapper.get('input[placeholder="1"]').setValue('0.25')
+
+    await wrapper.setProps({ show: false })
+    await flushPromises()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await selectButtonByText(wrapper, 'Kiro')
+
+    expect((checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').element as HTMLInputElement).checked).toBe(false)
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(true)
+    expect((kiroEndpointModeSelect(wrapper).element as HTMLSelectElement).value).toBe('q')
+    expect((checkboxByLabel(wrapper, 'admin.groups.kiroCache.stickyRouting').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('input[placeholder="3600"]').element as HTMLInputElement).value).toBe('3600')
+    expect((checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').element as HTMLInputElement).checked).toBe(false)
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').setValue(true)
+    expect((wrapper.get('input[placeholder="1"]').element as HTMLInputElement).value).toBe('1')
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(false)
+
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('fresh Kiro account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('ksk_fresh')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.mixed_scheduling).toBeUndefined()
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.kiro_endpoint_mode).toBeUndefined()
   })
 
   it('sends explicit false for Codex PAT import after the toggle is changed back', async () => {

@@ -205,10 +205,10 @@ func (s *GatewayService) resolveAndPersistKiroProfileArn(ctx context.Context, ac
 }
 
 // ensureKiroProfileArnForRequest 确保 Kiro 请求的 profileArn 已解析。
-// 在流式/非流式请求发送前调用，如果是 KRS 模式且 profileArn 缺失或为占位符，
+// 在流式/非流式请求发送前调用，如果是 KRS/auto 模式且 profileArn 缺失或为占位符，
 // 则触发 ListAvailableProfiles 解析并回填。
 func (s *GatewayService) ensureKiroProfileArnForRequest(ctx context.Context, account *Account, token string, mode string) {
-	if account == nil || mode != KiroEndpointModeKRS {
+	if account == nil || (mode != KiroEndpointModeKRS && mode != KiroEndpointModeAuto) {
 		return
 	}
 	existingARN := strings.TrimSpace(account.GetCredential("profile_arn"))

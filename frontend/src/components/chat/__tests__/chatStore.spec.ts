@@ -471,6 +471,42 @@ describe('useChatStore', () => {
     }), expect.any(AbortSignal))
   })
 
+  it('generates a conversation title after the first completed assistant response', async () => {
+    mockCompletedWebChatStream()
+    vi.spyOn(chatAPI, 'createConversation').mockResolvedValue({
+      id: 7,
+      title: 'Explain Kubernetes controllers',
+      default_model: textOnlyModel.model,
+      default_provider: textOnlyModel.provider,
+      last_model: textOnlyModel.model,
+      last_provider: textOnlyModel.provider,
+      status: 'active',
+      message_count: 0,
+      created_at: '2026-06-22T00:00:00Z',
+      updated_at: '2026-06-22T00:00:00Z',
+    })
+    const titleSpy = vi.spyOn(chatAPI, 'generateConversationTitle').mockResolvedValue({
+      id: 7,
+      title: 'Kubernetes Controllers',
+      default_model: textOnlyModel.model,
+      default_provider: textOnlyModel.provider,
+      last_model: textOnlyModel.model,
+      last_provider: textOnlyModel.provider,
+      status: 'active',
+      message_count: 2,
+      created_at: '2026-06-22T00:00:00Z',
+      updated_at: '2026-06-22T00:00:01Z',
+    })
+    const store = useChatStore()
+    store.selectedModel = textOnlyModel
+
+    await store.sendMessage('Explain Kubernetes controllers')
+
+    expect(titleSpy).toHaveBeenCalledWith(7)
+    expect(store.currentConversation?.conversation.title).toBe('Kubernetes Controllers')
+    expect(store.conversations.find((conversation) => conversation.id === 7)?.title).toBe('Kubernetes Controllers')
+  })
+
   it('never sends a frontend search config for OpenAI', async () => {
     const streamSpy = mockCompletedWebChatStream()
     const store = useChatStore()

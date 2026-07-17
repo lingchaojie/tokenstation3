@@ -382,7 +382,7 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	resp, err := s.executeKiroTestUpstream(ctx, account, payloadBytes, testModelID, accessToken)
+	resp, requestCtx, err := s.executeKiroTestUpstream(ctx, account, payloadBytes, testModelID, accessToken)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -396,7 +396,7 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 	pr, pw := io.Pipe()
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, resp.Body, pw, testModelID, estimateKiroInputTokens(payloadBytes), kiropkg.KiroRequestContext{})
+		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, resp.Body, pw, testModelID, requestCtx.EstimatedInputTokens, requestCtx)
 		if streamErr != nil {
 			_ = pw.CloseWithError(streamErr)
 			return
@@ -411,16 +411,17 @@ func formatKiroTestError(statusCode int, body []byte, requestedModel string, acc
 	return fmt.Sprintf("API returned %d: %s", statusCode, string(body))
 }
 
-func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, token string) (*http.Response, error) {
+func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, token string) (*http.Response, kiropkg.KiroRequestContext, error) {
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
 	profileArn := kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+	buildResult, err := buildKiroPayloadWithRequestContext(ctx, preparedBody, modelID, profileArn, "AI_EDITOR", nil)
 	if err != nil {
-		return nil, err
+		return nil, kiropkg.KiroRequestContext{}, err
 	}
 	payload := buildResult.Payload
+	requestCtx := buildResult.Context
 
 	endpoints := buildKiroEndpoints(account, KiroEndpointModeQ)
 	proxyURL := kiroProxyURL(account)
@@ -432,12 +433,12 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, machineID, endpoint.AmzTarget, account)
 			if err != nil {
-				return nil, err
+				return nil, requestCtx, err
 			}
 
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			if err != nil {
-				return nil, err
+				return nil, requestCtx, err
 			}
 
 			if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
@@ -445,14 +446,14 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					_ = resp.Body.Close()
 					break
 				}
-				return resp, nil
+				return resp, requestCtx, nil
 			}
 
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 				respBody, readErr := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				if readErr != nil {
-					return nil, readErr
+					return nil, requestCtx, readErr
 				}
 
 				if s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
@@ -461,34 +462,29 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 						currentToken = refreshedToken
 						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
-						if err != nil {
-							return nil, err
-						}
-						payload = buildResult.Payload
 						continue
 					}
 				}
 
 				resetHTTPResponseBody(resp, respBody)
-				return resp, nil
+				return resp, requestCtx, nil
 			}
 
 			if resp.StatusCode == http.StatusBadRequest {
 				respBody, readErr := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				if readErr != nil {
-					return nil, readErr
+					return nil, requestCtx, readErr
 				}
 				resetHTTPResponseBody(resp, respBody)
-				return resp, nil
+				return resp, requestCtx, nil
 			}
 
-			return resp, nil
+			return resp, requestCtx, nil
 		}
 	}
 
-	return nil, fmt.Errorf("kiro upstream endpoints exhausted")
+	return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
 }
 
 func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {

@@ -3587,7 +3587,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type { AdminGroup, GroupPlatform, KiroEndpointMode, SubscriptionType } from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -3606,6 +3606,10 @@ import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import {
+  normalizeKiroEndpointMode,
+  resolveKiroEndpointModeForGroupPayload,
+} from "@/utils/kiroEndpointMode";
 import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
@@ -3845,6 +3849,7 @@ const subscriptionTypeOptions = computed(() => [
 const kiroEndpointModeOptions = computed(() => [
   { value: "q", label: t("admin.groups.kiroCache.endpointModeQ") },
   { value: "krs", label: t("admin.groups.kiroCache.endpointModeKRS") },
+  { value: "auto", label: t("admin.groups.kiroCache.endpointModeAuto") },
 ]);
 
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
@@ -4083,7 +4088,7 @@ const createForm = reactive({
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 0.5,
-  kiro_endpoint_mode: "q" as "q" | "krs",
+  kiro_endpoint_mode: "q" as KiroEndpointMode,
 });
 
 // 简单账号类型（用于模型路由选择）
@@ -4437,7 +4442,7 @@ const editForm = reactive({
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 0.5,
-  kiro_endpoint_mode: "q" as "q" | "krs",
+  kiro_endpoint_mode: "q" as KiroEndpointMode,
 });
 
 type ImagePricingFormState = {
@@ -4975,14 +4980,15 @@ const handleCreateGroup = async () => {
       requestData.kiro_sticky_session_ttl_seconds = 0;
       requestData.kiro_cache_emulation_enabled = false;
       requestData.kiro_cache_emulation_ratio = 0;
-      requestData.kiro_endpoint_mode = "q";
     } else {
       requestData.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
         requestData.kiro_sticky_session_ttl_seconds,
       );
-      requestData.kiro_endpoint_mode =
-        requestData.kiro_endpoint_mode === "krs" ? "krs" : "q";
     }
+    requestData.kiro_endpoint_mode = resolveKiroEndpointModeForGroupPayload(
+      requestData.platform,
+      requestData.kiro_endpoint_mode,
+    );
     await adminAPI.groups.create(requestData);
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
@@ -5067,7 +5073,9 @@ const handleEdit = async (group: AdminGroup) => {
     group.kiro_sticky_session_ttl_seconds ?? 3600;
   editForm.kiro_cache_emulation_enabled = group.kiro_cache_emulation_enabled ?? false;
   editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 0.5;
-  editForm.kiro_endpoint_mode = group.kiro_endpoint_mode === "krs" ? "krs" : "q";
+  editForm.kiro_endpoint_mode = normalizeKiroEndpointMode(
+    group.kiro_endpoint_mode,
+  );
   resetModelsListState(editModelsListState, group.models_list_config);
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
@@ -5188,13 +5196,15 @@ const handleUpdateGroup = async () => {
       payload.kiro_sticky_session_ttl_seconds = 0;
       payload.kiro_cache_emulation_enabled = false;
       payload.kiro_cache_emulation_ratio = 0;
-      payload.kiro_endpoint_mode = "q";
     } else {
       payload.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
         payload.kiro_sticky_session_ttl_seconds,
       );
-      payload.kiro_endpoint_mode = payload.kiro_endpoint_mode === "krs" ? "krs" : "q";
     }
+    payload.kiro_endpoint_mode = resolveKiroEndpointModeForGroupPayload(
+      payload.platform,
+      payload.kiro_endpoint_mode,
+    );
     await adminAPI.groups.update(editingGroup.value.id, payload);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
