@@ -111,7 +111,10 @@ vi.mock('@/composables/useAntigravityOAuth', () => ({
 }))
 
 vi.mock('@/composables/useKiroOAuth', () => ({
-  useKiroOAuth: () => genericOAuthMock
+  useKiroOAuth: () => ({
+    ...genericOAuthMock,
+    externalIdpStage: { value: 'portal' }
+  })
 }))
 
 vi.mock('@/composables/useGrokOAuth', () => ({
