@@ -499,11 +499,6 @@ func validateExternalIdpDiscoveryForIssuer(issuerURL string, discovery *external
 	return validateExternalIdpEndpointMatchesIssuer(issuerURL, discovery.TokenEndpoint, "token_endpoint")
 }
 
-func validateExternalIdpEndpoint(rawURL string) error {
-	_, err := parseExternalIdpURL(rawURL)
-	return err
-}
-
 func validateExternalIdpIssuerURL(rawURL string) error {
 	parsed, err := parseExternalIdpURL(rawURL)
 	if err != nil {
@@ -907,11 +902,12 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	if token.AuthMethod == "external_idp" && token.Provider != ProviderExternalIdp {
 		return nil, fmt.Errorf("kiro authMethod external_idp requires provider %s", ProviderExternalIdp)
 	}
-	if token.AuthMethod == "idc" {
+	switch token.AuthMethod {
+	case "idc":
 		if strings.TrimSpace(token.Region) == "" {
 			token.Region = defaultIDCRegion
 		}
-	} else if token.AuthMethod == "external_idp" {
+	case "external_idp":
 		token.RefreshToken = strings.TrimSpace(token.RefreshToken)
 		token.ClientID = strings.TrimSpace(token.ClientID)
 		token.TokenEndpoint = strings.TrimSpace(token.TokenEndpoint)

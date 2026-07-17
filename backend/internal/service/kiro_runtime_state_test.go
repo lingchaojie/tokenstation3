@@ -20,6 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// buildKiroPayloadForAccount preserves the former mode-based entry point for
+// focused tests. Production selects a profile ARN per concrete endpoint.
+func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
+	mode := kiroEndpointModeForRequest(account, parsed)
+	profileArn := kiroResolveProfileArnForPayload(account, mode)
+	return s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, token, requestModel, headers, profileArn)
+}
+
 type stubKiroCooldownStore struct {
 	reserveWait  time.Duration
 	reserveErr   error

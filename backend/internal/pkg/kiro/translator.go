@@ -2405,7 +2405,8 @@ func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, orig
 				mediaType := part.Get("source.media_type").String()
 				data := part.Get("source.data").String()
 				sourceURL := strings.TrimSpace(part.Get("source.url").String())
-				image, ok := KiroImage{}, false
+				var image KiroImage
+				var ok bool
 				if sourceURL != "" && strings.TrimSpace(data) == "" {
 					image, ok = buildKiroImageFromURL(ctx, sourceURL)
 				} else {

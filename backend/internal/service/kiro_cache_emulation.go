@@ -509,31 +509,6 @@ func stripKiroCacheControl(v any) any {
 	}
 }
 
-func countKiroInputTokensFromPayload(ctx context.Context, payload map[string]any) int {
-	if payload == nil {
-		return 1
-	}
-	tokens := 0
-	for _, block := range normalizeKiroSystemBlocks(payload["system"]) {
-		tokens += countKiroSystemBlockTokens(block)
-	}
-	messages, _ := payload["messages"].([]any)
-	for _, rawMessage := range messages {
-		message, ok := rawMessage.(map[string]any)
-		if !ok {
-			continue
-		}
-		tokens += kiroTokensPerMessage
-		tokens += countKiroMessageContentTokens(ctx, message["content"])
-	}
-	if tools, ok := payload["tools"].([]any); ok {
-		for _, tool := range tools {
-			tokens += countKiroToolDefinitionTokens(stripKiroCacheControl(tool))
-		}
-	}
-	return max(tokens, 1)
-}
-
 func countKiroSystemBlockTokens(value any) int {
 	switch typed := value.(type) {
 	case string:

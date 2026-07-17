@@ -632,12 +632,6 @@ func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string 
 	return resolveKiroEndpointMode(account, parsed.Group)
 }
 
-func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
-	mode := kiroEndpointModeForRequest(account, parsed)
-	profileArn := kiroResolveProfileArnForPayload(account, mode)
-	return s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, token, requestModel, headers, profileArn)
-}
-
 func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string) (*kiropkg.KiroBuildResult, error) {
 	_ = s
 	_ = token

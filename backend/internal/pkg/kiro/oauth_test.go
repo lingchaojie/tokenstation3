@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+func validateExternalIdpEndpoint(rawURL string) error {
+	_, err := parseExternalIdpURL(rawURL)
+	return err
+}
+
 func TestBuildSocialSignInURLUsesAppPortal(t *testing.T) {
 	got := BuildSocialSignInURL("http://localhost:49153", "challenge123", "state456")
 	want := "https://app.kiro.dev/signin?code_challenge=challenge123&code_challenge_method=S256&redirect_from=KiroIDE&redirect_uri=http%3A%2F%2Flocalhost%3A49153&state=state456"

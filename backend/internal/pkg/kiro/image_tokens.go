@@ -214,61 +214,59 @@ func loadRemoteImage(ctx context.Context, rawURL string, allowTokenCache bool) (
 		}
 	}
 
-	for {
-		imageTokenFetches.Lock()
-		flight := imageTokenFetches.flights[key]
-		if flight != nil {
-			flight.refs++
-		}
-		imageTokenFetches.Unlock()
-		if flight != nil {
-			return awaitImageTokenFlight(ctx, flight)
-		}
-
-		select {
-		case imageTokenFetches.slots <- struct{}{}:
-		case <-ctx.Done():
-			return kiroLoadedImage{}, false
-		}
-		if ctx.Err() != nil {
-			<-imageTokenFetches.slots
-			return kiroLoadedImage{}, false
-		}
-
-		if allowTokenCache {
-			if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
-				<-imageTokenFetches.slots
-				return kiroLoadedImage{Tokens: tokens}, true
-			}
-		}
-
-		imageTokenFetches.Lock()
-		if flight = imageTokenFetches.flights[key]; flight != nil {
-			flight.refs++
-			imageTokenFetches.Unlock()
-			<-imageTokenFetches.slots
-			return awaitImageTokenFlight(ctx, flight)
-		}
-		// Close the cache/flight race: workers publish cache entries before
-		// removing their flight, so a miss here is safe to admit as new work.
-		if allowTokenCache {
-			if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
-				imageTokenFetches.Unlock()
-				<-imageTokenFetches.slots
-				return kiroLoadedImage{Tokens: tokens}, true
-			}
-		}
-		flight = &imageTokenFlight{
-			key:  key,
-			done: make(chan struct{}),
-			refs: 1,
-		}
-		imageTokenFetches.flights[key] = flight
-		imageTokenFetches.Unlock()
-
-		go runImageTokenFlight(key, rawURL, flight)
+	imageTokenFetches.Lock()
+	flight := imageTokenFetches.flights[key]
+	if flight != nil {
+		flight.refs++
+	}
+	imageTokenFetches.Unlock()
+	if flight != nil {
 		return awaitImageTokenFlight(ctx, flight)
 	}
+
+	select {
+	case imageTokenFetches.slots <- struct{}{}:
+	case <-ctx.Done():
+		return kiroLoadedImage{}, false
+	}
+	if ctx.Err() != nil {
+		<-imageTokenFetches.slots
+		return kiroLoadedImage{}, false
+	}
+
+	if allowTokenCache {
+		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+			<-imageTokenFetches.slots
+			return kiroLoadedImage{Tokens: tokens}, true
+		}
+	}
+
+	imageTokenFetches.Lock()
+	if flight = imageTokenFetches.flights[key]; flight != nil {
+		flight.refs++
+		imageTokenFetches.Unlock()
+		<-imageTokenFetches.slots
+		return awaitImageTokenFlight(ctx, flight)
+	}
+	// Close the cache/flight race: workers publish cache entries before
+	// removing their flight, so a miss here is safe to admit as new work.
+	if allowTokenCache {
+		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+			imageTokenFetches.Unlock()
+			<-imageTokenFetches.slots
+			return kiroLoadedImage{Tokens: tokens}, true
+		}
+	}
+	flight = &imageTokenFlight{
+		key:  key,
+		done: make(chan struct{}),
+		refs: 1,
+	}
+	imageTokenFetches.flights[key] = flight
+	imageTokenFetches.Unlock()
+
+	go runImageTokenFlight(key, rawURL, flight)
+	return awaitImageTokenFlight(ctx, flight)
 }
 
 func runImageTokenFlight(key, rawURL string, flight *imageTokenFlight) {
@@ -557,14 +555,6 @@ func estimateBase64ImageTokens(ctx context.Context, mediaType, encoded string) (
 		}
 	}
 	return 0, false
-}
-
-func estimateImageBytesTokens(ctx context.Context, data []byte) (int, bool) {
-	if len(data) == 0 || len(data) > kiroRemoteImageMaxBytes {
-		return 0, false
-	}
-	_, tokens, ok := inspectImageReader(ctx, bytes.NewReader(data))
-	return tokens, ok
 }
 
 func estimateImageReaderTokens(ctx context.Context, reader io.Reader) (int, bool) {
