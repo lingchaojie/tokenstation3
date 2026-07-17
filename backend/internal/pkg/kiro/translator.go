@@ -2552,6 +2552,7 @@ func buildKiroImageFromURL(ctx context.Context, url string) (KiroImage, bool) {
 
 func buildKiroImageFromRemoteURL(ctx context.Context, url string) (KiroImage, bool) {
 	loaded, ok := kiroRemoteImageLoader(ctx, url)
+	defer loaded.Release()
 	if !ok || loaded.Format == "" || len(loaded.Bytes) == 0 {
 		return KiroImage{}, false
 	}

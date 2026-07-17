@@ -109,9 +109,24 @@ type imageTokenCacheEntry struct {
 // kiroLoadedImage is retained only by an active bounded fetch flight and its
 // waiters. The process-wide cache stores tokens only, never image bodies.
 type kiroLoadedImage struct {
-	Format string
-	Bytes  []byte
-	Tokens int
+	Format  string
+	Bytes   []byte
+	Tokens  int
+	release func()
+}
+
+// Release returns the bounded raw-body lease after the caller has finished
+// consuming Bytes. Cache-only results and test doubles have no lease.
+func (image *kiroLoadedImage) Release() {
+	if image == nil {
+		return
+	}
+	release := image.release
+	image.release = nil
+	image.Bytes = nil
+	if release != nil {
+		release()
+	}
 }
 
 var kiroRemoteImageLoader = loadKiroRemoteImage
@@ -122,9 +137,12 @@ var imageTokenEstimates = struct {
 }{entries: make(map[string]imageTokenCacheEntry)}
 
 type imageTokenFlight struct {
-	done   chan struct{}
-	result kiroLoadedImage
-	ok     bool
+	key      string
+	done     chan struct{}
+	result   kiroLoadedImage
+	ok       bool
+	refs     int
+	finished bool
 }
 
 var imageTokenFetches = struct {
@@ -156,6 +174,7 @@ func EstimateImageTokens(ctx context.Context, mediaType, source string) int {
 			return kiroImageTokenFallback
 		}
 		result, ok := loadRemoteImage(ctx, parsed.String(), true)
+		defer result.Release()
 		if !ok || result.Tokens < 1 {
 			return kiroImageTokenFallback
 		}
@@ -198,6 +217,9 @@ func loadRemoteImage(ctx context.Context, rawURL string, allowTokenCache bool) (
 	for {
 		imageTokenFetches.Lock()
 		flight := imageTokenFetches.flights[key]
+		if flight != nil {
+			flight.refs++
+		}
 		imageTokenFetches.Unlock()
 		if flight != nil {
 			return awaitImageTokenFlight(ctx, flight)
@@ -222,6 +244,7 @@ func loadRemoteImage(ctx context.Context, rawURL string, allowTokenCache bool) (
 
 		imageTokenFetches.Lock()
 		if flight = imageTokenFetches.flights[key]; flight != nil {
+			flight.refs++
 			imageTokenFetches.Unlock()
 			<-imageTokenFetches.slots
 			return awaitImageTokenFlight(ctx, flight)
@@ -235,7 +258,11 @@ func loadRemoteImage(ctx context.Context, rawURL string, allowTokenCache bool) (
 				return kiroLoadedImage{Tokens: tokens}, true
 			}
 		}
-		flight = &imageTokenFlight{done: make(chan struct{})}
+		flight = &imageTokenFlight{
+			key:  key,
+			done: make(chan struct{}),
+			refs: 1,
+		}
 		imageTokenFetches.flights[key] = flight
 		imageTokenFetches.Unlock()
 
@@ -258,22 +285,66 @@ func runImageTokenFlight(key, rawURL string, flight *imageTokenFlight) {
 	imageTokenFetches.Lock()
 	flight.result = result
 	flight.ok = ok
-	delete(imageTokenFetches.flights, key)
+	flight.finished = true
 	close(flight.done)
+	releaseSlot := cleanupImageTokenFlightLocked(flight)
 	imageTokenFetches.Unlock()
-	<-imageTokenFetches.slots
+	if releaseSlot {
+		<-imageTokenFetches.slots
+	}
 }
 
 func awaitImageTokenFlight(ctx context.Context, flight *imageTokenFlight) (kiroLoadedImage, bool) {
 	select {
 	case <-ctx.Done():
+		releaseImageTokenFlightWaiter(flight)
 		return kiroLoadedImage{}, false
 	case <-flight.done:
-		if flight.result.Tokens < 1 {
+		if ctx.Err() != nil {
+			releaseImageTokenFlightWaiter(flight)
 			return kiroLoadedImage{}, false
 		}
-		return flight.result, flight.ok
+		imageTokenFetches.Lock()
+		result := flight.result
+		ok := flight.ok
+		imageTokenFetches.Unlock()
+		if !ok || result.Tokens < 1 {
+			releaseImageTokenFlightWaiter(flight)
+			return result, false
+		}
+		var once sync.Once
+		result.release = func() {
+			once.Do(func() { releaseImageTokenFlightWaiter(flight) })
+		}
+		return result, true
 	}
+}
+
+func releaseImageTokenFlightWaiter(flight *imageTokenFlight) {
+	imageTokenFetches.Lock()
+	if flight.refs > 0 {
+		flight.refs--
+	}
+	releaseSlot := cleanupImageTokenFlightLocked(flight)
+	imageTokenFetches.Unlock()
+	if releaseSlot {
+		<-imageTokenFetches.slots
+	}
+}
+
+// cleanupImageTokenFlightLocked drops the only coordinator-owned raw-body
+// reference. The admission permit is returned by the caller after unlocking.
+func cleanupImageTokenFlightLocked(flight *imageTokenFlight) bool {
+	if !flight.finished || flight.refs != 0 {
+		return false
+	}
+	current, ok := imageTokenFetches.flights[flight.key]
+	if !ok || current != flight {
+		return false
+	}
+	delete(imageTokenFetches.flights, flight.key)
+	flight.result = kiroLoadedImage{}
+	return true
 }
 
 func fetchRemoteImage(ctx context.Context, rawURL string) (kiroLoadedImage, bool) {

@@ -251,6 +251,195 @@ func TestEstimateImageTokensBoundsDistinctRemoteFetchesAndCancelsAdmissionWait(t
 	wg.Wait()
 }
 
+func TestImageTokenLeaseBoundsCompletedBodiesUntilRelease(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	body := make([]byte, kiroRemoteImageMaxBytes)
+	copy(body, encodeImageForTokenTest(t, "png", 200, 200))
+	var requests atomic.Int32
+	seventeenthStarted := make(chan struct{})
+	var seventeenthStartedOnce sync.Once
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		requests.Add(1)
+		if req.URL.Path == "/image-16.png" {
+			seventeenthStartedOnce.Do(func() { close(seventeenthStarted) })
+		}
+		return imageTokenHTTPResponse(req, http.StatusOK, body, nil)
+	}))
+
+	held := make([]kiroLoadedImage, 0, kiroImageTokenMaxFetches+1)
+	t.Cleanup(func() {
+		for _, result := range held {
+			result.Release()
+		}
+	})
+	for i := 0; i < kiroImageTokenMaxFetches; i++ {
+		result, ok := loadKiroRemoteImage(context.Background(), "http://images.example.com/image-"+strconv.Itoa(i)+".png")
+		require.True(t, ok)
+		require.Len(t, result.Bytes, kiroRemoteImageMaxBytes)
+		held = append(held, result)
+	}
+	require.Equal(t, int32(kiroImageTokenMaxFetches), requests.Load())
+	requireImageTokenFetchState(t, kiroImageTokenMaxFetches, kiroImageTokenMaxFetches, kiroImageTokenMaxFetches)
+
+	seventeenthResult := make(chan kiroLoadedImage, 1)
+	seventeenthOK := make(chan bool, 1)
+	go func() {
+		result, ok := loadKiroRemoteImage(context.Background(), "http://images.example.com/image-16.png")
+		seventeenthResult <- result
+		seventeenthOK <- ok
+	}()
+	select {
+	case <-seventeenthStarted:
+		t.Fatal("a seventeenth body started while sixteen completed bodies remained leased")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	held[0].Release()
+	require.Nil(t, held[0].Bytes, "releasing a lease must drop the consumer's raw-body reference before admission resumes")
+	select {
+	case <-seventeenthStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the seventeenth body did not start after a completed body lease was released")
+	}
+	select {
+	case result := <-seventeenthResult:
+		require.True(t, <-seventeenthOK)
+		require.Len(t, result.Bytes, kiroRemoteImageMaxBytes)
+		held = append(held, result)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the seventeenth body did not finish after admission")
+	}
+
+	for i := 1; i < len(held); i++ {
+		held[i].Release()
+	}
+	requireEventuallyImageTokenFetchState(t, 0, 0, 0)
+}
+
+func TestImageTokenLeaseCanceledSoleWaiterIsReclaimedAfterWorkerFinishes(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	started := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseWorker := func() { releaseOnce.Do(func() { close(releaseFetch) }) }
+	t.Cleanup(releaseWorker)
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		startedOnce.Do(func() { close(started) })
+		<-releaseFetch
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan kiroLoadedImage, 1)
+	okCh := make(chan bool, 1)
+	go func() {
+		result, ok := loadKiroRemoteImage(ctx, "http://images.example.com/canceled.png")
+		resultCh <- result
+		okCh <- ok
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	cancel()
+	result := <-resultCh
+	require.False(t, <-okCh)
+	result.Release()
+	requireImageTokenFetchState(t, 1, 1, 0)
+
+	releaseWorker()
+	requireEventuallyImageTokenFetchState(t, 0, 0, 0)
+}
+
+func TestImageTokenLeaseFailureIsAutomaticallyReclaimed(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		return imageTokenHTTPResponse(req, http.StatusNotFound, nil, nil)
+	}))
+
+	result, ok := loadKiroRemoteImage(context.Background(), "http://images.example.com/missing.png")
+	require.False(t, ok)
+	result.Release()
+	requireEventuallyImageTokenFetchState(t, 0, 0, 0)
+}
+
+func TestImageTokenLeaseSameKeyWaitersReleaseIndependently(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	started := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	var requests atomic.Int32
+	releaseWorker := func() { releaseOnce.Do(func() { close(releaseFetch) }) }
+	t.Cleanup(releaseWorker)
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		requests.Add(1)
+		startedOnce.Do(func() { close(started) })
+		<-releaseFetch
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	type loadResult struct {
+		image kiroLoadedImage
+		ok    bool
+	}
+	results := make(chan loadResult, 3)
+	load := func() {
+		image, ok := loadKiroRemoteImage(context.Background(), "http://images.example.com/shared.png")
+		results <- loadResult{image: image, ok: ok}
+	}
+	go load()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	go load()
+	require.Eventually(t, func() bool {
+		flights, slots, refs := imageTokenFetchState()
+		return flights == 1 && slots == 1 && refs == 2
+	}, time.Second, time.Millisecond)
+
+	releaseWorker()
+	first := <-results
+	second := <-results
+	require.True(t, first.ok)
+	require.True(t, second.ok)
+	require.Equal(t, int32(1), requests.Load())
+	first.image.Release()
+	first.image.Release()
+	requireImageTokenFetchState(t, 1, 1, 1)
+
+	go load()
+	third := <-results
+	require.True(t, third.ok)
+	require.Equal(t, int32(1), requests.Load(), "a waiter joining a completed flight must reuse its body")
+	requireImageTokenFetchState(t, 1, 1, 2)
+
+	second.image.Release()
+	second.image.Release()
+	requireImageTokenFetchState(t, 1, 1, 1)
+	third.image.Release()
+	third.image.Release()
+	requireEventuallyImageTokenFetchState(t, 0, 0, 0)
+}
+
 func TestEstimateImageTokensRemoteFailureCacheExpires(t *testing.T) {
 	resetImageTokenEstimateStateForTest()
 	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
@@ -541,6 +730,7 @@ func TestBuildKiroPayloadRemoteImageFetchesOnceAndSeedsTokenCache(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, int32(1), requests.Load(), "translation and its visual estimate must share one safe fetch")
 	require.Contains(t, string(result.Payload), base64.StdEncoding.EncodeToString(pngBody))
+	requireEventuallyImageTokenFetchState(t, 0, 0, 0)
 
 	require.Equal(t, 54, EstimateImageTokens(context.Background(), "", rawURL))
 	require.Equal(t, int32(1), requests.Load(), "cache flattening must reuse the token-only result without another GET")
@@ -737,4 +927,29 @@ func resetImageTokenEstimateStateForTest() {
 	imageTokenEstimates.Lock()
 	imageTokenEstimates.entries = make(map[string]imageTokenCacheEntry)
 	imageTokenEstimates.Unlock()
+}
+
+func imageTokenFetchState() (flights, slots, refs int) {
+	imageTokenFetches.Lock()
+	defer imageTokenFetches.Unlock()
+	for _, flight := range imageTokenFetches.flights {
+		refs += flight.refs
+	}
+	return len(imageTokenFetches.flights), len(imageTokenFetches.slots), refs
+}
+
+func requireImageTokenFetchState(t *testing.T, flights, slots, refs int) {
+	t.Helper()
+	actualFlights, actualSlots, actualRefs := imageTokenFetchState()
+	require.Equal(t, flights, actualFlights, "active flights")
+	require.Equal(t, slots, actualSlots, "occupied slots")
+	require.Equal(t, refs, actualRefs, "waiter references")
+}
+
+func requireEventuallyImageTokenFetchState(t *testing.T, flights, slots, refs int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		actualFlights, actualSlots, actualRefs := imageTokenFetchState()
+		return actualFlights == flights && actualSlots == slots && actualRefs == refs
+	}, 2*time.Second, time.Millisecond)
 }
