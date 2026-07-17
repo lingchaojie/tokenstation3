@@ -415,6 +415,61 @@ func TestForwardKiroMessagesNonStreamPreservesFullCacheHitZeros(t *testing.T) {
 	require.Zero(t, result.Usage.OutputTokens)
 }
 
+func TestForwardKiroMessagesNonStreamDirectAPIKeyReachesAWSUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := &Account{
+		ID:          34,
+		Name:        "kiro-nonstream-apikey",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":    "kiro-api-key",
+			"api_region": "us-west-2",
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-6": "claude-sonnet-4-6",
+			},
+		},
+	}
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "hello from API key"},
+	}))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "metadataEvent", map[string]any{
+		"metadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 3, "outputTokens": 4, "totalTokens": 7,
+		}},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(upstreamBody),
+	}}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "Bearer kiro-api-key", upstream.requests[0].Header.Get("Authorization"))
+	require.Equal(t, []string{"API_KEY"}, upstream.requests[0].Header["tokentype"])
+}
+
 func TestForwardKiroMessagesStreamContentBeforeMetadataFinalZerosReplaceProvisionalUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetKiroCacheTracker()

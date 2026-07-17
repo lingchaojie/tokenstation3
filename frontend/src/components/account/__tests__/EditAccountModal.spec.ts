@@ -1164,6 +1164,23 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-central-1')
   })
 
+  it('uses the relay hint only for a Kiro API-key account with a base URL', () => {
+    const relayWrapper = mountModal(buildKiroAPIKeyAccount('https://relay.example.com'))
+    const relayBaseUrlInput = relayWrapper.get<HTMLInputElement>(
+      'input[placeholder="https://your-relay.example.com"]'
+    )
+
+    expect(relayBaseUrlInput.element.value).toBe('https://relay.example.com')
+    expect(relayBaseUrlInput.element.parentElement?.textContent).toContain(
+      'admin.accounts.kiro.relayBaseUrlHint'
+    )
+
+    const directWrapper = mountModal(buildKiroAPIKeyAccount())
+    expect(
+      directWrapper.find('input[placeholder="https://your-relay.example.com"]').exists()
+    ).toBe(false)
+  })
+
   it('does not expose or introduce API region for a relay Kiro API-key account', async () => {
     const account = buildKiroAPIKeyAccount('https://relay.example.com')
     updateAccountMock.mockReset()
