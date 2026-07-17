@@ -24,7 +24,13 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	if isKiroDirectModeAccount(account) {
-		inputTokens := estimateKiroInputTokens(ctx, parsed.Body.Bytes())
+		requestModel := parsed.Model
+		mappedModel := account.GetMappedModel(requestModel)
+		var headers http.Header
+		if c.Request != nil {
+			headers = c.Request.Header
+		}
+		inputTokens := estimateKiroInputTokensForRequest(ctx, parsed.Body.Bytes(), mappedModel, requestModel, headers)
 		if inputTokens < 1 {
 			inputTokens = 1
 		}

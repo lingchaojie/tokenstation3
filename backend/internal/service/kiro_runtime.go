@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -328,7 +327,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	inputTokens := estimateKiroInputTokens(ctx, anthropicBody)
+	inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
 		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
@@ -635,10 +634,9 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 
 func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string) (*kiropkg.KiroBuildResult, error) {
 	_ = s
-	_ = ctx
 	_ = token
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(ctx, anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 	if err != nil {
 		return nil, err
 	}
@@ -811,12 +809,18 @@ func resetHTTPResponseBody(resp *http.Response, body []byte) {
 }
 
 func estimateKiroInputTokens(ctx context.Context, body []byte) int {
+	requestModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	return estimateKiroInputTokensForRequest(ctx, body, requestModel, requestModel, nil)
+}
+
+func estimateKiroInputTokensForRequest(ctx context.Context, body []byte, mappedModel, requestModel string, headers http.Header) int {
 	if len(body) == 0 {
 		return 0
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err == nil {
-		return countKiroInputTokensFromPayload(ctx, payload)
+	preparedBody := prepareKiroPayloadBodyForRequestModel(body, requestModel)
+	modelID := kiropkg.MapModel(mappedModel)
+	if tokens, err := kiropkg.EstimateClaudeInputTokens(ctx, preparedBody, modelID, "AI_EDITOR", headers); err == nil {
+		return tokens
 	}
 	tokens := len(body) / 4
 	if tokens == 0 {

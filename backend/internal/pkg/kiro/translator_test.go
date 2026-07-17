@@ -58,6 +58,19 @@ func encodePNGForInputTokenTest(t *testing.T, width, height int) string {
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
+func TestBuildKiroPayloadWithRequestContextUsesCallerContext(t *testing.T) {
+	body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}}]}]}`, encodePNGForInputTokenTest(t, 200, 200)))
+
+	normal, err := BuildKiroPayloadWithRequestContext(context.Background(), body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceled, err := BuildKiroPayloadWithRequestContext(canceledCtx, body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	require.Equal(t, kiroImageTokenFallback-54, canceled.Context.EstimatedInputTokens-normal.Context.EstimatedInputTokens)
+}
+
 func TestBuildKiroPayloadStoresPostTranslationInputEstimate(t *testing.T) {
 	body := []byte("{\"model\":\"claude-sonnet-4-6\",\"system\":\"system text\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}")
 	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)

@@ -134,7 +134,8 @@ func buildKiroCacheProfile(ctx context.Context, body []byte, model string, input
 	}
 	totalTokens := inputTokens
 	if totalTokens <= 0 {
-		totalTokens = countKiroInputTokensFromPayload(ctx, payload)
+		requestModel, _ := payload["model"].(string)
+		totalTokens = estimateKiroInputTokensForRequest(ctx, body, model, requestModel, nil)
 	}
 	prelude, err := canonicalJSON(map[string]any{
 		"model":       payload["model"],

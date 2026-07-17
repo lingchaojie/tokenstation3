@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,9 @@ func TestCountTokensKiroDirectUsesLocalEstimate(t *testing.T) {
 		],
 		"tools":[{"name":"lookup","description":"Look up weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
 	}`)
-	want := estimateKiroInputTokens(context.Background(), body)
+	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(context.Background(), body, kiropkg.MapModel("claude-sonnet-4-6"), "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	want := buildResult.Context.EstimatedInputTokens
 	require.Greater(t, want, 1)
 
 	accounts := []*Account{
@@ -53,9 +56,13 @@ func TestCountTokensKiroDirectUsesLocalEstimate(t *testing.T) {
 	}
 }
 
-func TestCountTokensKiroDirectClampsEstimateToOne(t *testing.T) {
+func TestCountTokensKiroDirectUsesTranslatedMinimumEstimate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[]}`)
+	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(context.Background(), body, kiropkg.MapModel("claude-sonnet-4-6"), "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	want := buildResult.Context.EstimatedInputTokens
+	require.GreaterOrEqual(t, want, 1)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
@@ -68,7 +75,7 @@ func TestCountTokensKiroDirectClampsEstimateToOne(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"input_tokens":1}`, rec.Body.String())
+	require.JSONEq(t, `{"input_tokens":`+strconv.Itoa(want)+`}`, rec.Body.String())
 }
 
 func TestCountTokensKiroImageUsesVisualEstimate(t *testing.T) {

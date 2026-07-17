@@ -393,6 +393,16 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 }
 
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	return BuildKiroPayloadWithRequestContext(context.Background(), claudeBody, modelID, profileArn, origin, headers)
+}
+
+// BuildKiroPayloadWithRequestContext translates an Anthropic request and uses
+// the caller's Go context for visual-token estimation.
+// BuildKiroPayloadWithContext remains the background-context compatibility API.
+func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
 	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
@@ -524,12 +534,22 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		InferenceConfig:              inferenceConfig,
 		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
 	}
-	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(context.Background(), payload)
+	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(ctx, payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
+}
+
+// EstimateClaudeInputTokens translates an Anthropic request into the exact
+// Kiro payload shape and returns that payload's authoritative input estimate.
+func EstimateClaudeInputTokens(ctx context.Context, claudeBody []byte, modelID, origin string, headers http.Header) (int, error) {
+	result, err := BuildKiroPayloadWithRequestContext(ctx, claudeBody, modelID, "", origin, headers)
+	if err != nil {
+		return 0, err
+	}
+	return result.Context.EstimatedInputTokens, nil
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {

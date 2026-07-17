@@ -205,7 +205,12 @@ func (s *GatewayService) handleWebSearchEmulation(
 		model = defaultWebSearchModel
 	}
 	body := parsed.Body.Bytes()
-	inputTokens := estimateKiroInputTokens(ctx, body)
+	mappedModel := account.GetMappedModel(model)
+	var requestHeaders http.Header
+	if c.Request != nil {
+		requestHeaders = c.Request.Header
+	}
+	inputTokens := estimateKiroInputTokensForRequest(ctx, body, mappedModel, model, requestHeaders)
 	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, model, inputTokens)
 
 	if parsed.Stream {

@@ -13,6 +13,16 @@ const (
 )
 
 func estimateKiroPayloadInputTokens(ctx context.Context, payload KiroPayload) int {
+	return EstimateKiroPayloadInputTokens(ctx, payload)
+}
+
+// EstimateKiroPayloadInputTokens is the authoritative Kiro input-token
+// estimator. Callers with Anthropic bodies should use EstimateClaudeInputTokens
+// so the request is translated before it is counted.
+func EstimateKiroPayloadInputTokens(ctx context.Context, payload KiroPayload) int {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	total := estimateKiroUserMessageTokens(ctx, payload.ConversationState.CurrentMessage.UserInputMessage)
 	for _, message := range payload.ConversationState.History {
 		if message.UserInputMessage != nil {

@@ -3,6 +3,7 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	_ "golang.org/x/image/webp"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -34,6 +34,7 @@ const (
 	kiroImageTokenCacheMaxItems = 256
 	kiroImageTokenSuccessTTL    = 5 * time.Minute
 	kiroImageTokenFailureTTL    = 30 * time.Second
+	kiroImageTokenMaxFetches    = 16
 	kiroImageTokenMaxRedirects  = 3
 	kiroImageTokenMaxURLBytes   = 8 << 10
 	kiroImageEncodedMaxBytes    = ((kiroRemoteImageMaxBytes + 2) / 3) * 4
@@ -80,6 +81,7 @@ var kiroImageBlockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("2001::/23"),
 	netip.MustParsePrefix("fc00::/7"),
 	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("ff00::/8"),
 }
 
@@ -109,7 +111,19 @@ var imageTokenEstimates = struct {
 	entries map[string]imageTokenCacheEntry
 }{entries: make(map[string]imageTokenCacheEntry)}
 
-var imageTokenEstimateGroup singleflight.Group
+type imageTokenFlight struct {
+	done   chan struct{}
+	tokens int
+}
+
+var imageTokenFetches = struct {
+	sync.Mutex
+	flights map[string]*imageTokenFlight
+	slots   chan struct{}
+}{
+	flights: make(map[string]*imageTokenFlight),
+	slots:   make(chan struct{}, kiroImageTokenMaxFetches),
+}
 
 // EstimateImageTokens estimates Kiro visual tokens from image dimensions.
 // Local sources are parsed through bounded streaming decoders. Remote sources
@@ -126,7 +140,11 @@ func EstimateImageTokens(ctx context.Context, mediaType, source string) int {
 		return kiroImageTokenFallback
 	}
 	if isRemoteImageURL(source) {
-		return estimateRemoteImageTokens(ctx, source)
+		parsed, err := validateKiroRemoteImageURL(source)
+		if err != nil {
+			return kiroImageTokenFallback
+		}
+		return estimateRemoteImageTokens(ctx, parsed.String())
 	}
 
 	if data, ok := imageDataURLPayload(source); ok {
@@ -139,38 +157,86 @@ func EstimateImageTokens(ctx context.Context, mediaType, source string) int {
 }
 
 func estimateRemoteImageTokens(ctx context.Context, rawURL string) int {
+	digest := sha256.Sum256([]byte(rawURL))
+	key := string(digest[:])
 	now := kiroImageTokenNow()
-	if tokens, ok := loadImageTokenCache(rawURL, now); ok {
+	if tokens, ok := loadImageTokenCache(key, now); ok {
 		return tokens
 	}
 
-	result := imageTokenEstimateGroup.DoChan(rawURL, func() (any, error) {
-		now := kiroImageTokenNow()
-		if tokens, ok := loadImageTokenCache(rawURL, now); ok {
-			return tokens, nil
+	for {
+		imageTokenFetches.Lock()
+		flight := imageTokenFetches.flights[key]
+		imageTokenFetches.Unlock()
+		if flight != nil {
+			return awaitImageTokenFlight(ctx, flight)
 		}
-		tokens, ok := fetchRemoteImageTokens(ctx, rawURL)
-		ttl := kiroImageTokenSuccessTTL
-		if !ok {
-			tokens = kiroImageTokenFallback
-			ttl = kiroImageTokenFailureTTL
-		}
-		storeImageTokenCache(rawURL, tokens, ttl, kiroImageTokenNow())
-		return tokens, nil
-	})
 
+		select {
+		case imageTokenFetches.slots <- struct{}{}:
+		case <-ctx.Done():
+			return kiroImageTokenFallback
+		}
+		if ctx.Err() != nil {
+			<-imageTokenFetches.slots
+			return kiroImageTokenFallback
+		}
+
+		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+			<-imageTokenFetches.slots
+			return tokens
+		}
+
+		imageTokenFetches.Lock()
+		if flight = imageTokenFetches.flights[key]; flight != nil {
+			imageTokenFetches.Unlock()
+			<-imageTokenFetches.slots
+			return awaitImageTokenFlight(ctx, flight)
+		}
+		// Close the cache/flight race: workers publish cache entries before
+		// removing their flight, so a miss here is safe to admit as new work.
+		if tokens, ok := loadImageTokenCache(key, kiroImageTokenNow()); ok {
+			imageTokenFetches.Unlock()
+			<-imageTokenFetches.slots
+			return tokens
+		}
+		flight = &imageTokenFlight{done: make(chan struct{})}
+		imageTokenFetches.flights[key] = flight
+		imageTokenFetches.Unlock()
+
+		go runImageTokenFlight(key, rawURL, flight)
+		return awaitImageTokenFlight(ctx, flight)
+	}
+}
+
+func runImageTokenFlight(key, rawURL string, flight *imageTokenFlight) {
+	ctx, cancel := context.WithTimeout(context.Background(), kiroRemoteImageTimeout)
+	tokens, ok := fetchRemoteImageTokens(ctx, rawURL)
+	cancel()
+	ttl := kiroImageTokenSuccessTTL
+	if !ok {
+		tokens = kiroImageTokenFallback
+		ttl = kiroImageTokenFailureTTL
+	}
+	storeImageTokenCache(key, tokens, ttl, kiroImageTokenNow())
+
+	imageTokenFetches.Lock()
+	flight.tokens = tokens
+	delete(imageTokenFetches.flights, key)
+	close(flight.done)
+	imageTokenFetches.Unlock()
+	<-imageTokenFetches.slots
+}
+
+func awaitImageTokenFlight(ctx context.Context, flight *imageTokenFlight) int {
 	select {
 	case <-ctx.Done():
 		return kiroImageTokenFallback
-	case resolved := <-result:
-		if resolved.Err != nil {
+	case <-flight.done:
+		if flight.tokens < 1 {
 			return kiroImageTokenFallback
 		}
-		tokens, ok := resolved.Val.(int)
-		if !ok || tokens < 1 {
-			return kiroImageTokenFallback
-		}
-		return tokens
+		return flight.tokens
 	}
 }
 
@@ -261,7 +327,19 @@ func validateKiroRemoteImageURL(rawURL string) (*url.URL, error) {
 			return nil, errors.New("image URL address is not public")
 		}
 	}
+	port := parsed.Port()
+	if (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		parsed.Host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		parsed.Host = "[" + host + "]"
+	} else {
+		parsed.Host = host
+	}
 	parsed.Fragment = ""
+	parsed.RawFragment = ""
 	return parsed, nil
 }
 

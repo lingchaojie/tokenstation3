@@ -191,6 +191,28 @@ func TestResolveKiroInputTokensPrefersTranslatedEstimate(t *testing.T) {
 	}
 }
 
+func TestKiroInputTokenEstimateMatchesTranslatedPayload(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"system":[{"type":"text","text":"You are helpful."}],
+		"messages":[
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"lookup","input":{"city":"Shanghai"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":[{"type":"text","text":"sunny"}]}]}
+		],
+		"tools":[{"name":"lookup","description":"Look up weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
+	}`)
+	buildResult, err := kiropkg.BuildKiroPayloadWithContext(body, kiropkg.MapModel("claude-sonnet-4-6"), "", "AI_EDITOR", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := estimateKiroInputTokens(context.Background(), body)
+	want := buildResult.Context.EstimatedInputTokens
+	if got != want {
+		t.Fatalf("Claude-body estimate = %d, translated KiroPayload estimate = %d", got, want)
+	}
+}
+
 func TestKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	if got := anthropictokenizer.CountTokens("abc def"); got != 1 {
 		t.Fatalf("english tokens = %d, want 1", got)
@@ -215,12 +237,13 @@ func TestKiroTokenCountersMatchReferenceRules(t *testing.T) {
 func TestKiroInputTokenEstimateSeparatesVisualTokensFromBase64(t *testing.T) {
 	dataURL := kiroPNGDataURL(t, 512, 512, color.RGBA{R: 37, G: 89, B: 151, A: 255})
 	body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}}]}]}`, strings.TrimPrefix(dataURL, "data:image/png;base64,")))
+	textOnlyBody := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"describe"}]}]}`)
 
 	imageTokens := 350
 	got := estimateKiroInputTokens(context.Background(), body)
-	want := anthropictokenizer.CountTokens("describe") + imageTokens
-	if got < want || got > want+50 {
-		t.Fatalf("input token estimate = %d, expected visual-aware estimate near %d", got, want)
+	textOnly := estimateKiroInputTokens(context.Background(), textOnlyBody)
+	if got-textOnly != imageTokens {
+		t.Fatalf("visual token increment = %d, want %d (total=%d text-only=%d)", got-textOnly, imageTokens, got, textOnly)
 	}
 	if got >= len(dataURL)/2 {
 		t.Fatalf("base64 payload dominated input estimate: got=%d encoded=%d", got, len(dataURL))
@@ -230,8 +253,12 @@ func TestKiroInputTokenEstimateSeparatesVisualTokensFromBase64(t *testing.T) {
 func TestKiroInputTokenEstimateImageFailureUsesFallback(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"http://169.254.169.254/latest/meta-data"}}]}]}`)
 	got := estimateKiroInputTokens(context.Background(), body)
-	if got < 1600 || got > 1650 {
-		t.Fatalf("failed image estimate = %d, want fallback near 1600", got)
+	buildResult, err := kiropkg.BuildKiroPayloadWithRequestContext(context.Background(), body, kiropkg.MapModel("claude-sonnet-4-6"), "", "AI_EDITOR", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != buildResult.Context.EstimatedInputTokens {
+		t.Fatalf("failed image estimate = %d, translated payload estimate = %d", got, buildResult.Context.EstimatedInputTokens)
 	}
 }
 
@@ -258,6 +285,10 @@ func TestKiroCacheEmulationIncludesImageTokensAndKeepsImageFingerprint(t *testin
 	prefix := strings.Repeat("cacheable visual prompt ", 700)
 	body := kiroCacheImageRequestBody(t, prefix, color.RGBA{R: 1, A: 255})
 	inputTokens := estimateKiroInputTokens(context.Background(), body)
+	profile, ok := buildKiroCacheProfile(context.Background(), body, "claude-sonnet-4-6", 0)
+	if !ok || profile.totalInputTokens != inputTokens {
+		t.Fatalf("cache fallback total = %+v, want translated estimate %d", profile, inputTokens)
+	}
 
 	first := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", inputTokens)
 	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {

@@ -205,7 +205,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		currentBody = anthropicBody
 	}
 
-	inputTokens := estimateKiroInputTokens(ctx, anthropicBody)
+	inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	searches := make([]kiropkg.SearchIndicator, 0, 2)
 	requestID := ""

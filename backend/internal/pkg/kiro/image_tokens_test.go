@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,6 +103,7 @@ func TestValidateKiroRemoteImageURLRejectsUnsafeTargets(t *testing.T) {
 		"http://[2001:db8::1]/image.png",
 		"http://[64:ff9b::a9fe:a9fe]/latest/meta-data",
 		"http://[2002:a9fe:a9fe::1]/latest/meta-data",
+		"http://[fec0::1]/image.png",
 	}
 	for _, rawURL := range unsafeURLs {
 		t.Run(rawURL, func(t *testing.T) {
@@ -151,6 +154,100 @@ func TestEstimateImageTokensRemoteURLCachesSingleflightsAndPreventsDNSRebinding(
 
 	require.Equal(t, 54, EstimateImageTokens(context.Background(), "", "http://images.example.com/image.png"))
 	require.Equal(t, int32(1), requests.Load(), "success must be cached")
+}
+
+func TestEstimateImageTokensCanonicalRemoteURLUsesFixedDigestCacheKey(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	var requests atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		requests.Add(1)
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	require.Equal(t, 54, EstimateImageTokens(context.Background(), "", "HTTP://IMAGES.EXAMPLE.COM.:80/image.png#one"))
+	require.Equal(t, 54, EstimateImageTokens(context.Background(), "", "http://images.example.com/image.png#two"))
+	require.Equal(t, int32(1), requests.Load(), "canonical-equivalent URLs must share a fetch and cache entry")
+
+	imageTokenEstimates.Lock()
+	defer imageTokenEstimates.Unlock()
+	require.Len(t, imageTokenEstimates.entries, 1)
+	for key := range imageTokenEstimates.entries {
+		require.Len(t, key, sha256.Size, "cache must retain only a fixed-size URL digest")
+	}
+}
+
+func TestEstimateImageTokensOverlongURLDoesNotEnterCache(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	overlong := "https://images.example.com/" + strings.Repeat("x", kiroImageTokenMaxURLBytes)
+
+	require.Equal(t, 1600, EstimateImageTokens(context.Background(), "", overlong))
+	imageTokenEstimates.Lock()
+	defer imageTokenEstimates.Unlock()
+	require.Empty(t, imageTokenEstimates.entries, "invalid URLs must be rejected before cache admission")
+}
+
+func TestEstimateImageTokensBoundsDistinctRemoteFetchesAndCancelsAdmissionWait(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
+	}}
+	const maxConcurrentFetches = 16
+	started := make(chan struct{}, maxConcurrentFetches*3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	var active atomic.Int32
+	var peak atomic.Int32
+	var canceledPathRequests atomic.Int32
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := peak.Load()
+			if current <= old || peak.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		if req.URL.Path == "/cancelled" {
+			canceledPathRequests.Add(1)
+		}
+		started <- struct{}{}
+		<-release
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
+
+	var wg sync.WaitGroup
+	for i := 0; i < maxConcurrentFetches*2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = EstimateImageTokens(context.Background(), "", "http://images.example.com/image-"+strconv.Itoa(i)+".png")
+		}(i)
+	}
+	for i := 0; i < maxConcurrentFetches; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the bounded fetch window to fill")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	require.Equal(t, 1600, EstimateImageTokens(ctx, "", "http://images.example.com/cancelled"))
+	require.Less(t, time.Since(startedAt), 500*time.Millisecond)
+	require.Zero(t, canceledPathRequests.Load(), "a canceled admission waiter must not start a fetch")
+	require.LessOrEqual(t, peak.Load(), int32(maxConcurrentFetches))
+
+	releaseAll()
+	wg.Wait()
 }
 
 func TestEstimateImageTokensRemoteFailureCacheExpires(t *testing.T) {
@@ -215,6 +312,21 @@ func TestEstimateImageTokensRejectsMixedPrivateDNSWithoutDialing(t *testing.T) {
 	require.Zero(t, dials.Load())
 }
 
+func TestEstimateImageTokensRejectsFEC0DNSWithoutDialing(t *testing.T) {
+	resetImageTokenEstimateStateForTest()
+	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
+		"images.example.com": {{IP: net.ParseIP("fec0::1")}},
+	}}
+	var dials atomic.Int32
+	installImageTokenNetworkHooks(t, resolver, func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("must not dial")
+	})
+
+	require.Equal(t, 1600, EstimateImageTokens(context.Background(), "", "http://images.example.com/image.png"))
+	require.Zero(t, dials.Load())
+}
+
 func TestEstimateImageTokensRejectsRedirectToPrivateTarget(t *testing.T) {
 	resetImageTokenEstimateStateForTest()
 	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
@@ -266,34 +378,48 @@ func TestEstimateImageTokensRejectsOversizedRemoteBody(t *testing.T) {
 	require.Equal(t, 1600, EstimateImageTokens(context.Background(), "", "http://images.example.com/chunked"))
 }
 
-func TestEstimateImageTokensRemoteRespectsContext(t *testing.T) {
+func TestEstimateImageTokensCallerCancellationDoesNotPoisonSharedFetch(t *testing.T) {
 	resetImageTokenEstimateStateForTest()
 	resolver := &stubImageTokenResolver{answers: map[string][]net.IPAddr{
 		"images.example.com": {{IP: net.ParseIP("8.8.8.8")}},
 	}}
-	connectionClosed := make(chan struct{})
-	installImageTokenNetworkHooks(t, resolver, func(_ context.Context, _, _ string) (net.Conn, error) {
-		client, server := net.Pipe()
-		go func() {
-			defer close(connectionClosed)
-			defer server.Close()
-			_, _ = http.ReadRequest(bufio.NewReader(server))
-			_, _ = server.Read(make([]byte, 1))
-		}()
-		return client, nil
-	})
+	pngBody := encodeImageForTokenTest(t, "png", 200, 200)
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	var fetchStartedOnce sync.Once
+	var releaseFetchOnce sync.Once
+	releaseAll := func() { releaseFetchOnce.Do(func() { close(releaseFetch) }) }
+	defer releaseAll()
+	installImageTokenNetworkHooks(t, resolver, scriptedImageTokenDialer(func(_ string, req *http.Request) *http.Response {
+		fetchStartedOnce.Do(func() { close(fetchStarted) })
+		<-releaseFetch
+		return imageTokenHTTPResponse(req, http.StatusOK, pngBody, nil)
+	}))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	require.Equal(t, 1600, EstimateImageTokens(ctx, "", "http://images.example.com/slow"))
-	require.Less(t, time.Since(started), 500*time.Millisecond)
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstResult := make(chan int, 1)
+	go func() {
+		firstResult <- EstimateImageTokens(firstCtx, "", "http://images.example.com/slow")
+	}()
+	<-fetchStarted
+
+	followerResult := make(chan int, 1)
+	go func() {
+		followerResult <- EstimateImageTokens(context.Background(), "", "http://images.example.com/slow")
+	}()
+	time.Sleep(20 * time.Millisecond)
+	startedAt := time.Now()
+	cancelFirst()
+	require.Equal(t, 1600, <-firstResult)
+	require.Less(t, time.Since(startedAt), 500*time.Millisecond, "each waiter must honor its own context")
+
+	releaseAll()
 	select {
-	case <-connectionClosed:
+	case tokens := <-followerResult:
+		require.Equal(t, 54, tokens, "the independent worker must survive the first caller cancellation")
 	case <-time.After(time.Second):
-		t.Fatal("request context cancellation did not close the connection")
+		t.Fatal("healthy follower did not receive the shared fetch result")
 	}
-	_, _, _ = imageTokenEstimateGroup.Do("http://images.example.com/slow", func() (any, error) { return nil, nil })
 }
 
 func TestImageTokenHTTPClientHasBoundedTimeout(t *testing.T) {
