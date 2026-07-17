@@ -2823,7 +2823,8 @@ import type {
   CheckMixedChannelResponse,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  KiroEndpointMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3037,7 +3038,7 @@ const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs' | 'auto'>('q')
+const kiroEndpointMode = ref<KiroEndpointMode>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)

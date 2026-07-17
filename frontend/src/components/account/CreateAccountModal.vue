@@ -3975,7 +3975,8 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  KiroEndpointMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -4326,7 +4327,7 @@ const kiroAPIRegionOptions = computed(() =>
   }).map(option => ({ ...option }))
 )
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs' | 'auto'>('q')
+const kiroEndpointMode = ref<KiroEndpointMode>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)
@@ -5251,6 +5252,12 @@ const resetForm = () => {
   kiroAPIRegion.value = DEFAULT_KIRO_API_REGION
   kiroModelMappings.value = []
   kiroCreditUnitPriceUsd.value = 0
+  mixedScheduling.value = false
+  kiroEndpointMode.value = 'q'
+  kiroCacheEmulationEnabled.value = false
+  kiroCacheEmulationRatio.value = 1
+  kiroAutoStickyEnabled.value = true
+  kiroStickyTtlSeconds.value = 3600
   resetKiroOAuthLocalState()
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null

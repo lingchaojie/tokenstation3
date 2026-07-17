@@ -119,17 +119,6 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(enSource).toContain("kiroMixedScheduling: 'Use in Anthropic /v1/messages'");
   });
 
-  it("keeps auto as an opt-in Kiro endpoint mode in direct-account payloads", () => {
-    const mixedExtraSource = source.slice(
-      source.indexOf("function buildKiroMixedExtra"),
-      source.indexOf("const buildOpenAICompactModelMapping"),
-    );
-
-    expect(source).toContain("const kiroEndpointMode = ref<'q' | 'krs' | 'auto'>('q')");
-    expect(source).toContain("{ value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') }");
-    expect(mixedExtraSource).toContain("kiro_endpoint_mode: kiroEndpointMode.value,");
-  });
-
   it("configures the Kiro API region for every direct account create flow", () => {
     const buildKiroCredentialsSource = source.slice(
       source.indexOf("const buildKiroCredentials"),

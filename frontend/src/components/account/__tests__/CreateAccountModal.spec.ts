@@ -87,6 +87,33 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `,
 })
 
+const SelectStub = defineComponent({
+  name: 'SelectStub',
+  inheritAttrs: false,
+  props: {
+    modelValue: { type: [String, Number, Boolean], default: null },
+    options: { type: Array, default: () => [] },
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <label>
+      <select
+        v-bind="$attrs"
+        :value="modelValue"
+        @change="$emit('update:modelValue', $event.target.value)"
+      >
+        <option
+          v-for="option in options"
+          :key="String(option.value)"
+          :value="option.value"
+        >
+          {{ option.label }}
+        </option>
+      </select>
+    </label>
+  `,
+})
+
 function mountModal() {
   return mount(CreateAccountModal, {
     props: { show: true, proxies: [], groups: [] },
@@ -95,7 +122,7 @@ function mountModal() {
         BaseDialog: BaseDialogStub,
         OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
         ConfirmDialog: true,
-        Select: true,
+        Select: SelectStub,
         Icon: true,
         PlatformIcon: true,
         ProxySelector: true,
@@ -112,6 +139,21 @@ async function selectButtonByText(wrapper: ReturnType<typeof mountModal>, text: 
   const button = wrapper.findAll('button').find((candidate) => candidate.text().includes(text))
   expect(button).toBeDefined()
   await button?.trigger('click')
+}
+
+function checkboxByLabel(wrapper: ReturnType<typeof mountModal>, text: string) {
+  const label = wrapper.findAll('label').find(candidate => candidate.text().includes(text))
+  expect(label, `missing checkbox label: ${text}`).toBeDefined()
+  return label!.get('input[type="checkbox"]')
+}
+
+function kiroEndpointModeSelect(wrapper: ReturnType<typeof mountModal>) {
+  const select = wrapper.findAllComponents(SelectStub).find(candidate => {
+    const options = candidate.props('options') as Array<{ value?: unknown }>
+    return options.some(option => option.value === 'auto')
+  })
+  expect(select, 'missing Kiro endpoint mode select').toBeDefined()
+  return select!.get('select')
 }
 
 async function submitApiKeyAccount(platform: 'openai' | 'anthropic', enableLongContextBilling = false) {
@@ -318,6 +360,42 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
       api_region: 'us-east-1',
     })
+  })
+
+  it('resets Kiro mixed endpoint settings across close and reopen before serializing a new account', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kiro')
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(true)
+    await kiroEndpointModeSelect(wrapper).setValue('auto')
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.stickyRouting').setValue(false)
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').setValue(true)
+    await wrapper.get('input[placeholder="1"]').setValue('0.25')
+
+    await wrapper.setProps({ show: false })
+    await flushPromises()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await selectButtonByText(wrapper, 'Kiro')
+
+    expect((checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').element as HTMLInputElement).checked).toBe(false)
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(true)
+    expect((kiroEndpointModeSelect(wrapper).element as HTMLSelectElement).value).toBe('q')
+    expect((checkboxByLabel(wrapper, 'admin.groups.kiroCache.stickyRouting').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('input[placeholder="3600"]').element as HTMLInputElement).value).toBe('3600')
+    expect((checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').element as HTMLInputElement).checked).toBe(false)
+    await checkboxByLabel(wrapper, 'admin.groups.kiroCache.enabled').setValue(true)
+    expect((wrapper.get('input[placeholder="1"]').element as HTMLInputElement).value).toBe('1')
+    await checkboxByLabel(wrapper, 'admin.accounts.kiroMixedScheduling').setValue(false)
+
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('fresh Kiro account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('ksk_fresh')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.mixed_scheduling).toBeUndefined()
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.kiro_endpoint_mode).toBeUndefined()
   })
 
   it('sends explicit false for Codex PAT import after the toggle is changed back', async () => {

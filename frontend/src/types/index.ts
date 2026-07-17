@@ -538,6 +538,7 @@ export interface PaginationConfig {
 // ==================== API Key & Group Types ====================
 
 export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok'
+export type KiroEndpointMode = 'q' | 'krs' | 'auto'
 
 // 'unified' marks a provider-agnostic key (group_binding_mode = 'auto') that the
 // backend routes to the Anthropic or OpenAI default group based on the request.
@@ -601,7 +602,7 @@ export interface Group {
   kiro_sticky_session_ttl_seconds: number
   kiro_cache_emulation_enabled: boolean
   kiro_cache_emulation_ratio: number
-  kiro_endpoint_mode?: string
+  kiro_endpoint_mode?: KiroEndpointMode
   created_at: string
   updated_at: string
 }
@@ -749,7 +750,7 @@ export interface CreateGroupRequest {
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_enabled?: boolean
   kiro_cache_emulation_ratio?: number
-  kiro_endpoint_mode?: string
+  kiro_endpoint_mode?: KiroEndpointMode
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -802,7 +803,7 @@ export interface UpdateGroupRequest {
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_enabled?: boolean
   kiro_cache_emulation_ratio?: number
-  kiro_endpoint_mode?: string
+  kiro_endpoint_mode?: KiroEndpointMode
   copy_accounts_from_group_ids?: number[]
 }
 

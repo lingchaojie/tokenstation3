@@ -3587,7 +3587,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type { AdminGroup, GroupPlatform, KiroEndpointMode, SubscriptionType } from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -3606,6 +3606,10 @@ import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import {
+  normalizeKiroEndpointMode,
+  resolveKiroEndpointModeForGroupPayload,
+} from "@/utils/kiroEndpointMode";
 import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
@@ -4084,7 +4088,7 @@ const createForm = reactive({
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 0.5,
-  kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_endpoint_mode: "q" as KiroEndpointMode,
 });
 
 // 简单账号类型（用于模型路由选择）
@@ -4438,7 +4442,7 @@ const editForm = reactive({
   kiro_auto_sticky_enabled: true,
   kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 0.5,
-  kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_endpoint_mode: "q" as KiroEndpointMode,
 });
 
 type ImagePricingFormState = {
@@ -4976,17 +4980,15 @@ const handleCreateGroup = async () => {
       requestData.kiro_sticky_session_ttl_seconds = 0;
       requestData.kiro_cache_emulation_enabled = false;
       requestData.kiro_cache_emulation_ratio = 0;
-      requestData.kiro_endpoint_mode = "q";
     } else {
       requestData.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
         requestData.kiro_sticky_session_ttl_seconds,
       );
-      requestData.kiro_endpoint_mode =
-        requestData.kiro_endpoint_mode === "krs" ||
-        requestData.kiro_endpoint_mode === "auto"
-          ? requestData.kiro_endpoint_mode
-          : "q";
     }
+    requestData.kiro_endpoint_mode = resolveKiroEndpointModeForGroupPayload(
+      requestData.platform,
+      requestData.kiro_endpoint_mode,
+    );
     await adminAPI.groups.create(requestData);
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
@@ -5071,10 +5073,9 @@ const handleEdit = async (group: AdminGroup) => {
     group.kiro_sticky_session_ttl_seconds ?? 3600;
   editForm.kiro_cache_emulation_enabled = group.kiro_cache_emulation_enabled ?? false;
   editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 0.5;
-  editForm.kiro_endpoint_mode =
-    group.kiro_endpoint_mode === "krs" || group.kiro_endpoint_mode === "auto"
-      ? group.kiro_endpoint_mode
-      : "q";
+  editForm.kiro_endpoint_mode = normalizeKiroEndpointMode(
+    group.kiro_endpoint_mode,
+  );
   resetModelsListState(editModelsListState, group.models_list_config);
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
@@ -5195,17 +5196,15 @@ const handleUpdateGroup = async () => {
       payload.kiro_sticky_session_ttl_seconds = 0;
       payload.kiro_cache_emulation_enabled = false;
       payload.kiro_cache_emulation_ratio = 0;
-      payload.kiro_endpoint_mode = "q";
     } else {
       payload.kiro_sticky_session_ttl_seconds = normalizeKiroStickySessionTTL(
         payload.kiro_sticky_session_ttl_seconds,
       );
-      payload.kiro_endpoint_mode =
-        payload.kiro_endpoint_mode === "krs" ||
-        payload.kiro_endpoint_mode === "auto"
-          ? payload.kiro_endpoint_mode
-          : "q";
     }
+    payload.kiro_endpoint_mode = resolveKiroEndpointModeForGroupPayload(
+      payload.platform,
+      payload.kiro_endpoint_mode,
+    );
     await adminAPI.groups.update(editingGroup.value.id, payload);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
