@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
@@ -9,14 +10,13 @@ import (
 const (
 	kiroEstimatedTokensPerMessage = 4
 	kiroEstimatedTokensPerTool    = 8
-	kiroEstimatedTokensPerImage   = 1600
 )
 
-func estimateKiroPayloadInputTokens(payload KiroPayload) int {
-	total := estimateKiroUserMessageTokens(payload.ConversationState.CurrentMessage.UserInputMessage)
+func estimateKiroPayloadInputTokens(ctx context.Context, payload KiroPayload) int {
+	total := estimateKiroUserMessageTokens(ctx, payload.ConversationState.CurrentMessage.UserInputMessage)
 	for _, message := range payload.ConversationState.History {
 		if message.UserInputMessage != nil {
-			total += estimateKiroUserMessageTokens(*message.UserInputMessage)
+			total += estimateKiroUserMessageTokens(ctx, *message.UserInputMessage)
 		}
 		if message.AssistantResponseMessage != nil {
 			total += estimateKiroAssistantMessageTokens(*message.AssistantResponseMessage)
@@ -25,9 +25,11 @@ func estimateKiroPayloadInputTokens(payload KiroPayload) int {
 	return max(total, 1)
 }
 
-func estimateKiroUserMessageTokens(message KiroUserInputMessage) int {
+func estimateKiroUserMessageTokens(ctx context.Context, message KiroUserInputMessage) int {
 	total := kiroEstimatedTokensPerMessage + anthropictokenizer.CountTokens(message.Content)
-	total += len(message.Images) * kiroEstimatedTokensPerImage
+	for _, image := range message.Images {
+		total += EstimateImageTokens(ctx, image.Format, image.Source.Bytes)
+	}
 	if message.UserInputMessageContext == nil {
 		return total
 	}

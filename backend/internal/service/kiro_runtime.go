@@ -267,13 +267,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		})
 		return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 	}
-	inputTokens := resolveKiroInputTokens(body, requestCtx)
+	inputTokens := resolveKiroInputTokens(ctx, body, requestCtx)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, false)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, parsed.Group, body, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
 	if err != nil {
@@ -328,9 +328,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	inputTokens := estimateKiroInputTokens(anthropicBody)
+	inputTokens := estimateKiroInputTokens(ctx, anthropicBody)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
-		cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
@@ -360,13 +360,13 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	inputTokens = resolveKiroInputTokens(anthropicBody, requestCtx)
+	inputTokens = resolveKiroInputTokens(ctx, anthropicBody, requestCtx)
 	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
 	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		stashKiroCaptureHeaders(c, resp)
 	}
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
 	pr, pw := io.Pipe()
@@ -810,13 +810,13 @@ func resetHTTPResponseBody(resp *http.Response, body []byte) {
 	resp.ContentLength = int64(len(body))
 }
 
-func estimateKiroInputTokens(body []byte) int {
+func estimateKiroInputTokens(ctx context.Context, body []byte) int {
 	if len(body) == 0 {
 		return 0
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err == nil {
-		return countKiroInputTokensFromPayload(payload)
+		return countKiroInputTokensFromPayload(ctx, payload)
 	}
 	tokens := len(body) / 4
 	if tokens == 0 {
@@ -825,11 +825,11 @@ func estimateKiroInputTokens(body []byte) int {
 	return tokens
 }
 
-func resolveKiroInputTokens(body []byte, requestCtx kiropkg.KiroRequestContext) int {
+func resolveKiroInputTokens(ctx context.Context, body []byte, requestCtx kiropkg.KiroRequestContext) int {
 	if requestCtx.EstimatedInputTokens > 0 {
 		return requestCtx.EstimatedInputTokens
 	}
-	return estimateKiroInputTokens(body)
+	return estimateKiroInputTokens(ctx, body)
 }
 
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {

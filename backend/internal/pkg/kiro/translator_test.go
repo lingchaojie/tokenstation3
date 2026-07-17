@@ -3,9 +3,12 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"math"
 	"net/http"
@@ -29,7 +32,30 @@ func TestEstimateKiroPayloadInputTokensIgnoresImageByteLength(t *testing.T) {
 	large.ConversationState.CurrentMessage.UserInputMessage.Images = []KiroImage{{
 		Format: "png", Source: KiroImageSource{Bytes: strings.Repeat("A", 16<<20)},
 	}}
-	require.Equal(t, estimateKiroPayloadInputTokens(base), estimateKiroPayloadInputTokens(large))
+	require.Equal(t, estimateKiroPayloadInputTokens(context.Background(), base), estimateKiroPayloadInputTokens(context.Background(), large))
+}
+
+func TestEstimateKiroPayloadInputTokensUsesVisualDimensions(t *testing.T) {
+	small := KiroPayload{ConversationState: KiroConversationState{
+		CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+			Images: []KiroImage{{Format: "png", Source: KiroImageSource{Bytes: encodePNGForInputTokenTest(t, 200, 200)}}},
+		}},
+	}}
+	large := small
+	large.ConversationState.CurrentMessage.UserInputMessage.Images = []KiroImage{{
+		Format: "png", Source: KiroImageSource{Bytes: encodePNGForInputTokenTest(t, 1000, 1000)},
+	}}
+
+	smallTokens := estimateKiroPayloadInputTokens(context.Background(), small)
+	largeTokens := estimateKiroPayloadInputTokens(context.Background(), large)
+	require.Equal(t, 1334-54, largeTokens-smallTokens)
+}
+
+func encodePNGForInputTokenTest(t *testing.T, width, height int) string {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, width, height))))
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 func TestBuildKiroPayloadStoresPostTranslationInputEstimate(t *testing.T) {
@@ -64,10 +90,10 @@ func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
 
 	var translatedPayload KiroPayload
 	require.NoError(t, json.Unmarshal(result.Payload, &translatedPayload))
-	withCompactedResult := estimateKiroPayloadInputTokens(translatedPayload)
+	withCompactedResult := estimateKiroPayloadInputTokens(context.Background(), translatedPayload)
 	translatedPayload.ConversationState.CurrentMessage.UserInputMessage.
 		UserInputMessageContext.ToolResults[0].Content[0].Text = ""
-	withoutCompactedResult := estimateKiroPayloadInputTokens(translatedPayload)
+	withoutCompactedResult := estimateKiroPayloadInputTokens(context.Background(), translatedPayload)
 	require.Greater(t, withCompactedResult, withoutCompactedResult)
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -50,13 +51,13 @@ type kiroCacheTracker struct {
 
 var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 
-func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
+func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
 	NormalizeGroupRuntimeFields(group)
 	cacheEnabled, cacheRatio := resolveKiroCacheEmulation(account, group)
 	if !cacheEnabled || account == nil || account.ID <= 0 || len(body) == 0 {
 		return nil
 	}
-	profile, ok := buildKiroCacheProfile(body, model, inputTokens)
+	profile, ok := buildKiroCacheProfile(ctx, body, model, inputTokens)
 	if !ok {
 		return nil
 	}
@@ -122,18 +123,18 @@ type kiroPendingBlock struct {
 	isMessageEnd  bool
 }
 
-func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCacheProfile, bool) {
+func buildKiroCacheProfile(ctx context.Context, body []byte, model string, inputTokens int) (*kiroCacheProfile, bool) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, false
 	}
-	blocks := flattenKiroCacheBlocks(payload)
+	blocks := flattenKiroCacheBlocks(ctx, payload)
 	if len(blocks) == 0 {
 		return nil, false
 	}
 	totalTokens := inputTokens
 	if totalTokens <= 0 {
-		totalTokens = countKiroInputTokensFromPayload(payload)
+		totalTokens = countKiroInputTokensFromPayload(ctx, payload)
 	}
 	prelude, err := canonicalJSON(map[string]any{
 		"model":       payload["model"],
@@ -185,7 +186,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 	return profile, true
 }
 
-func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {
+func flattenKiroCacheBlocks(ctx context.Context, payload map[string]any) []kiroPendingBlock {
 	var blocks []kiroPendingBlock
 	if tools, ok := payload["tools"].([]any); ok {
 		for toolIndex, tool := range tools {
@@ -215,7 +216,7 @@ func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {
 			block := map[string]any{"type": "text", "text": typed}
 			blocks = append(blocks, kiroPendingBlock{
 				value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": 0, "block": block},
-				tokens: countKiroMessageContentTokens(block), messageIndex: &mi, isMessageEnd: true,
+				tokens: countKiroMessageContentTokens(ctx, block), messageIndex: &mi, isMessageEnd: true,
 			})
 		case []any:
 			lastBlockIndex := len(typed) - 1
@@ -224,7 +225,7 @@ func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {
 				value := stripKiroCacheControl(rawBlock)
 				blocks = append(blocks, kiroPendingBlock{
 					value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": blockIndex, "block": value},
-					tokens: countKiroMessageContentTokens(rawBlock), breakpointTTL: extractKiroCacheTTL(rawBlock), messageIndex: &mi, isMessageEnd: blockIndex == lastBlockIndex,
+					tokens: countKiroMessageContentTokens(ctx, rawBlock), breakpointTTL: extractKiroCacheTTL(rawBlock), messageIndex: &mi, isMessageEnd: blockIndex == lastBlockIndex,
 				})
 			}
 		}
@@ -459,7 +460,7 @@ func stripKiroCacheControl(v any) any {
 	}
 }
 
-func countKiroInputTokensFromPayload(payload map[string]any) int {
+func countKiroInputTokensFromPayload(ctx context.Context, payload map[string]any) int {
 	if payload == nil {
 		return 1
 	}
@@ -474,7 +475,7 @@ func countKiroInputTokensFromPayload(payload map[string]any) int {
 			continue
 		}
 		tokens += kiroTokensPerMessage
-		tokens += countKiroMessageContentTokens(message["content"])
+		tokens += countKiroMessageContentTokens(ctx, message["content"])
 	}
 	if tools, ok := payload["tools"].([]any); ok {
 		tokens += len(tools) * kiroTokensPerTool
@@ -496,7 +497,7 @@ func countKiroSystemBlockTokens(value any) int {
 	}
 }
 
-func countKiroMessageContentTokens(value any) int {
+func countKiroMessageContentTokens(ctx context.Context, value any) int {
 	switch typed := value.(type) {
 	case nil:
 		return 0
@@ -505,10 +506,13 @@ func countKiroMessageContentTokens(value any) int {
 	case []any:
 		total := 0
 		for _, item := range typed {
-			total += countKiroMessageContentTokens(item)
+			total += countKiroMessageContentTokens(ctx, item)
 		}
 		return total
 	case map[string]any:
+		if mediaType, source, ok := kiroImageTokenSource(typed); ok {
+			return kiropkg.EstimateImageTokens(ctx, mediaType, source)
+		}
 		if text, ok := typed["text"].(string); ok {
 			return anthropictokenizer.CountTokens(text)
 		}
@@ -519,12 +523,56 @@ func countKiroMessageContentTokens(value any) int {
 			return countKiroSerializedValueTokens(input)
 		}
 		if content, ok := typed["content"]; ok {
-			return countKiroMessageContentTokens(content)
+			return countKiroMessageContentTokens(ctx, content)
 		}
 		return 0
 	default:
 		return 0
 	}
+}
+
+func kiroImageTokenSource(value map[string]any) (mediaType, source string, ok bool) {
+	kind, _ := value["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image":
+		mediaType, source = kiroImageSourceFields(value)
+		return mediaType, source, true
+	case "image_url", "input_image":
+		mediaType, source = kiroImageSourceFields(value)
+		if raw, exists := value["image_url"]; exists {
+			switch typed := raw.(type) {
+			case string:
+				source = typed
+			case map[string]any:
+				if rawURL, found := typed["url"].(string); found {
+					source = rawURL
+				}
+			}
+		}
+		return mediaType, source, true
+	default:
+		return "", "", false
+	}
+}
+
+func kiroImageSourceFields(value map[string]any) (mediaType, source string) {
+	container := value
+	if nested, ok := value["source"].(map[string]any); ok {
+		container = nested
+	}
+	for _, key := range []string{"media_type", "mediaType", "mime_type"} {
+		if candidate, ok := container[key].(string); ok && strings.TrimSpace(candidate) != "" {
+			mediaType = candidate
+			break
+		}
+	}
+	for _, key := range []string{"data", "url"} {
+		if candidate, ok := container[key].(string); ok && strings.TrimSpace(candidate) != "" {
+			source = candidate
+			break
+		}
+	}
+	return mediaType, source
 }
 
 func countKiroSerializedValueTokens(value any) int {

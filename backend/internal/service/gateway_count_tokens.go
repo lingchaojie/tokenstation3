@@ -23,6 +23,15 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
+	if isKiroDirectModeAccount(account) {
+		inputTokens := estimateKiroInputTokens(ctx, parsed.Body.Bytes())
+		if inputTokens < 1 {
+			inputTokens = 1
+		}
+		c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
+		return nil
+	}
+
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		if reqModel := parsed.Model; reqModel != "" {
@@ -84,10 +93,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
 	if account.Platform == PlatformAntigravity {
 		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
-		return nil
-	}
-	if isKiroDirectModeAccount(account) {
-		s.countTokensError(c, http.StatusNotFound, "not_found_error", "Token counting is not supported for this platform")
 		return nil
 	}
 
