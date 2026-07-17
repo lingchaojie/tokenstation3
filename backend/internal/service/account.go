@@ -1631,8 +1631,11 @@ func (a *Account) KiroEndpointMode() string {
 		return KiroEndpointModeQ
 	}
 	if a.Extra != nil {
-		if s, ok := a.Extra["kiro_endpoint_mode"].(string); ok && s == KiroEndpointModeKRS {
-			return KiroEndpointModeKRS
+		if s, ok := a.Extra["kiro_endpoint_mode"].(string); ok {
+			switch s {
+			case KiroEndpointModeKRS, KiroEndpointModeAuto:
+				return s
+			}
 		}
 	}
 	return KiroEndpointModeQ

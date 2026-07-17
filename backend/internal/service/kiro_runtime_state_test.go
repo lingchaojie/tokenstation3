@@ -424,6 +424,139 @@ func TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(t *testi
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE", account.GetCredential("profile_arn"))
 }
 
+func TestExecuteKiroUpstreamAutoFallsBackFromQ429ToKRS(t *testing.T) {
+	originalRetrySleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalRetrySleep })
+
+	account := newKiroAutoEndpointTestAccount()
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusTooManyRequests, `{"message":"rate limited"}`),
+		newJSONResponse(http.StatusOK, `{}`),
+	}}
+	svc := newKiroAutoEndpointTestService(upstream)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(
+		context.Background(), account, newKiroAutoEndpointParsedRequest(),
+		newKiroAutoEndpointPayload(t), "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "q.eu-west-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[1].URL.Host)
+	require.Equal(t, "eu-west-1", account.GetCredential("api_region"))
+	assertKiroAutoEndpointRequestProfiles(t, upstream.requests)
+}
+
+func TestExecuteKiroUpstreamAutoFallsBackAfterQRetryableResponsesExhausted(t *testing.T) {
+	originalRetrySleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalRetrySleep })
+
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			account := newKiroAutoEndpointTestAccount()
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{
+				newJSONResponse(status, `{}`),
+				newJSONResponse(status, `{}`),
+				newJSONResponse(status, `{}`),
+				newJSONResponse(http.StatusOK, `{}`),
+			}}
+			svc := newKiroAutoEndpointTestService(upstream)
+
+			resp, _, err := svc.executeKiroUpstreamWithParsed(
+				context.Background(), account, newKiroAutoEndpointParsedRequest(),
+				newKiroAutoEndpointPayload(t), "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Len(t, upstream.requests, 4)
+			for _, req := range upstream.requests[:3] {
+				require.Equal(t, "q.eu-west-1.amazonaws.com", req.URL.Host)
+			}
+			require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[3].URL.Host)
+			require.Equal(t, "eu-west-1", account.GetCredential("api_region"))
+		})
+	}
+}
+
+func TestExecuteKiroUpstreamAutoDoesNotFallbackForNonRetryable4xx(t *testing.T) {
+	account := newKiroAutoEndpointTestAccount()
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusBadRequest, `{"message":"invalid request"}`),
+	}}
+	svc := newKiroAutoEndpointTestService(upstream)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(
+		context.Background(), account, newKiroAutoEndpointParsedRequest(),
+		newKiroAutoEndpointPayload(t), "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "q.eu-west-1.amazonaws.com", upstream.requests[0].URL.Host)
+}
+
+func newKiroAutoEndpointTestAccount() *Account {
+	return &Account{
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_region":  "eu-west-1",
+			"machine_id":  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/AUTO",
+		},
+	}
+}
+
+func newKiroAutoEndpointParsedRequest() *ParsedRequest {
+	return &ParsedRequest{Group: &Group{
+		Platform:         PlatformKiro,
+		KiroEndpointMode: "auto",
+	}}
+}
+
+func newKiroAutoEndpointTestService(upstream *queuedHTTPUpstream) *GatewayService {
+	return &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+}
+
+func newKiroAutoEndpointPayload(t *testing.T) []byte {
+	t.Helper()
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return payloadBytes
+}
+
+func assertKiroAutoEndpointRequestProfiles(t *testing.T, requests []*http.Request) {
+	t.Helper()
+	require.Len(t, requests, 2)
+
+	qBody, err := io.ReadAll(requests[0].Body)
+	require.NoError(t, err)
+	krsBody, err := io.ReadAll(requests[1].Body)
+	require.NoError(t, err)
+
+	const profileARN = "arn:aws:codewhisperer:us-east-1:123456789012:profile/AUTO"
+	require.Contains(t, string(qBody), `"profileArn":"`+profileARN+`"`)
+	require.Empty(t, requests[0].Header.Get("x-amzn-kiro-profile-arn"))
+	require.Contains(t, string(krsBody), `"profileArn":"`+profileARN+`"`)
+	require.Equal(t, profileARN, requests[1].Header.Get("x-amzn-kiro-profile-arn"))
+	const machineID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.Contains(t, requests[0].Header.Get("User-Agent"), machineID)
+	require.Contains(t, requests[1].Header.Get("User-Agent"), machineID)
+}
+
 func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

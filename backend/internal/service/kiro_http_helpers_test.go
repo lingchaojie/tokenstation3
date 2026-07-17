@@ -488,10 +488,33 @@ func TestBuildKiroEndpointsKRS(t *testing.T) {
 	require.Equal(t, kiroKRSEndpointURL, endpoints[0].URL)
 }
 
+func TestBuildKiroEndpointsAuto(t *testing.T) {
+	account := &Account{Credentials: map[string]any{"api_region": "eu-west-1"}}
+	endpoints := buildKiroEndpoints(account, "auto")
+
+	require.Len(t, endpoints, 2)
+	require.Equal(t, "AmazonQ", endpoints[0].Name)
+	require.Equal(t, "https://q.eu-west-1.amazonaws.com/generateAssistantResponse", endpoints[0].URL)
+	require.Equal(t, "KiroRuntime", endpoints[1].Name)
+	require.Equal(t, kiroKRSEndpointURL, endpoints[1].URL)
+	require.Equal(t, "eu-west-1", account.GetCredential("api_region"))
+}
+
 // TestEffectiveKiroEndpointMode 验证 group 取值与兜底。
 func TestEffectiveKiroEndpointMode(t *testing.T) {
 	require.Equal(t, KiroEndpointModeQ, (*Group)(nil).EffectiveKiroEndpointMode())
 	require.Equal(t, KiroEndpointModeQ, (&Group{Platform: PlatformAnthropic, KiroEndpointMode: "krs"}).EffectiveKiroEndpointMode())
 	require.Equal(t, KiroEndpointModeKRS, (&Group{Platform: PlatformKiro, KiroEndpointMode: "krs"}).EffectiveKiroEndpointMode())
+	require.Equal(t, "auto", (&Group{Platform: PlatformKiro, KiroEndpointMode: "auto"}).EffectiveKiroEndpointMode())
 	require.Equal(t, KiroEndpointModeQ, (&Group{Platform: PlatformKiro, KiroEndpointMode: "bogus"}).EffectiveKiroEndpointMode())
+}
+
+func TestNormalizeKiroEndpointFieldsPreservesAuto(t *testing.T) {
+	group := &Group{Platform: PlatformKiro, KiroEndpointMode: "auto"}
+	normalizeKiroEndpointFields(group)
+	require.Equal(t, "auto", group.KiroEndpointMode)
+
+	unknown := &Group{Platform: PlatformKiro, KiroEndpointMode: "bogus"}
+	normalizeKiroEndpointFields(unknown)
+	require.Equal(t, KiroEndpointModeQ, unknown.KiroEndpointMode)
 }

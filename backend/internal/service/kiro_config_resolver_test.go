@@ -25,6 +25,35 @@ func TestResolveKiroEndpointMode(t *testing.T) {
 	require.Equal(t, KiroEndpointModeQ, resolveKiroEndpointMode(mixedKiroAcct, qGroup))
 }
 
+func TestResolveKiroEndpointModeAutoForMixedScheduling(t *testing.T) {
+	autoGroup := &Group{Platform: PlatformKiro, KiroEndpointMode: "auto"}
+	anthropicGroup := &Group{Platform: PlatformAnthropic}
+	mixedKiroAcct := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Extra: map[string]any{
+		"mixed_scheduling": true, "kiro_endpoint_mode": "auto",
+	}}
+
+	require.Equal(t, "auto", resolveKiroEndpointMode(mixedKiroAcct, autoGroup))
+	require.Equal(t, "auto", resolveKiroEndpointMode(mixedKiroAcct, anthropicGroup))
+}
+
+func TestResolveKiroEndpointModeAPIKeyForcesQ(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_region": "eu-west-1",
+			"api_key":    "ksk_test",
+		},
+		Extra: map[string]any{"kiro_endpoint_mode": "auto"},
+	}
+	parsed := &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: "auto"}}
+
+	require.Equal(t, KiroEndpointModeQ, kiroEndpointModeForRequest(account, parsed))
+	endpoints := buildKiroEndpoints(account, kiroEndpointModeForRequest(account, parsed))
+	require.Len(t, endpoints, 1)
+	require.Equal(t, "https://q.eu-west-1.amazonaws.com/generateAssistantResponse", endpoints[0].URL)
+}
+
 func TestResolveKiroCacheEmulation(t *testing.T) {
 	kiroGroup := &Group{Platform: PlatformKiro, KiroCacheEmulationEnabled: true, KiroCacheEmulationRatio: 1}
 	anthropicGroup := &Group{Platform: PlatformAnthropic}

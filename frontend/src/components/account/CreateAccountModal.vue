@@ -4326,7 +4326,7 @@ const kiroAPIRegionOptions = computed(() =>
   }).map(option => ({ ...option }))
 )
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs'>('q')
+const kiroEndpointMode = ref<'q' | 'krs' | 'auto'>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)
@@ -4334,6 +4334,7 @@ const kiroStickyTtlSeconds = ref(3600)
 const kiroEndpointModeOptions = computed(() => [
   { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
   { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
+  { value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') },
 ])
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 
@@ -4442,7 +4443,7 @@ function buildKiroMixedExtra(): Record<string, unknown> | undefined {
   if (!mixedScheduling.value) return undefined
   return {
     mixed_scheduling: true,
-    kiro_endpoint_mode: kiroEndpointMode.value === 'krs' ? 'krs' : 'q',
+    kiro_endpoint_mode: kiroEndpointMode.value,
     kiro_cache_emulation_enabled: kiroCacheEmulationEnabled.value,
     kiro_cache_emulation_ratio: Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0)),
     kiro_auto_sticky_enabled: kiroAutoStickyEnabled.value,

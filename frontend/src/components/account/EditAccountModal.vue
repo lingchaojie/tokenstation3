@@ -3037,7 +3037,7 @@ const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 // Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<'q' | 'krs'>('q')
+const kiroEndpointMode = ref<'q' | 'krs' | 'auto'>('q')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const kiroAutoStickyEnabled = ref(true)
@@ -3045,6 +3045,7 @@ const kiroStickyTtlSeconds = ref(3600)
 const kiroEndpointModeOptions = computed(() => [
   { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
   { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
+  { value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') },
 ])
 
 function normalizeKiroTtlSeconds(v: number): number {
@@ -3606,7 +3607,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = extra?.mixed_scheduling === true
   allowOverages.value = extra?.allow_overages === true
   // Backfill kiro mixed-scheduling config
-  kiroEndpointMode.value = extra?.kiro_endpoint_mode === 'krs' ? 'krs' : 'q'
+  kiroEndpointMode.value =
+    extra?.kiro_endpoint_mode === 'krs' || extra?.kiro_endpoint_mode === 'auto'
+      ? extra.kiro_endpoint_mode
+      : 'q'
   kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
   kiroCacheEmulationRatio.value = typeof extra?.kiro_cache_emulation_ratio === 'number' ? extra.kiro_cache_emulation_ratio : 1
   // auto-sticky 缺省视为开启（与后端/分组默认一致）：老账号无此字段时不应丢失粘性
@@ -4741,7 +4745,7 @@ const handleSubmit = async () => {
       newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
       if (mixedScheduling.value) {
         newExtra.mixed_scheduling = true
-        newExtra.kiro_endpoint_mode = kiroEndpointMode.value === 'krs' ? 'krs' : 'q'
+        newExtra.kiro_endpoint_mode = kiroEndpointMode.value
         newExtra.kiro_cache_emulation_enabled = kiroCacheEmulationEnabled.value
         newExtra.kiro_cache_emulation_ratio = Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0))
         newExtra.kiro_auto_sticky_enabled = kiroAutoStickyEnabled.value

@@ -1228,6 +1228,21 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.kiro_endpoint_mode).toBe('krs')
   })
 
+  it('preserves auto Kiro endpoint mode on edit', async () => {
+    const account = buildKiroExternalIdpAccount()
+    account.extra.kiro_endpoint_mode = 'auto'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.kiro_endpoint_mode).toBe('auto')
+  })
+
   it('defaults Anthropic OAuth model mapping to the supported Claude model list', async () => {
     const account = buildAnthropicOAuthAccount()
     updateAccountMock.mockReset()
