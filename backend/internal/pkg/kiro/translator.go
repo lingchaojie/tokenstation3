@@ -237,9 +237,9 @@ const (
 	toolUseSourceAggregate
 )
 
-type toolUseSourceCounts struct {
-	streaming int
-	aggregate int
+type toolUseSourceRecord struct {
+	digest [sha256.Size]byte
+	source toolUseSource
 }
 
 type toolUseState struct {
@@ -577,7 +577,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	thinkingBlockOpen := false
 	processedIDs := make(map[string]bool)
 	trackedToolIDs := make(map[string]struct{})
-	toolSourceCounts := make(map[[sha256.Size]byte]toolUseSourceCounts)
+	toolSourcesByID := make(map[string]toolUseSourceRecord)
 	streamingToolNames := make(map[string]string)
 	streamingToolStopped := make(map[string]bool)
 	streamingToolInputBuf := make(map[string]*strings.Builder)
@@ -702,35 +702,44 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		_, ok := trackedToolIDs[toolUseID]
 		return ok
 	}
-	consumeToolMirror := func(digest [sha256.Size]byte, source toolUseSource) bool {
-		counts := toolSourceCounts[digest]
-		switch source {
-		case toolUseSourceStreaming:
-			if counts.aggregate == 0 {
-				return false
-			}
-			counts.aggregate--
-		case toolUseSourceAggregate:
-			if counts.streaming == 0 {
-				return false
-			}
-			counts.streaming--
+	consumeSameIDToolMirror := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) bool {
+		record, ok := toolSourcesByID[toolUseID]
+		if !ok || record.source == source || record.digest != digest {
+			return false
 		}
-		if counts.streaming == 0 && counts.aggregate == 0 {
-			delete(toolSourceCounts, digest)
-		} else {
-			toolSourceCounts[digest] = counts
-		}
+		delete(toolSourcesByID, toolUseID)
 		return true
 	}
-	recordToolSource := func(digest [sha256.Size]byte, source toolUseSource) {
-		counts := toolSourceCounts[digest]
-		if source == toolUseSourceStreaming {
-			counts.streaming++
-		} else {
-			counts.aggregate++
+	consumeToolMirror := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) bool {
+		if _, ok := toolSourcesByID[toolUseID]; ok {
+			return consumeSameIDToolMirror(toolUseID, digest, source)
 		}
-		toolSourceCounts[digest] = counts
+		for outstandingID, record := range toolSourcesByID {
+			if record.source != source && record.digest == digest {
+				delete(toolSourcesByID, outstandingID)
+				return true
+			}
+		}
+		return false
+	}
+	recordToolSource := func(toolUseID string, digest [sha256.Size]byte, source toolUseSource) {
+		toolSourcesByID[toolUseID] = toolUseSourceRecord{digest: digest, source: source}
+	}
+	canReconcileStreamingTool := func(toolUseID string) bool {
+		record, ok := toolSourcesByID[toolUseID]
+		return ok && record.source == toolUseSourceAggregate
+	}
+	prepareStreamingTool := func(toolUseID string) bool {
+		if !admitToolID(toolUseID) {
+			return false
+		}
+		if processedIDs[toolUseID] {
+			if !canReconcileStreamingTool(toolUseID) {
+				return false
+			}
+			delete(streamingToolStopped, toolUseID)
+		}
+		return !streamingToolStopped[toolUseID]
 	}
 	releaseStreamingToolBuffer := func(toolUseID string) {
 		if buf := streamingToolInputBuf[toolUseID]; buf != nil {
@@ -773,9 +782,16 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if !ok {
 			return nil
 		}
-		processedIDs[toolUseID] = true
 		digest, ok := toolUseContentDigestFromJSON(responseName, inputJSON)
-		if !ok || consumeToolMirror(digest, toolUseSourceStreaming) {
+		if !ok {
+			return nil
+		}
+		if processedIDs[toolUseID] {
+			consumeSameIDToolMirror(toolUseID, digest, toolUseSourceStreaming)
+			return nil
+		}
+		processedIDs[toolUseID] = true
+		if consumeToolMirror(toolUseID, digest, toolUseSourceStreaming) {
 			return nil
 		}
 		if structuredOutput {
@@ -785,7 +801,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			if err := emitTextDelta(inputJSON, true); err != nil {
 				return err
 			}
-			recordToolSource(digest, toolUseSourceStreaming)
+			recordToolSource(toolUseID, digest, toolUseSourceStreaming)
 			return nil
 		}
 		if err := ensureMessageStart(); err != nil {
@@ -828,7 +844,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": blockIndex}); err != nil {
 			return err
 		}
-		recordToolSource(digest, toolUseSourceStreaming)
+		recordToolSource(toolUseID, digest, toolUseSourceStreaming)
 		toolBlockEmitted = true
 		_, _ = outputTextBuf.WriteString(inputJSON)
 		if stopReason == "" {
@@ -840,7 +856,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return closeStreamingTool(currentStreamingToolID)
 	}
 	bufferStreamingToolInput := func(toolUseID, name, fragment string, snapshot bool) error {
-		if !admitToolID(toolUseID) || processedIDs[toolUseID] || streamingToolStopped[toolUseID] {
+		if !prepareStreamingTool(toolUseID) {
 			return nil
 		}
 		if currentStreamingToolID != "" && currentStreamingToolID != toolUseID {
@@ -882,7 +898,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil
 	}
 	markStreamingToolInvalid := func(toolUseID, name string) error {
-		if !admitToolID(toolUseID) || processedIDs[toolUseID] || streamingToolStopped[toolUseID] {
+		if !prepareStreamingTool(toolUseID) {
 			return nil
 		}
 		if currentStreamingToolID != "" && currentStreamingToolID != toolUseID {
@@ -1010,16 +1026,23 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	emitToolUse := func(tool KiroToolUse) error {
 		structuredOutput := isStructuredOutputToolName(tool.Name, requestCtx)
 		tool.Name = normalizeResponseToolName(restoreResponseToolName(tool.Name, requestCtx))
-		if !isEmittableToolUse(tool) || !admitToolID(tool.ToolUseID) || processedIDs[tool.ToolUseID] {
+		if !isEmittableToolUse(tool) || !admitToolID(tool.ToolUseID) {
 			return nil
 		}
-		processedIDs[tool.ToolUseID] = true
 		inputJSON, ok := marshalBoundedJSONObject(tool.Input, maxStreamingToolInputBytes)
 		if !ok {
 			return nil
 		}
 		digest, ok := toolUseContentDigestFromJSON(tool.Name, inputJSON)
-		if !ok || consumeToolMirror(digest, toolUseSourceAggregate) {
+		if !ok {
+			return nil
+		}
+		if processedIDs[tool.ToolUseID] {
+			consumeSameIDToolMirror(tool.ToolUseID, digest, toolUseSourceAggregate)
+			return nil
+		}
+		processedIDs[tool.ToolUseID] = true
+		if consumeToolMirror(tool.ToolUseID, digest, toolUseSourceAggregate) {
 			return nil
 		}
 		if structuredOutput {
@@ -1029,7 +1052,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			if err := emitTextDelta(inputJSON, true); err != nil {
 				return err
 			}
-			recordToolSource(digest, toolUseSourceAggregate)
+			recordToolSource(tool.ToolUseID, digest, toolUseSourceAggregate)
 			return nil
 		}
 		if err := closeOpenStreamingTool(); err != nil {
@@ -1071,7 +1094,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex}); err != nil {
 			return err
 		}
-		recordToolSource(digest, toolUseSourceAggregate)
+		recordToolSource(tool.ToolUseID, digest, toolUseSourceAggregate)
 		toolBlockEmitted = true
 		return nil
 	}
@@ -1303,7 +1326,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			if (!structuredOutput && !isEmittableToolUse(*evt.ToolUse)) || evt.ToolUse.IsTruncated {
 				return nil
 			}
-			if !admitToolID(evt.ToolUse.ToolUseID) || processedIDs[evt.ToolUse.ToolUseID] {
+			if !admitToolID(evt.ToolUse.ToolUseID) {
 				return nil
 			}
 			discardStreamingTool(evt.ToolUse.ToolUseID)

@@ -1860,6 +1860,144 @@ func TestStreamEventStreamAsAnthropicPreservesDistinctSameContentStreamingTools(
 	require.NotContains(t, out.String(), `"id":"toolu_equal_aggregate_mirror"`)
 }
 
+func TestStreamEventStreamAsAnthropicSameIDStreamingMirrorDoesNotHideLaterAggregateCall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_same_id_stream",
+			"name":      "custom_tool",
+			"input":     `{"value":"same"}`,
+			"stop":      true,
+		},
+	}))
+	for _, id := range []string{"toolu_same_id_stream", "toolu_later_aggregate"} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"toolUses": []map[string]any{{
+					"toolUseId": id,
+					"name":      "custom_tool",
+					"input":     map[string]any{"value": "same"},
+				}},
+			},
+		}))
+	}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, 2, strings.Count(out.String(), `"type":"tool_use"`))
+	require.Contains(t, out.String(), `"id":"toolu_same_id_stream"`)
+	require.Contains(t, out.String(), `"id":"toolu_later_aggregate"`)
+}
+
+func TestStreamEventStreamAsAnthropicSameIDAggregateMirrorDoesNotHideLaterStreamingCall(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"toolUses": []map[string]any{{
+				"toolUseId": "toolu_same_id_aggregate",
+				"name":      "custom_tool",
+				"input":     map[string]any{"value": "same"},
+			}},
+		},
+	}))
+	for _, id := range []string{"toolu_same_id_aggregate", "toolu_later_stream"} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+			"toolUseEvent": map[string]any{
+				"toolUseId": id,
+				"name":      "custom_tool",
+				"input":     map[string]any{"value": "same"},
+				"stop":      true,
+			},
+		}))
+	}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, 2, strings.Count(out.String(), `"type":"tool_use"`))
+	require.Contains(t, out.String(), `"id":"toolu_same_id_aggregate"`)
+	require.Contains(t, out.String(), `"id":"toolu_later_stream"`)
+}
+
+func TestStreamEventStreamAsAnthropicSameIDDifferentContentDoesNotConsumeAnotherToolMirror(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	for _, tool := range []struct {
+		id    string
+		value string
+	}{
+		{id: "toolu_stream_alpha", value: "alpha"},
+		{id: "toolu_stream_beta", value: "beta"},
+	} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+			"toolUseEvent": map[string]any{
+				"toolUseId": tool.id,
+				"name":      "custom_tool",
+				"input":     map[string]any{"value": tool.value},
+				"stop":      true,
+			},
+		}))
+	}
+	for _, tool := range []struct {
+		id    string
+		value string
+	}{
+		{id: "toolu_stream_alpha", value: "beta"},
+		{id: "toolu_beta_mirror", value: "beta"},
+		{id: "toolu_alpha_mirror", value: "alpha"},
+	} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"toolUses": []map[string]any{{
+					"toolUseId": tool.id,
+					"name":      "custom_tool",
+					"input":     map[string]any{"value": tool.value},
+				}},
+			},
+		}))
+	}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, 2, strings.Count(out.String(), `"type":"tool_use"`))
+	require.Contains(t, out.String(), `"id":"toolu_stream_alpha"`)
+	require.Contains(t, out.String(), `"id":"toolu_stream_beta"`)
+	require.NotContains(t, out.String(), `"id":"toolu_beta_mirror"`)
+	require.NotContains(t, out.String(), `"id":"toolu_alpha_mirror"`)
+}
+
+func TestStreamEventStreamAsAnthropicInvalidStreamingToolRecoversFromSameIDAggregate(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_invalid_then_aggregate",
+			"name":      "custom_tool",
+			"input":     `{"value":`,
+			"stop":      true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"toolUses": []map[string]any{{
+				"toolUseId": "toolu_invalid_then_aggregate",
+				"name":      "custom_tool",
+				"input":     map[string]any{"value": "recovered"},
+			}},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, 1, strings.Count(out.String(), `"type":"tool_use"`))
+	require.Contains(t, out.String(), `"id":"toolu_invalid_then_aggregate"`)
+	require.JSONEq(t, `{"value":"recovered"}`, extractStreamedToolInputJSON(t, out.String(), "toolu_invalid_then_aggregate"))
+}
+
 func TestStreamEventStreamAsAnthropicCapsTrackedToolState(t *testing.T) {
 	const maxTrackedTools = 256
 	stream := bytes.NewBuffer(nil)
