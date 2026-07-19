@@ -773,6 +773,29 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 	return false, time.Hour
 }
 
+const defaultAlvinValue = true
+
+// GetAlvin returns the public alvin flag directly from the settings table.
+// Missing or invalid values use the documented true default.
+func (s *SettingService) GetAlvin(ctx context.Context) (bool, error) {
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyAlvin)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return defaultAlvinValue, nil
+		}
+		return false, fmt.Errorf("get alvin setting: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return defaultAlvinValue, nil
+	}
+}
+
 // GetPublicSettings 获取公开设置（无需登录）
 func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings, error) {
 	keys := []string{
