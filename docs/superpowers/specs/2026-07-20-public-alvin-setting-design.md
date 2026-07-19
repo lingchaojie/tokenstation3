@@ -53,10 +53,11 @@ SettingKeyAlvin = "alvin"
 
 `SettingService.InitializeDefaultSettings` 需要同时覆盖两类部署：
 
-1. 新数据库：把 `SettingKeyAlvin: "true"` 加入完整默认值 map。
-2. 已有数据库：启动时单独检查 `alvin`；仅当记录不存在时插入 `"true"`，已有值绝不覆盖。
+新数据库和已有数据库统一走 `SetIfAbsent`：使用数据库原子的
+`INSERT ... ON CONFLICT (key) DO NOTHING` 插入 `alvin=true`。`alvin` 不进入现有批量 upsert
+默认值 map，避免部分初始化数据库中的已有值被覆盖；并发启动或并发写入时也不会覆盖已有记录。
 
-默认值补齐必须是幂等操作。检查或写入发生真实数据库错误时，初始化返回错误，保持当前 setting
+默认值补齐必须是幂等操作。写入发生真实数据库错误时，初始化返回错误，保持当前 setting
 初始化链路的失败语义。
 
 ### Service 读取方法
@@ -139,7 +140,8 @@ settings.GET("/alvin", h.Setting.GetAlvin)
 - 新数据库初始化包含 `alvin=true`。
 - 已有数据库缺少 `alvin` 时补齐 `true`。
 - 已有 `alvin=false` 时不覆盖。
-- 检查或补齐默认值失败时初始化返回错误。
+- 部分初始化数据库和并发插入场景中的 `alvin=false` 均不覆盖。
+- 原子补齐默认值失败时初始化返回错误。
 
 ### Handler 与路由测试
 

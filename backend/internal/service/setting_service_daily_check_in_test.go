@@ -42,6 +42,13 @@ func (r *dailyCheckInSettingRepo) Set(_ context.Context, key, value string) erro
 	return nil
 }
 
+func (r *dailyCheckInSettingRepo) SetIfAbsent(_ context.Context, key, value string) error {
+	if _, exists := r.values[key]; !exists {
+		r.values[key] = value
+	}
+	return nil
+}
+
 func (r *dailyCheckInSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {

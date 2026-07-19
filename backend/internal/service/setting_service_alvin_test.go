@@ -13,10 +13,12 @@ import (
 
 type alvinSettingRepoStub struct {
 	SettingRepository
-	values           map[string]string
-	getValueErrors   map[string]error
-	setErrors        map[string]error
-	setMultipleError error
+	values            map[string]string
+	getValueErrors    map[string]error
+	setErrors         map[string]error
+	setIfAbsentErrors map[string]error
+	beforeSetIfAbsent func()
+	setMultipleError  error
 }
 
 func newAlvinSettingRepoStub(values map[string]string) *alvinSettingRepoStub {
@@ -25,9 +27,10 @@ func newAlvinSettingRepoStub(values map[string]string) *alvinSettingRepoStub {
 		cloned[key] = value
 	}
 	return &alvinSettingRepoStub{
-		values:         cloned,
-		getValueErrors: make(map[string]error),
-		setErrors:      make(map[string]error),
+		values:            cloned,
+		getValueErrors:    make(map[string]error),
+		setErrors:         make(map[string]error),
+		setIfAbsentErrors: make(map[string]error),
 	}
 }
 
@@ -47,6 +50,19 @@ func (r *alvinSettingRepoStub) Set(_ context.Context, key, value string) error {
 		return err
 	}
 	r.values[key] = value
+	return nil
+}
+
+func (r *alvinSettingRepoStub) SetIfAbsent(_ context.Context, key, value string) error {
+	if r.beforeSetIfAbsent != nil {
+		r.beforeSetIfAbsent()
+	}
+	if err := r.setIfAbsentErrors[key]; err != nil {
+		return err
+	}
+	if _, exists := r.values[key]; !exists {
+		r.values[key] = value
+	}
 	return nil
 }
 
@@ -149,17 +165,31 @@ func TestSettingService_InitializeDefaultSettings_PreservesExistingAlvin(t *test
 	require.Equal(t, "false", repo.values[SettingKeyAlvin])
 }
 
-func TestSettingService_InitializeDefaultSettings_ReturnsAlvinCheckError(t *testing.T) {
-	repo := newAlvinSettingRepoStub(map[string]string{
-		SettingKeyRegistrationEnabled: "true",
-	})
-	dbErr := errors.New("alvin lookup failed")
-	repo.getValueErrors[SettingKeyAlvin] = dbErr
+func TestSettingService_InitializeDefaultSettings_PreservesAlvinInPartiallyInitializedDatabase(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{SettingKeyAlvin: "false"})
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.InitializeDefaultSettings(context.Background())
 
-	require.ErrorIs(t, err, dbErr)
+	require.NoError(t, err)
+	require.Equal(t, "false", repo.values[SettingKeyAlvin])
+}
+
+func TestSettingService_InitializeDefaultSettings_DoesNotOverwriteConcurrentAlvinInsert(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+		SettingKeySiteName:            "Custom Portal",
+		SettingKeySiteSubtitle:        "Custom subtitle",
+	})
+	repo.beforeSetIfAbsent = func() {
+		repo.values[SettingKeyAlvin] = "false"
+	}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "false", repo.values[SettingKeyAlvin])
 }
 
 func TestSettingService_InitializeDefaultSettings_ReturnsAlvinBackfillError(t *testing.T) {
@@ -167,7 +197,7 @@ func TestSettingService_InitializeDefaultSettings_ReturnsAlvinBackfillError(t *t
 		SettingKeyRegistrationEnabled: "true",
 	})
 	dbErr := errors.New("alvin insert failed")
-	repo.setErrors[SettingKeyAlvin] = dbErr
+	repo.setIfAbsentErrors[SettingKeyAlvin] = dbErr
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.InitializeDefaultSettings(context.Background())

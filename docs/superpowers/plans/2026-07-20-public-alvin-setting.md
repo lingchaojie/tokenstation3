@@ -6,6 +6,8 @@
 
 **Architecture:** Keep this feature isolated from the full public-settings payload. A dedicated `SettingService.GetAlvin(context.Context) (bool, error)` reads the fixed key on every request, strictly parses `true`/`false`, and falls back to `true` only for missing or invalid values. Startup initialization creates `alvin=true` for new and existing installations without overwriting an existing row, while a public Gin handler returns a typed payload with `Cache-Control: no-store` outside the JWT route group.
 
+**Review amendment:** Startup initialization must use an atomic repository `SetIfAbsent` implemented as `INSERT ... ON CONFLICT (key) DO NOTHING`. Do not put `alvin` in the existing bulk-upsert defaults map and do not use a read-then-upsert sequence; both can overwrite a value inserted before or during startup. This amendment supersedes the Task 2 snippets below where they differ.
+
 **Tech Stack:** Go 1.26.5, Gin, ent-backed `SettingRepository`, `testify/require`, Go build-tagged unit tests.
 
 ## Global Constraints

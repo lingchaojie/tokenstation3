@@ -73,6 +73,10 @@ type SettingRepository interface {
 	Delete(ctx context.Context, key string) error
 }
 
+type settingInsertIfAbsentRepository interface {
+	SetIfAbsent(ctx context.Context, key, value string) error
+}
+
 // cachedVersionBounds 缓存 Claude Code 版本号上下限（进程内缓存，60s TTL）
 type cachedVersionBounds struct {
 	min       string // 空字符串 = 不检查
@@ -3362,14 +3366,11 @@ func (s *SettingService) UpdateAuthSourceDefaultSettings(ctx context.Context, se
 }
 
 func (s *SettingService) ensureAlvinDefault(ctx context.Context) error {
-	_, err := s.settingRepo.GetValue(ctx, SettingKeyAlvin)
-	if err == nil {
-		return nil
+	repo, ok := s.settingRepo.(settingInsertIfAbsentRepository)
+	if !ok {
+		return errors.New("initialize alvin setting: repository does not support insert-if-absent")
 	}
-	if !errors.Is(err, ErrSettingNotFound) {
-		return fmt.Errorf("check alvin setting: %w", err)
-	}
-	if err := s.settingRepo.Set(ctx, SettingKeyAlvin, strconv.FormatBool(defaultAlvinValue)); err != nil {
+	if err := repo.SetIfAbsent(ctx, SettingKeyAlvin, strconv.FormatBool(defaultAlvinValue)); err != nil {
 		return fmt.Errorf("initialize alvin setting: %w", err)
 	}
 	return nil
@@ -3427,7 +3428,6 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyCustomEndpoints:                           "[]",
 		SettingKeyAnnouncementBanners:                       "[]",
 		SettingKeyAnnouncementBannerIntervalMs:              "3000",
-		SettingKeyAlvin:                                     strconv.FormatBool(defaultAlvinValue),
 		SettingKeyWeChatConnectEnabled:                      "false",
 		SettingKeyWeChatConnectAppID:                        "",
 		SettingKeyWeChatConnectAppSecret:                    "",
@@ -3609,7 +3609,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAllowUserViewErrorRequests: "false",
 	}
 
-	return s.settingRepo.SetMultiple(ctx, defaults)
+	if err := s.settingRepo.SetMultiple(ctx, defaults); err != nil {
+		return err
+	}
+	return s.ensureAlvinDefault(ctx)
 }
 
 func (s *SettingService) migrateLegacyBrandingDefaults(ctx context.Context) error {

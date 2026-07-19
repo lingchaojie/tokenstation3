@@ -41,6 +41,23 @@ func (s *SettingRepoSuite) TestSet_Upsert() {
 	s.Require().Equal("v2", got, "upsert mismatch")
 }
 
+func (s *SettingRepoSuite) TestSetIfAbsent_DoesNotOverwriteExistingValue() {
+	s.Require().NoError(s.repo.Set(s.ctx, "insert_once", "false"), "seed existing value")
+	s.Require().NoError(s.repo.SetIfAbsent(s.ctx, "insert_once", "true"), "SetIfAbsent")
+
+	got, err := s.repo.GetValue(s.ctx, "insert_once")
+	s.Require().NoError(err, "GetValue after SetIfAbsent")
+	s.Require().Equal("false", got, "SetIfAbsent must preserve the existing value")
+}
+
+func (s *SettingRepoSuite) TestSetIfAbsent_InsertsMissingValue() {
+	s.Require().NoError(s.repo.SetIfAbsent(s.ctx, "insert_once_missing", "true"), "SetIfAbsent")
+
+	got, err := s.repo.GetValue(s.ctx, "insert_once_missing")
+	s.Require().NoError(err, "GetValue after SetIfAbsent")
+	s.Require().Equal("true", got)
+}
+
 func (s *SettingRepoSuite) TestGetValue_Missing() {
 	_, err := s.repo.GetValue(s.ctx, "nonexistent")
 	s.Require().Error(err, "expected error for missing key")

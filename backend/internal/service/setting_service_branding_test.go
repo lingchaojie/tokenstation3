@@ -30,6 +30,13 @@ func (s *settingBrandingRepoStub) Set(ctx context.Context, key, value string) er
 	return nil
 }
 
+func (s *settingBrandingRepoStub) SetIfAbsent(ctx context.Context, key, value string) error {
+	if _, exists := s.values[key]; !exists {
+		s.values[key] = value
+	}
+	return nil
+}
+
 func (s *settingBrandingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
 	out := make(map[string]string, len(keys))
 	for _, key := range keys {
