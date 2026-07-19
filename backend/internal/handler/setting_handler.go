@@ -119,6 +119,19 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 	})
 }
 
+// GetAlvin returns the public alvin boolean setting.
+// GET /api/v1/settings/alvin
+func (h *SettingHandler) GetAlvin(c *gin.Context) {
+	alvin, err := h.settingService.GetAlvin(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, dto.AlvinSettingResponse{Alvin: alvin})
+}
+
 // GetPublicModelPricing returns curated public model pricing for the homepage.
 // GET /api/v1/settings/model-pricing
 func (h *SettingHandler) GetPublicModelPricing(c *gin.Context) {
