@@ -73,6 +73,10 @@ type SettingRepository interface {
 	Delete(ctx context.Context, key string) error
 }
 
+type settingInsertIfAbsentRepository interface {
+	SetIfAbsent(ctx context.Context, key, value string) error
+}
+
 // cachedVersionBounds 缓存 Claude Code 版本号上下限（进程内缓存，60s TTL）
 type cachedVersionBounds struct {
 	min       string // 空字符串 = 不检查
@@ -771,6 +775,29 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 		return entry.enabled, entry.ttl
 	}
 	return false, time.Hour
+}
+
+const defaultAlvinValue = true
+
+// GetAlvin returns the public alvin flag directly from the settings table.
+// Missing or invalid values use the documented true default.
+func (s *SettingService) GetAlvin(ctx context.Context) (bool, error) {
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyAlvin)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return defaultAlvinValue, nil
+		}
+		return false, fmt.Errorf("get alvin setting: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return defaultAlvinValue, nil
+	}
 }
 
 // GetPublicSettings 获取公开设置（无需登录）
@@ -3338,11 +3365,25 @@ func (s *SettingService) UpdateAuthSourceDefaultSettings(ctx context.Context, se
 	return nil
 }
 
+func (s *SettingService) ensureAlvinDefault(ctx context.Context) error {
+	repo, ok := s.settingRepo.(settingInsertIfAbsentRepository)
+	if !ok {
+		return errors.New("initialize alvin setting: repository does not support insert-if-absent")
+	}
+	if err := repo.SetIfAbsent(ctx, SettingKeyAlvin, strconv.FormatBool(defaultAlvinValue)); err != nil {
+		return fmt.Errorf("initialize alvin setting: %w", err)
+	}
+	return nil
+}
+
 // InitializeDefaultSettings 初始化默认设置
 func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 检查是否已有设置
 	_, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEnabled)
 	if err == nil {
+		if err := s.ensureAlvinDefault(ctx); err != nil {
+			return err
+		}
 		// 已有设置时仍要迁移旧品牌默认值；管理员自定义值不覆盖。
 		return s.migrateLegacyBrandingDefaults(ctx)
 	}
@@ -3568,7 +3609,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAllowUserViewErrorRequests: "false",
 	}
 
-	return s.settingRepo.SetMultiple(ctx, defaults)
+	if err := s.settingRepo.SetMultiple(ctx, defaults); err != nil {
+		return err
+	}
+	return s.ensureAlvinDefault(ctx)
 }
 
 func (s *SettingService) migrateLegacyBrandingDefaults(ctx context.Context) error {

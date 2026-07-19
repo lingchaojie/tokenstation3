@@ -316,6 +316,7 @@ const (
 	SettingKeyCustomEndpoints              = "custom_endpoints"                // 自定义端点列表（JSON 数组）
 	SettingKeyAnnouncementBanners          = "announcement_banners"            // 顶部滚动公告（JSON 数组）
 	SettingKeyAnnouncementBannerIntervalMs = "announcement_banner_interval_ms" // 公告切换间隔（毫秒）
+	SettingKeyAlvin                        = "alvin"                           // 外部项目读取的公开布尔变量
 
 	// 默认配置
 	SettingKeyDefaultConcurrency      = "default_concurrency"        // 新用户默认并发量
