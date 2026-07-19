@@ -109,3 +109,68 @@ func TestSettingService_GetAlvin_ReturnsRepositoryError(t *testing.T) {
 
 	require.ErrorIs(t, err, dbErr)
 }
+
+func TestSettingService_InitializeDefaultSettings_SeedsAlvinForNewDatabase(t *testing.T) {
+	repo := newAlvinSettingRepoStub(nil)
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "true", repo.values[SettingKeyAlvin])
+}
+
+func TestSettingService_InitializeDefaultSettings_BackfillsAlvinForExistingDatabase(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+		SettingKeySiteName:            "Custom Portal",
+		SettingKeySiteSubtitle:        "Custom subtitle",
+	})
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "true", repo.values[SettingKeyAlvin])
+}
+
+func TestSettingService_InitializeDefaultSettings_PreservesExistingAlvin(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+		SettingKeySiteName:            "Custom Portal",
+		SettingKeySiteSubtitle:        "Custom subtitle",
+		SettingKeyAlvin:               "false",
+	})
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "false", repo.values[SettingKeyAlvin])
+}
+
+func TestSettingService_InitializeDefaultSettings_ReturnsAlvinCheckError(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	})
+	dbErr := errors.New("alvin lookup failed")
+	repo.getValueErrors[SettingKeyAlvin] = dbErr
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.ErrorIs(t, err, dbErr)
+}
+
+func TestSettingService_InitializeDefaultSettings_ReturnsAlvinBackfillError(t *testing.T) {
+	repo := newAlvinSettingRepoStub(map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	})
+	dbErr := errors.New("alvin insert failed")
+	repo.setErrors[SettingKeyAlvin] = dbErr
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.InitializeDefaultSettings(context.Background())
+
+	require.ErrorIs(t, err, dbErr)
+}

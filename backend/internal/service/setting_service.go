@@ -3361,11 +3361,28 @@ func (s *SettingService) UpdateAuthSourceDefaultSettings(ctx context.Context, se
 	return nil
 }
 
+func (s *SettingService) ensureAlvinDefault(ctx context.Context) error {
+	_, err := s.settingRepo.GetValue(ctx, SettingKeyAlvin)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrSettingNotFound) {
+		return fmt.Errorf("check alvin setting: %w", err)
+	}
+	if err := s.settingRepo.Set(ctx, SettingKeyAlvin, strconv.FormatBool(defaultAlvinValue)); err != nil {
+		return fmt.Errorf("initialize alvin setting: %w", err)
+	}
+	return nil
+}
+
 // InitializeDefaultSettings 初始化默认设置
 func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 检查是否已有设置
 	_, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEnabled)
 	if err == nil {
+		if err := s.ensureAlvinDefault(ctx); err != nil {
+			return err
+		}
 		// 已有设置时仍要迁移旧品牌默认值；管理员自定义值不覆盖。
 		return s.migrateLegacyBrandingDefaults(ctx)
 	}
@@ -3410,6 +3427,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyCustomEndpoints:                           "[]",
 		SettingKeyAnnouncementBanners:                       "[]",
 		SettingKeyAnnouncementBannerIntervalMs:              "3000",
+		SettingKeyAlvin:                                     strconv.FormatBool(defaultAlvinValue),
 		SettingKeyWeChatConnectEnabled:                      "false",
 		SettingKeyWeChatConnectAppID:                        "",
 		SettingKeyWeChatConnectAppSecret:                    "",
