@@ -155,7 +155,7 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 
 // NewConversationCapturePool 是 wire provider。capture 关闭时返回 nil（handler 侧已 nil 保护）；
 // ClickHouse 建连失败时降级为 noopArchiveWriter（仍可 Submit，但不落库），绝不阻塞启动、绝不影响转发。
-func NewConversationCapturePool(cfg *config.Config, repos ...CaptureHealthRepository) *ConversationCapturePool {
+func NewConversationCapturePool(cfg *config.Config, repo CaptureHealthRepository) *ConversationCapturePool {
 	if cfg == nil || !cfg.Gateway.Capture.Enabled {
 		return nil
 	}
@@ -173,8 +173,8 @@ func NewConversationCapturePool(cfg *config.Config, repos ...CaptureHealthReposi
 		writer = unavailableArchiveWriter{}
 	}
 	var reporter *captureHealthReporter
-	if len(repos) > 0 && repos[0] != nil {
-		reporter = newCaptureHealthReporter(tracker, repos[0], captureHealthReporterOptions{})
+	if repo != nil {
+		reporter = newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{})
 		reporter.Start()
 	}
 	return newConversationCapturePoolWithState(conversationCapturePoolOptions{
