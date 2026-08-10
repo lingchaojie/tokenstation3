@@ -264,10 +264,14 @@ type OpenAIForwardResult struct {
 	wsReplayInputExists bool
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse        []byte
-	CaptureTruncated       bool
-	CaptureRequestHeaders  []byte
-	CaptureResponseHeaders []byte
+	CaptureRequest          []byte
+	CaptureResponse         []byte
+	CaptureTruncated        bool
+	CaptureRequestHeaders   []byte
+	CaptureResponseHeaders  []byte
+	CaptureUpstreamEndpoint string
+	CaptureHTTPStatus       int
+	CaptureContentPolicy    *CaptureContentPolicy
 }
 
 // SetActualOpenAIUpstreamEndpoint records the endpoint selected by the current

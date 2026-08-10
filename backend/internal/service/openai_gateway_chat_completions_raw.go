@@ -175,6 +175,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 7. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		finishOpenAIHTTPCapture(resp)
 		if account.Platform == PlatformGrok {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -190,7 +191,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
+					RequestHeaders:         captureRequestHeadersFromResponse(resp),
 					ResponseHeaders:        resp.Header.Clone(),
+					UpstreamEndpoint:       captureEndpointFromResponse(resp),
+					Platform:               string(account.Platform),
 					RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 				}
 			}
@@ -214,9 +218,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	} else {
 		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
+	finishOpenAIHTTPCapture(resp)
 	if result != nil {
 		addOpenAIUsage(&result.Usage, bridgeUsage)
 		result.UpstreamEndpoint = grokChatRawEndpoint
+		if forwardErr == nil {
+			s.applyOpenAIHTTPSuccessCapture(c, account, result)
+		}
 	}
 	return result, forwardErr
 }

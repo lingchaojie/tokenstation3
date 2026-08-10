@@ -132,14 +132,15 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	Request          []byte
-	Response         []byte
-	Truncated        bool
-	RequestTruncated bool
-	RequestHeaders   []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
-	ResponseHeaders  []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
-	UpstreamEndpoint string
-	HTTPStatus       int
+	Request           []byte
+	Response          []byte
+	Truncated         bool
+	RequestTruncated  bool
+	ResponseTruncated bool
+	RequestHeaders    []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders   []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamEndpoint  string
+	HTTPStatus        int
 }
 
 func captureResultForUpdate(c *gin.Context) *captureResultBridge {
@@ -164,6 +165,11 @@ func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, l
 		return
 	}
 	bridge.Request, bridge.RequestTruncated = captureWithLimit(body, limit)
+	bridge.Response = nil
+	bridge.ResponseHeaders = nil
+	bridge.ResponseTruncated = false
+	bridge.Truncated = bridge.RequestTruncated
+	bridge.HTTPStatus = 0
 	if req == nil {
 		return
 	}
@@ -190,6 +196,7 @@ func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncate
 		return
 	}
 	bridge.Response = snapshotBytes(body)
+	bridge.ResponseTruncated = truncated
 	bridge.Truncated = bridge.RequestTruncated || truncated
 	if resp != nil {
 		bridge.HTTPStatus = resp.StatusCode
@@ -452,6 +459,14 @@ func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *U
 		}
 	}
 	rawResponse, responseTruncated := captureWithLimit(failure.ResponseBody, limit)
+	if hasBridge && bridge.Response != nil {
+		rawResponse = snapshotBytes(bridge.Response)
+		responseTruncated = bridge.ResponseTruncated
+	}
+	if requestedModel == "" {
+		requestedModel, stream, _ = extractOpenAIRequestMetaFromBody(rawRequest)
+		upstreamModel = requestedModel
+	}
 	rec := &CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         platform,

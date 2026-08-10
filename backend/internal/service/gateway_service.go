@@ -612,6 +612,7 @@ type UpstreamFailoverError struct {
 	RequestHeaders           http.Header // 最终上游请求头，仅供脱敏归档
 	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	UpstreamEndpoint         string
+	Platform                 string
 	ForceCacheBilling        bool // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount   bool // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
 	SafeToFailoverAfterWrite bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
