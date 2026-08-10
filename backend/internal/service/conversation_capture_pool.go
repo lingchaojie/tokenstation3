@@ -112,6 +112,9 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 				}
 			}()
 			extractCaptureColumns(rec)
+			if rec.ContentPolicy != nil {
+				ApplyCaptureContentPolicy(rec, *rec.ContentPolicy)
+			}
 			err := p.writer.Write(context.Background(), item)
 			if err == nil {
 				return

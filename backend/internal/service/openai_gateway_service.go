@@ -503,6 +503,15 @@ func NewOpenAIGatewayService(
 	return svc
 }
 
+// CaptureSettingService exposes the shared setting service to the HTTP handler
+// so it can prepare one request-scoped capture policy before any buffers exist.
+func (s *OpenAIGatewayService) CaptureSettingService() *SettingService {
+	if s == nil {
+		return nil
+	}
+	return s.settingService
+}
+
 func (s *OpenAIGatewayService) logOpenAICompactNonstreamKeepaliveBootstrap() {
 	interval := s.compactNonstreamKeepaliveInterval()
 	if interval <= 0 {

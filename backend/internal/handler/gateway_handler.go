@@ -162,6 +162,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.messages",

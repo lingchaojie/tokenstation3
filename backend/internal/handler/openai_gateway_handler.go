@@ -39,6 +39,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter             *imageConcurrencyLimiter
 	maxAccountSwitches       int
 	cfg                      *config.Config
+	settingService           *service.SettingService
 }
 
 const maxOpenAIFirstOutputTimeoutSwitches = 1
@@ -145,6 +146,10 @@ func NewOpenAIGatewayHandler(
 			maxAccountSwitches = cfg.Gateway.MaxAccountSwitches
 		}
 	}
+	var settingService *service.SettingService
+	if gatewayService != nil {
+		settingService = gatewayService.CaptureSettingService()
+	}
 	return &OpenAIGatewayHandler{
 		gatewayService:           gatewayService,
 		billingCacheService:      billingCacheService,
@@ -158,7 +163,15 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
+		settingService:           settingService,
 	}
+}
+
+func (h *OpenAIGatewayHandler) prepareCaptureScope(c *gin.Context, userID int64, groupID *int64) {
+	if h == nil || c == nil {
+		return
+	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, userID, groupID)
 }
 
 func (h *OpenAIGatewayHandler) captureLimit() int {
@@ -215,6 +228,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.responses",
@@ -816,6 +830,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.messages",

@@ -30,6 +30,7 @@ type CaptureRecord struct {
 	RequestHeaders   []byte // 脱敏后 JSON
 	ResponseHeaders  []byte // 脱敏后 JSON
 	Truncated        bool
+	ContentPolicy    *CaptureContentPolicy
 
 	// 以下抽取列由 worker 调用 extractCaptureColumns 填充，提交时可留空。
 	SessionID           string
@@ -131,27 +132,74 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	Response        []byte
-	Truncated       bool
-	RequestHeaders  []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
-	ResponseHeaders []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	Request          []byte
+	Response         []byte
+	Truncated        bool
+	RequestTruncated bool
+	RequestHeaders   []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders  []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamEndpoint string
+	HTTPStatus       int
+}
+
+func captureResultForUpdate(c *gin.Context) *captureResultBridge {
+	if c == nil {
+		return nil
+	}
+	if value, ok := c.Get(captureResultContextKey); ok {
+		if bridge, valid := value.(*captureResultBridge); valid && bridge != nil {
+			return bridge
+		}
+	}
+	bridge := &captureResultBridge{}
+	c.Set(captureResultContextKey, bridge)
+	return bridge
+}
+
+// SetCaptureOutboundRequest snapshots the actual post-mapping request sent to
+// the provider. Callers must guard this with CaptureMayApplyFor.
+func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, limit int) {
+	bridge := captureResultForUpdate(c)
+	if bridge == nil {
+		return
+	}
+	bridge.Request, bridge.RequestTruncated = captureWithLimit(body, limit)
+	if req == nil {
+		return
+	}
+	bridge.RequestHeaders = redactHTTPHeader(req.Header)
+	if req.URL != nil {
+		bridge.UpstreamEndpoint = req.URL.String()
+	}
+}
+
+// ResetCaptureExchange clears snapshots from an intermediate failover attempt.
+func ResetCaptureExchange(c *gin.Context) {
+	if c != nil {
+		c.Set(captureResultContextKey, nil)
+	}
 }
 
 // setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
 // resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
 // 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
 func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncated bool) {
-	if c == nil {
+	bridge := captureResultForUpdate(c)
+	if bridge == nil {
 		return
 	}
-	bridge := &captureResultBridge{Response: body, Truncated: truncated}
+	bridge.Response = snapshotBytes(body)
+	bridge.Truncated = bridge.RequestTruncated || truncated
 	if resp != nil {
-		if resp.Request != nil {
+		bridge.HTTPStatus = resp.StatusCode
+		if resp.Request != nil && len(bridge.RequestHeaders) == 0 {
 			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+			if resp.Request.URL != nil && bridge.UpstreamEndpoint == "" {
+				bridge.UpstreamEndpoint = resp.Request.URL.String()
+			}
 		}
 		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
 	}
-	c.Set(captureResultContextKey, bridge)
 }
 
 // takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
@@ -366,4 +414,24 @@ func extractCaptureColumns(rec *CaptureRecord) {
 	rec.CacheReadTokens = cols.CacheReadTokens
 	rec.CacheCreationTokens = cols.CacheCreationTokens
 	rec.SignaturePresent = cols.SignaturePresent
+}
+
+// ApplyCaptureContentPolicy clears disabled persistence fields. Call it only
+// after extractCaptureColumns so searchable metadata survives body suppression.
+func ApplyCaptureContentPolicy(rec *CaptureRecord, policy CaptureContentPolicy) {
+	if rec == nil {
+		return
+	}
+	if !policy.RawRequest {
+		rec.RawRequest = nil
+	}
+	if !policy.RawResponse {
+		rec.RawResponse = nil
+	}
+	if !policy.RequestHeaders {
+		rec.RequestHeaders = nil
+	}
+	if !policy.ResponseHeaders {
+		rec.ResponseHeaders = nil
+	}
 }
