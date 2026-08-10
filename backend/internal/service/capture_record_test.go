@@ -1,9 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildErrorCaptureRecord(t *testing.T) {
@@ -41,6 +46,52 @@ func TestBuildErrorCaptureRecord(t *testing.T) {
 	if string(rec2.RawResponse) != "0123" || !rec2.Truncated {
 		t.Fatalf("truncation failed: %q trunc=%v", rec2.RawResponse, rec2.Truncated)
 	}
+}
+
+func TestBuildTerminalErrorCaptureRecordUsesFinalExchangeAndPolicy(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Outcomes.TerminalError = true
+	policy.Content.RawResponse = false
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.test/v1/messages", bytes.NewReader(nil))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer secret")
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"final-model"}`), 1024)
+
+	rec := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, &UpstreamFailoverError{
+		StatusCode:      http.StatusTooManyRequests,
+		ResponseBody:    []byte(`{"error":{"message":"busy"}}`),
+		ResponseHeaders: http.Header{"X-Request-Id": []string{"req-final"}},
+	}, 1024)
+	require.NotNil(t, rec)
+	require.Equal(t, http.StatusTooManyRequests, rec.HTTPStatus)
+	require.Equal(t, "https://api.example.test/v1/messages", rec.UpstreamEndpoint)
+	require.JSONEq(t, `{"model":"final-model"}`, string(rec.RawRequest))
+	require.NotContains(t, string(rec.RequestHeaders), "secret")
+	require.NotNil(t, rec.ContentPolicy)
+	require.False(t, rec.ContentPolicy.RawResponse)
+}
+
+func TestBuildTerminalErrorCaptureRecordSkipsLocalOrDisabledOutcomes(t *testing.T) {
+	failure := &UpstreamFailoverError{StatusCode: http.StatusTooManyRequests, ResponseBody: []byte("busy")}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, 1024), "local error has no exchange evidence")
+
+	policy.Outcomes.TerminalError = false
+	compiled, err = CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	failure.UpstreamEndpoint = "https://api.example.test/v1/messages"
+	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, 1024))
 }
 
 func TestSnapshotBytesCopiesInput(t *testing.T) {

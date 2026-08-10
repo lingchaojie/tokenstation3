@@ -415,14 +415,20 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		}
 	}
 	if shouldDisable {
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body}
+		return nil, &UpstreamFailoverError{
+			StatusCode:       resp.StatusCode,
+			ResponseBody:     body,
+			RequestHeaders:   captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:  resp.Header.Clone(),
+			UpstreamEndpoint: captureEndpointFromResponse(resp),
+		}
 	}
 
 	MarkResponseCommitted(c)
 
 	// 归档采集（错误响应）：仅在此终态提交——failover 重试路径在上面 shouldDisable 分支已返回，
 	// 不会走到这里，故不会归档中间重试。drop-safe，绝不影响转发。
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError); s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
 		var reqBody []byte
 		requestedModel := ""
 		stream := false
@@ -438,7 +444,8 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		// 错误路径通常无模型映射信息；用请求模型兼作 upstream_model 占位。
 		upstreamModel := requestedModel
 		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), requestedModel, upstreamModel, "", stream, reqBody, body, limit); rec != nil {
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), requestedModel, upstreamModel, captureEndpointFromResponse(resp), stream, reqBody, body, limit); rec != nil {
+			rec.ContentPolicy = &content
 			s.capturePool.Submit(rec)
 		}
 	}
@@ -696,7 +703,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	// 归档采集：仅 gateway.capture.enabled=true 时在上游 SSE 读取 goroutine 里逐行累积原始字节。
 	// tee 加锁保护；此 defer 在函数返回时读取已到达的字节写入 gin.Context 桥，供上层 Forward 组装。
 	var tee *sseTee
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
 		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
 	}
@@ -1033,6 +1040,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return nil, &UpstreamFailoverError{
 						StatusCode:             http.StatusBadGateway,
 						ResponseBody:           body,
+						RequestHeaders:         captureRequestHeadersFromResponse(resp),
+						ResponseHeaders:        resp.Header.Clone(),
+						UpstreamEndpoint:       captureEndpointFromResponse(resp),
 						RetryableOnSameAccount: true,
 					}
 				}
@@ -1452,7 +1462,7 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 
 	// 归档采集：在任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整）之前，
 	// 快照上游原始响应体，保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
 		setCaptureResult(c, resp, capturedResp, truncated)
 	}

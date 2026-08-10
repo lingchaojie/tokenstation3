@@ -177,6 +177,7 @@ func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, l
 func ResetCaptureExchange(c *gin.Context) {
 	if c != nil {
 		c.Set(captureResultContextKey, nil)
+		c.Set(kiroCaptureHeadersContextKey, nil)
 	}
 }
 
@@ -369,8 +370,8 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 	if len(reqBody) == 0 && len(respBody) == 0 {
 		return nil
 	}
-	rawReq, _ := captureWithLimit(reqBody, limit)
-	rawResp, truncated := captureWithLimit(respBody, limit)
+	rawReq, requestTruncated := captureWithLimit(reqBody, limit)
+	rawResp, responseTruncated := captureWithLimit(respBody, limit)
 	rec := &CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         platform,
@@ -380,7 +381,7 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 		Stream:           stream,
 		RawRequest:       rawReq,
 		RawResponse:      rawResp,
-		Truncated:        truncated,
+		Truncated:        requestTruncated || responseTruncated,
 	}
 	if resp != nil {
 		rec.HTTPStatus = resp.StatusCode
@@ -389,6 +390,86 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 			rec.RequestHeaders = redactHTTPHeader(resp.Request.Header)
 		}
 		rec.ResponseHeaders = redactHTTPHeader(resp.Header)
+	}
+	return rec
+}
+
+func captureEndpointFromResponse(resp *http.Response) string {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return ""
+	}
+	return resp.Request.URL.String()
+}
+
+func captureRequestHeadersFromResponse(resp *http.Response) http.Header {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	return resp.Request.Header.Clone()
+}
+
+// BuildTerminalErrorCaptureRecord materializes only a final upstream HTTP
+// failure. A request snapshot or explicit upstream endpoint is required, which
+// excludes local scheduling/cooldown errors that merely reuse HTTP-like codes.
+func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *UpstreamFailoverError, limit int) *CaptureRecord {
+	if c == nil || failure == nil || failure.StatusCode <= 0 || len(failure.ResponseBody) == 0 {
+		return nil
+	}
+	content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeTerminalError)
+	if !enabled {
+		return nil
+	}
+	bridge, hasBridge := takeCaptureResult(c)
+	if !hasBridge && strings.TrimSpace(failure.UpstreamEndpoint) == "" {
+		return nil
+	}
+
+	var requestedModel, upstreamModel string
+	var stream bool
+	var fallbackRequest []byte
+	if value, ok := c.Get("parsed_request"); ok {
+		if parsed, valid := value.(*ParsedRequest); valid && parsed != nil {
+			requestedModel = parsed.Model
+			upstreamModel = parsed.Model
+			stream = parsed.Stream
+			if parsed.Body != nil {
+				fallbackRequest = parsed.Body.Bytes()
+			}
+		}
+	}
+
+	rawRequest, requestTruncated := captureWithLimit(fallbackRequest, limit)
+	endpoint := strings.TrimSpace(failure.UpstreamEndpoint)
+	requestHeaders := redactHTTPHeader(failure.RequestHeaders)
+	if hasBridge {
+		if bridge.Request != nil {
+			rawRequest = snapshotBytes(bridge.Request)
+			requestTruncated = bridge.RequestTruncated
+		}
+		requestHeaders = snapshotBytes(bridge.RequestHeaders)
+		if endpoint == "" {
+			endpoint = bridge.UpstreamEndpoint
+		}
+	}
+	rawResponse, responseTruncated := captureWithLimit(failure.ResponseBody, limit)
+	rec := &CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         platform,
+		RequestID:        failure.ResponseHeaders.Get("x-request-id"),
+		RequestedModel:   requestedModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: endpoint,
+		Stream:           stream,
+		HTTPStatus:       failure.StatusCode,
+		RawRequest:       rawRequest,
+		RawResponse:      rawResponse,
+		RequestHeaders:   requestHeaders,
+		ResponseHeaders:  redactHTTPHeader(failure.ResponseHeaders),
+		Truncated:        requestTruncated || responseTruncated,
+		ContentPolicy:    &content,
+	}
+	if rec.RequestID == "" {
+		rec.RequestID = CaptureRequestID("")
 	}
 	return rec
 }

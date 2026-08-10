@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -75,4 +76,14 @@ func CaptureMayApplyFor(c *gin.Context, platform string) bool {
 	}
 	_, ok := CaptureDecisionFor(c, platform, CaptureOutcomeTerminalError)
 	return ok
+}
+
+func (s *GatewayService) captureOutboundRequest(c *gin.Context, account *Account, req *http.Request, body []byte) {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil {
+		return
+	}
+	if !CaptureMayApplyFor(c, string(account.Platform)) {
+		return
+	}
+	SetCaptureOutboundRequest(c, req, body, s.cfg.Gateway.Capture.MaxBodyBytes)
 }

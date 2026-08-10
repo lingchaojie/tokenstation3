@@ -101,7 +101,7 @@ func TestHandleNonStreamingResponse_CaptureDisabledLeavesNoContextResult(t *test
 		rateLimitService: &RateLimitService{},
 	}
 
-	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
 	capturedResp, truncated := takeCaptureResult(c)
@@ -114,6 +114,7 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	setCaptureScopeForPlatformTest(t, c, true, true)
 
 	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
@@ -129,13 +130,47 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 		rateLimitService: &RateLimitService{},
 	}
 
-	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
 	bridge, ok := takeCaptureResult(c)
 	require.True(t, ok)
 	require.False(t, bridge.Truncated)
 	require.JSONEq(t, string(body), string(bridge.Response))
+}
+
+func TestHandleNonStreamingResponse_RuntimePlatformOffAllocatesNoCaptureResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	setCaptureScopeForPlatformTest(t, c, true, false)
+
+	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1024
+	svc := &GatewayService{cfg: cfg, rateLimitService: &RateLimitService{}}
+
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	_, ok := takeCaptureResult(c)
+	require.False(t, ok)
+}
+
+func setCaptureScopeForPlatformTest(t *testing.T, c *gin.Context, enabled, anthropic bool) {
+	t.Helper()
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = enabled
+	policy.Platforms.Anthropic = anthropic
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 1, nil)
 }
 
 func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxTriggersFailover(t *testing.T) {
