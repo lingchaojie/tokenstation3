@@ -201,6 +201,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
+		s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, body)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
@@ -216,6 +217,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			return nil, transportErr
 		}
+		s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 		if resp.StatusCode < 400 {
 			break
 		}
@@ -223,6 +225,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// Peek only to identify an invalid task. Restore the body so the existing
 		// passthrough error handling sees the same response after recovery fails.
 		probeBody := s.readUpstreamErrorBody(resp)
+		finishOpenAIHTTPCapture(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
 		if openAICompactKeepaliveCommitted(c) {
@@ -263,6 +266,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		stopCompactKeepalive()
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 		if err != nil {
+			finishOpenAIHTTPCapture(resp)
 			return nil, err
 		}
 		usage = result.usage
@@ -274,6 +278,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	} else {
 		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel, stopCompactKeepalive)
 		if err != nil {
+			finishOpenAIHTTPCapture(resp)
 			return nil, err
 		}
 		usage = result.usage
@@ -282,6 +287,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageOutputSizes = result.imageOutputSizes
 		imageResults = result.imageResults
 	}
+	finishOpenAIHTTPCapture(resp)
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
@@ -316,14 +322,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
 	}
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
-			forwardResult.CaptureResponse = bridge.Response
-			forwardResult.CaptureTruncated = bridge.Truncated
-			forwardResult.CaptureRequestHeaders = bridge.RequestHeaders
-			forwardResult.CaptureResponseHeaders = bridge.ResponseHeaders
-		}
-	}
+	s.applyOpenAIHTTPSuccessCapture(c, account, forwardResult)
 	return forwardResult, nil
 }
 
@@ -630,10 +629,14 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		UpstreamResponseBody: upstreamDetail,
 	})
 	return &UpstreamFailoverError{
-		StatusCode:             resp.StatusCode,
-		ResponseBody:           body,
-		ResponseHeaders:        resp.Header.Clone(),
-		RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+		StatusCode:              resp.StatusCode,
+		ResponseBody:            body,
+		RequestHeaders:          captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:         resp.Header.Clone(),
+		UpstreamEndpoint:        captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse: true,
+		Platform:                string(account.Platform),
+		RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 	}
 }
 
@@ -700,14 +703,7 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
 	}
 
-	// 归档采集（错误响应）：终态提交，drop-safe，绝不影响转发。
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		reqModel, stream, _ := extractOpenAIRequestMetaFromBody(requestBody)
-		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), reqModel, reqModel, "", stream, requestBody, body, limit); rec != nil {
-			s.capturePool.Submit(rec)
-		}
-	}
+	s.submitOpenAIHTTPTerminalCapture(c, account, resp)
 
 	return fmt.Errorf("upstream error: %d (client response sanitized)", resp.StatusCode)
 }
@@ -1141,12 +1137,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		return nil, errors.New("streaming not supported")
 	}
 
-	var tee *sseTee
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
-	}
-
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	retainImageResults := hasWebChatStreamCapture(ctx)
@@ -1213,9 +1203,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for documentScanner.Scan() {
 		line := documentScanner.Text()
-		if tee != nil {
-			tee.appendLine(line)
-		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
@@ -1413,10 +1400,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 
 	// 归档采集：在任何改写（model 名还原、SSE→JSON 转换）之前，快照上游原始响应体，
 	// 保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, capturedResp, truncated)
-	}
 
 	// Detect SSE responses from upstream and convert to JSON.
 	// Some upstreams (e.g. other sub2api instances) may return SSE even when

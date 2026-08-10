@@ -2,7 +2,7 @@
 
 本文档说明如何部署一台**远端、独立**的 ClickHouse，并把网关的「上游模型调用全量归档」无缝接入。
 
-- 关联设计：`superpowers/specs/2026-07-07-model-call-archive-design.md`、`superpowers/specs/2026-07-08-capture-translated-paths-design.md`
+- 关联设计：`superpowers/specs/2026-07-07-model-call-archive-design.md`、`superpowers/specs/2026-07-08-capture-translated-paths-design.md`、`superpowers/specs/2026-08-11-capture-settings-openai-http-design.md`
 - 配置示例：`deploy/config.example.yaml` 的 `gateway.capture` 段
 - 相关代码：`backend/internal/service/clickhouse_archive_writer.go`、`conversation_capture_pool.go`、`capture_byte_gauge.go`
 
@@ -10,14 +10,15 @@
 
 ## 1. 它是什么 / 不是什么
 
-- 是：与转发/计费**完全隔离的第三条异步通道**，把每次上游调用的原始 request+response 逐字异步写入远端 ClickHouse，供离线二次开发。
+- 是：与转发/计费**完全隔离的第三条异步通道**。每个符合运行时策略且已完成的最终上游调用产生一条归档记录，异步写入远端 ClickHouse，供离线二次开发。
 - 不是：不参与转发决策、不影响计费、不阻塞热路径。任何归档侧故障（库宕、慢、队列满）都被 drop / recover / no-op 降级吸收。
-- 默认**关闭**（`gateway.capture.enabled=false`），关时零成本。
+- 静态 provisioning 默认**关闭**（`gateway.capture.enabled=false`）；即使静态启用，管理员页面里的运行时总开关也默认关闭，OpenAI 平台开关也默认关闭。
 
 ```
 转发主路径 ──► 客户端        (不受归档影响)
-     └─ tap ─► 有界内存队列(条数+字节双限, overflow=drop)
-                 └─ worker: 抽取列 ─► 批量 INSERT ─► 远端 ClickHouse
+     └─ tap ─► 一级有界队列 ─► worker: 抽取列 ─► 二级写入队列
+                  └──────── 全链路 max_queue_bytes ────────┘
+                                      └─ 非空批次 INSERT ─► 远端 ClickHouse
 ```
 
 ---
@@ -128,19 +129,21 @@ GRANT CREATE TABLE, INSERT, SELECT ON llm_archive.* TO archiver;
 
 ## 5. 网关接入配置
 
-在网关 `config.yaml` 填 `gateway.capture`（完整字段见下表 §6）：
+在网关 `config.yaml` 填 `gateway.capture`（完整字段见下表 §6）。以下是 **2 GiB 应用机的保守起始值**；它不会修改现有正式服，部署后应根据管理页的队列峰值和丢失计数调优：
 
 ```yaml
 gateway:
   capture:
-    enabled: true
+    enabled: false                       # 先配置凭据；确认后改 true 并重启
     max_body_bytes: 8388608          # 8MB 单条原文上限
-    max_queue_bytes: 1073741824      # 1GiB 在途内存上界；0=不限
-    queue_size: 8192
-    worker_count: 4
+    max_queue_bytes: 134217728       # 128MiB 全链路在途正文上界；0=不限
+    queue_size: 512
+    worker_count: 2
+    writer_queue_size: 1024
     overflow_policy: drop            # 满时丢弃，绝不阻塞转发
-    batch_max_size: 200
-    batch_max_interval_ms: 1000
+    overflow_sample_percent: 0
+    batch_max_size: 100
+    batch_max_interval_ms: 2000
     clickhouse:
       addr: ["ch.internal.example.com:9000"]   # TLS 时用 :9440
       database: llm_archive
@@ -156,21 +159,26 @@ gateway:
 
 多副本：`addr` 可填多个 `["ch1:9000","ch2:9000"]`，clickhouse-go 会做连接级负载/故障转移。
 
+YAML 只负责 ClickHouse、队列和批量参数等静态 provisioning。改为 `enabled: true` 并重启、确认管理页显示“已就绪”后，再到管理员左侧 **转存设置** 打开运行时总开关及平台/结果/内容/用户/分组范围。运行时策略保存后立即生效，无需重启；OpenAI 默认仍为关闭。
+
+首次进入页面时的运行时默认值为：总开关关闭；Anthropic/Kiro 平台开启、OpenAI 关闭；成功和最终上游错误开启；四类正文/头字段开启；用户和分组范围为空。总开关、平台、用户和分组会在热路径尽早过滤，最终结果类型再决定是否提交该条记录。
+
 ---
 
 ## 6. 配置字段速查
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | `false` | 总开关。关时零成本（不装 tee、不分配 buffer） |
+| `enabled` | `false` | 静态 provisioning 开关。关闭时不初始化 ClickHouse/pool；它不是管理页里的运行时总开关 |
 | `max_body_bytes` | `8388608` (8MB) | 单条 request/response 原文上限，超出截断并标 `is_truncated=1` |
 | `max_queue_bytes` | `1073741824` (1GiB) | 在途 record 总字节上界；`0`=不限；非 0 必须 `>= max_body_bytes`（否则启动校验失败） |
 | `queue_size` | `8192` | pond 队列条数上限 |
-| `worker_count` | `4` | 抽取+写入 worker 数 |
+| `worker_count` | `4` | 从一级队列抽取列并非阻塞送入二级队列的 worker 数 |
+| `writer_queue_size` | `1024` | worker 后、ClickHouse batcher 前的二级队列条数上限 |
 | `overflow_policy` | `drop` | 满时策略：`drop` / `sample`。**禁止 `sync`**（校验拦截，归档不得反压转发） |
 | `overflow_sample_percent` | `0` | `sample` 策略下入队概率(1-100) |
 | `batch_max_size` | `200` | 批量 INSERT 行数上限 |
-| `batch_max_interval_ms` | `1000` | 批量时间窗(ms)，未满也会按时 flush |
+| `batch_max_interval_ms` | `1000` | 非空批次未满时的最长等待时间；空闲时不发送空 INSERT |
 | `clickhouse.addr` | — | `["host:port"]`，enabled 时必填。明文 9000 / TLS 9440 |
 | `clickhouse.database` | `llm_archive` | enabled 时必填，**需预先建库** |
 | `clickhouse.table` | `model_call_archive` | 自动建表 |
@@ -181,16 +189,17 @@ gateway:
 | `clickhouse.dial_timeout_ms` | `2000` | 建连/Ping 超时 |
 | `clickhouse.read_timeout_ms` | `10000` | 读/建表/发送批次超时 |
 
-启动校验（`enabled=true` 时）：`addr` 非空 + `database` 非空；`overflow_policy ∈ {drop,sample}`；`compression ∈ {lz4,zstd,none,空}`；`max_body_bytes/queue_size/worker_count/batch_max_size > 0`；`max_queue_bytes >= 0` 且（非 0 时）`>= max_body_bytes`。任一不满足则**启动失败**（fail-fast，不会静默跑错配置）。
+启动校验（`enabled=true` 时）：`addr` 非空 + `database` 非空；`overflow_policy ∈ {drop,sample}`；`compression ∈ {lz4,zstd,none,空}`；`max_body_bytes/queue_size/worker_count/writer_queue_size/batch_max_size > 0`；`max_queue_bytes >= 0` 且（非 0 时）`>= max_body_bytes`。任一不满足则**启动失败**（fail-fast，不会静默跑错配置）。
 
 ---
 
 ## 7. 接入验证（Checklist）
 
 1. **建库已完成**：`SHOW DATABASES` 含 `llm_archive`。
-2. **启动网关**，日志无 `capture.clickhouse_init_failed_degrade_noop`（有则表示建连/建表失败，已降级为 no-op，不落库）。
-3. **打一次真实请求**（Anthropic 原生或 Kiro 账号）。
-4. **回读**：
+2. 把 YAML 的 `gateway.capture.enabled` 改为 `true` 并**重启网关**。日志应无 `capture.clickhouse_init_failed_degrade_noop`。
+3. 打开管理员左侧 **转存设置**：确认基础设施为“已就绪”，开启运行时总开关和要验证的平台。OpenAI 需显式打开；它不依赖 `openai_passthrough`。
+4. **打一次真实、受支持的请求**（Anthropic、Kiro，或 OpenAI 的 `/v1/responses`、`/v1/chat/completions`、`/v1/messages`）。
+5. **回读**：
    ```sql
    SELECT captured_at, platform, stream, http_status,
           session_id, thinking_effort, signature_present, is_truncated,
@@ -198,9 +207,32 @@ gateway:
    FROM llm_archive.model_call_archive
    ORDER BY captured_at DESC LIMIT 10;
    ```
-5. 有行进来即接入成功。若无：
+6. 有行进来即接入成功。若无：
    - 查网关日志 `capture.clickhouse.send_failed` / `prepare_batch_failed` / `append_failed`。
    - 确认账号有 `INSERT`；确认 `max_queue_bytes >= max_body_bytes`；确认 `addr`/`secure`/端口匹配。
+   - 确认运行时总开关、平台、结果、用户和分组范围均命中。
+
+### 7.1 它是否每秒写一次 DB？
+
+不是。每个符合策略且完成的最终调用会立即尝试进入一级队列；worker 抽取元数据后立即把它交给二级写入队列。`batch_max_interval_ms` 只是**已有非空批次**的最长等待时间：达到 `batch_max_size` 会提前发送，而没有任何记录时 ticker 不会执行空 INSERT。因此 `2000` 不代表服务每两秒写一次 ClickHouse，也不代表每秒向 worker 放一条记录。
+
+### 7.2 丢失是否可见？
+
+可见。管理员 **转存设置** 页面每 15 秒刷新当前进程的提交、接收、成功写入、丢失条数/字节数、启动/最近成功/最近丢失时间、最后丢失原因、两级队列和全链路在途字节，并显示最近 100 条进程内丢失事件。每条事件和历史行同时显示当时的两级队列及在途字节峰值；左侧导航在出现尚未查看的丢失时显示告警点。
+
+分钟级丢失聚合同时异步 upsert 到 PostgreSQL `capture_health_events`，保留最近 30 天，可按 24 小时、7 天、30 天查看；只保存计数、队列峰值和脱敏错误摘要，不保存 request/response 正文。可见的原因包括：
+
+- `byte_budget_exceeded`
+- `worker_queue_full`
+- `writer_queue_full`
+- `writer_unavailable`
+- `clickhouse_prepare_failed`
+- `clickhouse_append_failed`
+- `clickhouse_send_failed`
+
+历史 reporter 的 PostgreSQL 待重试聚合也有明确上限：最多保留 4096 个分钟/原因 bucket，每次最多重试 256 个最旧 bucket。持续故障导致上限被占满时会淘汰最旧 bucket；这只会影响“丢失历史”本身，不影响 ClickHouse 中已写入的正文。淘汰次数通过页面的“历史聚合淘汰”指标和 `capture.health_history_pending_overflow` 日志可见。页面和持久历史只保存预定义的安全错误分类，不会显示 ClickHouse DSN、密码或内部地址。
+
+转存设计没有本地磁盘 spool。任何上述失败都可能造成归档缺失，但不会阻塞或中断用户请求。
 
 ---
 
@@ -210,7 +242,8 @@ gateway:
 - 粗估：日调用量 N，平均单条原文 S（压缩前），压缩比 4x → 日增磁盘 ≈ `N × S × 2 / 4`（req+resp）。
   - 例：100 万次/日、平均 20KB → ≈ `1e6 × 20KB × 2 / 4` ≈ **10 GB/日**。
 - 按 `toYYYYMM(captured_at)` 分区，方便按月 `DROP PARTITION` 清理。
-- 内存上界：在途 ≤ `max_queue_bytes`(1GiB) + batchCh(`batch_max_size×4`,最小1024条) + 在途 batch(≤`batch_max_size`)。ClickHouse 变慢时队列满即 drop，不会无界增长。
+- 正文内存上界：record 从一级队列接收开始，到 ClickHouse `Send` 成功或明确丢弃之前始终占用 `max_queue_bytes` 预算；一级队列、二级队列和当前 batch 都包含在同一预算内。除此之外仍有按队列条数有界的对象/指针开销。ClickHouse 变慢时预算或任一级队列触顶即 drop，不会无界增长。
+- 运行时策略读取采用 stale-while-revalidate：请求只读进程内快照，冷缓存先 fail-closed 并在后台刷新，过期缓存继续使用旧值并在后台刷新；PostgreSQL 读取再慢也不阻塞转发。管理员保存会立即替换快照，且不会被较早启动的后台读取覆盖。
 
 ### 8.1 留存 / 清理
 
@@ -255,10 +288,12 @@ ORDER BY (session_id, captured_at, request_id)
 SETTINGS index_granularity = 8192;
 ```
 
-**格式提示（重要）**：`raw_response` 的格式取决于 `stream`：
-- `stream=1`：翻译后的 **Anthropic SSE 字节流**（多帧 `event:/data:`），离线需按 SSE 组装。
-- `stream=0`：组装好的**单个 Anthropic JSON**，可直接解析。
-- `raw_request` 两者一致，均为 Anthropic 请求 body（model-map 后）。抽取列（usage/stop_reason/signature 等）两者语义等价。
+**格式提示（重要）**：内容以最终实际平台/attempt 为准。
+
+- Anthropic：保存最终发给 Anthropic 的请求和原始 JSON/SSE。
+- Kiro：保持既有的 Anthropic 语义请求/翻译响应边界，同时保存真实且脱敏的 Kiro 上游头。
+- OpenAI：仅覆盖 HTTP 文本入口 `/v1/responses`、`/v1/chat/completions`、`/v1/messages`；保存模型映射、策略转换和 fallback 后最终实际发出的请求，以及任何客户端协议转换前的原始上游 JSON/SSE。WebSocket、图片、视频、Embeddings、alpha/compact 不转存。
+- 中间 retry/failover 不单独落库；成功只保存最终成功 attempt，错误只在所有 failover 结束后的终态按策略保存。
 
 ---
 
@@ -279,7 +314,9 @@ SETTINGS index_granularity = 8192;
 - **降级为 no-op**：建连/Ping/建表任一失败 → 日志 `capture.clickhouse_init_failed_degrade_noop`，网关照常转发，只是不落库。修好配置/权限后重启网关重连。
 - **写入失败**：`capture.clickhouse.{prepare_batch,append,send}_failed`（批次被丢，不影响转发）。常见原因：库磁盘满、账号权限、网络抖动。
 - **归档缺数据但转发正常**：多半是队列 drop（提交速率 > 抽取/写入速率，或 `max_queue_bytes` 触顶，或 ClickHouse 慢）。可调大 `worker_count` / `batch_max_size`，或确认 CH 侧写入吞吐。
-- **OpenAI 转发不归档**：设计如此。当前归档覆盖 Anthropic 原生 + Kiro（流式/非流式/错误）。
+- **OpenAI 不归档**：先确认管理页的 OpenAI 平台开关已显式开启，并确认入口属于三个 HTTP 文本接口。`openai_passthrough` 开关与转存无关。
+- **是否会周期性空写**：不会。`batch_max_interval_ms` 只 flush 非空批次。
+- **丢失追踪**：优先查看管理页的实时事件和 30 天历史；服务日志仍保留 ClickHouse 错误细节，管理 API 不回显凭据。
 - **优雅关闭**：进程退出时 `Stop()` 会 drain batchCh 并做最后一次 flush，尽量不丢在途数据。
 
 ---

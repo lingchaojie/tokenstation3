@@ -36,6 +36,7 @@ func TestClickHouseArchiveRoundTrip(t *testing.T) {
 		Enabled:            true,
 		MaxBodyBytes:       8 << 20,
 		QueueSize:          16,
+		WriterQueueSize:    16,
 		WorkerCount:        1,
 		OverflowPolicy:     "drop",
 		BatchMaxSize:       1,
@@ -68,11 +69,21 @@ func TestClickHouseArchiveRoundTrip(t *testing.T) {
 		RawRequest:  []byte(`{"model":"claude"}`),
 		RawResponse: rawResp,
 	}
-	if err := writer.Write(context.Background(), rec); err != nil {
+	completed := make(chan archiveWriteResult, 1)
+	item := newArchiveWriteItem(rec, recordBytes(rec), func(result archiveWriteResult) {
+		completed <- result
+	})
+	if err := writer.Write(context.Background(), item); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// 等待 batcher flush（batch_max_interval_ms=50）。
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case result := <-completed:
+		if !result.success {
+			t.Fatalf("flush: %v", result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ClickHouse flush")
+	}
 
 	// 通过一条独立连接直接回读。
 	conn, err := clickhouse.Open(&clickhouse.Options{

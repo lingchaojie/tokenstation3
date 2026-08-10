@@ -187,13 +187,16 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		// 归档：tee 已在 handleStreamingResponse 内累积翻译后的 Anthropic SSE 并写入 gin.Context 桥；
 		// 此处取回填入 result，头用暂存的真实上游头（非 pipe 合成头）。汇入 gateway_handler submit 块统一提交。
-		if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeSuccess); s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
 			if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
 				reqHeaders, respHeaders := takeKiroCaptureHeaders(c)
 				result.CaptureResponse = bridge.Response
 				result.CaptureTruncated = bridge.Truncated
 				result.CaptureRequestHeaders = reqHeaders
 				result.CaptureResponseHeaders = respHeaders
+				result.CaptureUpstreamEndpoint = takeKiroCaptureEndpoint(c)
+				result.CaptureHTTPStatus = http.StatusOK
+				result.CaptureContentPolicy = &content
 			}
 		}
 		return result, nil
@@ -317,13 +320,16 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 	// 归档：非流式不走 handleNonStreamingResponse，此处直接快照组装好的 Anthropic JSON +
 	// 真实上游头（resp 即厂商响应）。汇入 gateway_handler submit 块统一提交。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeSuccess); s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
 		captured, truncated := captureWithLimit(parseResult.ResponseBody, s.cfg.Gateway.Capture.MaxBodyBytes)
 		result.CaptureResponse = captured
 		result.CaptureTruncated = truncated
 		headers := buildKiroCaptureHeaders(resp)
 		result.CaptureRequestHeaders = headers.RequestHeaders
 		result.CaptureResponseHeaders = headers.ResponseHeaders
+		result.CaptureUpstreamEndpoint = captureEndpointFromResponse(resp)
+		result.CaptureHTTPStatus = http.StatusOK
+		result.CaptureContentPolicy = &content
 	}
 	return result, nil
 }
@@ -374,7 +380,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	}
 	// 归档：暂存真实上游头（脱敏），供 forwardKiroMessages 组装 CaptureRecord 时取回。
 	// 流式返回的是 pipe 响应（合成头），真实上游头只在此处可见。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform)) {
 		stashKiroCaptureHeaders(c, resp)
 	}
 	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
@@ -516,9 +522,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
 				}
 				return nil, requestCtx, &UpstreamFailoverError{
-					StatusCode:      resp.StatusCode,
-					ResponseBody:    respBody,
-					ResponseHeaders: resp.Header.Clone(),
+					StatusCode:              resp.StatusCode,
+					ResponseBody:            respBody,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        endpoint.URL,
+					HasUpstreamHTTPResponse: true,
 				}
 			}
 
@@ -914,9 +923,12 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 		event := s.buildKiroInvalidModelUpstreamEvent(account, resp, upstreamMsg, mappedModel, requestBody, c)
 		appendOpsUpstreamError(c, event)
 		return &UpstreamFailoverError{
-			StatusCode:      resp.StatusCode,
-			ResponseBody:    respBody,
-			ResponseHeaders: resp.Header.Clone(),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
 		}
 	}
 
@@ -938,9 +950,12 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}
 		return &UpstreamFailoverError{
-			StatusCode:      resp.StatusCode,
-			ResponseBody:    respBody,
-			ResponseHeaders: resp.Header.Clone(),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
 		}
 	}
 
@@ -956,9 +971,10 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 	})
 	// 归档：终态错误响应（非 failover）。上面两处 UpstreamFailoverError 分支已提前返回，
 	// 不会到这里，故中间重试不归档。drop-safe，绝不影响转发。
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError); s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
 		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), mappedModel, mappedModel, "", stream, requestBody, respBody, limit); rec != nil {
+		if rec := buildErrorCaptureRecord(resp, string(account.Platform), mappedModel, mappedModel, captureEndpointFromResponse(resp), stream, requestBody, respBody, limit); rec != nil {
+			rec.ContentPolicy = &content
 			s.capturePool.Submit(rec)
 		}
 	}

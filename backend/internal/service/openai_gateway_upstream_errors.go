@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -277,7 +278,13 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	account *Account,
 	requestBody []byte,
 	requestedModel ...string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, retErr error) {
+	defer func() {
+		var failoverErr *UpstreamFailoverError
+		if retErr != nil && !errors.As(retErr, &failoverErr) {
+			s.submitOpenAIHTTPTerminalCapture(c, account, resp)
+		}
+	}()
 	body := s.readUpstreamErrorBody(resp)
 	body = s.redactAgentIdentitySensitiveBody(ctx, account, body)
 
@@ -403,9 +410,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			Platform:                string(account.Platform),
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 
@@ -469,7 +481,13 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	account *Account,
 	writeError compatErrorWriter,
 	requestedModel ...string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, retErr error) {
+	defer func() {
+		var failoverErr *UpstreamFailoverError
+		if retErr != nil && !errors.As(retErr, &failoverErr) {
+			s.submitOpenAIHTTPTerminalCapture(c, account, resp)
+		}
+	}()
 	body := s.readUpstreamErrorBody(resp)
 	body = s.redactAgentIdentitySensitiveBody(context.Background(), account, body)
 
@@ -573,9 +591,14 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			Platform:                string(account.Platform),
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 

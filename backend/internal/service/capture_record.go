@@ -30,6 +30,7 @@ type CaptureRecord struct {
 	RequestHeaders   []byte // 脱敏后 JSON
 	ResponseHeaders  []byte // 脱敏后 JSON
 	Truncated        bool
+	ContentPolicy    *CaptureContentPolicy
 
 	// 以下抽取列由 worker 调用 extractCaptureColumns 填充，提交时可留空。
 	SessionID           string
@@ -131,27 +132,82 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	Response        []byte
-	Truncated       bool
-	RequestHeaders  []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
-	ResponseHeaders []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	Request           []byte
+	Response          []byte
+	Truncated         bool
+	RequestTruncated  bool
+	ResponseTruncated bool
+	RequestHeaders    []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders   []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamEndpoint  string
+	HTTPStatus        int
+}
+
+func captureResultForUpdate(c *gin.Context) *captureResultBridge {
+	if c == nil {
+		return nil
+	}
+	if value, ok := c.Get(captureResultContextKey); ok {
+		if bridge, valid := value.(*captureResultBridge); valid && bridge != nil {
+			return bridge
+		}
+	}
+	bridge := &captureResultBridge{}
+	c.Set(captureResultContextKey, bridge)
+	return bridge
+}
+
+// SetCaptureOutboundRequest snapshots the actual post-mapping request sent to
+// the provider. Callers must guard this with CaptureMayApplyFor.
+func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, limit int) {
+	bridge := captureResultForUpdate(c)
+	if bridge == nil {
+		return
+	}
+	bridge.Request, bridge.RequestTruncated = captureWithLimit(body, limit)
+	bridge.Response = nil
+	bridge.ResponseHeaders = nil
+	bridge.ResponseTruncated = false
+	bridge.Truncated = bridge.RequestTruncated
+	bridge.HTTPStatus = 0
+	if req == nil {
+		return
+	}
+	bridge.RequestHeaders = redactHTTPHeader(req.Header)
+	if req.URL != nil {
+		bridge.UpstreamEndpoint = req.URL.String()
+	}
+}
+
+// ResetCaptureExchange clears snapshots from an intermediate failover attempt.
+func ResetCaptureExchange(c *gin.Context) {
+	if c != nil {
+		c.Set(captureResultContextKey, nil)
+		c.Set(kiroCaptureHeadersContextKey, nil)
+	}
 }
 
 // setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
 // resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
 // 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
 func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncated bool) {
-	if c == nil {
+	bridge := captureResultForUpdate(c)
+	if bridge == nil {
 		return
 	}
-	bridge := &captureResultBridge{Response: body, Truncated: truncated}
+	bridge.Response = snapshotBytes(body)
+	bridge.ResponseTruncated = truncated
+	bridge.Truncated = bridge.RequestTruncated || truncated
 	if resp != nil {
-		if resp.Request != nil {
+		bridge.HTTPStatus = resp.StatusCode
+		if resp.Request != nil && len(bridge.RequestHeaders) == 0 {
 			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+			if resp.Request.URL != nil && bridge.UpstreamEndpoint == "" {
+				bridge.UpstreamEndpoint = resp.Request.URL.String()
+			}
 		}
 		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
 	}
-	c.Set(captureResultContextKey, bridge)
 }
 
 // takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
@@ -321,8 +377,8 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 	if len(reqBody) == 0 && len(respBody) == 0 {
 		return nil
 	}
-	rawReq, _ := captureWithLimit(reqBody, limit)
-	rawResp, truncated := captureWithLimit(respBody, limit)
+	rawReq, requestTruncated := captureWithLimit(reqBody, limit)
+	rawResp, responseTruncated := captureWithLimit(respBody, limit)
 	rec := &CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         platform,
@@ -332,7 +388,7 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 		Stream:           stream,
 		RawRequest:       rawReq,
 		RawResponse:      rawResp,
-		Truncated:        truncated,
+		Truncated:        requestTruncated || responseTruncated,
 	}
 	if resp != nil {
 		rec.HTTPStatus = resp.StatusCode
@@ -341,6 +397,103 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 			rec.RequestHeaders = redactHTTPHeader(resp.Request.Header)
 		}
 		rec.ResponseHeaders = redactHTTPHeader(resp.Header)
+	}
+	return rec
+}
+
+func captureEndpointFromResponse(resp *http.Response) string {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return ""
+	}
+	return resp.Request.URL.String()
+}
+
+func captureRequestHeadersFromResponse(resp *http.Response) http.Header {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	return resp.Request.Header.Clone()
+}
+
+// BuildTerminalErrorCaptureRecord materializes only a final upstream HTTP
+// failure. Callers must explicitly mark that an actual error-status response
+// was received; transport, local scheduling, and errors embedded in an HTTP 200
+// stream are deliberately excluded even when they reuse HTTP-like status codes.
+func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *UpstreamFailoverError, limit int) *CaptureRecord {
+	if c == nil || failure == nil || failure.StatusCode <= 0 || !failure.HasUpstreamHTTPResponse {
+		return nil
+	}
+	content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeTerminalError)
+	if !enabled {
+		return nil
+	}
+	bridge, hasBridge := takeCaptureResult(c)
+	if !hasBridge && strings.TrimSpace(failure.UpstreamEndpoint) == "" {
+		return nil
+	}
+
+	requestedModel := captureRequestedModel(c)
+	var upstreamModel string
+	var stream bool
+	var fallbackRequest []byte
+	if value, ok := c.Get("parsed_request"); ok {
+		if parsed, valid := value.(*ParsedRequest); valid && parsed != nil {
+			if requestedModel == "" {
+				requestedModel = parsed.Model
+			}
+			stream = parsed.Stream
+			if parsed.Body != nil {
+				fallbackRequest = parsed.Body.Bytes()
+			}
+		}
+	}
+
+	rawRequest, requestTruncated := captureWithLimit(fallbackRequest, limit)
+	endpoint := strings.TrimSpace(failure.UpstreamEndpoint)
+	requestHeaders := redactHTTPHeader(failure.RequestHeaders)
+	if hasBridge {
+		if bridge.Request != nil {
+			rawRequest = snapshotBytes(bridge.Request)
+			requestTruncated = bridge.RequestTruncated
+		}
+		requestHeaders = snapshotBytes(bridge.RequestHeaders)
+		if endpoint == "" {
+			endpoint = bridge.UpstreamEndpoint
+		}
+	}
+	rawResponse, responseTruncated := captureWithLimit(failure.ResponseBody, limit)
+	if hasBridge && bridge.Response != nil {
+		rawResponse = snapshotBytes(bridge.Response)
+		responseTruncated = bridge.ResponseTruncated
+	}
+	if model, outboundStream, _ := extractOpenAIRequestMetaFromBody(rawRequest); model != "" {
+		upstreamModel = model
+		stream = outboundStream
+	}
+	if requestedModel == "" {
+		requestedModel = upstreamModel
+	}
+	if upstreamModel == "" {
+		upstreamModel = requestedModel
+	}
+	rec := &CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         platform,
+		RequestID:        failure.ResponseHeaders.Get("x-request-id"),
+		RequestedModel:   requestedModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: endpoint,
+		Stream:           stream,
+		HTTPStatus:       failure.StatusCode,
+		RawRequest:       rawRequest,
+		RawResponse:      rawResponse,
+		RequestHeaders:   requestHeaders,
+		ResponseHeaders:  redactHTTPHeader(failure.ResponseHeaders),
+		Truncated:        requestTruncated || responseTruncated,
+		ContentPolicy:    &content,
+	}
+	if rec.RequestID == "" {
+		rec.RequestID = CaptureRequestID("")
 	}
 	return rec
 }
@@ -366,4 +519,24 @@ func extractCaptureColumns(rec *CaptureRecord) {
 	rec.CacheReadTokens = cols.CacheReadTokens
 	rec.CacheCreationTokens = cols.CacheCreationTokens
 	rec.SignaturePresent = cols.SignaturePresent
+}
+
+// ApplyCaptureContentPolicy clears disabled persistence fields. Call it only
+// after extractCaptureColumns so searchable metadata survives body suppression.
+func ApplyCaptureContentPolicy(rec *CaptureRecord, policy CaptureContentPolicy) {
+	if rec == nil {
+		return
+	}
+	if !policy.RawRequest {
+		rec.RawRequest = nil
+	}
+	if !policy.RawResponse {
+		rec.RawResponse = nil
+	}
+	if !policy.RequestHeaders {
+		rec.RequestHeaders = nil
+	}
+	if !policy.ResponseHeaders {
+		rec.ResponseHeaders = nil
+	}
 }
