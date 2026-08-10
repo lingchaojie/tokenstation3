@@ -110,3 +110,21 @@ func TestCaptureSettingsHistoryValidatesRangeAndSortsNewestFirst(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidCaptureHistoryRange)
 	require.False(t, errors.Is(err, ErrCaptureInfrastructureNotReady))
 }
+
+func TestCaptureSettingsHistoryReclassifiesStoredErrorBeforeReturningIt(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	repo := &captureHealthRepoStub{events: []CaptureHealthEvent{{
+		MinuteBucket: now.Add(-time.Minute),
+		Reason:       string(CaptureDropClickHouseSendFailed),
+		LastError:    "dial clickhouse://archive:super-secret@db.internal:9000 failed",
+	}}}
+	svc := NewCaptureAdminService(&config.Config{}, NewSettingService(&capturePolicyRepoStub{}, nil), nil, repo)
+	svc.now = func() time.Time { return now }
+
+	got, err := svc.History(context.Background(), "24h")
+	require.NoError(t, err)
+	require.Len(t, got.Events, 1)
+	require.Equal(t, "ClickHouse batch send failed", got.Events[0].LastError)
+	require.NotContains(t, got.Events[0].LastError, "super-secret")
+	require.NotContains(t, got.Events[0].LastError, "db.internal")
+}

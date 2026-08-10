@@ -115,6 +115,9 @@ func (s *CaptureAdminService) History(ctx context.Context, selectedRange string)
 	if err != nil {
 		return nil, err
 	}
+	for i := range events {
+		events[i].LastError = safeStoredCaptureHealthError(CaptureDropReason(events[i].Reason), events[i].LastError)
+	}
 	sort.SliceStable(events, func(i, j int) bool {
 		if events[i].MinuteBucket.Equal(events[j].MinuteBucket) {
 			if events[i].InstanceID == events[j].InstanceID {

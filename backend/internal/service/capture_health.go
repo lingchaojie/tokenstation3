@@ -256,6 +256,17 @@ func safeCaptureHealthErrorSummary(reason CaptureDropReason, err error) string {
 	if err == nil {
 		return ""
 	}
+	return captureHealthErrorCategory(reason)
+}
+
+func safeStoredCaptureHealthError(reason CaptureDropReason, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return captureHealthErrorCategory(reason)
+}
+
+func captureHealthErrorCategory(reason CaptureDropReason) string {
 	switch reason {
 	case CaptureDropByteBudgetExceeded:
 		return "capture in-flight byte budget exceeded"
@@ -272,7 +283,7 @@ func safeCaptureHealthErrorSummary(reason CaptureDropReason, err error) string {
 	case CaptureDropClickHouseSendFailed:
 		return "ClickHouse batch send failed"
 	default:
-		return sanitizeCaptureHealthError(err)
+		return "capture archive operation failed"
 	}
 }
 

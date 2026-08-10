@@ -148,7 +148,7 @@ func (s *OpenAIGatewayService) submitOpenAIHTTPTerminalCapture(c *gin.Context, a
 	}
 	finishOpenAIHTTPCapture(resp)
 	bridge, ok := takeCaptureResult(c)
-	if !ok || bridge.Response == nil {
+	if !ok {
 		return
 	}
 	failure := &UpstreamFailoverError{
