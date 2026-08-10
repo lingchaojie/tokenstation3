@@ -67,6 +67,8 @@ Handler 只能稳定拿到转换后的客户端响应，无法保证上游保真
 
 - `enabled=true` 表示初始化 ClickHouse 连接、自动建表和 worker pool。
 - ClickHouse 地址、库、表、用户名、密码、TLS、队列和批量参数继续只存在 YAML/Secret。
+- `writer_queue_size` 显式限制 worker 之后、ClickHouse batcher 之前的二级队列，不再只使用代码内隐式容量。
+- `max_queue_bytes` 覆盖从一级接收开始到 ClickHouse 成功写入或明确丢弃为止的全部在途 record，包括 worker、二级队列和当前 batch。
 - 修改 provisioning 配置仍需重启服务。
 - `enabled=false` 时 pool 为 `nil`，所有运行时策略恒不采集。
 
@@ -143,6 +145,7 @@ value 是版本化 JSON：
 ```text
 GET /api/v1/admin/capture-settings
 PUT /api/v1/admin/capture-settings
+GET /api/v1/admin/capture-settings/history?range=24h|7d|30d
 ```
 
 不把字段加入通用 `GET/PUT /api/v1/admin/settings`。
@@ -153,6 +156,8 @@ GET 返回：
 - `provisioned`：静态 capture 子系统是否初始化。
 - `ready`：ClickHouse writer 是否在启动时成功连接并可写。
 - `database`、`table` 和脱敏后的地址，用于诊断。
+- 当前进程实时健康快照：提交、接收、成功写入、丢失总数，丢失字节数，一级/二级队列使用量，全链路在途字节数，以及最后成功和最后丢失时间。
+- 最近 100 条进程内丢失事件。PostgreSQL 中最近 30 天的按分钟聚合历史通过独立 history API 按 24 小时/7 天/30 天查询。
 - 不返回 username、password 或其他凭据。
 
 PUT 行为：
@@ -186,7 +191,10 @@ PUT 行为：
 4. 结果：成功、终态错误。
 5. 内容：原始请求、原始响应、请求头、响应头；明确正文包含用户内容，Header 仍会脱敏。
 6. 范围：复用 `GroupSelector.vue` 与 `OpenAIFastPolicyUserSelector.vue`，说明留空和 AND 语义。
-7. 独立保存按钮；保存成功后重新获取服务端规范化结果。
+7. 实时健康卡：本进程启动时间、提交/接收/写入/丢失数、队列占用、在途字节与最后成功时间。
+8. 丢失历史：显示发生时间、原因、条数、估算字节数和当时队列使用量，支持 24 小时/7 天/30 天查看。
+9. 导航告警标记：当前进程启动后丢失计数增加时显示；管理员打开页面后可确认，不会删除历史。
+10. 独立保存按钮；保存成功后重新获取服务端规范化结果。
 
 ## 8. 上游数据边界
 
@@ -224,16 +232,51 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
 - 不进入日志。
 - 随该条 worker 处理结束释放。
 
-## 10. 错误处理与隔离
+## 10. 丢失定义、实时指标与持久历史
+
+### 10.1 丢失定义
+
+以下情况计为转存数据丢失：
+
+- `byte_budget_exceeded`：`max_queue_bytes` 不足以接纳新 record。
+- `worker_queue_full`：一级 worker 队列已满。
+- `writer_queue_full`：ClickHouse writer 二级队列已满。
+- `writer_unavailable`：ClickHouse 启动连接或建表失败，writer 未就绪。
+- `clickhouse_prepare_failed`、`clickhouse_append_failed`、`clickhouse_send_failed`：已成批的 record 未能写入 ClickHouse。
+
+管理员主动关闭、平台/结果/用户/分组策略不命中都属于 `policy_skipped`，不计入丢失和告警。`max_body_bytes` 只导致正文截断并设置 `is_truncated=1`，不等于整条 record 丢失。
+
+### 10.2 实时指标
+
+进程内 tracker 用 atomic counter/gauge 维护：
+
+- `submitted_records`、`accepted_records`、`written_records`、`dropped_records`、`dropped_bytes`。
+- 按上述 reason 拆分的丢失条数和字节数。
+- 一级队列当前/峰值条数、二级队列当前/峰值条数、全链路当前/峰值在途字节数。
+- `started_at`、`last_success_at`、`last_drop_at`、`last_drop_reason` 和最后一条脱敏错误摘要。
+- 内存 ring buffer 保留最近 100 条丢失事件。
+
+数据只有在 ClickHouse `Send` 成功后才计入 `written_records`。在成功写入或确认丢失之前，record 始终占用 `max_queue_bytes` 预算，避免二级队列和 batch 绕过内存上限。
+
+### 10.3 PostgreSQL 持久历史
+
+新增 `capture_health_events` 表，按 `minute_bucket + instance_id + reason` 聚合保存：丢失条数、丢失字节、队列使用峰值和最后脱敏错误摘要。
+
+- 记录丢失的热路径只更新内存聚合器，不同步写 PostgreSQL。
+- 后台 reporter 每分钟批量 upsert 上一分钟的聚合值，自身队列有界，失败时记结构化日志但不影响转发。
+- 每小时删除 30 天以前的聚合行。
+- 服务停止时在有界超时内尝试最后一次 flush；进程崩溃时最多丢失当前尚未 flush 的一分钟健康聚合，不影响 ClickHouse 中已写入的转存数据。
+
+## 11. 错误处理与隔离
 
 - 运行时关闭或过滤不命中：在 tee/buffer 分配前短路。
 - ClickHouse 启动连接失败：保留现有 noop 降级，页面显示未 ready，不影响服务启动。
-- ClickHouse 运行时写失败：记录现有 capture 错误日志并丢弃批次，不反压转发。
-- 队列或字节预算满：继续使用 drop/sample 策略。
+- ClickHouse 运行时写失败：记录 capture 错误日志、实时丢失指标和按分钟历史，丢弃批次，不反压转发。
+- 队列或字节预算满：继续使用 drop/sample 策略，每次最终丢弃都必须按真实原因计数；`sample` 重试成功不计丢失。
 - 设置 DB 读取失败或策略损坏：fail-closed，不采集、不影响转发。
 - 客户端断开：沿用各路径现有 drain/usage 行为；只有已经完整形成并提交的 capture record 才入库。
 
-## 11. 实现边界
+## 12. 实现边界
 
 建议新增小而明确的组件：
 
@@ -241,13 +284,15 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
 - `capture_runtime_policy_service.go`：settings 读写、缓存和保存即刷新。
 - `capture_admin_handler.go`：独立 GET/PUT API 和 infrastructure 状态 DTO。
 - `capture_context.go`：请求级策略决策与上游请求快照桥。
+- `capture_health.go`：实时计数、队列 gauge、最近事件 ring buffer 和健康 DTO。
+- `capture_health_reporter.go`：按分钟聚合、异步 PostgreSQL upsert 和 30 天清理。
 - `CaptureSettingsView.vue`：独立管理员页面。
 
 现有 `CaptureRecord`、`ConversationCapturePool`、ClickHouse writer 和表结构继续复用。避免继续扩大巨型 `setting_handler.go` 和 `SettingsView.vue`。
 
-## 12. 测试与验收
+## 13. 测试与验收
 
-### 12.1 后端
+### 13.1 后端
 
 - 默认策略：总关、Anthropic/Kiro 开、OpenAI 关。
 - policy JSON 正常、未知版本、未知字段、脏数据、ID 去重排序。
@@ -262,20 +307,26 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
   - 四类内容开关分别生效，元数据仍可抽取。
   - Header 凭据脱敏。
 - Anthropic/Kiro 既有 capture 回归通过。
+- 字节预算、一级队列、二级队列和 ClickHouse Prepare/Append/Send 失败分别生成正确 reason、条数和字节数。
+- `max_queue_bytes` 在真正写入或丢弃前不释放；成功和所有失败路径都会精确释放一次。
+- reporter 按分钟聚合、upsert 重试不重复计数，并删除 30 天前数据。
+- 进程内最近 100 条事件有界，错误摘要不包含 ClickHouse 凭据或 record 正文。
 
-### 12.2 前端
+### 13.2 前端
 
 - 路由仅管理员可访问。
 - 左侧导航在普通/简单管理员模式显示且位于系统设置前；普通用户不显示。
 - GET 初始化、默认 OpenAI 关闭、PUT 完整替换、保存后回读。
 - 未 ready 状态禁止开启总开关并显示原因。
 - 平台、结果、内容、用户、分组控件正确序列化。
+- 丢失计数增长时显示导航告警，页面可查看实时队列和 24 小时/7 天/30 天历史。
 - 中英文标题、描述和敏感数据提示齐全。
 
-### 12.3 完成标准
+### 13.3 完成标准
 
 - 不开启 OpenAI 平台时，OpenAI 标准与 passthrough 请求都不写归档。
 - 管理员显式开启 OpenAI 后，三个 HTTP 文本入口均不依赖 `openai_passthrough` 即可写入真实上游快照。
 - 页面策略保存后对新请求立即生效，无需重启。
 - 静态 ClickHouse 未配置或不可用时，管理员无法误开启实际转存。
+- 任何整条 record 或整批 record 丢失都能在管理页看到原因和发生时间；服务重启后仍可查看最近 30 天历史。
 - 全部新增单测、相关网关回归、前端测试、后端构建与前端类型检查通过。
