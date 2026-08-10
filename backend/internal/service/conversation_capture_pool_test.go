@@ -9,8 +9,9 @@ import (
 
 type fakeWriter struct{ n int32 }
 
-func (f *fakeWriter) Write(_ context.Context, rec *CaptureRecord) error {
+func (f *fakeWriter) Write(_ context.Context, item *archiveWriteItem) error {
 	atomic.AddInt32(&f.n, 1)
+	item.completeSuccess()
 	return nil
 }
 func (f *fakeWriter) Stop() {}
@@ -64,9 +65,10 @@ type blockingWriter struct {
 	n       int32
 }
 
-func (b *blockingWriter) Write(_ context.Context, _ *CaptureRecord) error {
+func (b *blockingWriter) Write(_ context.Context, item *archiveWriteItem) error {
 	atomic.AddInt32(&b.n, 1)
 	<-b.release
+	item.completeSuccess()
 	return nil
 }
 func (b *blockingWriter) Stop() {}

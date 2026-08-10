@@ -17,15 +17,66 @@ import (
 // ArchiveWriter 把一条 CaptureRecord 写入归档存储。实现必须自身吸收所有
 // 错误（不得外溢到调用方转发路径）；此处返回的 error 仅用于内部计数/日志。
 type ArchiveWriter interface {
-	Write(ctx context.Context, rec *CaptureRecord) error
+	Write(ctx context.Context, item *archiveWriteItem) error
 	Stop()
+}
+
+type archiveWriteResult struct {
+	success bool
+	reason  CaptureDropReason
+	err     error
+}
+
+// archiveWriteItem owns a capture record from the worker until ClickHouse has
+// either committed it or explicitly dropped it. Completion is exactly once.
+type archiveWriteItem struct {
+	record       *CaptureRecord
+	bytes        int64
+	onComplete   func(archiveWriteResult)
+	completeOnce sync.Once
+}
+
+func newArchiveWriteItem(rec *CaptureRecord, bytes int64, onComplete func(archiveWriteResult)) *archiveWriteItem {
+	return &archiveWriteItem{record: rec, bytes: bytes, onComplete: onComplete}
+}
+
+func (i *archiveWriteItem) complete(result archiveWriteResult) bool {
+	if i == nil {
+		return false
+	}
+	completed := false
+	i.completeOnce.Do(func() {
+		completed = true
+		if i.onComplete != nil {
+			i.onComplete(result)
+		}
+	})
+	return completed
+}
+
+func (i *archiveWriteItem) completeSuccess() bool {
+	return i.complete(archiveWriteResult{success: true})
+}
+
+func (i *archiveWriteItem) completeDrop(reason CaptureDropReason, err error) bool {
+	return i.complete(archiveWriteResult{reason: reason, err: err})
 }
 
 // noopArchiveWriter 在 capture 关闭时注入，零副作用。
 type noopArchiveWriter struct{}
 
-func (noopArchiveWriter) Write(context.Context, *CaptureRecord) error { return nil }
-func (noopArchiveWriter) Stop()                                       {}
+func (noopArchiveWriter) Write(_ context.Context, item *archiveWriteItem) error {
+	item.completeSuccess()
+	return nil
+}
+func (noopArchiveWriter) Stop() {}
+
+type unavailableArchiveWriter struct{}
+
+func (unavailableArchiveWriter) Write(context.Context, *archiveWriteItem) error {
+	return errArchiveWriterUnavailable
+}
+func (unavailableArchiveWriter) Stop() {}
 
 // captureVersion 写入 capture_version 列，用于未来 schema 演进时区分记录版本。
 const captureVersion = 1
@@ -33,6 +84,7 @@ const captureVersion = 1
 // errArchiveQueueFull 在批量写入通道已满时返回；调用方（capture worker）据此
 // 计数/丢弃，绝不能阻塞转发主路径。
 var errArchiveQueueFull = errors.New("capture: clickhouse batch queue full")
+var errArchiveWriterUnavailable = errors.New("capture: clickhouse writer unavailable")
 
 // b2u8 把 bool 映射为 ClickHouse UInt8 (0/1)。
 func b2u8(b bool) uint8 {
@@ -83,10 +135,13 @@ type clickHouseArchiveWriter struct {
 	database string
 	table    string
 
-	batchCh     chan *CaptureRecord
+	batchCh     chan *archiveWriteItem
 	batchMax    int
 	batchWait   time.Duration
 	sendTimeout time.Duration
+	tracker     *captureHealthTracker
+	sendBatch   func([]*archiveWriteItem) (CaptureDropReason, error)
+	queueMu     sync.Mutex
 
 	stopOnce sync.Once
 	done     chan struct{}
@@ -95,7 +150,7 @@ type clickHouseArchiveWriter struct {
 
 // newClickHouseArchiveWriter 建连、Ping、建表、启动 batcher。任一步失败返回 error，
 // 调用方据此降级为 noopArchiveWriter，绝不阻塞启动。
-func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig) (ArchiveWriter, error) {
+func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig, trackers ...*captureHealthTracker) (ArchiveWriter, error) {
 	chCfg := cc.ClickHouse
 
 	dialTimeout := time.Duration(chCfg.DialTimeoutMs) * time.Millisecond
@@ -169,21 +224,27 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig) (ArchiveWriter, 
 		batchWait = time.Second
 	}
 
-	chanSize := batchMax * 4
-	if chanSize < 1024 {
+	chanSize := cc.WriterQueueSize
+	if chanSize <= 0 {
 		chanSize = 1024
+	}
+	var tracker *captureHealthTracker
+	if len(trackers) > 0 {
+		tracker = trackers[0]
 	}
 
 	w := &clickHouseArchiveWriter{
 		conn:        conn,
 		database:    chCfg.Database,
 		table:       chCfg.Table,
-		batchCh:     make(chan *CaptureRecord, chanSize),
+		batchCh:     make(chan *archiveWriteItem, chanSize),
 		batchMax:    batchMax,
 		batchWait:   batchWait,
 		sendTimeout: readTimeout,
+		tracker:     tracker,
 		done:        make(chan struct{}),
 	}
+	w.sendBatch = w.sendClickHouseBatch
 
 	w.wg.Add(1)
 	go w.runBatcher()
@@ -192,13 +253,30 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig) (ArchiveWriter, 
 }
 
 // Write 非阻塞入队；队列满时返回 errArchiveQueueFull，调用方计数丢弃即可。
-func (w *clickHouseArchiveWriter) Write(_ context.Context, rec *CaptureRecord) error {
+func (w *clickHouseArchiveWriter) Write(_ context.Context, item *archiveWriteItem) error {
+	if item == nil || item.record == nil {
+		return nil
+	}
+	w.queueMu.Lock()
+	defer w.queueMu.Unlock()
 	select {
-	case w.batchCh <- rec:
+	case w.batchCh <- item:
+		if w.tracker != nil {
+			w.tracker.writerQueue.add(1)
+		}
 		return nil
 	default:
 		return errArchiveQueueFull
 	}
+}
+
+func (w *clickHouseArchiveWriter) recordDequeued() {
+	if w.tracker == nil {
+		return
+	}
+	w.queueMu.Lock()
+	w.tracker.writerQueue.add(-1)
+	w.queueMu.Unlock()
 }
 
 // runBatcher 累积记录，达到 batchMax 或 ticker 到期时落盘；done 关闭后
@@ -209,27 +287,29 @@ func (w *clickHouseArchiveWriter) runBatcher() {
 	ticker := time.NewTicker(w.batchWait)
 	defer ticker.Stop()
 
-	batch := make([]*CaptureRecord, 0, w.batchMax)
+	batch := make([]*archiveWriteItem, 0, w.batchMax)
 
 	for {
 		select {
-		case rec := <-w.batchCh:
-			batch = append(batch, rec)
+		case item := <-w.batchCh:
+			w.recordDequeued()
+			batch = append(batch, item)
 			if len(batch) >= w.batchMax {
 				w.flush(batch)
-				batch = make([]*CaptureRecord, 0, w.batchMax)
+				batch = make([]*archiveWriteItem, 0, w.batchMax)
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
 				w.flush(batch)
-				batch = make([]*CaptureRecord, 0, w.batchMax)
+				batch = make([]*archiveWriteItem, 0, w.batchMax)
 			}
 		case <-w.done:
 			// drain 已入队但未处理的记录，再做最后一次 flush。
 			for {
 				select {
-				case rec := <-w.batchCh:
-					batch = append(batch, rec)
+				case item := <-w.batchCh:
+					w.recordDequeued()
+					batch = append(batch, item)
 				default:
 					if len(batch) > 0 {
 						w.flush(batch)
@@ -243,9 +323,29 @@ func (w *clickHouseArchiveWriter) runBatcher() {
 
 // flush 把一批记录 PrepareBatch+Append+Send 到 ClickHouse。任何错误在此
 // 吸收（记日志），不向上传播。
-func (w *clickHouseArchiveWriter) flush(batch []*CaptureRecord) {
+func (w *clickHouseArchiveWriter) flush(batch []*archiveWriteItem) {
 	if len(batch) == 0 {
 		return
+	}
+	sendBatch := w.sendBatch
+	if sendBatch == nil {
+		sendBatch = w.sendClickHouseBatch
+	}
+	reason, err := sendBatch(batch)
+	if err != nil {
+		for _, item := range batch {
+			item.completeDrop(reason, err)
+		}
+		return
+	}
+	for _, item := range batch {
+		item.completeSuccess()
+	}
+}
+
+func (w *clickHouseArchiveWriter) sendClickHouseBatch(batch []*archiveWriteItem) (CaptureDropReason, error) {
+	if len(batch) == 0 {
+		return "", nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), w.sendTimeout)
@@ -259,12 +359,13 @@ func (w *clickHouseArchiveWriter) flush(batch []*CaptureRecord) {
 			zap.Error(err),
 			zap.Int("batch_size", len(batch)),
 		).Error("capture.clickhouse.prepare_batch_failed")
-		return
+		return CaptureDropClickHousePrepareFailed, err
 	}
 	// Close 在 Send 之后为 no-op；在 Append 失败等早退路径上负责释放底层连接资源。
 	defer func() { _ = chBatch.Close() }()
 
-	for _, rec := range batch {
+	for _, item := range batch {
+		rec := item.record
 		if err := chBatch.Append(
 			rec.CapturedAt,
 			rec.RequestID,
@@ -295,7 +396,7 @@ func (w *clickHouseArchiveWriter) flush(batch []*CaptureRecord) {
 				zap.Error(err),
 				zap.String("request_id", rec.RequestID),
 			).Error("capture.clickhouse.append_failed")
-			return
+			return CaptureDropClickHouseAppendFailed, err
 		}
 	}
 
@@ -305,8 +406,9 @@ func (w *clickHouseArchiveWriter) flush(batch []*CaptureRecord) {
 			zap.Error(err),
 			zap.Int("batch_size", len(batch)),
 		).Error("capture.clickhouse.send_failed")
-		return
+		return CaptureDropClickHouseSendFailed, err
 	}
+	return "", nil
 }
 
 // Stop 停止 batcher，flush 剩余记录，关闭底层连接。安全多次调用。
