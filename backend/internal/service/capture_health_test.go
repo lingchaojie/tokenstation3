@@ -190,3 +190,19 @@ func TestCaptureHealthErrorNeverContainsRecordBody(t *testing.T) {
 	encoded := fmt.Sprintf("%+v", tracker.snapshot())
 	require.False(t, strings.Contains(encoded, recordBody))
 }
+
+func TestCaptureHealthErrorUsesSafeCategoryInsteadOfDriverDetails(t *testing.T) {
+	tracker := newCaptureHealthTracker("host-a", time.Now)
+	tracker.recordDrop(
+		CaptureDropClickHouseSendFailed,
+		1,
+		42,
+		errors.New("dial clickhouse://archive:super-secret@db.internal:9000 failed"),
+	)
+
+	got := tracker.snapshot()
+	require.Equal(t, "ClickHouse batch send failed", got.LastError)
+	require.NotContains(t, got.LastError, "super-secret")
+	require.NotContains(t, got.LastError, "db.internal")
+	require.Equal(t, got.LastError, got.RecentIncidents[0].Error)
+}

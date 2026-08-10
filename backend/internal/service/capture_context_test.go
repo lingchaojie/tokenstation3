@@ -3,10 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -59,6 +62,92 @@ func TestPrepareCaptureScopeFailsClosedForNilOrFailedSettingService(t *testing.T
 		_, ok := CaptureDecisionFor(c, "anthropic", CaptureOutcomeSuccess)
 		require.False(t, ok)
 	}
+}
+
+func TestPrepareCaptureScopeStaticDisabledDoesNotReadRepository(t *testing.T) {
+	repo := &capturePolicyRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	start := time.Now()
+	PrepareCaptureScope(context.Background(), c, svc, 9, nil)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	gets, _ := repo.calls()
+	require.Zero(t, gets)
+	require.False(t, CaptureMayApplyFor(c, PlatformAnthropic))
+}
+
+func TestPrepareCaptureScopeColdCacheRefreshesWithoutBlockingForwarding(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	encoded, err := json.Marshal(policy)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repo := &capturePolicyRepoStub{value: string(encoded), getStarted: started, getRelease: release}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	svc := NewSettingService(repo, cfg)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	start := time.Now()
+	PrepareCaptureScope(context.Background(), c, svc, 9, nil)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.False(t, CaptureMayApplyFor(c, PlatformAnthropic), "cold cache must fail closed")
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background policy refresh did not start")
+	}
+	for i := 0; i < 100; i++ {
+		repeated, _ := gin.CreateTestContext(httptest.NewRecorder())
+		PrepareCaptureScope(context.Background(), repeated, svc, 9, nil)
+		require.False(t, CaptureMayApplyFor(repeated, PlatformAnthropic))
+	}
+	gets, _ := repo.calls()
+	require.Equal(t, 1, gets, "cold-cache requests must share one background refresh")
+	close(release)
+	require.Eventually(t, func() bool {
+		entry, _ := svc.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy)
+		return entry != nil && entry.compiled.Enabled()
+	}, time.Second, 10*time.Millisecond)
+
+	warm, _ := gin.CreateTestContext(httptest.NewRecorder())
+	PrepareCaptureScope(context.Background(), warm, svc, 9, nil)
+	require.True(t, CaptureMayApplyFor(warm, PlatformAnthropic))
+}
+
+func TestPrepareCaptureScopeExpiredCacheServesStaleWithoutBlocking(t *testing.T) {
+	oldPolicy := DefaultCaptureRuntimePolicy()
+	oldPolicy.Enabled = true
+	oldEntry := newCaptureRuntimePolicySuccessEntry(oldPolicy)
+	oldEntry.expiresAt = time.Now().Add(-time.Second).UnixNano()
+
+	newPolicy := oldPolicy
+	newPolicy.Enabled = false
+	encoded, err := json.Marshal(newPolicy)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repo := &capturePolicyRepoStub{value: string(encoded), getStarted: started, getRelease: release}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	svc := NewSettingService(repo, cfg)
+	svc.captureRuntimePolicyCache.Store(oldEntry)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	start := time.Now()
+	PrepareCaptureScope(context.Background(), c, svc, 9, nil)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.True(t, CaptureMayApplyFor(c, PlatformAnthropic), "expired cache must serve stale while refreshing")
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background policy refresh did not start")
+	}
+	close(release)
 }
 
 func TestApplyCaptureContentPolicyKeepsMetadataAndClearsDisabledFields(t *testing.T) {

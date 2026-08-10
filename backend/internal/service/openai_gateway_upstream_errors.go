@@ -410,13 +410,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RequestHeaders:         captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:        resp.Header.Clone(),
-			UpstreamEndpoint:       captureEndpointFromResponse(resp),
-			Platform:               string(account.Platform),
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			Platform:                string(account.Platform),
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 
@@ -590,13 +591,14 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RequestHeaders:         captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:        resp.Header.Clone(),
-			UpstreamEndpoint:       captureEndpointFromResponse(resp),
-			Platform:               string(account.Platform),
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			Platform:                string(account.Platform),
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 

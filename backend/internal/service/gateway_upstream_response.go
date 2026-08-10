@@ -416,11 +416,12 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	}
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:       resp.StatusCode,
-			ResponseBody:     body,
-			RequestHeaders:   captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:  resp.Header.Clone(),
-			UpstreamEndpoint: captureEndpointFromResponse(resp),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
 		}
 	}
 

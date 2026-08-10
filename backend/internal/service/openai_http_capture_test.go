@@ -2,12 +2,15 @@ package service
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -130,6 +133,66 @@ func TestOpenAIHTTPCaptureRejectsNonTextEndpoints(t *testing.T) {
 			_, exists := c.Get(captureResultContextKey)
 			require.False(t, exists)
 		})
+	}
+}
+
+func TestOpenAIHTTPCaptureRejectsResponsesImageIntent(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	SetOpenAIImageIntentHint(c, true)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	require.False(t, svc.prepareOpenAIHTTPCaptureAttempt(c, &Account{Platform: PlatformOpenAI}, req, []byte(`{"model":"gpt-image"}`)))
+}
+
+type captureHTTPUpstreamStub struct {
+	rawResponse []byte
+	request     *http.Request
+}
+
+func (s *captureHTTPUpstreamStub) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	s.request = req
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(s.rawResponse)),
+		Request:    req,
+	}, nil
+}
+
+func (s *captureHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return s.Do(req, proxyURL, accountID, concurrency)
+}
+
+func TestOpenAIHTTPCaptureEndpointMatrixUsesActualSendPipelineIndependentOfPassthrough(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/messages"} {
+		for _, passthrough := range []bool{false, true} {
+			t.Run(path+"/passthrough="+fmt.Sprint(passthrough), func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+				c.Set("openai_passthrough", passthrough)
+				setOpenAIHTTPCaptureScopeForTest(t, c, true)
+				upstream := &captureHTTPUpstreamStub{rawResponse: []byte(`{"id":"upstream-raw"}`)}
+				svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024), httpUpstream: upstream}
+				account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "secret"}}
+				outbound := []byte(`{"model":"mapped-provider-model"}`)
+
+				resp, err := svc.sendCCUpstreamRequest(context.Background(), c, account, "https://api.openai.test/v1/chat/completions", outbound, false, "secret", "", "")
+				require.NoError(t, err)
+				_, err = io.Copy(io.Discard, resp.Body)
+				require.NoError(t, err)
+				finishOpenAIHTTPCapture(resp)
+
+				result := &OpenAIForwardResult{}
+				svc.applyOpenAIHTTPSuccessCapture(c, account, result)
+				require.Equal(t, outbound, result.CaptureRequest)
+				require.Equal(t, upstream.rawResponse, result.CaptureResponse)
+				require.Equal(t, "https://api.openai.test/v1/chat/completions", result.CaptureUpstreamEndpoint)
+				require.NotContains(t, string(result.CaptureRequestHeaders), "secret")
+			})
+		}
 	}
 }
 

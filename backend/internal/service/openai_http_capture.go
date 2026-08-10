@@ -67,6 +67,9 @@ func openAIHTTPCaptureEndpointEligible(c *gin.Context) bool {
 	if c == nil || c.Request == nil || c.Request.URL == nil || c.Request.Method != http.MethodPost {
 		return false
 	}
+	if imageIntent, known := getOpenAIImageIntentHint(c); known && imageIntent {
+		return false
+	}
 	path := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
 	for _, suffix := range []string{
 		"/v1/responses",
@@ -149,12 +152,13 @@ func (s *OpenAIGatewayService) submitOpenAIHTTPTerminalCapture(c *gin.Context, a
 		return
 	}
 	failure := &UpstreamFailoverError{
-		StatusCode:       resp.StatusCode,
-		ResponseBody:     bridge.Response,
-		RequestHeaders:   captureRequestHeadersFromResponse(resp),
-		ResponseHeaders:  resp.Header.Clone(),
-		UpstreamEndpoint: captureEndpointFromResponse(resp),
-		Platform:         string(account.Platform),
+		StatusCode:              resp.StatusCode,
+		ResponseBody:            bridge.Response,
+		RequestHeaders:          captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:         resp.Header.Clone(),
+		UpstreamEndpoint:        captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse: true,
+		Platform:                string(account.Platform),
 	}
 	if rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), failure, s.cfg.Gateway.Capture.MaxBodyBytes); rec != nil {
 		s.capturePool.Submit(rec)

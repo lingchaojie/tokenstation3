@@ -9,6 +9,7 @@ import (
 )
 
 const captureScopeContextKey = "gateway_capture_scope"
+const captureRequestedModelContextKey = "gateway_capture_requested_model"
 
 type captureRequestScope struct {
 	policy   CompiledCapturePolicy
@@ -23,7 +24,12 @@ func PrepareCaptureScope(ctx context.Context, c *gin.Context, settings *SettingS
 	if c == nil || settings == nil || userID <= 0 {
 		return
 	}
-	compiled := settings.GetCompiledCaptureRuntimePolicy(ctx)
+	// Static provisioning off is the default and must be true zero-cost: do not
+	// touch PostgreSQL or start a policy refresh when no capture pool can exist.
+	if settings.cfg == nil || !settings.cfg.Gateway.Capture.Enabled {
+		return
+	}
+	compiled := settings.GetCompiledCaptureRuntimePolicyHot()
 	if !compiled.Enabled() {
 		return
 	}
@@ -52,6 +58,27 @@ func captureScopeFrom(c *gin.Context) (*captureRequestScope, bool) {
 	}
 	scope, ok := value.(*captureRequestScope)
 	return scope, ok && scope != nil
+}
+
+// SetCaptureRequestedModel preserves the client-visible model independently
+// from per-attempt provider mapping. ResetCaptureExchange deliberately does not
+// clear it because failover attempts belong to the same inbound request.
+func SetCaptureRequestedModel(c *gin.Context, model string) {
+	if c == nil {
+		return
+	}
+	if model = strings.TrimSpace(model); model != "" {
+		c.Set(captureRequestedModelContextKey, model)
+	}
+}
+
+func captureRequestedModel(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, _ := c.Get(captureRequestedModelContextKey)
+	model, _ := value.(string)
+	return strings.TrimSpace(model)
 }
 
 // CaptureDecisionFor makes the final platform/outcome decision without any DB

@@ -57,21 +57,22 @@ type CaptureLossIncident struct {
 }
 
 type CaptureHealthSnapshot struct {
-	StartedAt        time.Time                     `json:"started_at"`
-	SubmittedRecords uint64                        `json:"submitted_records"`
-	AcceptedRecords  uint64                        `json:"accepted_records"`
-	WrittenRecords   uint64                        `json:"written_records"`
-	DroppedRecords   uint64                        `json:"dropped_records"`
-	DroppedBytes     uint64                        `json:"dropped_bytes"`
-	DroppedByReason  map[string]CaptureReasonStats `json:"dropped_by_reason"`
-	WorkerQueue      CaptureGaugeSnapshot          `json:"worker_queue"`
-	WriterQueue      CaptureGaugeSnapshot          `json:"writer_queue"`
-	InFlightBytes    CaptureGaugeSnapshot          `json:"in_flight_bytes"`
-	LastSuccessAt    *time.Time                    `json:"last_success_at,omitempty"`
-	LastDropAt       *time.Time                    `json:"last_drop_at,omitempty"`
-	LastDropReason   string                        `json:"last_drop_reason"`
-	LastError        string                        `json:"last_error"`
-	RecentIncidents  []CaptureLossIncident         `json:"recent_incidents"`
+	StartedAt             time.Time                     `json:"started_at"`
+	SubmittedRecords      uint64                        `json:"submitted_records"`
+	AcceptedRecords       uint64                        `json:"accepted_records"`
+	WrittenRecords        uint64                        `json:"written_records"`
+	DroppedRecords        uint64                        `json:"dropped_records"`
+	DroppedBytes          uint64                        `json:"dropped_bytes"`
+	DroppedByReason       map[string]CaptureReasonStats `json:"dropped_by_reason"`
+	WorkerQueue           CaptureGaugeSnapshot          `json:"worker_queue"`
+	WriterQueue           CaptureGaugeSnapshot          `json:"writer_queue"`
+	InFlightBytes         CaptureGaugeSnapshot          `json:"in_flight_bytes"`
+	LastSuccessAt         *time.Time                    `json:"last_success_at,omitempty"`
+	LastDropAt            *time.Time                    `json:"last_drop_at,omitempty"`
+	LastDropReason        string                        `json:"last_drop_reason"`
+	LastError             string                        `json:"last_error"`
+	RecentIncidents       []CaptureLossIncident         `json:"recent_incidents"`
+	HistoryDroppedBuckets uint64                        `json:"history_dropped_buckets"`
 }
 
 type captureAtomicGauge struct {
@@ -120,11 +121,12 @@ type captureHealthTracker struct {
 	now        func() time.Time
 	startedAt  time.Time
 
-	submitted atomic.Uint64
-	accepted  atomic.Uint64
-	written   atomic.Uint64
-	dropped   atomic.Uint64
-	dropBytes atomic.Uint64
+	submitted             atomic.Uint64
+	accepted              atomic.Uint64
+	written               atomic.Uint64
+	dropped               atomic.Uint64
+	dropBytes             atomic.Uint64
+	historyDroppedBuckets atomic.Uint64
 
 	dropByReason  map[CaptureDropReason]*captureDropCounter
 	workerQueue   captureAtomicGauge
@@ -214,7 +216,7 @@ func (t *captureHealthTracker) recordDrop(reason CaptureDropReason, records, byt
 	counter.bytes.Add(uint64(bytes))
 
 	at := t.now().UTC()
-	errorSummary := sanitizeCaptureHealthError(cause)
+	errorSummary := safeCaptureHealthErrorSummary(reason, cause)
 	t.lastDropUnixNano.Store(at.UnixNano())
 	t.lastDropReason.Store(string(reason))
 	t.lastError.Store(errorSummary)
@@ -250,6 +252,36 @@ func (t *captureHealthTracker) recordDrop(reason CaptureDropReason, records, byt
 	t.mu.Unlock()
 }
 
+func safeCaptureHealthErrorSummary(reason CaptureDropReason, err error) string {
+	if err == nil {
+		return ""
+	}
+	switch reason {
+	case CaptureDropByteBudgetExceeded:
+		return "capture in-flight byte budget exceeded"
+	case CaptureDropWorkerQueueFull:
+		return "capture worker queue is full"
+	case CaptureDropWriterQueueFull:
+		return "capture writer queue is full"
+	case CaptureDropWriterUnavailable:
+		return "capture writer is unavailable"
+	case CaptureDropClickHousePrepareFailed:
+		return "ClickHouse batch prepare failed"
+	case CaptureDropClickHouseAppendFailed:
+		return "ClickHouse batch append failed"
+	case CaptureDropClickHouseSendFailed:
+		return "ClickHouse batch send failed"
+	default:
+		return sanitizeCaptureHealthError(err)
+	}
+}
+
+func (t *captureHealthTracker) recordHistoryBucketsDropped(count uint64) {
+	if t != nil && count > 0 {
+		t.historyDroppedBuckets.Add(count)
+	}
+}
+
 func sanitizeCaptureHealthError(err error) string {
 	if err == nil {
 		return ""
@@ -280,6 +312,7 @@ func (t *captureHealthTracker) snapshot() CaptureHealthSnapshot {
 		DroppedByReason: droppedByReason, WorkerQueue: t.workerQueue.snapshot(), WriterQueue: t.writerQueue.snapshot(),
 		InFlightBytes: t.inFlightBytes.snapshot(), LastDropReason: atomicString(&t.lastDropReason),
 		LastError: atomicString(&t.lastError), RecentIncidents: incidents,
+		HistoryDroppedBuckets: t.historyDroppedBuckets.Load(),
 	}
 	if value := t.lastSuccessUnixNano.Load(); value > 0 {
 		at := time.Unix(0, value).UTC()

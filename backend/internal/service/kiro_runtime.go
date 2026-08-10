@@ -522,11 +522,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
 				}
 				return nil, requestCtx, &UpstreamFailoverError{
-					StatusCode:       resp.StatusCode,
-					ResponseBody:     respBody,
-					RequestHeaders:   captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:  resp.Header.Clone(),
-					UpstreamEndpoint: endpoint.URL,
+					StatusCode:              resp.StatusCode,
+					ResponseBody:            respBody,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        endpoint.URL,
+					HasUpstreamHTTPResponse: true,
 				}
 			}
 
@@ -922,11 +923,12 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 		event := s.buildKiroInvalidModelUpstreamEvent(account, resp, upstreamMsg, mappedModel, requestBody, c)
 		appendOpsUpstreamError(c, event)
 		return &UpstreamFailoverError{
-			StatusCode:       resp.StatusCode,
-			ResponseBody:     respBody,
-			RequestHeaders:   captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:  resp.Header.Clone(),
-			UpstreamEndpoint: captureEndpointFromResponse(resp),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
 		}
 	}
 
@@ -948,11 +950,12 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}
 		return &UpstreamFailoverError{
-			StatusCode:       resp.StatusCode,
-			ResponseBody:     respBody,
-			RequestHeaders:   captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:  resp.Header.Clone(),
-			UpstreamEndpoint: captureEndpointFromResponse(resp),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
 		}
 	}
 

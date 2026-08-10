@@ -55,9 +55,21 @@ const captureSettings = reactive({
     worker_queue: { current: 1, peak: 4, capacity: 512 },
     writer_queue: { current: 2, peak: 8, capacity: 1024 },
     in_flight_bytes: { current: 4096, peak: 8192, capacity: 134_217_728 },
+    last_success_at: '2026-08-11T00:02:00Z',
+    last_drop_at: '2026-08-11T00:03:00Z',
     last_drop_reason: 'worker_queue_full',
-    last_error: '',
-    recent_incidents: [],
+    last_error: 'capture worker queue is full',
+    history_dropped_buckets: 1,
+    recent_incidents: [{
+      occurred_at: '2026-08-11T00:03:00Z',
+      reason: 'worker_queue_full',
+      records: 2,
+      bytes: 2048,
+      worker_queue: 512,
+      writer_queue: 12,
+      in_flight_bytes: 4096,
+      error: 'capture worker queue is full',
+    }],
   },
 })
 
@@ -123,7 +135,7 @@ describe('CaptureSettingsView', () => {
         worker_queue_peak: 512,
         writer_queue_peak: 12,
         in_flight_bytes_peak: 4096,
-        last_error: '',
+        last_error: 'capture worker queue is full',
       }],
     })
     updateCaptureSettings.mockResolvedValue(captureSettings)
@@ -149,6 +161,14 @@ describe('CaptureSettingsView', () => {
     expect(wrapper.text()).toContain('12')
     expect(wrapper.text()).toContain('worker_queue_full')
     expect(wrapper.text()).toContain('2 KB')
+    expect(wrapper.get('[data-test="health-started-at"]').text()).not.toContain('—')
+    expect(wrapper.get('[data-test="health-last-success-at"]').text()).not.toContain('—')
+    expect(wrapper.get('[data-test="health-last-drop-at"]').text()).not.toContain('—')
+    expect(wrapper.get('[data-test="health-last-drop-reason"]').text()).toContain('worker_queue_full')
+    expect(wrapper.get('[data-test="capture-incident-queues"]').text()).toContain('512')
+    expect(wrapper.get('[data-test="capture-incident-queues"]').text()).toContain('12')
+    expect(wrapper.get('[data-test="capture-history-queues"]').text()).toContain('512')
+    expect(wrapper.get('[data-test="capture-history-error"]').text()).toContain('capture worker queue is full')
     expect(captureStore.acknowledgeLoss).toHaveBeenCalled()
   })
 

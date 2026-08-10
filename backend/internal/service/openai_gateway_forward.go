@@ -877,13 +877,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 				s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
 				return nil, &UpstreamFailoverError{
-					StatusCode:             resp.StatusCode,
-					ResponseBody:           respBody,
-					RequestHeaders:         captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:        resp.Header.Clone(),
-					UpstreamEndpoint:       captureEndpointFromResponse(resp),
-					Platform:               string(account.Platform),
-					RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					StatusCode:              resp.StatusCode,
+					ResponseBody:            respBody,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse: true,
+					Platform:                string(account.Platform),
+					RetryableOnSameAccount:  account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 				}
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)

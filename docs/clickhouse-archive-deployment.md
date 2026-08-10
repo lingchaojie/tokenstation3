@@ -218,7 +218,7 @@ YAML 只负责 ClickHouse、队列和批量参数等静态 provisioning。改为
 
 ### 7.2 丢失是否可见？
 
-可见。管理员 **转存设置** 页面每 15 秒刷新当前进程的提交、接收、成功写入、丢失条数/字节数、两级队列和全链路在途字节，并显示最近 100 条进程内丢失事件。左侧导航在出现尚未查看的丢失时显示告警点。
+可见。管理员 **转存设置** 页面每 15 秒刷新当前进程的提交、接收、成功写入、丢失条数/字节数、启动/最近成功/最近丢失时间、最后丢失原因、两级队列和全链路在途字节，并显示最近 100 条进程内丢失事件。每条事件和历史行同时显示当时的两级队列及在途字节峰值；左侧导航在出现尚未查看的丢失时显示告警点。
 
 分钟级丢失聚合同时异步 upsert 到 PostgreSQL `capture_health_events`，保留最近 30 天，可按 24 小时、7 天、30 天查看；只保存计数、队列峰值和脱敏错误摘要，不保存 request/response 正文。可见的原因包括：
 
@@ -229,6 +229,8 @@ YAML 只负责 ClickHouse、队列和批量参数等静态 provisioning。改为
 - `clickhouse_prepare_failed`
 - `clickhouse_append_failed`
 - `clickhouse_send_failed`
+
+历史 reporter 的 PostgreSQL 待重试聚合也有明确上限：最多保留 4096 个分钟/原因 bucket，每次最多重试 256 个最旧 bucket。持续故障导致上限被占满时会淘汰最旧 bucket；这只会影响“丢失历史”本身，不影响 ClickHouse 中已写入的正文。淘汰次数通过页面的“历史聚合淘汰”指标和 `capture.health_history_pending_overflow` 日志可见。页面和持久历史只保存预定义的安全错误分类，不会显示 ClickHouse DSN、密码或内部地址。
 
 转存设计没有本地磁盘 spool。任何上述失败都可能造成归档缺失，但不会阻塞或中断用户请求。
 
@@ -241,6 +243,7 @@ YAML 只负责 ClickHouse、队列和批量参数等静态 provisioning。改为
   - 例：100 万次/日、平均 20KB → ≈ `1e6 × 20KB × 2 / 4` ≈ **10 GB/日**。
 - 按 `toYYYYMM(captured_at)` 分区，方便按月 `DROP PARTITION` 清理。
 - 正文内存上界：record 从一级队列接收开始，到 ClickHouse `Send` 成功或明确丢弃之前始终占用 `max_queue_bytes` 预算；一级队列、二级队列和当前 batch 都包含在同一预算内。除此之外仍有按队列条数有界的对象/指针开销。ClickHouse 变慢时预算或任一级队列触顶即 drop，不会无界增长。
+- 运行时策略读取采用 stale-while-revalidate：请求只读进程内快照，冷缓存先 fail-closed 并在后台刷新，过期缓存继续使用旧值并在后台刷新；PostgreSQL 读取再慢也不阻塞转发。管理员保存会立即替换快照，且不会被较早启动的后台读取覆盖。
 
 ### 8.1 留存 / 清理
 

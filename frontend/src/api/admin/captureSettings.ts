@@ -61,6 +61,7 @@ export interface CaptureHealthSnapshot {
   last_drop_at?: string
   last_drop_reason: string
   last_error: string
+  history_dropped_buckets: number
   recent_incidents: CaptureLossIncident[]
 }
 

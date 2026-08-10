@@ -416,10 +416,11 @@ func captureRequestHeadersFromResponse(resp *http.Response) http.Header {
 }
 
 // BuildTerminalErrorCaptureRecord materializes only a final upstream HTTP
-// failure. A request snapshot or explicit upstream endpoint is required, which
-// excludes local scheduling/cooldown errors that merely reuse HTTP-like codes.
+// failure. Callers must explicitly mark that an actual error-status response
+// was received; transport, local scheduling, and errors embedded in an HTTP 200
+// stream are deliberately excluded even when they reuse HTTP-like status codes.
 func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *UpstreamFailoverError, limit int) *CaptureRecord {
-	if c == nil || failure == nil || failure.StatusCode <= 0 || len(failure.ResponseBody) == 0 {
+	if c == nil || failure == nil || failure.StatusCode <= 0 || !failure.HasUpstreamHTTPResponse {
 		return nil
 	}
 	content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeTerminalError)
@@ -431,13 +432,15 @@ func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *U
 		return nil
 	}
 
-	var requestedModel, upstreamModel string
+	requestedModel := captureRequestedModel(c)
+	var upstreamModel string
 	var stream bool
 	var fallbackRequest []byte
 	if value, ok := c.Get("parsed_request"); ok {
 		if parsed, valid := value.(*ParsedRequest); valid && parsed != nil {
-			requestedModel = parsed.Model
-			upstreamModel = parsed.Model
+			if requestedModel == "" {
+				requestedModel = parsed.Model
+			}
 			stream = parsed.Stream
 			if parsed.Body != nil {
 				fallbackRequest = parsed.Body.Bytes()
@@ -463,8 +466,14 @@ func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *U
 		rawResponse = snapshotBytes(bridge.Response)
 		responseTruncated = bridge.ResponseTruncated
 	}
+	if model, outboundStream, _ := extractOpenAIRequestMetaFromBody(rawRequest); model != "" {
+		upstreamModel = model
+		stream = outboundStream
+	}
 	if requestedModel == "" {
-		requestedModel, stream, _ = extractOpenAIRequestMetaFromBody(rawRequest)
+		requestedModel = upstreamModel
+	}
+	if upstreamModel == "" {
 		upstreamModel = requestedModel
 	}
 	rec := &CaptureRecord{

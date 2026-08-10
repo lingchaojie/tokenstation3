@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -94,28 +95,45 @@ func TestCompiledCapturePolicyMatchesOutcomeAndReturnsContentPolicy(t *testing.T
 }
 
 type capturePolicyRepoStub struct {
-	mu       sync.Mutex
-	value    string
-	getErr   error
-	getCalls int
-	setCalls int
+	mu         sync.Mutex
+	value      string
+	getErr     error
+	getCalls   int
+	setCalls   int
+	getStarted chan struct{}
+	getRelease chan struct{}
+	startOnce  sync.Once
 }
 
 func (r *capturePolicyRepoStub) Get(context.Context, string) (*Setting, error) {
 	return nil, ErrSettingNotFound
 }
 
-func (r *capturePolicyRepoStub) GetValue(context.Context, string) (string, error) {
+func (r *capturePolicyRepoStub) GetValue(ctx context.Context, _ string) (string, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.getCalls++
-	if r.getErr != nil {
-		return "", r.getErr
+	value := r.value
+	getErr := r.getErr
+	started := r.getStarted
+	release := r.getRelease
+	r.mu.Unlock()
+	if started != nil {
+		r.startOnce.Do(func() { close(started) })
 	}
-	if r.value == "" {
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	if getErr != nil {
+		return "", getErr
+	}
+	if value == "" {
 		return "", ErrSettingNotFound
 	}
-	return r.value, nil
+	return value, nil
 }
 
 func (r *capturePolicyRepoStub) Set(_ context.Context, _ string, value string) error {
@@ -207,4 +225,37 @@ func TestCaptureRuntimePolicyCorruptStoredJSONFailsClosed(t *testing.T) {
 	_, err := svc.GetCaptureRuntimePolicy(context.Background())
 	require.Error(t, err)
 	require.False(t, svc.GetCompiledCaptureRuntimePolicy(context.Background()).Enabled())
+}
+
+func TestCaptureRuntimePolicyBackgroundRefreshCannotOverwriteNewerAdminSave(t *testing.T) {
+	oldPolicy := DefaultCaptureRuntimePolicy()
+	oldEncoded, err := json.Marshal(oldPolicy)
+	require.NoError(t, err)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repo := &capturePolicyRepoStub{value: string(oldEncoded), getStarted: started, getRelease: release}
+	svc := NewSettingService(repo, nil)
+
+	_ = svc.GetCompiledCaptureRuntimePolicyHot()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background refresh did not start")
+	}
+
+	newPolicy := DefaultCaptureRuntimePolicy()
+	newPolicy.Enabled = true
+	newPolicy.Platforms.OpenAI = true
+	_, err = svc.UpdateCaptureRuntimePolicy(context.Background(), newPolicy)
+	require.NoError(t, err)
+	close(release)
+	require.Eventually(t, func() bool {
+		return !svc.captureRuntimePolicyRefreshing.Load()
+	}, time.Second, time.Millisecond)
+
+	got := svc.GetCompiledCaptureRuntimePolicy(context.Background())
+	require.True(t, got.Enabled())
+	content, ok := got.Decide(PlatformOpenAI, CaptureOutcomeSuccess, 1, nil)
+	require.True(t, ok)
+	require.Equal(t, newPolicy.Content, content)
 }

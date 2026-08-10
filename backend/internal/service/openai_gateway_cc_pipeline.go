@@ -118,13 +118,14 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 	}
 	return &UpstreamFailoverError{
-		StatusCode:             resp.StatusCode,
-		ResponseBody:           respBody,
-		RequestHeaders:         captureRequestHeadersFromResponse(resp),
-		ResponseHeaders:        resp.Header.Clone(),
-		UpstreamEndpoint:       captureEndpointFromResponse(resp),
-		Platform:               string(account.Platform),
-		RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+		StatusCode:              resp.StatusCode,
+		ResponseBody:            respBody,
+		RequestHeaders:          captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:         resp.Header.Clone(),
+		UpstreamEndpoint:        captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse: true,
+		Platform:                string(account.Platform),
+		RetryableOnSameAccount:  account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 	}
 }
 

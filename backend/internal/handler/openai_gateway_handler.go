@@ -295,6 +295,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	service.SetCaptureRequestedModel(c, reqModel)
 
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
@@ -893,6 +894,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	service.SetCaptureRequestedModel(c, reqModel)
 	routingModel := service.NormalizeOpenAICompatRequestedModel(reqModel)
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)
 	reqStream := gjson.GetBytes(body, "stream").Bool()

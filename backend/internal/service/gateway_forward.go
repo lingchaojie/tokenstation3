@@ -697,12 +697,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}(),
 			})
 			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RequestHeaders:         captureRequestHeadersFromResponse(resp),
-				ResponseHeaders:        resp.Header.Clone(),
-				UpstreamEndpoint:       captureEndpointFromResponse(resp),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				StatusCode:              resp.StatusCode,
+				ResponseBody:            respBody,
+				RequestHeaders:          captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:         resp.Header.Clone(),
+				UpstreamEndpoint:        captureEndpointFromResponse(resp),
+				HasUpstreamHTTPResponse: true,
+				RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -734,12 +735,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}(),
 		})
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RequestHeaders:         captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:        resp.Header.Clone(),
-			UpstreamEndpoint:       captureEndpointFromResponse(resp),
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -786,11 +788,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}
 				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
 				return nil, &UpstreamFailoverError{
-					StatusCode:       resp.StatusCode,
-					ResponseBody:     respBody,
-					RequestHeaders:   captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:  resp.Header.Clone(),
-					UpstreamEndpoint: captureEndpointFromResponse(resp),
+					StatusCode:              resp.StatusCode,
+					ResponseBody:            respBody,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse: true,
 				}
 			}
 		}

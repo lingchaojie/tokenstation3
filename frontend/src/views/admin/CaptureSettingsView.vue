@@ -163,24 +163,52 @@
             :title="t('admin.captureSettings.health.title')"
             :description="t('admin.captureSettings.health.description')"
           />
-          <div class="grid gap-3 p-6 sm:grid-cols-2 lg:grid-cols-5">
+          <div class="grid gap-3 p-6 sm:grid-cols-2 lg:grid-cols-6">
             <Metric :label="t('admin.captureSettings.health.submitted')" :value="settings?.health.submitted_records ?? 0" />
             <Metric :label="t('admin.captureSettings.health.accepted')" :value="settings?.health.accepted_records ?? 0" />
             <Metric :label="t('admin.captureSettings.health.written')" :value="settings?.health.written_records ?? 0" />
             <Metric :label="t('admin.captureSettings.health.dropped')" :value="settings?.health.dropped_records ?? 0" danger />
             <Metric :label="t('admin.captureSettings.health.droppedBytes')" :value="formatBytes(settings?.health.dropped_bytes ?? 0)" danger />
+            <Metric
+              :label="t('admin.captureSettings.health.historyDroppedBuckets')"
+              :value="settings?.health.history_dropped_buckets ?? 0"
+              :danger="Boolean(settings?.health.history_dropped_buckets)"
+            />
           </div>
           <div class="grid gap-4 border-t border-gray-100 p-6 text-sm dark:border-dark-700 md:grid-cols-3">
             <Gauge :label="t('admin.captureSettings.health.workerQueue')" :gauge="settings?.health.worker_queue" />
             <Gauge :label="t('admin.captureSettings.health.writerQueue')" :gauge="settings?.health.writer_queue" />
             <Gauge :label="t('admin.captureSettings.health.inFlightBytes')" :gauge="settings?.health.in_flight_bytes" bytes />
           </div>
+          <dl class="grid gap-4 border-t border-gray-100 p-6 text-sm dark:border-dark-700 sm:grid-cols-2 lg:grid-cols-4">
+            <div data-test="health-started-at">
+              <InfoItem :label="t('admin.captureSettings.health.startedAt')" :value="formatOptionalDate(settings?.health.started_at)" />
+            </div>
+            <div data-test="health-last-success-at">
+              <InfoItem :label="t('admin.captureSettings.health.lastSuccessAt')" :value="formatOptionalDate(settings?.health.last_success_at)" />
+            </div>
+            <div data-test="health-last-drop-at">
+              <InfoItem :label="t('admin.captureSettings.health.lastDropAt')" :value="formatOptionalDate(settings?.health.last_drop_at)" />
+            </div>
+            <div data-test="health-last-drop-reason">
+              <InfoItem :label="t('admin.captureSettings.health.lastDropReason')" :value="settings?.health.last_drop_reason || '—'" />
+            </div>
+          </dl>
           <div v-if="settings?.health.recent_incidents.length" class="border-t border-gray-100 dark:border-dark-700">
             <h3 class="px-6 pt-5 text-sm font-semibold text-gray-900 dark:text-white">
               {{ t('admin.captureSettings.health.recentIncidents') }}
             </h3>
             <div class="overflow-x-auto">
               <table class="min-w-full text-sm">
+                <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-dark-800">
+                  <tr>
+                    <th class="px-6 py-3">{{ t('admin.captureSettings.history.time') }}</th>
+                    <th class="px-6 py-3">{{ t('admin.captureSettings.history.reason') }}</th>
+                    <th class="px-6 py-3">{{ t('admin.captureSettings.health.lossAmount') }}</th>
+                    <th class="px-6 py-3">{{ t('admin.captureSettings.health.queueAtLoss') }}</th>
+                    <th class="px-6 py-3">{{ t('admin.captureSettings.history.error') }}</th>
+                  </tr>
+                </thead>
                 <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
                   <tr
                     v-for="(incident, index) in [...settings.health.recent_incidents].reverse()"
@@ -190,6 +218,9 @@
                     <td class="px-6 py-3 font-mono text-xs text-red-600 dark:text-red-400">{{ incident.reason }}</td>
                     <td class="px-6 py-3 text-gray-900 dark:text-white">
                       {{ incident.records }} / {{ formatBytes(incident.bytes) }}
+                    </td>
+                    <td data-test="capture-incident-queues" class="whitespace-nowrap px-6 py-3 text-gray-500">
+                      {{ incident.worker_queue }} / {{ incident.writer_queue }} / {{ formatBytes(incident.in_flight_bytes) }}
                     </td>
                     <td class="max-w-sm truncate px-6 py-3 text-gray-500" :title="incident.error">{{ incident.error || '—' }}</td>
                   </tr>
@@ -237,6 +268,8 @@
                   <th class="px-6 py-3">{{ t('admin.captureSettings.history.reason') }}</th>
                   <th class="px-6 py-3">{{ t('admin.captureSettings.history.records') }}</th>
                   <th class="px-6 py-3">{{ t('admin.captureSettings.history.bytes') }}</th>
+                  <th class="px-6 py-3">{{ t('admin.captureSettings.history.queuePeaks') }}</th>
+                  <th class="px-6 py-3">{{ t('admin.captureSettings.history.error') }}</th>
                   <th class="px-6 py-3">{{ t('admin.captureSettings.history.instance') }}</th>
                 </tr>
               </thead>
@@ -246,6 +279,12 @@
                   <td class="px-6 py-3 font-mono text-xs text-red-600 dark:text-red-400">{{ event.reason }}</td>
                   <td class="px-6 py-3 text-gray-900 dark:text-white">{{ event.dropped_records }}</td>
                   <td class="px-6 py-3 text-gray-900 dark:text-white">{{ formatBytes(event.dropped_bytes) }}</td>
+                  <td data-test="capture-history-queues" class="whitespace-nowrap px-6 py-3 text-gray-500">
+                    {{ event.worker_queue_peak }} / {{ event.writer_queue_peak }} / {{ formatBytes(event.in_flight_bytes_peak) }}
+                  </td>
+                  <td data-test="capture-history-error" class="max-w-sm truncate px-6 py-3 text-gray-500" :title="event.last_error">
+                    {{ event.last_error || '—' }}
+                  </td>
                   <td class="px-6 py-3 text-gray-500">{{ event.instance_id }}</td>
                 </tr>
               </tbody>
@@ -382,6 +421,10 @@ function formatBytes(value: number): string {
 function formatDate(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function formatOptionalDate(value?: string): string {
+  return value ? formatDate(value) : '—'
 }
 
 const CardHeader = defineComponent({

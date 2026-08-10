@@ -2,6 +2,8 @@ package service
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,9 +65,10 @@ func TestBuildTerminalErrorCaptureRecordUsesFinalExchangeAndPolicy(t *testing.T)
 	SetCaptureOutboundRequest(c, req, []byte(`{"model":"final-model"}`), 1024)
 
 	rec := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, &UpstreamFailoverError{
-		StatusCode:      http.StatusTooManyRequests,
-		ResponseBody:    []byte(`{"error":{"message":"busy"}}`),
-		ResponseHeaders: http.Header{"X-Request-Id": []string{"req-final"}},
+		StatusCode:              http.StatusTooManyRequests,
+		ResponseBody:            []byte(`{"error":{"message":"busy"}}`),
+		ResponseHeaders:         http.Header{"X-Request-Id": []string{"req-final"}},
+		HasUpstreamHTTPResponse: true,
 	}, 1024)
 	require.NotNil(t, rec)
 	require.Equal(t, http.StatusTooManyRequests, rec.HTTPStatus)
@@ -92,6 +95,89 @@ func TestBuildTerminalErrorCaptureRecordSkipsLocalOrDisabledOutcomes(t *testing.
 	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
 	failure.UpstreamEndpoint = "https://api.example.test/v1/messages"
 	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, 1024))
+}
+
+func TestBuildTerminalErrorCaptureRecordRejectsSyntheticTransportFailure(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"gpt-5"}`), 1024)
+
+	svc := &OpenAIGatewayService{}
+	failure := svc.handleOpenAIUpstreamTransportError(context.Background(), c, &Account{ID: 1, Platform: PlatformOpenAI}, errors.New("dial tcp: connection refused"), false)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, failure, &failoverErr)
+	require.False(t, failoverErr.HasUpstreamHTTPResponse)
+	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformOpenAI, failoverErr, 1024))
+}
+
+func TestBuildTerminalErrorCaptureRecordRejectsErrorEmbeddedInHTTP200Stream(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"claude"}`), 1024)
+
+	failure := &UpstreamFailoverError{
+		StatusCode:       http.StatusForbidden,
+		ResponseBody:     []byte(`{"type":"error"}`),
+		UpstreamEndpoint: req.URL.String(),
+		// An HTTP 200 SSE event:error may use an HTTP-like status for failover,
+		// but it is not an upstream error-status response.
+		HasUpstreamHTTPResponse: false,
+	}
+	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, 1024))
+}
+
+func TestBuildTerminalErrorCaptureRecordKeepsRequestedAndMappedModels(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	SetCaptureRequestedModel(c, "client-model")
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"mapped-provider-model","stream":false}`), 1024)
+
+	rec := BuildTerminalErrorCaptureRecord(c, PlatformOpenAI, &UpstreamFailoverError{
+		StatusCode:              http.StatusBadGateway,
+		ResponseBody:            []byte(`{"error":"upstream"}`),
+		UpstreamEndpoint:        req.URL.String(),
+		HasUpstreamHTTPResponse: true,
+	}, 1024)
+	require.NotNil(t, rec)
+	require.Equal(t, "client-model", rec.RequestedModel)
+	require.Equal(t, "mapped-provider-model", rec.UpstreamModel)
+}
+
+func TestBuildTerminalErrorCaptureRecordAllowsEmptyHTTPErrorBody(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"claude"}`), 1024)
+
+	rec := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, &UpstreamFailoverError{
+		StatusCode:              http.StatusBadGateway,
+		UpstreamEndpoint:        req.URL.String(),
+		HasUpstreamHTTPResponse: true,
+	}, 1024)
+	require.NotNil(t, rec)
+	require.Empty(t, rec.RawResponse)
+	require.Equal(t, http.StatusBadGateway, rec.HTTPStatus)
 }
 
 func TestSnapshotBytesCopiesInput(t *testing.T) {

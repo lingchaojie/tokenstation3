@@ -70,3 +70,31 @@ func TestCaptureHealthReporterCleanupUsesThirtyDayCutoff(t *testing.T) {
 	require.NoError(t, reporter.cleanupOnce(context.Background()))
 	require.Equal(t, []time.Time{now.Add(-30 * 24 * time.Hour)}, repo.cutoffs)
 }
+
+func TestCaptureHealthReporterBoundsPendingRetryStateAndBatchSize(t *testing.T) {
+	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	tracker := newCaptureHealthTracker("host-a", func() time.Time { return now })
+	repo := &captureHealthRepoFake{failUpserts: 10}
+	reporter := newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{
+		now:             func() time.Time { return now },
+		pendingCapacity: 2,
+		maxBatchSize:    1,
+	})
+
+	for i := 0; i < 3; i++ {
+		tracker.recordDrop(CaptureDropWriterQueueFull, 1, int64(i+1), nil)
+		now = now.Add(time.Minute)
+		require.Error(t, reporter.flushOnce(context.Background(), false))
+	}
+
+	reporter.mu.Lock()
+	require.Len(t, reporter.pending, 2)
+	reporter.mu.Unlock()
+	require.Equal(t, uint64(1), tracker.snapshot().HistoryDroppedBuckets)
+
+	repo.mu.Lock()
+	for _, batch := range repo.upserts {
+		require.LessOrEqual(t, len(batch), 1)
+	}
+	repo.mu.Unlock()
+}

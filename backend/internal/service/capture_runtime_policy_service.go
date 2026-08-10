@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -34,6 +35,36 @@ func (s *SettingService) GetCompiledCaptureRuntimePolicy(ctx context.Context) Co
 	return s.loadCaptureRuntimePolicy(ctx).compiled
 }
 
+// GetCompiledCaptureRuntimePolicyHot is the forwarding-path accessor. It never
+// waits for PostgreSQL: a fresh cache is returned immediately, while a stale
+// cache is served during a deduplicated background refresh. A cold cache fails
+// closed until that refresh publishes a value.
+func (s *SettingService) GetCompiledCaptureRuntimePolicyHot() CompiledCapturePolicy {
+	fallback := newCaptureRuntimePolicyErrorEntry("capture runtime policy cache is cold").compiled
+	if s == nil {
+		return fallback
+	}
+	cached, _ := s.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy)
+	if cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.compiled
+	}
+
+	if s.captureRuntimePolicyRefreshing.CompareAndSwap(false, true) {
+		go func() {
+			defer s.captureRuntimePolicyRefreshing.Store(false)
+			entry := s.loadCaptureRuntimePolicy(context.Background())
+			if entry.loadError != "" {
+				// Do not put raw repository/DSN details in request-adjacent logs.
+				slog.Warn("capture_runtime_policy_refresh_failed", "detail", "capture remains fail-closed until retry")
+			}
+		}()
+	}
+	if cached != nil {
+		return cached.compiled
+	}
+	return fallback
+}
+
 func (s *SettingService) loadCaptureRuntimePolicy(ctx context.Context) *cachedCaptureRuntimePolicy {
 	if s != nil {
 		if cached, ok := s.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
@@ -50,9 +81,9 @@ func (s *SettingService) loadCaptureRuntimePolicy(ctx context.Context) *cachedCa
 		}
 		if s.settingRepo == nil {
 			entry := newCaptureRuntimePolicyErrorEntry("capture runtime policy repository is nil")
-			s.captureRuntimePolicyCache.Store(entry)
-			return entry, nil
+			return s.publishCaptureRuntimePolicyEntry(s.captureRuntimePolicyGeneration.Load(), entry), nil
 		}
+		generation := s.captureRuntimePolicyGeneration.Load()
 
 		baseCtx := ctx
 		if baseCtx == nil {
@@ -63,28 +94,40 @@ func (s *SettingService) loadCaptureRuntimePolicy(ctx context.Context) *cachedCa
 		raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyCaptureRuntimePolicy)
 		if errors.Is(err, ErrSettingNotFound) {
 			entry := newCaptureRuntimePolicySuccessEntry(DefaultCaptureRuntimePolicy())
-			s.captureRuntimePolicyCache.Store(entry)
-			return entry, nil
+			return s.publishCaptureRuntimePolicyEntry(generation, entry), nil
 		}
 		if err != nil {
 			entry := newCaptureRuntimePolicyErrorEntry(fmt.Sprintf("load capture runtime policy: %v", err))
-			s.captureRuntimePolicyCache.Store(entry)
-			return entry, nil
+			return s.publishCaptureRuntimePolicyEntry(generation, entry), nil
 		}
 		policy, err := DecodeCaptureRuntimePolicy([]byte(raw))
 		if err != nil {
 			entry := newCaptureRuntimePolicyErrorEntry(err.Error())
-			s.captureRuntimePolicyCache.Store(entry)
-			return entry, nil
+			return s.publishCaptureRuntimePolicyEntry(generation, entry), nil
 		}
 		entry := newCaptureRuntimePolicySuccessEntry(policy)
-		s.captureRuntimePolicyCache.Store(entry)
-		return entry, nil
+		return s.publishCaptureRuntimePolicyEntry(generation, entry), nil
 	})
 	entry, _ := result.(*cachedCaptureRuntimePolicy)
 	if entry == nil {
 		return newCaptureRuntimePolicyErrorEntry("capture runtime policy cache returned no value")
 	}
+	return entry
+}
+
+func (s *SettingService) publishCaptureRuntimePolicyEntry(generation uint64, entry *cachedCaptureRuntimePolicy) *cachedCaptureRuntimePolicy {
+	if s == nil {
+		return entry
+	}
+	s.captureRuntimePolicyMu.Lock()
+	defer s.captureRuntimePolicyMu.Unlock()
+	if s.captureRuntimePolicyGeneration.Load() != generation {
+		if current, _ := s.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy); current != nil {
+			return current
+		}
+		return entry
+	}
+	s.captureRuntimePolicyCache.Store(entry)
 	return entry
 }
 
@@ -128,7 +171,10 @@ func (s *SettingService) UpdateCaptureRuntimePolicy(ctx context.Context, policy 
 		return CaptureRuntimePolicy{}, fmt.Errorf("save capture runtime policy: %w", err)
 	}
 	entry := newCaptureRuntimePolicySuccessEntry(normalized)
+	s.captureRuntimePolicyMu.Lock()
+	s.captureRuntimePolicyGeneration.Add(1)
 	s.captureRuntimePolicyCache.Store(entry)
+	s.captureRuntimePolicyMu.Unlock()
 	s.captureRuntimePolicySF.Forget(captureRuntimePolicySFKey)
 	return normalized, nil
 }
