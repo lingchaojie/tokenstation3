@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/alitto/pond/v2"
-	"go.uber.org/zap"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 type conversationCapturePoolOptions struct {
@@ -28,22 +26,40 @@ type conversationCapturePoolOptions struct {
 // ConversationCapturePool 是与转发/计费隔离的第三条异步通道。
 // 队列满时按 overflow 策略 drop/sample，绝不 sync 回写、绝不阻塞热路径。
 type ConversationCapturePool struct {
-	pool      pond.Pool
-	writer    ArchiveWriter
-	overflow  string
-	sample    int
-	bytes     *captureByteGauge
-	health    *captureHealthTracker
-	reporter  *captureHealthReporter
+	pool     pond.Pool
+	writer   ArchiveWriter
+	overflow string
+	sample   int
+	bytes    *captureByteGauge
+	health   *captureHealthTracker
+	reporter *captureHealthReporter
+	status   archiveWriterStatus
+	queueMu  sync.Mutex
+	stopOnce sync.Once
+}
+
+type archiveWriterStatus interface {
+	Ready() bool
+	InitializationError() string
+}
+
+type staticArchiveWriterStatus struct {
 	ready     bool
 	initError string
-	queueMu   sync.Mutex
-	stopOnce  sync.Once
 }
+
+func (s staticArchiveWriterStatus) Ready() bool                 { return s.ready }
+func (s staticArchiveWriterStatus) InitializationError() string { return s.initError }
 
 func newConversationCapturePool(opts conversationCapturePoolOptions, writer ArchiveWriter) *ConversationCapturePool {
 	tracker := newCaptureHealthTracker(captureInstanceID(), time.Now)
-	return newConversationCapturePoolWithState(opts, writer, tracker, nil, true, "")
+	return newConversationCapturePoolWithStatus(
+		opts,
+		writer,
+		staticArchiveWriterStatus{ready: true},
+		tracker,
+		nil,
+	)
 }
 
 func newConversationCapturePoolWithState(
@@ -53,6 +69,22 @@ func newConversationCapturePoolWithState(
 	reporter *captureHealthReporter,
 	ready bool,
 	initError string,
+) *ConversationCapturePool {
+	return newConversationCapturePoolWithStatus(
+		opts,
+		writer,
+		staticArchiveWriterStatus{ready: ready, initError: sanitizeCaptureHealthError(errors.New(initError))},
+		tracker,
+		reporter,
+	)
+}
+
+func newConversationCapturePoolWithStatus(
+	opts conversationCapturePoolOptions,
+	writer ArchiveWriter,
+	status archiveWriterStatus,
+	tracker *captureHealthTracker,
+	reporter *captureHealthReporter,
 ) *ConversationCapturePool {
 	workers := opts.WorkerCount
 	if workers <= 0 {
@@ -67,15 +99,14 @@ func newConversationCapturePoolWithState(
 	}
 	tracker.setCapacities(int64(queue), int64(opts.WriterQueueSize), opts.MaxQueueBytes)
 	return &ConversationCapturePool{
-		pool:      pond.NewPool(workers, pond.WithQueueSize(queue)),
-		writer:    writer,
-		overflow:  opts.OverflowPolicy,
-		sample:    opts.SamplePercent,
-		bytes:     &captureByteGauge{max: opts.MaxQueueBytes},
-		health:    tracker,
-		reporter:  reporter,
-		ready:     ready,
-		initError: sanitizeCaptureHealthError(errors.New(initError)),
+		pool:     pond.NewPool(workers, pond.WithQueueSize(queue)),
+		writer:   writer,
+		overflow: opts.OverflowPolicy,
+		sample:   opts.SamplePercent,
+		bytes:    &captureByteGauge{max: opts.MaxQueueBytes},
+		health:   tracker,
+		reporter: reporter,
+		status:   status,
 	}
 }
 
@@ -154,37 +185,28 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 }
 
 // NewConversationCapturePool 是 wire provider。capture 关闭时返回 nil（handler 侧已 nil 保护）；
-// ClickHouse 建连失败时降级为 noopArchiveWriter（仍可 Submit，但不落库），绝不阻塞启动、绝不影响转发。
+// ClickHouse 建连失败时由稳定 manager 降级为 unavailable writer 并后台重试，
+// 仍可 Submit 但在恢复前不落库；绝不阻塞启动、绝不影响转发。
 func NewConversationCapturePool(cfg *config.Config, repo CaptureHealthRepository) *ConversationCapturePool {
 	if cfg == nil || !cfg.Gateway.Capture.Enabled {
 		return nil
 	}
 	cc := cfg.Gateway.Capture
 	tracker := newCaptureHealthTracker(captureInstanceID(), time.Now)
-	writer, err := newClickHouseArchiveWriter(cc, tracker)
-	ready := err == nil
-	initError := ""
-	if err != nil {
-		logger.L().With(
-			zap.String("component", "service.conversation_capture_pool"),
-			zap.Error(err),
-		).Error("capture.clickhouse_init_failed_degrade_noop")
-		initError = err.Error()
-		writer = unavailableArchiveWriter{}
-	}
+	manager := newCaptureArchiveWriterManager(cc, tracker, captureWriterRetryOptions{})
 	var reporter *captureHealthReporter
 	if repo != nil {
 		reporter = newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{})
 		reporter.Start()
 	}
-	return newConversationCapturePoolWithState(conversationCapturePoolOptions{
+	return newConversationCapturePoolWithStatus(conversationCapturePoolOptions{
 		WorkerCount:     cc.WorkerCount,
 		QueueSize:       cc.QueueSize,
 		WriterQueueSize: cc.WriterQueueSize,
 		OverflowPolicy:  cc.OverflowPolicy,
 		SamplePercent:   cc.OverflowSamplePercent,
 		MaxQueueBytes:   cc.MaxQueueBytes,
-	}, writer, tracker, reporter, ready, initError)
+	}, manager, manager, tracker, reporter)
 }
 
 func captureInstanceID() string {
@@ -202,13 +224,19 @@ func (p *ConversationCapturePool) Health() CaptureHealthSnapshot {
 	return p.health.snapshot()
 }
 
-func (p *ConversationCapturePool) Ready() bool { return p != nil && p.ready }
+func (p *ConversationCapturePool) Ready() bool {
+	return p != nil && p.status != nil && p.status.Ready()
+}
 
 func (p *ConversationCapturePool) InitializationError() string {
-	if p == nil {
+	if p == nil || p.status == nil {
 		return ""
 	}
-	return p.initError
+	initError := p.status.InitializationError()
+	if initError == "" {
+		return ""
+	}
+	return sanitizeCaptureHealthError(errors.New(initError))
 }
 
 func (p *ConversationCapturePool) Stop() {

@@ -85,7 +85,7 @@ ClickHouse 容器 :9000 ─► 独立持久数据盘
 | OpenAI 三个 HTTP 文本入口 | 已实现 | OpenAI 平台默认关闭；与 `openai_passthrough` 无关 |
 | 队列/写入丢失实时可见 | 已实现 | 管理页显示计数、时间、原因、峰值和最近事件 |
 | 30 天丢失历史 | 已实现 | 写入主 PostgreSQL 的 `capture_health_events` |
-| 启动时 ClickHouse 初始化失败后自动重连 | 尚未实现 | 当前需恢复 ClickHouse 后重启 `sub2api`；目标版本要加入指数退避重连 |
+| 启动时 ClickHouse 初始化失败后自动重连 | 已实现 | 首次同步尝试失败后按约 2～60 秒指数退避并带 jitter 后台重试，无需重启应用 |
 | Capture 指标接入现有 Ops 邮件 | 尚未实现 | 当前有管理页和日志；目标版本再补告警事件/恢复邮件 |
 
 因此推荐把正式服接入拆成两步：
@@ -554,7 +554,9 @@ docker compose logs --tail=200 sub2api
 
 管理员「转存设置」应显示 `provisioned=true`、`ready=true`，地址已脱敏，database/table 正确。
 
-当前 `dev` 有一个必须知道的限制：如果应用启动时 `Open + Ping + CREATE TABLE IF NOT EXISTS` 任一步失败，它会降级为 unavailable/no-op，主服务继续运行，但不会在后台重新初始化。修复网络/权限后要重启 `sub2api`。已确定的后续改动是加入约 2 秒起步、最大约 60 秒、带 jitter 的指数退避初始化重连；它只恢复后续写入，不补写已经丢失的数据。
+应用仍会在启动时同步执行第一次 `Open + Ping + CREATE TABLE IF NOT EXISTS`，所以 ClickHouse 健康时会立即 ready。任一步失败后，主服务降级为 unavailable writer 并继续启动，同时以约 2 秒起步、最大约 60 秒、带 jitter 的指数退避在后台重新初始化。连接恢复后，管理员页面会自动变为 `ready=true`，不需要重启 `sub2api`。
+
+初始化失败期间到达的记录会按 `writer_unavailable` 计为丢失，不会补写。已经建立连接后的网络恢复由 clickhouse-go 连接池处理；已经失败的批次仍按对应 ClickHouse 原因计为丢失，不做 replay。
 
 ---
 
@@ -656,7 +658,7 @@ LIMIT 20;
 2. 发一个测试请求，确认主转发仍成功。
 3. 管理页应出现 writer/ClickHouse 丢失事件，时间和计数可见。
 4. 恢复 ClickHouse。
-5. 当前版本若启动初始化失败，重启 `sub2api` 后 `ready=true`；目标自动重连版本应自行恢复。
+5. 若启动初始化失败，保持 `sub2api` 运行，确认后台自动重连后页面自行变为 `ready=true`。
 6. 恢复后的新请求应能写入；故障期间已经丢失的记录不会补写。
 
 再重启 ClickHouse 主机一次，确认：
@@ -848,7 +850,7 @@ ALTER TABLE llm_archive.model_call_archive DROP PARTITION '202607';
 
 ### ClickHouse 恢复了，为什么页面仍不 ready？
 
-当前实现只在 `sub2api` 启动时初始化 writer；启动失败后不会自动重试。修复连接后重启 `sub2api`。目标自动重连版本完成后，此限制会取消，但故障期间丢失的数据仍不会补写。
+先等待后台指数退避的下一次初始化，最长间隔约 60 秒，并检查 `capture.clickhouse_init_retry_failed` 日志中的安全错误分类。网络、账号权限和建表权限恢复后，页面会自行变为 `ready=true`，不需要重启 `sub2api`；故障期间丢失的数据仍不会补写。
 
 ### 为什么正式服一键更新后不需要重配 Tailscale？
 

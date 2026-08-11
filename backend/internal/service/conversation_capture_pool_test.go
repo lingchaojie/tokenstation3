@@ -2,10 +2,38 @@ package service
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+type mutableArchiveWriterStatus struct {
+	mu        sync.RWMutex
+	ready     bool
+	initError string
+}
+
+func (s *mutableArchiveWriterStatus) Ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ready
+}
+
+func (s *mutableArchiveWriterStatus) InitializationError() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.initError
+}
+
+func (s *mutableArchiveWriterStatus) set(ready bool, initError string) {
+	s.mu.Lock()
+	s.ready = ready
+	s.initError = initError
+	s.mu.Unlock()
+}
 
 type fakeWriter struct{ n int32 }
 
@@ -56,6 +84,25 @@ func TestCapturePoolNilSafe(t *testing.T) {
 	var p *ConversationCapturePool
 	p.Submit(&CaptureRecord{}) // must not panic
 	p.Stop()                   // must not panic
+}
+
+func TestCapturePoolReadinessDelegatesToWriterStatus(t *testing.T) {
+	status := &mutableArchiveWriterStatus{initError: "dial failed"}
+	pool := newConversationCapturePoolWithStatus(
+		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1},
+		&fakeWriter{},
+		status,
+		newCaptureHealthTracker("test", time.Now),
+		nil,
+	)
+	t.Cleanup(pool.Stop)
+
+	require.False(t, pool.Ready())
+	require.Equal(t, "dial failed", pool.InitializationError())
+
+	status.set(true, "")
+	require.True(t, pool.Ready())
+	require.Empty(t, pool.InitializationError())
 }
 
 // blockingWriter 阻塞在 Write 上直到 release 关闭，用来把 record 卡在 worker 里，

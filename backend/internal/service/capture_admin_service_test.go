@@ -90,6 +90,34 @@ func TestCaptureSettingsViewDoesNotExposeInitializationErrorDetails(t *testing.T
 	require.Equal(t, "ClickHouse initialization failed; check server logs", got.InitializationError)
 }
 
+func TestCaptureSettingsViewReflectsWriterRecovery(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	status := &mutableArchiveWriterStatus{initError: "dial failed"}
+	pool := newConversationCapturePoolWithStatus(
+		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
+		&fakeWriter{},
+		status,
+		newCaptureHealthTracker("test", time.Now),
+		nil,
+	)
+	t.Cleanup(pool.Stop)
+	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{})
+
+	before, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.True(t, before.Provisioned)
+	require.False(t, before.Ready)
+	require.Equal(t, "ClickHouse initialization failed; check server logs", before.InitializationError)
+
+	status.set(true, "")
+	after, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.True(t, after.Provisioned)
+	require.True(t, after.Ready)
+	require.Empty(t, after.InitializationError)
+}
+
 func TestCaptureSettingsHistoryValidatesRangeAndSortsNewestFirst(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	repo := &captureHealthRepoStub{events: []CaptureHealthEvent{
