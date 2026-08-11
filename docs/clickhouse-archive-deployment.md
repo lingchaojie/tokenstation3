@@ -86,7 +86,7 @@ ClickHouse 容器 :9000 ─► 独立持久数据盘
 | 队列/写入丢失实时可见 | 已实现 | 管理页显示计数、时间、原因、峰值和最近事件 |
 | 30 天丢失历史 | 已实现 | 写入主 PostgreSQL 的 `capture_health_events` |
 | 启动时 ClickHouse 初始化失败后自动重连 | 已实现 | 首次同步尝试失败后按约 2～60 秒指数退避并带 jitter 后台重试，无需重启应用 |
-| Capture 指标接入现有 Ops 邮件 | 尚未实现 | 当前有管理页和日志；目标版本再补告警事件/恢复邮件 |
+| Capture 指标接入现有 Ops 邮件 | 已实现 | 复用 Ops 规则、事件、收件人、静默、限速和邮件模板；迁移会写入三条默认启用规则 |
 
 因此推荐把正式服接入拆成两步：
 
@@ -688,18 +688,27 @@ LIMIT 20;
 
 健康历史 reporter 最多暂存 4096 个分钟/原因 bucket，每批重试最旧的 256 个。它自身溢出也有页面计数和结构化日志。管理 API 不返回 ClickHouse 密码，不把 DSN 或凭据写入历史错误。
 
-### 12.2 已选定但尚待实现
+### 12.2 Capture Ops 告警
 
-后续要把以下 capture 指标接入现有 Ops 事件/邮件：
+Capture 已接入现有 Ops 告警评估器。应用迁移会按名称幂等写入三条默认启用规则，管理员可在 Ops 告警规则编辑器中调整或关闭：
 
-- `capture_ready` 连续 2 分钟不就绪：critical。
-- `capture_dropped_records` 5 分钟窗口出现任何新增：warning。
-- `capture_writer_failures` 出现连接或批次失败：critical。
-- 恢复后生成 recovery 事件/邮件。
-- 同类告警冷却 60 分钟，避免邮件风暴。
-- 告警只包含安全分类、计数和时间，不包含 body、headers、DSN 或密码。
+| 默认规则 | 条件 | 级别 | 冷却 |
+|---|---|---|---:|
+| 转存基础设施未就绪 | `capture_ready < 1`，连续 2 个一分钟样本 | P0 | 60 分钟 |
+| 转存发生数据丢失 | 5 分钟 `capture_dropped_records > 0` | P1 | 60 分钟 |
+| ClickHouse 转存写入失败 | 5 分钟 `capture_writer_failures > 0` | P0 | 60 分钟 |
 
-在该功能实现前，生产启用后必须由管理员页面、日志或现有外部监控承担主动巡检，不能把“页面可见”误认为“已经主动发邮件”。
+启用邮件前须同时确认：
+
+1. 静态 `ops.enabled` 和管理员系统设置中的 Ops monitoring 均为开启状态，否则评估任务不运行。
+2. 在现有 Ops 邮件设置中开启告警邮件，填写收件人，并按需设置最低级别与每小时限速；系统 SMTP/邮件发送能力也必须已正确配置。
+3. 在 Ops 告警规则页确认三条迁移规则存在且 `notify_email` 已开启。迁移使用规则名称做冲突键，不会覆盖管理员已经调整过的同名规则。
+
+`capture_ready` 表示当前取得 Ops leader lock 的评估实例自身的 writer 状态；当前正式服为单应用实例，因此等同于正式服转存就绪状态。以后扩成多应用实例时，不能把它误读为集群全部实例都就绪。
+
+两个丢失指标读取 PostgreSQL 的 `capture_health_events` 分钟桶，并聚合查询返回的所有实例。评估器只读取已经结束的分钟窗口，所以最新丢失通常要等当前分钟结束并由 reporter 落库后才会进入告警。`capture_dropped_records` 统计所有丢失；`capture_writer_failures` 只统计 writer 不可用以及 ClickHouse prepare、append、send 失败。因此存储链路故障可能同时触发 P1 和 P0，这是有意的重叠：P1 表示“发生任何丢失”，P0 标识“存储链路故障”。
+
+指标恢复后，服务先把活动事件持久化为 `resolved`，成功后才发送独立的 `ops.alert_recovered` 恢复邮件。恢复邮件沿用规则邮件开关、全局邮件开关、收件人、最低级别、静默和每小时限速；若持久化失败则不会误发恢复通知。告警和邮件只包含规则、数值、状态和时间，不包含 capture body、headers、ClickHouse DSN 或密码。
 
 ### 12.3 ClickHouse 主机监控
 
@@ -777,11 +786,13 @@ sudo tailscale serve --tcp=19000 off
 - [ ] OpenAI 支持入口测试请求成功入库，且不依赖 passthrough。
 - [ ] 空闲时没有周期性空 INSERT。
 - [ ] 故障时用户请求不受影响，丢失在页面/历史中可见。
+- [ ] Ops monitoring 与告警邮件已启用，收件人、最低级别和限速已核对。
+- [ ] 三条 Capture 默认规则存在，并已通过受控故障验证 firing 与 recovery 事件/邮件。
 - [ ] ClickHouse 主机重启后数据盘、Docker、容器、Tailscale 和 Serve 自动恢复。
 - [ ] 已配置磁盘与服务健康告警。
 - [ ] 已验证运行时关闭、静态关闭和应用版本回滚路径。
 
-如果要求“无人值守后能主动邮件提醒”，还必须等 Capture 指标接入 Ops 邮件完成并验证 recovery 邮件；当前管理页可见性本身不满足这一条。
+仅看到管理页统计不等于主动告警已可用；必须实际配置 Ops 邮件并完成一次受控 firing/recovery 演练。
 
 ---
 
