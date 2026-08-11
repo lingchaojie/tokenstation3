@@ -429,8 +429,19 @@ func ProvideOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	capturePool *ConversationCapturePool,
+	captureHealthRepo CaptureHealthRepository,
 ) *OpsAlertEvaluatorService {
-	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyRepo)
+	svc := NewOpsAlertEvaluatorService(
+		opsService,
+		opsRepo,
+		emailService,
+		redisClient,
+		cfg,
+		proxyRepo,
+		capturePool,
+		captureHealthRepo,
+	)
 	svc.Start()
 	return svc
 }

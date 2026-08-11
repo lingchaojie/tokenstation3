@@ -209,6 +209,26 @@ func TestOpsAlertRuleValidation(t *testing.T) {
 
 	require.True(t, isPercentOrRateMetric("error_rate"))
 	require.False(t, isPercentOrRateMetric("concurrency_queue_depth"))
+
+	for _, metricType := range []string{
+		"capture_ready",
+		"capture_dropped_records",
+		"capture_writer_failures",
+	} {
+		payload := map[string]json.RawMessage{
+			"name":        json.RawMessage(`"Capture health"`),
+			"metric_type": json.RawMessage(`"` + metricType + `"`),
+			"operator":    json.RawMessage(`">"`),
+			"threshold":   json.RawMessage(`0`),
+		}
+		_, err := validateOpsAlertRulePayload(payload)
+		require.NoError(t, err, metricType)
+		require.False(t, isPercentOrRateMetric(metricType))
+
+		payload["threshold"] = json.RawMessage(`-1`)
+		_, err = validateOpsAlertRulePayload(payload)
+		require.ErrorContains(t, err, "threshold must be >= 0", metricType)
+	}
 }
 
 func TestOpsWSHelpers(t *testing.T) {

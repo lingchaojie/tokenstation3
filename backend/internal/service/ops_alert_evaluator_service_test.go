@@ -4,11 +4,46 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type opsCaptureHealthRepoStub struct {
+	events []CaptureHealthEvent
+	err    error
+	start  time.Time
+	end    time.Time
+}
+
+func (r *opsCaptureHealthRepoStub) UpsertEvents(context.Context, []CaptureHealthEvent) error {
+	return nil
+}
+
+func (r *opsCaptureHealthRepoStub) ListEvents(_ context.Context, start, end time.Time) ([]CaptureHealthEvent, error) {
+	r.start = start
+	r.end = end
+	return append([]CaptureHealthEvent(nil), r.events...), r.err
+}
+
+func (r *opsCaptureHealthRepoStub) DeleteBefore(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func newOpsCaptureMetricPool(t *testing.T, status archiveWriterStatus) *ConversationCapturePool {
+	t.Helper()
+	pool := newConversationCapturePoolWithStatus(
+		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
+		noopArchiveWriter{},
+		status,
+		newCaptureHealthTracker("ops-test", time.Now),
+		nil,
+	)
+	t.Cleanup(pool.Stop)
+	return pool
+}
 
 var _ OpsRepository = (*stubOpsRepo)(nil)
 
@@ -251,4 +286,144 @@ func TestComputeRuleMetricNewIndicators(t *testing.T) {
 			require.InDelta(t, tt.wantValue, gotValue, 0.0001)
 		})
 	}
+}
+
+func TestComputeRuleMetricCaptureReady(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	rule := &OpsAlertRule{MetricType: "capture_ready"}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}}
+
+	value, ok := svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.False(t, ok)
+	require.Zero(t, value)
+
+	status := &mutableArchiveWriterStatus{initError: "dial failed"}
+	svc.capturePool = newOpsCaptureMetricPool(t, status)
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Zero(t, value)
+
+	status.set(true, "")
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Equal(t, 1.0, value)
+}
+
+func TestComputeRuleMetricCaptureDroppedRecords(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{InstanceID: "app-1", Reason: string(CaptureDropWorkerQueueFull), DroppedRecords: 2},
+		{InstanceID: "app-2", Reason: string(CaptureDropWriterUnavailable), DroppedRecords: 3},
+		{InstanceID: "app-2", Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 5},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 10.0, value)
+	require.Equal(t, start, repo.start)
+	require.Equal(t, end, repo.end)
+}
+
+func TestComputeRuleMetricCaptureWriterFailures(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{Reason: string(CaptureDropWriterUnavailable), DroppedRecords: 2},
+		{Reason: string(CaptureDropClickHousePrepareFailed), DroppedRecords: 3},
+		{Reason: string(CaptureDropClickHouseAppendFailed), DroppedRecords: 5},
+		{Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 7},
+		{Reason: string(CaptureDropWorkerQueueFull), DroppedRecords: 11},
+		{Reason: string(CaptureDropWriterQueueFull), DroppedRecords: 13},
+		{Reason: string(CaptureDropByteBudgetExceeded), DroppedRecords: 17},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_writer_failures"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 17.0, value)
+}
+
+func TestComputeRuleMetricCaptureRepositoryErrorIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	svc := &OpsAlertEvaluatorService{
+		opsRepo:           &stubOpsRepo{},
+		captureHealthRepo: &opsCaptureHealthRepoStub{err: errors.New("postgres unavailable")},
+	}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-5*time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.False(t, ok)
+	require.Zero(t, value)
+}
+
+func TestNewOpsAlertEvaluatorServiceProvidesCaptureMetrics(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{{
+		Reason:         string(CaptureDropWorkerQueueFull),
+		DroppedRecords: 4,
+	}}}
+	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	svc := NewOpsAlertEvaluatorService(nil, &stubOpsRepo{}, nil, nil, nil, nil, pool, repo)
+
+	ready, readyOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_ready"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+	dropped, droppedOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.True(t, readyOK)
+	require.Equal(t, 1.0, ready)
+	require.True(t, droppedOK)
+	require.Equal(t, 4.0, dropped)
 }

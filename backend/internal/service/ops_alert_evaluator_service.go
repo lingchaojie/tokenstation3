@@ -32,10 +32,12 @@ return 0
 `)
 
 type OpsAlertEvaluatorService struct {
-	opsService   *OpsService
-	opsRepo      OpsRepository
-	emailService *EmailService
-	proxyRepo    ProxyRepository
+	opsService        *OpsService
+	opsRepo           OpsRepository
+	emailService      *EmailService
+	proxyRepo         ProxyRepository
+	capturePool       *ConversationCapturePool
+	captureHealthRepo CaptureHealthRepository
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -62,6 +64,13 @@ type opsAlertRuleState struct {
 	ConsecutiveBreaches int
 }
 
+var captureWriterFailureReasons = map[string]struct{}{
+	string(CaptureDropWriterUnavailable):       {},
+	string(CaptureDropClickHousePrepareFailed): {},
+	string(CaptureDropClickHouseAppendFailed):  {},
+	string(CaptureDropClickHouseSendFailed):    {},
+}
+
 func NewOpsAlertEvaluatorService(
 	opsService *OpsService,
 	opsRepo OpsRepository,
@@ -69,17 +78,21 @@ func NewOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	capturePool *ConversationCapturePool,
+	captureHealthRepo CaptureHealthRepository,
 ) *OpsAlertEvaluatorService {
 	return &OpsAlertEvaluatorService{
-		opsService:   opsService,
-		opsRepo:      opsRepo,
-		emailService: emailService,
-		proxyRepo:    proxyRepo,
-		redisClient:  redisClient,
-		cfg:          cfg,
-		instanceID:   uuid.NewString(),
-		ruleStates:   map[int64]*opsAlertRuleState{},
-		emailLimiter: newSlidingWindowLimiter(0, time.Hour),
+		opsService:        opsService,
+		opsRepo:           opsRepo,
+		emailService:      emailService,
+		proxyRepo:         proxyRepo,
+		capturePool:       capturePool,
+		captureHealthRepo: captureHealthRepo,
+		redisClient:       redisClient,
+		cfg:               cfg,
+		instanceID:        uuid.NewString(),
+		ruleStates:        map[int64]*opsAlertRuleState{},
+		emailLimiter:      newSlidingWindowLimiter(0, time.Hour),
 	}
 }
 
@@ -445,6 +458,32 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		return 0, false
 	}
 	switch strings.TrimSpace(rule.MetricType) {
+	case "capture_ready":
+		if s == nil || s.capturePool == nil {
+			return 0, false
+		}
+		if s.capturePool.Ready() {
+			return 1, true
+		}
+		return 0, true
+	case "capture_dropped_records":
+		if s == nil || s.captureHealthRepo == nil {
+			return 0, false
+		}
+		events, err := s.captureHealthRepo.ListEvents(ctx, start, end)
+		if err != nil {
+			return 0, false
+		}
+		return float64(sumCaptureDroppedRecords(events, nil)), true
+	case "capture_writer_failures":
+		if s == nil || s.captureHealthRepo == nil {
+			return 0, false
+		}
+		events, err := s.captureHealthRepo.ListEvents(ctx, start, end)
+		if err != nil {
+			return 0, false
+		}
+		return float64(sumCaptureDroppedRecords(events, captureWriterFailureReasons)), true
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
 			return *systemMetrics.CPUUsagePercent, true
@@ -616,6 +655,19 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	default:
 		return 0, false
 	}
+}
+
+func sumCaptureDroppedRecords(events []CaptureHealthEvent, reasons map[string]struct{}) int64 {
+	var total int64
+	for _, event := range events {
+		if reasons != nil {
+			if _, ok := reasons[event.Reason]; !ok {
+				continue
+			}
+		}
+		total += event.DroppedRecords
+	}
+	return total
 }
 
 func compareMetric(value float64, operator string, threshold float64) bool {
