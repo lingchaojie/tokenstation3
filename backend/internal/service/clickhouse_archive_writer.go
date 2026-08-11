@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
@@ -131,7 +132,7 @@ SETTINGS index_granularity = 8192`, database, table)
 // Write 只做非阻塞入队；真正的建连/建表/发送错误全部在内部吸收并记日志，
 // 绝不向调用方（转发主路径）传播 panic 或阻塞。
 type clickHouseArchiveWriter struct {
-	conn     clickhouse.Conn
+	conn     archiveClickHouseConnection
 	database string
 	table    string
 
@@ -148,9 +149,44 @@ type clickHouseArchiveWriter struct {
 	wg       sync.WaitGroup
 }
 
+type archiveClickHouseConnection interface {
+	Ping(context.Context) error
+	Exec(context.Context, string, ...any) error
+	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
+	Close() error
+}
+
+type clickHouseArchiveWriterInitOptions struct {
+	Open func(*clickhouse.Options) (archiveClickHouseConnection, error)
+}
+
 // newClickHouseArchiveWriter 建连、Ping、建表、启动 batcher。任一步失败返回 error，
 // 调用方据此降级为 noopArchiveWriter，绝不阻塞启动。
 func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig, trackers ...*captureHealthTracker) (ArchiveWriter, error) {
+	return newClickHouseArchiveWriterContext(context.Background(), cc, trackers...)
+}
+
+func newClickHouseArchiveWriterContext(
+	parent context.Context,
+	cc config.GatewayCaptureConfig,
+	trackers ...*captureHealthTracker,
+) (ArchiveWriter, error) {
+	var tracker *captureHealthTracker
+	if len(trackers) > 0 {
+		tracker = trackers[0]
+	}
+	return newClickHouseArchiveWriterWithOptions(parent, cc, tracker, clickHouseArchiveWriterInitOptions{})
+}
+
+func newClickHouseArchiveWriterWithOptions(
+	parent context.Context,
+	cc config.GatewayCaptureConfig,
+	tracker *captureHealthTracker,
+	initOpts clickHouseArchiveWriterInitOptions,
+) (_ ArchiveWriter, err error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	chCfg := cc.ClickHouse
 
 	dialTimeout := time.Duration(chCfg.DialTimeoutMs) * time.Millisecond
@@ -198,18 +234,30 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig, trackers ...*cap
 		MaxOpenConns: maxOpenConns,
 	}
 
-	conn, err := clickhouse.Open(opts)
+	open := initOpts.Open
+	if open == nil {
+		open = func(opts *clickhouse.Options) (archiveClickHouseConnection, error) {
+			return clickhouse.Open(opts)
+		}
+	}
+	conn, err := open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("capture: clickhouse open: %w", err)
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = conn.Close()
+		}
+	}()
 
-	pingCtx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	pingCtx, cancel := context.WithTimeout(parent, dialTimeout)
 	defer cancel()
 	if err := conn.Ping(pingCtx); err != nil {
 		return nil, fmt.Errorf("capture: clickhouse ping: %w", err)
 	}
 
-	execCtx, cancelExec := context.WithTimeout(context.Background(), readTimeout)
+	execCtx, cancelExec := context.WithTimeout(parent, readTimeout)
 	defer cancelExec()
 	if err := conn.Exec(execCtx, archiveCreateTableDDL(chCfg.Database, chCfg.Table)); err != nil {
 		return nil, fmt.Errorf("capture: clickhouse create table: %w", err)
@@ -228,11 +276,6 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig, trackers ...*cap
 	if chanSize <= 0 {
 		chanSize = 1024
 	}
-	var tracker *captureHealthTracker
-	if len(trackers) > 0 {
-		tracker = trackers[0]
-	}
-
 	w := &clickHouseArchiveWriter{
 		conn:        conn,
 		database:    chCfg.Database,
@@ -248,6 +291,7 @@ func newClickHouseArchiveWriter(cc config.GatewayCaptureConfig, trackers ...*cap
 
 	w.wg.Add(1)
 	go w.runBatcher()
+	initialized = true
 
 	return w, nil
 }

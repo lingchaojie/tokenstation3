@@ -110,8 +110,8 @@ func normalizeCaptureWriterRetryOptions(opts captureWriterRetryOptions) captureW
 		opts.Wait = waitForCaptureWriterRetry
 	}
 	if opts.Factory == nil {
-		opts.Factory = func(_ context.Context, cfg config.GatewayCaptureConfig, tracker *captureHealthTracker) (ArchiveWriter, error) {
-			return newClickHouseArchiveWriter(cfg, tracker)
+		opts.Factory = func(ctx context.Context, cfg config.GatewayCaptureConfig, tracker *captureHealthTracker) (ArchiveWriter, error) {
+			return newClickHouseArchiveWriterContext(ctx, cfg, tracker)
 		}
 	}
 	return opts

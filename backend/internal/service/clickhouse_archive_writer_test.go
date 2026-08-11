@@ -4,11 +4,126 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+type captureArchiveInitConnection struct {
+	pingErr error
+	execErr error
+	closes  atomic.Int32
+}
+
+func (c *captureArchiveInitConnection) Ping(ctx context.Context) error {
+	if c.pingErr != nil {
+		return c.pingErr
+	}
+	return ctx.Err()
+}
+
+func (c *captureArchiveInitConnection) Exec(ctx context.Context, _ string, _ ...any) error {
+	if c.execErr != nil {
+		return c.execErr
+	}
+	return ctx.Err()
+}
+
+func (c *captureArchiveInitConnection) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	return nil, errors.New("PrepareBatch is not used by initialization tests")
+}
+
+func (c *captureArchiveInitConnection) Close() error {
+	c.closes.Add(1)
+	return nil
+}
+
+func captureArchiveInitTestConfig() config.GatewayCaptureConfig {
+	return config.GatewayCaptureConfig{
+		WriterQueueSize:    1,
+		BatchMaxSize:       1,
+		BatchMaxIntervalMs: 1000,
+		ClickHouse: config.CaptureClickHouseConfig{
+			Database: "llm_archive",
+			Table:    "model_call_archive",
+		},
+	}
+}
+
+func captureArchiveInitOpen(conn archiveClickHouseConnection) func(*clickhouse.Options) (archiveClickHouseConnection, error) {
+	return func(*clickhouse.Options) (archiveClickHouseConnection, error) {
+		return conn, nil
+	}
+}
+
+func TestNewClickHouseArchiveWriterClosesConnectionAfterPingFailure(t *testing.T) {
+	conn := &captureArchiveInitConnection{pingErr: errors.New("ping failed")}
+
+	writer, err := newClickHouseArchiveWriterWithOptions(
+		context.Background(),
+		captureArchiveInitTestConfig(),
+		nil,
+		clickHouseArchiveWriterInitOptions{Open: captureArchiveInitOpen(conn)},
+	)
+
+	require.Nil(t, writer)
+	require.ErrorContains(t, err, "clickhouse ping")
+	require.Equal(t, int32(1), conn.closes.Load())
+}
+
+func TestNewClickHouseArchiveWriterClosesConnectionAfterCreateTableFailure(t *testing.T) {
+	conn := &captureArchiveInitConnection{execErr: errors.New("create failed")}
+
+	writer, err := newClickHouseArchiveWriterWithOptions(
+		context.Background(),
+		captureArchiveInitTestConfig(),
+		nil,
+		clickHouseArchiveWriterInitOptions{Open: captureArchiveInitOpen(conn)},
+	)
+
+	require.Nil(t, writer)
+	require.ErrorContains(t, err, "clickhouse create table")
+	require.Equal(t, int32(1), conn.closes.Load())
+}
+
+func TestNewClickHouseArchiveWriterContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conn := &captureArchiveInitConnection{}
+
+	writer, err := newClickHouseArchiveWriterWithOptions(
+		ctx,
+		captureArchiveInitTestConfig(),
+		nil,
+		clickHouseArchiveWriterInitOptions{Open: captureArchiveInitOpen(conn)},
+	)
+
+	require.Nil(t, writer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), conn.closes.Load())
+}
+
+func TestNewClickHouseArchiveWriterKeepsSuccessfulConnectionUntilStop(t *testing.T) {
+	conn := &captureArchiveInitConnection{}
+
+	writer, err := newClickHouseArchiveWriterWithOptions(
+		context.Background(),
+		captureArchiveInitTestConfig(),
+		nil,
+		clickHouseArchiveWriterInitOptions{Open: captureArchiveInitOpen(conn)},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+	require.Zero(t, conn.closes.Load())
+	writer.Stop()
+	require.Equal(t, int32(1), conn.closes.Load())
+}
 
 func TestNoopArchiveWriterNeverErrors(t *testing.T) {
 	var w ArchiveWriter = noopArchiveWriter{}
