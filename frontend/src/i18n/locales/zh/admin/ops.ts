@@ -479,6 +479,7 @@ export default {
         manage: '预警规则',
         metricGroups: {
           system: '系统指标',
+          capture: '转存指标',
           group: '分组级别指标（需 group_id）',
           account: '账号级别指标'
         },
@@ -491,6 +492,9 @@ export default {
           cpu: 'CPU 使用率 (%)',
           memory: '内存使用率 (%)',
           queueDepth: '并发排队深度',
+          captureReady: '转存写入器就绪状态 (0/1)',
+          captureDroppedRecords: '转存丢失记录数',
+          captureWriterFailures: '转存写入失败记录数',
           groupAvailableAccounts: '分组可用账号数',
           groupAvailableRatio: '分组可用比例 (%)',
           groupRateLimitRatio: '分组限流比例 (%)',
@@ -509,6 +513,9 @@ export default {
           cpu: '当前实例 CPU 使用率（0~100）。',
           memory: '当前实例内存使用率（0~100）。',
           queueDepth: '统计窗口内并发队列排队深度（等待中的请求数）。',
+          captureReady: '执行告警评估的实例上，转存写入器是否就绪：1 表示就绪，0 表示不可用。',
+          captureDroppedRecords: '所选统计窗口内所有实例丢失的转存记录总数。',
+          captureWriterFailures: '所选统计窗口内因 ClickHouse 不可用或写入失败而丢失的转存记录数。',
           groupAvailableAccounts: '指定分组中当前可用账号数量（需要 group_id 过滤）。',
           groupAvailableRatio: '指定分组中可用账号占比（0~100，需要 group_id 过滤）。',
           groupRateLimitRatio: '指定分组中账号被限流的比例（0~100，需要 group_id 过滤）。',
