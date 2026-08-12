@@ -352,7 +352,7 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
 		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	return readCaptureAwareUpstreamErrorBody(resp, limit)
 }
 
 // readWebChatUpstreamErrorBody preserves the normal 512 KiB safety bound for
@@ -454,24 +454,17 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 
 	// 归档采集（错误响应）：仅在此终态提交——failover 重试路径在上面 shouldDisable 分支已返回，
 	// 不会走到这里，故不会归档中间重试。drop-safe，绝不影响转发。
-	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError); s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
-		var reqBody []byte
-		requestedModel := ""
-		stream := false
-		if v, ok := c.Get("parsed_request"); ok {
-			if pr, ok := v.(*ParsedRequest); ok && pr != nil {
-				requestedModel = pr.Model
-				stream = pr.Stream
-				if pr.Body != nil {
-					reqBody = pr.Body.Bytes()
-				}
-			}
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		failure := &UpstreamFailoverError{
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            body,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			Platform:                string(account.Platform),
+			HasUpstreamHTTPResponse: true,
 		}
-		// 错误路径通常无模型映射信息；用请求模型兼作 upstream_model 占位。
-		upstreamModel := requestedModel
-		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), requestedModel, upstreamModel, captureEndpointFromResponse(resp), stream, reqBody, body, limit); rec != nil {
-			rec.ContentPolicy = &content
+		if rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), failure, s.cfg.Gateway.Capture.MaxBodyBytes); rec != nil {
 			s.capturePool.Submit(rec)
 		}
 	}

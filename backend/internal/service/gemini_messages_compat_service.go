@@ -65,7 +65,7 @@ func (s *GeminiMessagesCompatService) readUpstreamErrorBody(resp *http.Response)
 	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
 		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
+	body, _ := readCaptureAwareUpstreamErrorBody(resp, limit)
 	return body
 }
 
@@ -1004,7 +1004,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, newGeminiHTTPFailoverError(account, resp, respBody, false)
 			}
 		}
 
@@ -1038,7 +1038,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: true}
+				return nil, newGeminiHTTPFailoverError(account, resp, respBody, true)
 			}
 		}
 		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
@@ -1066,7 +1066,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+			return nil, newGeminiHTTPFailoverError(account, resp, respBody, false)
 		}
 		upstreamReqID := resp.Header.Get(requestIDHeader)
 		if upstreamReqID == "" {
@@ -1551,7 +1551,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, newGeminiHTTPFailoverError(account, resp, respBody, false)
 			}
 		}
 
@@ -1582,7 +1582,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: evBody, RetryableOnSameAccount: true}
+				return nil, newGeminiHTTPFailoverError(account, resp, evBody, true)
 			}
 		}
 		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
@@ -1607,7 +1607,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: evBody}
+			return nil, newGeminiHTTPFailoverError(account, resp, evBody, false)
 		}
 
 		respBody = unwrapIfNeeded(isOAuth, respBody)
@@ -1752,6 +1752,29 @@ func (s *GeminiMessagesCompatService) shouldFailoverGeminiUpstreamError(statusCo
 	}
 }
 
+func newGeminiHTTPFailoverError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
+	failure := &UpstreamFailoverError{
+		ResponseBody:            snapshotBytes(body),
+		HasUpstreamHTTPResponse: resp != nil,
+		RetryableOnSameAccount:  retryable,
+	}
+	if account != nil {
+		failure.Platform = account.Platform
+	}
+	if resp == nil {
+		return failure
+	}
+	failure.StatusCode = resp.StatusCode
+	failure.ResponseHeaders = resp.Header.Clone()
+	if resp.Request != nil {
+		failure.RequestHeaders = resp.Request.Header.Clone()
+		if resp.Request.URL != nil {
+			failure.UpstreamEndpoint = resp.Request.URL.String()
+		}
+	}
+	return failure
+}
+
 // poolModeSkippedFailoverError 池模式账号命中 ErrorPolicySkipped 时构造 failover 错误：
 // 可 failover 的状态码返回 UpstreamFailoverError，交给 handler 层按 pool_mode_retry_count
 // 同账号重试后换号；返回 nil 表示不适用（非池模式或状态码不可 failover），由调用方透传。
@@ -1779,9 +1802,11 @@ func (s *GeminiMessagesCompatService) poolModeSkippedFailoverError(c *gin.Contex
 		Detail:             upstreamDetail,
 	})
 	return &UpstreamFailoverError{
-		StatusCode:             statusCode,
-		ResponseBody:           respBody,
-		RetryableOnSameAccount: account.IsPoolModeRetryableStatus(statusCode),
+		StatusCode:              statusCode,
+		ResponseBody:            snapshotBytes(respBody),
+		Platform:                account.Platform,
+		HasUpstreamHTTPResponse: true,
+		RetryableOnSameAccount:  account.IsPoolModeRetryableStatus(statusCode),
 	}
 }
 

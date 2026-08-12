@@ -721,6 +721,56 @@ func TestForwardKiroMessagesNonStreamDirectAPIKeyReachesAWSUpstream(t *testing.T
 		"non-stream capture must preserve raw AWS event-stream bytes, not translated JSON")
 }
 
+func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+
+	account := &Account{
+		ID: 37, Name: "kiro-terminal-capture", Platform: PlatformKiro, Type: AccountTypeAPIKey,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "kiro-provider-secret", "api_region": "us-west-2",
+			"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"},
+		},
+	}
+	errorBody := []byte(`{"message":"Kiro rejected final request"}`)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"kiro-terminal-id"}},
+		Body:       io.NopCloser(bytes.NewReader(errorBody)),
+	}}}
+	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	t.Cleanup(pool.Stop)
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{}, capturePool: pool,
+		cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}},
+	}
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	c.Set("parsed_request", parsed)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	require.Nil(t, result)
+	pool.Stop()
+
+	require.Len(t, upstream.requests, 1)
+	require.Len(t, writer.records, 1)
+	record := <-writer.records
+	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
+	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), record.RawRequest)
+	require.NotEqual(t, requestBody, record.RawRequest)
+	require.Equal(t, errorBody, record.RawResponse)
+	require.Contains(t, record.UpstreamEndpoint, "q.us-west-2.amazonaws.com")
+	require.NotContains(t, string(record.RequestHeaders), "kiro-provider-secret")
+}
+
 func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	endpoint := "https://q.us-east-1.amazonaws.com/mcp"

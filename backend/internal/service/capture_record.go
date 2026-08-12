@@ -184,6 +184,34 @@ func finishCaptureResponse(resp *http.Response) {
 	}
 }
 
+// readCaptureAwareUpstreamErrorBody preserves the caller's normal error-body
+// bound when capture is not active. When a policy-approved capture wrapper is
+// present, it consumes one byte past that wrapper's ceiling so the archive can
+// distinguish an exact-size body from a truncated one without allocating past
+// the configured hard limit.
+func readCaptureAwareUpstreamErrorBody(resp *http.Response, fallbackLimit int64) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
+	}
+	if fallbackLimit <= 0 {
+		fallbackLimit = gatewayUpstreamErrorBodyReadLimit
+	}
+	readLimit := fallbackLimit
+	trimLimit := fallbackLimit
+	if captureReader, ok := resp.Body.(*captureBodyReadCloser); ok && captureReader.limit > 0 {
+		captureLimit := int64(captureReader.limit)
+		if captureLimit >= fallbackLimit {
+			trimLimit = captureLimit
+			readLimit = captureLimit + 1
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
+	if int64(len(body)) > trimLimit {
+		body = body[:trimLimit]
+	}
+	return body, err
+}
+
 func newSSETee(limit int) *sseTee { return &sseTee{limit: normalizeCaptureLimit(limit)} }
 
 func (t *sseTee) appendLine(line string) {

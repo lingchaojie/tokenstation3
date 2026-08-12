@@ -24,6 +24,7 @@ import (
 type gatewayAnthropicAPIKeyStreamUpstream struct {
 	mu      sync.Mutex
 	calls   int
+	status  int
 	newBody func() io.ReadCloser
 }
 
@@ -35,8 +36,12 @@ func (u *gatewayAnthropicAPIKeyStreamUpstream) DoWithTLS(req *http.Request, _ st
 	u.mu.Lock()
 	u.calls++
 	u.mu.Unlock()
+	status := u.status
+	if status == 0 {
+		status = http.StatusOK
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: status,
 		Header: http.Header{
 			"Content-Type": {"text/event-stream"},
 			"x-request-id": {"req-handler-apikey-stream"},
@@ -113,6 +118,17 @@ func runGatewayAnthropicCompatHandler(
 	newBody func() io.ReadCloser,
 	handle func(*GatewayHandler, *gin.Context),
 ) gatewayAnthropicHandlerRunResult {
+	return runGatewayAnthropicCompatHandlerWithStatus(t, endpoint, requestBody, http.StatusOK, newBody, handle)
+}
+
+func runGatewayAnthropicCompatHandlerWithStatus(
+	t *testing.T,
+	endpoint string,
+	requestBody string,
+	status int,
+	newBody func() io.ReadCloser,
+	handle func(*GatewayHandler, *gin.Context),
+) gatewayAnthropicHandlerRunResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -149,7 +165,7 @@ func runGatewayAnthropicCompatHandler(
 	capturePool := service.NewConversationCapturePoolForUnitTest(captureRecords)
 	t.Cleanup(capturePool.Stop)
 	usageRepo := &gatewayAnthropicUsageRepo{}
-	upstream := &gatewayAnthropicAPIKeyStreamUpstream{newBody: newBody}
+	upstream := &gatewayAnthropicAPIKeyStreamUpstream{status: status, newBody: newBody}
 	gateway := service.NewGatewayService(
 		nil,                          // accountRepo
 		&fakeGroupRepo{group: group}, // groupRepo
@@ -253,6 +269,40 @@ func TestGatewayCompatibilityHandlersArchiveProviderAttemptExactlyOnce(t *testin
 			require.Len(t, got.usages, 1)
 			require.Len(t, got.captures, 1, "the compatibility handler must submit its final provider exchange exactly once")
 			require.Equal(t, upstreamSSE, string(got.captures[0].RawResponse))
+			require.Contains(t, string(got.captures[0].RawRequest), `"model":"claude-test"`)
+		})
+	}
+}
+
+func TestGatewayCompatibilityHandlersArchiveTerminalFailoverAttemptExactlyOnce(t *testing.T) {
+	errorBody := `{"type":"error","error":{"type":"overloaded_error","message":"final provider overload"}}`
+	tests := []struct {
+		name, endpoint, requestBody string
+		handle                      func(*GatewayHandler, *gin.Context)
+	}{
+		{
+			name: "chat_completions", endpoint: EndpointChatCompletions,
+			requestBody: `{"model":"claude-test","stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.ChatCompletions(c) },
+		},
+		{
+			name: "responses", endpoint: EndpointResponses,
+			requestBody: `{"model":"claude-test","stream":false,"input":"hello"}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runGatewayAnthropicCompatHandlerWithStatus(t, tt.endpoint, tt.requestBody, http.StatusServiceUnavailable, func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(errorBody))
+			}, tt.handle)
+
+			require.GreaterOrEqual(t, got.calls, 1)
+			require.Empty(t, got.usages)
+			require.Len(t, got.captures, 1, "the exhausted handler must archive the final provider HTTP attempt")
+			require.Equal(t, service.PlatformAnthropic, got.captures[0].Platform)
+			require.Equal(t, http.StatusServiceUnavailable, got.captures[0].HTTPStatus)
+			require.Equal(t, errorBody, string(got.captures[0].RawResponse))
 			require.Contains(t, string(got.captures[0].RawRequest), `"model":"claude-test"`)
 		})
 	}

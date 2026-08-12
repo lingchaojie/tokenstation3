@@ -127,6 +127,13 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		}
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, c, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group)
 		if err != nil {
+			var failoverErr *UpstreamFailoverError
+			if errors.As(err, &failoverErr) {
+				if failoverErr.Platform == "" {
+					failoverErr.Platform = account.Platform
+				}
+				return nil, failoverErr
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -218,8 +225,13 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			}
 			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody)
 			return nil, &UpstreamFailoverError{
-				StatusCode:   resp.StatusCode,
-				ResponseBody: respBody,
+				StatusCode:              resp.StatusCode,
+				ResponseBody:            respBody,
+				RequestHeaders:          captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:         resp.Header.Clone(),
+				UpstreamEndpoint:        captureEndpointFromResponse(resp),
+				Platform:                string(account.Platform),
+				HasUpstreamHTTPResponse: true,
 			}
 		}
 

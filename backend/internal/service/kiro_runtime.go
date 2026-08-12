@@ -1046,10 +1046,17 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 	})
 	// 归档：终态错误响应（非 failover）。上面两处 UpstreamFailoverError 分支已提前返回，
 	// 不会到这里，故中间重试不归档。drop-safe，绝不影响转发。
-	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError); s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
-		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), mappedModel, mappedModel, captureEndpointFromResponse(resp), stream, requestBody, respBody, limit); rec != nil {
-			rec.ContentPolicy = &content
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		failure := &UpstreamFailoverError{
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			Platform:                string(account.Platform),
+			HasUpstreamHTTPResponse: true,
+		}
+		if rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), failure, s.cfg.Gateway.Capture.MaxBodyBytes); rec != nil {
 			s.capturePool.Submit(rec)
 		}
 	}

@@ -143,8 +143,31 @@ func (s *AntigravityGatewayService) readUpstreamErrorBody(resp *http.Response) [
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, s.upstreamErrorBodyReadLimit()))
+	body, _ := readCaptureAwareUpstreamErrorBody(resp, s.upstreamErrorBodyReadLimit())
 	return body
+}
+
+func newAntigravityHTTPFailoverError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
+	failure := &UpstreamFailoverError{
+		ResponseBody:            snapshotBytes(body),
+		HasUpstreamHTTPResponse: resp != nil,
+		RetryableOnSameAccount:  retryable,
+	}
+	if account != nil {
+		failure.Platform = account.Platform
+	}
+	if resp == nil {
+		return failure
+	}
+	failure.StatusCode = resp.StatusCode
+	failure.ResponseHeaders = resp.Header.Clone()
+	if resp.Request != nil {
+		failure.RequestHeaders = resp.Request.Header.Clone()
+		if resp.Request.URL != nil {
+			failure.UpstreamEndpoint = resp.Request.URL.String()
+		}
+	}
+	return failure
 }
 
 func NewAntigravityGatewayService(
