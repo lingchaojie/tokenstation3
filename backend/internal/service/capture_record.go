@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
+
+const captureHardMaxBodyBytes = 8 << 20
 
 // CaptureRecord 是提交给归档通道的一条原始上游调用快照。
 // 所有 []byte 字段在提交前已 deep-copy，worker 内安全读取。
@@ -58,6 +62,7 @@ func snapshotBytes(src []byte) []byte {
 
 // captureWithLimit 返回最多 limit 字节的独立副本及是否被截断。limit<=0 或 src 为 nil 视为不采集。
 func captureWithLimit(src []byte, limit int) ([]byte, bool) {
+	limit = normalizeCaptureLimit(limit)
 	if limit <= 0 || src == nil {
 		return nil, false
 	}
@@ -67,6 +72,16 @@ func captureWithLimit(src []byte, limit int) ([]byte, bool) {
 	dst := make([]byte, limit)
 	copy(dst, src[:limit])
 	return dst, true
+}
+
+func normalizeCaptureLimit(limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit > captureHardMaxBodyBytes {
+		return captureHardMaxBodyBytes
+	}
+	return limit
 }
 
 // captureResponseIfEnabled 便于测试的薄封装。
@@ -93,6 +108,7 @@ type sseTee struct {
 // same capture on success and committed-error paths.
 type captureBodyReadCloser struct {
 	io.ReadCloser
+	attempt   captureAttemptToken
 	mu        sync.Mutex
 	buf       []byte
 	limit     int
@@ -131,18 +147,19 @@ func (r *captureBodyReadCloser) bytes() ([]byte, bool) {
 }
 
 func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, limit int) func() {
+	limit = normalizeCaptureLimit(limit)
 	if !enabled || limit <= 0 || resp == nil || resp.Body == nil {
 		return func() {}
 	}
-	reader := &captureBodyReadCloser{ReadCloser: resp.Body, limit: limit}
+	reader := &captureBodyReadCloser{ReadCloser: resp.Body, attempt: currentCaptureAttempt(c, true), limit: limit}
 	resp.Body = reader
 	return func() {
 		body, truncated := reader.bytes()
-		setCaptureResult(c, resp, body, truncated)
+		setCaptureResultForAttempt(reader.attempt, resp, body, truncated)
 	}
 }
 
-func newSSETee(limit int) *sseTee { return &sseTee{limit: limit} }
+func newSSETee(limit int) *sseTee { return &sseTee{limit: normalizeCaptureLimit(limit)} }
 
 func (t *sseTee) appendLine(line string) {
 	if t == nil {
@@ -188,16 +205,17 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	UpstreamRequest   []byte
-	Response          []byte
-	Truncated         bool
-	RequestTruncated  bool
-	ResponseTruncated bool
-	RequestHeaders    []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
-	ResponseHeaders   []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
-	UpstreamEndpoint  string
-	HTTPStatus        int
-	Platform          string
+	UpstreamRequest     []byte
+	UpstreamRequestHash string
+	Response            []byte
+	Truncated           bool
+	RequestTruncated    bool
+	ResponseTruncated   bool
+	RequestHeaders      []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders     []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamEndpoint    string
+	HTTPStatus          int
+	Platform            string
 }
 
 // captureResultSlot is shared by all forwarding attempts that reuse one Gin
@@ -205,11 +223,17 @@ type captureResultBridge struct {
 // race with result assembly; the slot makes publish/take/reset atomic so a take
 // can never clear a bridge published after it.
 type captureResultSlot struct {
-	mu     sync.Mutex
-	bridge *captureResultBridge
+	mu         sync.Mutex
+	generation uint64
+	bridge     *captureResultBridge
 }
 
-func captureSlot(c *gin.Context) *captureResultSlot {
+type captureAttemptToken struct {
+	slot       *captureResultSlot
+	generation uint64
+}
+
+func existingCaptureSlot(c *gin.Context) *captureResultSlot {
 	if c == nil {
 		return nil
 	}
@@ -218,20 +242,87 @@ func captureSlot(c *gin.Context) *captureResultSlot {
 			return slot
 		}
 	}
+	return nil
+}
+
+func captureSlot(c *gin.Context) *captureResultSlot {
+	if slot := existingCaptureSlot(c); slot != nil {
+		return slot
+	}
+	if c == nil {
+		return nil
+	}
 	slot := &captureResultSlot{}
 	c.Set(captureResultContextKey, slot)
 	return slot
+}
+
+func currentCaptureAttempt(c *gin.Context, create bool) captureAttemptToken {
+	slot := existingCaptureSlot(c)
+	if slot == nil && create {
+		slot = captureSlot(c)
+	}
+	if slot == nil {
+		return captureAttemptToken{}
+	}
+	slot.mu.Lock()
+	if slot.generation == 0 {
+		slot.generation = 1
+	}
+	if create && slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	token := captureAttemptToken{slot: slot, generation: slot.generation}
+	slot.mu.Unlock()
+	return token
+}
+
+func startCaptureAttempt(c *gin.Context) captureAttemptToken {
+	slot := captureSlot(c)
+	if slot == nil {
+		return captureAttemptToken{}
+	}
+	slot.mu.Lock()
+	platform := ""
+	if slot.bridge != nil {
+		platform = slot.bridge.Platform
+	}
+	slot.generation++
+	if slot.generation == 0 {
+		slot.generation = 1
+	}
+	slot.bridge = &captureResultBridge{Platform: platform}
+	token := captureAttemptToken{slot: slot, generation: slot.generation}
+	slot.mu.Unlock()
+	return token
+}
+
+func withCaptureAttempt(token captureAttemptToken, fn func(*captureResultBridge)) bool {
+	if token.slot == nil || fn == nil {
+		return false
+	}
+	token.slot.mu.Lock()
+	defer token.slot.mu.Unlock()
+	if token.slot.generation != token.generation {
+		return false
+	}
+	if token.slot.bridge == nil {
+		token.slot.bridge = &captureResultBridge{}
+	}
+	fn(token.slot.bridge)
+	return true
 }
 
 // beginCaptureAttempt isolates a new account attempt from any result left by a
 // prior nil-result/failover path. Handlers invoke service attempts serially for
 // a request; response publishing and result taking remain synchronized below.
 func beginCaptureAttempt(c *gin.Context) {
-	slot := captureSlot(c)
+	slot := existingCaptureSlot(c)
 	if slot == nil {
 		return
 	}
 	slot.mu.Lock()
+	slot.generation++
 	slot.bridge = nil
 	slot.mu.Unlock()
 }
@@ -239,6 +330,9 @@ func beginCaptureAttempt(c *gin.Context) {
 // ResetCaptureExchange clears snapshots from an intermediate failover attempt
 // without replacing the synchronized slot shared by response finalization.
 func ResetCaptureExchange(c *gin.Context) {
+	if existingCaptureSlot(c) == nil {
+		return
+	}
 	beginCaptureAttempt(c)
 	if c != nil {
 		c.Set(kiroCaptureHeadersContextKey, nil)
@@ -248,30 +342,24 @@ func ResetCaptureExchange(c *gin.Context) {
 // SetCaptureOutboundRequest snapshots the actual post-mapping request sent to
 // the provider. Callers must guard this with CaptureMayApplyFor.
 func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, limit int) {
-	slot := captureSlot(c)
-	if slot == nil {
+	token := startCaptureAttempt(c)
+	if token.slot == nil {
 		return
 	}
 	request, requestTruncated := captureWithLimit(body, limit)
-	slot.mu.Lock()
-	if slot.bridge == nil {
-		slot.bridge = &captureResultBridge{}
-	}
-	bridge := slot.bridge
-	bridge.UpstreamRequest = request
-	bridge.RequestTruncated = requestTruncated
-	bridge.Response = nil
-	bridge.ResponseHeaders = nil
-	bridge.ResponseTruncated = false
-	bridge.Truncated = requestTruncated
-	bridge.HTTPStatus = 0
-	if req != nil {
-		bridge.RequestHeaders = redactHTTPHeader(req.Header)
-		if req.URL != nil {
-			bridge.UpstreamEndpoint = req.URL.String()
+	requestHash := HashUsageRequestPayload(body)
+	withCaptureAttempt(token, func(bridge *captureResultBridge) {
+		bridge.UpstreamRequest = request
+		bridge.UpstreamRequestHash = requestHash
+		bridge.RequestTruncated = requestTruncated
+		bridge.Truncated = requestTruncated
+		if req != nil {
+			bridge.RequestHeaders = redactHTTPHeader(req.Header)
+			if req.URL != nil {
+				bridge.UpstreamEndpoint = req.URL.String()
+			}
 		}
-	}
-	slot.mu.Unlock()
+	})
 }
 
 func setCapturePlatform(c *gin.Context, platform string) {
@@ -291,43 +379,95 @@ func setCapturePlatform(c *gin.Context, platform string) {
 // resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
 // 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
 func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncated bool) {
-	slot := captureSlot(c)
-	if slot == nil {
-		return
-	}
-	slot.mu.Lock()
-	if slot.bridge == nil {
-		slot.bridge = &captureResultBridge{}
-	}
-	bridge := slot.bridge
-	bridge.Response = snapshotBytes(body)
-	bridge.ResponseTruncated = truncated
-	bridge.Truncated = bridge.RequestTruncated || truncated
-	if resp != nil {
-		bridge.HTTPStatus = resp.StatusCode
-		if resp.Request != nil && len(bridge.RequestHeaders) == 0 {
-			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
-			if resp.Request.URL != nil && bridge.UpstreamEndpoint == "" {
-				bridge.UpstreamEndpoint = resp.Request.URL.String()
+	setCaptureResultForAttempt(currentCaptureAttempt(c, true), resp, body, truncated)
+}
+
+func setCaptureResultForAttempt(token captureAttemptToken, resp *http.Response, body []byte, truncated bool) {
+	body, hardTruncated := captureWithLimit(body, captureHardMaxBodyBytes)
+	truncated = truncated || hardTruncated
+	withCaptureAttempt(token, func(bridge *captureResultBridge) {
+		bridge.Response = snapshotBytes(body)
+		bridge.ResponseTruncated = truncated
+		bridge.Truncated = bridge.RequestTruncated || truncated
+		if resp != nil {
+			bridge.HTTPStatus = resp.StatusCode
+			if resp.Request != nil && len(bridge.RequestHeaders) == 0 {
+				bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+				if resp.Request.URL != nil && bridge.UpstreamEndpoint == "" {
+					bridge.UpstreamEndpoint = resp.Request.URL.String()
+				}
 			}
+			bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
 		}
-		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
-	}
-	slot.mu.Unlock()
+	})
 }
 
 func markCaptureResultTruncated(c *gin.Context) {
-	slot := captureSlot(c)
-	if slot == nil {
-		return
+	withCaptureAttempt(currentCaptureAttempt(c, false), func(bridge *captureResultBridge) {
+		bridge.ResponseTruncated = true
+		bridge.Truncated = true
+	})
+}
+
+type boundedCaptureWriter struct {
+	buf       []byte
+	limit     int
+	total     int64
+	truncated bool
+}
+
+func (w *boundedCaptureWriter) Write(p []byte) (int, error) {
+	w.total += int64(len(p))
+	if remain := w.limit - len(w.buf); remain > 0 {
+		if remain > len(p) {
+			remain = len(p)
+		}
+		w.buf = append(w.buf, p[:remain]...)
 	}
-	slot.mu.Lock()
-	if slot.bridge == nil {
-		slot.bridge = &captureResultBridge{}
+	if w.total > int64(w.limit) {
+		w.truncated = true
 	}
-	slot.bridge.ResponseTruncated = true
-	slot.bridge.Truncated = true
-	slot.mu.Unlock()
+	return len(p), nil
+}
+
+type replayPrefixReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *replayPrefixReadCloser) Close() error { return r.closer.Close() }
+
+func snapshotHTTPRequestBodyForCapture(req *http.Request, limit int) ([]byte, bool, string) {
+	limit = normalizeCaptureLimit(limit)
+	if req == nil || limit <= 0 {
+		return nil, false, ""
+	}
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err == nil {
+			defer func() { _ = body.Close() }()
+			hasher := sha256.New()
+			writer := &boundedCaptureWriter{limit: limit}
+			if _, copyErr := io.Copy(io.MultiWriter(hasher, writer), body); copyErr == nil {
+				return snapshotBytes(writer.buf), writer.truncated, hex.EncodeToString(hasher.Sum(nil))
+			}
+		}
+	}
+	if req.Body == nil {
+		return nil, false, ""
+	}
+	original := req.Body
+	prefix, err := io.ReadAll(io.LimitReader(original, int64(limit)+1))
+	if err != nil {
+		return nil, false, ""
+	}
+	req.Body = &replayPrefixReadCloser{Reader: io.MultiReader(bytes.NewReader(prefix), original), closer: original}
+	captured, truncated := captureWithLimit(prefix, limit)
+	requestHash := ""
+	if !truncated {
+		requestHash = HashUsageRequestPayload(prefix)
+	}
+	return captured, truncated, requestHash
 }
 
 func snapshotHTTPRequestBody(req *http.Request) []byte {
@@ -357,85 +497,78 @@ func snapshotHTTPRequestBody(req *http.Request) []byte {
 // setCaptureUpstreamRequest records the body immediately before the real Do
 // call. A later retry replaces it, so the bridge always represents the final
 // attempted provider request rather than the inbound client payload.
-func setCaptureUpstreamRequest(c *gin.Context, req *http.Request) {
-	slot := captureSlot(c)
-	if slot == nil {
+func setCaptureUpstreamRequest(c *gin.Context, req *http.Request, limit int) {
+	token := startCaptureAttempt(c)
+	if token.slot == nil {
 		return
 	}
-	body := snapshotHTTPRequestBody(req)
-	slot.mu.Lock()
-	if slot.bridge == nil {
-		slot.bridge = &captureResultBridge{}
-	}
-	slot.bridge.UpstreamRequest = body
-	slot.bridge.RequestTruncated = false
-	if req != nil {
-		slot.bridge.RequestHeaders = redactHTTPHeader(req.Header)
-		if req.URL != nil {
-			slot.bridge.UpstreamEndpoint = req.URL.String()
+	body, truncated, requestHash := snapshotHTTPRequestBodyForCapture(req, limit)
+	withCaptureAttempt(token, func(bridge *captureResultBridge) {
+		bridge.UpstreamRequest = body
+		bridge.UpstreamRequestHash = requestHash
+		bridge.RequestTruncated = truncated
+		bridge.Truncated = truncated
+		if req != nil {
+			bridge.RequestHeaders = redactHTTPHeader(req.Header)
+			if req.URL != nil {
+				bridge.UpstreamEndpoint = req.URL.String()
+			}
 		}
-	}
-	// A new attempt owns the slot. Response-side data from a prior retry must
-	// never be paired with this request.
-	slot.bridge.Response = nil
-	slot.bridge.ResponseTruncated = false
-	slot.bridge.Truncated = false
-	slot.bridge.ResponseHeaders = nil
-	slot.bridge.HTTPStatus = 0
-	slot.mu.Unlock()
+	})
 }
 
 func setCaptureUpstreamResponse(c *gin.Context, resp *http.Response) {
-	slot := captureSlot(c)
-	if slot == nil || resp == nil {
+	if resp == nil {
 		return
 	}
-	slot.mu.Lock()
-	if slot.bridge == nil {
-		slot.bridge = &captureResultBridge{}
-	}
-	if len(slot.bridge.RequestHeaders) == 0 && resp.Request != nil {
-		slot.bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
-	}
-	slot.bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
-	slot.bridge.HTTPStatus = resp.StatusCode
-	if slot.bridge.UpstreamEndpoint == "" && resp.Request != nil && resp.Request.URL != nil {
-		slot.bridge.UpstreamEndpoint = resp.Request.URL.String()
-	}
-	slot.mu.Unlock()
+	withCaptureAttempt(currentCaptureAttempt(c, false), func(bridge *captureResultBridge) {
+		if len(bridge.RequestHeaders) == 0 && resp.Request != nil {
+			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+		}
+		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
+		bridge.HTTPStatus = resp.StatusCode
+		if bridge.UpstreamEndpoint == "" && resp.Request != nil && resp.Request.URL != nil {
+			bridge.UpstreamEndpoint = resp.Request.URL.String()
+		}
+	})
 }
 
 type captureUpstreamRequestContextKey struct{}
 
-func withCaptureUpstreamRequestContext(ctx context.Context, c *gin.Context) context.Context {
+type captureUpstreamRequestContext struct {
+	c     *gin.Context
+	limit int
+}
+
+func withCaptureUpstreamRequestContext(ctx context.Context, c *gin.Context, limit int) context.Context {
 	if ctx == nil || c == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, captureUpstreamRequestContextKey{}, c)
+	return context.WithValue(ctx, captureUpstreamRequestContextKey{}, captureUpstreamRequestContext{c: c, limit: normalizeCaptureLimit(limit)})
 }
 
 func setCaptureUpstreamRequestFromContext(ctx context.Context, req *http.Request) {
 	if ctx == nil {
 		return
 	}
-	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
-	setCaptureUpstreamRequest(c, req)
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	setCaptureUpstreamRequest(captureCtx.c, req, captureCtx.limit)
 }
 
 func setCaptureUpstreamResponseFromContext(ctx context.Context, resp *http.Response) {
 	if ctx == nil {
 		return
 	}
-	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
-	setCaptureUpstreamResponse(c, resp)
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	setCaptureUpstreamResponse(captureCtx.c, resp)
 }
 
 func markCaptureResultTruncatedFromContext(ctx context.Context) {
 	if ctx == nil {
 		return
 	}
-	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
-	markCaptureResultTruncated(c)
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	markCaptureResultTruncated(captureCtx.c)
 }
 
 // takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
@@ -443,13 +576,14 @@ func takeCaptureResult(c *gin.Context) (*captureResultBridge, bool) {
 	if c == nil {
 		return nil, false
 	}
-	slot := captureSlot(c)
+	slot := existingCaptureSlot(c)
 	if slot == nil {
 		return nil, false
 	}
 	slot.mu.Lock()
 	res := slot.bridge
 	slot.bridge = nil
+	slot.generation++
 	slot.mu.Unlock()
 	return res, res != nil
 }
@@ -463,6 +597,7 @@ func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *Forwar
 	}
 	if bridge, ok := takeCaptureResult(c); ok {
 		result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+		result.UpstreamRequestHash = bridge.UpstreamRequestHash
 		result.CaptureRequest = snapshotBytes(bridge.UpstreamRequest)
 		result.CaptureRequestHeaders = bridge.RequestHeaders
 		result.CaptureResponseHeaders = bridge.ResponseHeaders
@@ -491,6 +626,7 @@ func attachCaptureToOpenAIForwardResult(c *gin.Context, result *OpenAIForwardRes
 	}
 	if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
 		result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+		result.UpstreamRequestHash = bridge.UpstreamRequestHash
 		result.CaptureRequest = snapshotBytes(bridge.UpstreamRequest)
 		result.CaptureResponse = bridge.Response
 		result.CaptureTruncated = bridge.Truncated
@@ -511,8 +647,9 @@ func finalizeOpenAIForwardResult(c *gin.Context, result *OpenAIForwardResult, up
 	if result == nil {
 		return nil
 	}
-	result.UpstreamRequest = snapshotBytes(upstreamRequest)
-	result.CaptureRequest = snapshotBytes(upstreamRequest)
+	result.UpstreamRequest, _ = captureWithLimit(upstreamRequest, captureHardMaxBodyBytes)
+	result.UpstreamRequestHash = HashUsageRequestPayload(upstreamRequest)
+	result.CaptureRequest = snapshotBytes(result.UpstreamRequest)
 	return attachCaptureToOpenAIForwardResult(c, result)
 }
 
@@ -759,8 +896,9 @@ func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *U
 	requestHeaders := redactHTTPHeader(failure.RequestHeaders)
 	if hasBridge {
 		if bridge.UpstreamRequest != nil {
-			rawRequest = snapshotBytes(bridge.UpstreamRequest)
-			requestTruncated = bridge.RequestTruncated
+			var additionallyTruncated bool
+			rawRequest, additionallyTruncated = captureWithLimit(bridge.UpstreamRequest, limit)
+			requestTruncated = bridge.RequestTruncated || additionallyTruncated
 		}
 		requestHeaders = snapshotBytes(bridge.RequestHeaders)
 		if endpoint == "" {

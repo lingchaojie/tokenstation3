@@ -124,7 +124,7 @@ func (s *GatewayService) ForwardAsResponses(
 	finishCapture := func() {}
 	if kiroDirectMode {
 		if captureEnabled {
-			ctx = withCaptureUpstreamRequestContext(ctx, c)
+			ctx = withCaptureUpstreamRequestContext(ctx, c, s.cfg.Gateway.Capture.MaxBodyBytes)
 		}
 		var group *Group
 		if parsed != nil {
@@ -168,7 +168,7 @@ func (s *GatewayService) ForwardAsResponses(
 
 		// 11. Send request
 		if captureEnabled {
-			setCaptureUpstreamRequest(c, upstreamReq)
+			setCaptureUpstreamRequest(c, upstreamReq, s.cfg.Gateway.Capture.MaxBodyBytes)
 		}
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 		if captureEnabled {

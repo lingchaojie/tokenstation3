@@ -220,12 +220,12 @@ func TestCaptureUpstreamRequestKeepsImmutableFinalAttempt(t *testing.T) {
 	first := []byte(`{"attempt":1}`)
 	firstReq, err := http.NewRequest(http.MethodPost, "https://provider.invalid", bytes.NewReader(first))
 	require.NoError(t, err)
-	setCaptureUpstreamRequest(c, firstReq)
+	setCaptureUpstreamRequest(c, firstReq, 1024)
 
 	finalBody := []byte(`{"attempt":2}`)
 	finalReq, err := http.NewRequest(http.MethodPost, "https://provider.invalid", bytes.NewReader(finalBody))
 	require.NoError(t, err)
-	setCaptureUpstreamRequest(c, finalReq)
+	setCaptureUpstreamRequest(c, finalReq, 1024)
 	finalBody[0] = 'x'
 
 	result := finalizeForwardResult(c, &ForwardResult{})

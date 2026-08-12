@@ -295,6 +295,7 @@ type OpenAIForwardResult struct {
 	// UpstreamRequest is the exact final request body sent by this attempt.
 	// The handler uses this same immutable snapshot for capture and usage dedup.
 	UpstreamRequest         []byte
+	UpstreamRequestHash     string
 	CaptureRequest          []byte
 	CaptureResponse         []byte
 	CaptureTruncated        bool

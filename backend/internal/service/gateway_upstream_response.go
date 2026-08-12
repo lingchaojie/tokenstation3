@@ -367,6 +367,7 @@ func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp 
 }
 
 func readUpstreamBodyWithCeiling(resp *http.Response, limit int) ([]byte, bool, error) {
+	limit = normalizeCaptureLimit(limit)
 	if resp == nil || resp.Body == nil || limit <= 0 {
 		return nil, false, nil
 	}

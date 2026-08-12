@@ -35,6 +35,8 @@ type kiroEndpointConfig struct {
 type kiroTranslatedStreamBody struct {
 	*io.PipeReader
 	raw       io.Closer
+	done      <-chan struct{}
+	cancel    context.CancelFunc
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -44,9 +46,15 @@ func (b *kiroTranslatedStreamBody) Close() error {
 		return nil
 	}
 	b.closeOnce.Do(func() {
+		if b.cancel != nil {
+			b.cancel()
+		}
 		b.closeErr = b.PipeReader.Close()
 		if b.raw != nil {
 			b.closeErr = errors.Join(b.closeErr, b.raw.Close())
+		}
+		if b.done != nil {
+			<-b.done
 		}
 	})
 	return b.closeErr
@@ -128,7 +136,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform))
 	if captureEnabled {
 		setCapturePlatform(c, string(account.Platform))
-		ctx = withCaptureUpstreamRequestContext(ctx, c)
+		ctx = withCaptureUpstreamRequestContext(ctx, c, s.cfg.Gateway.Capture.MaxBodyBytes)
 	}
 
 	originalModel := parsed.Model
@@ -385,10 +393,14 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
 		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
+		translatorCtx, cancelTranslator := context.WithCancel(ctx)
+		translatorDone := make(chan struct{})
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
 		go func() {
-			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
+			defer close(translatorDone)
+			defer cancelTranslator()
+			streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -401,7 +413,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 			// The inner WebSearch loop owns and publishes the provider-native
 			// AWS response. Use the same marker as the normal KIRO translator so
 			// the outer Anthropic stream reader cannot overwrite it with SSE.
-			Body: &kiroTranslatedStreamBody{PipeReader: pr},
+			Body: &kiroTranslatedStreamBody{PipeReader: pr, done: translatorDone, cancel: cancelTranslator},
 		}, inputTokens, nil
 	}
 
@@ -433,6 +445,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
 	pr, pw := io.Pipe()
+	translatorCtx, cancelTranslator := context.WithCancel(ctx)
+	translatorDone := make(chan struct{})
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
 	claudeReqID := kiropkg.NewClaudeRequestID()
@@ -440,8 +454,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	wrappedHeaders.Set("request-id", claudeReqID)
 
 	go func() {
+		defer close(translatorDone)
+		defer cancelTranslator()
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, resp.Body, pw, requestModel, inputTokens, requestCtx)
+		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(translatorCtx, resp.Body, pw, requestModel, inputTokens, requestCtx)
 		// Publish the provider-native AWS event-stream before closing the pipe.
 		// The outer Anthropic/WebChat reader only sees translated SSE and must not
 		// win the result assembly race.
@@ -457,7 +473,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	return &http.Response{
 		StatusCode: resp.StatusCode,
 		Header:     wrappedHeaders,
-		Body:       &kiroTranslatedStreamBody{PipeReader: pr, raw: resp.Body},
+		Body:       &kiroTranslatedStreamBody{PipeReader: pr, raw: resp.Body, done: translatorDone, cancel: cancelTranslator},
 	}, inputTokens, nil
 }
 

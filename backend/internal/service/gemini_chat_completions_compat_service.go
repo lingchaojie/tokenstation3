@@ -82,7 +82,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
 	if captureEnabled {
-		ctx = withCaptureUpstreamRequestContext(ctx, c)
+		ctx = withCaptureUpstreamRequestContext(ctx, c, captureLimit)
 	}
 	var req struct {
 		Model  string `json:"model"`
@@ -136,7 +136,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		requestIDHeader = idHeader
 
 		if captureEnabled {
-			setCaptureUpstreamRequest(c, upstreamReq)
+			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if captureEnabled {

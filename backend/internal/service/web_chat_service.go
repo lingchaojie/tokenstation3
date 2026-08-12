@@ -94,9 +94,6 @@ func NewWebChatService(
 		storage = NewLocalWebChatStorageFromConfig(cfg)
 	}
 	captureMaxBytes := webChatDefaultCaptureBytes
-	if cfg != nil && cfg.Gateway.Capture.MaxBodyBytes > captureMaxBytes {
-		captureMaxBytes = cfg.Gateway.Capture.MaxBodyBytes
-	}
 	return &WebChatService{
 		repo:                 repo,
 		attachmentRepo:       repo,

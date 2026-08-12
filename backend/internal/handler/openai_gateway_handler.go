@@ -252,6 +252,9 @@ func finalOpenAIUpstreamRequest(result *service.OpenAIForwardResult, fallback []
 }
 
 func hashFinalOpenAIUpstreamRequest(result *service.OpenAIForwardResult, fallback []byte) string {
+	if result != nil && result.UpstreamRequestHash != "" {
+		return result.UpstreamRequestHash
+	}
 	return service.HashUsageRequestPayload(finalOpenAIUpstreamRequest(result, fallback))
 }
 

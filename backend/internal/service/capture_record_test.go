@@ -4,14 +4,47 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type delayedTranslatorSource struct {
+	readStarted  chan struct{}
+	closeSignal  chan struct{}
+	readReturned chan struct{}
+	startOnce    sync.Once
+	closeOnce    sync.Once
+	returnOnce   sync.Once
+}
+
+func newDelayedTranslatorSource() *delayedTranslatorSource {
+	return &delayedTranslatorSource{
+		readStarted:  make(chan struct{}),
+		closeSignal:  make(chan struct{}),
+		readReturned: make(chan struct{}),
+	}
+}
+
+func (r *delayedTranslatorSource) Read([]byte) (int, error) {
+	r.startOnce.Do(func() { close(r.readStarted) })
+	<-r.closeSignal
+	time.Sleep(50 * time.Millisecond)
+	r.returnOnce.Do(func() { close(r.readReturned) })
+	return 0, io.EOF
+}
+
+func (r *delayedTranslatorSource) Close() error {
+	r.closeOnce.Do(func() { close(r.closeSignal) })
+	return nil
+}
 
 func TestBuildErrorCaptureRecord(t *testing.T) {
 	// both empty -> nil (nothing to archive)
@@ -98,6 +131,56 @@ func TestCaptureBridgeAttemptIsolation(t *testing.T) {
 	if len(reused.CaptureResponse) != 0 {
 		t.Fatalf("reused context leaked capture: %q", reused.CaptureResponse)
 	}
+}
+
+func TestCapturePolicyMissDoesNotCreateAttemptSlot(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = false
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+
+	beginCaptureAttempt(c)
+	ResetCaptureExchange(c)
+	_, captured := takeCaptureResult(c)
+	require.False(t, captured)
+	_, exists := c.Get(captureResultContextKey)
+	require.False(t, exists, "a policy miss must not allocate or mutate a capture slot")
+}
+
+func TestLateCaptureFinalizerCannotOverwriteNewAttempt(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	firstReq := httptest.NewRequest(http.MethodPost, "https://first.example/v1/messages", nil)
+	SetCaptureOutboundRequest(c, firstReq, []byte(`{"attempt":1}`), 1024)
+	firstResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    firstReq,
+		Body:       io.NopCloser(strings.NewReader("first-response")),
+	}
+	finishFirst := beginCaptureResponse(c, firstResp, true, 1024)
+	_, err := io.ReadAll(firstResp.Body)
+	require.NoError(t, err)
+
+	secondReq := httptest.NewRequest(http.MethodPost, "https://second.example/v1/messages", nil)
+	SetCaptureOutboundRequest(c, secondReq, []byte(`{"attempt":2}`), 1024)
+	secondResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    secondReq,
+		Body:       io.NopCloser(strings.NewReader("second-response")),
+	}
+	finishSecond := beginCaptureResponse(c, secondResp, true, 1024)
+	_, err = io.ReadAll(secondResp.Body)
+	require.NoError(t, err)
+	finishSecond()
+	finishFirst() // stale translator/finalizer publishes after the new attempt
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.JSONEq(t, `{"attempt":2}`, string(bridge.UpstreamRequest))
+	require.Equal(t, "second-response", string(bridge.Response))
+	require.Equal(t, "https://second.example/v1/messages", bridge.UpstreamEndpoint)
 }
 
 func TestBuildTerminalErrorCaptureRecordUsesFinalExchangeAndPolicy(t *testing.T) {
@@ -243,6 +326,50 @@ func TestSnapshotBytesCopiesInput(t *testing.T) {
 	if snapshotBytes(nil) != nil {
 		t.Fatal("nil in -> nil out")
 	}
+}
+
+func TestCaptureRequestSnapshotsUseEightMiBHardCeiling(t *testing.T) {
+	const hardLimit = 8 << 20
+	body := bytes.Repeat([]byte("x"), hardLimit+1024)
+
+	direct, truncated := captureWithLimit(body, hardLimit*2)
+	require.Len(t, direct, hardLimit)
+	require.True(t, truncated)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req := httptest.NewRequest(http.MethodPost, "https://api.example/v1/messages", bytes.NewReader(body))
+	setCaptureUpstreamRequest(c, req, hardLimit*2)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Len(t, bridge.UpstreamRequest, hardLimit)
+	require.True(t, bridge.RequestTruncated)
+}
+
+func TestKiroTranslatedStreamCloseJoinsTranslator(t *testing.T) {
+	raw := newDelayedTranslatorSource()
+	pipeReader, pipeWriter := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(pipeWriter, raw)
+		_ = pipeWriter.Close()
+	}()
+	select {
+	case <-raw.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("translator did not start reading")
+	}
+
+	body := &kiroTranslatedStreamBody{PipeReader: pipeReader, raw: raw, done: done}
+	require.NoError(t, body.Close())
+	returnedBeforeTranslator := false
+	select {
+	case <-done:
+	default:
+		returnedBeforeTranslator = true
+		<-done
+	}
+	require.False(t, returnedBeforeTranslator, "Close returned while the translator could still publish stale capture state")
 }
 
 func TestExtractSessionIDFromMetadataUserID(t *testing.T) {

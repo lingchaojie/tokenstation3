@@ -591,7 +591,8 @@ type ForwardResult struct {
 	// UpstreamRequest is an immutable snapshot of the final request body sent
 	// by the last attempted upstream call. Compatibility producers may leave it
 	// nil; new forwarding paths must not substitute the inbound client body.
-	UpstreamRequest []byte
+	UpstreamRequest     []byte
+	UpstreamRequestHash string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
 	UpstreamModel string
