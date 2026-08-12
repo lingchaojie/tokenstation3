@@ -1686,7 +1686,6 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
 	finishCapture()
-	finishCapture = func() {}
 	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,

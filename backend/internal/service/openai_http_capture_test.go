@@ -85,6 +85,29 @@ func TestOpenAIHTTPCaptureResponseIsBounded(t *testing.T) {
 	require.True(t, bridge.Truncated)
 }
 
+func TestOpenAIHTTPCaptureResponseHonorsHardMaximum(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(captureHardMaxBodyBytes * 2)}
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/chat/completions", nil)
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, &Account{Platform: PlatformOpenAI}, req, []byte(`{}`)))
+	body := bytes.Repeat([]byte("x"), captureHardMaxBodyBytes+1)
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Request: req}
+	svc.wrapOpenAIHTTPCaptureResponse(c, &Account{Platform: PlatformOpenAI}, resp)
+	capture, ok := resp.Body.(*openAIHTTPCaptureReadCloser)
+	require.True(t, ok)
+	require.Equal(t, captureHardMaxBodyBytes, capture.limit)
+	_, err := io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	finishOpenAIHTTPCapture(resp)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Len(t, bridge.Response, captureHardMaxBodyBytes)
+	require.True(t, bridge.Truncated)
+}
+
 func TestOpenAIHTTPCaptureRetryKeepsOnlyFinalAttempt(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

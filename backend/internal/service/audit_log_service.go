@@ -241,10 +241,10 @@ func (s *AuditLogService) runWriter() {
 					}
 					batch = append(batch, item.log)
 					if len(batch) >= auditLogBatchSize {
-						flush()
+						_ = flush()
 					}
 				default:
-					flush()
+					_ = flush()
 					return
 				}
 			}
@@ -258,10 +258,10 @@ func (s *AuditLogService) runWriter() {
 			}
 			batch = append(batch, item.log)
 			if len(batch) >= auditLogBatchSize {
-				flush()
+				_ = flush()
 			}
 		case <-ticker.C:
-			flush()
+			_ = flush()
 		}
 	}
 }

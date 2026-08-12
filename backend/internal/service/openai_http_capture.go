@@ -109,7 +109,7 @@ func (s *OpenAIGatewayService) wrapOpenAIHTTPCaptureResponse(c *gin.Context, acc
 		inner: resp.Body,
 		c:     c,
 		resp:  resp,
-		limit: s.cfg.Gateway.Capture.MaxBodyBytes,
+		limit: normalizeCaptureLimit(s.cfg.Gateway.Capture.MaxBodyBytes),
 	}
 }
 
