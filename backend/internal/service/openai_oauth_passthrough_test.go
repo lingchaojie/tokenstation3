@@ -532,6 +532,7 @@ func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *tes
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	enableCaptureForTest(t, c)
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.Error(t, err)
@@ -2710,6 +2711,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
 	}
+	enableCaptureForTest(t, c)
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.EqualError(t, err, "stream usage incomplete: missing terminal event")

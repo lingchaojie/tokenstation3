@@ -364,6 +364,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				return nil, fmt.Errorf("build grok retry request: %w", err)
 			}
 		}
+		s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, responsesBody)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -399,11 +400,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(respBody), 240)),
 		)
 	}
+	s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 	defer func() { _ = resp.Body.Close() }()
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		finishOpenAIHTTPCapture(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -452,13 +455,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
 		}
 	}
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
-	captureLimit := 0
-	if captureEnabled {
-		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
-	}
-	finishCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
-
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
 	var result *OpenAIForwardResult
@@ -469,7 +465,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
-	finishCapture()
+	finishOpenAIHTTPCapture(resp)
 
 	// cyber_policy：标记已设、error 已按 Anthropic 格式发给客户端。丢弃 result、返回哨兵，
 	// 使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），不计费、不 failover。
@@ -482,6 +478,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
+		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 		if compatContinuationEnabled && promptCacheKey != "" && result.ResponseID != "" {
 			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID)
 		}

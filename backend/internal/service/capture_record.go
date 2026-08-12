@@ -32,6 +32,7 @@ type CaptureRecord struct {
 	RequestHeaders   []byte // 脱敏后 JSON
 	ResponseHeaders  []byte // 脱敏后 JSON
 	Truncated        bool
+	ContentPolicy    *CaptureContentPolicy
 
 	// 以下抽取列由 worker 调用 extractCaptureColumns 填充，提交时可留空。
 	SessionID           string
@@ -187,11 +188,16 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
-	UpstreamRequest []byte
-	Response        []byte
-	Truncated       bool
-	RequestHeaders  []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
-	ResponseHeaders []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamRequest   []byte
+	Response          []byte
+	Truncated         bool
+	RequestTruncated  bool
+	ResponseTruncated bool
+	RequestHeaders    []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
+	ResponseHeaders   []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
+	UpstreamEndpoint  string
+	HTTPStatus        int
+	Platform          string
 }
 
 // captureResultSlot is shared by all forwarding attempts that reuse one Gin
@@ -230,6 +236,57 @@ func beginCaptureAttempt(c *gin.Context) {
 	slot.mu.Unlock()
 }
 
+// ResetCaptureExchange clears snapshots from an intermediate failover attempt
+// without replacing the synchronized slot shared by response finalization.
+func ResetCaptureExchange(c *gin.Context) {
+	beginCaptureAttempt(c)
+	if c != nil {
+		c.Set(kiroCaptureHeadersContextKey, nil)
+	}
+}
+
+// SetCaptureOutboundRequest snapshots the actual post-mapping request sent to
+// the provider. Callers must guard this with CaptureMayApplyFor.
+func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, limit int) {
+	slot := captureSlot(c)
+	if slot == nil {
+		return
+	}
+	request, requestTruncated := captureWithLimit(body, limit)
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	bridge := slot.bridge
+	bridge.UpstreamRequest = request
+	bridge.RequestTruncated = requestTruncated
+	bridge.Response = nil
+	bridge.ResponseHeaders = nil
+	bridge.ResponseTruncated = false
+	bridge.Truncated = requestTruncated
+	bridge.HTTPStatus = 0
+	if req != nil {
+		bridge.RequestHeaders = redactHTTPHeader(req.Header)
+		if req.URL != nil {
+			bridge.UpstreamEndpoint = req.URL.String()
+		}
+	}
+	slot.mu.Unlock()
+}
+
+func setCapturePlatform(c *gin.Context, platform string) {
+	slot := captureSlot(c)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	slot.bridge.Platform = strings.ToLower(strings.TrimSpace(platform))
+	slot.mu.Unlock()
+}
+
 // setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
 // resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
 // 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
@@ -238,21 +295,24 @@ func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncate
 	if slot == nil {
 		return
 	}
-	bridge := &captureResultBridge{Response: body, Truncated: truncated}
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	bridge := slot.bridge
+	bridge.Response = snapshotBytes(body)
+	bridge.ResponseTruncated = truncated
+	bridge.Truncated = bridge.RequestTruncated || truncated
 	if resp != nil {
-		if resp.Request != nil {
+		bridge.HTTPStatus = resp.StatusCode
+		if resp.Request != nil && len(bridge.RequestHeaders) == 0 {
 			bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+			if resp.Request.URL != nil && bridge.UpstreamEndpoint == "" {
+				bridge.UpstreamEndpoint = resp.Request.URL.String()
+			}
 		}
 		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
 	}
-	slot.mu.Lock()
-	if slot.bridge != nil {
-		bridge.UpstreamRequest = slot.bridge.UpstreamRequest
-		if len(bridge.RequestHeaders) == 0 {
-			bridge.RequestHeaders = slot.bridge.RequestHeaders
-		}
-	}
-	slot.bridge = bridge
 	slot.mu.Unlock()
 }
 
@@ -265,6 +325,7 @@ func markCaptureResultTruncated(c *gin.Context) {
 	if slot.bridge == nil {
 		slot.bridge = &captureResultBridge{}
 	}
+	slot.bridge.ResponseTruncated = true
 	slot.bridge.Truncated = true
 	slot.mu.Unlock()
 }
@@ -307,14 +368,20 @@ func setCaptureUpstreamRequest(c *gin.Context, req *http.Request) {
 		slot.bridge = &captureResultBridge{}
 	}
 	slot.bridge.UpstreamRequest = body
+	slot.bridge.RequestTruncated = false
 	if req != nil {
 		slot.bridge.RequestHeaders = redactHTTPHeader(req.Header)
+		if req.URL != nil {
+			slot.bridge.UpstreamEndpoint = req.URL.String()
+		}
 	}
 	// A new attempt owns the slot. Response-side data from a prior retry must
 	// never be paired with this request.
 	slot.bridge.Response = nil
+	slot.bridge.ResponseTruncated = false
 	slot.bridge.Truncated = false
 	slot.bridge.ResponseHeaders = nil
+	slot.bridge.HTTPStatus = 0
 	slot.mu.Unlock()
 }
 
@@ -331,6 +398,10 @@ func setCaptureUpstreamResponse(c *gin.Context, resp *http.Response) {
 		slot.bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
 	}
 	slot.bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
+	slot.bridge.HTTPStatus = resp.StatusCode
+	if slot.bridge.UpstreamEndpoint == "" && resp.Request != nil && resp.Request.URL != nil {
+		slot.bridge.UpstreamEndpoint = resp.Request.URL.String()
+	}
 	slot.mu.Unlock()
 }
 
@@ -392,11 +463,19 @@ func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *Forwar
 	}
 	if bridge, ok := takeCaptureResult(c); ok {
 		result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+		result.CaptureRequest = snapshotBytes(bridge.UpstreamRequest)
 		result.CaptureRequestHeaders = bridge.RequestHeaders
 		result.CaptureResponseHeaders = bridge.ResponseHeaders
+		result.CaptureUpstreamEndpoint = bridge.UpstreamEndpoint
+		result.CaptureHTTPStatus = bridge.HTTPStatus
 		if bridge.Response != nil {
 			result.CaptureResponse = bridge.Response
 			result.CaptureTruncated = bridge.Truncated
+		}
+		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
+			if content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); enabled {
+				result.CaptureContentPolicy = &content
+			}
 		}
 	}
 	return result
@@ -411,10 +490,19 @@ func attachCaptureToOpenAIForwardResult(c *gin.Context, result *OpenAIForwardRes
 		return nil
 	}
 	if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+		result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+		result.CaptureRequest = snapshotBytes(bridge.UpstreamRequest)
 		result.CaptureResponse = bridge.Response
 		result.CaptureTruncated = bridge.Truncated
 		result.CaptureRequestHeaders = bridge.RequestHeaders
 		result.CaptureResponseHeaders = bridge.ResponseHeaders
+		result.CaptureUpstreamEndpoint = bridge.UpstreamEndpoint
+		result.CaptureHTTPStatus = bridge.HTTPStatus
+		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
+			if content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); enabled {
+				result.CaptureContentPolicy = &content
+			}
+		}
 	}
 	return result
 }
@@ -424,7 +512,24 @@ func finalizeOpenAIForwardResult(c *gin.Context, result *OpenAIForwardResult, up
 		return nil
 	}
 	result.UpstreamRequest = snapshotBytes(upstreamRequest)
+	result.CaptureRequest = snapshotBytes(upstreamRequest)
 	return attachCaptureToOpenAIForwardResult(c, result)
+}
+
+func platformFromCaptureEndpoint(endpoint string) string {
+	host := strings.ToLower(endpoint)
+	switch {
+	case strings.Contains(host, "api.openai.com") || strings.Contains(host, "/backend-api/codex"):
+		return PlatformOpenAI
+	case strings.Contains(host, "anthropic"):
+		return PlatformAnthropic
+	case strings.Contains(host, "generativelanguage") || strings.Contains(host, "googleapis"):
+		return PlatformGemini
+	case strings.Contains(host, "x.ai"):
+		return PlatformGrok
+	default:
+		return ""
+	}
 }
 
 // responseColumns 是从原始上游响应体（流式 SSE 或非流式 JSON）轻扫描抽取出的
@@ -602,6 +707,103 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 	return rec
 }
 
+func captureEndpointFromResponse(resp *http.Response) string {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return ""
+	}
+	return resp.Request.URL.String()
+}
+
+func captureRequestHeadersFromResponse(resp *http.Response) http.Header {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	return resp.Request.Header.Clone()
+}
+
+// BuildTerminalErrorCaptureRecord materializes only a final upstream HTTP
+// failure. Callers must explicitly mark that an actual error-status response
+// was received; transport, local scheduling, and errors embedded in an HTTP 200
+// stream are deliberately excluded even when they reuse HTTP-like status codes.
+func BuildTerminalErrorCaptureRecord(c *gin.Context, platform string, failure *UpstreamFailoverError, limit int) *CaptureRecord {
+	if c == nil || failure == nil || failure.StatusCode <= 0 || !failure.HasUpstreamHTTPResponse {
+		return nil
+	}
+	content, enabled := CaptureDecisionFor(c, platform, CaptureOutcomeTerminalError)
+	if !enabled {
+		return nil
+	}
+	bridge, hasBridge := takeCaptureResult(c)
+	if !hasBridge && strings.TrimSpace(failure.UpstreamEndpoint) == "" {
+		return nil
+	}
+
+	requestedModel := captureRequestedModel(c)
+	var upstreamModel string
+	var stream bool
+	var fallbackRequest []byte
+	if value, ok := c.Get("parsed_request"); ok {
+		if parsed, valid := value.(*ParsedRequest); valid && parsed != nil {
+			if requestedModel == "" {
+				requestedModel = parsed.Model
+			}
+			stream = parsed.Stream
+			if parsed.Body != nil {
+				fallbackRequest = parsed.Body.Bytes()
+			}
+		}
+	}
+
+	rawRequest, requestTruncated := captureWithLimit(fallbackRequest, limit)
+	endpoint := strings.TrimSpace(failure.UpstreamEndpoint)
+	requestHeaders := redactHTTPHeader(failure.RequestHeaders)
+	if hasBridge {
+		if bridge.UpstreamRequest != nil {
+			rawRequest = snapshotBytes(bridge.UpstreamRequest)
+			requestTruncated = bridge.RequestTruncated
+		}
+		requestHeaders = snapshotBytes(bridge.RequestHeaders)
+		if endpoint == "" {
+			endpoint = bridge.UpstreamEndpoint
+		}
+	}
+	rawResponse, responseTruncated := captureWithLimit(failure.ResponseBody, limit)
+	if hasBridge && bridge.Response != nil {
+		rawResponse = snapshotBytes(bridge.Response)
+		responseTruncated = bridge.ResponseTruncated
+	}
+	if model, outboundStream, _ := extractOpenAIRequestMetaFromBody(rawRequest); model != "" {
+		upstreamModel = model
+		stream = outboundStream
+	}
+	if requestedModel == "" {
+		requestedModel = upstreamModel
+	}
+	if upstreamModel == "" {
+		upstreamModel = requestedModel
+	}
+	rec := &CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         platform,
+		RequestID:        failure.ResponseHeaders.Get("x-request-id"),
+		RequestedModel:   requestedModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: endpoint,
+		Stream:           stream,
+		HTTPStatus:       failure.StatusCode,
+		RawRequest:       rawRequest,
+		RawResponse:      rawResponse,
+		RequestHeaders:   requestHeaders,
+		ResponseHeaders:  redactHTTPHeader(failure.ResponseHeaders),
+		Truncated:        requestTruncated || responseTruncated,
+		ContentPolicy:    &content,
+	}
+	if rec.RequestID == "" {
+		rec.RequestID = CaptureRequestID("")
+	}
+	return rec
+}
+
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。
 func extractCaptureColumns(rec *CaptureRecord) {
 	rec.SessionID = extractCaptureSessionID(rec.RawRequest)
@@ -623,4 +825,24 @@ func extractCaptureColumns(rec *CaptureRecord) {
 	rec.CacheReadTokens = cols.CacheReadTokens
 	rec.CacheCreationTokens = cols.CacheCreationTokens
 	rec.SignaturePresent = cols.SignaturePresent
+}
+
+// ApplyCaptureContentPolicy clears disabled persistence fields. Call it only
+// after extractCaptureColumns so searchable metadata survives body suppression.
+func ApplyCaptureContentPolicy(rec *CaptureRecord, policy CaptureContentPolicy) {
+	if rec == nil {
+		return
+	}
+	if !policy.RawRequest {
+		rec.RawRequest = nil
+	}
+	if !policy.RawResponse {
+		rec.RawResponse = nil
+	}
+	if !policy.RequestHeaders {
+		rec.RequestHeaders = nil
+	}
+	if !policy.ResponseHeaders {
+		rec.ResponseHeaders = nil
+	}
 }

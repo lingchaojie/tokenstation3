@@ -20,6 +20,8 @@ import (
 )
 
 var upstreamSyncMigrationFilenames = []string{
+	"191_capture_health_events.sql",
+	"192_capture_ops_alert_rules.sql",
 	"193_usage_log_image_input_tokens.sql",
 	"194_audit_logs.sql",
 	"195_group_duplicate_operation_id.sql",
@@ -79,12 +81,11 @@ func TestUpstreamSyncMigrationSequenceIntentionallyLeavesPromptAuditGap(t *testi
 	require.Contains(t, files, "198_ops_ingress_reject_aggregates.sql")
 }
 
-func TestUpstreamSyncMigrationSequenceIntentionallyLeavesImagePricingGap(t *testing.T) {
+func TestUpstreamSyncMigrationSequenceIncludesCaptureHealthAndOpsRules(t *testing.T) {
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	require.NoError(t, err)
-	for _, name := range files {
-		require.False(t, strings.HasPrefix(name, "192_"), name)
-	}
+	require.Contains(t, files, "191_capture_health_events.sql")
+	require.Contains(t, files, "192_capture_ops_alert_rules.sql")
 	require.Contains(t, files, "193_usage_log_image_input_tokens.sql")
 }
 

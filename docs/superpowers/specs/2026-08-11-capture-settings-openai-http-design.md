@@ -255,6 +255,7 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
 - 一级队列当前/峰值条数、二级队列当前/峰值条数、全链路当前/峰值在途字节数。
 - `started_at`、`last_success_at`、`last_drop_at`、`last_drop_reason` 和最后一条脱敏错误摘要。
 - 内存 ring buffer 保留最近 100 条丢失事件。
+- PostgreSQL 历史待重试聚合最多保留 4096 个 bucket，每次发送最旧的 256 个；持续失败触顶时淘汰最旧 bucket，并通过 `history_dropped_buckets` 与结构化日志显式告警。
 
 数据只有在 ClickHouse `Send` 成功后才计入 `written_records`。在成功写入或确认丢失之前，record 始终占用 `max_queue_bytes` 预算，避免二级队列和 batch 绕过内存上限。
 
@@ -263,7 +264,7 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
 新增 `capture_health_events` 表，按 `minute_bucket + instance_id + reason` 聚合保存：丢失条数、丢失字节、队列使用峰值和最后脱敏错误摘要。
 
 - 记录丢失的热路径只更新内存聚合器，不同步写 PostgreSQL。
-- 后台 reporter 每分钟批量 upsert 上一分钟的聚合值，自身队列有界，失败时记结构化日志但不影响转发。
+- 后台 reporter 每分钟批量 upsert 上一分钟的聚合值，自身待重试 map 有 4096 bucket 上限，单次最多处理 256 个最旧 bucket；失败时保留待重试，触顶淘汰会增加可见计数并记结构化日志，均不影响转发。
 - 每小时删除 30 天以前的聚合行。
 - 服务停止时在有界超时内尝试最后一次 flush；进程崩溃时最多丢失当前尚未 flush 的一分钟健康聚合，不影响 ClickHouse 中已写入的转存数据。
 
@@ -273,7 +274,7 @@ ClickHouse schema 保持不变。关闭的内容字段写空字符串，不迁�
 - ClickHouse 启动连接失败：保留现有 noop 降级，页面显示未 ready，不影响服务启动。
 - ClickHouse 运行时写失败：记录 capture 错误日志、实时丢失指标和按分钟历史，丢弃批次，不反压转发。
 - 队列或字节预算满：继续使用 drop/sample 策略，每次最终丢弃都必须按真实原因计数；`sample` 重试成功不计丢失。
-- 设置 DB 读取失败或策略损坏：fail-closed，不采集、不影响转发。
+- 设置 DB 读取失败或策略损坏：fail-closed，不采集、不影响转发。请求热路径只读进程内策略快照；冷缓存后台加载、过期缓存 stale-while-revalidate，绝不等待 PostgreSQL。管理员保存的新快照不得被较早发起的后台读取覆盖。
 - 客户端断开：沿用各路径现有 drain/usage 行为；只有已经完整形成并提交的 capture record 才入库。
 
 ## 12. 实现边界

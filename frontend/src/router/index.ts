@@ -644,6 +644,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/capture-settings',
+    name: 'AdminCaptureSettings',
+    component: () => import('@/views/admin/CaptureSettingsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Capture Settings',
+      titleKey: 'admin.captureSettings.title',
+      descriptionKey: 'admin.captureSettings.description'
+    }
+  },
+  {
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/SettingsView.vue'),

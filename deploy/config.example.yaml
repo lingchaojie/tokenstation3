@@ -602,17 +602,21 @@ gateway:
   # 把每次上游调用的原始 request/response 逐字异步写入远端 ClickHouse，供离线
   # 二次开发（训练轨迹采集、分析、审计）。默认关闭、关时零成本；与转发/计费完全
   # 隔离的第三条异步通道，外部库故障绝不影响转发。
+  # 这里仅做静态基础设施 provisioning；运行时总开关、平台/结果/内容/用户/分组范围
+  # 请在管理员左侧“转存设置”保存。静态配置修改后必须重启。
+  # 以下容量是 2GiB 应用机的保守起始值，按管理页丢失计数和队列峰值再调优。
   # ==========================================================================
   capture:
-    enabled: false            # 总开关，默认关。关时整条链路不初始化
+    enabled: false            # 静态 provisioning 开关，默认关；开启后仍需在管理页打开运行时总开关
     max_body_bytes: 8388608   # 单条原文上限(8MB)，超出停止累积并标 is_truncated
-    max_queue_bytes: 1073741824 # 在途 record 总字节上界(1GiB)，防大 body 突发打爆内存；0=不限，非0须 >= max_body_bytes
-    queue_size: 8192          # 有界内存队列容量（本期 A1，满即按策略丢弃）
-    worker_count: 4           # 抽取+写入 worker 数
+    max_queue_bytes: 134217728 # 128MiB 全链路在途字节上界；持有到 ClickHouse 成功/明确丢弃；0=不限
+    queue_size: 512           # 一级有界内存队列容量，满时按策略丢弃
+    worker_count: 2           # 抽取并送入二级写入队列的 worker 数
+    writer_queue_size: 1024   # 二级 ClickHouse batcher 队列容量
     overflow_policy: drop      # 队列满策略：drop（默认，绝不阻塞转发）/ sample
     overflow_sample_percent: 0 # sample 策略下的采样百分比(1-100)
-    batch_max_size: 200        # 批量 INSERT 行数上限
-    batch_max_interval_ms: 1000 # 批量时间窗(ms)
+    batch_max_size: 100        # 批量 INSERT 行数上限
+    batch_max_interval_ms: 2000 # 非空批次的最长等待时间；没有数据时不会写空批次
     clickhouse:
       # 远端 ClickHouse（独立部署，勿与转发生产机争资源；勿裸暴露公网）。
       # Docker: 另一台机填其 IP/域名；兄弟容器填 service 名；宿主机填 host.docker.internal
@@ -626,11 +630,8 @@ gateway:
       compression: lz4          # 传输层压缩：lz4 / zstd / none
       secure: false             # 跨不可信网络传输时开 TLS（端口 9440）
       max_open_conns: 8
-    # ── 后续优化预留（本期未实现）──
-    # spool:                    # A2：本地落盘 spool + 后台 shipper，扛外部瞬断不丢
-    #   enabled: false
-    #   dir: /var/lib/sub2api/capture-spool
-    #   max_disk_bytes: 1073741824
+    # 当前没有本地磁盘 spool。任何容量或写入失败都会非阻塞丢弃，并在“转存设置”显示。
+    # 丢失历史写 PostgreSQL 的待重试聚合固定最多 4096 个 bucket，每批 256 个；触顶淘汰也会在页面计数。
 
 # =============================================================================
 # Logging Configuration

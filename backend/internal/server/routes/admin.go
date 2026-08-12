@@ -67,6 +67,9 @@ func RegisterAdminRoutes(
 		// 优惠码管理
 		registerPromoCodeRoutes(admin, h)
 
+		// 转存设置
+		registerCaptureSettingsRoutes(admin, h)
+
 		// 系统设置
 		registerSettingsRoutes(admin, h)
 
@@ -121,6 +124,15 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerCaptureSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	capture := admin.Group("/capture-settings")
+	{
+		capture.GET("", h.Admin.Capture.Get)
+		capture.PUT("", h.Admin.Capture.Update)
+		capture.GET("/history", h.Admin.Capture.History)
 	}
 }
 

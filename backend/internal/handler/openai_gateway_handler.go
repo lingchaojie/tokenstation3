@@ -44,6 +44,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
 	cfg                        *config.Config
+	settingService             *service.SettingService
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -208,6 +209,10 @@ func NewOpenAIGatewayHandler(
 			maxAccountSwitches = cfg.Gateway.MaxAccountSwitches
 		}
 	}
+	var settingService *service.SettingService
+	if gatewayService != nil {
+		settingService = gatewayService.CaptureSettingService()
+	}
 	return &OpenAIGatewayHandler{
 		gatewayService:           gatewayService,
 		billingCacheService:      billingCacheService,
@@ -221,7 +226,15 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
+		settingService:           settingService,
 	}
+}
+
+func (h *OpenAIGatewayHandler) prepareCaptureScope(c *gin.Context, userID int64, groupID *int64) {
+	if h == nil || c == nil {
+		return
+	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, userID, groupID)
 }
 
 func (h *OpenAIGatewayHandler) captureLimit() int {
@@ -245,7 +258,7 @@ func hashFinalOpenAIUpstreamRequest(result *service.OpenAIForwardResult, fallbac
 // submitCapture 把一次 OpenAI 透传调用的原始上游快照提交到归档通道。
 // capturePool 为 nil（未启用/未注入）或结果未采集时直接返回，热路径零成本。
 func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.OpenAIForwardResult, account *service.Account, body []byte, upstreamEndpoint string) {
-	if h.capturePool == nil || result == nil || result.CaptureResponse == nil {
+	if h.capturePool == nil || result == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
 	h.capturePool.Submit(buildOpenAICaptureRecord(result, account, body, upstreamEndpoint, h.captureLimit()))
@@ -256,6 +269,9 @@ func buildOpenAICaptureRecord(result *service.OpenAIForwardResult, account *serv
 		return nil
 	}
 	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(finalOpenAIUpstreamRequest(result, fallbackBody), limit)
+	if result.CaptureUpstreamEndpoint != "" {
+		upstreamEndpoint = result.CaptureUpstreamEndpoint
+	}
 	return &service.CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         string(account.Platform),
@@ -270,6 +286,7 @@ func buildOpenAICaptureRecord(result *service.OpenAIForwardResult, account *serv
 		RequestHeaders:   result.CaptureRequestHeaders,
 		ResponseHeaders:  result.CaptureResponseHeaders,
 		Truncated:        requestTruncated || result.CaptureTruncated,
+		ContentPolicy:    result.CaptureContentPolicy,
 	}
 }
 
@@ -297,6 +314,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.responses",
@@ -350,6 +368,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	service.SetCaptureRequestedModel(c, reqModel)
 	if cappedBody, changed := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); changed {
 		body = cappedBody
 	}
@@ -590,6 +609,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			service.ResetCaptureExchange(c)
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
 		cyberBlockKeyHTTP := ""
@@ -617,6 +637,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					if failoverErr.Platform == "" {
+						failoverErr.Platform = string(account.Platform)
+					}
 					if failoverClientGone(c) {
 						reqLog.Info("openai.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -964,6 +987,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.messages",
@@ -1009,6 +1033,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	service.SetCaptureRequestedModel(c, reqModel)
 	bindOpenAIReasoningEffortPolicyForMessagesRequest(c, apiKey, body)
 	routingModel := service.NormalizeOpenAICompatRequestedModel(reqModel)
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)
@@ -1168,6 +1193,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			service.ResetCaptureExchange(c)
 			return h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
 		cyberBlockKeyMsg := ""
@@ -1195,6 +1221,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					if failoverErr.Platform == "" {
+						failoverErr.Platform = string(account.Platform)
+					}
 					if failoverClientGone(c) {
 						reqLog.Info("openai_messages.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -1373,6 +1402,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
+	h.submitOpenAITerminalCapture(c, failoverErr)
 	if failoverErr != nil {
 		copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	}
@@ -2537,6 +2567,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleFailoverExhaustedSimple(c, http.StatusBadGateway, streamStarted)
 		return
 	}
+	h.submitOpenAITerminalCapture(c, failoverErr)
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
 		h.handleStreamingAwareError(
@@ -2593,6 +2624,19 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
+}
+
+func (h *OpenAIGatewayHandler) submitOpenAITerminalCapture(c *gin.Context, failure *service.UpstreamFailoverError) {
+	if h == nil || h.capturePool == nil || failure == nil {
+		return
+	}
+	platform := strings.TrimSpace(failure.Platform)
+	if platform == "" {
+		platform = service.PlatformOpenAI
+	}
+	if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failure, h.captureLimit()); rec != nil {
+		h.capturePool.Submit(rec)
+	}
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {

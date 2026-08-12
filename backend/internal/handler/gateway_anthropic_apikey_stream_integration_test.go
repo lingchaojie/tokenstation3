@@ -125,6 +125,7 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 	cfg.Gateway.MaxAccountSwitches = 1
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settingService := newEnabledCaptureSettingService(t, cfg)
 
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCache.Stop)
@@ -157,7 +158,7 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 		nil, // sessionLimitCache
 		nil, // rpmCache
 		nil, // digestStore
-		nil, // settingService
+		settingService,
 		nil, // tlsFPProfileService
 		nil, // channelService
 		nil, // resolver
@@ -169,7 +170,7 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 	apiKeyService := service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg)
 	h := NewGatewayHandler(
 		gateway, nil, nil, nil, nil, concurrencyService, billingCache, nil, apiKeyService,
-		nil, nil, nil, nil, cfg, nil, capturePool,
+		nil, nil, nil, nil, cfg, settingService, capturePool,
 	)
 
 	recorder := httptest.NewRecorder()

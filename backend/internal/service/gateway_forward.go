@@ -388,6 +388,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已签名 CCH 再改写。
 		lastWireBody = wireBody
+		s.captureOutboundRequest(c, account, upstreamReq, wireBody)
 
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
@@ -472,6 +473,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					retryReq, retryWireBody, buildErr := s.buildUpstreamRequest(retryCtx, c, account, filteredBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 					releaseRetryCtx()
 					if buildErr == nil {
+						s.captureOutboundRequest(c, account, retryReq, retryWireBody)
 						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
@@ -513,6 +515,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									retryReq2, retryWireBody2, buildErr2 := s.buildUpstreamRequest(retryCtx2, c, account, filteredBody2, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 									releaseRetryCtx2()
 									if buildErr2 == nil {
+										s.captureOutboundRequest(c, account, retryReq2, retryWireBody2)
 										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
 										if retryErr2 == nil {
 											if retryResp2.StatusCode < 400 {
@@ -592,6 +595,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						budgetRetryReq, budgetWireBody, buildErr := s.buildUpstreamRequest(budgetRetryCtx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 						releaseBudgetRetryCtx()
 						if buildErr == nil {
+							s.captureOutboundRequest(c, account, budgetRetryReq, budgetWireBody)
 							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 							if retryErr == nil {
 								if budgetRetryResp.StatusCode < 400 {
@@ -713,9 +717,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}(),
 			})
 			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				StatusCode:              resp.StatusCode,
+				ResponseBody:            respBody,
+				RequestHeaders:          captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:         resp.Header.Clone(),
+				UpstreamEndpoint:        captureEndpointFromResponse(resp),
+				HasUpstreamHTTPResponse: true,
+				RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -747,9 +755,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}(),
 		})
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -795,7 +807,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
 				}
 				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, &UpstreamFailoverError{
+					StatusCode:              resp.StatusCode,
+					ResponseBody:            respBody,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse: true,
+				}
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, reqModel)
@@ -868,8 +887,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					return partial, err
 				}
 				return nil, &UpstreamFailoverError{
-					StatusCode:   403,
-					ResponseBody: body,
+					StatusCode:       403,
+					ResponseBody:     body,
+					RequestHeaders:   captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:  resp.Header.Clone(),
+					UpstreamEndpoint: captureEndpointFromResponse(resp),
 				}
 			}
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的

@@ -1340,6 +1340,7 @@ type GatewayCaptureConfig struct {
 	MaxQueueBytes         int64                   `mapstructure:"max_queue_bytes"`
 	QueueSize             int                     `mapstructure:"queue_size"`
 	WorkerCount           int                     `mapstructure:"worker_count"`
+	WriterQueueSize       int                     `mapstructure:"writer_queue_size"`
 	OverflowPolicy        string                  `mapstructure:"overflow_policy"`
 	OverflowSamplePercent int                     `mapstructure:"overflow_sample_percent"`
 	BatchMaxSize          int                     `mapstructure:"batch_max_size"`
@@ -1380,8 +1381,8 @@ func (c GatewayCaptureConfig) validate() error {
 	default:
 		return fmt.Errorf("gateway.capture.clickhouse.compression must be lz4|zstd|none, got %q", c.ClickHouse.Compression)
 	}
-	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.BatchMaxSize <= 0 {
-		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/batch_max_size must be > 0")
+	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.WriterQueueSize <= 0 || c.BatchMaxSize <= 0 {
+		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/writer_queue_size/batch_max_size must be > 0")
 	}
 	// max_queue_bytes: 0 = 不限；否则必须 >= max_body_bytes，否则单条大 record 永远预留失败、该类流量永不归档。
 	if c.MaxQueueBytes < 0 {
@@ -2502,6 +2503,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.capture.max_queue_bytes", int64(1)<<30) // 1 GiB 在途上界；0 = 不限
 	viper.SetDefault("gateway.capture.queue_size", 8192)
 	viper.SetDefault("gateway.capture.worker_count", 4)
+	viper.SetDefault("gateway.capture.writer_queue_size", 1024)
 	viper.SetDefault("gateway.capture.overflow_policy", UsageRecordOverflowPolicyDrop)
 	viper.SetDefault("gateway.capture.overflow_sample_percent", 0)
 	viper.SetDefault("gateway.capture.batch_max_size", 200)

@@ -17,10 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newGrokErrorCaptureTestContext(body []byte) (*gin.Context, *httptest.ResponseRecorder) {
+func newGrokErrorCaptureTestContext(t *testing.T, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
 	return c, recorder
 }
 
@@ -39,7 +41,7 @@ func grokErrorCaptureTestConfig() *config.Config {
 func TestForwardGrokResponsesFinalHTTPErrorCarriesFinalAttemptCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"grok","input":"hi","stream":false}`)
-	c, _ := newGrokErrorCaptureTestContext(body)
+	c, _ := newGrokErrorCaptureTestContext(t, body)
 	errorBody := `{"error":{"message":"invalid request"}}`
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusBadRequest,
@@ -62,7 +64,7 @@ func TestForwardGrokResponsesFinalHTTPErrorCarriesFinalAttemptCapture(t *testing
 func TestForwardGrokResponsesFinal2xxParseErrorCarriesConsumedCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"grok","input":"hi","stream":false}`)
-	c, _ := newGrokErrorCaptureTestContext(body)
+	c, _ := newGrokErrorCaptureTestContext(t, body)
 	malformed := `{"id":"broken"`
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -85,7 +87,7 @@ func TestForwardGrokResponsesFinal2xxParseErrorCarriesConsumedCapture(t *testing
 func TestForwardGrokResponsesSuccessKeepsSchedulingAndCaptureStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"grok","input":"hi","stream":false}`)
-	c, _ := newGrokErrorCaptureTestContext(body)
+	c, _ := newGrokErrorCaptureTestContext(t, body)
 	responseBody := `{"id":"resp-ok","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,

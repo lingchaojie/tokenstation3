@@ -32,6 +32,7 @@ const (
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
+	NotificationEmailEventOpsAlertRecovered           = "ops.alert_recovered"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
 
 	notificationEmailTemplateKeyPrefix    = "notification_email_template:"
@@ -1033,6 +1034,7 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventCyberPolicyNotice,
 	NotificationEmailEventOpsAlert,
+	NotificationEmailEventOpsAlertRecovered,
 	NotificationEmailEventOpsScheduledReport,
 }
 
@@ -1137,6 +1139,15 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
 			"rule_name", "severity", "alert_status", "metric_type", "operator", "metric_value", "threshold_value", "triggered_at", "alert_description"),
+	},
+	NotificationEmailEventOpsAlertRecovered: {
+		Event:       NotificationEmailEventOpsAlertRecovered,
+		Label:       "Ops alert recovered",
+		Description: "Sent to configured operations recipients after a firing ops alert is resolved.",
+		Category:    "ops",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"rule_name", "severity", "alert_status", "metric_type", "operator", "metric_value", "threshold_value", "triggered_at", "resolved_at", "alert_description"),
 	},
 	NotificationEmailEventOpsScheduledReport: {
 		Event:       NotificationEmailEventOpsScheduledReport,
@@ -1422,7 +1433,30 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p><strong>严重级别</strong>：{{severity}}</p>
 <p><strong>状态</strong>：{{alert_status}}</p>
 <p><strong>指标</strong>：{{metric_type}} {{operator}} {{metric_value}}（阈值 {{threshold_value}}）</p>
+<p><strong>触发时间</strong>：{{triggered_at}}</p>`),
+		},
+	},
+	NotificationEmailEventOpsAlertRecovered: {
+		notificationEmailDefaultLocale: {
+			Subject: "[Ops Recovered][{{severity}}] {{rule_name}}",
+			HTML: notificationEmailCard("#16a34a", "Ops alert recovered", `
+<p><strong>Rule</strong>: {{rule_name}}</p>
+<p><strong>Severity</strong>: {{severity}}</p>
+<p><strong>Status</strong>: {{alert_status}}</p>
+<p><strong>Metric</strong>: {{metric_type}} {{operator}} {{metric_value}} (threshold {{threshold_value}})</p>
+<p><strong>Fired at</strong>: {{triggered_at}}</p>
+<p><strong>Resolved at</strong>: {{resolved_at}}</p>
+<p><strong>Description</strong>: {{alert_description}}</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[运维恢复][{{severity}}] {{rule_name}}",
+			HTML: notificationEmailCard("#16a34a", "运维告警已恢复", `
+<p><strong>规则</strong>：{{rule_name}}</p>
+<p><strong>严重级别</strong>：{{severity}}</p>
+<p><strong>状态</strong>：{{alert_status}}</p>
+<p><strong>指标</strong>：{{metric_type}} {{operator}} {{metric_value}}（阈值 {{threshold_value}}）</p>
 <p><strong>触发时间</strong>：{{triggered_at}}</p>
+<p><strong>恢复时间</strong>：{{resolved_at}}</p>
 <p><strong>说明</strong>：{{alert_description}}</p>`),
 		},
 	},

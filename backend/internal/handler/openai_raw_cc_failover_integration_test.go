@@ -232,6 +232,7 @@ func runRawCCHandlerScenario(
 	cfg.Gateway.MaxAccountSwitches = 2
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settingService := newEnabledCaptureSettingService(t, cfg)
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCache.Stop)
 	captureRecords := make(chan *service.CaptureRecord, 2)
@@ -242,7 +243,7 @@ func runRawCCHandlerScenario(
 	gateway := service.NewOpenAIGatewayService(
 		accountRepo, usageRepo, nil, nil, nil, nil, nil, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
-		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil, capturePool,
+		&service.DeferredService{}, nil, nil, nil, nil, nil, settingService, nil, capturePool,
 	)
 	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billingCache, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, capturePool)
 

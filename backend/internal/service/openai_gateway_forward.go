@@ -830,6 +830,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		upstreamStart := time.Now()
+		s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, body)
 		resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
@@ -864,11 +865,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if headerGuard != nil {
 			resp.Body = &openAIRequestContextReadCloser{ReadCloser: resp.Body, cleanup: headerGuard.close}
 		}
+		s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
 			stopCompactKeepalive()
 			respBody := s.readUpstreamErrorBody(resp)
+			finishOpenAIHTTPCapture(resp)
 			_ = resp.Body.Close()
 			if openAICompactKeepaliveCommitted(c) {
 				respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
@@ -942,17 +945,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					respBody,
 					upstreamMsg,
 					!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					resp,
+					string(account.Platform),
 				)
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
-		captureLimit := 0
-		if captureEnabled {
-			captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
-		}
-		finishCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 
 		serviceTier := extractOpenAIServiceTierFromBody(body)
 		// 上游接受后只保留计费需要的标量，避免响应处理期间继续保活完整 input/tools map。
@@ -969,7 +968,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if reqStream {
 			stopCompactKeepalive()
 			streamResult, streamErr := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
-			finishCapture()
+			finishOpenAIHTTPCapture(resp)
 			if streamErr != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(streamErr, &failoverErr) {
@@ -988,7 +987,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageResults = streamResult.imageResults
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel, stopCompactKeepalive)
-			finishCapture()
+			finishOpenAIHTTPCapture(resp)
 			if err != nil {
 				return nil, err
 			}

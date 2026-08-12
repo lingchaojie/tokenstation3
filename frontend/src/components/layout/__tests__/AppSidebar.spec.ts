@@ -27,9 +27,16 @@ interface SidebarAppState {
   setMobileOpen: (open: boolean) => void
 }
 
+interface SidebarCaptureHealthState {
+  hasUnacknowledgedLoss: boolean
+  startPolling: () => Promise<void>
+  stopPolling: () => void
+}
+
 const sidebarStores = vi.hoisted(() => ({
   app: null as SidebarAppState | null,
   auth: null as SidebarAuthState | null,
+	 capture: null as SidebarCaptureHealthState | null,
 }))
 
 const sidebarRoute = vi.hoisted(() => ({ path: '/dashboard' }))
@@ -50,8 +57,14 @@ vi.mock('@/stores', async () => {
     setMobileOpen: vi.fn(),
   })
   const auth = reactive<SidebarAuthState>({ isAdmin: false, isSimpleMode: false })
+	 const capture = reactive<SidebarCaptureHealthState>({
+	   hasUnacknowledgedLoss: false,
+	   startPolling: vi.fn(async () => undefined),
+	   stopPolling: vi.fn(),
+	 })
   sidebarStores.app = app
   sidebarStores.auth = auth
+	 sidebarStores.capture = capture
 
   return {
     useAppStore: () => app,
@@ -66,6 +79,7 @@ vi.mock('@/stores', async () => {
       paymentEnabled: false,
       customMenuItems: [],
     }),
+	   useCaptureHealthStore: () => capture,
   }
 })
 
@@ -138,7 +152,37 @@ beforeEach(() => {
   sidebarStores.app!.cachedPublicSettings = { custom_menu_items: [] }
   sidebarStores.auth!.isAdmin = false
   sidebarStores.auth!.isSimpleMode = false
+	 sidebarStores.capture!.hasUnacknowledgedLoss = false
   sidebarRoute.path = '/dashboard'
+})
+
+describe('AppSidebar capture settings navigation', () => {
+  it.each([
+    ['standard admin', { admin: true, simple: false }],
+    ['simple-mode admin', { admin: true, simple: true }],
+  ] as const)('places capture settings immediately before system settings for %s', (_label, options) => {
+    const wrapper = mountSidebar(options)
+    const routes = wrapper.findAll('[data-route]').map((link) => link.attributes('data-route'))
+    const captureIndex = routes.indexOf('/admin/capture-settings')
+    const settingsIndex = routes.indexOf('/admin/settings')
+
+    expect(captureIndex).toBeGreaterThanOrEqual(0)
+    expect(settingsIndex).toBe(captureIndex + 1)
+  })
+
+  it('hides capture settings from ordinary users', () => {
+    const wrapper = mountSidebar({ admin: false, simple: false })
+    expect(wrapper.find('[data-route="/admin/capture-settings"]').exists()).toBe(false)
+  })
+
+  it('renders an accessible loss warning on the capture item', () => {
+    sidebarStores.capture!.hasUnacknowledgedLoss = true
+    const wrapper = mountSidebar({ admin: true, simple: false })
+
+    expect(wrapper.get('[data-route="/admin/capture-settings"] [role="status"]').attributes('aria-label')).toBe(
+      'admin.captureSettings.lossAlert',
+    )
+  })
 })
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), '../AppSidebar.vue')

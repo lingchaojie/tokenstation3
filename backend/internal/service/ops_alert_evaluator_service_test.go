@@ -4,11 +4,47 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type opsCaptureHealthRepoStub struct {
+	events []CaptureHealthEvent
+	err    error
+	start  time.Time
+	end    time.Time
+}
+
+func (r *opsCaptureHealthRepoStub) UpsertEvents(context.Context, []CaptureHealthEvent) error {
+	return nil
+}
+
+func (r *opsCaptureHealthRepoStub) ListEvents(_ context.Context, start, end time.Time) ([]CaptureHealthEvent, error) {
+	r.start = start
+	r.end = end
+	return append([]CaptureHealthEvent(nil), r.events...), r.err
+}
+
+func (r *opsCaptureHealthRepoStub) DeleteBefore(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func newOpsCaptureMetricPool(t *testing.T, status archiveWriterStatus) *ConversationCapturePool {
+	t.Helper()
+	pool := newConversationCapturePoolWithStatus(
+		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
+		noopArchiveWriter{},
+		status,
+		newCaptureHealthTracker("ops-test", time.Now),
+		nil,
+	)
+	t.Cleanup(pool.Stop)
+	return pool
+}
 
 var _ OpsRepository = (*stubOpsRepo)(nil)
 
@@ -16,6 +52,49 @@ type stubOpsRepo struct {
 	OpsRepository
 	overview *OpsDashboardOverview
 	err      error
+}
+
+type opsAlertEvaluatorRepoStub struct {
+	OpsRepository
+	rules             []*OpsAlertRule
+	activeEvent       *OpsAlertEvent
+	resolveErr        error
+	resolutionApplied bool
+	resolvedStatus    string
+	resolvedAt        *time.Time
+	heartbeatResult   string
+}
+
+func (s *opsAlertEvaluatorRepoStub) ListAlertRules(context.Context) ([]*OpsAlertRule, error) {
+	return s.rules, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) GetLatestSystemMetrics(context.Context, int) (*OpsSystemMetricsSnapshot, error) {
+	return &OpsSystemMetricsSnapshot{}, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) GetActiveAlertEvent(context.Context, int64) (*OpsAlertEvent, error) {
+	return s.activeEvent, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) UpdateAlertEventStatus(_ context.Context, _ int64, status string, resolvedAt *time.Time) error {
+	if s.resolveErr != nil {
+		return s.resolveErr
+	}
+	s.resolvedStatus = status
+	if resolvedAt != nil {
+		copied := *resolvedAt
+		s.resolvedAt = &copied
+		s.resolutionApplied = true
+	}
+	return nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) UpsertJobHeartbeat(_ context.Context, input *OpsUpsertJobHeartbeatInput) error {
+	if input != nil && input.LastResult != nil {
+		s.heartbeatResult = *input.LastResult
+	}
+	return nil
 }
 
 func (s *stubOpsRepo) GetDashboardOverview(ctx context.Context, filter *OpsDashboardFilter) (*OpsDashboardOverview, error) {
@@ -251,4 +330,228 @@ func TestComputeRuleMetricNewIndicators(t *testing.T) {
 			require.InDelta(t, tt.wantValue, gotValue, 0.0001)
 		})
 	}
+}
+
+func TestComputeRuleMetricCaptureReady(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	rule := &OpsAlertRule{MetricType: "capture_ready"}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}}
+
+	value, ok := svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.False(t, ok)
+	require.Zero(t, value)
+
+	status := &mutableArchiveWriterStatus{initError: "dial failed"}
+	svc.capturePool = newOpsCaptureMetricPool(t, status)
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Zero(t, value)
+
+	status.set(true, "")
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Equal(t, 1.0, value)
+}
+
+func TestComputeRuleMetricCaptureDroppedRecords(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{InstanceID: "app-1", Reason: string(CaptureDropWorkerQueueFull), DroppedRecords: 2},
+		{InstanceID: "app-2", Reason: string(CaptureDropWriterUnavailable), DroppedRecords: 3},
+		{InstanceID: "app-2", Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 5},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 10.0, value)
+	require.Equal(t, start, repo.start)
+	require.Equal(t, end, repo.end)
+}
+
+func TestComputeRuleMetricCaptureWriterFailures(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{Reason: string(CaptureDropWriterUnavailable), DroppedRecords: 2},
+		{Reason: string(CaptureDropClickHousePrepareFailed), DroppedRecords: 3},
+		{Reason: string(CaptureDropClickHouseAppendFailed), DroppedRecords: 5},
+		{Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 7},
+		{Reason: string(CaptureDropWorkerQueueFull), DroppedRecords: 11},
+		{Reason: string(CaptureDropWriterQueueFull), DroppedRecords: 13},
+		{Reason: string(CaptureDropByteBudgetExceeded), DroppedRecords: 17},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_writer_failures"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 17.0, value)
+}
+
+func TestComputeRuleMetricCaptureRepositoryErrorIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	svc := &OpsAlertEvaluatorService{
+		opsRepo:           &stubOpsRepo{},
+		captureHealthRepo: &opsCaptureHealthRepoStub{err: errors.New("postgres unavailable")},
+	}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-5*time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.False(t, ok)
+	require.Zero(t, value)
+}
+
+func TestNewOpsAlertEvaluatorServiceProvidesCaptureMetrics(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{{
+		Reason:         string(CaptureDropWorkerQueueFull),
+		DroppedRecords: 4,
+	}}}
+	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	svc := NewOpsAlertEvaluatorService(nil, &stubOpsRepo{}, nil, nil, nil, nil, pool, repo)
+
+	ready, readyOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_ready"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+	dropped, droppedOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.True(t, readyOK)
+	require.Equal(t, 1.0, ready)
+	require.True(t, droppedOK)
+	require.Equal(t, 4.0, dropped)
+}
+
+func TestOpsAlertEvaluatorSendsRecoveryEmailAfterResolution(t *testing.T) {
+	rule := &OpsAlertRule{
+		ID:          91,
+		Name:        "Capture writer readiness",
+		Enabled:     true,
+		Severity:    "P0",
+		MetricType:  "capture_ready",
+		Operator:    "<",
+		Threshold:   1,
+		NotifyEmail: true,
+	}
+	firedAt := time.Now().UTC().Add(-5 * time.Minute)
+	repo := &opsAlertEvaluatorRepoStub{
+		rules: []*OpsAlertRule{rule},
+		activeEvent: &OpsAlertEvent{
+			ID:        501,
+			RuleID:    rule.ID,
+			Severity:  rule.Severity,
+			Status:    OpsAlertStatusFiring,
+			FiredAt:   firedAt,
+			EmailSent: true,
+		},
+	}
+	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil)
+
+	var sentKind opsAlertEmailKind
+	var sentEvent *OpsAlertEvent
+	svc.sendAlertEmail = func(_ context.Context, _ *OpsAlertRuntimeSettings, _ *OpsAlertRule, event *OpsAlertEvent, kind opsAlertEmailKind) bool {
+		require.True(t, repo.resolutionApplied, "the resolved state must be durable before recovery email dispatch")
+		sentKind = kind
+		sentEvent = event
+		return true
+	}
+
+	svc.evaluateOnce(time.Minute)
+
+	require.Equal(t, OpsAlertStatusResolved, repo.resolvedStatus)
+	require.NotNil(t, repo.resolvedAt)
+	require.Equal(t, opsAlertEmailRecovery, sentKind)
+	require.NotNil(t, sentEvent)
+	require.Equal(t, OpsAlertStatusResolved, sentEvent.Status)
+	require.NotNil(t, sentEvent.ResolvedAt)
+	require.True(t, sentEvent.EmailSent, "a prior firing email must not suppress recovery notification")
+	require.True(t, strings.Contains(repo.heartbeatResult, "resolved=1"), repo.heartbeatResult)
+	require.True(t, strings.Contains(repo.heartbeatResult, "emails_sent=1"), repo.heartbeatResult)
+}
+
+func TestOpsAlertEvaluatorDoesNotSendRecoveryEmailWhenResolutionFails(t *testing.T) {
+	rule := &OpsAlertRule{
+		ID:         92,
+		Name:       "Capture writer readiness",
+		Enabled:    true,
+		Severity:   "P0",
+		MetricType: "capture_ready",
+		Operator:   "<",
+		Threshold:  1,
+	}
+	repo := &opsAlertEvaluatorRepoStub{
+		rules:       []*OpsAlertRule{rule},
+		resolveErr:  errors.New("database unavailable"),
+		activeEvent: &OpsAlertEvent{ID: 502, RuleID: rule.ID, Status: OpsAlertStatusFiring},
+	}
+	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil)
+	svc.sendAlertEmail = func(context.Context, *OpsAlertRuntimeSettings, *OpsAlertRule, *OpsAlertEvent, opsAlertEmailKind) bool {
+		t.Fatal("recovery email must not be sent before resolution is persisted")
+		return false
+	}
+
+	svc.evaluateOnce(time.Minute)
+
+	require.False(t, repo.resolutionApplied)
+	require.True(t, strings.Contains(repo.heartbeatResult, "resolved=0"), repo.heartbeatResult)
+	require.True(t, strings.Contains(repo.heartbeatResult, "emails_sent=0"), repo.heartbeatResult)
+}
+
+func TestShouldSkipOpsAlertEmailTreatsEmailSentAsFiringOnly(t *testing.T) {
+	event := &OpsAlertEvent{EmailSent: true}
+
+	require.True(t, shouldSkipOpsAlertEmail(opsAlertEmailFiring, event))
+	require.False(t, shouldSkipOpsAlertEmail(opsAlertEmailRecovery, event))
 }

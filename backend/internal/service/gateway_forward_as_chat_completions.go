@@ -35,7 +35,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 	beginCaptureAttempt(c)
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+	}
 
 	// 1. Parse Chat Completions request
 	var ccReq apicompat.ChatCompletionsRequest

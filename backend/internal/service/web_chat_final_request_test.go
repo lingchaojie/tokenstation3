@@ -201,6 +201,7 @@ func TestGeminiChatCompletionsCompatCarriesFinalProviderRequest(t *testing.T) {
 	body := []byte(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body)
 
@@ -689,6 +690,7 @@ func TestWebChatAnthropicChatFinalHTTPErrorArchivesProviderAttemptExactlyOnce(t 
 	inbound := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
+	enableCaptureForTest(t, c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)
@@ -737,6 +739,7 @@ func TestWebChatAnthropicResponsesFinalHTTPErrorArchivesProviderAttemptExactlyOn
 	inbound := []byte(`{"model":"claude-sonnet-4","input":"hello","stream":false}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
+	enableCaptureForTest(t, c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)
@@ -788,6 +791,7 @@ func TestWebChatKiroFinalHTTPErrorArchivesFinalProviderPayloadExactlyOnce(t *tes
 	inbound := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
+	enableCaptureForTest(t, c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)
@@ -835,6 +839,7 @@ func TestWebChatKiroRetryArchivesOnlyFinalProviderHTTPError(t *testing.T) {
 	inbound := []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
+	enableCaptureForTest(t, c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)

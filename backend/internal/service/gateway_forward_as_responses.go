@@ -37,7 +37,10 @@ func (s *GatewayService) ForwardAsResponses(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 	beginCaptureAttempt(c)
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+	}
 
 	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
 	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)

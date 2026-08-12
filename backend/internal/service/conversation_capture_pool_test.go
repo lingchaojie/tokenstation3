@@ -2,15 +2,44 @@ package service
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+type mutableArchiveWriterStatus struct {
+	mu        sync.RWMutex
+	ready     bool
+	initError string
+}
+
+func (s *mutableArchiveWriterStatus) Ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ready
+}
+
+func (s *mutableArchiveWriterStatus) InitializationError() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.initError
+}
+
+func (s *mutableArchiveWriterStatus) set(ready bool, initError string) {
+	s.mu.Lock()
+	s.ready = ready
+	s.initError = initError
+	s.mu.Unlock()
+}
 
 type fakeWriter struct{ n int32 }
 
-func (f *fakeWriter) Write(_ context.Context, rec *CaptureRecord) error {
+func (f *fakeWriter) Write(_ context.Context, item *archiveWriteItem) error {
 	atomic.AddInt32(&f.n, 1)
+	item.completeSuccess()
 	return nil
 }
 func (f *fakeWriter) Stop() {}
@@ -57,6 +86,25 @@ func TestCapturePoolNilSafe(t *testing.T) {
 	p.Stop()                   // must not panic
 }
 
+func TestCapturePoolReadinessDelegatesToWriterStatus(t *testing.T) {
+	status := &mutableArchiveWriterStatus{initError: "dial failed"}
+	pool := newConversationCapturePoolWithStatus(
+		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1},
+		&fakeWriter{},
+		status,
+		newCaptureHealthTracker("test", time.Now),
+		nil,
+	)
+	t.Cleanup(pool.Stop)
+
+	require.False(t, pool.Ready())
+	require.Equal(t, "dial failed", pool.InitializationError())
+
+	status.set(true, "")
+	require.True(t, pool.Ready())
+	require.Empty(t, pool.InitializationError())
+}
+
 // blockingWriter 阻塞在 Write 上直到 release 关闭，用来把 record 卡在 worker 里，
 // 从而让字节预算保持占用，验证超预算 drop。
 type blockingWriter struct {
@@ -64,9 +112,10 @@ type blockingWriter struct {
 	n       int32
 }
 
-func (b *blockingWriter) Write(_ context.Context, _ *CaptureRecord) error {
+func (b *blockingWriter) Write(_ context.Context, item *archiveWriteItem) error {
 	atomic.AddInt32(&b.n, 1)
 	<-b.release
+	item.completeSuccess()
 	return nil
 }
 func (b *blockingWriter) Stop() {}

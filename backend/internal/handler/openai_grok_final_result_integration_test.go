@@ -153,6 +153,7 @@ func runGrokFinalHandler(t *testing.T, requestBody string, upstream *grokFinalHa
 	cfg.Gateway.MaxAccountSwitches = 1
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settingService := newEnabledCaptureSettingService(t, cfg)
 
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	defer billingCache.Stop()
@@ -164,7 +165,7 @@ func runGrokFinalHandler(t *testing.T, requestBody string, upstream *grokFinalHa
 	gateway := service.NewOpenAIGatewayService(
 		&openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{*account}}, usageRepo, nil, nil, nil, nil, nil, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
-		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil, capturePool,
+		&service.DeferredService{}, nil, nil, nil, nil, nil, settingService, nil, capturePool,
 	)
 	resetScheduler := gateway.InstallOpenAIAccountSchedulerForUnitTest(scheduler)
 	defer resetScheduler()

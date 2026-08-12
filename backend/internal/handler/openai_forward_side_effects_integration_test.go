@@ -40,14 +40,16 @@ func task6RealOpenAIForward(t *testing.T, responseBody string) (*service.OpenAIF
 	cfg := &config.Config{}
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 64 * 1024
+	settingService := newEnabledCaptureSettingService(t, cfg)
 	svc := service.NewOpenAIGatewayService(
 		nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil,
-		task6OpenAIUpstream{responseBody: responseBody}, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		task6OpenAIUpstream{responseBody: responseBody}, nil, nil, nil, nil, nil, nil, settingService, nil, nil,
 	)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	body := []byte(`{"model":"gpt-5.4","stream":true,"input":"hello"}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	service.PrepareCaptureScope(context.Background(), c, settingService, 9, nil)
 	account := &service.Account{
 		ID: 9, Name: "task6", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "acct"},

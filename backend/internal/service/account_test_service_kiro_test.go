@@ -346,6 +346,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
 
 	account := &Account{
 		ID:          21,
@@ -375,6 +376,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	_, _ = upstreamBody.Write(buildKiroEventStreamFrame(t, "meteringEvent", map[string]any{
 		"meteringEvent": map[string]any{"usage": 0.17},
 	}))
+	rawUpstreamBody := snapshotBytes(upstreamBody.Bytes())
 	upstream := &queuedHTTPUpstream{
 		responses: []*http.Response{{
 			StatusCode: http.StatusOK,
@@ -405,8 +407,8 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.True(t, result.Stream)
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.Equal(t, 3, result.Usage.OutputTokens)
-	require.Contains(t, string(result.CaptureResponse), "event: message_start")
-	require.Contains(t, string(result.CaptureResponse), "_sub2api_kiro_credits")
+	require.Equal(t, rawUpstreamBody, result.CaptureResponse, "capture must preserve the provider-native AWS event stream")
+	require.NotContains(t, string(result.CaptureResponse), "_sub2api_kiro_credits")
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
 }
 

@@ -86,6 +86,10 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 		!ownsWebChatFinalGatewayErrorCapture(ctx) || account == nil || resp == nil {
 		return
 	}
+	content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError)
+	if !enabled {
+		return
+	}
 	bridge, ok := takeCaptureResult(c)
 	if !ok || len(bridge.UpstreamRequest) == 0 {
 		return
@@ -115,6 +119,7 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 		RequestHeaders:   requestHeaders,
 		ResponseHeaders:  responseHeaders,
 		Truncated:        requestTruncated || responseTruncated || bridge.Truncated,
+		ContentPolicy:    &content,
 	})
 }
 
@@ -122,7 +127,7 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 // invokes GatewayService directly and therefore does not pass through the
 // normal HTTP handler capture sink.
 func (s *GatewayService) SubmitWebChatCapture(result *ForwardResult, account *Account, requestBody []byte, upstreamEndpoint string) {
-	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil {
+	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
 	limit := 0
@@ -141,41 +146,7 @@ func (s *GatewayService) SubmitWebChatCapture(result *ForwardResult, account *Ac
 		RequestID:        CaptureRequestID(result.RequestID),
 		RequestedModel:   result.Model,
 		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: upstreamEndpoint,
-		Stream:           result.Stream,
-		HTTPStatus:       200,
-		RawRequest:       rawRequest,
-		RawResponse:      rawResponse,
-		RequestHeaders:   result.CaptureRequestHeaders,
-		ResponseHeaders:  result.CaptureResponseHeaders,
-		Truncated:        requestTruncated || responseTruncated || result.CaptureTruncated,
-	})
-}
-
-// SubmitWebChatCapture is the OpenAI equivalent. The result carries the exact
-// final attempt body after provider-specific rewriting; requestBody is only a
-// compatibility fallback for result producers that predate that snapshot.
-func (s *OpenAIGatewayService) SubmitWebChatCapture(result *OpenAIForwardResult, account *Account, requestBody []byte, upstreamEndpoint string) {
-	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil {
-		return
-	}
-	limit := 0
-	if s.cfg != nil {
-		limit = s.cfg.Gateway.Capture.MaxBodyBytes
-	}
-	finalRequest := result.UpstreamRequest
-	if finalRequest == nil {
-		finalRequest = requestBody
-	}
-	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(finalRequest, limit)
-	rawResponse, responseTruncated := SnapshotForCaptureWithFlag(result.CaptureResponse, limit)
-	s.capturePool.Submit(&CaptureRecord{
-		CapturedAt:       time.Now().UTC(),
-		Platform:         string(account.Platform),
-		RequestID:        CaptureRequestID(result.RequestID),
-		RequestedModel:   result.Model,
-		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: upstreamEndpoint,
+		UpstreamEndpoint: firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint),
 		Stream:           result.Stream,
 		HTTPStatus:       result.HTTPStatusForCapture(),
 		RawRequest:       rawRequest,
@@ -183,5 +154,41 @@ func (s *OpenAIGatewayService) SubmitWebChatCapture(result *OpenAIForwardResult,
 		RequestHeaders:   result.CaptureRequestHeaders,
 		ResponseHeaders:  result.CaptureResponseHeaders,
 		Truncated:        requestTruncated || responseTruncated || result.CaptureTruncated,
+		ContentPolicy:    result.CaptureContentPolicy,
+	})
+}
+
+// SubmitWebChatCapture is the OpenAI equivalent. The result carries the exact
+// final attempt body after provider-specific rewriting; requestBody is only a
+// compatibility fallback for result producers that predate that snapshot.
+func (s *OpenAIGatewayService) SubmitWebChatCapture(result *OpenAIForwardResult, account *Account, requestBody []byte, upstreamEndpoint string) {
+	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+		return
+	}
+	limit := 0
+	if s.cfg != nil {
+		limit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	finalRequest := result.UpstreamRequest
+	if finalRequest == nil {
+		finalRequest = requestBody
+	}
+	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(finalRequest, limit)
+	rawResponse, responseTruncated := SnapshotForCaptureWithFlag(result.CaptureResponse, limit)
+	s.capturePool.Submit(&CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         string(account.Platform),
+		RequestID:        CaptureRequestID(result.RequestID),
+		RequestedModel:   result.Model,
+		UpstreamModel:    result.UpstreamModel,
+		UpstreamEndpoint: firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint),
+		Stream:           result.Stream,
+		HTTPStatus:       result.HTTPStatusForCapture(),
+		RawRequest:       rawRequest,
+		RawResponse:      rawResponse,
+		RequestHeaders:   result.CaptureRequestHeaders,
+		ResponseHeaders:  result.CaptureResponseHeaders,
+		Truncated:        requestTruncated || responseTruncated || result.CaptureTruncated,
+		ContentPolicy:    result.CaptureContentPolicy,
 	})
 }

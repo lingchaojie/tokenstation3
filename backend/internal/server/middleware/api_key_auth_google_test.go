@@ -1060,7 +1060,7 @@ func TestApiKeyAuthWithSubscriptionGoogle_AbsentEffectiveSevenDayLimitRequiresBa
 			},
 		})
 		now := time.Now()
-		windowStart := now.Add(-time.Hour)
+		windowStart := now
 		sub := &service.UserSubscription{
 			ID:                 802 + user.ID,
 			UserID:             user.ID,

@@ -111,7 +111,11 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			return nil, buildErr
 		}
 
+		captureAttempt := s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, patchedBody)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		if captureAttempt {
+			s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
+		}
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -148,6 +152,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		finishOpenAIHTTPCapture(resp)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		upstreamMsg := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(respBody))
 		if upstreamMsg == "" {
@@ -186,14 +191,6 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if errors.As(handledErr, &failoverErr) {
 			return nil, handledErr
 		}
-		if captureEnabled, captureLimit := grokCaptureSettings(s); captureEnabled {
-			captured, truncated := captureWithLimit(respBody, captureLimit)
-			// readUpstreamErrorBody itself is bounded. Conservatively retain
-			// truncation when it filled that bound so archival never presents a
-			// potentially shortened provider error as complete.
-			truncated = truncated || int64(len(respBody)) >= openAIUpstreamErrorBodyReadLimitForConfig(s.cfg)
-			setCaptureResult(c, resp, captured, truncated)
-		}
 		if handledResult == nil {
 			handledResult = newGrokErrorForwardResult(resp, originalModel, upstreamModel, reqStream, startTime)
 		}
@@ -205,12 +202,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	// Attach model so rate-limit snapshots can fan out a team+model cool.
 	stateCtx := withGrokTeamRateLimitModel(ctx, upstreamModel)
 	s.updateGrokUsageFromResponse(stateCtx, account, resp.Header, resp.StatusCode)
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
-	captureLimit := 0
-	if captureEnabled {
-		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
-	}
-	finishCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
+	finishCapture := func() { finishOpenAIHTTPCapture(resp) }
 
 	var usage *OpenAIUsage
 	var firstTokenMs *int
@@ -283,13 +275,6 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		result.ImageOutputSizes = imageOutputSizes
 	}
 	return finalizeOpenAIForwardResult(c, result, patchedBody), responseErr
-}
-
-func grokCaptureSettings(s *OpenAIGatewayService) (bool, int) {
-	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled {
-		return false, 0
-	}
-	return true, s.cfg.Gateway.Capture.MaxBodyBytes
 }
 
 func newGrokErrorForwardResult(resp *http.Response, originalModel, upstreamModel string, stream bool, startTime time.Time) *OpenAIForwardResult {

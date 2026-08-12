@@ -326,8 +326,12 @@ type webChatArchiveRecordWriter struct {
 	records chan *CaptureRecord
 }
 
-func (w *webChatArchiveRecordWriter) Write(_ context.Context, rec *CaptureRecord) error {
-	w.records <- rec
+func (w *webChatArchiveRecordWriter) Write(_ context.Context, item *archiveWriteItem) error {
+	if item == nil {
+		return nil
+	}
+	w.records <- item.record
+	item.completeSuccess()
 	return nil
 }
 
@@ -1854,5 +1858,13 @@ func newTestGinContext(ctx context.Context) *gin.Context {
 	c, _ := gin.CreateTestContext(rec)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
 	c.Request = req
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
 	return c
 }

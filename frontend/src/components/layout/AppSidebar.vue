@@ -98,6 +98,12 @@
               <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
               <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
               <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{ item.label }}</span>
+              <span
+                v-if="item.path === '/admin/capture-settings' && captureHealthStore.hasUnacknowledgedLoss"
+                role="status"
+                :aria-label="t('admin.captureSettings.lossAlert')"
+                class="ui-accent-dot ml-auto h-2 w-2 flex-shrink-0 rounded-full"
+              ></span>
             </router-link>
           </template>
         </div>
@@ -192,7 +198,7 @@
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
+import { useAdminSettingsStore, useAppStore, useAuthStore, useCaptureHealthStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import LinxWordmark from '@/components/common/LinxWordmark.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
@@ -245,6 +251,7 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const onboardingStore = useOnboardingStore()
 const adminSettingsStore = useAdminSettingsStore()
+const captureHealthStore = useCaptureHealthStore()
 const { canUseBatchImage, refreshBatchImageAccess } = useBatchImageAccess()
 const { active: dailyCheckInActive } = useDailyCheckInActivity()
 
@@ -902,6 +909,7 @@ const adminNavItems = computed((): NavItem[] => {
   if (authStore.isSimpleMode) {
     const filtered = visible.filter(item => !item.hideInSimpleMode)
     filtered.push({ path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon })
+    filtered.push({ path: '/admin/capture-settings', label: t('nav.captureSettings'), icon: ServerIcon })
     filtered.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
     for (const cm of customMenuItemsForAdmin.value) {
       filtered.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
@@ -909,6 +917,7 @@ const adminNavItems = computed((): NavItem[] => {
     return filtered
   }
 
+  visible.push({ path: '/admin/capture-settings', label: t('nav.captureSettings'), icon: ServerIcon })
   visible.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
   for (const cm of customMenuItemsForAdmin.value) {
     visible.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
@@ -1014,6 +1023,21 @@ watch(
   { immediate: true }
 )
 
+let capturePollingActive = false
+watch(
+  isAdmin,
+  (value) => {
+    if (value && !capturePollingActive) {
+      capturePollingActive = true
+      void captureHealthStore.startPolling()
+    } else if (!value && capturePollingActive) {
+      capturePollingActive = false
+      captureHealthStore.stopPolling()
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   void refreshBatchImageAccess()
   if (isAdmin.value) {
@@ -1030,6 +1054,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (capturePollingActive) {
+    capturePollingActive = false
+    captureHealthStore.stopPolling()
+  }
   if (sidebarNavRef.value) {
     appStore.sidebarScrollTop = sidebarNavRef.value.scrollTop
   }

@@ -30,6 +30,7 @@ func TestOpenAIGatewayServiceNativeCommittedPartialCarriesCaptureAndFinalRequest
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
 	account := &Account{
 		ID: 10, Name: "native", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "acct"}, Status: StatusActive, Schedulable: true,

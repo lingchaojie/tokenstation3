@@ -31,11 +31,20 @@ end
 return 0
 `)
 
+type opsAlertEmailKind string
+
+const (
+	opsAlertEmailFiring   opsAlertEmailKind = "firing"
+	opsAlertEmailRecovery opsAlertEmailKind = "recovery"
+)
+
 type OpsAlertEvaluatorService struct {
-	opsService   *OpsService
-	opsRepo      OpsRepository
-	emailService *EmailService
-	proxyRepo    ProxyRepository
+	opsService        *OpsService
+	opsRepo           OpsRepository
+	emailService      *EmailService
+	proxyRepo         ProxyRepository
+	capturePool       *ConversationCapturePool
+	captureHealthRepo CaptureHealthRepository
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -55,11 +64,21 @@ type OpsAlertEvaluatorService struct {
 	skipLogAt time.Time
 
 	warnNoRedisOnce sync.Once
+
+	// Test seam for asserting persistence-before-notification ordering.
+	sendAlertEmail func(context.Context, *OpsAlertRuntimeSettings, *OpsAlertRule, *OpsAlertEvent, opsAlertEmailKind) bool
 }
 
 type opsAlertRuleState struct {
 	LastEvaluatedAt     time.Time
 	ConsecutiveBreaches int
+}
+
+var captureWriterFailureReasons = map[string]struct{}{
+	string(CaptureDropWriterUnavailable):       {},
+	string(CaptureDropClickHousePrepareFailed): {},
+	string(CaptureDropClickHouseAppendFailed):  {},
+	string(CaptureDropClickHouseSendFailed):    {},
 }
 
 func NewOpsAlertEvaluatorService(
@@ -69,17 +88,21 @@ func NewOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	capturePool *ConversationCapturePool,
+	captureHealthRepo CaptureHealthRepository,
 ) *OpsAlertEvaluatorService {
 	return &OpsAlertEvaluatorService{
-		opsService:   opsService,
-		opsRepo:      opsRepo,
-		emailService: emailService,
-		proxyRepo:    proxyRepo,
-		redisClient:  redisClient,
-		cfg:          cfg,
-		instanceID:   uuid.NewString(),
-		ruleStates:   map[int64]*opsAlertRuleState{},
-		emailLimiter: newSlidingWindowLimiter(0, time.Hour),
+		opsService:        opsService,
+		opsRepo:           opsRepo,
+		emailService:      emailService,
+		proxyRepo:         proxyRepo,
+		capturePool:       capturePool,
+		captureHealthRepo: captureHealthRepo,
+		redisClient:       redisClient,
+		cfg:               cfg,
+		instanceID:        uuid.NewString(),
+		ruleStates:        map[int64]*opsAlertRuleState{},
+		emailLimiter:      newSlidingWindowLimiter(0, time.Hour),
 	}
 }
 
@@ -292,7 +315,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 			eventsCreated++
 			if created != nil && created.ID > 0 {
-				if s.maybeSendAlertEmail(ctx, runtimeCfg, rule, created) {
+				if s.dispatchOpsAlertEmail(ctx, runtimeCfg, rule, created, opsAlertEmailFiring) {
 					emailsSent++
 				}
 			}
@@ -306,6 +329,12 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] resolve event failed (event=%d): %v", activeEvent.ID, err)
 			} else {
 				eventsResolved++
+				resolvedEvent := *activeEvent
+				resolvedEvent.Status = OpsAlertStatusResolved
+				resolvedEvent.ResolvedAt = &resolvedAt
+				if s.dispatchOpsAlertEmail(ctx, runtimeCfg, rule, &resolvedEvent, opsAlertEmailRecovery) {
+					emailsSent++
+				}
 			}
 		}
 	}
@@ -445,6 +474,32 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		return 0, false
 	}
 	switch strings.TrimSpace(rule.MetricType) {
+	case "capture_ready":
+		if s == nil || s.capturePool == nil {
+			return 0, false
+		}
+		if s.capturePool.Ready() {
+			return 1, true
+		}
+		return 0, true
+	case "capture_dropped_records":
+		if s == nil || s.captureHealthRepo == nil {
+			return 0, false
+		}
+		events, err := s.captureHealthRepo.ListEvents(ctx, start, end)
+		if err != nil {
+			return 0, false
+		}
+		return float64(sumCaptureDroppedRecords(events, nil)), true
+	case "capture_writer_failures":
+		if s == nil || s.captureHealthRepo == nil {
+			return 0, false
+		}
+		events, err := s.captureHealthRepo.ListEvents(ctx, start, end)
+		if err != nil {
+			return 0, false
+		}
+		return float64(sumCaptureDroppedRecords(events, captureWriterFailureReasons)), true
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
 			return *systemMetrics.CPUUsagePercent, true
@@ -618,6 +673,19 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	}
 }
 
+func sumCaptureDroppedRecords(events []CaptureHealthEvent, reasons map[string]struct{}) int64 {
+	var total int64
+	for _, event := range events {
+		if reasons != nil {
+			if _, ok := reasons[event.Reason]; !ok {
+				continue
+			}
+		}
+		total += event.DroppedRecords
+	}
+	return total
+}
+
 func compareMetric(value float64, operator string, threshold float64) bool {
 	switch strings.TrimSpace(operator) {
 	case ">":
@@ -675,11 +743,25 @@ func buildOpsAlertDescription(rule *OpsAlertRule, value float64, windowMinutes i
 	)
 }
 
-func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent) bool {
+func shouldSkipOpsAlertEmail(kind opsAlertEmailKind, event *OpsAlertEvent) bool {
+	return event == nil || (kind == opsAlertEmailFiring && event.EmailSent)
+}
+
+func (s *OpsAlertEvaluatorService) dispatchOpsAlertEmail(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent, kind opsAlertEmailKind) bool {
+	if shouldSkipOpsAlertEmail(kind, event) {
+		return false
+	}
+	if s != nil && s.sendAlertEmail != nil {
+		return s.sendAlertEmail(ctx, runtimeCfg, rule, event, kind)
+	}
+	return s.maybeSendOpsAlertEmail(ctx, runtimeCfg, rule, event, kind)
+}
+
+func (s *OpsAlertEvaluatorService) maybeSendOpsAlertEmail(ctx context.Context, runtimeCfg *OpsAlertRuntimeSettings, rule *OpsAlertRule, event *OpsAlertEvent, kind opsAlertEmailKind) bool {
 	if s == nil || s.emailService == nil || s.opsService == nil || event == nil || rule == nil {
 		return false
 	}
-	if event.EmailSent {
+	if shouldSkipOpsAlertEmail(kind, event) {
 		return false
 	}
 	if !rule.NotifyEmail {
@@ -705,10 +787,20 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 	}
 
 	// Apply/update rate limiter.
+	if s.emailLimiter == nil {
+		s.emailLimiter = newSlidingWindowLimiter(0, time.Hour)
+	}
 	s.emailLimiter.SetLimit(emailCfg.Alert.RateLimitPerHour)
 
 	subject := fmt.Sprintf("[Ops Alert][%s] %s", strings.TrimSpace(rule.Severity), strings.TrimSpace(rule.Name))
-	body := buildOpsAlertEmailBody(rule, event)
+	notificationEvent := NotificationEmailEventOpsAlert
+	sourceType := "ops_alert"
+	if kind == opsAlertEmailRecovery {
+		subject = fmt.Sprintf("[Ops Recovered][%s] %s", strings.TrimSpace(rule.Severity), strings.TrimSpace(rule.Name))
+		notificationEvent = NotificationEmailEventOpsAlertRecovered
+		sourceType = "ops_alert_recovery"
+	}
+	body := buildOpsAlertEmailBody(kind, rule, event)
 
 	anySent := false
 	for _, to := range emailCfg.Alert.Recipients {
@@ -721,10 +813,10 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		}
 		if s.emailService.notificationEmailService != nil {
 			if err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
-				Event:          NotificationEmailEventOpsAlert,
+				Event:          notificationEvent,
 				RecipientEmail: addr,
 				RecipientName:  emailRecipientName(addr),
-				SourceType:     "ops_alert",
+				SourceType:     sourceType,
 				SourceID:       fmt.Sprintf("%d", event.ID),
 				Variables:      opsAlertEmailVariables(rule, event),
 			}); err == nil {
@@ -741,7 +833,7 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		anySent = true
 	}
 
-	if anySent {
+	if anySent && kind == opsAlertEmailFiring {
 		_ = s.opsRepo.UpdateAlertEventEmailSent(context.Background(), event.ID, true)
 	}
 	return anySent
@@ -757,6 +849,7 @@ func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string
 		"metric_value":      "-",
 		"threshold_value":   "-",
 		"triggered_at":      time.Now().UTC().Format(time.RFC3339),
+		"resolved_at":       "-",
 		"alert_description": "-",
 	}
 	if rule != nil {
@@ -780,6 +873,9 @@ func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string
 		if !event.FiredAt.IsZero() {
 			variables["triggered_at"] = event.FiredAt.UTC().Format(time.RFC3339)
 		}
+		if event.ResolvedAt != nil && !event.ResolvedAt.IsZero() {
+			variables["resolved_at"] = event.ResolvedAt.UTC().Format(time.RFC3339)
+		}
 		if strings.TrimSpace(event.Description) != "" {
 			variables["alert_description"] = strings.TrimSpace(event.Description)
 		}
@@ -787,9 +883,19 @@ func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string
 	return variables
 }
 
-func buildOpsAlertEmailBody(rule *OpsAlertRule, event *OpsAlertEvent) string {
+func buildOpsAlertEmailBody(kind opsAlertEmailKind, rule *OpsAlertRule, event *OpsAlertEvent) string {
 	if rule == nil || event == nil {
 		return ""
+	}
+	heading := "Ops Alert"
+	timeLabel := "Fired at"
+	eventTime := event.FiredAt
+	if kind == opsAlertEmailRecovery {
+		heading = "Ops Recovered"
+		timeLabel = "Resolved at"
+		if event.ResolvedAt != nil {
+			eventTime = *event.ResolvedAt
+		}
 	}
 	metric := strings.TrimSpace(rule.MetricType)
 	value := "-"
@@ -801,21 +907,23 @@ func buildOpsAlertEmailBody(rule *OpsAlertRule, event *OpsAlertEvent) string {
 		threshold = fmt.Sprintf("%.2f", *event.ThresholdValue)
 	}
 	return fmt.Sprintf(`
-<h2>Ops Alert</h2>
+<h2>%s</h2>
 <p><b>Rule</b>: %s</p>
 <p><b>Severity</b>: %s</p>
 <p><b>Status</b>: %s</p>
 <p><b>Metric</b>: %s %s %s</p>
-<p><b>Fired at</b>: %s</p>
+<p><b>%s</b>: %s</p>
 <p><b>Description</b>: %s</p>
 `,
+		htmlEscape(heading),
 		htmlEscape(rule.Name),
 		htmlEscape(rule.Severity),
 		htmlEscape(event.Status),
 		htmlEscape(metric),
 		htmlEscape(rule.Operator),
 		htmlEscape(fmt.Sprintf("%s (threshold %s)", value, threshold)),
-		event.FiredAt.Format(time.RFC3339),
+		htmlEscape(timeLabel),
+		eventTime.Format(time.RFC3339),
 		htmlEscape(event.Description),
 	)
 }

@@ -478,6 +478,7 @@ export default {
         deleteConfirmMessage: 'This will remove the rule and its related events. Continue?',
         metricGroups: {
           system: 'System Metrics',
+          capture: 'Conversation Capture Metrics',
           group: 'Group-level Metrics (requires group_id)',
           account: 'Account-level Metrics'
         },
@@ -490,6 +491,9 @@ export default {
           cpu: 'CPU Usage (%)',
           memory: 'Memory Usage (%)',
           queueDepth: 'Concurrency Queue Depth',
+          captureReady: 'Capture Writer Ready (0/1)',
+          captureDroppedRecords: 'Dropped Capture Records',
+          captureWriterFailures: 'Capture Writer Failures',
           groupAvailableAccounts: 'Group Available Accounts',
           groupAvailableRatio: 'Group Available Ratio (%)',
           groupRateLimitRatio: 'Group Rate Limit Ratio (%)',
@@ -508,6 +512,9 @@ export default {
           cpu: 'Current instance CPU usage (0-100).',
           memory: 'Current instance memory usage (0-100).',
           queueDepth: 'Concurrency queue depth within the window (queued requests).',
+          captureReady: 'Whether the capture writer on the evaluating instance is ready: 1 for ready, 0 for unavailable.',
+          captureDroppedRecords: 'Total capture records dropped across all instances in the selected window.',
+          captureWriterFailures: 'Capture records dropped because ClickHouse was unavailable or a write operation failed in the selected window.',
           groupAvailableAccounts: 'Number of available accounts in the selected group (requires group_id).',
           groupAvailableRatio: 'Available account ratio in the selected group (0-100, requires group_id).',
           groupRateLimitRatio: 'Rate-limited account ratio in the selected group (0-100, requires group_id).',

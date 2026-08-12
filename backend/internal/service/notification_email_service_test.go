@@ -145,6 +145,7 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 		{NotificationEmailEventContentModerationDisabled, "violation_count"},
 		{NotificationEmailEventCyberPolicyNotice, "upstream_message"},
 		{NotificationEmailEventOpsAlert, "rule_name"},
+		{NotificationEmailEventOpsAlertRecovered, "resolved_at"},
 		{NotificationEmailEventOpsScheduledReport, "report_html"},
 	}
 
@@ -257,6 +258,42 @@ func TestOpsScheduledReportRuntimeVariablesDoNotLeakPreviewSamples(t *testing.T)
 	)
 	require.NoError(t, err)
 	require.NotContains(t, rendered.HTML, "<h2>Daily summary</h2>")
+}
+
+func TestNotificationEmailOpsAlertRecoveryTemplates(t *testing.T) {
+	t.Parallel()
+
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	variables := map[string]string{
+		"rule_name":         "ClickHouse archive unavailable",
+		"severity":          "P0",
+		"alert_status":      OpsAlertStatusResolved,
+		"metric_type":       "capture_ready",
+		"operator":          "<",
+		"metric_value":      "1.00",
+		"threshold_value":   "1.00",
+		"triggered_at":      "2026-08-11T10:00:00Z",
+		"resolved_at":       "2026-08-11T10:05:00Z",
+		"alert_description": "writer recovered",
+	}
+
+	for _, tc := range []struct {
+		locale      string
+		subjectText string
+	}{
+		{locale: "en", subjectText: "Ops Recovered"},
+		{locale: "zh", subjectText: "运维恢复"},
+	} {
+		preview, err := svc.PreviewTemplate(context.Background(), NotificationEmailPreviewInput{
+			Event:     NotificationEmailEventOpsAlertRecovered,
+			Locale:    tc.locale,
+			Variables: variables,
+		})
+		require.NoError(t, err)
+		require.Contains(t, preview.Subject, tc.subjectText)
+		require.Contains(t, preview.Subject, "ClickHouse archive unavailable")
+		require.Contains(t, preview.HTML, "2026-08-11T10:05:00Z")
+	}
 }
 
 func TestNotificationEmailRawHTMLVariablesAreTrustedOnlyForHTMLPlaceholders(t *testing.T) {

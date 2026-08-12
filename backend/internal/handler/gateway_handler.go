@@ -167,6 +167,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.messages",
@@ -203,6 +204,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 	body = parsedReq.Body.Bytes()
 	reqModel := parsedReq.Model
+	service.SetCaptureRequestedModel(c, reqModel)
 	reqStream := parsedReq.Stream
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
@@ -874,6 +876,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
+			service.ResetCaptureExchange(c)
 			var result *service.ForwardResult
 			requestCtx := c.Request.Context()
 			if fs.SwitchCount > 0 {
@@ -959,8 +962,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				})
 
-				if h.capturePool != nil && result.CaptureResponse != nil {
-					rawReq, reqTrunc := service.SnapshotForCaptureWithFlag(attemptParsedReq.Body.Bytes(), h.captureLimit())
+				if h.capturePool != nil && result.CaptureResponse != nil && result.CaptureContentPolicy != nil {
+					finalRequest := result.UpstreamRequest
+					if finalRequest == nil {
+						finalRequest = attemptParsedReq.Body.Bytes()
+					}
+					rawReq, reqTrunc := service.SnapshotForCaptureWithFlag(finalRequest, h.captureLimit())
 					effort := ""
 					if e := service.NormalizeClaudeOutputEffort(attemptParsedReq.OutputEffort); e != nil {
 						effort = *e
@@ -971,15 +978,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						RequestID:        service.CaptureRequestID(result.RequestID),
 						RequestedModel:   result.Model,
 						UpstreamModel:    result.UpstreamModel,
-						UpstreamEndpoint: upstreamEndpoint,
+						UpstreamEndpoint: firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
 						Stream:           result.Stream,
-						HTTPStatus:       200,
+						HTTPStatus:       result.HTTPStatusForCapture(),
 						ThinkingEffort:   effort,
 						RawRequest:       rawReq,
 						RawResponse:      result.CaptureResponse,
 						RequestHeaders:   result.CaptureRequestHeaders,
 						ResponseHeaders:  result.CaptureResponseHeaders,
 						Truncated:        result.CaptureTruncated || reqTrunc,
+						ContentPolicy:    result.CaptureContentPolicy,
 					})
 				}
 			}
@@ -1769,6 +1777,11 @@ func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotT
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
+	if h.capturePool != nil {
+		if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); rec != nil {
+			h.capturePool.Submit(rec)
+		}
+	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {

@@ -292,13 +292,17 @@ type OpenAIForwardResult struct {
 	wsReplayInputExists bool
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse        []byte
-	CaptureTruncated       bool
-	CaptureRequestHeaders  []byte
-	CaptureResponseHeaders []byte
 	// UpstreamRequest is the exact final request body sent by this attempt.
 	// The handler uses this same immutable snapshot for capture and usage dedup.
-	UpstreamRequest []byte
+	UpstreamRequest         []byte
+	CaptureRequest          []byte
+	CaptureResponse         []byte
+	CaptureTruncated        bool
+	CaptureRequestHeaders   []byte
+	CaptureResponseHeaders  []byte
+	CaptureUpstreamEndpoint string
+	CaptureHTTPStatus       int
+	CaptureContentPolicy    *CaptureContentPolicy
 }
 
 // SucceededForScheduling reports whether this result is an upstream success
@@ -574,6 +578,15 @@ func NewOpenAIGatewayService(
 	svc.logOpenAIWSModeBootstrap()
 	svc.logOpenAICompactNonstreamKeepaliveBootstrap()
 	return svc
+}
+
+// CaptureSettingService exposes the shared setting service to the HTTP handler
+// so it can prepare one request-scoped capture policy before any buffers exist.
+func (s *OpenAIGatewayService) CaptureSettingService() *SettingService {
+	if s == nil {
+		return nil
+	}
+	return s.settingService
 }
 
 func (s *OpenAIGatewayService) logOpenAICompactNonstreamKeepaliveBootstrap() {

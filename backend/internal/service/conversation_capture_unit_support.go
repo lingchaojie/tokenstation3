@@ -11,10 +11,14 @@ type conversationCaptureUnitWriter struct {
 	records chan<- *CaptureRecord
 }
 
-func (w *conversationCaptureUnitWriter) Write(_ context.Context, record *CaptureRecord) error {
-	if w != nil && w.records != nil {
-		w.records <- record
+func (w *conversationCaptureUnitWriter) Write(_ context.Context, item *archiveWriteItem) error {
+	if item == nil {
+		return nil
 	}
+	if w != nil && w.records != nil {
+		w.records <- item.record
+	}
+	item.completeSuccess()
 	return nil
 }
 

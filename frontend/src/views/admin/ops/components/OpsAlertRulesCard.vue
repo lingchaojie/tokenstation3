@@ -48,7 +48,7 @@ const saving = ref(false)
 const editingId = ref<number | null>(null)
 const draft = ref<AlertRule | null>(null)
 
-type MetricGroup = 'system' | 'group' | 'account'
+type MetricGroup = 'system' | 'capture' | 'group' | 'account'
 
 interface MetricDefinition {
   type: MetricType
@@ -171,6 +171,32 @@ const metricDefinitions = computed(() => {
       recommendedThreshold: 10
     },
 
+    // Conversation capture metrics
+    {
+      type: 'capture_ready',
+      group: 'capture',
+      label: t('admin.ops.alertRules.metrics.captureReady'),
+      description: t('admin.ops.alertRules.metricDescriptions.captureReady'),
+      recommendedOperator: '<',
+      recommendedThreshold: 1
+    },
+    {
+      type: 'capture_dropped_records',
+      group: 'capture',
+      label: t('admin.ops.alertRules.metrics.captureDroppedRecords'),
+      description: t('admin.ops.alertRules.metricDescriptions.captureDroppedRecords'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'capture_writer_failures',
+      group: 'capture',
+      label: t('admin.ops.alertRules.metrics.captureWriterFailures'),
+      description: t('admin.ops.alertRules.metricDescriptions.captureWriterFailures'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+
     // Group-level metrics (requires group_id filter)
     {
       type: 'group_available_accounts',
@@ -266,7 +292,12 @@ const metricOptions = computed(() => {
     ]
   }
 
-  return [...buildGroup('system'), ...buildGroup('group'), ...buildGroup('account')]
+  return [
+    ...buildGroup('system'),
+    ...buildGroup('capture'),
+    ...buildGroup('group'),
+    ...buildGroup('account')
+  ]
 })
 
 const operatorOptions = computed(() => {

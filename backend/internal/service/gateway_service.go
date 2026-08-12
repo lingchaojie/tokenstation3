@@ -615,10 +615,23 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse        []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
-	CaptureTruncated       bool   // 采集 buffer 超过 max_body_bytes 被截断
-	CaptureRequestHeaders  []byte // 上游请求头(脱敏)JSON
-	CaptureResponseHeaders []byte // 上游响应头(脱敏)JSON
+	CaptureRequest          []byte // 实际最终上游请求体
+	CaptureResponse         []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
+	CaptureTruncated        bool   // 采集 buffer 超过 max_body_bytes 被截断
+	CaptureRequestHeaders   []byte // 上游请求头(脱敏)JSON
+	CaptureResponseHeaders  []byte // 上游响应头(脱敏)JSON
+	CaptureUpstreamEndpoint string
+	CaptureHTTPStatus       int
+	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+// HTTPStatusForCapture returns the actual provider status when capture has
+// one, while preserving HTTP 200 for existing successful result producers.
+func (r *ForwardResult) HTTPStatusForCapture() int {
+	if r != nil && r.CaptureHTTPStatus >= 100 && r.CaptureHTTPStatus <= 599 {
+		return r.CaptureHTTPStatus
+	}
+	return http.StatusOK
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is
@@ -658,11 +671,15 @@ type GatewayFailureReason string
 type UpstreamFailoverError struct {
 	StatusCode               int
 	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
+	RequestHeaders           http.Header // 最终上游请求头，仅供脱敏归档
 	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
-	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	UpstreamEndpoint         string
+	Platform                 string
+	HasUpstreamHTTPResponse  bool // true only when an actual HTTP response produced this failure
+	ForceCacheBilling        bool // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	RequestScopedTransient   bool // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	Stage                    GatewayFailureStage
 	Scope                    GatewayFailureScope
 	Reason                   GatewayFailureReason

@@ -188,6 +188,7 @@ export default {
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
     promoCodes: 'Promo Codes',
+    captureSettings: 'Capture Settings',
     settings: 'Settings',
     myAccount: 'My Account',
     lightMode: 'Light Mode',

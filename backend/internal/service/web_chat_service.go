@@ -56,6 +56,7 @@ type WebChatService struct {
 	geminiCompatService  webChatGeminiCompatService
 	usageLogRepository   webChatUsageLogLookupRepository
 	captureMaxBytes      int
+	settingService       *SettingService
 
 	defaultGroups webChatDefaultGroupResolver
 	accountLister webChatAccountLister
@@ -109,6 +110,7 @@ func NewWebChatService(
 		geminiCompatService:  geminiCompatService,
 		usageLogRepository:   usageLogRepo,
 		captureMaxBytes:      captureMaxBytes,
+		settingService:       settingService,
 		defaultGroups:        settingService,
 		accountLister:        accountService,
 	}

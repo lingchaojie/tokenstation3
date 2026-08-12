@@ -120,6 +120,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	// 4. Handle error responses
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		finishOpenAIHTTPCapture(resp)
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
 		}
@@ -127,23 +128,20 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		// shared compat handler (passthrough rules, ops recording, cyber_policy).
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
-	captureLimit := 0
-	if captureEnabled {
-		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
-	}
-	finishCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
-
-	var result *OpenAIForwardResult
 	// 5. Convert response
+	var result *OpenAIForwardResult
+	var forwardErr error
 	if clientStream {
 		streamOwnsResponseBody = true
-		result, err = s.streamChatCompletionsAsAnthropic(ctx, c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.streamChatCompletionsAsAnthropic(ctx, c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	} else {
-		result, err = s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	finishCapture()
-	return finalizeOpenAIForwardResult(c, result, chatBody), err
+	finishOpenAIHTTPCapture(resp)
+	if forwardErr == nil {
+		s.applyOpenAIHTTPSuccessCapture(c, account, result)
+	}
+	return finalizeOpenAIForwardResult(c, result, chatBody), forwardErr
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(

@@ -2669,6 +2669,9 @@ func TestGatewayCaptureConfigDefaults(t *testing.T) {
 	if cfg.Gateway.Capture.MaxQueueBytes != int64(1)<<30 {
 		t.Fatalf("default max_queue_bytes = 1GiB, got %d", cfg.Gateway.Capture.MaxQueueBytes)
 	}
+	if cfg.Gateway.Capture.WriterQueueSize != 1024 {
+		t.Fatalf("default writer_queue_size = 1024, got %d", cfg.Gateway.Capture.WriterQueueSize)
+	}
 }
 
 func TestGatewayCaptureValidateMaxQueueBytes(t *testing.T) {
@@ -2679,6 +2682,7 @@ func TestGatewayCaptureValidateMaxQueueBytes(t *testing.T) {
 		c.Gateway.Capture.MaxBodyBytes = 100
 		c.Gateway.Capture.QueueSize = 1
 		c.Gateway.Capture.WorkerCount = 1
+		c.Gateway.Capture.WriterQueueSize = 1
 		c.Gateway.Capture.BatchMaxSize = 1
 		c.Gateway.Capture.ClickHouse.Addr = []string{"ch:9000"}
 		c.Gateway.Capture.ClickHouse.Database = "llm_archive"
@@ -2717,6 +2721,7 @@ func TestGatewayCaptureValidateRejectsSyncAndEmptyAddr(t *testing.T) {
 	c.Gateway.Capture.MaxBodyBytes = 1
 	c.Gateway.Capture.QueueSize = 1
 	c.Gateway.Capture.WorkerCount = 1
+	c.Gateway.Capture.WriterQueueSize = 1
 	c.Gateway.Capture.BatchMaxSize = 1
 	if err := c.Gateway.Capture.validate(); err == nil {
 		t.Fatal("sync overflow must be rejected for capture")
@@ -2724,5 +2729,25 @@ func TestGatewayCaptureValidateRejectsSyncAndEmptyAddr(t *testing.T) {
 	c.Gateway.Capture.OverflowPolicy = UsageRecordOverflowPolicyDrop
 	if err := c.Gateway.Capture.validate(); err == nil {
 		t.Fatal("empty clickhouse addr/database must be rejected")
+	}
+}
+
+func TestGatewayCaptureValidateRejectsNonPositiveWriterQueueSize(t *testing.T) {
+	c := GatewayCaptureConfig{
+		Enabled:         true,
+		MaxBodyBytes:    1,
+		MaxQueueBytes:   1,
+		QueueSize:       1,
+		WorkerCount:     1,
+		WriterQueueSize: 0,
+		OverflowPolicy:  UsageRecordOverflowPolicyDrop,
+		BatchMaxSize:    1,
+		ClickHouse: CaptureClickHouseConfig{
+			Addr:     []string{"ch:9000"},
+			Database: "llm_archive",
+		},
+	}
+	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "writer_queue_size") {
+		t.Fatalf("writer_queue_size=0 must be rejected, got %v", err)
 	}
 }

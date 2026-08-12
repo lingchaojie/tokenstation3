@@ -209,6 +209,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
+		s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, body)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
@@ -224,6 +225,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			return nil, transportErr
 		}
+		s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 		if resp.StatusCode < 400 {
 			break
 		}
@@ -231,6 +233,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// Peek only to identify an invalid task. Restore the body so the existing
 		// passthrough error handling sees the same response after recovery fails.
 		probeBody := s.readUpstreamErrorBody(resp)
+		finishOpenAIHTTPCapture(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
 		if openAICompactKeepaliveCommitted(c) {
@@ -271,6 +274,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	if reqStream {
 		stopCompactKeepalive()
 		result, streamErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
+		finishOpenAIHTTPCapture(resp)
 		if streamErr != nil {
 			var failoverErr *UpstreamFailoverError
 			if errors.As(streamErr, &failoverErr) {
@@ -289,6 +293,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageResults = result.imageResults
 	} else {
 		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel, stopCompactKeepalive)
+		finishOpenAIHTTPCapture(resp)
 		if err != nil {
 			return nil, err
 		}
@@ -683,6 +688,8 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		body,
 		upstreamMsg,
 		!shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+		resp,
+		string(account.Platform),
 	)
 }
 
@@ -750,11 +757,13 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
 	}
 
-	// 归档采集（错误响应）：终态提交，drop-safe，绝不影响转发。
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		reqModel, stream, _ := extractOpenAIRequestMetaFromBody(requestBody)
-		limit := s.cfg.Gateway.Capture.MaxBodyBytes
-		if rec := buildErrorCaptureRecord(resp, string(account.Platform), reqModel, reqModel, "", stream, requestBody, body, limit); rec != nil {
+	if s != nil && s.cfg != nil && s.capturePool != nil {
+		rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), &UpstreamFailoverError{
+			StatusCode: resp.StatusCode, ResponseBody: responseBody,
+			RequestHeaders: captureRequestHeadersFromResponse(resp), ResponseHeaders: resp.Header.Clone(),
+			UpstreamEndpoint: captureEndpointFromResponse(resp), HasUpstreamHTTPResponse: true,
+		}, s.cfg.Gateway.Capture.MaxBodyBytes)
+		if rec != nil {
 			s.capturePool.Submit(rec)
 		}
 	}
@@ -1319,12 +1328,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		return nil, errors.New("streaming not supported")
 	}
 
-	var tee *sseTee
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
-	}
-
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	retainImageResults := hasWebChatStreamCapture(ctx)
@@ -1391,9 +1394,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for documentScanner.Scan() {
 		line := documentScanner.Text()
-		if tee != nil {
-			tee.appendLine(line)
-		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
@@ -1608,10 +1608,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 
 	// 归档采集：在任何改写（model 名还原、SSE→JSON 转换）之前，快照上游原始响应体，
 	// 保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, capturedResp, truncated)
-	}
 
 	// Detect SSE responses from upstream and convert to JSON.
 	// Some upstreams (e.g. other sub2api instances) may return SSE even when
