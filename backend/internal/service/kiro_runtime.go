@@ -44,7 +44,10 @@ func (b *kiroTranslatedStreamBody) Close() error {
 		return nil
 	}
 	b.closeOnce.Do(func() {
-		b.closeErr = errors.Join(b.PipeReader.Close(), b.raw.Close())
+		b.closeErr = b.PipeReader.Close()
+		if b.raw != nil {
+			b.closeErr = errors.Join(b.closeErr, b.raw.Close())
+		}
 	})
 	return b.closeErr
 }
@@ -395,7 +398,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     headers,
-			Body:       pr,
+			// The inner WebSearch loop owns and publishes the provider-native
+			// AWS response. Use the same marker as the normal KIRO translator so
+			// the outer Anthropic stream reader cannot overwrite it with SSE.
+			Body: &kiroTranslatedStreamBody{PipeReader: pr},
 		}, inputTokens, nil
 	}
 

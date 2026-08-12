@@ -225,9 +225,13 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				}(),
 			})
 			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				StatusCode:              resp.StatusCode,
+				ResponseBody:            respBody,
+				RequestHeaders:          captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:         resp.Header.Clone(),
+				UpstreamEndpoint:        captureEndpointFromResponse(resp),
+				HasUpstreamHTTPResponse: true,
+				RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -259,9 +263,13 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			}(),
 		})
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse: true,
+			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
 

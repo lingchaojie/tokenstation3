@@ -1382,6 +1382,40 @@ func TestAnthropicAPIKeyPassthroughCaptureUsesFinalWireRequestAtCustomEndpoint(t
 	require.NotContains(t, string(result.CaptureRequestHeaders), "upstream-anthropic-key")
 }
 
+func TestAnthropicAPIKeyPassthroughTerminalHTTPErrorBuildsCaptureRecord(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := newAnthropicAPIKeyAccountForTest()
+	account.Credentials["base_url"] = "https://relay.example"
+	account.Credentials["pool_mode"] = true
+	errorBody := []byte(`{"type":"error","error":{"type":"overloaded_error","message":"temporarily unavailable"}}`)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"terminal-request"}},
+		Body:       io.NopCloser(bytes.NewReader(errorBody)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(
+		context.Background(), c, account, body,
+		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now(),
+	)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, cfg.Gateway.Capture.MaxBodyBytes)
+	require.NotNil(t, record, "a final real upstream HTTP response must be eligible for terminal-error capture")
+	require.Equal(t, http.StatusServiceUnavailable, record.HTTPStatus)
+	require.Equal(t, upstream.lastBody, record.RawRequest)
+	require.Equal(t, errorBody, record.RawResponse)
+	require.Equal(t, upstream.lastReq.URL.String(), record.UpstreamEndpoint)
+	require.NotContains(t, string(record.RequestHeaders), "upstream-anthropic-key")
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
