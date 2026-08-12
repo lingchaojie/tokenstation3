@@ -223,7 +223,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	return fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*kiroWebSearchExecution, error) {
+func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*kiroWebSearchExecution, error) {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
 		return nil, errKiroWebSearchFallback
@@ -269,6 +269,13 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, &kiroWebSearchHTTPError{Response: resp}
 		}
+		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+			account != nil && CaptureMayApplyFor(c, string(account.Platform))
+		captureLimit := 0
+		if s.cfg != nil {
+			captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+		}
+		finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 
 		parseResult, parseErr := func() (*kiropkg.ParseResult, error) {
 			defer func() { _ = resp.Body.Close() }()
@@ -278,7 +285,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			}
 			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, kiropkg.KiroRequestContext{CacheEmulationUsage: cacheUsage.toKiroUsage()})
 		}()
+		finishRawCapture()
 		if parseErr != nil {
+			_, _ = takeCaptureResult(c)
 			return nil, parseErr
 		}
 		if requestID == "" {

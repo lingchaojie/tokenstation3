@@ -69,7 +69,13 @@ func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
 		attachCaptureToForwardResult(c, result)
 	}
 	if len(result.CaptureResponse) > 0 {
-		result.CaptureRequestHeaders, result.CaptureResponseHeaders = takeKiroCaptureHeaders(c)
+		requestHeaders, responseHeaders := takeKiroCaptureHeaders(c)
+		if len(requestHeaders) > 0 {
+			result.CaptureRequestHeaders = requestHeaders
+		}
+		if len(responseHeaders) > 0 {
+			result.CaptureResponseHeaders = responseHeaders
+		}
 		if v, ok := c.Get(kiroCaptureHeadersContextKey); ok {
 			if h, ok := v.(kiroCaptureHeaders); ok && h.UpstreamEndpoint != "" {
 				result.CaptureUpstreamEndpoint = h.UpstreamEndpoint

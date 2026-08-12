@@ -119,11 +119,13 @@ func resolveKiroUpstreamModel(mappedModel string) string {
 }
 
 func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
-		setCapturePlatform(c, string(account.Platform))
-	}
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
+	}
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform))
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+		ctx = withCaptureUpstreamRequestContext(ctx, c)
 	}
 
 	originalModel := parsed.Model
@@ -244,7 +246,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 	if isOnlyWebSearchToolInBody(body) {
-		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
+		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, c, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
 		switch {
 		case errors.Is(webSearchErr, errKiroWebSearchFallback):
 		case webSearchErr == nil:
@@ -254,14 +256,16 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			c.Header("x-request-id", claudeReqID)
 			c.Header("request-id", claudeReqID)
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
-			return &ForwardResult{
+			result := &ForwardResult{
 				RequestID:     webSearchResult.RequestID,
 				Usage:         webSearchResult.Usage,
 				Model:         originalModel,
 				UpstreamModel: upstreamModel,
 				Stream:        false,
 				Duration:      time.Since(startTime),
-			}, nil
+			}
+			finalizeKiroCapture(c, result)
+			return result, nil
 		default:
 			var httpErr *kiroWebSearchHTTPError
 			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
@@ -323,8 +327,15 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 
 	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+	captureLimit := 0
+	if s.cfg != nil {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
+	finishRawCapture()
 	if err != nil {
+		_, _ = takeCaptureResult(c)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type": "error",
 			"error": gin.H{
@@ -352,19 +363,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		Stream:        false,
 		Duration:      time.Since(startTime),
 	}
-	// 归档：非流式不走 handleNonStreamingResponse，此处直接快照组装好的 Anthropic JSON +
-	// 真实上游头（resp 即厂商响应）。汇入 gateway_handler submit 块统一提交。
-	if content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeSuccess); s.cfg != nil && s.cfg.Gateway.Capture.Enabled && enabled {
-		captured, truncated := captureWithLimit(parseResult.ResponseBody, s.cfg.Gateway.Capture.MaxBodyBytes)
-		result.CaptureResponse = captured
-		result.CaptureTruncated = truncated
-		headers := buildKiroCaptureHeaders(resp)
-		result.CaptureRequestHeaders = headers.RequestHeaders
-		result.CaptureResponseHeaders = headers.ResponseHeaders
-		result.CaptureUpstreamEndpoint = captureEndpointFromResponse(resp)
-		result.CaptureHTTPStatus = http.StatusOK
-		result.CaptureContentPolicy = &content
-	}
+	finalizeKiroCapture(c, result)
 	return result, nil
 }
 
