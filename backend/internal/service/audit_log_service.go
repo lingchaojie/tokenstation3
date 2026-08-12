@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -26,7 +27,13 @@ type AuditLogService struct {
 	repo           AuditLogRepository
 	settingService *SettingService
 
-	queue chan *AuditLog
+	queue chan auditLogQueueItem
+
+	// queueMu establishes the Record/ClearAll ordering boundary. ClearAll holds
+	// the write lock through the writer barrier and atomic repository clear, so
+	// records accepted before it cannot reappear after the clear trace.
+	queueMu sync.RWMutex
+	started atomic.Bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -37,12 +44,17 @@ type AuditLogService struct {
 	writtenCount uint64
 }
 
+type auditLogQueueItem struct {
+	log     *AuditLog
+	barrier chan error
+}
+
 func NewAuditLogService(repo AuditLogRepository, settingService *SettingService) *AuditLogService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AuditLogService{
 		repo:           repo,
 		settingService: settingService,
-		queue:          make(chan *AuditLog, auditLogQueueCapacity),
+		queue:          make(chan auditLogQueueItem, auditLogQueueCapacity),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -51,6 +63,9 @@ func NewAuditLogService(repo AuditLogRepository, settingService *SettingService)
 // Start 启动异步写入与保留期清理协程。
 func (s *AuditLogService) Start() {
 	if s == nil || s.repo == nil {
+		return
+	}
+	if !s.started.CompareAndSwap(false, true) {
 		return
 	}
 	s.wg.Add(2)
@@ -72,6 +87,8 @@ func (s *AuditLogService) Record(entry *AuditLog) {
 	if s == nil || entry == nil {
 		return
 	}
+	s.queueMu.RLock()
+	defer s.queueMu.RUnlock()
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
@@ -81,7 +98,7 @@ func (s *AuditLogService) Record(entry *AuditLog) {
 	default:
 	}
 	select {
-	case s.queue <- entry:
+	case s.queue <- auditLogQueueItem{log: entry}:
 	default:
 		atomic.AddUint64(&s.droppedCount, 1)
 	}
@@ -99,15 +116,17 @@ func (s *AuditLogService) GetByID(ctx context.Context, id int64) (*AuditLog, err
 
 // ClearAll 全量清空审计日志并写入留痕记录。
 // 调用方（handler）必须先完成 TOTP 验证；本方法负责：
-//  1. 统计并清空全表
-//  2. 同步写入一条 "audit_log.clear" 留痕记录（绕过异步队列，保证落库）
+//  1. 阻止新记录入队，并等待已接受的记录全部完成持久化
+//  2. 在单一数据库事务内统计、清空并写入 "audit_log.clear" 留痕
 func (s *AuditLogService) ClearAll(ctx context.Context, trace *AuditLog) (int64, error) {
-	deleted, err := s.repo.Count(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("count audit logs: %w", err)
+	if s == nil || s.repo == nil {
+		return 0, fmt.Errorf("nil audit log service")
 	}
-	if err := s.repo.TruncateAll(ctx); err != nil {
-		return 0, fmt.Errorf("truncate audit logs: %w", err)
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
+	if err := s.flushAcceptedRecords(ctx); err != nil {
+		return 0, fmt.Errorf("flush audit logs before clear: %w", err)
 	}
 
 	if trace != nil {
@@ -115,16 +134,73 @@ func (s *AuditLogService) ClearAll(ctx context.Context, trace *AuditLog) (int64,
 		if trace.CreatedAt.IsZero() {
 			trace.CreatedAt = time.Now().UTC()
 		}
-		if trace.Extra == nil {
-			trace.Extra = map[string]any{}
-		}
-		trace.Extra["deleted_rows"] = deleted
-		if err := s.repo.Insert(ctx, trace); err != nil {
-			// 留痕失败必须显式暴露：清空已发生，但审计链断裂。
-			return deleted, fmt.Errorf("audit logs cleared (%d rows) but failed to persist clear-trace record: %w", deleted, err)
-		}
+	}
+	deleted, err := s.repo.ClearAllWithTrace(ctx, trace)
+	if err != nil {
+		return 0, fmt.Errorf("clear audit logs atomically: %w", err)
 	}
 	return deleted, nil
+}
+
+func (s *AuditLogService) flushAcceptedRecords(ctx context.Context) error {
+	if !s.started.Load() {
+		batch := make([]*AuditLog, 0, auditLogBatchSize)
+		for {
+			select {
+			case item := <-s.queue:
+				if item.log != nil {
+					batch = append(batch, item.log)
+				}
+			default:
+				return s.flushAuditBatch(ctx, batch)
+			}
+		}
+	}
+
+	barrier := make(chan error, 1)
+	select {
+	case s.queue <- auditLogQueueItem{barrier: barrier}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.ctx.Done():
+		return context.Canceled
+	}
+	select {
+	case err := <-barrier:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.ctx.Done():
+		return context.Canceled
+	}
+}
+
+func (s *AuditLogService) flushAuditBatch(ctx context.Context, batch []*AuditLog) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	inserted, failed, err := s.persistAuditBatch(ctx, batch)
+	if inserted > 0 {
+		atomic.AddUint64(&s.writtenCount, uint64(inserted))
+	}
+	if failed > 0 {
+		atomic.AddUint64(&s.writeFailed, uint64(failed))
+	}
+	return err
+}
+
+func (s *AuditLogService) persistAuditBatch(ctx context.Context, batch []*AuditLog) (int64, int, error) {
+	inserted, err := s.repo.BatchInsert(ctx, batch)
+	if err == nil {
+		return inserted, 0, nil
+	}
+	if len(batch) == 1 {
+		return 0, 1, err
+	}
+	mid := len(batch) / 2
+	leftInserted, leftFailed, leftErr := s.persistAuditBatch(ctx, batch[:mid])
+	rightInserted, rightFailed, rightErr := s.persistAuditBatch(ctx, batch[mid:])
+	return leftInserted + rightInserted, leftFailed + rightFailed, errors.Join(leftErr, rightErr)
 }
 
 func (s *AuditLogService) runWriter() {
@@ -134,21 +210,19 @@ func (s *AuditLogService) runWriter() {
 	defer ticker.Stop()
 
 	batch := make([]*AuditLog, 0, auditLogBatchSize)
-	flush := func() {
+	flush := func() error {
 		if len(batch) == 0 {
-			return
+			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		inserted, err := s.repo.BatchInsert(ctx, batch)
+		err := s.flushAuditBatch(ctx, batch)
 		cancel()
 		if err != nil {
-			atomic.AddUint64(&s.writeFailed, uint64(len(batch)))
 			_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"audit log flush failed\" err=%v batch=%d\n",
 				time.Now().Format(time.RFC3339Nano), err, len(batch))
-		} else {
-			atomic.AddUint64(&s.writtenCount, uint64(inserted))
 		}
 		batch = batch[:0]
+		return err
 	}
 
 	for {
@@ -158,10 +232,14 @@ func (s *AuditLogService) runWriter() {
 			for {
 				select {
 				case item := <-s.queue:
-					if item == nil {
+					if item.barrier != nil {
+						item.barrier <- flush()
 						continue
 					}
-					batch = append(batch, item)
+					if item.log == nil {
+						continue
+					}
+					batch = append(batch, item.log)
 					if len(batch) >= auditLogBatchSize {
 						flush()
 					}
@@ -171,10 +249,14 @@ func (s *AuditLogService) runWriter() {
 				}
 			}
 		case item := <-s.queue:
-			if item == nil {
+			if item.barrier != nil {
+				item.barrier <- flush()
 				continue
 			}
-			batch = append(batch, item)
+			if item.log == nil {
+				continue
+			}
+			batch = append(batch, item.log)
 			if len(batch) >= auditLogBatchSize {
 				flush()
 			}

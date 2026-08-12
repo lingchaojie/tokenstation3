@@ -36,6 +36,16 @@ func (r *task11AuditCaptureRepository) Insert(_ context.Context, log *service.Au
 	r.logs = append(r.logs, log)
 	return nil
 }
+func (r *task11AuditCaptureRepository) ClearAllWithTrace(_ context.Context, trace *service.AuditLog) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	deleted := int64(len(r.logs))
+	r.logs = nil
+	if trace != nil {
+		r.logs = append(r.logs, trace)
+	}
+	return deleted, nil
+}
 
 func (*task11AuditCaptureRepository) List(context.Context, *service.AuditLogFilter) (*service.AuditLogList, error) {
 	return &service.AuditLogList{}, nil

@@ -51,7 +51,7 @@ func auditLogInsertValues(log *service.AuditLog) []any {
 		truncateString(log.RequestID, 64),
 		truncateString(log.ClientIP, 64),
 		truncateString(log.UserAgent, 512),
-		log.RequestBody,
+		strings.ToValidUTF8(log.RequestBody, "�"),
 		log.StatusCode,
 		log.LatencyMs,
 		extraJSON,
@@ -120,6 +120,46 @@ func (r *auditLogRepository) Insert(ctx context.Context, log *service.AuditLog) 
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`
 	_, err := r.db.ExecContext(ctx, query, auditLogInsertValues(log)...)
 	return err
+}
+
+func (r *auditLogRepository) ClearAllWithTrace(ctx context.Context, trace *service.AuditLog) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil audit log repository")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Serialize the count/truncate/trace sequence with concurrent INSERT/COPY
+	// transactions. PostgreSQL TRUNCATE is transactional, so a trace failure
+	// rolls the deletion back with it.
+	if _, err := tx.ExecContext(ctx, "LOCK TABLE audit_logs IN ACCESS EXCLUSIVE MODE"); err != nil {
+		return 0, err
+	}
+	var deleted int64
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_logs").Scan(&deleted); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "TRUNCATE TABLE audit_logs"); err != nil {
+		return 0, err
+	}
+	if trace != nil {
+		if trace.Extra == nil {
+			trace.Extra = map[string]any{}
+		}
+		trace.Extra["deleted_rows"] = deleted
+		query := `INSERT INTO audit_logs (` + auditLogInsertColumns + `)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`
+		if _, err := tx.ExecContext(ctx, query, auditLogInsertValues(trace)...); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 func buildAuditLogsWhere(filter *service.AuditLogFilter) (string, []any) {
@@ -355,7 +395,7 @@ func nullInt64Ptr(v *int64) any {
 }
 
 func truncateString(s string, max int) string {
-	s = strings.TrimSpace(s)
+	s = strings.ToValidUTF8(strings.TrimSpace(s), "�")
 	if len(s) <= max {
 		return s
 	}

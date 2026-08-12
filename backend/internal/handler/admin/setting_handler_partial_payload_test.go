@@ -56,6 +56,7 @@ func TestUpdateSettingsOmittingPreservesLocalExtensions(t *testing.T) {
 		{name: "affiliate", key: service.SettingKeyAffiliateEnabled, value: "true"},
 		{name: "check-in", key: service.SettingKeyDailyCheckInEnabled, value: "true"},
 		{name: "capture config extension", key: "gateway_capture_enabled", value: "true"},
+		{name: "hidden passkey switch", key: service.SettingKeyPasskeyEnabled, value: "true"},
 		{name: "announcement", key: service.SettingKeyAnnouncementBanners, value: `[{"id":"maintenance","zh":"维护中"}]`},
 		{name: "alvin", key: service.SettingKeyAlvin, value: "false"},
 	}

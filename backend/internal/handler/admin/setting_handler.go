@@ -891,6 +891,9 @@ func omittedSettingKeys(sentFields map[string]json.RawMessage) service.OmittedSe
 			omitted[settingKey] = struct{}{}
 		}
 	}
+	// Passkey is intentionally absent from the public/admin settings payload.
+	// Preserve its stored value when an unrelated whole-settings save occurs.
+	omitted[service.SettingKeyPasskeyEnabled] = struct{}{}
 	return omitted
 }
 
