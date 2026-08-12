@@ -14,8 +14,10 @@ import (
 )
 
 type settingRepoStub struct {
-	values map[string]string
-	err    error
+	values           map[string]string
+	err              error
+	getValueCalls    int
+	getMultipleCalls int
 }
 
 func (s *settingRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
@@ -23,6 +25,7 @@ func (s *settingRepoStub) Get(ctx context.Context, key string) (*Setting, error)
 }
 
 func (s *settingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	s.getValueCalls++
 	if s.err != nil {
 		return "", s.err
 	}
@@ -37,6 +40,7 @@ func (s *settingRepoStub) Set(ctx context.Context, key, value string) error {
 }
 
 func (s *settingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	s.getMultipleCalls++
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -71,7 +75,9 @@ type defaultSubscriptionAssignerStub struct {
 	err   error
 }
 
-type refreshTokenCacheStub struct{}
+type refreshTokenCacheStub struct {
+	storedData *RefreshTokenData
+}
 
 type userPlatformQuotaRepoStub struct {
 	bulkInsertCalls [][]UserPlatformQuotaRecord
@@ -119,7 +125,11 @@ func (s *defaultSubscriptionAssignerStub) AssignOrExtendSubscription(_ context.C
 	return &UserSubscription{UserID: input.UserID, GroupID: input.GroupID}, false, nil
 }
 
-func (s *refreshTokenCacheStub) StoreRefreshToken(context.Context, string, *RefreshTokenData, time.Duration) error {
+func (s *refreshTokenCacheStub) StoreRefreshToken(_ context.Context, _ string, data *RefreshTokenData, _ time.Duration) error {
+	if data != nil {
+		copy := *data
+		s.storedData = &copy
+	}
 	return nil
 }
 
@@ -253,6 +263,49 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 	)
 }
 
+func TestAuthServiceSessionBindingIssuanceFollowsDeterministicSetting(t *testing.T) {
+	binding := &SessionBinding{IP: "203.0.113.10", UserAgent: "test-agent"}
+	ctx := WithSessionBinding(context.Background(), binding)
+	user := &User{ID: 42, Email: "binding@example.com", Role: RoleUser, Status: StatusActive}
+
+	for _, tc := range []struct {
+		name       string
+		values     map[string]string
+		settingErr error
+		wantHash   string
+	}{
+		{name: "explicit false", values: map[string]string{SettingKeySessionBindingEnabled: "false"}},
+		{name: "missing setting", values: map[string]string{}},
+		{name: "setting read error", settingErr: errors.New("database unavailable")},
+		{name: "explicit true", values: map[string]string{SettingKeySessionBindingEnabled: "true"}, wantHash: binding.Hash()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{JWT: config.JWTConfig{
+				Secret:                 "test-secret",
+				ExpireHour:             1,
+				RefreshTokenExpireDays: 7,
+			}}
+			settings := NewSettingService(&settingRepoStub{values: tc.values, err: tc.settingErr}, cfg)
+			refreshCache := &refreshTokenCacheStub{}
+			svc := NewAuthService(nil, nil, nil, refreshCache, cfg, settings, nil, nil, nil, nil, nil, nil, nil)
+
+			token, err := svc.GenerateToken(ctx, user)
+			require.NoError(t, err)
+			claims, err := svc.ValidateToken(token)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantHash, claims.BindingHash)
+
+			pair, err := svc.GenerateTokenPair(ctx, user, "test-family")
+			require.NoError(t, err)
+			pairClaims, err := svc.ValidateToken(pair.AccessToken)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantHash, pairClaims.BindingHash)
+			require.NotNil(t, refreshCache.storedData)
+			require.Equal(t, tc.wantHash, refreshCache.storedData.BindingHash)
+		})
+	}
+}
+
 func TestAuthService_Register_Disabled(t *testing.T) {
 	repo := &userRepoStub{}
 	service := newAuthService(repo, map[string]string{
@@ -365,6 +418,30 @@ func TestAuthService_Register_EmailExists(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmailExists)
 }
 
+func TestAuthService_Register_AliasDuplicateRejected(t *testing.T) {
+	repo := &userRepoStub{aliasExists: true}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, nil)
+
+	_, _, err := service.Register(context.Background(), "some.one+bulk294@gmail.com", "password")
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Empty(t, repo.created)
+}
+
+func TestAuthService_Register_UsesAliasGuardedCreate(t *testing.T) {
+	// 注册必须走带别名兜底的创建路径：服务层前置查重与写入之间存在竞态窗口。
+	repo := &userRepoStub{nextID: 91}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, nil)
+
+	_, user, err := service.Register(context.Background(), "newuser@gmail.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, 1, repo.guardedCreates)
+}
+
 func TestAuthService_Register_CheckEmailError(t *testing.T) {
 	repo := &userRepoStub{existsErr: errors.New("db down")}
 	service := newAuthService(repo, map[string]string{
@@ -386,20 +463,120 @@ func TestAuthService_Register_ReservedEmail(t *testing.T) {
 }
 
 func TestAuthService_Register_EmailSuffixNotAllowed(t *testing.T) {
-	repo := &userRepoStub{}
+	repo := &userRepoStub{domainCounts: map[string]int{"other.com": 1}}
 	service := newAuthService(repo, map[string]string{
-		SettingKeyRegistrationEnabled:              "true",
-		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com","@company.com"]`,
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com","@company.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
 	}, nil, nil)
 
 	_, _, err := service.Register(context.Background(), "user@other.com", "password")
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "EMAIL_DOMAIN_REGISTRATION_LIMIT", appErr.Reason)
+	require.Contains(t, appErr.Message, "mainstream email")
+}
+
+func TestAuthService_Register_NonWhitelistDomainAllowsFirstAccount(t *testing.T) {
+	repo := &userRepoStub{nextID: 9, domainCounts: map[string]int{"custom.example": 0}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+	}, nil, nil)
+
+	_, user, err := svc.Register(context.Background(), "first@custom.example", "password")
+	require.NoError(t, err)
+	require.Equal(t, int64(9), user.ID)
+}
+
+func TestAuthService_Register_NonWhitelistDomainRejectsSecondAccount(t *testing.T) {
+	repo := &userRepoStub{domainCounts: map[string]int{"custom.example": 1}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+	}, nil, nil)
+
+	_, _, err := svc.Register(context.Background(), "second@sub.custom.example", "password")
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
+}
+
+// 域名限量注册开关默认关闭：白名单外域名保持 PR5423 之前的严格拒绝语义，
+// 即使该域名下还没有任何账户也不放行。
+func TestAuthService_Register_NonWhitelistDomainRejectedWhenQuotaDisabledByDefault(t *testing.T) {
+	repo := &userRepoStub{nextID: 9, domainCounts: map[string]int{"custom.example": 0}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com"]`,
+	}, nil, nil)
+
+	_, _, err := svc.Register(context.Background(), "first@custom.example", "password")
 	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
 	appErr := infraerrors.FromError(err)
-	require.Contains(t, appErr.Message, "@example.com")
-	require.Contains(t, appErr.Message, "@company.com")
 	require.Equal(t, "EMAIL_SUFFIX_NOT_ALLOWED", appErr.Reason)
-	require.Equal(t, "2", appErr.Metadata["allowed_suffix_count"])
-	require.Equal(t, "@example.com,@company.com", appErr.Metadata["allowed_suffixes"])
+	require.Empty(t, repo.created)
+	require.Zero(t, repo.domainLimitedCreates)
+}
+
+func TestAuthService_Register_NonWhitelistDomainRejectedWhenQuotaExplicitlyDisabled(t *testing.T) {
+	repo := &userRepoStub{nextID: 9, domainCounts: map[string]int{"custom.example": 0}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "false",
+	}, nil, nil)
+
+	_, _, err := svc.Register(context.Background(), "first@custom.example", "password")
+	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+	require.Empty(t, repo.created)
+}
+
+// 开关关闭不影响白名单命中域名的正常注册。
+func TestAuthService_Register_WhitelistDomainAllowedWhenQuotaDisabled(t *testing.T) {
+	repo := &userRepoStub{nextID: 12}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com"]`,
+	}, nil, nil)
+
+	_, user, err := svc.Register(context.Background(), "user@example.com", "password")
+	require.NoError(t, err)
+	require.Equal(t, int64(12), user.ID)
+	require.Zero(t, repo.domainLimitedCreates)
+}
+
+func TestAuthService_SendVerifyCode_NonWhitelistDomainRejectedWhenQuotaDisabled(t *testing.T) {
+	repo := &userRepoStub{domainCounts: map[string]int{"custom.example": 0}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com"]`,
+	}, nil, nil)
+
+	err := svc.SendVerifyCode(context.Background(), "user@custom.example")
+	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+}
+
+func TestAuthService_SendVerifyCodeAsync_NonWhitelistDomainRejectedWhenQuotaDisabled(t *testing.T) {
+	repo := &userRepoStub{domainCounts: map[string]int{"custom.example": 0}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com"]`,
+	}, nil, nil)
+
+	_, err := svc.SendVerifyCodeAsync(context.Background(), "user@custom.example")
+	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+}
+
+func TestAuthService_Register_EmptyWhitelistAllowsAllDomains(t *testing.T) {
+	repo := &userRepoStub{nextID: 10}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `[]`,
+	}, nil, nil)
+
+	_, _, err := svc.Register(context.Background(), "any@custom.example", "password")
+	require.NoError(t, err)
 }
 
 func TestAuthService_Register_EmailSuffixAllowed(t *testing.T) {
@@ -416,18 +593,41 @@ func TestAuthService_Register_EmailSuffixAllowed(t *testing.T) {
 }
 
 func TestAuthService_SendVerifyCode_EmailSuffixNotAllowed(t *testing.T) {
-	repo := &userRepoStub{}
+	repo := &userRepoStub{domainCounts: map[string]int{"other.com": 1}}
 	service := newAuthService(repo, map[string]string{
-		SettingKeyRegistrationEnabled:              "true",
-		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com","@company.com"]`,
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com","@company.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
 	}, nil, nil)
 
 	err := service.SendVerifyCode(context.Background(), "user@other.com")
-	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
 	appErr := infraerrors.FromError(err)
-	require.Contains(t, appErr.Message, "@example.com")
-	require.Contains(t, appErr.Message, "@company.com")
-	require.Equal(t, "2", appErr.Metadata["allowed_suffix_count"])
+	require.Equal(t, "EMAIL_DOMAIN_REGISTRATION_LIMIT", appErr.Reason)
+}
+
+func TestAuthService_SendVerifyCode_NonWhitelistDomainLimit(t *testing.T) {
+	repo := &userRepoStub{domainCounts: map[string]int{"custom.example": 1}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+	}, nil, nil)
+
+	err := svc.SendVerifyCode(context.Background(), "user@custom.example")
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
+}
+
+func TestAuthService_SendVerifyCodeAsync_NonWhitelistDomainLimit(t *testing.T) {
+	repo := &userRepoStub{domainCounts: map[string]int{"custom.example": 1}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["@example.com"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+	}, nil, nil)
+
+	_, err := svc.SendVerifyCodeAsync(context.Background(), "user@custom.example")
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
 }
 
 func TestAuthService_Register_CreateError(t *testing.T) {
@@ -484,7 +684,7 @@ func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
 		Status:       StatusActive,
 		TokenVersion: 1,
 	}
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	// 验证有效 token
@@ -495,7 +695,7 @@ func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
 
 	// 模拟过期 token（通过创建一个过期很久的 token）
 	service.cfg.JWT.ExpireHour = -1 // 设置为负数使 token 立即过期
-	expiredToken, err := service.GenerateToken(user)
+	expiredToken, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 	service.cfg.JWT.ExpireHour = 1 // 恢复
 
@@ -520,7 +720,7 @@ func TestAuthService_RefreshToken_ExpiredTokenNoPanic(t *testing.T) {
 
 	// 创建过期 token
 	service.cfg.JWT.ExpireHour = -1
-	expiredToken, err := service.GenerateToken(user)
+	expiredToken, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 	service.cfg.JWT.ExpireHour = 1
 
@@ -561,7 +761,7 @@ func TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(t *testing.T) {
 		TokenVersion: 1,
 	}
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := service.ValidateToken(token)
@@ -586,7 +786,7 @@ func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
 		TokenVersion: 1,
 	}
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := service.ValidateToken(token)

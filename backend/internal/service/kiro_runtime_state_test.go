@@ -46,16 +46,20 @@ type stubKiroCooldownStore struct {
 
 type recordingKiroTempUnschedRepo struct {
 	mockAccountRepoForGemini
-	called          bool
-	id              int64
-	until           time.Time
-	reason          string
-	rateCalled      bool
-	rateID          int64
-	rateLimitReset  time.Time
-	rateLimitedCall int
-	clearCalled     bool
-	clearID         int64
+	called              bool
+	id                  int64
+	until               time.Time
+	reason              string
+	rateCalled          bool
+	rateID              int64
+	rateLimitReset      time.Time
+	rateLimitedCall     int
+	modelRateCalled     bool
+	modelRateID         int64
+	modelRateScope      string
+	modelRateLimitReset time.Time
+	clearCalled         bool
+	clearID             int64
 }
 
 func (r *recordingKiroTempUnschedRepo) ClearRateLimit(_ context.Context, id int64) error {
@@ -77,6 +81,14 @@ func (r *recordingKiroTempUnschedRepo) SetRateLimited(_ context.Context, id int6
 	r.rateID = id
 	r.rateLimitReset = resetAt
 	r.rateLimitedCall++
+	return nil
+}
+
+func (r *recordingKiroTempUnschedRepo) SetModelRateLimit(_ context.Context, id int64, scope string, resetAt time.Time, _ ...string) error {
+	r.modelRateCalled = true
+	r.modelRateID = id
+	r.modelRateScope = scope
+	r.modelRateLimitReset = resetAt
 	return nil
 }
 
@@ -710,7 +722,7 @@ func assertKiroAutoEndpointRequestProfiles(t *testing.T, requests []*http.Reques
 	require.Contains(t, requests[1].Header.Get("User-Agent"), machineID)
 }
 
-func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T) {
+func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsOnlyMappedModelAndFailovers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -718,10 +730,18 @@ func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T
 	c.Request.Header.Set("Anthropic-Beta", "context-1m-2025-08-07")
 
 	account := &Account{
-		ID:       42,
-		Platform: PlatformKiro,
-		Type:     AccountTypeOAuth,
-		Name:     "kiro-oauth",
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Name:        "kiro-oauth",
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-opus-4-7":   "claude-opus-4.6",
+				"claude-sonnet-4-6": "claude-sonnet-4.6",
+			},
+		},
 	}
 	repo := &recordingKiroTempUnschedRepo{}
 	svc := &GatewayService{accountRepo: repo}
@@ -739,9 +759,25 @@ func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T
 	require.False(t, failoverErr.RetryableOnSameAccount)
 
 	require.False(t, repo.called)
-	require.True(t, repo.rateCalled)
-	require.Equal(t, account.ID, repo.rateID)
-	require.WithinDuration(t, time.Now().Add(kiroInvalidModelTempUnschedDuration), repo.rateLimitReset, 5*time.Second)
+	require.False(t, repo.rateCalled, "invalid-model must not evict the whole KIRO account")
+	require.True(t, repo.modelRateCalled)
+	require.Equal(t, account.ID, repo.modelRateID)
+	require.Equal(t, "claude-opus-4.6", repo.modelRateScope)
+	require.WithinDuration(t, time.Now().Add(kiroInvalidModelTempUnschedDuration), repo.modelRateLimitReset, 5*time.Second)
+
+	// Mirror the repository/snapshot payload shape, then exercise the real
+	// scheduler predicate. The public alias resolves to the persisted mapped
+	// model key, while an unrelated KIRO model on the same account stays live.
+	account.Extra = map[string]any{
+		modelRateLimitsKey: map[string]any{
+			repo.modelRateScope: map[string]any{
+				"rate_limit_reset_at": repo.modelRateLimitReset.UTC().Format(time.RFC3339),
+			},
+		},
+	}
+	require.True(t, account.IsSchedulable(), "model cooldown must not set the account-level rate limit")
+	require.False(t, account.IsSchedulableForModelWithContext(context.Background(), "claude-opus-4-7"))
+	require.True(t, account.IsSchedulableForModelWithContext(context.Background(), "claude-sonnet-4-6"))
 
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
@@ -782,6 +818,7 @@ func TestHandleKiroHTTPErrorAPIKeyInvalidModelDoesNotFailover(t *testing.T) {
 	require.NotErrorAs(t, err, &failoverErr)
 	require.False(t, repo.called)
 	require.False(t, repo.rateCalled)
+	require.False(t, repo.modelRateCalled)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 

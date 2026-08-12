@@ -246,7 +246,8 @@ func TestOpenAIFirstOutputStageCommitCopiesSpoolAndRemovesTemp(t *testing.T) {
 	}
 
 	var downstream bytes.Buffer
-	require.NoError(t, stage.CommitTo(&downstream))
+	_, err = stage.CommitTo(&downstream)
+	require.NoError(t, err)
 	require.Equal(t, payload, downstream.Bytes())
 	require.Zero(t, stage.Buffered())
 	if path != "" {
@@ -254,6 +255,26 @@ func TestOpenAIFirstOutputStageCommitCopiesSpoolAndRemovesTemp(t *testing.T) {
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
 	require.NoError(t, stage.Close())
+}
+
+func TestOpenAIFirstOutputStageCommitSeparatesFullDeliveryFromCleanupFailure(t *testing.T) {
+	stage := newDefaultOpenAIFirstOutputStage()
+	payload := []byte("fully delivered")
+	_, err := stage.Write(payload)
+	require.NoError(t, err)
+	cleanupSentinel := errors.New("forced cleanup failure")
+	stage.cleanupErr = cleanupSentinel
+
+	var downstream bytes.Buffer
+	written, commitErr := stage.CommitTo(&downstream)
+	deliveryErr, cleanupErr := splitOpenAIFirstOutputCommitError(commitErr)
+
+	require.EqualValues(t, len(payload), written)
+	require.Equal(t, payload, downstream.Bytes())
+	require.NoError(t, deliveryErr, "complete downstream delivery must remain successful")
+	require.ErrorIs(t, cleanupErr, cleanupSentinel, "cleanup must remain separately observable")
+	require.ErrorIs(t, commitErr, cleanupSentinel, "the CommitTo contract must preserve cleanup errors")
+	require.True(t, stage.closed)
 }
 
 func TestOpenAIFirstOutputStageUnlinkFailurePermanentlyFallsBackToMemoryAndRetriesCleanup(t *testing.T) {

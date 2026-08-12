@@ -240,7 +240,7 @@ async function fetchAndRenderMarkdown(slug: string) {
       headers: authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {},
     })
     if (!resp.ok) {
-      renderedHtml.value = `<p class="text-red-500">${escapeHtml(t('customPage.notFoundTitle'))}</p>`
+      renderedHtml.value = `<p class="text-red-500">${escapeHtml(t('common.pageNotFound'))}</p>`
       return
     }
     let raw = await resp.text()

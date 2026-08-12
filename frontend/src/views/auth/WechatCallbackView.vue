@@ -562,7 +562,7 @@ function resolveWeChatStartURL(intent: 'bind_current_user' | 'adopt_existing_use
     intent,
   })
 
-  return `${normalized}/auth/oauth/wechat/start?${params.toString()}`
+  return `${normalized}/auth/oauth/wechat/bind/start?${params.toString()}`
 }
 
 function buildExistingAccountResumePath(): string | null {

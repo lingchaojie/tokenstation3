@@ -7,6 +7,7 @@ const sendVerifyCode = vi.fn()
 const sendPendingOAuthVerifyCode = vi.fn()
 const getPublicSettings = vi.fn()
 const showError = vi.fn()
+const turnstileReset = vi.fn()
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -40,6 +41,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     sendPendingOAuthVerifyCode.mockReset()
     getPublicSettings.mockReset()
     showError.mockReset()
+    turnstileReset.mockReset()
     getPublicSettings.mockResolvedValue({
       turnstile_enabled: false,
       turnstile_site_key: ''
@@ -215,7 +217,8 @@ describe('PendingOAuthCreateAccountForm', () => {
       global: {
         stubs: {
           TurnstileWidget: {
-            template: '<button data-testid="turnstile-verify" @click="$emit(\'verify\', \'turnstile-token\')">verify</button>'
+            template: '<button data-testid="turnstile-verify" @click="$emit(\'verify\', \'turnstile-token\')">verify</button>',
+            methods: { reset: vi.fn() }
           }
         }
       }
@@ -235,4 +238,6 @@ describe('PendingOAuthCreateAccountForm', () => {
       turnstile_token: 'turnstile-token'
     })
   })
+
+
 })

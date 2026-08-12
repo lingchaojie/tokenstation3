@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,44 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type kiroSlowFrameErrorReader struct {
+	data []byte
+	off  int
+}
+
+func (r *kiroSlowFrameErrorReader) Read(p []byte) (int, error) {
+	if r.off < len(r.data) {
+		n := copy(p, r.data[r.off:])
+		r.off += n
+		return n, nil
+	}
+	time.Sleep(50 * time.Millisecond)
+	return 0, errors.New("kiro read failed")
+}
+func (r *kiroSlowFrameErrorReader) Close() error { return nil }
+
+type blockingKiroUpstreamBody struct {
+	readStarted chan struct{}
+	closed      chan struct{}
+	startOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func newBlockingKiroUpstreamBody() *blockingKiroUpstreamBody {
+	return &blockingKiroUpstreamBody{readStarted: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (b *blockingKiroUpstreamBody) Read([]byte) (int, error) {
+	b.startOnce.Do(func() { close(b.readStarted) })
+	<-b.closed
+	return 0, context.Canceled
+}
+
+func (b *blockingKiroUpstreamBody) Close() error {
+	b.closeOnce.Do(func() { close(b.closed) })
+	return nil
+}
 
 func TestAccountTestService_KiroUsesKiroUpstreamInsteadOfAnthropic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -350,6 +390,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 			Gateway: config.GatewayConfig{
 				StreamDataIntervalTimeout: 0,
 				MaxLineSize:               defaultMaxLineSize,
+				Capture:                   config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
 			},
 		},
 		rateLimitService: &RateLimitService{},
@@ -364,7 +405,106 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.True(t, result.Stream)
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Contains(t, string(result.CaptureResponse), "event: message_start")
+	require.Contains(t, string(result.CaptureResponse), "_sub2api_kiro_credits")
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestForwardKiroMessagesCommittedPartialCarriesUsageAndCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	account := &Account{ID: 22, Name: "kiro-partial", Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"access_token": "kiro-access-token", "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/PARTIAL"}}
+	var payload bytes.Buffer
+	_, _ = payload.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "hello"}}))
+	raw := append([]byte(nil), payload.Bytes()...)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{StatusCode: 200, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: &kiroSlowFrameErrorReader{data: raw}}}}
+	svc := &GatewayService{httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{}, tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{}, cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.Greater(t, result.Usage.InputTokens, 0)
+	require.Contains(t, string(result.CaptureResponse), "hello")
+	require.Contains(t, rec.Body.String(), "hello")
+}
+
+func TestForwardKiroMessagesPreOutputReadFailureIsFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	account := &Account{ID: 23, Name: "kiro-pre-output", Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"access_token": "kiro-access-token", "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/PRE"}}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{StatusCode: 200, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: &errTailReader{err: errors.New("kiro read failed")}}}}
+	svc := &GatewayService{httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{}, tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{}, cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Nil(t, result)
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	require.Equal(t, -1, c.Writer.Size())
+	require.Empty(t, rec.Body.String())
+	_, captured := takeCaptureResult(c)
+	require.False(t, captured)
+}
+
+func TestForwardKiroMessagesCancellationClosesTranslatedAndRawBodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	account := &Account{ID: 24, Name: "kiro-cancel", Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"access_token": "kiro-access-token", "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/CANCEL"}}
+	rawBody := newBlockingKiroUpstreamBody()
+	defer func() { _ = rawBody.Close() }()
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: rawBody}}}
+	svc := &GatewayService{httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{}, tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{}, cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan *ForwardResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, forwardErr := svc.forwardKiroMessages(ctx, c, account, parsed, time.Now())
+		resultCh <- result
+		errCh <- forwardErr
+	}()
+
+	select {
+	case <-rawBody.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("KIRO translator did not start reading the raw upstream body")
+	}
+	cancel()
+
+	var result *ForwardResult
+	var forwardErr error
+	returnedBeforeCleanup := true
+	select {
+	case result = <-resultCh:
+		forwardErr = <-errCh
+	case <-time.After(500 * time.Millisecond):
+		returnedBeforeCleanup = false
+		_ = rawBody.Close()
+		result = <-resultCh
+		forwardErr = <-errCh
+	}
+	require.True(t, returnedBeforeCleanup, "cancel must stop both shared scanner and KIRO translator")
+	require.Nil(t, result)
+	require.Error(t, forwardErr)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, forwardErr, &failoverErr)
+	select {
+	case <-rawBody.closed:
+	default:
+		t.Fatal("closing the translated response must also close KIRO's raw upstream body")
+	}
+	require.Equal(t, -1, c.Writer.Size())
 }
 
 func TestForwardKiroMessagesNonStreamPreservesFullCacheHitZeros(t *testing.T) {

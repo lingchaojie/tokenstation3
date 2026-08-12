@@ -24,6 +24,7 @@ const (
 	webChatMaxUploadBytes      = 20 << 20
 	webChatMaxTextPreviewBytes = 64 << 10
 	webChatCatalogCacheTTL     = 30 * time.Second
+	webChatDefaultCaptureBytes = 8 << 20
 )
 
 const webChatCatalogSingleflightKey = "web-chat-catalog"
@@ -54,6 +55,7 @@ type WebChatService struct {
 	openAIGatewayService webChatOpenAIGatewayService
 	geminiCompatService  webChatGeminiCompatService
 	usageLogRepository   webChatUsageLogLookupRepository
+	captureMaxBytes      int
 
 	defaultGroups webChatDefaultGroupResolver
 	accountLister webChatAccountLister
@@ -90,6 +92,10 @@ func NewWebChatService(
 	if storage == nil && cfg != nil {
 		storage = NewLocalWebChatStorageFromConfig(cfg)
 	}
+	captureMaxBytes := webChatDefaultCaptureBytes
+	if cfg != nil && cfg.Gateway.Capture.MaxBodyBytes > captureMaxBytes {
+		captureMaxBytes = cfg.Gateway.Capture.MaxBodyBytes
+	}
 	return &WebChatService{
 		repo:                 repo,
 		attachmentRepo:       repo,
@@ -102,9 +108,17 @@ func NewWebChatService(
 		openAIGatewayService: openAIGatewayService,
 		geminiCompatService:  geminiCompatService,
 		usageLogRepository:   usageLogRepo,
+		captureMaxBytes:      captureMaxBytes,
 		defaultGroups:        settingService,
 		accountLister:        accountService,
 	}
+}
+
+func (s *WebChatService) webChatCaptureMaxBytes() int {
+	if s != nil && s.captureMaxBytes > 0 {
+		return s.captureMaxBytes
+	}
+	return webChatDefaultCaptureBytes
 }
 
 type WebChatSendInput struct {
@@ -539,13 +553,23 @@ func (s *WebChatService) SendMessage(c *gin.Context, in WebChatSendInput) (*WebC
 		status := WebChatMessageStatusFailed
 		errMsg := err.Error()
 		role := WebChatRoleAssistant
-		_, updateErr := s.repo.UpdateMessage(context.WithoutCancel(ctx), user.ID, assistantMessage.ID, UpdateWebChatMessageInput{
+		failedUpdate := UpdateWebChatMessageInput{
 			Status:                 &status,
 			ErrorMessage:           &errMsg,
 			ExpectedConversationID: &in.ConversationID,
 			ExpectedRole:           &role,
 			ExpectedStatuses:       []string{WebChatMessageStatusPending, WebChatMessageStatusStreaming},
-		})
+		}
+		if dispatchResult != nil {
+			content := ExtractAssistantTextFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
+			contentJSON := ExtractAssistantProcessFromChatCompletions(dispatchResult.ResponseBody, in.Stream)
+			failedUpdate.ContentText = &content
+			if len(contentJSON) > 0 {
+				failedUpdate.ContentJSON = &contentJSON
+			}
+			failedUpdate.UsageLogID = dispatchResult.UsageLogID
+		}
+		_, updateErr := s.repo.UpdateMessage(context.WithoutCancel(ctx), user.ID, assistantMessage.ID, failedUpdate)
 		if updateErr != nil && s.webChatAssistantIsCanceled(context.WithoutCancel(ctx), user.ID, in.ConversationID, assistantMessage.ID) {
 			return &WebChatSendResult{UserMessageID: userMessage.ID, AssistantMessageID: assistantMessage.ID}, nil
 		}

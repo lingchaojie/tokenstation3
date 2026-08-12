@@ -15,6 +15,7 @@ type WebChatResponseCapture struct {
 	gin.ResponseWriter
 	body            bytes.Buffer
 	maxCaptureBytes int
+	truncated       bool
 }
 
 func NewWebChatResponseCapture(w gin.ResponseWriter, maxCaptureBytes int) *WebChatResponseCapture {
@@ -35,13 +36,25 @@ func (w *WebChatResponseCapture) Body() []byte {
 	return append([]byte(nil), w.body.Bytes()...)
 }
 
+func (w *WebChatResponseCapture) Snapshot() ([]byte, bool) {
+	if w == nil {
+		return nil, false
+	}
+	return w.Body(), w.truncated
+}
+
 func (w *WebChatResponseCapture) capture(p []byte) {
-	if w.maxCaptureBytes <= 0 || w.body.Len() >= w.maxCaptureBytes {
+	if w.maxCaptureBytes <= 0 {
+		return
+	}
+	if w.body.Len() >= w.maxCaptureBytes {
+		w.truncated = len(p) > 0
 		return
 	}
 	remaining := w.maxCaptureBytes - w.body.Len()
 	if len(p) > remaining {
 		_, _ = w.body.Write(p[:remaining])
+		w.truncated = true
 		return
 	}
 	_, _ = w.body.Write(p)
@@ -53,6 +66,8 @@ type webChatStreamCapture struct {
 	mu              sync.Mutex
 	body            bytes.Buffer
 	maxCaptureBytes int
+	truncated       bool
+	terminalError   error
 }
 
 func newWebChatStreamCapture(maxCaptureBytes int) *webChatStreamCapture {
@@ -95,24 +110,58 @@ func (c *webChatStreamCapture) Capture(p []byte) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.maxCaptureBytes <= 0 || c.body.Len() >= c.maxCaptureBytes {
+	if c.maxCaptureBytes <= 0 {
+		return
+	}
+	if c.body.Len() >= c.maxCaptureBytes {
+		c.truncated = true
 		return
 	}
 	remaining := c.maxCaptureBytes - c.body.Len()
 	if len(p) > remaining {
 		_, _ = c.body.Write(p[:remaining])
+		c.truncated = true
 		return
 	}
 	_, _ = c.body.Write(p)
 }
 
 func (c *webChatStreamCapture) Body() []byte {
+	body, _ := c.Snapshot()
+	return body
+}
+
+func (c *webChatStreamCapture) Snapshot() ([]byte, bool) {
 	if c == nil {
-		return nil
+		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]byte(nil), c.body.Bytes()...)
+	return append([]byte(nil), c.body.Bytes()...), c.truncated
+}
+
+func publishWebChatStreamTerminalError(ctx context.Context, err error) {
+	if ctx == nil || err == nil {
+		return
+	}
+	capture, _ := ctx.Value(webChatStreamCaptureContextKey{}).(*webChatStreamCapture)
+	if capture == nil {
+		return
+	}
+	capture.mu.Lock()
+	capture.terminalError = err
+	capture.mu.Unlock()
+}
+
+func takeWebChatStreamTerminalError(capture *webChatStreamCapture) error {
+	if capture == nil {
+		return nil
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	err := capture.terminalError
+	capture.terminalError = nil
+	return err
 }
 
 type WebChatArtifactCandidate struct {

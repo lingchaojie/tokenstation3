@@ -56,3 +56,16 @@ func takeKiroCaptureHeaders(c *gin.Context) ([]byte, []byte) {
 	}
 	return h.RequestHeaders, h.ResponseHeaders
 }
+
+func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
+	if result == nil {
+		return nil
+	}
+	if len(result.CaptureResponse) == 0 {
+		attachCaptureToForwardResult(c, result)
+	}
+	if len(result.CaptureResponse) > 0 {
+		result.CaptureRequestHeaders, result.CaptureResponseHeaders = takeKiroCaptureHeaders(c)
+	}
+	return result
+}

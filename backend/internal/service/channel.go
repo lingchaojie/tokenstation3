@@ -128,7 +128,13 @@ func (c *Channel) normalizeBillingModelSource() {
 	if c == nil {
 		return
 	}
-	if c.BillingModelSource == "" {
+	switch c.BillingModelSource {
+	case BillingModelSourceRequested, BillingModelSourceUpstream, BillingModelSourceChannelMapped:
+		return
+	default:
+		// Unknown/stale values (including the retired response_model mode) must
+		// never reactivate provider-declared billing. Fall back to the existing
+		// channel-mapped policy.
 		c.BillingModelSource = BillingModelSourceChannelMapped
 	}
 }

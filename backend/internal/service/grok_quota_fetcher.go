@@ -21,8 +21,9 @@ func NewGrokQuotaFetcher() *GrokQuotaFetcher {
 func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 	now := time.Now()
 	usage := &UsageInfo{
-		Source:    "passive",
-		UpdatedAt: &now,
+		Source:             "passive",
+		UpdatedAt:          &now,
+		GrokFreeTokenLimit: xai.GrokFreeRolling24hTokenLimit,
 	}
 	if account == nil {
 		usage.ErrorCode = "quota_unknown"
@@ -32,8 +33,10 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 
 	billing, _ := grokBillingSnapshotFromExtra(account.Extra)
 	snapshot, err := grokQuotaSnapshotFromExtra(account.Extra)
+	activeProbeClearsForbidden := newerSuccessfulGrokActiveProbeClearsBillingForbidden(billing, snapshot)
 	if billing != nil {
 		usage.GrokBilling = billing
+		applyGrokBillingProgressWindows(usage, billing, now)
 		if billing.Plan != "" {
 			usage.SubscriptionTier = billing.Plan
 			usage.SubscriptionTierRaw = billing.Plan
@@ -56,6 +59,14 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 			usage.ErrorCode = "forbidden"
 		case 429:
 			usage.ErrorCode = "rate_limited"
+		}
+		// Official weekly/monthly progress clears the "unknown until headers" state.
+		if usage.ErrorCode == "quota_unknown" && (usage.SevenDay != nil || usage.ThirtyDay != nil) {
+			usage.ErrorCode = ""
+			if strings.Contains(strings.ToLower(usage.Error), "unknown until") ||
+				strings.Contains(strings.ToLower(usage.Error), "no xai quota headers") {
+				usage.Error = ""
+			}
 		}
 	}
 
@@ -87,7 +98,13 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		usage.GrokLastQuotaProbeAt = snapshot.LastProbeAt
 	}
 	usage.GrokLastHeadersSeenAt = snapshot.LastHeadersSeenAt
-	if snapshot.StatusCode >= http.StatusBadRequest || usage.GrokLastStatusCode == 0 {
+	if activeProbeClearsForbidden {
+		usage.IsForbidden = false
+		usage.ForbiddenType = ""
+		usage.ErrorCode = ""
+		usage.GrokLastQuotaProbeAt = snapshot.LastProbeAt
+		usage.GrokLastStatusCode = snapshot.StatusCode
+	} else if snapshot.StatusCode >= http.StatusBadRequest || usage.GrokLastStatusCode == 0 {
 		usage.GrokLastStatusCode = snapshot.StatusCode
 	}
 	if snapshot.HasObservedHeaders() {
@@ -116,8 +133,41 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 			usage.ErrorCode = "rate_limited"
 		}
 	}
+	if accountGrokNeedsReauth(account) {
+		usage.NeedsReauth = true
+		if usage.ErrorCode == "" {
+			usage.ErrorCode = "spending_limit"
+		}
+	}
 	applyGrokCredentialUsageFallback(usage, account)
+	if activeProbeClearsForbidden && strings.TrimSpace(snapshot.EntitlementStatus) == "" &&
+		strings.EqualFold(strings.TrimSpace(usage.GrokEntitlementStatus), "forbidden") {
+		usage.GrokEntitlementStatus = ""
+	}
 	return usage
+}
+
+func newerSuccessfulGrokActiveProbeClearsBillingForbidden(billing *xai.BillingSummary, snapshot *xai.QuotaSnapshot) bool {
+	if billing == nil || billing.StatusCode != http.StatusForbidden || snapshot == nil ||
+		snapshot.StatusCode != http.StatusOK || strings.TrimSpace(snapshot.ObservationSource) != "active_probe" {
+		return false
+	}
+
+	billingAt, billingOK := firstGrokObservationTime(billing.UpdatedAt, billing.FetchedAt)
+	probeAt, probeOK := firstGrokObservationTime(snapshot.LastProbeAt, snapshot.UpdatedAt)
+	// Both snapshots use second precision, so a billing request followed by the
+	// active probe in the same refresh can legitimately have equal timestamps.
+	return billingOK && probeOK && !probeAt.Before(billingAt)
+}
+
+func firstGrokObservationTime(values ...string) (time.Time, bool) {
+	for _, value := range values {
+		parsedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+		if err == nil {
+			return parsedAt, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func applyGrokCredentialUsageFallback(usage *UsageInfo, account *Account) {
@@ -203,5 +253,50 @@ func grokQuotaSnapshotFromExtra(extra map[string]any) (*xai.QuotaSnapshot, error
 			return nil, err
 		}
 		return &out, nil
+	}
+}
+
+// applyGrokBillingProgressWindows fills official weekly (seven_day) and monthly
+// (thirty_day) UsageProgress from a billing probe summary.
+func applyGrokBillingProgressWindows(usage *UsageInfo, billing *xai.BillingSummary, now time.Time) {
+	if usage == nil || billing == nil {
+		return
+	}
+	if billing.UsagePercent != nil {
+		seven := &UsageProgress{Utilization: *billing.UsagePercent}
+		if end, err := parseTime(strings.TrimSpace(billing.PeriodEnd)); err == nil {
+			seven.ResetsAt = &end
+			if sec := int(end.Sub(now).Seconds()); sec > 0 {
+				seven.RemainingSeconds = sec
+			}
+		}
+		if usage.SevenDay != nil {
+			seven.WindowStats = usage.SevenDay.WindowStats
+		}
+		usage.SevenDay = seven
+	}
+	var monthlyUtil *float64
+	if billing.UsedPercent != nil {
+		monthlyUtil = billing.UsedPercent
+	} else if billing.MonthlyLimitCents != nil && *billing.MonthlyLimitCents > 0 && billing.UsedCents != nil {
+		v := (*billing.UsedCents / *billing.MonthlyLimitCents) * 100
+		monthlyUtil = &v
+	}
+	if monthlyUtil != nil {
+		thirty := &UsageProgress{Utilization: *monthlyUtil}
+		endRaw := strings.TrimSpace(billing.BillingPeriodEnd)
+		if endRaw == "" && billing.PeriodType == "monthly" {
+			endRaw = strings.TrimSpace(billing.PeriodEnd)
+		}
+		if end, err := parseTime(endRaw); err == nil {
+			thirty.ResetsAt = &end
+			if sec := int(end.Sub(now).Seconds()); sec > 0 {
+				thirty.RemainingSeconds = sec
+			}
+		}
+		if usage.ThirtyDay != nil {
+			thirty.WindowStats = usage.ThirtyDay.WindowStats
+		}
+		usage.ThirtyDay = thirty
 	}
 }

@@ -37,7 +37,7 @@
             <Doughnut v-if="modelData" :data="modelData" :options="doughnutOptions" />
             <div v-else class="flex h-full items-center justify-center text-xs text-gray-500 dark:text-linear-ink-subtle">{{ t('dashboard.noDataAvailable') }}</div>
           </div>
-          <div class="max-h-48 min-w-0 flex-1 overflow-x-auto overflow-y-auto">
+          <div class="max-h-48 w-full min-w-0 flex-1 overflow-auto">
             <table class="w-full min-w-max text-xs">
               <thead>
                 <tr class="text-gray-500 dark:text-linear-ink-subtle">
@@ -49,7 +49,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="model in models" :key="model.model" class="border-t border-gray-100 dark:border-gray-700">
+                <tr v-for="model in models" :key="model.model" class="border-t border-gray-100 dark:border-dark-700">
                   <td class="max-w-[100px] truncate py-1.5 font-medium text-gray-900 dark:text-white" :title="model.model">{{ model.model }}</td>
                   <td class="py-1.5 text-right text-gray-600 dark:text-gray-400">{{ formatNumber(model.requests) }}</td>
                   <td class="py-1.5 text-right text-gray-600 dark:text-gray-400">{{ formatTokens(model.total_tokens) }}</td>

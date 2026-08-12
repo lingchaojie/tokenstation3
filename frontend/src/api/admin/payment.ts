@@ -56,7 +56,6 @@ export interface UpdatePaymentConfigRequest {
 export interface RefundResult {
   success: boolean
   warning?: string
-  require_force?: boolean
   balance_deducted?: number
   subscription_days_deducted?: number
 }
@@ -116,7 +115,7 @@ export const adminPaymentAPI = {
   },
 
   /** Process a refund */
-  refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
+  refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean }) {
     return apiClient.post<RefundResult>(`/admin/payment/orders/${id}/refund`, data)
   },
 

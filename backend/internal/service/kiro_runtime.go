@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
@@ -26,6 +27,26 @@ type kiroEndpointConfig struct {
 	URL       string
 	AmzTarget string
 	Name      string
+}
+
+// kiroTranslatedStreamBody owns both sides of the translation boundary. The
+// shared Anthropic reader only sees the pipe; closing that pipe alone does not
+// interrupt a translator blocked in a raw AWS event-stream Read.
+type kiroTranslatedStreamBody struct {
+	*io.PipeReader
+	raw       io.Closer
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (b *kiroTranslatedStreamBody) Close() error {
+	if b == nil {
+		return nil
+	}
+	b.closeOnce.Do(func() {
+		b.closeErr = errors.Join(b.PipeReader.Close(), b.raw.Close())
+	})
+	return b.closeErr
 }
 
 var (
@@ -169,7 +190,28 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
-			return nil, err
+			resultErr := err
+			var failoverErr *UpstreamFailoverError
+			if errors.As(err, &failoverErr) && c.Writer.Written() {
+				// The generic stream reader may classify a transport break as
+				// failover before it sees the translated KIRO pipe state. Once the
+				// client has semantic output, replay is forbidden; preserve the
+				// observed usage/capture and surface a plain visible error instead.
+				resultErr = fmt.Errorf("kiro committed stream failed: %s", sanitizeUpstreamErrorMessage(err.Error()))
+			}
+			partial := partialStreamUsageResult(c, resp, streamResult, originalModel, upstreamModel, startTime, resultErr)
+			if partial == nil {
+				// A provider-native response tee may have published an empty bridge
+				// before the translator reported a pre-output failure. This attempt is
+				// retryable, so its capture must not survive into the next account.
+				_, _ = takeCaptureResult(c)
+				if errors.As(err, &failoverErr) {
+					return nil, err
+				}
+				return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference, ClientMessage: sanitizeUpstreamErrorMessage(err.Error())}
+			}
+			finalizeKiroCapture(c, partial)
+			return partial, resultErr
 		}
 		if streamResult.usage == nil {
 			streamResult.usage = &ClaudeUsage{}
@@ -187,15 +229,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		// 归档：tee 已在 handleStreamingResponse 内累积翻译后的 Anthropic SSE 并写入 gin.Context 桥；
 		// 此处取回填入 result，头用暂存的真实上游头（非 pipe 合成头）。汇入 gateway_handler submit 块统一提交。
-		if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
-			if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
-				reqHeaders, respHeaders := takeKiroCaptureHeaders(c)
-				result.CaptureResponse = bridge.Response
-				result.CaptureTruncated = bridge.Truncated
-				result.CaptureRequestHeaders = reqHeaders
-				result.CaptureResponseHeaders = respHeaders
-			}
-		}
+		finalizeKiroCapture(c, result)
 		return result, nil
 	}
 
@@ -346,7 +380,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
 		go func() {
-			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
+			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -377,6 +411,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		stashKiroCaptureHeaders(c, resp)
 	}
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+	captureLimit := 0
+	if s.cfg != nil {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
@@ -390,6 +430,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
 		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, resp.Body, pw, requestModel, inputTokens, requestCtx)
+		// Publish the provider-native AWS event-stream before closing the pipe.
+		// The outer Anthropic/WebChat reader only sees translated SSE and must not
+		// win the result assembly race.
+		finishRawCapture()
 		if streamErr != nil {
 			_, _ = io.WriteString(pw, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"stream interrupted\"}}\n\n")
 			_ = pw.CloseWithError(streamErr)
@@ -401,7 +445,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	return &http.Response{
 		StatusCode: resp.StatusCode,
 		Header:     wrappedHeaders,
-		Body:       pr,
+		Body:       &kiroTranslatedStreamBody{PipeReader: pr, raw: resp.Body},
 	}, inputTokens, nil
 }
 
@@ -457,7 +501,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				return nil, requestCtx, err
 			}
 
+			setCaptureUpstreamRequestFromContext(ctx, req)
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+			setCaptureUpstreamResponseFromContext(ctx, resp)
 			if err != nil {
 				if attempt < maxRetries {
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
@@ -878,11 +924,18 @@ func (s *GatewayService) markKiroInvalidModelRateLimited(ctx context.Context, ac
 	if s == nil || s.accountRepo == nil || account == nil || account.Type != AccountTypeOAuth {
 		return
 	}
+	// mappedModel is already the account mapping result. Persist it directly so
+	// modelRateLimitKeysForRequest resolves the same key without mapping twice,
+	// and an invalid model does not evict the account's other KIRO models.
+	modelKey := strings.TrimSpace(mappedModel)
+	if modelKey == "" {
+		return
+	}
 	resetAt := time.Now().Add(kiroInvalidModelTempUnschedDuration)
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt); err != nil {
 		logger.L().Warn("kiro invalid model rate-limit failed",
 			zap.Int64("account_id", account.ID),
-			zap.String("mapped_model", strings.TrimSpace(mappedModel)),
+			zap.String("mapped_model", modelKey),
 			zap.Time("reset_at", resetAt),
 			zap.Error(err),
 		)
@@ -890,7 +943,7 @@ func (s *GatewayService) markKiroInvalidModelRateLimited(ctx context.Context, ac
 	}
 	logger.L().Warn("kiro invalid model rate-limited",
 		zap.Int64("account_id", account.ID),
-		zap.String("mapped_model", strings.TrimSpace(mappedModel)),
+		zap.String("mapped_model", modelKey),
 		zap.Time("reset_at", resetAt),
 	)
 }
@@ -1045,7 +1098,7 @@ func dumpKiro429ResponseForDebug(resp *http.Response, accountID int64, endpointU
 	}
 	const maxBytes = 2048
 	limited := io.LimitReader(resp.Body, maxBytes+1)
-	sample, err := io.ReadAll(limited)
+	readPrefix, err := io.ReadAll(limited)
 	if err != nil {
 		logger.L().Warn("kiro.429_debug_read_failed",
 			zap.Int64("account_id", accountID),
@@ -1056,14 +1109,20 @@ func dumpKiro429ResponseForDebug(resp *http.Response, accountID int64, endpointU
 		resp.Body = io.NopCloser(bytes.NewReader(nil))
 		return
 	}
-	truncated := false
-	if len(sample) > maxBytes {
+	sample := readPrefix
+	truncated := len(sample) > maxBytes
+	if truncated {
 		sample = sample[:maxBytes]
-		truncated = true
 	}
-	rest, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	resp.Body = io.NopCloser(bytes.NewReader(append(append([]byte{}, sample...), rest...)))
+	// The maxBytes+1 probe byte is part of the provider response. Keep it in
+	// the restored body even though the diagnostic sample is limited to 2 KiB.
+	// Do not buffer the remainder here: the WebChat/handler consumer owns its
+	// configured read ceiling and the underlying response lifetime.
+	originalBody := resp.Body
+	resp.Body = &kiroReplayReadCloser{
+		Reader: io.MultiReader(bytes.NewReader(readPrefix), originalBody),
+		closer: originalBody,
+	}
 
 	headers := map[string]string{}
 	for k, v := range resp.Header {
@@ -1084,6 +1143,18 @@ func dumpKiro429ResponseForDebug(resp *http.Response, accountID int64, endpointU
 		zap.Bool("truncated", truncated),
 		zap.String("body_sample", string(sample)),
 	)
+}
+
+type kiroReplayReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *kiroReplayReadCloser) Close() error {
+	if r == nil || r.closer == nil {
+		return nil
+	}
+	return r.closer.Close()
 }
 
 func coalesceKiroErrorMessage(statusCode int, upstreamMsg string) string {

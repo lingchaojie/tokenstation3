@@ -355,7 +355,31 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
+// readWebChatUpstreamErrorBody preserves the normal 512 KiB safety bound for
+// handlers while allowing the explicitly-tokened one-account WebChat boundary
+// to archive the terminal provider body up to its configured capture ceiling.
+func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp *http.Response) ([]byte, bool, error) {
+	if !ownsWebChatFinalGatewayErrorCapture(ctx) || s == nil || s.cfg == nil || s.cfg.Gateway.Capture.MaxBodyBytes <= 0 {
+		body, err := s.readUpstreamErrorBody(resp)
+		return body, false, err
+	}
+	return readUpstreamBodyWithCeiling(resp, s.cfg.Gateway.Capture.MaxBodyBytes)
+}
+
+func readUpstreamBodyWithCeiling(resp *http.Response, limit int) ([]byte, bool, error) {
+	if resp == nil || resp.Body == nil || limit <= 0 {
+		return nil, false, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if len(body) <= limit {
+		return body, false, err
+	}
+	return body[:limit], true, err
+}
+
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
+	// Upstream returned a non-success HTTP status; count Ollama Cloud activity.
+	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	body, readErr := s.readUpstreamErrorBody(resp)
 	if readErr != nil {
 		// 读取失败时 body 可能被截断，错误分类会基于不完整数据；记录日志以便排查，
@@ -666,9 +690,98 @@ type streamingResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
+	semanticOutput   bool // 是否已向客户端提交实际文本/工具等语义输出
+}
+
+// partialStreamUsageResult 在流式转发中途出错时，把已经提交语义输出的部分结果包装为
+// ForwardResult（与错误一起返回给 handler 记录）。语义输出可能先于 usage 到达，因此
+// 即使 token 仍为零也必须保留一次 capture；反之仅有 usage/preamble 仍可安全 failover。
+//
+// 不变式：UpstreamFailoverError 必须保持 result=nil——failover 重试成功后按成功请求
+// 计费，若同时返回部分 usage 会造成双重计费，此处显式拦截兜底。
+func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
+	if streamResult == nil || !streamResult.semanticOutput {
+		return nil
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) {
+		return nil
+	}
+	return attachCaptureToForwardResult(c, &ForwardResult{
+		RequestID:                     resp.Header.Get("x-request-id"),
+		Usage:                         *streamResult.usage,
+		Model:                         model,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        true,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  streamResult.firstTokenMs,
+		ClientDisconnect:              streamResult.clientDisconnect,
+	})
+}
+
+// anthropicSSEEventHasSemanticOutput reports whether an Anthropic SSE event
+// exposes model output that the caller can act on. Protocol preambles,
+// keepalive frames and usage-only events deliberately do not cross the retry
+// boundary: they remain staged until semantic output or terminal success.
+func anthropicSSEEventHasSemanticOutput(data string) bool {
+	if data == "" || data == "[DONE]" {
+		return false
+	}
+	var event map[string]any
+	if json.Unmarshal([]byte(data), &event) != nil {
+		return false
+	}
+	eventType, _ := event["type"].(string)
+	switch eventType {
+	case "content_block_start":
+		block, _ := event["content_block"].(map[string]any)
+		blockType, _ := block["type"].(string)
+		switch blockType {
+		case "tool_use", "server_tool_use":
+			// A non-empty tool name is visible semantic output before its JSON
+			// arguments arrive. A generated/id-only empty tool element is not.
+			return anthropicStringValue(block["name"]) != ""
+		case "text":
+			return anthropicStringValue(block["text"]) != ""
+		case "thinking":
+			return anthropicStringValue(block["thinking"]) != ""
+		case "redacted_thinking":
+			return anthropicStringValue(block["data"]) != ""
+		}
+	case "content_block_delta":
+		delta, _ := event["delta"].(map[string]any)
+		deltaType, _ := delta["type"].(string)
+		switch deltaType {
+		case "text_delta":
+			return anthropicStringValue(delta["text"]) != ""
+		case "thinking_delta":
+			return anthropicStringValue(delta["thinking"]) != ""
+		case "input_json_delta":
+			return anthropicStringValue(delta["partial_json"]) != ""
+		}
+	}
+	return false
+}
+
+func anthropicStringValue(value any) string {
+	result, _ := value.(string)
+	return result
 }
 
 func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool) (*streamingResult, error) {
+	bodyOwnedByScanner := false
+	defer func() {
+		if !bodyOwnedByScanner && resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
@@ -696,9 +809,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	// 归档采集：仅 gateway.capture.enabled=true 时在上游 SSE 读取 goroutine 里逐行累积原始字节。
 	// tee 加锁保护；此 defer 在函数返回时读取已到达的字节写入 gin.Context 桥，供上层 Forward 组装。
 	var tee *sseTee
+	semanticOutput := false
+	sawTerminalEvent := false
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() { b, tr := tee.bytes(); setCaptureResult(c, resp, b, tr) }()
+		defer func() {
+			if semanticOutput || sawTerminalEvent {
+				b, tr := tee.bytes()
+				setCaptureResult(c, resp, b, tr)
+			}
+		}()
 	}
 
 	usage := &ClaudeUsage{}
@@ -711,6 +831,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
+	scanner.Split(boundedStreamScanLines(openAIFirstOutputStageMaxBytes, errStreamScannerTokenLimit))
 
 	type scanEvent struct {
 		line string
@@ -719,6 +840,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	// 独立 goroutine 读取上游，避免读取阻塞导致超时/keepalive无法处理
 	events := make(chan scanEvent, 16)
 	done := make(chan struct{})
+	scanDone := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
 		case events <- ev:
@@ -730,6 +852,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	var lastReadAt int64
 	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 	go func(scanBuf *sseScannerBuf64K) {
+		defer close(scanDone)
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		for scanner.Scan() {
@@ -746,7 +869,15 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			_ = sendEvent(scanEvent{err: err})
 		}
 	}(scanBuf)
-	defer close(done)
+	bodyOwnedByScanner = true
+	defer func() {
+		close(done)
+		// Scanner has no context-aware Read API. Closing the owned response body
+		// is what interrupts a blocked network read; joining the goroutine keeps a
+		// canceled/overflowed attempt from leaking into the next account attempt.
+		_ = resp.Body.Close()
+		<-scanDone
+	}()
 
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
@@ -818,16 +949,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	needModelReplace := originalModel != mappedModel
 	clientDisconnected := false // 客户端断开标志，断开后继续读取上游以获取完整usage
-	sawTerminalEvent := false
 	useNoopDeltaKeepalive := c != nil && c.Request != nil && shouldUseClaudeCodeNoopDeltaKeepalive(c.GetHeader("User-Agent"))
 	noopDeltaKeepaliveBlockIndex := -1
 	noopDeltaKeepaliveDeltaType := ""
 
 	pendingEventLines := make([]string, 0, 4)
+	pendingEventBytes := 0
 
-	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
+	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, bool, error) {
 		if len(lines) == 0 {
-			return nil, "", nil, nil
+			return nil, "", nil, false, nil
 		}
 
 		eventName := ""
@@ -844,11 +975,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if eventName == "error" {
-			return nil, dataLine, nil, &sseStreamErrorEventError{RawData: dataLine}
+			return nil, dataLine, nil, false, &sseStreamErrorEventError{RawData: dataLine}
 		}
 
 		if dataLine == "" {
-			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, nil
+			return []string{strings.Join(lines, "\n") + "\n\n"}, "", nil, false, nil
 		}
 
 		if dataLine == "[DONE]" {
@@ -858,7 +989,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+			return []string{block}, dataLine, nil, false, nil
 		}
 
 		var event map[string]any
@@ -869,10 +1000,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, nil
+			return []string{block}, dataLine, nil, false, nil
 		}
 
 		eventType, _ := event["type"].(string)
+		observer.ObserveAnthropic([]byte(dataLine))
 		if eventName == "" {
 			eventName = eventType
 		}
@@ -964,7 +1096,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			return []string{block}, dataLine, usagePatch, anthropicSSEEventHasSemanticOutput(dataLine), nil
 		}
 
 		newData, err := json.Marshal(event)
@@ -975,7 +1107,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, nil
+			return []string{block}, dataLine, usagePatch, anthropicSSEEventHasSemanticOutput(dataLine), nil
 		}
 
 		block := ""
@@ -983,7 +1115,73 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			block = "event: " + eventName + "\n"
 		}
 		block += "data: " + string(newData) + "\n\n"
-		return []string{block}, string(newData), usagePatch, nil
+		emittedData := string(newData)
+		return []string{block}, emittedData, usagePatch, anthropicSSEEventHasSemanticOutput(emittedData), nil
+	}
+
+	// Reuse the established OpenAI first-output spool: 64 KiB stays in memory,
+	// larger preambles spill to an unlinked temp file, and the total attempt-local
+	// stage is capped at openAIFirstOutputStageMaxBytes (8 MiB).
+	stagedOutput := newDefaultOpenAIFirstOutputStage()
+	defer func() { _ = stagedOutput.Close() }()
+	writeOutput := func(block string, commitsSemanticOutput, terminal bool) error {
+		if clientDisconnected {
+			return nil
+		}
+		restored := reverseToolNamesIfPresent(c, []byte(block))
+		if !semanticOutput {
+			if _, err := stagedOutput.Write(restored); err != nil {
+				return fmt.Errorf("stage Anthropic output: %w", err)
+			}
+			if commitsSemanticOutput {
+				semanticOutput = true
+				if firstTokenMs == nil {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
+			}
+			if !semanticOutput && !terminal {
+				return nil
+			}
+			_, commitErr := stagedOutput.CommitTo(w)
+			deliveryErr, cleanupErr := splitOpenAIFirstOutputCommitError(commitErr)
+			if cleanupErr != nil {
+				logger.LegacyPrintf("service.gateway", "Anthropic first-output staging cleanup failed after commit: account=%d error=%v", account.ID, cleanupErr)
+			}
+			if deliveryErr != nil {
+				clientDisconnected = true
+				logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing: error=%v", deliveryErr)
+				return nil
+			}
+		} else {
+			if _, werr := w.Write(restored); werr != nil {
+				clientDisconnected = true
+				logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+				return nil
+			}
+		}
+		flusher.Flush()
+		lastDataAt = time.Now()
+		resetKeepaliveTimer()
+		return nil
+	}
+
+	streamResult := func() *streamingResult {
+		return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, semanticOutput: semanticOutput}
+	}
+	preOutputFailover := func(message string, retryable bool) error {
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_disconnected",
+				"message": message,
+			},
+		})
+		return &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: body, RetryableOnSameAccount: retryable}
+	}
+	var ctxDone <-chan struct{}
+	if ctx != nil {
+		ctxDone = ctx.Done()
 	}
 
 	for {
@@ -992,27 +1190,35 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if !ok {
 				// 上游完成，返回结果
 				if !sawTerminalEvent {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("stream usage incomplete: missing terminal event")
+					if !semanticOutput {
+						return nil, preOutputFailover("upstream stream ended before semantic output", true)
+					}
+					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+				return streamResult(), nil
 			}
 			if ev.err != nil {
 				if sawTerminalEvent {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+					return streamResult(), nil
+				}
+				if !semanticOutput {
+					disconnectMsg := "upstream stream disconnected: " + sanitizeStreamError(ev.err)
+					logger.LegacyPrintf("service.gateway", "Upstream stream read error before semantic output (account=%d), failing over: %v", account.ID, ev.err)
+					return nil, preOutputFailover(disconnectMsg, true)
 				}
 				// 检测 context 取消（客户端断开会导致 context 取消，进而影响上游读取）
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete: %w", ev.err)
+					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}
 				// 客户端已通过写入失败检测到断开，上游也出错了，返回已收集的 usage
 				if clientDisconnected {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
+					return streamResult(), fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
 				}
 				// 客户端未断开，正常的错误处理
 				if errors.Is(ev.err, bufio.ErrTooLong) {
 					logger.LegacyPrintf("service.gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
 					sendErrorEvent("response_too_large", fmt.Sprintf("upstream SSE line exceeded %d bytes", maxLineSize))
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, ev.err
+					return streamResult(), ev.err
 				}
 				// 上游中途读错误（unexpected EOF / connection reset 等，常见于 HTTP/2 GOAWAY）：
 				// 若尚未向客户端写过任何字节，包成 UpstreamFailoverError 让 handler 层走 failover/重试。
@@ -1021,23 +1227,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				// 默认 *net.OpError 的 Error() 会泄露内部 IP/端口和上游地址。完整 ev.err
 				// 仅在下方 LegacyPrintf 内部日志中保留供运维诊断。
 				disconnectMsg := "upstream stream disconnected: " + sanitizeStreamError(ev.err)
-				if !c.Writer.Written() {
-					logger.LegacyPrintf("service.gateway", "Upstream stream read error before any client output (account=%d), failing over: %v", account.ID, ev.err)
-					body, _ := json.Marshal(map[string]any{
-						"type": "error",
-						"error": map[string]string{
-							"type":    "upstream_disconnected",
-							"message": disconnectMsg,
-						},
-					})
-					return nil, &UpstreamFailoverError{
-						StatusCode:             http.StatusBadGateway,
-						ResponseBody:           body,
-						RetryableOnSameAccount: true,
-					}
-				}
 				sendErrorEvent("stream_read_error", disconnectMsg)
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream read error: %w", ev.err)
+				return streamResult(), fmt.Errorf("stream read error: %w", ev.err)
 			}
 			line := ev.line
 			trimmed := strings.TrimSpace(line)
@@ -1047,44 +1238,61 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					continue
 				}
 
-				outputBlocks, data, usagePatch, err := processSSEEvent(pendingEventLines)
+				outputBlocks, data, usagePatch, eventHasSemanticOutput, err := processSSEEvent(pendingEventLines)
 				pendingEventLines = pendingEventLines[:0]
+				pendingEventBytes = 0
 				if err != nil {
 					if clientDisconnected {
-						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+						return streamResult(), nil
 					}
-					return nil, err
+					if semanticOutput {
+						return streamResult(), err
+					}
+					var sseErr *sseStreamErrorEventError
+					if errors.As(err, &sseErr) {
+						return nil, &UpstreamFailoverError{
+							StatusCode:             http.StatusBadGateway,
+							ResponseBody:           []byte(sseErr.RawData),
+							RetryableOnSameAccount: true,
+						}
+					}
+					return nil, preOutputFailover(sanitizeStreamError(err), true)
 				}
 
 				for _, block := range outputBlocks {
-					if !clientDisconnected {
-						restored := reverseToolNamesIfPresent(c, []byte(block))
-						if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
-							clientDisconnected = true
-							logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
-							// 不 break：客户端断开后仍需继续合并本事件及后续事件的 usage，
-							// 否则会漏计当前事件携带的 usage 导致少计费。后续写入由
-							// clientDisconnected 守卫跳过。
-						} else {
-							flusher.Flush()
-							lastDataAt = time.Now()
-							resetKeepaliveTimer()
+					if writeErr := writeOutput(block, eventHasSemanticOutput, sawTerminalEvent); writeErr != nil {
+						if !semanticOutput {
+							return nil, preOutputFailover(sanitizeStreamError(writeErr), true)
 						}
+						return streamResult(), writeErr
 					}
-					if data != "" {
-						if firstTokenMs == nil && data != "[DONE]" {
-							ms := int(time.Since(startTime).Milliseconds())
-							firstTokenMs = &ms
-						}
-						if usagePatch != nil {
-							mergeSSEUsagePatch(usage, usagePatch)
-						}
-					}
+				}
+				if data != "" && usagePatch != nil {
+					mergeSSEUsagePatch(usage, usagePatch)
 				}
 				continue
 			}
 
+			lineBytes := len(line) + 1 // Scanner removes the newline delimiter.
+			if lineBytes > openAIFirstOutputStageMaxBytes-pendingEventBytes {
+				limitErr := fmt.Errorf("anthropic SSE event exceeded %d bytes", openAIFirstOutputStageMaxBytes)
+				if !semanticOutput {
+					return nil, preOutputFailover(limitErr.Error(), true)
+				}
+				return streamResult(), limitErr
+			}
 			pendingEventLines = append(pendingEventLines, line)
+			pendingEventBytes += lineBytes
+
+		case <-ctxDone:
+			cancelErr := ctx.Err()
+			if cancelErr == nil {
+				cancelErr = context.Canceled
+			}
+			if !semanticOutput {
+				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false)
+			}
+			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
@@ -1092,18 +1300,25 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				continue
 			}
 			if clientDisconnected {
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
+				return streamResult(), fmt.Errorf("stream usage incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
+			if !semanticOutput {
+				return nil, preOutputFailover(fmt.Sprintf("upstream stream idle for %s", streamInterval), true)
+			}
 			sendErrorEvent("stream_timeout", fmt.Sprintf("upstream stream idle for %s", streamInterval))
-			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
+			return streamResult(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
 			if clientDisconnected {
+				continue
+			}
+			if !semanticOutput {
+				resetKeepaliveTimer()
 				continue
 			}
 			if time.Since(lastDataAt) < keepaliveInterval {
@@ -1449,6 +1664,11 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	if err != nil {
 		return nil, err
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveAnthropic(body)
 
 	// 归档采集：在任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整）之前，
 	// 快照上游原始响应体，保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。

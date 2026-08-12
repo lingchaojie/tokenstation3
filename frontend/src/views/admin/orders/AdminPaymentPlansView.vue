@@ -16,9 +16,9 @@
         </template>
 		<template #cell-price="{ value, row }">
 		  <div class="text-sm">
-			<span class="font-medium text-gray-900 dark:text-white">{{ row.currency ? '' : '¥' }}{{ formatMoney(value) }}</span>
+			<span class="font-medium text-gray-900 dark:text-white">{{ planCurrencySymbol(row.currency) }}{{ formatMoney(value) }}</span>
 			<span v-if="row.currency" class="ml-1 text-xs text-gray-400">{{ row.currency }}</span>
-			<span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">{{ row.currency ? '' : '¥' }}{{ formatMoney(row.original_price) }}</span>
+			<span v-if="row.original_price" class="ml-1 text-xs text-gray-400 line-through">{{ planCurrencySymbol(row.currency) }}{{ formatMoney(row.original_price) }}</span>
           </div>
         </template>
         <template #cell-seven_day_quota_usd="{ value }">
@@ -84,12 +84,16 @@ import DataTable from '@/components/common/DataTable.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlanEditDialog from './PlanEditDialog.vue'
+import { currencySymbol } from '@/components/payment/currency'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 
 // Payment config drives the subscription CNY charge preview in PlanEditDialog.
 // Plans are decoupled from groups in this fork, so no group state is loaded here.
+function planCurrencySymbol(currency?: string): string {
+  return currencySymbol(currency || 'CNY')
+}
 const paymentConfig = ref<AdminPaymentConfig | null>(null)
 
 async function loadPaymentConfig() {

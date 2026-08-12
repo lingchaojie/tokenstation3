@@ -131,18 +131,6 @@
         {{ warning }}
       </div>
 
-      <!-- Force Refund -->
-      <div v-if="requireForce" class="flex items-center gap-2">
-        <input
-          id="force-refund"
-          v-model="form.force"
-          type="checkbox"
-          class="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-        />
-        <label for="force-refund" class="text-sm font-medium text-red-600 dark:text-red-400">
-          {{ t('payment.admin.forceRefund') }}
-        </label>
-      </div>
     </form>
 
     <template #footer>
@@ -153,7 +141,7 @@
         <button
           type="submit"
           form="refund-form"
-          :disabled="submitting || form.amount <= 0 || (requireForce && !form.force)"
+          :disabled="submitting || form.amount <= 0"
           class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-dark-800"
         >
           {{ submitting ? t('common.processing') : t('payment.admin.confirmRefund') }}
@@ -178,12 +166,11 @@ const props = defineProps<{
   order: PaymentOrder | null
   submitting?: boolean
   userBalance?: number | null
-  requireForce?: boolean
   warning?: string
 }>()
 
 const emit = defineEmits<{
-  (e: 'confirm', data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }): void
+  (e: 'confirm', data: { amount: number; reason: string; deduct_balance: boolean }): void
   (e: 'cancel'): void
 }>()
 
@@ -195,7 +182,6 @@ const form = reactive({
   amount: 0,
   reason: '',
   deduct_balance: true,
-  force: false,
 })
 
 // In REFUND_REQUESTED / REFUND_PENDING status, refund_amount is requested/pending, not actually refunded.
@@ -227,7 +213,6 @@ watch(() => props.show, (val) => {
     }
     form.reason = props.order.refund_request_reason || ''
     form.deduct_balance = true
-    form.force = false
   }
 })
 
@@ -237,7 +222,6 @@ function formatDateTime(dateStr: string): string {
 
 function handleSubmit() {
   if (form.amount <= 0 || form.amount > maxRefundable.value) return
-  if (props.requireForce && !form.force) return
   emit('confirm', { ...form })
 }
 </script>

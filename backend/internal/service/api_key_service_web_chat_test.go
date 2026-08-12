@@ -136,7 +136,7 @@ func (s *webChatAuthRepoStub) GetByKeyForAuth(_ context.Context, key string) (*A
 	return &clone, nil
 }
 
-func (s *webChatAuthRepoStub) Update(_ context.Context, _ *APIKey) error {
+func (s *webChatAuthRepoStub) Update(_ context.Context, _ *APIKey, _ APIKeyUpdateFields) error {
 	s.updateCalls++
 	return nil
 }

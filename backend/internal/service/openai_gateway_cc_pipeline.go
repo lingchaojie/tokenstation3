@@ -90,10 +90,19 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamMsg string,
 	upstreamModel string,
 ) *UpstreamFailoverError {
+	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+	tempUnscheduled := false
+	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
+		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
+		shouldFailover = tempUnscheduled
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
+	}
 	if account != nil && account.Platform == PlatformGrok {
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 	}
-	if !s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+	if !shouldFailover {
 		return nil
 	}
 	upstreamDetail := ""
@@ -114,15 +123,17 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	if account.Platform != PlatformGrok {
-		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+	shouldDisable := tempUnscheduled
+	if account.Platform != PlatformGrok && !tempUnscheduled {
+		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 	}
-	return &UpstreamFailoverError{
-		StatusCode:             resp.StatusCode,
-		ResponseBody:           respBody,
-		ResponseHeaders:        resp.Header.Clone(),
-		RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
-	}
+	return newOpenAIUpstreamFailoverError(
+		resp.StatusCode,
+		resp.Header,
+		respBody,
+		upstreamMsg,
+		!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+	)
 }
 
 // openAIChatCompletionsTargetURL 解析账号的（非 Grok）Chat Completions 上游端点。
@@ -169,9 +180,10 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
-	releaseUpstreamCtx()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
@@ -234,10 +246,114 @@ type ccStreamScanState struct {
 	FirstTokenMs *int
 	// SawDone 表示上游发出了 [DONE] 哨兵。
 	SawDone bool
+	// SawOutput means at least one semantic content/reasoning/tool chunk was
+	// observed. It is the commit boundary for retry/failover decisions.
+	SawOutput bool
 	// Err 为 scanner 读错误（客户端 context 取消不属于此类，会原样带出）。
 	// 非 nil 时调用方必须跳过 finalize 并返回 usage-incomplete 错误，避免
 	// 把上游截断伪装成正常收尾。
 	Err error
+}
+
+// stagedConvertedStream keeps converter-generated protocol preambles private
+// to one upstream attempt. A retryable attempt must not make Gin's writer look
+// committed merely because a role/message-start frame was synthesized.
+type stagedConvertedStream struct {
+	pending    *openAIFirstOutputStage
+	committed  bool
+	cleanupErr error
+}
+
+type stagedConvertedClientWriteError struct{ err error }
+
+func (e *stagedConvertedClientWriteError) Error() string { return e.err.Error() }
+func (e *stagedConvertedClientWriteError) Unwrap() error { return e.err }
+
+type stagedConvertedTrackingWriter struct {
+	w       io.Writer
+	err     error
+	written int64
+}
+
+func (w *stagedConvertedTrackingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	w.written += int64(n)
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func restoreStagedConvertedHeaders(dst, snapshot http.Header) {
+	clear(dst)
+	for key, values := range snapshot {
+		dst[key] = append([]string(nil), values...)
+	}
+}
+
+func (s *stagedConvertedStream) write(c *gin.Context, writeHeaders func(), payload string, commit bool) error {
+	if s.committed {
+		if payload == "" {
+			return nil
+		}
+		_, err := c.Writer.Write([]byte(payload))
+		if err != nil {
+			return &stagedConvertedClientWriteError{err: err}
+		}
+		c.Writer.Flush()
+		return nil
+	}
+	if payload != "" {
+		if s.pending == nil {
+			s.pending = newDefaultOpenAIFirstOutputStage()
+		}
+		if _, err := s.pending.WriteString(payload); err != nil {
+			return fmt.Errorf("stage converted stream before semantic output: %w", err)
+		}
+	}
+	if !commit {
+		return nil
+	}
+	headersBeforeCommit := c.Writer.Header().Clone()
+	writeHeaders()
+	if s.pending != nil {
+		tracked := &stagedConvertedTrackingWriter{w: c.Writer}
+		delivered, commitErr := s.pending.CommitTo(tracked)
+		s.pending = nil
+		s.committed = delivered > 0
+		deliveryErr, cleanupErr := splitOpenAIFirstOutputCommitError(commitErr)
+		if cleanupErr != nil {
+			s.cleanupErr = errors.Join(s.cleanupErr, cleanupErr)
+		}
+		if deliveryErr != nil {
+			if delivered == 0 {
+				restoreStagedConvertedHeaders(c.Writer.Header(), headersBeforeCommit)
+			}
+			combinedErr := errors.Join(deliveryErr, cleanupErr)
+			if tracked.err != nil {
+				return &stagedConvertedClientWriteError{err: combinedErr}
+			}
+			return fmt.Errorf("commit converted stream: %w", combinedErr)
+		}
+		s.committed = true
+	} else {
+		s.committed = true
+	}
+	c.Writer.Flush()
+	return nil
+}
+
+func (s *stagedConvertedStream) close() error {
+	if s == nil {
+		return nil
+	}
+	err := s.cleanupErr
+	s.cleanupErr = nil
+	if s.pending != nil {
+		err = errors.Join(err, s.pending.Close())
+		s.pending = nil
+	}
+	return err
 }
 
 // scanCCStream 驱动两条 CC 回退路径共享的 SSE 读循环：提取 data 行、在 [DONE]
@@ -245,17 +361,108 @@ type ccStreamScanState struct {
 // emit 回调做各自的协议转换与写出。读错误按既有约定过滤 context 取消类噪声后
 // 记入 Warn 日志。
 func (s *OpenAIGatewayService) scanCCStream(
+	ctx context.Context,
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
 	startTime time.Time,
-	emit func(*apicompat.ChatCompletionsChunk),
+	emit func(*apicompat.ChatCompletionsChunk) (bool, error),
 ) ccStreamScanState {
 	var st ccStreamScanState
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
+	scanner.Split(boundedStreamScanLines(openAIFirstOutputStageMaxBytes, errStreamScannerTokenLimit))
+	type scanEvent struct {
+		line string
+		err  error
+	}
+	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
+	done := make(chan struct{})
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		defer close(events)
+		for scanner.Scan() {
+			select {
+			case events <- scanEvent{line: scanner.Text()}:
+			case <-done:
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case events <- scanEvent{err: err}:
+			case <-done:
+			}
+		}
+	}()
+	defer func() {
+		close(done)
+		_ = resp.Body.Close()
+		<-scanDone
+	}()
+
+	streamInterval := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	}
+	var idleTimer *time.Timer
+	var idleCh <-chan time.Time
+	resetIdleTimer := func() {
+		if streamInterval <= 0 {
+			return
+		}
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(streamInterval)
+			idleCh = idleTimer.C
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(streamInterval)
+	}
+	resetIdleTimer()
+	defer func() {
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
+	}()
+
+	for {
+		var event scanEvent
+		var ok bool
+		select {
+		case <-ctx.Done():
+			st.Err = ctx.Err()
+			return st
+		case <-idleCh:
+			st.Err = fmt.Errorf("upstream stream idle timeout after %s", streamInterval)
+			return st
+		case event, ok = <-events:
+			if !ok {
+				return st
+			}
+		}
+		resetIdleTimer()
+		if event.err != nil {
+			if !errors.Is(event.err, context.Canceled) && !errors.Is(event.err, context.DeadlineExceeded) {
+				logger.L().Warn(logPrefix+": stream read error",
+					zap.Error(event.err),
+					zap.String("request_id", requestID),
+				)
+			}
+			st.Err = event.err
+			return st
+		}
+
+		line := event.line
 		payload, ok := extractOpenAISSEDataLine(line)
 		if !ok {
 			continue
@@ -266,7 +473,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 		}
 		if payload == "[DONE]" {
 			st.SawDone = true
-			break
+			return st
 		}
 
 		usageValue := gjson.Get(payload, "usage")
@@ -281,21 +488,15 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if usageValue.Exists() {
 			withoutUsage, err := sjson.Delete(payload, "usage")
 			if err != nil {
-				logger.L().Warn(logPrefix+": failed to isolate chat stream usage",
-					zap.Error(err),
-					zap.String("request_id", requestID),
-				)
-				continue
+				st.Err = fmt.Errorf("isolate chat stream usage: %w", err)
+				return st
 			}
 			decodePayload = withoutUsage
 		}
 		var chunk apicompat.ChatCompletionsChunk
 		if err := json.Unmarshal([]byte(decodePayload), &chunk); err != nil {
-			logger.L().Warn(logPrefix+": failed to parse chat stream chunk",
-				zap.Error(err),
-				zap.String("request_id", requestID),
-			)
-			continue
+			st.Err = fmt.Errorf("parse chat stream chunk: %w", err)
+			return st
 		}
 		if sawUsageObject {
 			// The raw parser accepts provider aliases and ignores malformed
@@ -303,23 +504,19 @@ func (s *OpenAIGatewayService) scanCCStream(
 			// bridges after removing the original object from decodePayload.
 			chunk.Usage = parsedUsage.chatUsage()
 		}
-		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
+		chunkCommittedOutput, emitErr := emit(&chunk)
+		if emitErr != nil {
+			st.Err = fmt.Errorf("convert chat stream chunk: %w", emitErr)
+			return st
+		}
+		if chunkCommittedOutput {
+			st.SawOutput = true
+		}
+		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && st.SawOutput {
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
 		}
-		emit(&chunk)
 	}
-
-	if err := scanner.Err(); err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			logger.L().Warn(logPrefix+": stream read error",
-				zap.Error(err),
-				zap.String("request_id", requestID),
-			)
-		}
-		st.Err = err
-	}
-	return st
 }
 
 // responsesUsageFromCCUsage projects the CC/raw usage parser's canonical

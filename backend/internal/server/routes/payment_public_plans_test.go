@@ -68,6 +68,7 @@ func TestPaymentRoutesPublicPlansIsRegisteredWithoutAuth(t *testing.T) {
 		func(c *gin.Context) { c.Next() },
 		func(c *gin.Context) { c.Next() },
 		nil,
+		nil,
 	)
 
 	recorder := httptest.NewRecorder()
@@ -91,6 +92,7 @@ func TestRegisterPaymentRoutesIncludesIkunPayWebhook(t *testing.T) {
 		adminhandler.NewPaymentHandler(nil, nil),
 		func(c *gin.Context) { c.Next() },
 		func(c *gin.Context) { c.Next() },
+		nil,
 		nil,
 	)
 

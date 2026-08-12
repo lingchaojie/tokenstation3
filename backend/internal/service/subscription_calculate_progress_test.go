@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -14,6 +15,56 @@ import (
 
 func newTestSubscriptionService() *SubscriptionService {
 	return &SubscriptionService{}
+}
+
+type refundAdjustmentLockRepo struct {
+	userSubRepoNoop
+	stale     UserSubscription
+	current   UserSubscription
+	lockReads int
+	wrote     bool
+}
+
+func (r *refundAdjustmentLockRepo) GetByID(context.Context, int64) (*UserSubscription, error) {
+	sub := r.stale
+	if r.wrote {
+		sub = r.current
+	}
+	return &sub, nil
+}
+
+func (r *refundAdjustmentLockRepo) GetByIDForUpdate(context.Context, int64) (*UserSubscription, error) {
+	r.lockReads++
+	sub := r.current
+	return &sub, nil
+}
+
+func (r *refundAdjustmentLockRepo) ExtendExpiry(_ context.Context, _ int64, expiresAt time.Time) error {
+	r.current.ExpiresAt = expiresAt
+	r.wrote = true
+	return nil
+}
+
+func TestExtendSubscriptionDeferredLocksCurrentRowBeforeComputingExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	repo := &refundAdjustmentLockRepo{
+		stale: UserSubscription{
+			ID: 71, UserID: 72, GroupID: 73, Status: SubscriptionStatusActive,
+			ExpiresAt: now.AddDate(0, 0, 10),
+		},
+		current: UserSubscription{
+			ID: 71, UserID: 72, GroupID: 73, Status: SubscriptionStatusActive,
+			ExpiresAt: now.AddDate(0, 0, 30),
+		},
+	}
+	svc := &SubscriptionService{userSubRepo: repo, now: func() time.Time { return now }}
+
+	updated, _, err := svc.extendSubscriptionDeferred(context.Background(), repo.current.ID, -3)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.lockReads,
+		"refund adjustment must compute from the row locked against concurrent renewal")
+	require.Equal(t, now.AddDate(0, 0, 27), updated.ExpiresAt)
 }
 
 func ptrFloat64(v float64) *float64  { return &v }
@@ -36,7 +87,7 @@ func TestCalculateProgress_BasicFields(t *testing.T) {
 	assert.Equal(t, int64(100), progress.ID)
 	assert.Equal(t, "Premium", progress.GroupName)
 	assert.Equal(t, sub.ExpiresAt, progress.ExpiresAt)
-	assert.True(t, progress.ExpiresInDays == 29 || progress.ExpiresInDays == 30, "ExpiresInDays should be 29 or 30, got %d", progress.ExpiresInDays)
+	assert.Equal(t, 30, progress.ExpiresInDays)
 	assert.Nil(t, progress.Daily, "无日限额时 Daily 应为 nil")
 	assert.Nil(t, progress.Weekly, "无周限额时 Weekly 应为 nil")
 	assert.Nil(t, progress.Monthly, "无月限额时 Monthly 应为 nil")

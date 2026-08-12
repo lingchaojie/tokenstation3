@@ -40,7 +40,7 @@ func TestAuthRoutesExposeAlvinWithoutJWT(t *testing.T) {
 	RegisterAuthRoutes(v1, &handler.Handlers{
 		Auth:    &handler.AuthHandler{},
 		Setting: settingHandler,
-	}, jwtAuth, nil, settingService)
+	}, jwtAuth, nil, nil, settingService)
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/alvin", nil)

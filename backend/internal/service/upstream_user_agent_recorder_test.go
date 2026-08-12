@@ -215,6 +215,8 @@ func TestOpenAIGatewayServiceBuildOpenAIWSHeadersRecordsFinalFallbackUserAgent(t
 		"",
 		"",
 		"",
+		"",
+		"",
 	)
 
 	require.Equal(t, codexCLIUserAgent, headers.Get("user-agent"))

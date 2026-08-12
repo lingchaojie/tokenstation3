@@ -3,7 +3,9 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -85,6 +87,60 @@ type sseTee struct {
 	truncated bool
 }
 
+// captureBodyReadCloser captures the exact bytes consumed from an upstream
+// response without changing read/close behavior. It lets callers finalize the
+// same capture on success and committed-error paths.
+type captureBodyReadCloser struct {
+	io.ReadCloser
+	mu        sync.Mutex
+	buf       []byte
+	limit     int
+	truncated bool
+}
+
+func (r *captureBodyReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n <= 0 {
+		return n, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.truncated {
+		remain := r.limit - len(r.buf)
+		if remain > n {
+			remain = n
+		}
+		if remain > 0 {
+			r.buf = append(r.buf, p[:remain]...)
+		}
+		if remain < n {
+			r.truncated = true
+		}
+	}
+	return n, err
+}
+
+func (r *captureBodyReadCloser) bytes() ([]byte, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return snapshotBytes(r.buf), r.truncated
+}
+
+func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, limit int) func() {
+	if !enabled || limit <= 0 || resp == nil || resp.Body == nil {
+		return func() {}
+	}
+	reader := &captureBodyReadCloser{ReadCloser: resp.Body, limit: limit}
+	resp.Body = reader
+	return func() {
+		body, truncated := reader.bytes()
+		setCaptureResult(c, resp, body, truncated)
+	}
+}
+
 func newSSETee(limit int) *sseTee { return &sseTee{limit: limit} }
 
 func (t *sseTee) appendLine(line string) {
@@ -131,17 +187,55 @@ const captureResultContextKey = "gateway_capture_result"
 // captureResultBridge 是暂存在 gin.Context 上的采集结果。
 // 只保存“上游相关”数据：上游请求头/响应头（脱敏后）与响应体，不含任何客户端侧字段。
 type captureResultBridge struct {
+	UpstreamRequest []byte
 	Response        []byte
 	Truncated       bool
 	RequestHeaders  []byte // 上游请求头(脱敏)JSON —— 真正发给厂商的头
 	ResponseHeaders []byte // 上游响应头(脱敏)JSON —— 厂商返回的头
 }
 
+// captureResultSlot is shared by all forwarding attempts that reuse one Gin
+// context. Forwarding attempts are sequential, while response finalization may
+// race with result assembly; the slot makes publish/take/reset atomic so a take
+// can never clear a bridge published after it.
+type captureResultSlot struct {
+	mu     sync.Mutex
+	bridge *captureResultBridge
+}
+
+func captureSlot(c *gin.Context) *captureResultSlot {
+	if c == nil {
+		return nil
+	}
+	if v, ok := c.Get(captureResultContextKey); ok {
+		if slot, ok := v.(*captureResultSlot); ok && slot != nil {
+			return slot
+		}
+	}
+	slot := &captureResultSlot{}
+	c.Set(captureResultContextKey, slot)
+	return slot
+}
+
+// beginCaptureAttempt isolates a new account attempt from any result left by a
+// prior nil-result/failover path. Handlers invoke service attempts serially for
+// a request; response publishing and result taking remain synchronized below.
+func beginCaptureAttempt(c *gin.Context) {
+	slot := captureSlot(c)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	slot.bridge = nil
+	slot.mu.Unlock()
+}
+
 // setCaptureResult 在响应处理阶段写入采集结果（流式与非流式共用）。
 // resp 是上游 http.Response —— 从中取“真正发给厂商的请求头”(resp.Request.Header)
 // 与“厂商返回的响应头”(resp.Header)，脱敏后随桥暂存；均为上游相关，不含客户端头。
 func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncated bool) {
-	if c == nil {
+	slot := captureSlot(c)
+	if slot == nil {
 		return
 	}
 	bridge := &captureResultBridge{Response: body, Truncated: truncated}
@@ -151,7 +245,126 @@ func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncate
 		}
 		bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
 	}
-	c.Set(captureResultContextKey, bridge)
+	slot.mu.Lock()
+	if slot.bridge != nil {
+		bridge.UpstreamRequest = slot.bridge.UpstreamRequest
+		if len(bridge.RequestHeaders) == 0 {
+			bridge.RequestHeaders = slot.bridge.RequestHeaders
+		}
+	}
+	slot.bridge = bridge
+	slot.mu.Unlock()
+}
+
+func markCaptureResultTruncated(c *gin.Context) {
+	slot := captureSlot(c)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	slot.bridge.Truncated = true
+	slot.mu.Unlock()
+}
+
+func snapshotHTTPRequestBody(req *http.Request) []byte {
+	if req == nil {
+		return nil
+	}
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err == nil {
+			defer func() { _ = body.Close() }()
+			if data, readErr := io.ReadAll(body); readErr == nil {
+				return snapshotBytes(data)
+			}
+		}
+	}
+	if req.Body == nil {
+		return nil
+	}
+	data, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil
+	}
+	req.Body = io.NopCloser(bytes.NewReader(data))
+	return snapshotBytes(data)
+}
+
+// setCaptureUpstreamRequest records the body immediately before the real Do
+// call. A later retry replaces it, so the bridge always represents the final
+// attempted provider request rather than the inbound client payload.
+func setCaptureUpstreamRequest(c *gin.Context, req *http.Request) {
+	slot := captureSlot(c)
+	if slot == nil {
+		return
+	}
+	body := snapshotHTTPRequestBody(req)
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	slot.bridge.UpstreamRequest = body
+	if req != nil {
+		slot.bridge.RequestHeaders = redactHTTPHeader(req.Header)
+	}
+	// A new attempt owns the slot. Response-side data from a prior retry must
+	// never be paired with this request.
+	slot.bridge.Response = nil
+	slot.bridge.Truncated = false
+	slot.bridge.ResponseHeaders = nil
+	slot.mu.Unlock()
+}
+
+func setCaptureUpstreamResponse(c *gin.Context, resp *http.Response) {
+	slot := captureSlot(c)
+	if slot == nil || resp == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.bridge == nil {
+		slot.bridge = &captureResultBridge{}
+	}
+	if len(slot.bridge.RequestHeaders) == 0 && resp.Request != nil {
+		slot.bridge.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+	}
+	slot.bridge.ResponseHeaders = redactHTTPHeader(resp.Header)
+	slot.mu.Unlock()
+}
+
+type captureUpstreamRequestContextKey struct{}
+
+func withCaptureUpstreamRequestContext(ctx context.Context, c *gin.Context) context.Context {
+	if ctx == nil || c == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, captureUpstreamRequestContextKey{}, c)
+}
+
+func setCaptureUpstreamRequestFromContext(ctx context.Context, req *http.Request) {
+	if ctx == nil {
+		return
+	}
+	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
+	setCaptureUpstreamRequest(c, req)
+}
+
+func setCaptureUpstreamResponseFromContext(ctx context.Context, resp *http.Response) {
+	if ctx == nil {
+		return
+	}
+	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
+	setCaptureUpstreamResponse(c, resp)
+}
+
+func markCaptureResultTruncatedFromContext(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	c, _ := ctx.Value(captureUpstreamRequestContextKey{}).(*gin.Context)
+	markCaptureResultTruncated(c)
 }
 
 // takeCaptureResult 在 ForwardResult 组装阶段读取采集结果（流式与非流式共用）。
@@ -159,15 +372,59 @@ func takeCaptureResult(c *gin.Context) (*captureResultBridge, bool) {
 	if c == nil {
 		return nil, false
 	}
-	v, ok := c.Get(captureResultContextKey)
-	if !ok {
+	slot := captureSlot(c)
+	if slot == nil {
 		return nil, false
 	}
-	res, ok := v.(*captureResultBridge)
-	if !ok || res == nil {
-		return nil, false
+	slot.mu.Lock()
+	res := slot.bridge
+	slot.bridge = nil
+	slot.mu.Unlock()
+	return res, res != nil
+}
+
+// attachCaptureToForwardResult transfers the attempt-local capture bridge to
+// the result returned to the handler. It is shared by complete and committed
+// partial responses so both paths submit the same real upstream bytes once.
+func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *ForwardResult {
+	if result == nil {
+		return nil
 	}
-	return res, true
+	if bridge, ok := takeCaptureResult(c); ok {
+		result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+		result.CaptureRequestHeaders = bridge.RequestHeaders
+		result.CaptureResponseHeaders = bridge.ResponseHeaders
+		if bridge.Response != nil {
+			result.CaptureResponse = bridge.Response
+			result.CaptureTruncated = bridge.Truncated
+		}
+	}
+	return result
+}
+
+func finalizeForwardResult(c *gin.Context, result *ForwardResult) *ForwardResult {
+	return attachCaptureToForwardResult(c, result)
+}
+
+func attachCaptureToOpenAIForwardResult(c *gin.Context, result *OpenAIForwardResult) *OpenAIForwardResult {
+	if result == nil {
+		return nil
+	}
+	if bridge, ok := takeCaptureResult(c); ok && bridge.Response != nil {
+		result.CaptureResponse = bridge.Response
+		result.CaptureTruncated = bridge.Truncated
+		result.CaptureRequestHeaders = bridge.RequestHeaders
+		result.CaptureResponseHeaders = bridge.ResponseHeaders
+	}
+	return result
+}
+
+func finalizeOpenAIForwardResult(c *gin.Context, result *OpenAIForwardResult, upstreamRequest []byte) *OpenAIForwardResult {
+	if result == nil {
+		return nil
+	}
+	result.UpstreamRequest = snapshotBytes(upstreamRequest)
+	return attachCaptureToOpenAIForwardResult(c, result)
 }
 
 // responseColumns 是从原始上游响应体（流式 SSE 或非流式 JSON）轻扫描抽取出的
@@ -321,8 +578,8 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 	if len(reqBody) == 0 && len(respBody) == 0 {
 		return nil
 	}
-	rawReq, _ := captureWithLimit(reqBody, limit)
-	rawResp, truncated := captureWithLimit(respBody, limit)
+	rawReq, requestTruncated := captureWithLimit(reqBody, limit)
+	rawResp, responseTruncated := captureWithLimit(respBody, limit)
 	rec := &CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         platform,
@@ -332,7 +589,7 @@ func buildErrorCaptureRecord(resp *http.Response, platform, requestedModel, upst
 		Stream:           stream,
 		RawRequest:       rawReq,
 		RawResponse:      rawResp,
-		Truncated:        truncated,
+		Truncated:        requestTruncated || responseTruncated,
 	}
 	if resp != nil {
 		rec.HTTPStatus = resp.StatusCode

@@ -98,7 +98,7 @@ func (s *quotaBaseAPIKeyRepoStub) GetByKeyForAuth(context.Context, string) (*API
 func (s *quotaBaseAPIKeyRepoStub) GetWebChatKeyByUserAndGroup(context.Context, int64, int64) (*APIKey, error) {
 	panic("unexpected GetWebChatKeyByUserAndGroup call")
 }
-func (s *quotaBaseAPIKeyRepoStub) Update(context.Context, *APIKey) error {
+func (s *quotaBaseAPIKeyRepoStub) Update(context.Context, *APIKey, APIKeyUpdateFields) error {
 	panic("unexpected Update call")
 }
 func (s *quotaBaseAPIKeyRepoStub) Delete(context.Context, int64) error {

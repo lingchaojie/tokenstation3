@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -31,6 +33,8 @@ func TestWebChatResponseCapture_CapturesBoundedBody(t *testing.T) {
 	require.Equal(t, len("hello world"), n)
 	require.Equal(t, "hello world", rec.Body.String())
 	require.Equal(t, []byte("hello"), capture.Body())
+	_, truncated := capture.Snapshot()
+	require.True(t, truncated)
 }
 
 func TestWebChatResponseCapture_CapturesWriteStringBoundedBody(t *testing.T) {
@@ -45,6 +49,27 @@ func TestWebChatResponseCapture_CapturesWriteStringBoundedBody(t *testing.T) {
 	require.Equal(t, len("streamed text"), n)
 	require.Equal(t, "streamed text", rec.Body.String())
 	require.Equal(t, []byte("stream"), capture.Body())
+	_, truncated := capture.Snapshot()
+	require.True(t, truncated)
+}
+
+func TestWebChatDispatch_DefaultCapturePreservesFiveMiBWithoutSilentTruncation(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	providerOutput := bytes.Repeat([]byte("x"), 5<<20)
+	svc.gatewayResponseBody = providerOutput
+	svc.gatewayForwardResult = &ForwardResult{RequestID: "five-mib", Model: "claude-sonnet-4"}
+
+	result, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID: 7, AssistantMessageID: 101, Model: "claude-sonnet-4", Provider: "anthropic",
+		Capabilities: WebChatModelCapability{Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4", SupportsText: true},
+		Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}}, Stream: true,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.ResponseBody, len(providerOutput))
+	require.Len(t, svc.gatewayForwardResult.CaptureResponse, len(providerOutput))
+	require.False(t, svc.gatewayForwardResult.CaptureTruncated, "a 5 MiB response is below the default 8 MiB capture ceiling")
 }
 
 func TestWebChatResponseCapture_ExtractAssistantTextFromChatCompletions(t *testing.T) {
@@ -255,6 +280,176 @@ func TestWebChatSend_OpenAIAlwaysUsesResponsesWithAutomaticSearch(t *testing.T) 
 	require.Equal(t, "auto", gjson.GetBytes(svc.forwardedBody, "tool_choice").String())
 	require.Equal(t, "search today's AI news", gjson.GetBytes(svc.forwardedBody, "input.1.content.0.text").String())
 	require.Equal(t, "Done.", *svc.finalUpdate.ContentText)
+}
+
+func TestWebChatDispatch_OpenAICommittedPartialRecordsUsageAndReturnsCapturedBodyOnce(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.openAISelection = &AccountSelectionResult{
+		Account:  &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		Acquired: true,
+	}
+	committedErr := errors.New("stream ended after semantic output")
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID:     "openai_partial_req",
+		Model:         "gpt-5.5",
+		UpstreamModel: "gpt-5.5",
+		Stream:        true,
+		Usage:         OpenAIUsage{InputTokens: 12, OutputTokens: 3},
+	}
+	svc.openAIForwardErr = committedErr
+
+	result, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:               &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID:     7,
+		AssistantMessageID: 101,
+		Model:              "gpt-5.5",
+		Provider:           "openai",
+		Capabilities: WebChatModelCapability{
+			Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true,
+		},
+		Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}},
+		Stream:   true,
+	})
+
+	require.ErrorIs(t, err, committedErr)
+	require.NotNil(t, result, "a committed result must survive the transport error")
+	require.Equal(t, "Done.", ExtractAssistantTextFromChatCompletions(result.ResponseBody, true))
+	require.Equal(t, int64(88), *result.UsageLogID)
+	require.Equal(t, 1, countWebChatEvent(svc.events, "forward_openai_responses"))
+	require.Equal(t, 1, countWebChatEvent(svc.events, "submit_openai_capture"))
+	require.Equal(t, 1, countWebChatEvent(svc.events, "record_openai_usage"))
+	require.Equal(t, 1, countWebChatEvent(svc.events, "usage_lookup"))
+}
+
+type webChatArchiveRecordWriter struct {
+	records chan *CaptureRecord
+}
+
+func (w *webChatArchiveRecordWriter) Write(_ context.Context, rec *CaptureRecord) error {
+	w.records <- rec
+	return nil
+}
+
+func (*webChatArchiveRecordWriter) Stop() {}
+
+type webChatRealGatewayHarness struct {
+	*GatewayService
+	account *Account
+}
+
+func (h *webChatRealGatewayHarness) SelectAccountWithLoadAwareness(context.Context, *int64, string, string, map[int64]struct{}, string, int64) (*AccountSelectionResult, error) {
+	return &AccountSelectionResult{Account: h.account, Acquired: true}, nil
+}
+
+func (*webChatRealGatewayHarness) RecordUsage(context.Context, *RecordUsageInput) error { return nil }
+
+func TestWebChatDispatch_AnthropicArchivesRecorderFinalRequestExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamSSE := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_webchat","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4","stop_reason":null,"usage":{"input_tokens":4}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"rid-webchat-real"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}}
+	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	defer pool.Stop()
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: defaultMaxLineSize,
+		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+	}}
+	gateway := &GatewayService{
+		cfg:                 cfg,
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		capturePool:         pool,
+	}
+	account := &Account{
+		ID: 501, Name: "webchat-real-anthropic", Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "upstream-key", "base_url": "https://api.anthropic.com",
+			"model_mapping": map[string]any{"claude-sonnet-4": "claude-sonnet-4-upstream"},
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+
+	double := newWebChatServiceWithStubs(t)
+	double.availableGroups = []Group{{ID: 11, Platform: PlatformAnthropic, Status: StatusActive}}
+	double.gatewayService = &webChatRealGatewayHarness{GatewayService: gateway, account: account}
+	result, err := double.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID: 7, AssistantMessageID: 101, Model: "claude-sonnet-4", Provider: "anthropic",
+		Capabilities: WebChatModelCapability{Provider: "anthropic", Platform: PlatformAnthropic, Model: "claude-sonnet-4", SupportsText: true},
+		Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello from webchat"}}, Stream: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, upstream.lastBody, "the real HTTP recorder must observe the converted Anthropic request")
+	pool.Stop()
+	require.Len(t, writer.records, 1, "WebChat must archive one upstream attempt exactly once")
+
+	select {
+	case archived := <-writer.records:
+		require.Equal(t, upstream.lastBody, archived.RawRequest, "archive must use the immutable final outbound bytes")
+		require.Equal(t, []byte(upstreamSSE), archived.RawResponse, "archive must tee the raw provider-native response before WebChat conversion")
+		require.Equal(t, "claude-sonnet-4-upstream", gjson.GetBytes(archived.RawRequest, "model").String(), "the archive must preserve post-mapping provider bytes")
+		require.NotContains(t, string(archived.RequestHeaders), "upstream-key", "provider credentials must be redacted")
+		require.Contains(t, string(archived.RequestHeaders), "anthropic-version")
+	case <-time.After(time.Second):
+		t.Fatal("real WebChat dispatch submitted no capture record")
+	}
+}
+
+func TestWebChatSend_OpenAICommittedPartialPersistsFailedAssistantContentAndUsage(t *testing.T) {
+	svc := newWebChatServiceWithStubs(t)
+	user := &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true}
+	svc.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.openAISelection = &AccountSelectionResult{
+		Account:  &Account{ID: 77, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		Acquired: true,
+	}
+	committedErr := errors.New("stream ended after semantic output")
+	svc.openAIForwardResult = &OpenAIForwardResult{
+		RequestID: "openai_partial_req", Model: "gpt-5.5", UpstreamModel: "gpt-5.5", Stream: true,
+		Usage: OpenAIUsage{InputTokens: 12, OutputTokens: 3},
+	}
+	svc.openAIForwardErr = committedErr
+
+	_, err := svc.SendMessage(newTestGinContext(context.Background()), WebChatSendInput{
+		UserID: 42, User: user, ConversationID: 7,
+		Model: "gpt-5.5", Provider: "openai", Text: "hello", Stream: true,
+		GinContext: newTestGinContext(context.Background()),
+	})
+
+	require.ErrorIs(t, err, committedErr)
+	require.NotEmpty(t, svc.updatedMessages)
+	failed := svc.updatedMessages[len(svc.updatedMessages)-1]
+	require.NotNil(t, failed.Status)
+	require.Equal(t, WebChatMessageStatusFailed, *failed.Status)
+	require.NotNil(t, failed.ContentText)
+	require.Equal(t, "Done.", *failed.ContentText)
+	require.NotNil(t, failed.UsageLogID)
+	require.Equal(t, int64(88), *failed.UsageLogID)
+	require.Equal(t, 1, countWebChatEvent(svc.events, "forward_openai_responses"))
+	require.Equal(t, 1, countWebChatEvent(svc.events, "submit_openai_capture"))
+	require.Equal(t, 1, countWebChatEvent(svc.events, "record_openai_usage"))
 }
 
 func TestWebChatSend_OpenAIIgnoresLegacyDisabledSearchConfig(t *testing.T) {
@@ -1065,6 +1260,7 @@ func TestWebChatSend_DoesNotOverwriteCanceledAssistantWhenDispatchCancels(t *tes
 	require.NotZero(t, result.AssistantMessageID)
 	require.NotContains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusFailed)
 	require.Contains(t, webChatUpdatedStatuses(svc.updatedMessages), WebChatMessageStatusCanceled)
+	require.Equal(t, 0, countWebChatEvent(svc.events, "submit_gateway_capture"), "nil-result failures must not submit an archive record")
 }
 
 func TestWebChatUpdateConversationRejectsInvalidStatus(t *testing.T) {
@@ -1099,7 +1295,9 @@ type webChatServiceTestDouble struct {
 	recordUsageCalled           bool
 	recordUsageErr              error
 	gatewayForwardResult        *ForwardResult
+	gatewayResponseBody         []byte
 	openAIForwardResult         *OpenAIForwardResult
+	openAIForwardErr            error
 	forwardErr                  error
 	cancelAssistantOnForward    bool
 	finalizedAssistantMessageID int64
@@ -1402,11 +1600,17 @@ func (s *webChatGatewayServiceStub) SelectAccountWithLoadAwareness(context.Conte
 func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, c *gin.Context, _ *Account, body []byte, _ *ParsedRequest) (*ForwardResult, error) {
 	s.double.events = append(s.double.events, "forward")
 	s.double.forwardedBody = append([]byte(nil), body...)
-	if _, err := c.Writer.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"Done.\"}}]}\n\n"); err != nil {
-		return nil, err
-	}
-	if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err != nil {
-		return nil, err
+	if len(s.double.gatewayResponseBody) > 0 {
+		if _, err := c.Writer.Write(s.double.gatewayResponseBody); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := c.Writer.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"Done.\"}}]}\n\n"); err != nil {
+			return nil, err
+		}
+		if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err != nil {
+			return nil, err
+		}
 	}
 	if s.double.cancelAssistantOnForward {
 		_ = s.double.CancelMessage(context.Background(), 42, 7, s.double.nextMessageID)
@@ -1444,6 +1648,10 @@ func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordU
 	s.double.recordUsageCalled = true
 	s.double.recordUsageInput = in
 	return s.double.recordUsageErr
+}
+
+func (s *webChatGatewayServiceStub) SubmitWebChatCapture(_ *ForwardResult, _ *Account, _ []byte, _ string) {
+	s.double.events = append(s.double.events, "submit_gateway_capture")
 }
 
 type webChatOpenAIGatewayServiceStub struct {
@@ -1497,7 +1705,7 @@ func (s *webChatOpenAIGatewayServiceStub) Forward(_ context.Context, c *gin.Cont
 	if s.double.openAIForwardResult == nil {
 		s.double.openAIForwardResult = &OpenAIForwardResult{RequestID: "openai_req", Model: "gpt-5.5", Stream: true}
 	}
-	return s.double.openAIForwardResult, nil
+	return s.double.openAIForwardResult, s.double.openAIForwardErr
 }
 
 func (s *webChatOpenAIGatewayServiceStub) RecordUsage(ctx context.Context, in *OpenAIRecordUsageInput) error {
@@ -1505,6 +1713,10 @@ func (s *webChatOpenAIGatewayServiceStub) RecordUsage(ctx context.Context, in *O
 	s.double.recordUsageClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
 	s.double.openAIRecordUsageInput = in
 	return s.double.recordUsageErr
+}
+
+func (s *webChatOpenAIGatewayServiceStub) SubmitWebChatCapture(_ *OpenAIForwardResult, _ *Account, _ []byte, _ string) {
+	s.double.events = append(s.double.events, "submit_openai_capture")
 }
 
 type webChatUsageLogRepoStub struct {
@@ -1550,6 +1762,16 @@ func requireOrderedEvents(t *testing.T, events []string, expected ...string) {
 		require.Greater(t, index, last, "event %q out of order in %v", want, events)
 		last = index
 	}
+}
+
+func countWebChatEvent(events []string, target string) int {
+	count := 0
+	for _, event := range events {
+		if event == target {
+			count++
+		}
+	}
+	return count
 }
 
 func webChatUpdatedStatuses(updates []UpdateWebChatMessageInput) []string {

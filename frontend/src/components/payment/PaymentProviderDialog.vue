@@ -32,8 +32,7 @@
       <!-- Toggles + Payment mode + Supported types (single row) -->
       <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
         <ToggleSwitch :label="t('common.enabled')" :checked="form.enabled" @toggle="form.enabled = !form.enabled" />
-        <ToggleSwitch :label="t('admin.settings.payment.refundEnabled')" :checked="form.refund_enabled" @toggle="form.refund_enabled = !form.refund_enabled; if (!form.refund_enabled) form.allow_user_refund = false" />
-        <ToggleSwitch v-if="form.refund_enabled" :label="t('admin.settings.payment.allowUserRefund')" :checked="form.allow_user_refund" @toggle="form.allow_user_refund = !form.allow_user_refund" />
+        <ToggleSwitch :label="t('admin.settings.payment.refundEnabled')" :checked="form.refund_enabled" @toggle="form.refund_enabled = !form.refund_enabled" />
         <div v-if="supportsPaymentMode" class="flex items-center gap-2">
           <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.paymentMode') }}</span>
           <div class="flex gap-1.5">
@@ -100,7 +99,7 @@
             </div>
             <div>
               <label class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.customMethodDisplayName') }}</label>
-              <input v-model="method.displayName" type="text" class="input mt-0.5" placeholder="信用卡" />
+              <input v-model="method.displayName" type="text" class="input mt-0.5" :placeholder="t('admin.settings.payment.customMethodDisplayNamePlaceholder')" />
             </div>
             <button
               type="button"
@@ -373,7 +372,6 @@ const emit = defineEmits<{
     enabled: boolean
     payment_mode: string
     refund_enabled: boolean
-    allow_user_refund: boolean
     config: Record<string, string>
     limits: string
   }]
@@ -402,7 +400,6 @@ const form = reactive({
   enabled: true,
   payment_mode: PAYMENT_MODE_QRCODE,
   refund_enabled: false,
-  allow_user_refund: false,
 })
 const config = reactive<Record<string, string>>({})
 const limits = reactive<Record<string, Record<string, number>>>({})
@@ -720,7 +717,6 @@ function handleSave() {
     enabled: form.enabled,
     payment_mode: supportsPaymentMode.value ? form.payment_mode : '',
     refund_enabled: form.refund_enabled,
-    allow_user_refund: form.refund_enabled ? form.allow_user_refund : false,
     config: filteredConfig,
     limits: serializeLimits(),
   })
@@ -790,7 +786,6 @@ function reset(defaultKey: string) {
   form.enabled = true
   form.payment_mode = defaultPaymentMode(defaultKey)
   form.refund_enabled = false
-  form.allow_user_refund = false
   clearConfig()
   applyDefaults()
 }
@@ -809,7 +804,6 @@ function loadProvider(provider: ProviderInstance) {
     ? (provider.payment_mode || '')
     : defaultPaymentMode(provider.provider_key)
   form.refund_enabled = provider.refund_enabled
-  form.allow_user_refund = provider.allow_user_refund
   clearConfig()
   // Pre-fill config from API response. Backend omits sensitive fields entirely,
   // so those inputs stay blank — submitting blank preserves the stored secret.

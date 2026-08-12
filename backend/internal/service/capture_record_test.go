@@ -2,8 +2,11 @@ package service
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestBuildErrorCaptureRecord(t *testing.T) {
@@ -40,6 +43,56 @@ func TestBuildErrorCaptureRecord(t *testing.T) {
 	rec2 := buildErrorCaptureRecord(nil, "openai", "m", "m", "", false, nil, []byte("0123456789"), 4)
 	if string(rec2.RawResponse) != "0123" || !rec2.Truncated {
 		t.Fatalf("truncation failed: %q trunc=%v", rec2.RawResponse, rec2.Truncated)
+	}
+
+	// A request-only overflow is still a truncated capture even if the error
+	// response itself fits in the configured bound.
+	rec3 := buildErrorCaptureRecord(nil, "openai", "m", "m", "", false, []byte("abcdefghij"), []byte("err"), 4)
+	if string(rec3.RawRequest) != "abcd" || string(rec3.RawResponse) != "err" || !rec3.Truncated {
+		t.Fatalf("request-only truncation failed: req=%q resp=%q trunc=%v", rec3.RawRequest, rec3.RawResponse, rec3.Truncated)
+	}
+}
+
+func TestCaptureBridgeIsTakenOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	setCaptureResult(c, nil, []byte("attempt-one"), false)
+
+	first := attachCaptureToForwardResult(c, &ForwardResult{})
+	second := attachCaptureToForwardResult(c, &ForwardResult{})
+	if string(first.CaptureResponse) != "attempt-one" {
+		t.Fatalf("first result capture = %q", first.CaptureResponse)
+	}
+	if len(second.CaptureResponse) != 0 {
+		t.Fatalf("bridge was reused by a second result: %q", second.CaptureResponse)
+	}
+}
+
+func TestCaptureBridgeAttemptIsolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	beginCaptureAttempt(c)
+	setCaptureResult(c, nil, []byte("failed-attempt"), false)
+	if got := attachCaptureToForwardResult(c, nil); got != nil {
+		t.Fatal("nil failover result must stay nil")
+	}
+
+	// The next attempt has capture disabled, so beginning it must discard the
+	// unclaimed bridge from the failed attempt.
+	beginCaptureAttempt(c)
+	second := attachCaptureToForwardResult(c, &ForwardResult{})
+	if len(second.CaptureResponse) != 0 {
+		t.Fatalf("stale bridge leaked into disabled attempt: %q", second.CaptureResponse)
+	}
+
+	// Reusing a Gin context for another completed request is isolated too.
+	beginCaptureAttempt(c)
+	setCaptureResult(c, nil, []byte("captured"), false)
+	beginCaptureAttempt(c)
+	reused := attachCaptureToOpenAIForwardResult(c, &OpenAIForwardResult{})
+	if len(reused.CaptureResponse) != 0 {
+		t.Fatalf("reused context leaked capture: %q", reused.CaptureResponse)
 	}
 }
 

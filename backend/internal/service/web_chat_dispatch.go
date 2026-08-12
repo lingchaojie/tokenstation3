@@ -50,6 +50,14 @@ type webChatUsageLogLookupRepository interface {
 	GetByRequestIDAndAPIKeyID(ctx context.Context, requestID string, apiKeyID int64) (*UsageLog, error)
 }
 
+type webChatGatewayCaptureSubmitter interface {
+	SubmitWebChatCapture(result *ForwardResult, account *Account, requestBody []byte, upstreamEndpoint string)
+}
+
+type webChatOpenAICaptureSubmitter interface {
+	SubmitWebChatCapture(result *OpenAIForwardResult, account *Account, requestBody []byte, upstreamEndpoint string)
+}
+
 type webChatDispatchInput struct {
 	User               *User
 	ConversationID     int64
@@ -140,8 +148,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		GroupID: &group.ID,
 	}
 
-	downstreamCapture := NewWebChatResponseCapture(c.Writer, 4<<20)
-	upstreamCapture := newWebChatStreamCapture(4 << 20)
+	captureMaxBytes := s.webChatCaptureMaxBytes()
+	downstreamCapture := NewWebChatResponseCapture(c.Writer, captureMaxBytes)
+	upstreamCapture := newWebChatStreamCapture(captureMaxBytes)
 	c.Writer = downstreamCapture
 
 	usageClientID := strings.TrimSpace(input.UsageClientID)
@@ -150,6 +159,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	}
 	usageCtx := context.WithValue(ctx, ctxkey.ClientRequestID, usageClientID)
 	usageCtx = withWebChatStreamCapture(usageCtx, upstreamCapture)
+	if errorCaptureSubmitter, ok := s.gatewayService.(webChatFinalGatewayErrorCaptureSubmitter); ok {
+		usageCtx = withWebChatFinalGatewayErrorCaptureSubmitter(usageCtx, errorCaptureSubmitter)
+	}
 	postDispatchCtx := context.WithValue(context.WithoutCancel(ctx), ctxkey.ClientRequestID, usageClientID)
 	usageRequestID := "client:" + usageClientID
 	inboundEndpoint := fmt.Sprintf("/api/v1/chat/conversations/%d/messages", input.ConversationID)
@@ -159,6 +171,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	channelMapping := ChannelMappingResult{MappedModel: input.Model}
 	usageRecorded := false
 	artifactCandidates := make([]WebChatArtifactCandidate, 0, 1)
+	var dispatchErr error
 
 	switch input.Capabilities.Platform {
 	case PlatformOpenAI:
@@ -171,12 +184,20 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		} else {
 			result, account, err = s.forwardWebChatOpenAI(usageCtx, c, group, body, input)
 		}
-		if err != nil {
+		if err != nil && result == nil {
 			return nil, err
+		}
+		dispatchErr = err
+		if result == nil {
+			return nil, ErrNoAvailableAccounts
 		}
 		if result != nil {
 			artifactCandidates = append(artifactCandidates, webChatArtifactCandidatesFromOpenAIImageResults(result.imageResults)...)
 			applyWebChatOpenAIUsageReasoningEffort(result, input.Capabilities, input.Thinking)
+		}
+		attachWebChatOpenAICaptureResponse(result, upstreamCapture, downstreamCapture)
+		if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
 		}
 		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, &OpenAIRecordUsageInput{
 			Result:             result,
@@ -206,10 +227,21 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		} else {
 			result, account, err = s.forwardWebChatGateway(usageCtx, c, group, body, parsed, input)
 		}
-		if err != nil {
+		if terminalErr := takeWebChatStreamTerminalError(upstreamCapture); terminalErr != nil {
+			return nil, terminalErr
+		}
+		if err != nil && result == nil {
 			return nil, err
 		}
+		dispatchErr = err
+		if result == nil {
+			return nil, ErrNoAvailableAccounts
+		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
+		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
+		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
+		}
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
@@ -231,10 +263,18 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		}
 	case PlatformGemini:
 		result, account, err := s.forwardWebChatGemini(usageCtx, c, group, body, parsed, input)
-		if err != nil {
+		if err != nil && result == nil {
 			return nil, err
 		}
+		dispatchErr = err
+		if result == nil {
+			return nil, ErrNoAvailableAccounts
+		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
+		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
+		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, "/v1/chat/completions")
+		}
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
@@ -272,7 +312,37 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		responseBody = downstreamCapture.Body()
 	}
 	artifactCandidates = append(artifactCandidates, ExtractArtifactsFromChatCompletions(responseBody, input.Stream)...)
-	return &webChatDispatchResult{ResponseBody: responseBody, UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, nil
+	return &webChatDispatchResult{ResponseBody: responseBody, UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, dispatchErr
+}
+
+func webChatCapturedResponseBody(upstream *webChatStreamCapture, downstream *WebChatResponseCapture) ([]byte, bool) {
+	if upstream != nil {
+		if body, truncated := upstream.Snapshot(); len(body) > 0 {
+			return body, truncated
+		}
+	}
+	if downstream != nil {
+		return downstream.Snapshot()
+	}
+	return nil, false
+}
+
+func attachWebChatGatewayCaptureResponse(result *ForwardResult, upstream *webChatStreamCapture, downstream *WebChatResponseCapture) {
+	if result == nil || result.CaptureResponse != nil {
+		return
+	}
+	body, truncated := webChatCapturedResponseBody(upstream, downstream)
+	result.CaptureResponse = snapshotBytes(body)
+	result.CaptureTruncated = result.CaptureTruncated || truncated
+}
+
+func attachWebChatOpenAICaptureResponse(result *OpenAIForwardResult, upstream *webChatStreamCapture, downstream *WebChatResponseCapture) {
+	if result == nil || result.CaptureResponse != nil {
+		return
+	}
+	body, truncated := webChatCapturedResponseBody(upstream, downstream)
+	result.CaptureResponse = snapshotBytes(body)
+	result.CaptureTruncated = result.CaptureTruncated || truncated
 }
 
 func webChatUseResponsesPayload(input webChatDispatchInput) bool {

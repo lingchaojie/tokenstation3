@@ -104,7 +104,7 @@ func (a *Alipay) MerchantIdentityMetadata() map[string]string {
 }
 
 // CreatePayment creates an Alipay payment using the following routing:
-//   - Mobile (H5): alipay.trade.wap.pay — browser redirect into Alipay.
+//   - Mobile (H5), default: alipay.trade.wap.pay — browser redirect into Alipay.
 //   - Desktop, default: prefer alipay.trade.precreate (FACE_TO_FACE_PAYMENT) to
 //     get a scannable QR payload. If precreate is unavailable for the merchant,
 //     fall back to alipay.trade.page.pay and expose pay_url only — the frontend

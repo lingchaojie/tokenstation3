@@ -73,6 +73,7 @@ function buildPublicSettings(overrides: Partial<WeChatPublicSettings> = {}): WeC
     contact_info: '',
     doc_url: '',
     home_content: '',
+    compact_home_enabled: false,
     hide_ccs_import_button: false,
     payment_enabled: false,
     table_default_page_size: 20,
@@ -109,6 +110,7 @@ describe('WechatOAuthSection', () => {
       configurable: true,
       value: locationState.current,
     })
+    window.sessionStorage.clear()
     Object.defineProperty(window.navigator, 'userAgent', {
       configurable: true,
       value: 'Mozilla/5.0',
@@ -134,8 +136,8 @@ describe('WechatOAuthSection', () => {
 
     await wrapper.get('button').trigger('click')
 
-    expect(locationState.current.href).toContain(
-      '/api/v1/auth/oauth/wechat/start?mode=open&redirect=%2Fbilling%3Fplan%3Dpro'
+    expect(locationState.current.href).toBe(
+      '/api/v1/auth/oauth/wechat/start?mode=open&redirect=%2Fbilling%3Fplan%3Dpro',
     )
   })
 
@@ -156,8 +158,8 @@ describe('WechatOAuthSection', () => {
 
     await wrapper.get('button').trigger('click')
 
-    expect(locationState.current.href).toContain(
-      '/api/v1/auth/oauth/wechat/start?mode=mp&redirect=%2Fbilling%3Fplan%3Dpro'
+    expect(locationState.current.href).toBe(
+      '/api/v1/auth/oauth/wechat/start?mode=mp&redirect=%2Fbilling%3Fplan%3Dpro',
     )
   })
 
@@ -215,8 +217,8 @@ describe('WechatOAuthSection', () => {
 
     await wrapper.get('button').trigger('click')
 
-    expect(locationState.current.href).toContain(
-      '/api/v1/auth/oauth/wechat/start?mode=open&redirect=%2Fbilling%3Fplan%3Dpro'
+    expect(locationState.current.href).toBe(
+      '/api/v1/auth/oauth/wechat/start?mode=open&redirect=%2Fbilling%3Fplan%3Dpro',
     )
   })
 

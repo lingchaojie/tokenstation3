@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/gin-gonic/gin"
 )
 
 const kiroMaxWebSearchIterations = 5
@@ -106,7 +107,7 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 }
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
-	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, cacheUsage *kiroCacheEmulationUsage,
+	ctx context.Context, c *gin.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, cacheUsage *kiroCacheEmulationUsage,
 ) error {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
@@ -150,13 +151,40 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			return err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if ownsWebChatFinalGatewayErrorCapture(ctx) && s.shouldFailoverUpstreamError(resp.StatusCode) {
+				responseBody, truncated, readErr := s.readWebChatUpstreamErrorBody(ctx, resp)
+				_ = resp.Body.Close()
+				if truncated {
+					markCaptureResultTruncated(c)
+				}
+				s.submitWebChatFinalGatewayErrorCapture(
+					ctx, c, account, requestModel, mappedModel, "/v1/messages", true, resp, responseBody,
+				)
+				terminalErr := &UpstreamFailoverError{
+					StatusCode:      resp.StatusCode,
+					ResponseBody:    responseBody,
+					ResponseHeaders: resp.Header.Clone(),
+				}
+				if readErr != nil {
+					terminalErr.ClientMessage = sanitizeUpstreamErrorMessage(readErr.Error())
+				}
+				publishWebChatStreamTerminalError(ctx, terminalErr)
+				return terminalErr
+			}
 			return &kiroWebSearchHTTPError{Response: resp}
 		}
+		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+		captureLimit := 0
+		if s.cfg != nil {
+			captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+		}
+		finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 
 		chunks, _, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return bufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
 		}()
+		finishRawCapture()
 		if streamErr != nil {
 			return streamErr
 		}
@@ -401,7 +429,9 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			return nil, currentToken, err
 		}
 
+		setCaptureUpstreamRequestFromContext(ctx, req)
 		resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		setCaptureUpstreamResponseFromContext(ctx, resp)
 		if err != nil {
 			return nil, currentToken, err
 		}

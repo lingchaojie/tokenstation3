@@ -101,7 +101,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	streamOwnsResponseBody := false
+	defer func() {
+		if !streamOwnsResponseBody {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
@@ -110,11 +115,22 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, chatBody, billingModel)
 	}
-
-	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+	captureLimit := 0
+	if captureEnabled {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	finishCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
+
+	var result *OpenAIForwardResult
+	if clientStream {
+		streamOwnsResponseBody = true
+		result, err = s.streamChatCompletionsAsResponses(ctx, c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	} else {
+		result, err = s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	}
+	finishCapture()
+	return finalizeOpenAIForwardResult(c, result, chatBody), err
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
@@ -159,6 +175,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 }
 
 func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	originalModel string,
@@ -179,38 +196,54 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	state.ToolSearchDeclared = toolSearch
 	state.NamespaceTools = namespaceTools
 	clientDisconnected := false
-
-	writeEvents := func(events []apicompat.ResponsesStreamEvent) {
-		if clientDisconnected || len(events) == 0 {
-			return
+	var staged stagedConvertedStream
+	defer func() {
+		if err := staged.close(); err != nil {
+			logger.L().Warn("openai responses chat fallback: converted stage cleanup failed",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
 		}
-		writeStreamHeaders()
+	}()
+
+	writeEvents := func(events []apicompat.ResponsesStreamEvent, commit bool) (bool, error) {
+		if len(events) == 0 {
+			return staged.committed, nil
+		}
+		var wire strings.Builder
 		for _, event := range events {
 			sse, err := apicompat.ResponsesEventToSSE(event)
 			if err != nil {
-				logger.L().Warn("openai responses chat fallback: failed to marshal stream event",
-					zap.Error(err),
-					zap.String("request_id", requestID),
-				)
-				continue
+				return staged.committed, fmt.Errorf("marshal responses stream event %q: %w", event.Type, err)
 			}
-			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
-				clientDisconnected = true
-				logger.L().Debug("openai responses chat fallback: client disconnected, continuing to drain upstream for billing",
-					zap.Error(err),
-					zap.String("request_id", requestID),
-				)
-				return
-			}
+			_, _ = wire.WriteString(sse)
 		}
-		c.Writer.Flush()
+		if clientDisconnected {
+			return staged.committed, nil
+		}
+		if err := staged.write(c, writeStreamHeaders, wire.String(), commit); err != nil {
+			var clientWriteErr *stagedConvertedClientWriteError
+			if !errors.As(err, &clientWriteErr) {
+				return staged.committed, err
+			}
+			clientDisconnected = true
+			logger.L().Debug("openai responses chat fallback: client disconnected, continuing to drain upstream for billing",
+				zap.Error(clientWriteErr),
+				zap.String("request_id", requestID),
+			)
+		}
+		return staged.committed, nil
 	}
 
-	scan := s.scanCCStream(resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
-		writeEvents(apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state))
+	scan := s.scanCCStream(ctx, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
+		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
+		return writeEvents(events, responsesConvertedEventsHaveSemanticOutput(events))
 	})
 
 	if scan.Err != nil {
+		if !scan.SawOutput {
+			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+		}
 		return &OpenAIForwardResult{
 			RequestID:       requestID,
 			Usage:           scan.Usage,
@@ -224,6 +257,13 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			FirstTokenMs:    scan.FirstTokenMs,
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
+	if !scan.SawDone {
+		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
+		if !scan.SawOutput {
+			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+		}
+		return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, errors.New("upstream stream ended without [DONE]")
+	}
 	if scan.SawUsage {
 		// Keep response.completed aligned with the generic scanner used for
 		// billing, including compatible cache aliases and explicit nested zero
@@ -231,18 +271,29 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		state.Usage = responsesUsageFromCCUsage(scan.Usage, scan.UsageFields)
 	}
 
-	writeEvents(apicompat.FinalizeChatCompletionsResponsesStream(state))
-	if !clientDisconnected {
-		writeStreamHeaders()
-		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
-			clientDisconnected = true
-		}
-		if !clientDisconnected {
-			c.Writer.Flush()
-		}
+	finalSemantic, finalErr := writeEvents(apicompat.FinalizeChatCompletionsResponsesStream(state), true)
+	if finalSemantic && !scan.SawOutput {
+		scan.SawOutput = true
+		ms := int(time.Since(startTime).Milliseconds())
+		scan.FirstTokenMs = &ms
 	}
-	if !scan.SawDone {
-		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
+	if finalErr != nil {
+		if !scan.SawOutput {
+			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+		}
+		return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, fmt.Errorf("finalize converted response stream: %w", finalErr)
+	}
+	if !clientDisconnected {
+		if err := staged.write(c, writeStreamHeaders, "data: [DONE]\n\n", true); err != nil {
+			var clientWriteErr *stagedConvertedClientWriteError
+			if errors.As(err, &clientWriteErr) {
+				clientDisconnected = true
+			} else if !scan.SawOutput {
+				return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+			} else {
+				return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, fmt.Errorf("write converted response terminator: %w", err)
+			}
+		}
 	}
 
 	return &OpenAIForwardResult{
@@ -259,13 +310,23 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}, nil
 }
 
-func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool {
-	if chunk == nil {
-		return false
-	}
-	for _, choice := range chunk.Choices {
-		if choice.Delta.Content != nil || choice.Delta.ReasoningContent != nil || len(choice.Delta.ToolCalls) > 0 {
-			return true
+func responsesConvertedEventsHaveSemanticOutput(events []apicompat.ResponsesStreamEvent) bool {
+	for _, event := range events {
+		switch strings.TrimSpace(event.Type) {
+		case "response.output_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+			if event.Delta != "" {
+				return true
+			}
+		case "response.output_item.added":
+			if event.Item == nil {
+				continue
+			}
+			switch strings.TrimSpace(event.Item.Type) {
+			case "function_call", "custom_tool_call", "tool_search_call":
+				if strings.TrimSpace(event.Item.Name) != "" || event.Item.Arguments != "" || event.Item.Input != "" {
+					return true
+				}
+			}
 		}
 	}
 	return false

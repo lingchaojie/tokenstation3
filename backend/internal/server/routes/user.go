@@ -13,11 +13,16 @@ func RegisterUserRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
 	jwtAuth middleware.JWTAuthMiddleware,
+	auditLog middleware.AuditLogMiddleware,
 	settingService *service.SettingService,
 ) {
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	// 用户管理面变更类操作入审计（含 TOTP 启用/禁用、step-up 验证、密码修改等安全事件）
+	if auditLog != nil {
+		authenticated.Use(gin.HandlerFunc(auditLog))
+	}
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -55,6 +60,8 @@ func RegisterUserRoutes(
 				totp.POST("/setup", h.Totp.InitiateSetup)
 				totp.POST("/enable", h.Totp.Enable)
 				totp.POST("/disable", h.Totp.Disable)
+				// 敏感操作二次验证：授予当前会话一段时间的 step-up 权限
+				totp.POST("/step-up", h.Totp.StepUp)
 			}
 		}
 
@@ -148,6 +155,18 @@ func RegisterUserRoutes(
 			chat.POST("/attachments", h.WebChat.UploadAttachment)
 			chat.GET("/attachments/:id/download", h.WebChat.DownloadAttachment)
 			chat.GET("/artifacts/:id/download", h.WebChat.DownloadArtifact)
+		}
+
+		// V2 passive views require feature on + mode=v2.
+		monitorV2 := authenticated.Group("/channel-monitor-v2")
+		monitorV2.Use(channelMonitorModeV2Guard(settingService))
+		{
+			monitorV2.GET("/dimensions", h.ChannelMonitorV2.Dimensions)
+			monitorV2.GET("/snapshot", h.ChannelMonitorV2.Snapshot)
+			monitorV2.GET("/models", h.ChannelMonitorV2.Models)
+			monitorV2.GET("/matrix", h.ChannelMonitorV2.Matrix)
+			monitorV2.GET("/errors", h.ChannelMonitorV2.Errors)
+			monitorV2.GET("/users", h.ChannelMonitorV2.Users)
 		}
 	}
 }
