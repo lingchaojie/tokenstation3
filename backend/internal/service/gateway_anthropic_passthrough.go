@@ -442,7 +442,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	sawTerminalEvent := false
 
 	var tee *sseTee
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
 		defer func() {
 			if semanticOutput || sawTerminalEvent {
@@ -1072,7 +1073,8 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	if err != nil {
 		return nil, err
 	}
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		captured, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
 		setCaptureResult(c, resp, captured, truncated)
 	}

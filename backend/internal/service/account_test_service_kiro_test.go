@@ -417,6 +417,7 @@ func TestForwardKiroMessagesCommittedPartialCarriesUsageAndCapture(t *testing.T)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
 	account := &Account{ID: 22, Name: "kiro-partial", Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"access_token": "kiro-access-token", "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/PARTIAL"}}
 	var payload bytes.Buffer
 	_, _ = payload.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "hello"}}))
@@ -432,6 +433,102 @@ func TestForwardKiroMessagesCommittedPartialCarriesUsageAndCapture(t *testing.T)
 	require.Greater(t, result.Usage.InputTokens, 0)
 	require.Contains(t, string(result.CaptureResponse), "hello")
 	require.Contains(t, rec.Body.String(), "hello")
+}
+
+func TestCapturePolicyMissAvoidsKiroResponseTee(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := &Account{
+		ID: 24, Name: "kiro-policy-off", Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/POLICYOFF",
+			"region":       "us-east-1",
+		},
+	}
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+
+	t.Run("normal runtime stream", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		var raw bytes.Buffer
+		_, _ = raw.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "hello"},
+		}))
+		_, _ = raw.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 1, "outputTokens": 1}},
+		}))
+		upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+			Body:       io.NopCloser(bytes.NewReader(raw.Bytes())),
+		}}}
+		cfg := &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+			Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+		}}
+		svc := &GatewayService{
+			cfg: cfg, httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+			tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		}
+
+		resp, _, err := svc.openKiroAnthropicStreamResponse(
+			context.Background(), c, account, parsed, requestBody,
+			"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, nil,
+		)
+		require.NoError(t, err)
+		_, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		_, captured := takeCaptureResult(c)
+		require.False(t, captured, "runtime-policy miss must not tee the AWS response")
+	})
+
+	t.Run("websearch stream", func(t *testing.T) {
+		endpoint := "https://q.us-east-1.amazonaws.com/mcp"
+		kiroWebSearchDescCache.Store(endpoint, "Search the web")
+		t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		webSearchBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
+		webParsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(webSearchBody), domain.PlatformAnthropic)
+		require.NoError(t, parseErr)
+		mcpBody := []byte(`{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+		var raw bytes.Buffer
+		_, _ = raw.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "answer"},
+		}))
+		_, _ = raw.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 1, "outputTokens": 1}},
+		}))
+		upstream := &queuedHTTPUpstream{responses: []*http.Response{
+			{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
+			{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: io.NopCloser(bytes.NewReader(raw.Bytes()))},
+		}}
+		cfg := &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+			Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+		}}
+		svc := &GatewayService{
+			cfg: cfg, httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+			tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		}
+
+		resp, _, err := svc.openKiroAnthropicStreamResponse(
+			context.Background(), c, account, webParsed, webSearchBody,
+			"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, nil,
+		)
+		require.NoError(t, err)
+		_, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		_, captured := takeCaptureResult(c)
+		require.False(t, captured, "runtime-policy miss must not tee the WebSearch AWS response")
+	})
 }
 
 func TestForwardKiroMessagesPreOutputReadFailureIsFailover(t *testing.T) {

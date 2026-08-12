@@ -1253,6 +1253,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CommittedPartialCarriesCaptur
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	upstreamSSE := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":8}}}\n\n" +
 		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n"
@@ -1271,6 +1272,59 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CommittedPartialCarriesCaptur
 	require.NotNil(t, result)
 	require.Equal(t, 8, result.Usage.InputTokens)
 	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+}
+
+func TestCapturePolicyMissAvoidsAnthropicPassthroughResponseTee(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		body   string
+	}{
+		{
+			name:   "stream",
+			stream: true,
+			body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+				"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name:   "nonstream",
+			stream: false,
+			body:   `{"id":"msg_policy_off","type":"message","usage":{"input_tokens":1,"output_tokens":1}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			cfg := &config.Config{Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+				Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 64 << 10},
+			}}
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{map[bool]string{true: "text/event-stream", false: "application/json"}[tc.stream]},
+				},
+				Body: io.NopCloser(strings.NewReader(tc.body)),
+			}}
+			svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+			requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
+
+			result, err := svc.forwardAnthropicAPIKeyPassthrough(
+				context.Background(), c, newAnthropicAPIKeyAccountForTest(), requestBody,
+				"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", tc.stream, time.Now(),
+			)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Empty(t, result.CaptureResponse)
+			_, captured := takeCaptureResult(c)
+			require.False(t, captured, "runtime-policy miss must not create a capture bridge")
+		})
+	}
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {

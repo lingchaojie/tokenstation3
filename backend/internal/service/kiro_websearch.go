@@ -173,7 +173,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			}
 			return &kiroWebSearchHTTPError{Response: resp}
 		}
-		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+			account != nil && CaptureMayApplyFor(c, string(account.Platform))
 		captureLimit := 0
 		if s.cfg != nil {
 			captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes

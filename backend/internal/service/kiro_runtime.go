@@ -417,7 +417,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform)) {
 		stashKiroCaptureHeaders(c, resp)
 	}
-	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform))
 	captureLimit := 0
 	if s.cfg != nil {
 		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
