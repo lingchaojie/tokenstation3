@@ -109,6 +109,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			input.Body = input.Parsed.Body.Bytes()
 		}
 
+		s.captureOutboundRequest(c, account, upstreamReq, wireBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 		if err != nil {
 			if resp != nil && resp.Body != nil {
@@ -283,6 +284,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			if partial := partialStreamUsageResult(c, resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
 				return partial, err
 			}
+			// No semantic output reached the client, so this attempt remains
+			// retryable. Discard its request-only capture before another account
+			// can own the request scope.
+			_, _ = takeCaptureResult(c)
 			return nil, err
 		}
 		usage = streamResult.usage

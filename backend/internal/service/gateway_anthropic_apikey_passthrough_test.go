@@ -27,6 +27,27 @@ type anthropicHTTPUpstreamRecorder struct {
 	err      error
 }
 
+type anthropicHTTPUpstreamSequenceRecorder struct {
+	responses []*http.Response
+	bodies    [][]byte
+	requests  []*http.Request
+}
+
+func (u *anthropicHTTPUpstreamSequenceRecorder) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.requests = append(u.requests, req)
+	u.bodies = append(u.bodies, snapshotHTTPRequestBody(req))
+	if len(u.responses) == 0 {
+		return nil, io.EOF
+	}
+	resp := u.responses[0]
+	u.responses = u.responses[1:]
+	return resp, nil
+}
+
+func (u *anthropicHTTPUpstreamSequenceRecorder) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
 func newAnthropicAPIKeyAccountForTest() *Account {
 	return &Account{
 		ID:          201,
@@ -1325,6 +1346,40 @@ func TestCapturePolicyMissAvoidsAnthropicPassthroughResponseTee(t *testing.T) {
 			require.False(t, captured, "runtime-policy miss must not create a capture bridge")
 		})
 	}
+}
+
+func TestAnthropicAPIKeyPassthroughCaptureUsesFinalWireRequestAtCustomEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := newAnthropicAPIKeyAccountForTest()
+	account.Credentials["base_url"] = "https://relay.example"
+	account.Credentials["custom_error_codes_enabled"] = true
+	account.Credentials["custom_error_codes"] = []any{float64(http.StatusBadRequest)}
+	upstreamJSON := []byte(`{"id":"msg_final","type":"message","usage":{"input_tokens":2,"output_tokens":1}}`)
+	upstream := &anthropicHTTPUpstreamSequenceRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"retry"}}`))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"final-request"}}, Body: io.NopCloser(bytes.NewReader(upstreamJSON))},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(
+		context.Background(), c, account, body,
+		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, upstream.bodies[1], result.UpstreamRequest)
+	require.Equal(t, upstreamJSON, result.CaptureResponse)
+	require.Equal(t, upstream.requests[1].URL.String(), result.CaptureUpstreamEndpoint)
+	require.Equal(t, "relay.example", upstream.requests[1].URL.Host)
+	require.NotNil(t, result.CaptureContentPolicy, "custom endpoints require the account platform, not endpoint inference")
+	require.NotContains(t, string(result.CaptureRequestHeaders), "upstream-anthropic-key")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {
