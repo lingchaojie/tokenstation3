@@ -514,18 +514,23 @@ func TestGeminiMessagesCompatServiceForward_PreservesRequestedModelAndMappedUpst
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
 
+	rawProviderResponse := []byte(`{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)
 	httpStub := &geminiCompatHTTPUpstreamStub{
 		response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"x-request-id": []string{"gemini-req-1"}},
-			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)),
+			Body:       io.NopCloser(bytes.NewReader(rawProviderResponse)),
 		},
 	}
-	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{}}
+	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{Gateway: config.GatewayConfig{
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+	}}}
 	account := &Account{
-		ID:   1,
-		Type: AccountTypeAPIKey,
+		ID:       1,
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
 			"api_key": "test-key",
 			"model_mapping": map[string]any{
@@ -543,6 +548,11 @@ func TestGeminiMessagesCompatServiceForward_PreservesRequestedModelAndMappedUpst
 	require.Equal(t, 1, httpStub.calls)
 	require.NotNil(t, httpStub.lastReq)
 	require.Contains(t, httpStub.lastReq.URL.String(), "/models/claude-sonnet-4-20250514:")
+	require.Equal(t, snapshotHTTPRequestBody(httpStub.lastReq), result.CaptureRequest)
+	require.Equal(t, rawProviderResponse, result.CaptureResponse)
+	require.Equal(t, http.StatusOK, result.CaptureHTTPStatus)
+	require.NotNil(t, result.CaptureContentPolicy)
+	require.NotContains(t, string(result.CaptureRequestHeaders), "test-key")
 }
 
 func TestGeminiMessagesCompatServiceForward_NormalizesWebSearchToolForAIStudio(t *testing.T) {

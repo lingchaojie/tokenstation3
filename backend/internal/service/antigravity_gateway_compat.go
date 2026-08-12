@@ -168,6 +168,7 @@ func (s *AntigravityGatewayService) forwardAntigravityCompat(
 	account *Account,
 	request antigravityCompatRequest,
 ) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	call, err := s.prepareAntigravityCompatCall(ctx, c, account, request)
 	if err != nil {
@@ -324,7 +325,8 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 		streamResult.usage = &ClaudeUsage{}
 	}
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *streamResult.usage,
 		Model:                         call.request.originalModel,
@@ -336,7 +338,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ReasoningEffort:               call.request.reasoningEffort,
 		ClientDisconnect:              streamResult.clientDisconnect,
-	}, nil
+	}), nil
 }
 
 func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(

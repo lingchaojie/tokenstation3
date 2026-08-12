@@ -42,6 +42,7 @@ func WithForwardGeminiSession(groupID int64, sessionHash string) ForwardGeminiOp
 }
 
 func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 	forwardOpts := forwardGeminiOptions{}
@@ -200,7 +201,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
+						captureParams := antigravityRetryLoopParams{c: c, account: account, settingService: s.settingService}
+						prepareAntigravityCaptureAttempt(captureParams, fallbackReq)
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						wrapAntigravityCaptureResponse(captureParams, fallbackResp)
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
@@ -432,7 +436,8 @@ handleSuccess:
 		imageCount = 1
 	}
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -446,7 +451,7 @@ handleSuccess:
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}, nil
+	}), nil
 }
 
 // cleanGeminiRequest 清理 Gemini 请求体中的 Schema

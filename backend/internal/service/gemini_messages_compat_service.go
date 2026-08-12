@@ -592,9 +592,19 @@ func (s *GeminiMessagesCompatService) SelectAccountForAIStudioEndpoints(ctx cont
 }
 
 func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	beginGeminiImageOutputObservation(c)
 	startTime := time.Now()
+	captureEnabled := s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	captureLimit := 0
+	if s != nil && s.cfg != nil {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+	}
 
 	var req struct {
 		Model  string `json:"model"`
@@ -792,7 +802,11 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		}
 		requestIDHeader = idHeader
 
+		if captureEnabled {
+			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
+		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -1106,7 +1120,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	imageSize := normalizeOpenAIImageSizeTier(imageInputSize)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -1119,7 +1134,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}, nil
+	}), nil
 }
 
 func isGeminiSignatureRelatedError(respBody []byte) bool {
@@ -1131,9 +1146,19 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
 }
 
 func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	beginGeminiImageOutputObservation(c)
 	startTime := time.Now()
+	captureEnabled := s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	captureLimit := 0
+	if s != nil && s.cfg != nil {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+	}
 
 	if strings.TrimSpace(originalModel) == "" {
 		return nil, s.writeGoogleError(c, http.StatusBadRequest, "Missing model in URL")
@@ -1311,6 +1336,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	var resp *http.Response
+	finishCapture := func() {}
 	for attempt := 1; attempt <= geminiMaxRetries; attempt++ {
 		upstreamReq, idHeader, err := buildReq(ctx)
 		if err != nil {
@@ -1325,8 +1351,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		}
 		requestIDHeader = idHeader
 
+		if captureEnabled {
+			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
+		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		finishCapture = beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 		if err != nil {
+			finishCapture()
+			finishCapture = func() {}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -1359,15 +1391,26 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		}
 
 		// 错误策略优先：匹配则跳过重试直接处理。
+		policyReadResponse := resp.StatusCode >= 400 && s.rateLimitService != nil
 		if matched, rebuilt := s.checkErrorPolicyInLoop(ctx, account, resp, mappedModel); matched {
+			if policyReadResponse {
+				finishCapture()
+				finishCapture = func() {}
+			}
 			resp = rebuilt
 			break
 		} else {
+			if policyReadResponse {
+				finishCapture()
+				finishCapture = func() {}
+			}
 			resp = rebuilt
 		}
 
 		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
 			respBody := s.readUpstreamErrorBody(resp)
+			finishCapture()
+			finishCapture = func() {}
 			_ = resp.Body.Close()
 			// Don't treat insufficient-scope as transient.
 			if resp.StatusCode == 403 && isGeminiInsufficientScope(resp.Header, respBody) {
@@ -1435,6 +1478,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		break
 	}
+	defer finishCapture()
 	defer func() { _ = resp.Body.Close() }()
 
 	requestID := resp.Header.Get(requestIDHeader)
@@ -1641,7 +1685,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	imageSize := normalizeOpenAIImageSizeTier(imageInputSize)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
-	return &ForwardResult{
+	finishCapture()
+	finishCapture = func() {}
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -1654,7 +1700,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}, nil
+	}), nil
 }
 
 // checkErrorPolicyInLoop 在重试循环内预检查错误策略。

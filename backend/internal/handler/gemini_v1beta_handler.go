@@ -151,6 +151,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		googleError(c, http.StatusInternalServerError, "User context not found")
 		return
 	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, authSubject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gemini_v1beta.models",
@@ -172,6 +173,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		googleError(c, http.StatusNotFound, err.Error())
 		return
 	}
+	service.SetCaptureRequestedModel(c, modelName)
 	// URL 里的模型名最终会被拼进上游 /v1beta/models/{model}:{action}，
 	// 先在入口校验片段合规性，见 service/upstream_path_guard.go。
 	if !service.IsSafeGeminiModelPathSegment(modelName) {
@@ -516,6 +518,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
+		if result != nil {
+			h.submitGatewayResultCapture(result, account, body, GetUpstreamEndpoint(c, account.Platform))
+		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
@@ -556,7 +561,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-		requestPayloadHash := service.HashUsageRequestPayload(body)
+		requestPayloadHash := result.UpstreamRequestHash
+		if requestPayloadHash == "" {
+			requestPayloadHash = service.HashUsageRequestPayload(body)
+		}
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
@@ -625,6 +633,11 @@ func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverE
 	if failoverErr == nil {
 		googleError(c, http.StatusBadGateway, "Upstream request failed")
 		return
+	}
+	if h.capturePool != nil {
+		if record := service.BuildTerminalErrorCaptureRecord(c, service.PlatformGemini, failoverErr, h.captureLimit()); record != nil {
+			h.capturePool.Submit(record)
+		}
 	}
 
 	statusCode := failoverErr.StatusCode

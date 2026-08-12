@@ -775,6 +775,7 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request = req
+	enableCaptureForTest(t, c)
 
 	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
 	resp := &http.Response{
@@ -783,8 +784,9 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 	}
 
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
 	svc := &AntigravityGatewayService{
-		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
 		tokenProvider:  &AntigravityTokenProvider{},
 		httpUpstream:   &httpUpstreamStub{resp: resp},
 	}
@@ -811,6 +813,9 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "claude-sonnet-4-5", result.Model)
 	require.Equal(t, mappedModel, result.UpstreamModel)
+	require.Equal(t, upstreamBody, result.CaptureResponse)
+	require.NotEmpty(t, result.CaptureRequest)
+	require.NotNil(t, result.CaptureContentPolicy)
 }
 
 // TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel
@@ -829,6 +834,7 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 
 	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", bytes.NewReader(body))
 	c.Request = req
+	enableCaptureForTest(t, c)
 
 	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
 	resp := &http.Response{
@@ -837,8 +843,9 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 	}
 
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
 	svc := &AntigravityGatewayService{
-		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
 		tokenProvider:  &AntigravityTokenProvider{},
 		httpUpstream:   &httpUpstreamStub{resp: resp},
 	}
@@ -865,6 +872,9 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 	require.NotNil(t, result)
 	require.Equal(t, "gemini-2.5-flash", result.Model)
 	require.Equal(t, mappedModel, result.UpstreamModel)
+	require.Equal(t, upstreamBody, result.CaptureResponse)
+	require.NotEmpty(t, result.CaptureRequest)
+	require.NotNil(t, result.CaptureContentPolicy)
 }
 
 func TestAntigravityGatewayService_ForwardGemini_FallbackReportsActualUpstreamModel(t *testing.T) {

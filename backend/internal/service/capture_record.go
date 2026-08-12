@@ -108,11 +108,13 @@ type sseTee struct {
 // same capture on success and committed-error paths.
 type captureBodyReadCloser struct {
 	io.ReadCloser
-	attempt   captureAttemptToken
-	mu        sync.Mutex
-	buf       []byte
-	limit     int
-	truncated bool
+	attempt    captureAttemptToken
+	resp       *http.Response
+	mu         sync.Mutex
+	buf        []byte
+	limit      int
+	truncated  bool
+	finishOnce sync.Once
 }
 
 func (r *captureBodyReadCloser) Read(p []byte) (int, error) {
@@ -146,16 +148,39 @@ func (r *captureBodyReadCloser) bytes() ([]byte, bool) {
 	return snapshotBytes(r.buf), r.truncated
 }
 
+func (r *captureBodyReadCloser) Close() error {
+	r.Finish(r.resp)
+	return r.ReadCloser.Close()
+}
+
+func (r *captureBodyReadCloser) Finish(resp *http.Response) {
+	if r == nil {
+		return
+	}
+	r.finishOnce.Do(func() {
+		body, truncated := r.bytes()
+		setCaptureResultForAttempt(r.attempt, resp, body, truncated)
+	})
+}
+
 func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, limit int) func() {
 	limit = normalizeCaptureLimit(limit)
 	if !enabled || limit <= 0 || resp == nil || resp.Body == nil {
 		return func() {}
 	}
-	reader := &captureBodyReadCloser{ReadCloser: resp.Body, attempt: currentCaptureAttempt(c, true), limit: limit}
+	reader := &captureBodyReadCloser{ReadCloser: resp.Body, attempt: currentCaptureAttempt(c, true), resp: resp, limit: limit}
 	resp.Body = reader
 	return func() {
-		body, truncated := reader.bytes()
-		setCaptureResultForAttempt(reader.attempt, resp, body, truncated)
+		reader.Finish(resp)
+	}
+}
+
+func finishCaptureResponse(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	if body, ok := resp.Body.(*captureBodyReadCloser); ok {
+		body.Finish(resp)
 	}
 }
 

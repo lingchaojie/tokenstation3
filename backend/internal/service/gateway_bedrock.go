@@ -127,7 +127,8 @@ func (s *GatewayService) forwardBedrock(
 
 	// 错误/failover 处理
 	if resp.StatusCode >= 400 {
-		return s.handleBedrockUpstreamErrors(ctx, resp, c, account)
+		result, handleErr := s.handleBedrockUpstreamErrors(ctx, resp, c, account)
+		return finalizeForwardResult(c, result), handleErr
 	}
 
 	// Bedrock 分支绕过通用 Forward 成功路径，这里保持上游接受回调语义一致。
@@ -157,7 +158,8 @@ func (s *GatewayService) forwardBedrock(
 		usage = &ClaudeUsage{}
 	}
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:        resp.Header.Get("x-amzn-requestid"),
 		Usage:            *usage,
 		Model:            reqModel,
@@ -166,7 +168,7 @@ func (s *GatewayService) forwardBedrock(
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}), nil
 }
 
 // executeBedrockUpstream 执行 Bedrock 上游请求（含重试逻辑）
@@ -195,6 +197,7 @@ func (s *GatewayService) executeBedrockUpstream(
 		if err != nil {
 			return nil, err
 		}
+		s.captureOutboundRequest(c, account, upstreamReq, body)
 
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
 		if err != nil {
@@ -221,6 +224,15 @@ func (s *GatewayService) executeBedrockUpstream(
 			})
 			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
+		beginCaptureResponse(c, resp,
+			s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform)),
+			func() int {
+				if s.cfg == nil {
+					return 0
+				}
+				return s.cfg.Gateway.Capture.MaxBodyBytes
+			}(),
+		)
 
 		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {

@@ -46,6 +46,27 @@ type antigravityRetryLoopResult struct {
 	resp *http.Response
 }
 
+func antigravityCaptureEnabled(p antigravityRetryLoopParams) bool {
+	return p.settingService != nil && p.settingService.cfg != nil &&
+		p.settingService.cfg.Gateway.Capture.Enabled && p.account != nil &&
+		CaptureMayApplyFor(p.c, string(p.account.Platform))
+}
+
+func prepareAntigravityCaptureAttempt(p antigravityRetryLoopParams, req *http.Request) {
+	if !antigravityCaptureEnabled(p) {
+		return
+	}
+	setCapturePlatform(p.c, string(p.account.Platform))
+	setCaptureUpstreamRequest(p.c, req, p.settingService.cfg.Gateway.Capture.MaxBodyBytes)
+}
+
+func wrapAntigravityCaptureResponse(p antigravityRetryLoopParams, resp *http.Response) {
+	if !antigravityCaptureEnabled(p) {
+		return
+	}
+	_ = beginCaptureResponse(p.c, resp, true, p.settingService.cfg.Gateway.Capture.MaxBodyBytes)
+}
+
 // resolveAntigravityForwardBaseURL 解析转发用 base URL。
 //
 // 默认使用生产端点 cloudcode-pa.googleapis.com（antigravity.BaseURLs 的首个地址，
@@ -212,7 +233,9 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				}
 			}
 
+			prepareAntigravityCaptureAttempt(p, retryReq)
 			retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			wrapAntigravityCaptureResponse(p, retryResp)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
 				// 重试成功，清除 MODEL_CAPACITY_EXHAUSTED cooldown
@@ -387,7 +410,9 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 			break
 		}
 
+		prepareAntigravityCaptureAttempt(p, retryReq)
 		retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+		wrapAntigravityCaptureResponse(p, retryResp)
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d single_account_503_retry_success attempt=%d/%d total_waited=%v",
 				p.prefix, retryResp.StatusCode, attempt, antigravitySingleAccountSmartRetryMaxAttempts, totalWaited)
@@ -525,7 +550,9 @@ urlFallbackLoop:
 				return nil, err
 			}
 
+			prepareAntigravityCaptureAttempt(p, upstreamReq)
 			resp, err = p.httpUpstream.Do(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			wrapAntigravityCaptureResponse(p, resp)
 			if err == nil && resp == nil {
 				err = errors.New("upstream returned nil response")
 			}

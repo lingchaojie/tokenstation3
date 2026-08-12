@@ -19,6 +19,7 @@ import (
 
 // ForwardUpstream 使用 base_url + /v1/messages + 双 header 认证透传上游 Claude 请求
 func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 	sessionID := getSessionID(c)
@@ -79,11 +80,22 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	}
 
 	// 发送请求
+	captureLimit := 0
+	if s.settingService != nil && s.settingService.cfg != nil {
+		captureLimit = s.settingService.cfg.Gateway.Capture.MaxBodyBytes
+	}
+	captureEnabled := s.settingService != nil && s.settingService.cfg != nil &&
+		s.settingService.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform))
+	if captureEnabled {
+		setCapturePlatform(c, string(account.Platform))
+		setCaptureUpstreamRequest(c, req, captureLimit)
+	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
+	_ = beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 	defer func() { _ = resp.Body.Close() }()
 
 	// 处理错误响应
@@ -100,9 +112,10 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		c.Status(resp.StatusCode)
 		_, _ = c.Writer.Write(respBody)
 
-		return &ForwardResult{
+		finishCaptureResponse(resp)
+		return finalizeForwardResult(c, &ForwardResult{
 			Model: originalModel,
-		}, nil
+		}), nil
 	}
 
 	// 处理成功响应（流式/非流式）
@@ -142,7 +155,8 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	duration := time.Since(startTime)
 	logger.LegacyPrintf("service.antigravity_gateway", "%s status=success duration_ms=%d", prefix, duration.Milliseconds())
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		Model:                         originalModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
@@ -156,7 +170,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 			CacheReadInputTokens:     usage.CacheReadInputTokens,
 			CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		},
-	}, nil
+	}), nil
 }
 
 // streamUpstreamResponse 透传上游 SSE 流并提取 Claude usage
