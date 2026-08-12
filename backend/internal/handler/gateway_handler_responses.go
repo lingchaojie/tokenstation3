@@ -35,6 +35,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		h.responsesErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
+	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.responses",
@@ -75,6 +76,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	service.SetCaptureRequestedModel(c, reqModel)
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
 		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
@@ -275,6 +277,33 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			accountReleaseFunc()
 		}
 
+		submitForwardUsage := func(result *service.ForwardResult) {
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetClientIP(c)
+			requestPayloadHash := result.UpstreamRequestHash
+			if requestPayloadHash == "" {
+				requestPayloadHash = service.HashUsageRequestPayload(forwardBody)
+			}
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			h.submitGatewayResultCapture(result, account, forwardBody, upstreamEndpoint)
+			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+			sessionID := service.ExtractClientSessionID(c)
+			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					Result: result, QuotaPlatform: quotaPlatform, APIKey: apiKey, User: apiKey.User,
+					Account: account, Subscription: subscription, PricingAt: pricingAt,
+					InboundEndpoint: inboundEndpoint, UpstreamEndpoint: upstreamEndpoint,
+					UserAgent: userAgent, IPAddress: clientIP, RequestPayloadHash: requestPayloadHash,
+					APIKeyService: h.apiKeyService, SessionID: sessionID,
+					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				}); err != nil {
+					reqLog.Error("gateway.responses.record_usage_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				}
+			})
+		}
+		newGatewayForwardSideEffectSubmitter(submitForwardUsage).Submit(result)
+
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
@@ -309,39 +338,6 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 
-		// 6. Record usage
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		requestPayloadHash := service.HashUsageRequestPayload(body)
-		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-
-		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
-		sessionID := service.ExtractClientSessionID(c)
-		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-				Result:             result,
-				QuotaPlatform:      quotaPlatform,
-				APIKey:             apiKey,
-				User:               apiKey.User,
-				Account:            account,
-				Subscription:       subscription,
-				PricingAt:          pricingAt,
-				InboundEndpoint:    inboundEndpoint,
-				UpstreamEndpoint:   upstreamEndpoint,
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
-				SessionID:          sessionID,
-				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-			}); err != nil {
-				reqLog.Error("gateway.responses.record_usage_failed",
-					zap.Int64("account_id", account.ID),
-					zap.Error(err),
-				)
-			}
-		})
 		return
 	}
 }
@@ -362,6 +358,11 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 		return // Can't write error after stream started
 	}
 	if lastErr != nil {
+		if h.capturePool != nil {
+			if record := service.BuildTerminalErrorCaptureRecord(c, lastErr.Platform, lastErr, h.captureLimit()); record != nil {
+				h.capturePool.Submit(record)
+			}
+		}
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
 	}
 	if lastErr != nil && lastErr.IsCredentialFailure() {

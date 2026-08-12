@@ -24,6 +24,23 @@ type webChatFinalGatewayErrorCaptureSubmitter interface {
 
 type webChatFinalGatewayErrorCaptureContextKey struct{}
 
+const webChatCaptureOwnerContextKey = "web_chat_capture_owner"
+
+func markWebChatCaptureOwner(c *gin.Context) {
+	if c != nil {
+		c.Set(webChatCaptureOwnerContextKey, true)
+	}
+}
+
+func isWebChatCaptureOwner(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	value, exists := c.Get(webChatCaptureOwnerContextKey)
+	owned, _ := value.(bool)
+	return exists && owned
+}
+
 func hasWebChatFinalGatewayErrorCaptureSubmitter(ctx context.Context) bool {
 	if ctx == nil {
 		return false

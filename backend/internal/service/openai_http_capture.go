@@ -60,7 +60,8 @@ func (r *openAIHTTPCaptureReadCloser) Finish() {
 
 func (s *OpenAIGatewayService) openAIHTTPCaptureEnabled(c *gin.Context, account *Account) bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil &&
-		openAIHTTPCaptureEndpointEligible(c) && CaptureMayApplyFor(c, string(account.Platform))
+		(openAIHTTPCaptureEndpointEligible(c) || isWebChatCaptureOwner(c)) &&
+		CaptureMayApplyFor(c, string(account.Platform))
 }
 
 func openAIHTTPCaptureEndpointEligible(c *gin.Context) bool {

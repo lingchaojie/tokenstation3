@@ -348,6 +348,68 @@ func (h *webChatRealGatewayHarness) SelectAccountWithLoadAwareness(context.Conte
 
 func (*webChatRealGatewayHarness) RecordUsage(context.Context, *RecordUsageInput) error { return nil }
 
+type webChatRealOpenAIHarness struct {
+	*OpenAIGatewayService
+	account *Account
+}
+
+func (h *webChatRealOpenAIHarness) SelectAccountWithLoadAwareness(context.Context, *int64, string, string, map[int64]struct{}) (*AccountSelectionResult, error) {
+	return &AccountSelectionResult{Account: h.account, Acquired: true}, nil
+}
+
+func (*webChatRealOpenAIHarness) RecordUsage(context.Context, *OpenAIRecordUsageInput) error {
+	return nil
+}
+
+func TestWebChatDispatch_OpenAIArchivesProviderRequestAndResponseExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := []byte(`{"id":"resp_webchat","object":"response","created_at":1,"status":"completed","model":"gpt-5.5-upstream","output":[{"type":"message","id":"msg_webchat","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Done.","annotations":[]}]}],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}`)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid-openai-webchat"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}}
+	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	defer pool.Stop()
+	cfg := captureEnabledConfigForTest(1 << 20)
+	cfg.Security.URLAllowlist.Enabled = false
+	openAI := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: pool}
+	account := &Account{
+		ID: 502, Name: "webchat-real-openai", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "openai-secret", "base_url": "https://api.openai.test",
+			"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5-upstream"},
+		},
+		Extra: map[string]any{"use_responses_api": true}, Status: StatusActive, Schedulable: true,
+	}
+
+	double := newWebChatServiceWithStubs(t)
+	double.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+	double.openAIGatewayService = &webChatRealOpenAIHarness{OpenAIGatewayService: openAI, account: account}
+	result, err := double.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+		User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+		ConversationID: 7, AssistantMessageID: 101, Model: "gpt-5.5", Provider: "openai",
+		Capabilities: WebChatModelCapability{Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true},
+		Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello from webchat"}}, Stream: false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, upstream.lastBody)
+	pool.Stop()
+	require.Len(t, writer.records, 1)
+
+	select {
+	case archived := <-writer.records:
+		require.Equal(t, upstream.lastBody, archived.RawRequest)
+		require.Equal(t, upstreamBody, archived.RawResponse)
+		require.Equal(t, "gpt-5.5-upstream", gjson.GetBytes(archived.RawRequest, "model").String())
+		require.NotContains(t, string(archived.RequestHeaders), "openai-secret")
+	case <-time.After(time.Second):
+		t.Fatal("real OpenAI WebChat dispatch submitted no capture record")
+	}
+}
+
 func TestWebChatDispatch_AnthropicArchivesRecorderFinalRequestExactlyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstreamSSE := strings.Join([]string{

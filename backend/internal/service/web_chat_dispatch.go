@@ -94,6 +94,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	}
 	PrepareCaptureScope(ctx, c, s.settingService, input.User.ID, &group.ID)
 	SetCaptureRequestedModel(c, input.Model)
+	markWebChatCaptureOwner(c)
 	if s.subscriptionService == nil || s.billingCacheService == nil {
 		return nil, ErrBillingServiceUnavailable
 	}

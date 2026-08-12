@@ -152,6 +152,44 @@ func (h *GatewayHandler) captureLimit() int {
 	return h.cfg.Gateway.Capture.MaxBodyBytes
 }
 
+func (h *GatewayHandler) submitGatewayResultCapture(
+	result *service.ForwardResult,
+	account *service.Account,
+	fallbackRequest []byte,
+	upstreamEndpoint string,
+) {
+	if h == nil || h.capturePool == nil || result == nil || account == nil ||
+		result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+		return
+	}
+	finalRequest := result.UpstreamRequest
+	if finalRequest == nil {
+		finalRequest = fallbackRequest
+	}
+	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(finalRequest, h.captureLimit())
+	thinkingEffort := ""
+	if result.ReasoningEffort != nil {
+		thinkingEffort = *result.ReasoningEffort
+	}
+	h.capturePool.Submit(&service.CaptureRecord{
+		CapturedAt:       time.Now().UTC(),
+		Platform:         string(account.Platform),
+		RequestID:        service.CaptureRequestID(result.RequestID),
+		RequestedModel:   result.Model,
+		UpstreamModel:    result.UpstreamModel,
+		UpstreamEndpoint: firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
+		Stream:           result.Stream,
+		HTTPStatus:       result.HTTPStatusForCapture(),
+		ThinkingEffort:   thinkingEffort,
+		RawRequest:       rawRequest,
+		RawResponse:      result.CaptureResponse,
+		RequestHeaders:   result.CaptureRequestHeaders,
+		ResponseHeaders:  result.CaptureResponseHeaders,
+		Truncated:        result.CaptureTruncated || requestTruncated,
+		ContentPolicy:    result.CaptureContentPolicy,
+	})
+}
+
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
@@ -965,34 +1003,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				})
 
-				if h.capturePool != nil && result.CaptureResponse != nil && result.CaptureContentPolicy != nil {
-					finalRequest := result.UpstreamRequest
-					if finalRequest == nil {
-						finalRequest = attemptParsedReq.Body.Bytes()
-					}
-					rawReq, reqTrunc := service.SnapshotForCaptureWithFlag(finalRequest, h.captureLimit())
-					effort := ""
-					if e := service.NormalizeClaudeOutputEffort(attemptParsedReq.OutputEffort); e != nil {
-						effort = *e
-					}
-					h.capturePool.Submit(&service.CaptureRecord{
-						CapturedAt:       time.Now().UTC(),
-						Platform:         string(account.Platform),
-						RequestID:        service.CaptureRequestID(result.RequestID),
-						RequestedModel:   result.Model,
-						UpstreamModel:    result.UpstreamModel,
-						UpstreamEndpoint: firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
-						Stream:           result.Stream,
-						HTTPStatus:       result.HTTPStatusForCapture(),
-						ThinkingEffort:   effort,
-						RawRequest:       rawReq,
-						RawResponse:      result.CaptureResponse,
-						RequestHeaders:   result.CaptureRequestHeaders,
-						ResponseHeaders:  result.CaptureResponseHeaders,
-						Truncated:        result.CaptureTruncated || reqTrunc,
-						ContentPolicy:    result.CaptureContentPolicy,
-					})
-				}
+				h.submitGatewayResultCapture(result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 			}
 			forwardSideEffects := newGatewayForwardSideEffectSubmitter(submitForwardUsage)
 

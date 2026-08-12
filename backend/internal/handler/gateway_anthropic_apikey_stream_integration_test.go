@@ -97,6 +97,22 @@ type gatewayAnthropicHandlerRunResult struct {
 }
 
 func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser) gatewayAnthropicHandlerRunResult {
+	return runGatewayAnthropicCompatHandler(
+		t,
+		EndpointMessages,
+		`{"model":"claude-test","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+		newBody,
+		func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
+	)
+}
+
+func runGatewayAnthropicCompatHandler(
+	t *testing.T,
+	endpoint string,
+	requestBody string,
+	newBody func() io.ReadCloser,
+	handle func(*GatewayHandler, *gin.Context),
+) gatewayAnthropicHandlerRunResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -175,9 +191,7 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, EndpointMessages, strings.NewReader(
-		`{"model":"claude-test","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`,
-	))
+	c.Request = httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID: 9633, UserID: userID, GroupID: func() *int64 { id := groupID; return &id }(),
@@ -186,7 +200,7 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: userID, Concurrency: 10})
 
-	h.Messages(c)
+	handle(h, c)
 	capturePool.Stop()
 
 	var captures []*service.CaptureRecord
@@ -203,6 +217,44 @@ func runGatewayAnthropicAPIKeyStream(t *testing.T, newBody func() io.ReadCloser)
 				calls:    upstream.callCount(),
 			}
 		}
+	}
+}
+
+func TestGatewayCompatibilityHandlersArchiveProviderAttemptExactlyOnce(t *testing.T) {
+	upstreamSSE := strings.Join([]string{
+		`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_compat","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2}}}`,
+		`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+	}, "\n\n") + "\n\n"
+	tests := []struct {
+		name, endpoint, requestBody string
+		handle                      func(*GatewayHandler, *gin.Context)
+	}{
+		{
+			name: "chat_completions", endpoint: EndpointChatCompletions,
+			requestBody: `{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.ChatCompletions(c) },
+		},
+		{
+			name: "responses", endpoint: EndpointResponses,
+			requestBody: `{"model":"claude-test","stream":true,"input":"hello"}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runGatewayAnthropicCompatHandler(t, tt.endpoint, tt.requestBody, func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(upstreamSSE))
+			}, tt.handle)
+
+			require.Equal(t, 1, got.calls)
+			require.Len(t, got.usages, 1)
+			require.Len(t, got.captures, 1, "the compatibility handler must submit its final provider exchange exactly once")
+			require.Equal(t, upstreamSSE, string(got.captures[0].RawResponse))
+			require.Contains(t, string(got.captures[0].RawRequest), `"model":"claude-test"`)
+		})
 	}
 }
 
