@@ -547,7 +547,7 @@ func TestBuildKiroPayloadSkipsAdditionalModelRequestFieldsForLegacyThinkingModel
 
 // 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
-func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *testing.T) {
+func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47Opus48AndOpus5(t *testing.T) {
 	cases := []struct {
 		name    string
 		model   string
@@ -556,6 +556,7 @@ func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *te
 	}{
 		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStr: true},
 		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStr: true},
+		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStr: true},
 		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStr: false},
 	}
 	for _, tc := range cases {
@@ -3480,6 +3481,11 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
+		"gpt-5.6-sol":                         "gpt-5.6-sol",
+		"gpt-5.6-terra":                       "gpt-5.6-terra",
+		"gpt-5.6-luna":                        "gpt-5.6-luna",
+		"claude-opus-5":                       "claude-opus-5",
+		"claude-opus-5-thinking":              "claude-opus-5",
 		"claude-opus-4-8":                     "claude-opus-4.8",
 		"claude-opus-4-8-thinking":            "claude-opus-4.8",
 		"claude-opus-4.8":                     "claude-opus-4.8",
@@ -3537,6 +3543,8 @@ func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]bool{
+		"claude-opus-5":              true,
+		"claude-opus-5-thinking":     true,
 		"claude-opus-4.6":            true,
 		"claude-opus-4-9-thinking":   true,
 		"claude-sonnet-5":            true,
@@ -3550,6 +3558,35 @@ func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
 	for modelID, want := range cases {
 		require.Equal(t, want, isOutputConfigPathModel(modelID), modelID)
 	}
+}
+
+func TestKiroNewModelsUseExpectedThinkingAndTokenLimits(t *testing.T) {
+	t.Parallel()
+
+	for _, modelID := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5", "claude-opus-5-thinking"} {
+		require.Equal(t, 128000, kiroMaxOutputTokensForModel(modelID), modelID)
+	}
+
+	directive := thinkingDirectiveFromModel("claude-opus-5-thinking")
+	require.NotNil(t, directive)
+	require.Equal(t, "adaptive", directive.Mode)
+	require.Equal(t, 24576, directive.BudgetTokens)
+	require.Equal(t, "high", directive.Effort)
+}
+
+func TestBuildKiroPayloadDisablesThinkingForGPT56(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"thinking":{"type":"enabled","budget_tokens":12000},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+	result, err := BuildKiroPayloadWithContext(body, "gpt-5.6-sol", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.False(t, result.Context.ThinkingEnabled)
+	require.False(t, gjson.GetBytes(result.Payload, "additionalModelRequestFields").Exists())
+	require.NotContains(t, string(result.Payload), "<thinking_mode>")
 }
 
 func TestMapModel_ReturnsEmptyForUnsupportedModels(t *testing.T) {

@@ -39,7 +39,7 @@
 - Consumes: `domain.DefaultKiroModelMapping`, `kiro.DefaultModels`, `kiro.MapModel(string) string`.
 - Produces: KIRO fallback model IDs for public/admin listing and exact GPT-5.6/Opus 5 translation behavior.
 
-- [ ] **Step 1: Add failing model mapping and catalog tests**
+- [x] **Step 1: Add failing model mapping and catalog tests**
 
 Add exact assertions:
 
@@ -71,7 +71,7 @@ func TestMapModelSupportsGPT56AndOpus5(t *testing.T) {
 
 Add fallback-list tests that call `defaultModelIDsForPlatform(PlatformKiro)` and `defaultModelsListCandidateIDs(PlatformKiro)`, compare them to the IDs in `kiro.DefaultModels`, and assert GPT-5.6/Opus 5 are present.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 Run:
 
@@ -82,7 +82,7 @@ go test -tags=unit -count=1 ./internal/domain ./internal/pkg/kiro ./internal/han
 
 Expected: failures for missing GPT-5.6, Opus 5, `codex-auto-review`, and missing KIRO fallback cases.
 
-- [ ] **Step 3: Add the exact model entries and predicates**
+- [x] **Step 3: Add the exact model entries and predicates**
 
 Add these mappings and catalog entries:
 
@@ -110,7 +110,7 @@ case PlatformKiro:
 
 Use the existing import alias style in each package; do not touch local billing/usage files from `9f41d6b`.
 
-- [ ] **Step 4: Run backend and frontend model tests GREEN**
+- [x] **Step 4: Run backend and frontend model tests GREEN**
 
 Run:
 
@@ -123,7 +123,7 @@ COREPACK_ENABLE_PROJECT_SPEC=0 pnpm exec vitest run src/composables/__tests__/us
 
 Expected: all selected tests pass and `frontend/package.json` remains unchanged.
 
-- [ ] **Step 5: Commit the model contract**
+- [x] **Step 5: Commit the model contract**
 
 ```bash
 git add backend/internal/domain/constants.go backend/internal/domain/constants_test.go backend/internal/pkg/kiro/models.go backend/internal/pkg/kiro/models_test.go backend/internal/pkg/kiro/translator.go backend/internal/pkg/kiro/translator_test.go backend/internal/handler/gateway_handler.go backend/internal/handler/gateway_models_test.go backend/internal/service/admin_group.go backend/internal/service/admin_service_group_test.go frontend/src/composables/__tests__/useModelWhitelist.spec.ts

@@ -15,6 +15,15 @@ func ptrString[T ~string](v T) *string {
 	return &s
 }
 
+func TestDefaultModelsListCandidateIDs_Kiro(t *testing.T) {
+	t.Parallel()
+
+	ids := defaultModelsListCandidateIDs(PlatformKiro)
+	require.Contains(t, ids, "gpt-5.6-sol")
+	require.Contains(t, ids, "claude-opus-5")
+	require.NotContains(t, ids, "claude-3-5-sonnet-20241022")
+}
+
 // groupRepoStubForAdmin 用于测试 AdminService 的 GroupRepository Stub
 type groupRepoStubForAdmin struct {
 	created  *Group // 记录 Create 调用的参数

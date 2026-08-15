@@ -312,12 +312,16 @@ type kiroSemanticEvent struct {
 
 func MapModel(model string) string {
 	switch strings.TrimSpace(strings.ToLower(model)) {
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return strings.TrimSpace(strings.ToLower(model))
 	case "claude-opus-4-8", "claude-opus-4-8-thinking", "claude-opus-4.8":
 		return "claude-opus-4.8"
 	case "claude-opus-4-7", "claude-opus-4-7-thinking", "claude-opus-4.7":
 		return "claude-opus-4.7"
 	case "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6":
 		return "claude-opus-4.6"
+	case "claude-opus-5", "claude-opus-5-thinking":
+		return "claude-opus-5"
 	case "claude-sonnet-5", "claude-sonnet-5-thinking":
 		return "claude-sonnet-5"
 	case "claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4.6":
@@ -371,7 +375,7 @@ func normalizeClaudeVersionNumber(model string) string {
 // requiresImplicitThinkingTagStripping 判断是否需要在客户端未显式请求 thinking 时
 // 仍开启流式/非流式解析器的 <thinking> tag 抽取。
 //
-// Opus 4.7/4.8 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
+// Opus 4.7/4.8/5 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
 // 不开启抽取会让标签和思考内容直接落到 assistant 正文,客户端看到形如
 // "<thinking>...</thinking>final" 的乱码。
 //
@@ -380,7 +384,8 @@ func normalizeClaudeVersionNumber(model string) string {
 func requiresImplicitThinkingTagStripping(modelID string) bool {
 	switch strings.TrimSpace(strings.ToLower(modelID)) {
 	case "claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
-		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking":
+		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking",
+		"claude-opus-5", "claude-opus-5-thinking":
 		return true
 	}
 	return false
@@ -397,10 +402,20 @@ func normalizeModelAlias(model string) string {
 	}
 }
 
+func isKiroGPTModel(modelID string) bool {
+	switch normalizeModelAlias(modelID) {
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return true
+	default:
+		return false
+	}
+}
+
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6",
+		"claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 128000
 	case "claude-sonnet-4-6", "claude-sonnet-4.6":
 		return 64000
@@ -488,6 +503,10 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 		} else {
 			baseSystem = inlineSystem
 		}
+	}
+	if isKiroGPTModel(modelID) {
+		thinking = nil
+		requestCtx.ThinkingEnabled = false
 	}
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
 
@@ -1679,10 +1698,11 @@ func thinkingDirectiveFromModel(model string) *thinkingDirective {
 			BudgetTokens: 20000,
 			Effort:       "high",
 		}
-	// opus 4.7/4.8 走 adaptive 高预算,budget 对齐 Antigravity 的 ClaudeAdaptiveHighThinkingBudgetTokens
+	// opus 4.7/4.8/5 走 adaptive 高预算,budget 对齐 Antigravity 的 ClaudeAdaptiveHighThinkingBudgetTokens
 	// 避免 thinking 提前耗尽导致流式中途断开
 	case "claude-opus-4-7", "claude-opus-4.7",
-		"claude-opus-4-8", "claude-opus-4.8":
+		"claude-opus-4-8", "claude-opus-4.8",
+		"claude-opus-5":
 		return &thinkingDirective{
 			Mode:         "adaptive",
 			BudgetTokens: 24576,
@@ -1810,6 +1830,7 @@ func isOutputConfigPathModel(modelID string) bool {
 	}
 	// Claude 4.6+ 所有模型使用 output_config 路径
 	for _, prefix := range []string{"claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8",
+		"claude-opus-5",
 		"claude-sonnet-4.6", "claude-sonnet-4.7", "claude-sonnet-4.8",
 		"claude-haiku-4.6", "claude-haiku-4.7", "claude-haiku-4.8"} {
 		if normalized == prefix || strings.HasPrefix(normalized, prefix+"-") || strings.HasPrefix(normalized, prefix+".") {

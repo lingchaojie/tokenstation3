@@ -2,6 +2,29 @@ package domain
 
 import "testing"
 
+func TestDefaultKiroModelMapping_ContainsGPT56AndOpus5(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"gpt-5.6-sol":            "gpt-5.6-sol",
+		"gpt-5.6-terra":          "gpt-5.6-terra",
+		"gpt-5.6-luna":           "gpt-5.6-luna",
+		"codex-auto-review":      "gpt-5.6-luna",
+		"claude-opus-5":          "claude-opus-5",
+		"claude-opus-5-thinking": "claude-opus-5",
+	}
+
+	for from, want := range cases {
+		got, ok := DefaultKiroModelMapping[from]
+		if !ok {
+			t.Fatalf("expected KIRO mapping for %q to exist", from)
+		}
+		if got != want {
+			t.Fatalf("unexpected KIRO mapping for %q: got %q want %q", from, got, want)
+		}
+	}
+}
+
 func TestDefaultAntigravityModelMapping_ImageCompatibilityAliases(t *testing.T) {
 	t.Parallel()
 
