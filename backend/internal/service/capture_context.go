@@ -115,3 +115,15 @@ func (s *GatewayService) captureOutboundRequest(c *gin.Context, account *Account
 	setCapturePlatform(c, string(account.Platform))
 	SetCaptureOutboundRequest(c, req, body, s.cfg.Gateway.Capture.MaxBodyBytes)
 }
+
+// beginGatewayCaptureResponse attaches the raw provider-response tee for the
+// same policy-approved attempt created by captureOutboundRequest. Keeping this
+// guard next to the request snapshot prevents response buffering when runtime
+// capture policy cannot match the request.
+func (s *GatewayService) beginGatewayCaptureResponse(c *gin.Context, account *Account, resp *http.Response) func() {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil ||
+		!CaptureMayApplyFor(c, string(account.Platform)) {
+		return func() {}
+	}
+	return beginCaptureResponse(c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
+}

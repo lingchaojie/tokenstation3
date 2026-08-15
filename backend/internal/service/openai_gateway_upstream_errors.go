@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -126,6 +125,9 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
 		if code == "" {
 			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+		}
+		if code == "" {
+			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "code").String()))
 		}
 		return code == "server_is_overloaded" || code == "slow_down"
 	}
@@ -315,7 +317,7 @@ func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte
 	if s != nil {
 		cfg = s.cfg
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, openAIUpstreamErrorBodyReadLimitForConfig(cfg)))
+	body, _ := readCaptureAwareUpstreamErrorBody(resp, openAIUpstreamErrorBodyReadLimitForConfig(cfg))
 	return body
 }
 

@@ -4,12 +4,29 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAuditLogRepositoryTruncateStringPreservesUTF8AtByteBoundary(t *testing.T) {
+	input := strings.Repeat("a", 63) + "中"
+	got := truncateString(input, 64)
+	require.True(t, utf8.ValidString(got))
+	require.LessOrEqual(t, len(got), 64)
+	require.Equal(t, strings.Repeat("a", 63), got)
+}
+
+func TestAuditLogRepositoryTruncateStringHandlesLargeUntrustedFieldInLinearPrefix(t *testing.T) {
+	input := strings.Repeat("a", 1<<20) + "中"
+	got := truncateString(input, 512)
+	require.Equal(t, strings.Repeat("a", 512), got)
+	require.True(t, utf8.ValidString(got))
+}
 
 func auditLogInsertAnyArgs() []driver.Value {
 	args := make([]driver.Value, 16)

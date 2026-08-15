@@ -28,17 +28,78 @@ const (
 type grokResponsesBillingPingFilterBody struct {
 	*io.PipeReader
 	source    io.Closer
+	done      chan struct{}
 	closeOnce sync.Once
 	closeErr  error
 }
 
+func (b *grokResponsesBillingPingFilterBody) providerReadActivity() *providerBodyReadActivity {
+	if b == nil {
+		return nil
+	}
+	if carrier, ok := b.source.(providerBodyReadActivityCarrier); ok {
+		return carrier.providerReadActivity()
+	}
+	return nil
+}
+
 func (b *grokResponsesBillingPingFilterBody) Close() error {
+	readerErr := b.closeCaptureUnderlying()
+	b.joinCaptureReaders()
+	b.finishCapture()
+	if readerErr != nil {
+		return readerErr
+	}
+	return b.closeErr
+}
+
+func (b *grokResponsesBillingPingFilterBody) closeCaptureUnderlying() error {
 	readerErr := b.PipeReader.Close()
-	sourceErr := b.closeSource()
+	var sourceErr error
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		sourceErr = source.closeCaptureUnderlying()
+	} else {
+		sourceErr = b.closeSource()
+	}
 	if readerErr != nil {
 		return readerErr
 	}
 	return sourceErr
+}
+
+func (b *grokResponsesBillingPingFilterBody) joinCaptureReaders() {
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		source.joinCaptureReaders()
+	}
+	if b.done != nil {
+		<-b.done
+	}
+}
+
+func (b *grokResponsesBillingPingFilterBody) finishCapture() {
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		source.finishCapture()
+	}
+}
+
+func (b *grokResponsesBillingPingFilterBody) captureResponseNeedsDrain() bool {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		return source.captureResponseNeedsDrain()
+	}
+	return false
+}
+
+func (b *grokResponsesBillingPingFilterBody) captureResponseDrainRemaining() int64 {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		return source.captureResponseDrainRemaining()
+	}
+	return 0
+}
+
+func (b *grokResponsesBillingPingFilterBody) markCaptureResponseTruncated() {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		source.markCaptureResponseTruncated()
+	}
 }
 
 func (b *grokResponsesBillingPingFilterBody) closeSource() error {
@@ -51,8 +112,11 @@ func newGrokResponsesBillingPingFilterBody(source io.ReadCloser, account *Accoun
 		return source
 	}
 	reader, writer := io.Pipe()
-	body := &grokResponsesBillingPingFilterBody{PipeReader: reader, source: source}
-	go filterGrokResponsesBillingPings(source, writer, body.closeSource, maxLineSize)
+	body := &grokResponsesBillingPingFilterBody{PipeReader: reader, source: source, done: make(chan struct{})}
+	go func() {
+		defer close(body.done)
+		filterGrokResponsesBillingPings(source, writer, body.closeSource, maxLineSize)
+	}()
 	return body
 }
 

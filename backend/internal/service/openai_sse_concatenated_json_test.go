@@ -358,7 +358,8 @@ func assertOpenAISSEFrames(t *testing.T, body string, expectedTypes []string) {
 	var parser openAICompatSSEFrameParser
 	var eventTypes []string
 	for _, line := range strings.Split(body, "\n") {
-		frame, ok := parser.AddLine(strings.TrimSuffix(line, "\r"))
+		frame, ok, err := parser.AddLine(strings.TrimSuffix(line, "\r"))
+		require.NoError(t, err)
 		if !ok {
 			continue
 		}
@@ -372,7 +373,9 @@ func assertOpenAISSEFrames(t *testing.T, body string, expectedTypes []string) {
 		}
 		eventTypes = append(eventTypes, event.Type)
 	}
-	if frame, ok := parser.Finish(); ok {
+	if frame, ok, err := parser.Finish(); err != nil {
+		require.NoError(t, err)
+	} else if ok {
 		require.True(t, json.Valid([]byte(frame.Data)))
 		var event struct {
 			Type string `json:"type"`
@@ -390,7 +393,10 @@ func openAIConcatenatedJSONTestEvents(t *testing.T) (string, string, string) {
 	suffix := `"},"sequence_number":1}`
 	require.Less(t, len(prefix)+len(suffix), javascriptErrorPosition)
 	largeInProgress := prefix + strings.Repeat("x", javascriptErrorPosition-len(prefix)-len(suffix)) + suffix
-	outputItemAdded := `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","status":"in_progress","content":[]},"sequence_number":2}`
+	// Deliberately omit both correlation fields so this compatibility fixture
+	// exercises concatenated-document repair without opening an item lifecycle
+	// that would require a later output_item.done event.
+	outputItemAdded := `{"type":"response.output_item.added","item":{"type":"message","role":"assistant","status":"in_progress","content":[]},"sequence_number":2}`
 	completed := `{"type":"response.completed","response":{"id":"resp_large","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":9}},"sequence_number":3}`
 	require.Len(t, largeInProgress, javascriptErrorPosition)
 	require.True(t, json.Valid([]byte(largeInProgress)))

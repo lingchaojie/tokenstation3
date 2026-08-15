@@ -1,5 +1,7 @@
 package antigravity
 
+import "encoding/json"
+
 // Gemini v1internal 请求/响应类型定义
 
 // V1InternalRequest v1internal 请求包装
@@ -47,9 +49,9 @@ type GeminiInlineData struct {
 
 // GeminiFunctionCall Gemini 函数调用
 type GeminiFunctionCall struct {
-	Name string `json:"name"`
-	Args any    `json:"args,omitempty"`
-	ID   string `json:"id,omitempty"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args,omitempty"`
+	ID   string          `json:"id,omitempty"`
 }
 
 // GeminiFunctionResponse Gemini 函数响应

@@ -95,6 +95,13 @@ func b2u8(b bool) uint8 {
 	return 0
 }
 
+func captureUInt32(value int) uint32 {
+	if value < 0 || uint64(value) > uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(value)
+}
+
 // archiveCreateTableDDL 渲染归档表建表语句；列顺序与 flush() 里 batch.Append
 // 的参数顺序严格一致，修改任一处都必须同步另一处。
 func archiveCreateTableDDL(database, table string) string {
@@ -423,10 +430,10 @@ func (w *clickHouseArchiveWriter) sendClickHouseBatch(batch []*archiveWriteItem)
 			rec.StopReason,
 			rec.ThinkingEffort,
 			rec.ThinkingType,
-			uint32(rec.InputTokens),
-			uint32(rec.OutputTokens),
-			uint32(rec.CacheReadTokens),
-			uint32(rec.CacheCreationTokens),
+			captureUInt32(rec.InputTokens),
+			captureUInt32(rec.OutputTokens),
+			captureUInt32(rec.CacheReadTokens),
+			captureUInt32(rec.CacheCreationTokens),
 			b2u8(rec.SignaturePresent),
 			b2u8(rec.Truncated),
 			uint16(captureVersion),

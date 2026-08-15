@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -79,25 +79,6 @@ func buildClaudeCodeNoopDeltaKeepalive(index int, deltaType string) (string, boo
 		return "", false
 	}
 	return fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":%d,\"delta\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n", index, deltaType, fieldName), true
-}
-
-func sseEventIndex(event map[string]any) (int, bool) {
-	switch v := event["index"].(type) {
-	case float64:
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case json.Number:
-		i, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(i), true
-	default:
-		return 0, false
-	}
 }
 
 // shouldRectifySignatureError 统一判断是否应触发签名整流（strip thinking blocks 并重试）。
@@ -352,26 +333,35 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
 		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
 	}
-	return readCaptureAwareUpstreamErrorBody(resp, limit)
+	body, err := readCaptureAwareUpstreamErrorBody(resp, limit)
+	// The capture-aware reader may consume beyond the functional error prefix.
+	// Publish those raw bytes before terminal classification constructs/submits a
+	// record; waiting for a later Close would make the record fall back to the
+	// smaller business body.
+	finishCaptureResponse(resp)
+	return body, err
 }
 
 // readWebChatUpstreamErrorBody preserves the normal 512 KiB safety bound for
 // handlers while allowing the explicitly-tokened one-account WebChat boundary
 // to archive the terminal provider body up to its configured capture ceiling.
 func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp *http.Response) ([]byte, bool, error) {
-	if !ownsWebChatFinalGatewayErrorCapture(ctx) || s == nil || s.cfg == nil || s.cfg.Gateway.Capture.MaxBodyBytes <= 0 {
+	captureLimit, captureApproved := captureUpstreamRequestLimitFromContext(ctx)
+	if !ownsWebChatFinalGatewayErrorCapture(ctx) || !captureApproved {
 		body, err := s.readUpstreamErrorBody(resp)
 		return body, false, err
 	}
-	return readUpstreamBodyWithCeiling(resp, s.cfg.Gateway.Capture.MaxBodyBytes)
+	return readUpstreamBodyWithCeiling(ctx, resp, captureLimit, resolveProviderBodyIdleTimeout(s.cfg))
 }
 
-func readUpstreamBodyWithCeiling(resp *http.Response, limit int) ([]byte, bool, error) {
+func readUpstreamBodyWithCeiling(ctx context.Context, resp *http.Response, limit int, idleTimeout time.Duration) ([]byte, bool, error) {
 	limit = normalizeCaptureLimit(limit)
 	if resp == nil || resp.Body == nil || limit <= 0 {
 		return nil, false, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	body, err := readAllWithProviderIdle(ctx, resp.Body, idleTimeout, func(reader io.Reader) ([]byte, error) {
+		return io.ReadAll(io.LimitReader(reader, int64(limit)+1))
+	})
 	if len(body) <= limit {
 		return body, false, err
 	}
@@ -634,6 +624,25 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 		Detail:             upstreamDetail,
 	})
 
+	// This path owns a final provider HTTP response even though the account's
+	// custom error-code policy classified it as retryable and all retries were
+	// exhausted. It returns a normal communicated error rather than a typed
+	// failover, so the handler has no later terminal sink; archive it here once.
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+		failure := &UpstreamFailoverError{
+			StatusCode:              resp.StatusCode,
+			ResponseBody:            respBody,
+			RequestHeaders:          captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamEndpoint:        captureEndpointFromResponse(resp),
+			Platform:                string(account.Platform),
+			HasUpstreamHTTPResponse: true,
+		}
+		if rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), failure, s.cfg.Gateway.Capture.MaxBodyBytes); rec != nil {
+			s.capturePool.Submit(rec)
+		}
+	}
+
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.gateway",
 			"Upstream error %d retries_exhausted (account=%d platform=%s type=%s): %s",
@@ -720,6 +729,7 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ClientDisconnect:              streamResult.clientDisconnect,
+		CaptureTerminalError:          true,
 	})
 }
 
@@ -728,48 +738,50 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 // keepalive frames and usage-only events deliberately do not cross the retry
 // boundary: they remain staged until semantic output or terminal success.
 func anthropicSSEEventHasSemanticOutput(data string) bool {
-	if data == "" || data == "[DONE]" {
+	if data == "" || data == "[DONE]" || !gjson.Valid(data) {
 		return false
 	}
-	var event map[string]any
-	if json.Unmarshal([]byte(data), &event) != nil {
-		return false
-	}
-	eventType, _ := event["type"].(string)
+	event := gjson.Parse(data)
+	eventType := event.Get("type").String()
 	switch eventType {
 	case "content_block_start":
-		block, _ := event["content_block"].(map[string]any)
-		blockType, _ := block["type"].(string)
+		block := event.Get("content_block")
+		blockType := block.Get("type").String()
 		switch blockType {
 		case "tool_use", "server_tool_use":
 			// A non-empty tool name is visible semantic output before its JSON
 			// arguments arrive. A generated/id-only empty tool element is not.
-			return anthropicStringValue(block["name"]) != ""
+			return block.Get("name").Type == gjson.String && block.Get("name").String() != ""
 		case "text":
-			return anthropicStringValue(block["text"]) != ""
+			return block.Get("text").Type == gjson.String && block.Get("text").String() != ""
 		case "thinking":
-			return anthropicStringValue(block["thinking"]) != ""
+			return block.Get("thinking").Type == gjson.String && block.Get("thinking").String() != ""
 		case "redacted_thinking":
-			return anthropicStringValue(block["data"]) != ""
+			return block.Get("data").Type == gjson.String && block.Get("data").String() != ""
 		}
 	case "content_block_delta":
-		delta, _ := event["delta"].(map[string]any)
-		deltaType, _ := delta["type"].(string)
+		delta := event.Get("delta")
+		deltaType := delta.Get("type").String()
 		switch deltaType {
 		case "text_delta":
-			return anthropicStringValue(delta["text"]) != ""
+			return delta.Get("text").Type == gjson.String && delta.Get("text").String() != ""
 		case "thinking_delta":
-			return anthropicStringValue(delta["thinking"]) != ""
+			return delta.Get("thinking").Type == gjson.String && delta.Get("thinking").String() != ""
 		case "input_json_delta":
-			return anthropicStringValue(delta["partial_json"]) != ""
+			return delta.Get("partial_json").Type == gjson.String && delta.Get("partial_json").String() != ""
 		}
 	}
 	return false
 }
 
-func anthropicStringValue(value any) string {
-	result, _ := value.(string)
-	return result
+func anthropicSSEBytesHaveSemanticOutput(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		payload, ok := parseAnthropicSSEField(strings.TrimSpace(line), "data")
+		if ok && anthropicSSEEventHasSemanticOutput(payload) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool) (*streamingResult, error) {
@@ -813,8 +825,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	var tee *sseTee
 	semanticOutput := false
 	sawTerminalEvent := false
-	_, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
+	providerPayloadObserved := false
+	providerPhase := anthropicProviderAwaitingStart
+	kiroTranslatedBody, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
+	_, rawProviderCapture := resp.Body.(*captureBodyReadCloser)
+	stageSyntheticKiroWebSearchEvents := providerNativeCapture && kiroTranslatedBody.stageSyntheticWebSearchEvents
+	stagedKiroWebSearchBlockIndexes := make(map[int]struct{})
+	if !rawProviderCapture && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		setCapturePlatform(c, string(account.Platform))
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
 		defer func() {
@@ -829,7 +846,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
-	scanner := bufio.NewScanner(resp.Body)
+	providerReader, readActivity := providerBodyReaderWithActivity(resp.Body)
+	scanner := bufio.NewScanner(providerReader)
 	// 设置更大的buffer以处理长行
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
@@ -844,7 +862,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		err  error
 	}
 	// 独立 goroutine 读取上游，避免读取阻塞导致超时/keepalive无法处理
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
 	scanDone := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
@@ -855,14 +873,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return false
 		}
 	}
-	var lastReadAt int64
-	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 	go func(scanBuf *sseScannerBuf64K) {
 		defer close(scanDone)
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		for scanner.Scan() {
-			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 			line := scanner.Text()
 			if tee != nil {
 				tee.appendLine(line)
@@ -876,13 +891,19 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 	}(scanBuf)
 	bodyOwnedByScanner = true
+	providerScanFinished := false
 	defer func() {
+		if !providerScanFinished {
+			drainCaptureScannerOnParserFailure(ctx, resp, events, scanDone, &readActivity.lastRead, 0, nil, func() {
+				close(done)
+			})
+			return
+		}
 		close(done)
 		// Scanner has no context-aware Read API. Closing the owned response body
 		// is what interrupts a blocked network read; joining the goroutine keeps a
 		// canceled/overflowed attempt from leaking into the next account attempt.
-		_ = resp.Body.Close()
-		<-scanDone
+		closeCaptureResponseAndJoinScanner(resp, scanDone)
 	}()
 
 	streamInterval := time.Duration(0)
@@ -989,6 +1010,10 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if dataLine == "[DONE]" {
+			if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
+				return nil, dataLine, nil, false, errors.New("anthropic [DONE] arrived before a valid message_start")
+			}
+			providerPhase.state = anthropicProviderTerminated.state
 			sawTerminalEvent = true
 			block := ""
 			if eventName != "" {
@@ -998,50 +1023,60 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return []string{block}, dataLine, nil, false, nil
 		}
 
-		var event map[string]any
-		if err := json.Unmarshal([]byte(dataLine), &event); err != nil {
-			// JSON 解析失败，直接透传原始数据
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, nil, false, nil
+		eventType, err := validateAnthropicProviderJSONEvent(&providerPhase, eventName, []byte(dataLine))
+		if err != nil {
+			return nil, dataLine, nil, false, err
 		}
-
-		eventType, _ := event["type"].(string)
+		event := gjson.Parse(dataLine)
+		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(dataLine)
+		eventIndex := event.Get("index")
+		hasEventIndex := eventIndex.Exists() && nonNegativeIntegerGJSON(eventIndex)
+		if stageSyntheticKiroWebSearchEvents {
+			if hasEventIndex {
+				index := int(eventIndex.Int())
+				switch eventType {
+				case "content_block_start":
+					blockType := event.Get("content_block.type").String()
+					blockName := event.Get("content_block.name").String()
+					if blockType == "web_search_tool_result" ||
+						(blockType == "server_tool_use" && strings.EqualFold(strings.TrimSpace(blockName), "web_search")) {
+						stagedKiroWebSearchBlockIndexes[index] = struct{}{}
+					}
+				case "content_block_stop":
+					defer delete(stagedKiroWebSearchBlockIndexes, index)
+				}
+				if _, staged := stagedKiroWebSearchBlockIndexes[index]; staged {
+					eventHasSemanticOutput = false
+				}
+			}
+		}
 		observer.ObserveAnthropic([]byte(dataLine))
 		if eventName == "" {
 			eventName = eventType
 		}
-		eventChanged := false
-
 		if useNoopDeltaKeepalive {
 			switch eventType {
 			case "content_block_start":
-				if idx, ok := sseEventIndex(event); ok {
+				if hasEventIndex {
+					idx := int(eventIndex.Int())
 					noopDeltaKeepaliveBlockIndex = -1
 					noopDeltaKeepaliveDeltaType = ""
-					if contentBlock, ok := event["content_block"].(map[string]any); ok {
-						blockType, _ := contentBlock["type"].(string)
-						if deltaType := claudeCodeKeepaliveDeltaTypeForContentBlock(blockType); deltaType != "" {
-							noopDeltaKeepaliveBlockIndex = idx
-							noopDeltaKeepaliveDeltaType = deltaType
-						}
+					if deltaType := claudeCodeKeepaliveDeltaTypeForContentBlock(event.Get("content_block.type").String()); deltaType != "" {
+						noopDeltaKeepaliveBlockIndex = idx
+						noopDeltaKeepaliveDeltaType = deltaType
 					}
 				}
 			case "content_block_delta":
-				if idx, ok := sseEventIndex(event); ok {
-					if delta, ok := event["delta"].(map[string]any); ok {
-						deltaType, _ := delta["type"].(string)
-						if claudeCodeKeepaliveFieldForDeltaType(deltaType) != "" {
-							noopDeltaKeepaliveBlockIndex = idx
-							noopDeltaKeepaliveDeltaType = deltaType
-						}
+				if hasEventIndex {
+					idx := int(eventIndex.Int())
+					deltaType := event.Get("delta.type").String()
+					if claudeCodeKeepaliveFieldForDeltaType(deltaType) != "" {
+						noopDeltaKeepaliveBlockIndex = idx
+						noopDeltaKeepaliveDeltaType = deltaType
 					}
 				}
 			case "content_block_stop":
-				if idx, ok := sseEventIndex(event); ok && idx == noopDeltaKeepaliveBlockIndex {
+				if hasEventIndex && int(eventIndex.Int()) == noopDeltaKeepaliveBlockIndex {
 					noopDeltaKeepaliveBlockIndex = -1
 					noopDeltaKeepaliveDeltaType = ""
 				}
@@ -1051,48 +1086,56 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 		}
 
-		// 兼容 Kimi cached_tokens → cache_read_input_tokens
-		if eventType == "message_start" {
-			if msg, ok := event["message"].(map[string]any); ok {
-				if u, ok := msg["usage"].(map[string]any); ok {
-					eventChanged = reconcileCachedTokens(u) || eventChanged
-				}
+		updatedData := []byte(dataLine)
+		eventChanged := false
+		setJSONValue := func(path string, value any) {
+			if next, err := sjson.SetBytes(updatedData, path, value); err == nil {
+				updatedData = next
+				eventChanged = true
 			}
 		}
-		if eventType == "message_delta" {
-			if u, ok := event["usage"].(map[string]any); ok {
-				eventChanged = reconcileCachedTokens(u) || eventChanged
-			}
+		usagePath := "usage"
+		if eventType == "message_start" {
+			providerPayloadObserved = true
+			usagePath = "message.usage"
+		}
+		// 兼容 Kimi cached_tokens → cache_read_input_tokens.
+		cacheRead := event.Get(usagePath + ".cache_read_input_tokens")
+		cached := event.Get(usagePath + ".cached_tokens")
+		if cacheRead.Int() <= 0 && cached.Int() > 0 {
+			setJSONValue(usagePath+".cache_read_input_tokens", cached.Int())
 		}
 
 		// Cache TTL Override: 重写 SSE 事件中的 cache_creation 分类。
 		// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
 		if overrideTarget, ok := s.resolveCacheTTLUsageOverrideTarget(ctx, account); ok {
-			if eventType == "message_start" {
-				if msg, ok := event["message"].(map[string]any); ok {
-					if u, ok := msg["usage"].(map[string]any); ok {
-						eventChanged = rewriteCacheCreationJSON(u, overrideTarget) || eventChanged
-					}
-				}
-			}
-			if eventType == "message_delta" {
-				if u, ok := event["usage"].(map[string]any); ok {
-					eventChanged = rewriteCacheCreationJSON(u, overrideTarget) || eventChanged
+			fiveMinute := event.Get(usagePath + ".cache_creation.ephemeral_5m_input_tokens").Int()
+			oneHour := event.Get(usagePath + ".cache_creation.ephemeral_1h_input_tokens").Int()
+			total := fiveMinute + oneHour
+			if total > 0 && ((overrideTarget == "1h" && oneHour != total) || (overrideTarget != "1h" && fiveMinute != total)) {
+				if overrideTarget == "1h" {
+					setJSONValue(usagePath+".cache_creation.ephemeral_1h_input_tokens", total)
+					setJSONValue(usagePath+".cache_creation.ephemeral_5m_input_tokens", 0)
+				} else {
+					setJSONValue(usagePath+".cache_creation.ephemeral_5m_input_tokens", total)
+					setJSONValue(usagePath+".cache_creation.ephemeral_1h_input_tokens", 0)
 				}
 			}
 		}
 
-		if needModelReplace {
-			if msg, ok := event["message"].(map[string]any); ok {
-				if model, ok := msg["model"].(string); ok && model == mappedModel {
-					msg["model"] = originalModel
+		if needModelReplace && event.Get("message.model").String() == mappedModel {
+			setJSONValue("message.model", originalModel)
+		}
+
+		usagePatch := extractSSEUsagePatchFromGJSON(gjson.ParseBytes(updatedData))
+		for _, path := range []string{usagePath + "._sub2api_kiro_credits", usagePath + "." + kiroFinalUsageSSEField} {
+			if gjson.GetBytes(updatedData, path).Exists() {
+				if next, err := sjson.DeleteBytes(updatedData, path); err == nil {
+					updatedData = next
 					eventChanged = true
 				}
 			}
 		}
-
-		usagePatch := s.extractSSEUsagePatch(event)
-		eventChanged = stripInternalSSEUsageFields(event) || eventChanged
 		if anthropicStreamEventIsTerminal(eventName, dataLine) {
 			sawTerminalEvent = true
 		}
@@ -1102,27 +1145,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, anthropicSSEEventHasSemanticOutput(dataLine), nil
-		}
-
-		newData, err := json.Marshal(event)
-		if err != nil {
-			// 序列化失败，直接透传原始数据
-			block := ""
-			if eventName != "" {
-				block = "event: " + eventName + "\n"
-			}
-			block += "data: " + dataLine + "\n\n"
-			return []string{block}, dataLine, usagePatch, anthropicSSEEventHasSemanticOutput(dataLine), nil
+			return []string{block}, dataLine, usagePatch, eventHasSemanticOutput, nil
 		}
 
 		block := ""
 		if eventName != "" {
 			block = "event: " + eventName + "\n"
 		}
-		block += "data: " + string(newData) + "\n\n"
-		emittedData := string(newData)
-		return []string{block}, emittedData, usagePatch, anthropicSSEEventHasSemanticOutput(emittedData), nil
+		block += "data: " + string(updatedData) + "\n\n"
+		emittedData := string(updatedData)
+		return []string{block}, emittedData, usagePatch, eventHasSemanticOutput, nil
 	}
 
 	// Reuse the established OpenAI first-output spool: 64 KiB stays in memory,
@@ -1130,6 +1162,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	// stage is capped at openAIFirstOutputStageMaxBytes (8 MiB).
 	stagedOutput := newDefaultOpenAIFirstOutputStage()
 	defer func() { _ = stagedOutput.Close() }()
+	outputCommitted := false
 	writeOutput := func(block string, commitsSemanticOutput, terminal bool) error {
 		if clientDisconnected {
 			return nil
@@ -1146,10 +1179,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					firstTokenMs = &ms
 				}
 			}
-			if !semanticOutput && !terminal {
+			if !semanticOutput && (!terminal || !providerPayloadObserved) {
 				return nil
 			}
 			_, commitErr := stagedOutput.CommitTo(w)
+			outputCommitted = true
 			deliveryErr, cleanupErr := splitOpenAIFirstOutputCommitError(commitErr)
 			if cleanupErr != nil {
 				logger.LegacyPrintf("service.gateway", "Anthropic first-output staging cleanup failed after commit: account=%d error=%v", account.ID, cleanupErr)
@@ -1176,14 +1210,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, semanticOutput: semanticOutput}
 	}
 	preOutputFailover := func(message string, retryable bool) error {
-		body, _ := json.Marshal(map[string]any{
-			"type": "error",
-			"error": map[string]string{
-				"type":    "upstream_disconnected",
-				"message": message,
-			},
-		})
-		return &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: body, RetryableOnSameAccount: retryable}
+		failure := newIncompleteProviderStreamFailover(resp, message)
+		failure.RetryableOnSameAccount = retryable
+		return failure
 	}
 	var ctxDone <-chan struct{}
 	if ctx != nil {
@@ -1194,6 +1223,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				providerScanFinished = true
+				for _, pendingLine := range pendingEventLines {
+					if strings.TrimSpace(pendingLine) != "" && !strings.HasPrefix(strings.TrimSpace(pendingLine), ":") {
+						tailErr := errors.New("upstream stream ended with an incomplete SSE event")
+						if outputCommitted || semanticOutput {
+							return streamResult(), tailErr
+						}
+						return nil, preOutputFailover(tailErr.Error(), true)
+					}
+				}
 				// 上游完成，返回结果
 				if !sawTerminalEvent {
 					if !semanticOutput {
@@ -1201,13 +1240,25 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					}
 					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
+				if !providerPayloadObserved {
+					if semanticOutput {
+						return streamResult(), fmt.Errorf("stream usage incomplete: missing valid message_start")
+					}
+					return nil, preOutputFailover("upstream stream ended without a valid message_start", true)
+				}
 				return streamResult(), nil
 			}
 			if ev.err != nil {
-				if sawTerminalEvent {
-					return streamResult(), nil
-				}
-				if !semanticOutput {
+				if !outputCommitted && !semanticOutput {
+					// Adapter-owned pipe bodies may carry a fully classified terminal
+					// provider HTTP failure (for example KIRO only-WebSearch after the
+					// final AWS request). Preserve that typed error and its final-attempt
+					// metadata instead of collapsing it into a generic retryable stream
+					// disconnect, which would lose status/headers/capture ownership.
+					var providerHTTPFailure *UpstreamFailoverError
+					if errors.As(ev.err, &providerHTTPFailure) && providerHTTPFailure.HasUpstreamHTTPResponse {
+						return nil, providerHTTPFailure
+					}
 					disconnectMsg := "upstream stream disconnected: " + sanitizeStreamError(ev.err)
 					logger.LegacyPrintf("service.gateway", "Upstream stream read error before semantic output (account=%d), failing over: %v", account.ID, ev.err)
 					return nil, preOutputFailover(disconnectMsg, true)
@@ -1248,19 +1299,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				pendingEventLines = pendingEventLines[:0]
 				pendingEventBytes = 0
 				if err != nil {
-					if clientDisconnected {
-						return streamResult(), nil
-					}
 					if semanticOutput {
 						return streamResult(), err
 					}
 					var sseErr *sseStreamErrorEventError
 					if errors.As(err, &sseErr) {
-						return nil, &UpstreamFailoverError{
-							StatusCode:             http.StatusBadGateway,
-							ResponseBody:           []byte(sseErr.RawData),
-							RetryableOnSameAccount: true,
-						}
+						failure := newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+						failure.ResponseBody = []byte(sseErr.RawData)
+						return nil, failure
 					}
 					return nil, preOutputFailover(sanitizeStreamError(err), true)
 				}
@@ -1301,7 +1347,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)
 
 		case <-intervalCh:
-			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
+			lastRead := readActivity.LastReadTime()
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
@@ -1350,17 +1396,500 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 }
 
+func validAnthropicMessageStartPayload(data []byte) bool {
+	if !gjson.ValidBytes(data) || strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "message_start" {
+		return false
+	}
+	message := gjson.GetBytes(data, "message")
+	content := message.Get("content")
+	if !message.IsObject() {
+		return false
+	}
+	if strings.TrimSpace(message.Get("type").String()) != "message" ||
+		strings.TrimSpace(message.Get("role").String()) != "assistant" ||
+		!content.IsArray() || gjsonCollectionHasValues(content) {
+		return false
+	}
+	for _, field := range []string{"id", "model"} {
+		value := message.Get(field)
+		if value.Exists() && (value.Type != gjson.String || len(value.String()) > maxAnthropicProviderRetainedStringBytes) {
+			return false
+		}
+	}
+	if stopReason := message.Get("stop_reason"); stopReason.Exists() && stopReason.Type != gjson.Null {
+		return false
+	}
+	if value := message.Get("stop_sequence"); value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
+		return false
+	}
+	usage := message.Get("usage")
+	return !usage.Exists() || validAnthropicUsageShape(usage)
+}
+
+func validAnthropicUsageShape(usage gjson.Result) bool {
+	if !usage.IsObject() {
+		return false
+	}
+	for _, field := range []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "cached_tokens"} {
+		value := usage.Get(field)
+		if value.Exists() && !nonNegativeIntegerGJSON(value) {
+			return false
+		}
+	}
+	cacheCreation := usage.Get("cache_creation")
+	if cacheCreation.Exists() {
+		if !cacheCreation.IsObject() {
+			return false
+		}
+		for _, field := range []string{"ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"} {
+			if value := cacheCreation.Get(field); value.Exists() && !nonNegativeIntegerGJSON(value) {
+				return false
+			}
+		}
+		fiveMinute := cacheCreation.Get("ephemeral_5m_input_tokens")
+		oneHour := cacheCreation.Get("ephemeral_1h_input_tokens")
+		breakdownTotal, ok := checkedAddNonNegativeGJSON(fiveMinute, oneHour)
+		if !ok {
+			return false
+		}
+		aggregate := usage.Get("cache_creation_input_tokens")
+		if aggregate.Exists() && breakdownTotal > aggregate.Int() {
+			return false
+		}
+	}
+	if credits := usage.Get("_sub2api_kiro_credits"); credits.Exists() && !nonNegativeFiniteGJSONNumber(credits) {
+		return false
+	}
+	if finalUsage := usage.Get(kiroFinalUsageSSEField); finalUsage.Exists() && finalUsage.Type != gjson.True && finalUsage.Type != gjson.False {
+		return false
+	}
+	return true
+}
+
+func nonNegativeIntegerGJSON(value gjson.Result) bool {
+	if value.Type != gjson.Number {
+		return false
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value.Raw), 10, strconv.IntSize)
+	return err == nil && parsed >= 0
+}
+
+func checkedAddNonNegativeGJSON(left, right gjson.Result) (int64, bool) {
+	if left.Exists() && !nonNegativeIntegerGJSON(left) {
+		return 0, false
+	}
+	if right.Exists() && !nonNegativeIntegerGJSON(right) {
+		return 0, false
+	}
+	leftValue, rightValue := left.Int(), right.Int()
+	if leftValue > int64(^uint(0)>>1)-rightValue {
+		return 0, false
+	}
+	return leftValue + rightValue, true
+}
+
+func nonNegativeFiniteGJSONNumber(value gjson.Result) bool {
+	if value.Type != gjson.Number {
+		return false
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(value.Raw), 64)
+	return err == nil && number >= 0 && !math.IsInf(number, 0) && !math.IsNaN(number)
+}
+
+type anthropicProviderStreamPhase struct {
+	state       uint8
+	activeIndex int64
+	activeType  string
+	nextIndex   int64
+	hasActive   bool
+	finalDelta  bool
+	toolInput   strings.Builder
+	toolDelta   bool
+	seenToolIDs map[string]struct{}
+}
+
+const (
+	anthropicProviderToolInputMaxBytes      = 8 * 1024 * 1024
+	maxAnthropicProviderContentBlocks       = 1024
+	maxAnthropicProviderRetainedStringBytes = 1024
+)
+
+var (
+	anthropicProviderAwaitingStart = anthropicProviderStreamPhase{state: 0}
+	anthropicProviderStarted       = anthropicProviderStreamPhase{state: 1}
+	anthropicProviderTerminated    = anthropicProviderStreamPhase{state: 2}
+)
+
+func knownAnthropicProviderEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateAnthropicProviderEvent enforces the provider protocol order before
+// any staged bytes become client-visible. Unknown extension events remain
+// ignorable, but declared Anthropic events must decode consistently and may
+// not deliver content or a terminal marker before a strict message_start.
+func validateAnthropicProviderEvent(phase *anthropicProviderStreamPhase, declaredType string, payload []byte, decodedType string) error {
+	if err := validateOpenAIResponsesNoDuplicateKnownFields(payload, providerJSONAnthropicEvent); err != nil {
+		return fmt.Errorf("invalid Anthropic provider JSON payload: %w", err)
+	}
+	declaredType = strings.TrimSpace(declaredType)
+	decodedType = strings.TrimSpace(decodedType)
+	payloadType := gjson.GetBytes(payload, "type")
+	if payloadType.Exists() && payloadType.Type != gjson.String {
+		return errors.New("anthropic provider event type was not a string")
+	}
+	if knownAnthropicProviderEvent(declaredType) && declaredType != decodedType {
+		return fmt.Errorf("declared Anthropic event %q contained payload type %q", declaredType, decodedType)
+	}
+	if declaredType != "" && decodedType != "" && declaredType != decodedType {
+		return fmt.Errorf("declared Anthropic event %q contained payload type %q", declaredType, decodedType)
+	}
+	if phase == nil {
+		return errors.New("missing Anthropic provider stream phase")
+	}
+	if phase.state == anthropicProviderTerminated.state {
+		return fmt.Errorf("anthropic event %q arrived after message_stop", decodedType)
+	}
+	if phase.finalDelta && decodedType != "message_stop" {
+		return fmt.Errorf("anthropic event %q arrived after terminal message_delta", decodedType)
+	}
+	if !knownAnthropicProviderEvent(decodedType) {
+		if declaredType == "" && decodedType == "" {
+			return errors.New("anthropic provider data had no event type")
+		}
+		return nil
+	}
+	switch decodedType {
+	case "message_start":
+		if phase.state != anthropicProviderAwaitingStart.state || !validAnthropicMessageStartPayload(payload) {
+			return errors.New("invalid or out-of-order Anthropic message_start")
+		}
+		phase.state = anthropicProviderStarted.state
+	case "content_block_start", "content_block_delta", "content_block_stop", "message_delta":
+		if phase.state != anthropicProviderStarted.state {
+			return fmt.Errorf("anthropic event %q arrived before a valid message_start", decodedType)
+		}
+		event := gjson.ParseBytes(payload)
+		if err := validateAnthropicProviderEventShape(event, decodedType); err != nil {
+			return err
+		}
+		index := event.Get("index").Int()
+		switch decodedType {
+		case "content_block_start":
+			if phase.hasActive {
+				return fmt.Errorf("anthropic content_block_start index %d arrived before index %d stopped", index, phase.activeIndex)
+			}
+			if index != phase.nextIndex {
+				return fmt.Errorf("anthropic content_block_start index %d arrived while index %d was expected", index, phase.nextIndex)
+			}
+			if phase.nextIndex >= maxAnthropicProviderContentBlocks {
+				return errors.New("anthropic provider content block state limit exceeded")
+			}
+			activeType := event.Get("content_block.type").String()
+			if len(activeType) > maxAnthropicProviderRetainedStringBytes {
+				return errors.New("anthropic provider retained string limit exceeded")
+			}
+			if activeType == "tool_use" || activeType == "server_tool_use" {
+				toolID := strings.TrimSpace(event.Get("content_block.id").String())
+				if phase.seenToolIDs == nil {
+					phase.seenToolIDs = make(map[string]struct{})
+				}
+				if _, duplicate := phase.seenToolIDs[toolID]; duplicate {
+					return fmt.Errorf("anthropic provider duplicated tool id %q", toolID)
+				}
+				phase.seenToolIDs[toolID] = struct{}{}
+			}
+			phase.activeIndex, phase.activeType, phase.hasActive = index, activeType, true
+			phase.toolInput.Reset()
+			phase.toolDelta = false
+			phase.nextIndex++
+		case "content_block_delta":
+			if !phase.hasActive || phase.activeIndex != index {
+				return fmt.Errorf("anthropic content_block_delta index %d had no matching active block", index)
+			}
+			deltaType := event.Get("delta.type").String()
+			if err := validateAnthropicDeltaForBlockType(phase.activeType, deltaType); err != nil {
+				return err
+			}
+			if deltaType == "input_json_delta" {
+				fragment := event.Get("delta.partial_json").String()
+				if len(fragment) > anthropicProviderToolInputMaxBytes-phase.toolInput.Len() {
+					return errors.New("anthropic tool input exceeded bounded aggregate limit")
+				}
+				_, _ = phase.toolInput.WriteString(fragment)
+				phase.toolDelta = true
+			}
+		case "content_block_stop":
+			if !phase.hasActive || phase.activeIndex != index {
+				return fmt.Errorf("anthropic content_block_stop index %d had no matching active block", index)
+			}
+			if (phase.activeType == "tool_use" || phase.activeType == "server_tool_use") && phase.toolDelta && !validJSONObjectBytes([]byte(phase.toolInput.String())) {
+				return errors.New("anthropic tool input ended with malformed JSON object")
+			}
+			phase.hasActive = false
+			phase.activeType = ""
+			phase.toolInput.Reset()
+			phase.toolDelta = false
+		case "message_delta":
+			if phase.hasActive {
+				return fmt.Errorf("anthropic message_delta arrived before content block %d stopped", phase.activeIndex)
+			}
+			phase.finalDelta = true
+		}
+	case "message_stop":
+		if phase.state != anthropicProviderStarted.state {
+			return errors.New("anthropic message_stop arrived before a valid message_start")
+		}
+		if phase.hasActive {
+			return fmt.Errorf("anthropic message_stop arrived before content block %d stopped", phase.activeIndex)
+		}
+		if !phase.finalDelta {
+			return errors.New("anthropic message_stop arrived before terminal message_delta")
+		}
+		phase.state = anthropicProviderTerminated.state
+	case "error":
+		return errors.New("anthropic provider returned an error event")
+	}
+	return nil
+}
+
+func validateAnthropicProviderJSONEvent(phase *anthropicProviderStreamPhase, declaredType string, payload []byte) (string, error) {
+	if !gjson.ValidBytes(payload) {
+		return "", fmt.Errorf("invalid JSON for Anthropic event %q", strings.TrimSpace(declaredType))
+	}
+	decodedType := gjson.GetBytes(payload, "type").String()
+	if err := validateAnthropicProviderEvent(phase, declaredType, payload, decodedType); err != nil {
+		return decodedType, err
+	}
+	return decodedType, nil
+}
+
+func validateAnthropicDeltaForBlockType(blockType, deltaType string) error {
+	allowed := false
+	switch deltaType {
+	case "text_delta", "citations_delta":
+		allowed = blockType == "text"
+	case "thinking_delta", "signature_delta":
+		allowed = blockType == "thinking"
+	case "input_json_delta":
+		allowed = blockType == "tool_use" || blockType == "server_tool_use"
+	default:
+		// Unknown non-empty delta types remain forward-compatible for future
+		// block kinds. Known delta kinds must never cross block-type boundaries.
+		return nil
+	}
+	if !allowed {
+		return fmt.Errorf("anthropic %s was invalid for active %s content block", deltaType, blockType)
+	}
+	return nil
+}
+
+func validJSONObjectBytes(data []byte) bool {
+	return json.Valid(data) && gjson.ParseBytes(data).IsObject()
+}
+
+func validateAnthropicProviderEventShape(event gjson.Result, eventType string) error {
+	index := event.Get("index")
+	validIndex := index.Exists() && nonNegativeIntegerGJSON(index)
+	switch eventType {
+	case "content_block_start":
+		block := event.Get("content_block")
+		if !validIndex || !validAnthropicStreamContentBlockStart(block) {
+			return errors.New("invalid Anthropic content_block_start")
+		}
+	case "content_block_delta":
+		delta := event.Get("delta")
+		if !validIndex || !delta.IsObject() {
+			return errors.New("invalid Anthropic content_block_delta")
+		}
+		deltaTypeValue := delta.Get("type")
+		if deltaTypeValue.Type != gjson.String {
+			return errors.New("invalid Anthropic content_block_delta type")
+		}
+		deltaType := strings.TrimSpace(deltaTypeValue.String())
+		switch deltaType {
+		case "text_delta":
+			if delta.Get("text").Type != gjson.String {
+				return errors.New("invalid Anthropic text_delta")
+			}
+		case "thinking_delta":
+			if delta.Get("thinking").Type != gjson.String {
+				return errors.New("invalid Anthropic thinking_delta")
+			}
+		case "signature_delta":
+			if delta.Get("signature").Type != gjson.String {
+				return errors.New("invalid Anthropic signature_delta")
+			}
+		case "input_json_delta":
+			if delta.Get("partial_json").Type != gjson.String {
+				return errors.New("invalid Anthropic input_json_delta")
+			}
+		case "citations_delta":
+			if !delta.Get("citation").IsObject() {
+				return errors.New("invalid Anthropic citations_delta")
+			}
+		default:
+			if deltaType == "" {
+				return errors.New("invalid Anthropic content_block_delta type")
+			}
+		}
+	case "content_block_stop":
+		if !validIndex {
+			return errors.New("invalid Anthropic content_block_stop")
+		}
+	case "message_delta":
+		delta, usage := event.Get("delta"), event.Get("usage")
+		if delta.Exists() && !delta.IsObject() {
+			return errors.New("invalid Anthropic message_delta delta")
+		}
+		if usage.Exists() && !validAnthropicUsageShape(usage) {
+			return errors.New("invalid Anthropic message_delta usage")
+		}
+		if !delta.IsObject() && !usage.IsObject() {
+			return errors.New("invalid Anthropic message_delta")
+		}
+		stopReason := delta.Get("stop_reason")
+		if stopReason.Type != gjson.String || strings.TrimSpace(stopReason.String()) == "" || len(stopReason.String()) > maxAnthropicProviderRetainedStringBytes {
+			return errors.New("invalid Anthropic message_delta stop_reason")
+		}
+		if value := delta.Get("stop_sequence"); value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
+			return errors.New("invalid Anthropic message_delta stop_sequence")
+		}
+	}
+	return nil
+}
+
+func validAnthropicStreamContentBlockStart(block gjson.Result) bool {
+	if !block.IsObject() {
+		return false
+	}
+	blockTypeValue := block.Get("type")
+	if blockTypeValue.Type != gjson.String {
+		return false
+	}
+	blockType := strings.TrimSpace(blockTypeValue.String())
+	if len(blockType) > maxAnthropicProviderRetainedStringBytes {
+		return false
+	}
+	switch blockType {
+	case "text":
+		return block.Get("text").Type == gjson.String
+	case "thinking":
+		return block.Get("thinking").Type == gjson.String
+	case "redacted_thinking":
+		return block.Get("data").Type == gjson.String
+	case "tool_use", "server_tool_use":
+		return boundedNonEmptyGJSONString(block.Get("id"), maxAnthropicProviderRetainedStringBytes) &&
+			boundedNonEmptyGJSONString(block.Get("name"), maxAnthropicProviderRetainedStringBytes) &&
+			block.Get("input").IsObject()
+	case "web_search_tool_result":
+		return boundedNonEmptyGJSONString(block.Get("tool_use_id"), maxAnthropicProviderRetainedStringBytes) && block.Get("content").Exists()
+	default:
+		return blockType != ""
+	}
+}
+
+func validAnthropicResponseContent(content gjson.Result) bool {
+	if !content.IsArray() {
+		return false
+	}
+	count := 0
+	valid := true
+	var seenToolIDs map[string]struct{}
+	content.ForEach(func(_, block gjson.Result) bool {
+		count++
+		if count > maxAnthropicProviderContentBlocks {
+			valid = false
+			return false
+		}
+		if !block.IsObject() {
+			valid = false
+			return false
+		}
+		blockTypeValue := block.Get("type")
+		if blockTypeValue.Type != gjson.String {
+			valid = false
+			return false
+		}
+		blockType := strings.TrimSpace(blockTypeValue.String())
+		if len(blockType) > maxAnthropicProviderRetainedStringBytes {
+			valid = false
+			return false
+		}
+		switch blockType {
+		case "text":
+			if block.Get("text").Type != gjson.String {
+				valid = false
+				return false
+			}
+		case "thinking":
+			if block.Get("thinking").Type != gjson.String {
+				valid = false
+				return false
+			}
+		case "redacted_thinking":
+			if block.Get("data").Type != gjson.String {
+				valid = false
+				return false
+			}
+		case "tool_use", "server_tool_use":
+			if !boundedNonEmptyGJSONString(block.Get("id"), maxAnthropicProviderRetainedStringBytes) ||
+				!boundedNonEmptyGJSONString(block.Get("name"), maxAnthropicProviderRetainedStringBytes) ||
+				!block.Get("input").IsObject() {
+				valid = false
+				return false
+			}
+			toolID := strings.TrimSpace(block.Get("id").String())
+			if seenToolIDs == nil {
+				seenToolIDs = make(map[string]struct{})
+			}
+			if _, duplicate := seenToolIDs[toolID]; duplicate {
+				valid = false
+				return false
+			}
+			seenToolIDs[toolID] = struct{}{}
+		case "web_search_tool_result":
+			if !boundedNonEmptyGJSONString(block.Get("tool_use_id"), maxAnthropicProviderRetainedStringBytes) || !block.Get("content").Exists() {
+				valid = false
+				return false
+			}
+		default:
+			if blockType == "" {
+				valid = false
+				return false
+			}
+		}
+		return true
+	})
+	return valid
+}
+
+func nonEmptyGJSONString(value gjson.Result) bool {
+	return value.Type == gjson.String && strings.TrimSpace(value.String()) != ""
+}
+
+func boundedNonEmptyGJSONString(value gjson.Result, maxBytes int) bool {
+	if value.Type != gjson.String {
+		return false
+	}
+	text := strings.TrimSpace(value.String())
+	return text != "" && len(text) <= maxBytes
+}
+
 func (s *GatewayService) parseSSEUsage(data string, usage *ClaudeUsage) {
 	if usage == nil {
 		return
 	}
-
-	var event map[string]any
-	if err := json.Unmarshal([]byte(data), &event); err != nil {
+	event := gjson.Parse(data)
+	if !event.IsObject() {
 		return
 	}
-
-	if patch := s.extractSSEUsagePatch(event); patch != nil {
+	if patch := extractSSEUsagePatchFromGJSON(event); patch != nil {
 		mergeSSEUsagePatch(usage, patch)
 	}
 }
@@ -1384,98 +1913,58 @@ type sseUsagePatch struct {
 
 const kiroFinalUsageSSEField = "_sub2api_kiro_final_usage"
 
-func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePatch {
-	if len(event) == 0 {
+func extractSSEUsagePatchFromGJSON(event gjson.Result) *sseUsagePatch {
+	eventType := strings.TrimSpace(event.Get("type").String())
+	usage := event.Get("usage")
+	if eventType == "message_start" {
+		usage = event.Get("message.usage")
+	}
+	if !usage.IsObject() || !gjsonCollectionHasValues(usage) {
 		return nil
 	}
-
-	eventType, _ := event["type"].(string)
+	patch := &sseUsagePatch{}
+	setInt := func(path string, value *int, present *bool, allowZero bool) {
+		field := usage.Get(path)
+		if !field.Exists() {
+			return
+		}
+		parsed := int(field.Int())
+		if parsed > 0 || allowZero {
+			*value = parsed
+			*present = true
+		}
+	}
+	finalUsage := usage.Get(kiroFinalUsageSSEField).Bool()
 	switch eventType {
 	case "message_start":
-		msg, _ := event["message"].(map[string]any)
-		usageObj, _ := msg["usage"].(map[string]any)
-		if len(usageObj) == 0 {
-			return nil
-		}
-
-		patch := &sseUsagePatch{}
+		// Preserve the established message_start behavior: a present usage
+		// object authoritatively initializes the three input-side counters,
+		// including their zero values.
 		patch.hasInputTokens = true
-		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok {
-			patch.inputTokens = v
-		}
 		patch.hasCacheCreationInput = true
-		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok {
-			patch.cacheCreationInputTokens = v
-		}
 		patch.hasCacheReadInput = true
-		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok {
-			patch.cacheReadInputTokens = v
-		}
-		if cc, ok := usageObj["cache_creation"].(map[string]any); ok {
-			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists {
-				patch.cacheCreation5mTokens = v
-				patch.hasCacheCreation5m = true
-			}
-			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists {
-				patch.cacheCreation1hTokens = v
-				patch.hasCacheCreation1h = true
-			}
-		}
-		if v, ok := parseSSEUsageFloat(usageObj["_sub2api_kiro_credits"]); ok && v > 0 {
-			patch.kiroCredits = v
-			patch.hasKiroCredits = true
-		}
-		return patch
-
+		patch.inputTokens = int(usage.Get("input_tokens").Int())
+		patch.cacheCreationInputTokens = int(usage.Get("cache_creation_input_tokens").Int())
+		patch.cacheReadInputTokens = int(usage.Get("cache_read_input_tokens").Int())
 	case "message_delta":
-		usageObj, _ := event["usage"].(map[string]any)
-		if len(usageObj) == 0 {
-			return nil
-		}
-
-		patch := &sseUsagePatch{}
-		kiroFinalUsage, _ := usageObj[kiroFinalUsageSSEField].(bool)
-		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
-			patch.inputTokens = v
-			patch.hasInputTokens = true
-		}
-		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && (v > 0 || kiroFinalUsage) {
-			patch.outputTokens = v
-			patch.hasOutputTokens = true
-		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
-			patch.cacheCreationInputTokens = v
-			patch.hasCacheCreationInput = true
-		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && (v > 0 || kiroFinalUsage) {
-			patch.cacheReadInputTokens = v
-			patch.hasCacheReadInput = true
-		}
-		if kiroFinalUsage {
-			// KIRO's synthesized final delta is a complete authoritative usage
-			// snapshot. Clear provisional TTL sub-buckets even when the final
-			// aggregate cache-creation bucket is zero.
+		setInt("input_tokens", &patch.inputTokens, &patch.hasInputTokens, finalUsage)
+		setInt("output_tokens", &patch.outputTokens, &patch.hasOutputTokens, finalUsage)
+		setInt("cache_creation_input_tokens", &patch.cacheCreationInputTokens, &patch.hasCacheCreationInput, finalUsage)
+		setInt("cache_read_input_tokens", &patch.cacheReadInputTokens, &patch.hasCacheReadInput, finalUsage)
+		if finalUsage {
 			patch.hasCacheCreation5m = true
 			patch.hasCacheCreation1h = true
 		}
-		if cc, ok := usageObj["cache_creation"].(map[string]any); ok {
-			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && (v > 0 || kiroFinalUsage) {
-				patch.cacheCreation5mTokens = v
-				patch.hasCacheCreation5m = true
-			}
-			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && (v > 0 || kiroFinalUsage) {
-				patch.cacheCreation1hTokens = v
-				patch.hasCacheCreation1h = true
-			}
-		}
-		if v, ok := parseSSEUsageFloat(usageObj["_sub2api_kiro_credits"]); ok && v > 0 {
-			patch.kiroCredits = v
-			patch.hasKiroCredits = true
-		}
-		return patch
+	default:
+		return nil
 	}
-
-	return nil
+	setInt("cache_creation.ephemeral_5m_input_tokens", &patch.cacheCreation5mTokens, &patch.hasCacheCreation5m, eventType == "message_start" || finalUsage)
+	setInt("cache_creation.ephemeral_1h_input_tokens", &patch.cacheCreation1hTokens, &patch.hasCacheCreation1h, eventType == "message_start" || finalUsage)
+	if credits := usage.Get("_sub2api_kiro_credits"); credits.Exists() && credits.Float() > 0 {
+		patch.kiroCredits = credits.Float()
+		patch.hasKiroCredits = true
+	}
+	return patch
 }
 
 func mergeSSEUsagePatch(usage *ClaudeUsage, patch *sseUsagePatch) {
@@ -1504,90 +1993,6 @@ func mergeSSEUsagePatch(usage *ClaudeUsage, patch *sseUsagePatch) {
 	if patch.hasKiroCredits {
 		usage.KiroCredits = patch.kiroCredits
 	}
-}
-
-func parseSSEUsageInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case float64:
-		return int(v), true
-	case float32:
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case int32:
-		return int(v), true
-	case json.Number:
-		if i, err := v.Int64(); err == nil {
-			return int(i), true
-		}
-		if f, err := v.Float64(); err == nil {
-			return int(f), true
-		}
-	case string:
-		if parsed, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			return parsed, true
-		}
-	}
-	return 0, false
-}
-
-func parseSSEUsageFloat(value any) (float64, bool) {
-	switch v := value.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case int32:
-		return float64(v), true
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f, true
-		}
-	case string:
-		if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			return parsed, true
-		}
-	}
-	return 0, false
-}
-
-func stripInternalSSEUsageFields(event map[string]any) bool {
-	if len(event) == 0 {
-		return false
-	}
-
-	eventType, _ := event["type"].(string)
-	switch eventType {
-	case "message_start":
-		msg, _ := event["message"].(map[string]any)
-		usageObj, _ := msg["usage"].(map[string]any)
-		return stripInternalSSEUsageMap(usageObj)
-	case "message_delta":
-		usageObj, _ := event["usage"].(map[string]any)
-		return stripInternalSSEUsageMap(usageObj)
-	default:
-		return false
-	}
-}
-
-func stripInternalSSEUsageMap(usageObj map[string]any) bool {
-	if len(usageObj) == 0 {
-		return false
-	}
-	changed := false
-	for _, key := range []string{"_sub2api_kiro_credits", kiroFinalUsageSSEField} {
-		if _, ok := usageObj[key]; ok {
-			delete(usageObj, key)
-			changed = true
-		}
-	}
-	return changed
 }
 
 // applyCacheTTLOverride 将所有 cache creation tokens 归入指定的 TTL 类型。
@@ -1619,36 +2024,6 @@ func applyCacheTTLOverride(usage *ClaudeUsage, target string) bool {
 	return true
 }
 
-// rewriteCacheCreationJSON 在 JSON usage 对象中重写 cache_creation 嵌套对象的 TTL 分类。
-// usageObj 是 usage JSON 对象（map[string]any）。
-func rewriteCacheCreationJSON(usageObj map[string]any, target string) bool {
-	ccObj, ok := usageObj["cache_creation"].(map[string]any)
-	if !ok {
-		return false
-	}
-	v5m, _ := parseSSEUsageInt(ccObj["ephemeral_5m_input_tokens"])
-	v1h, _ := parseSSEUsageInt(ccObj["ephemeral_1h_input_tokens"])
-	total := v5m + v1h
-	if total == 0 {
-		return false
-	}
-	switch target {
-	case "1h":
-		if v1h == total {
-			return false
-		}
-		ccObj["ephemeral_1h_input_tokens"] = float64(total)
-		ccObj["ephemeral_5m_input_tokens"] = float64(0)
-	default: // "5m"
-		if v5m == total {
-			return false
-		}
-		ccObj["ephemeral_5m_input_tokens"] = float64(total)
-		ccObj["ephemeral_1h_input_tokens"] = float64(0)
-	}
-	return true
-}
-
 func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context, account *Account) (string, bool) {
 	if account == nil {
 		return "", false
@@ -1666,9 +2041,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(newInvalidProviderResponseFailover(resp, "failed to read upstream Anthropic response"), err)
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
@@ -1692,6 +2067,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, err, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	if !validAnthropicNonStreamingResponse(body) {
+		return nil, newInvalidProviderResponseFailover(resp, "upstream returned an invalid terminal JSON response")
 	}
 
 	// 解析嵌套的 cache_creation 对象中的 5m/1h 明细

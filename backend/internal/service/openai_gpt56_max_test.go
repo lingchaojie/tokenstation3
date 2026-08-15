@@ -105,7 +105,7 @@ func TestOpenAIGatewayServiceForwardPreservesGPT56MaxEffort(t *testing.T) {
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -144,7 +144,7 @@ func TestOpenAIGatewayServiceForwardPreservesMappedGPT56MaxEffort(t *testing.T) 
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -187,7 +187,7 @@ func TestOpenAIGatewayServiceForwardOAuthCompactDowngradesMaxEffort(t *testing.T
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -231,7 +231,7 @@ func TestOpenAIGatewayServiceForwardOAuthRemoteCompactV2PreservesResponsesWire(t
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: io.NopCloser(strings.NewReader(
 				"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"summary\"}}\n\n" +
-					"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_compact\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n" +
 					"data: [DONE]\n\n",
 			)),
 		},
@@ -288,7 +288,7 @@ func TestOpenAIGatewayServiceForwardAPIKeyRemoteCompactV2PreservesResponsesWire(
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: io.NopCloser(strings.NewReader(
 				"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"summary\"}}\n\n" +
-					"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_compact\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n" +
 					"data: [DONE]\n\n",
 			)),
 		},

@@ -523,7 +523,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
-			if errors.As(err, &failoverErr) {
+			if result == nil && errors.As(err, &failoverErr) {
 				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 				switch failoverAction {
 				case FailoverContinue:
@@ -536,9 +536,14 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 					return
 				}
 			}
-			// ForwardNative already wrote the response
-			reqLog.Error("gemini.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-			return
+			if result == nil || result.UpstreamFailed {
+				// ForwardNative already wrote the response. Capture-only failures
+				// must not create a usage row; a committed partial result continues
+				// below so already delivered tokens are accounted exactly once.
+				reqLog.Error("gemini.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				return
+			}
+			reqLog.Warn("gemini.forward_committed_partial", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
 
 		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
@@ -546,7 +551,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		clientIP := ip.GetClientIP(c)
 
 		// 保存 Gemini 内容摘要会话（用于 Fallback 匹配）
-		if useDigestFallback && geminiDigestChain != "" && geminiPrefixHash != "" {
+		if err == nil && useDigestFallback && geminiDigestChain != "" && geminiPrefixHash != "" {
 			if err := h.gatewayService.SaveGeminiSession(
 				c.Request.Context(),
 				derefGroupID(apiKey.GroupID),
@@ -634,10 +639,17 @@ func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverE
 		googleError(c, http.StatusBadGateway, "Upstream request failed")
 		return
 	}
+	platform := service.PlatformGemini
+	if strings.TrimSpace(failoverErr.Platform) != "" {
+		platform = failoverErr.Platform
+	}
 	if h.capturePool != nil {
-		if record := service.BuildTerminalErrorCaptureRecord(c, service.PlatformGemini, failoverErr, h.captureLimit()); record != nil {
+		if record := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); record != nil {
 			h.capturePool.Submit(record)
 		}
+	}
+	if c.Writer.Written() {
+		return
 	}
 
 	statusCode := failoverErr.StatusCode
@@ -645,7 +657,7 @@ func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverE
 
 	// 先检查透传规则
 	if h.errorPassthroughService != nil && len(responseBody) > 0 {
-		if rule := h.errorPassthroughService.MatchRule(service.PlatformGemini, statusCode, responseBody); rule != nil {
+		if rule := h.errorPassthroughService.MatchRule(platform, statusCode, responseBody); rule != nil {
 			// 确定响应状态码
 			respCode := statusCode
 			if !rule.PassthroughCode && rule.ResponseCode != nil {

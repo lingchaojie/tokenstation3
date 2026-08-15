@@ -87,7 +87,7 @@ func TestOpenAIGatewayServiceForwardOAuthDerivesEffortFromSuffixModel(t *testing
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_suffix","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}

@@ -24,7 +24,10 @@ const (
 	openAIFirstOutputStageMaxBytes           = 8 * 1024 * 1024
 	openAIFirstOutputScannerFramingAllowance = 64
 	openAIFirstOutputGuardQueueSize          = 1
-	openAIDefaultStreamQueueSize             = 16
+	// Provider events can be close to the configured per-token ceiling. Keep a
+	// single queued event so slow conversion/downstream writes apply backpressure
+	// instead of multiplying a large token across the attempt heap.
+	openAIDefaultStreamQueueSize = 1
 )
 
 var (
@@ -313,8 +316,12 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	reasoningEffort string,
 	timeout time.Duration,
 	phase string,
-	responseHeaders http.Header,
+	resp *http.Response,
 ) *UpstreamFailoverError {
+	responseHeaders := http.Header(nil)
+	if resp != nil {
+		responseHeaders = resp.Header
+	}
 	elapsed := time.Since(startTime)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
@@ -331,11 +338,17 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	if s.rateLimitService != nil {
 		s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 	}
-	return &UpstreamFailoverError{
+	failure := &UpstreamFailoverError{
 		StatusCode:      http.StatusGatewayTimeout,
 		ResponseBody:    []byte(`{"error":{"type":"first_output_timeout","message":"Upstream produced no output before the deadline"}}`),
 		ResponseHeaders: responseHeaders.Clone(), SafeToFailoverAfterWrite: true,
 	}
+	if resp != nil {
+		failure.RequestHeaders = captureRequestHeadersFromResponse(resp)
+		failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
+		failure.HasUpstreamHTTPResponse = true
+	}
+	return failure
 }
 
 type openAIFirstOutputHeaderGuard struct {

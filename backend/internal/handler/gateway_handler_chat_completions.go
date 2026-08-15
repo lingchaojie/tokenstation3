@@ -291,6 +291,11 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 
 		submitForwardUsage := func(result *service.ForwardResult) {
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			h.submitGatewayResultCapture(result, account, forwardBody, upstreamEndpoint)
+			if result.UpstreamFailed {
+				return
+			}
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			requestPayloadHash := result.UpstreamRequestHash
@@ -298,8 +303,6 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				requestPayloadHash = service.HashUsageRequestPayload(forwardBody)
 			}
 			inboundEndpoint := GetInboundEndpoint(c)
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-			h.submitGatewayResultCapture(result, account, forwardBody, upstreamEndpoint)
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
@@ -369,9 +372,6 @@ func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int
 
 // handleCCFailoverExhausted writes a failover-exhausted error in CC format.
 func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
-	if streamStarted {
-		return
-	}
 	if lastErr != nil {
 		if h.capturePool != nil {
 			if record := service.BuildTerminalErrorCaptureRecord(c, lastErr.Platform, lastErr, h.captureLimit()); record != nil {
@@ -379,6 +379,9 @@ func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *serv
 			}
 		}
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
+	}
+	if streamStarted {
+		return
 	}
 	if lastErr != nil && lastErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(lastErr)

@@ -3,20 +3,46 @@
 package service
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestAnthropicBufferedContentAccumulatorUsesLinearAllocationForTinyFragments(t *testing.T) {
+	const fragmentCount = 128 * 1024
+	response := &apicompat.AnthropicResponse{}
+	var accumulator anthropicBufferedContentAccumulator
+	accumulator.start(response, apicompat.AnthropicContentBlock{Type: "text"})
+	delta := &apicompat.AnthropicDelta{Type: "text_delta", Text: "x"}
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < fragmentCount; i++ {
+		accumulator.delta(0, delta)
+	}
+	accumulator.materialize(response)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Len(t, response.Content, 1)
+	require.Len(t, response.Content[0].Text, fragmentCount)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
 
 func TestAdaptResponsesClientToolsForAnthropic_FlattensNamespace(t *testing.T) {
 	t.Parallel()
@@ -79,7 +105,7 @@ func TestAdaptResponsesClientToolsForAnthropic_LiftsAdditionalTools(t *testing.T
 func namespaceToolAnthropicStream() string {
 	return strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"id":"msg_namespace","type":"message","role":"assistant","content":[],"model":"claude-fable-5","stop_reason":"","usage":{"input_tokens":10}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_namespace","type":"message","role":"assistant","content":[],"model":"claude-fable-5","stop_reason":null,"usage":{"input_tokens":10}}}`,
 		``,
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_namespace","name":"codex_app__read_thread","input":{"thread_id":"123"}}}`,
@@ -161,13 +187,19 @@ func TestHandleResponsesBufferedStreamingResponse_PreservesMessageStartCacheUsag
 		Header: http.Header{"x-request-id": []string{"rid_buffered"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":12,"cache_read_input_tokens":9,"cache_creation_input_tokens":3}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":12,"cache_read_input_tokens":9,"cache_creation_input_tokens":3}}}`,
 			``,
 			`event: content_block_start`,
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
 			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7,"_sub2api_kiro_credits":0.17}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
 			``,
 		}, "\n"))),
 	}
@@ -196,10 +228,13 @@ func TestHandleResponsesStreamingResponse_PreservesMessageStartCacheUsage(t *tes
 		Header: http.Header{"x-request-id": []string{"rid_stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":20,"cache_read_input_tokens":11,"cache_creation_input_tokens":4}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":20,"cache_read_input_tokens":11,"cache_creation_input_tokens":4}}}`,
 			``,
 			`event: content_block_start`,
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
 			``,
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8,"_sub2api_kiro_credits":0.23}}`,
@@ -259,6 +294,240 @@ func TestHandleResponsesStreamingResponse_KiroMarkedFinalUsageClearsProvisionalT
 	require.Equal(t, 120, result.Usage.CacheReadInputTokens)
 	require.Contains(t, rec.Body.String(), `"input_tokens":120`)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
+}
+
+func TestAnthropicToResponsesCompatibilityRejectsIncompleteProviderTailAfterTerminal(t *testing.T) {
+	complete := strings.Join([]string{
+		`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_tail","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2}}}`,
+		`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+		`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+	}, "\n\n") + "\n\n"
+	tails := map[string]string{
+		"event without companion":       `event: content_block_delta`,
+		"event with non-data companion": `event: content_block_delta` + "\n" + `: keepalive`,
+	}
+
+	for name, tail := range tails {
+		t.Run("buffered/"+name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(complete + tail))}
+			result, err := (&GatewayService{}).handleResponsesBufferedStreamingResponse(resp, c, "claude-test", "claude-test", nil, time.Now(), false, apicompat.ResponsesClientToolMapping{})
+			require.Error(t, err)
+			require.Nil(t, result)
+		})
+		t.Run("stream/"+name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(complete + tail))}
+			result, err := (&GatewayService{}).handleResponsesStreamingResponse(resp, c, "claude-test", "claude-test", nil, time.Now(), false, apicompat.ResponsesClientToolMapping{})
+			require.Error(t, err)
+			require.NotNil(t, result)
+			require.True(t, result.CaptureTerminalError)
+		})
+	}
+}
+
+func TestAnthropicToResponsesCompatibilityHonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, streamed := range []bool{false, true} {
+		name := "buffered"
+		if streamed {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			body := newRawChatBlockingAfterPrefixReadCloser(incompleteAnthropicCompatStreamPrefix())
+			resp := &http.Response{Body: body}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+				MaxLineSize:               defaultMaxLineSize,
+				StreamDataIntervalTimeout: 1,
+			}}}
+			type outcome struct {
+				result *ForwardResult
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				if streamed {
+					result, err := svc.handleResponsesStreamingResponse(resp, c, "claude-test", "claude-test", nil, time.Now(), false, apicompat.ResponsesClientToolMapping{})
+					done <- outcome{result: result, err: err}
+					return
+				}
+				result, err := svc.handleResponsesBufferedStreamingResponse(resp, c, "claude-test", "claude-test", nil, time.Now(), false, apicompat.ResponsesClientToolMapping{})
+				done <- outcome{result: result, err: err}
+			}()
+
+			select {
+			case got := <-done:
+				if streamed {
+					require.ErrorContains(t, got.err, "stream data interval timeout")
+					require.NotNil(t, got.result)
+					require.True(t, got.result.CaptureTerminalError)
+				} else {
+					require.Nil(t, got.result)
+					var failoverErr *UpstreamFailoverError
+					require.ErrorAs(t, got.err, &failoverErr)
+					require.Contains(t, string(failoverErr.ResponseBody), "upstream stream read failed before message_stop")
+				}
+			case <-time.After(2 * time.Second):
+				_ = body.Close()
+				<-done
+				t.Fatal("Anthropic-to-Responses compatibility stream ignored StreamDataIntervalTimeout")
+			}
+			require.NoError(t, body.Close())
+		})
+	}
+}
+
+func TestAnthropicToResponsesParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+
+	prefix := []byte(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_bad","type":"message","role":"assistant","content":"invalid","model":"claude-test","usage":{"input_tokens":1}}}`,
+		``,
+	}, "\n"))
+	tail := []byte(strings.Join([]string{
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"))
+	body := &delayedOpenAITerminalTailBody{
+		terminal: prefix,
+		tail:     tail,
+		delay:    75 * time.Millisecond,
+		closed:   make(chan struct{}),
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+		Request:    c.Request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+
+	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
+		resp, c, "claude-test", "claude-test", nil, time.Now(), false, apicompat.ResponsesClientToolMapping{},
+	)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), prefix...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
+}
+
+func TestOpenAIResponsesPassthroughParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+
+	first := []byte("data: {bad}\n\n")
+	tail := []byte(`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_error","message":"tail"}}}` + "\n\n")
+	body := &delayedOpenAITerminalTailBody{
+		terminal: first,
+		tail:     tail,
+		delay:    75 * time.Millisecond,
+		closed:   make(chan struct{}),
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+		Request:    c.Request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+
+	result, err := (&OpenAIGatewayService{}).handleStreamingResponsePassthrough(
+		c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "gpt-5", "gpt-5",
+	)
+	require.NotNil(t, result)
+	require.Error(t, err)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
+}
+
+func TestOpenAIResponsesNativeParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+
+	first := []byte("data: {bad}\n\n")
+	tail := []byte(`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_error","message":"tail"}}}` + "\n\n")
+	body := &delayedOpenAITerminalTailBody{
+		terminal: first,
+		tail:     tail,
+		delay:    75 * time.Millisecond,
+		closed:   make(chan struct{}),
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+		Request:    c.Request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		StreamDataIntervalTimeout: 1,
+	}}}
+
+	result, err := svc.handleStreamingResponse(
+		c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "gpt-5", "gpt-5",
+	)
+	require.NotNil(t, result)
+	require.Error(t, err)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
+}
+
+func TestOpenAIResponsesPassthroughScannerLimitDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1/responses", nil)
+	providerBody := bytes.Repeat([]byte{'x'}, (2<<20)+6)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+		Request:    request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 3<<20)
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: 1 << 20,
+	}}}
+
+	result, err := svc.handleStreamingResponsePassthrough(
+		c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "gpt-5", "gpt-5",
+	)
+	require.NotNil(t, result)
+	require.ErrorIs(t, err, bufio.ErrTooLong)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, providerBody, capture.Response)
+	require.False(t, capture.ResponseTruncated)
 }
 
 func TestForwardAsResponsesKiroDirectUsesKiroEndpointMode(t *testing.T) {
@@ -391,13 +660,19 @@ func TestHandleResponsesBufferedStreamingResponse_CompactSSEFormat(t *testing.T)
 		Header: http.Header{"x-request-id": []string{"rid_compact"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event:message_start`,
-			`data:{"type":"message_start","message":{"id":"msg_compact","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":10}}}`,
+			`data:{"type":"message_start","message":{"id":"msg_compact","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":10}}}`,
 			``,
 			`event:content_block_start`,
 			`data:{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}`,
 			``,
+			`event:content_block_stop`,
+			`data:{"type":"content_block_stop","index":0}`,
+			``,
 			`event:message_delta`,
 			`data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event:message_stop`,
+			`data:{"type":"message_stop"}`,
 			``,
 		}, "\n"))),
 	}
@@ -422,10 +697,13 @@ func TestHandleResponsesStreamingResponse_CompactSSEFormat(t *testing.T) {
 		Header: http.Header{"x-request-id": []string{"rid_compact_stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event:message_start`,
-			`data:{"type":"message_start","message":{"id":"msg_compact_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":15}}}`,
+			`data:{"type":"message_start","message":{"id":"msg_compact_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":15}}}`,
 			``,
 			`event:content_block_start`,
 			`data:{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}`,
+			``,
+			`event:content_block_stop`,
+			`data:{"type":"content_block_stop","index":0}`,
 			``,
 			`event:message_delta`,
 			`data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}}`,

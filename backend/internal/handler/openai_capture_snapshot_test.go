@@ -37,10 +37,26 @@ func TestBuildOpenAICaptureRecordUsesFinalUpstreamStatusWithLegacySuccessDefault
 	failed := &service.OpenAIForwardResult{
 		UpstreamFailed:     true,
 		UpstreamHTTPStatus: http.StatusBadRequest,
+		UpstreamRequest:    []byte(`{}`),
 		CaptureResponse:    []byte(`{"error":"bad request"}`),
 	}
 	require.Equal(t, http.StatusBadRequest, buildOpenAICaptureRecord(failed, account, nil, "/v1/responses", 1024).HTTPStatus)
 
-	legacySuccess := &service.OpenAIForwardResult{CaptureResponse: []byte(`{"ok":true}`)}
+	legacySuccess := &service.OpenAIForwardResult{UpstreamRequest: []byte(`{}`), CaptureResponse: []byte(`{"ok":true}`)}
 	require.Equal(t, http.StatusOK, buildOpenAICaptureRecord(legacySuccess, account, nil, "/v1/responses", 1024).HTTPStatus)
+}
+
+func TestBuildOpenAICaptureRecordGeneratesRequestIDWhenProviderOmitsIt(t *testing.T) {
+	result := &service.OpenAIForwardResult{UpstreamRequest: []byte{}, CaptureResponse: []byte{}}
+	account := &service.Account{Platform: service.PlatformOpenAI}
+	first := buildOpenAICaptureRecord(result, account, nil, "/v1/responses", 1024)
+	second := buildOpenAICaptureRecord(result, account, nil, "/v1/responses", 1024)
+	require.NotEmpty(t, first.RequestID)
+	require.NotEmpty(t, second.RequestID)
+	require.NotEqual(t, first.RequestID, second.RequestID)
+}
+
+func TestBuildOpenAICaptureRecordRejectsMissingProviderRequest(t *testing.T) {
+	result := &service.OpenAIForwardResult{CaptureResponse: []byte(`{"ok":true}`)}
+	require.Nil(t, buildOpenAICaptureRecord(result, &service.Account{Platform: service.PlatformOpenAI}, []byte(`{"model":"inbound"}`), "/v1/responses", 1024))
 }

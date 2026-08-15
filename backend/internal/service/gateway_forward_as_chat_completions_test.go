@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -54,13 +55,19 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 		Header: http.Header{"x-request-id": []string{"rid_cc_buffered"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":12,"cache_read_input_tokens":9,"cache_creation_input_tokens":3}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":12,"cache_read_input_tokens":9,"cache_creation_input_tokens":3}}}`,
 			``,
 			`event: content_block_start`,
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
 			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"_sub2api_kiro_final_usage":true,"_sub2api_kiro_credits":0.17}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
 			``,
 		}, "\n"))),
 	}
@@ -94,13 +101,19 @@ func TestHandleCCBufferedFromAnthropic_CompactSSEFormat(t *testing.T) {
 		Header: http.Header{"x-request-id": []string{"rid_cc_buffered_compact"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event:message_start`,
-			`data:{"type":"message_start","message":{"id":"msg_c1","type":"message","role":"assistant","content":[],"model":"k3","stop_reason":"","usage":{"input_tokens":15,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}`,
+			`data:{"type":"message_start","message":{"id":"msg_c1","type":"message","role":"assistant","content":[],"model":"k3","stop_reason":null,"usage":{"input_tokens":15,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}`,
 			``,
 			`event:content_block_start`,
 			`data:{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}`,
 			``,
+			`event:content_block_stop`,
+			`data:{"type":"content_block_stop","index":0}`,
+			``,
 			`event:message_delta`,
 			`data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event:message_stop`,
+			`data:{"type":"message_stop"}`,
 			``,
 		}, "\n"))),
 	}
@@ -127,10 +140,13 @@ func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 		Header: http.Header{"x-request-id": []string{"rid_cc_stream_compact"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event:message_start`,
-			`data:{"type":"message_start","message":{"id":"msg_c2","type":"message","role":"assistant","content":[],"model":"k3","stop_reason":"","usage":{"input_tokens":21,"cache_read_input_tokens":6,"cache_creation_input_tokens":1}}}`,
+			`data:{"type":"message_start","message":{"id":"msg_c2","type":"message","role":"assistant","content":[],"model":"k3","stop_reason":null,"usage":{"input_tokens":21,"cache_read_input_tokens":6,"cache_creation_input_tokens":1}}}`,
 			``,
 			`event:content_block_start`,
 			`data:{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}`,
+			``,
+			`event:content_block_stop`,
+			`data:{"type":"content_block_stop","index":0}`,
 			``,
 			`event:message_delta`,
 			`data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`,
@@ -164,10 +180,13 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 		Header: http.Header{"x-request-id": []string{"rid_cc_stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":20,"cache_read_input_tokens":11,"cache_creation_input_tokens":4}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":20,"cache_read_input_tokens":11,"cache_creation_input_tokens":4}}}`,
 			``,
 			`event: content_block_start`,
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
 			``,
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8,"_sub2api_kiro_credits":0.23}}`,
@@ -231,12 +250,112 @@ func TestHandleCCStreamingFromAnthropic_KiroMarkedFinalUsageClearsProvisionalTok
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
 }
 
+func TestAnthropicToChatCompatibilityRejectsIncompleteProviderTailAfterTerminal(t *testing.T) {
+	complete := strings.Join([]string{
+		`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_tail","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2}}}`,
+		`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+		`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+	}, "\n\n") + "\n\n"
+	tails := map[string]string{
+		"event without companion":       `event: content_block_delta`,
+		"event with non-data companion": `event: content_block_delta` + "\n" + `: keepalive`,
+	}
+
+	for name, tail := range tails {
+		t.Run("buffered/"+name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(complete + tail))}
+			result, err := (&GatewayService{}).handleCCBufferedFromAnthropic(resp, c, "claude-test", "claude-test", nil, time.Now(), false)
+			require.Error(t, err)
+			require.Nil(t, result)
+		})
+		t.Run("stream/"+name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(complete + tail))}
+			result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(context.Background(), resp, c, "claude-test", "claude-test", nil, time.Now(), true, false)
+			require.Error(t, err)
+			require.NotNil(t, result)
+			require.True(t, result.CaptureTerminalError)
+		})
+	}
+}
+
+func incompleteAnthropicCompatStreamPrefix() string {
+	return strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_idle","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":null,"usage":{"input_tokens":2}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+	}, "\n")
+}
+
+func TestAnthropicToChatCompatibilityHonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, streamed := range []bool{false, true} {
+		name := "buffered"
+		if streamed {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			body := newRawChatBlockingAfterPrefixReadCloser(incompleteAnthropicCompatStreamPrefix())
+			resp := &http.Response{Body: body}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+				MaxLineSize:               defaultMaxLineSize,
+				StreamDataIntervalTimeout: 1,
+			}}}
+			type outcome struct {
+				result *ForwardResult
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				if streamed {
+					result, err := svc.handleCCStreamingFromAnthropic(context.Background(), resp, c, "claude-test", "claude-test", nil, time.Now(), true, false)
+					done <- outcome{result: result, err: err}
+					return
+				}
+				result, err := svc.handleCCBufferedFromAnthropic(resp, c, "claude-test", "claude-test", nil, time.Now(), false)
+				done <- outcome{result: result, err: err}
+			}()
+
+			select {
+			case got := <-done:
+				if streamed {
+					require.ErrorContains(t, got.err, "stream data interval timeout")
+					require.NotNil(t, got.result)
+					require.True(t, got.result.CaptureTerminalError)
+				} else {
+					require.Nil(t, got.result)
+					var failoverErr *UpstreamFailoverError
+					require.ErrorAs(t, got.err, &failoverErr)
+					require.Contains(t, string(failoverErr.ResponseBody), "upstream stream read failed before message_stop")
+				}
+			case <-time.After(2 * time.Second):
+				_ = body.Close()
+				<-done
+				t.Fatal("Anthropic-to-Chat compatibility stream ignored StreamDataIntervalTimeout")
+			}
+			require.NoError(t, body.Close())
+		})
+	}
+}
+
 func markedKiroFinalUsageAnthropicResponse(messageID string) *http.Response {
 	return &http.Response{
 		Header: http.Header{"x-request-id": []string{"rid_kiro_marked_final"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`event: message_start`,
-			`data: {"type":"message_start","message":{"id":"` + messageID + `","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":"","usage":{"input_tokens":30,"output_tokens":0,"cache_read_input_tokens":60,"cache_creation_input_tokens":30}}}`,
+			`data: {"type":"message_start","message":{"id":"` + messageID + `","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.5","stop_reason":null,"usage":{"input_tokens":30,"output_tokens":0,"cache_read_input_tokens":60,"cache_creation_input_tokens":30}}}`,
 			``,
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":120,"cache_creation_input_tokens":0,"_sub2api_kiro_final_usage":true}}`,

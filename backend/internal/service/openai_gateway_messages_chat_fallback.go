@@ -138,7 +138,10 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		result, forwardErr = s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	finishOpenAIHTTPCapture(resp)
-	if forwardErr == nil {
+	if result != nil && forwardErr != nil {
+		result.CaptureTerminalError = true
+	}
+	if result != nil {
 		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 	return finalizeOpenAIForwardResult(c, result, chatBody), forwardErr
@@ -209,7 +212,10 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	// 仅跳过写出，保证 finalize 阶段的 usage 汇总不受断开影响。
 	emitChunk := func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
 		// CC chunk → Anthropic events (direct, single state machine)
-		anthropicEvents := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
+		anthropicEvents, err := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
+		if err != nil {
+			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
+		}
 		semanticOutput := anthropicConvertedEventsHaveSemanticOutput(anthropicEvents)
 		var wire strings.Builder
 		for _, aEvt := range anthropicEvents {
@@ -237,7 +243,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 
 	if scan.Err != nil {
 		if !scan.SawOutput {
-			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream read failed before semantic output")
 		}
 		// Broken upstream read: skip finalization so no synthetic message_stop
 		// masks the truncation, and surface the error to flag usage incomplete
@@ -259,9 +265,12 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	if !scan.SawDone {
 		logCCStreamMissingDoneSentinel("openai messages chat fallback", requestID)
 		if !scan.SawOutput {
-			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream ended before [DONE]")
 		}
 		return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs, ClientDisconnect: clientDisconnected}, errors.New("upstream stream ended without [DONE]")
+	}
+	if !scan.SawProviderPayload {
+		return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream contained only [DONE]")
 	}
 	// Finalize: close open blocks + emit message_delta/message_stop.
 	finalEvents := apicompat.FinalizeChatCompletionsAnthropicStream(anthropicState)

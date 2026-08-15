@@ -231,13 +231,19 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
 	c.Set("api_key", &APIKey{ID: 7101})
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
 
 	account := grokChatBridgeTestAccount(71)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
 		accountsByID: map[int64]*Account{account.ID: account},
 	}}
-	upstream := &httpUpstreamRecorder{resp: grokChatBridgeCompletedResponse("resp_grok_chat_cache", 9856)}
+	upstreamResp := grokChatBridgeCompletedResponse("resp_grok_chat_cache", 9856)
+	rawUpstreamResponse, err := io.ReadAll(upstreamResp.Body)
+	require.NoError(t, err)
+	upstreamResp.Body = io.NopCloser(bytes.NewReader(rawUpstreamResponse))
+	upstream := &httpUpstreamRecorder{resp: upstreamResp}
 	svc := &OpenAIGatewayService{
+		cfg:               captureEnabledConfigForTest(1 << 20),
 		httpUpstream:      upstream,
 		grokTokenProvider: NewGrokTokenProvider(repo, nil),
 		accountRepo:       repo,
@@ -252,6 +258,11 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	require.Equal(t, 9908, result.Usage.InputTokens)
 	require.Equal(t, 12, result.Usage.OutputTokens)
 	require.Equal(t, 9856, result.Usage.CacheReadInputTokens)
+	require.Equal(t, upstream.lastBody, result.CaptureRequest, "capture must store the converted Responses request sent to xAI")
+	require.Equal(t, rawUpstreamResponse, result.CaptureResponse, "capture must store the provider-native Responses SSE bytes")
+	require.Equal(t, http.StatusOK, result.HTTPStatusForCapture())
+	require.Equal(t, upstream.lastReq.URL.String(), result.CaptureUpstreamEndpoint)
+	require.Contains(t, string(result.CaptureResponseHeaders), "Xai-Request-Id")
 
 	identity := gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String()
 	require.NotEmpty(t, identity)
@@ -361,7 +372,6 @@ func TestForwardGrokChatViaResponsesTraeToolHistoryKeepsCacheRoute(t *testing.T)
 		grokTokenProvider: NewGrokTokenProvider(repo, nil),
 		accountRepo:       repo,
 	}
-
 	firstTurnIdentity := resolveGrokCacheIdentity(c, firstTurnBody, "", "grok-4.5")
 	extendedTurnIdentity := resolveGrokCacheIdentity(c, body, "", "grok-4.5")
 	require.NotEmpty(t, firstTurnIdentity)
@@ -418,7 +428,6 @@ func TestForwardGrokChatViaResponsesTraeCompatibilityFieldsKeepCacheRoute(t *tes
 		grokTokenProvider: NewGrokTokenProvider(repo, nil),
 		accountRepo:       repo,
 	}
-
 	firstTurnIdentity := resolveGrokCacheIdentity(c, firstTurnBody, "", "grok-4.5")
 	extendedTurnIdentity := resolveGrokCacheIdentity(c, body, "", "grok-4.5")
 	require.NotEmpty(t, firstTurnIdentity)
@@ -671,10 +680,14 @@ func grokChatBridgeTestAccount(id int64) *Account {
 }
 
 func grokChatBridgeCompletedResponse(responseID string, cachedTokens int) *http.Response {
+	inputTokens := 9908
+	if cachedTokens > inputTokens {
+		inputTokens = cachedTokens + 100
+	}
 	body := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","sequence_number":0,"delta":"cached ok"}`,
 		"",
-		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"` + responseID + `","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"cached ok"}]}],"usage":{"input_tokens":9908,"output_tokens":12,"total_tokens":9920,"input_tokens_details":{"cached_tokens":` + strconv.Itoa(cachedTokens) + `}}}}`,
+		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"` + responseID + `","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"cached ok"}]}],"usage":{"input_tokens":` + strconv.Itoa(inputTokens) + `,"output_tokens":12,"total_tokens":` + strconv.Itoa(inputTokens+12) + `,"input_tokens_details":{"cached_tokens":` + strconv.Itoa(cachedTokens) + `}}}}`,
 		"",
 	}, "\n")
 	return &http.Response{

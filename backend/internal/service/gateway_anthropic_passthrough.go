@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -93,6 +92,13 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	}
 
 	var resp *http.Response
+	finishCapture := func() {}
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
+		account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	captureLimit := 0
+	if s.cfg != nil {
+		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
+	}
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
 		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, input.RequestStream)
@@ -111,6 +117,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 		s.captureOutboundRequest(c, account, upstreamReq, wireBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		finishCapture = beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -193,6 +200,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	}
 	streamOwnsResponseBody := false
 	defer func() {
+		finishCapture()
 		if !streamOwnsResponseBody {
 			_ = resp.Body.Close()
 		}
@@ -292,10 +300,12 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			if partial := partialStreamUsageResult(c, resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
 				return partial, err
 			}
-			// No semantic output reached the client, so this attempt remains
-			// retryable. Discard its request-only capture before another account
-			// can own the request scope.
-			_, _ = takeCaptureResult(c)
+			// Preserve a real HTTP exchange for the final-account terminal sink.
+			// The next account's attempt reset will discard intermediate captures.
+			var failure *UpstreamFailoverError
+			if !errors.As(err, &failure) || !failure.HasUpstreamHTTPResponse {
+				_, _ = takeCaptureResult(c)
+			}
 			return nil, err
 		}
 		usage = streamResult.usage
@@ -304,12 +314,14 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	} else {
 		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account)
 		if err != nil {
-			return nil, err
+			finishCapture()
+			return failedForwardResultForError(c, resp, input.OriginalModel, input.RequestModel, false, input.StartTime, err), err
 		}
 	}
 	if usage == nil {
 		usage = &ClaudeUsage{}
 	}
+	finishCapture()
 
 	return attachCaptureToForwardResult(c, &ForwardResult{
 		RequestID:                     resp.Header.Get("x-request-id"),
@@ -453,18 +465,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	clientDisconnected := false
 	semanticOutput := false
 	sawTerminalEvent := false
-
-	var tee *sseTee
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
-		account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
-		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
-		defer func() {
-			if semanticOutput || sawTerminalEvent {
-				captured, truncated := tee.bytes()
-				setCaptureResult(c, resp, captured, truncated)
-			}
-		}()
-	}
+	providerPayloadObserved := false
+	providerPhase := anthropicProviderAwaitingStart
 
 	stagedOutput := newDefaultOpenAIFirstOutputStage()
 	defer func() { _ = stagedOutput.Close() }()
@@ -472,7 +474,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	pendingEventOutput := newDefaultOpenAIFirstOutputStage()
 	defer func() { _ = pendingEventOutput.Close() }()
 
-	scanner := bufio.NewScanner(resp.Body)
+	readActivity := newProviderBodyReadActivity(resp.Body)
+	scanner := bufio.NewScanner(readActivity)
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
@@ -485,7 +488,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
 	scanDone := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
@@ -496,18 +499,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			return false
 		}
 	}
-	var lastReadAt int64
-	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 	go func(scanBuf *sseScannerBuf64K) {
 		defer close(scanDone)
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		for scanner.Scan() {
-			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 			line := scanner.Text()
-			if tee != nil {
-				tee.appendLine(line)
-			}
 			if !sendEvent(scanEvent{line: line}) {
 				return
 			}
@@ -517,13 +514,19 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		}
 	}(scanBuf)
 	bodyOwnedByScanner = true
+	providerScanFinished := false
 	defer func() {
+		if !providerScanFinished {
+			drainCaptureScannerOnParserFailure(ctx, resp, events, scanDone, &readActivity.lastRead, 0, nil, func() {
+				close(done)
+			})
+			return
+		}
 		close(done)
 		// Closing the owned body is the only way to interrupt Scanner.Read. Join
 		// before returning so a canceled/overflowed attempt cannot leak into the
 		// next account; the outer caller has transferred close ownership here.
-		_ = resp.Body.Close()
-		<-scanDone
+		closeCaptureResponseAndJoinScanner(resp, scanDone)
 	}()
 
 	streamInterval := time.Duration(0)
@@ -585,11 +588,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				},
 			})
 		}
-		return &UpstreamFailoverError{
-			StatusCode:             http.StatusBadGateway,
-			ResponseBody:           responseBody,
-			RetryableOnSameAccount: retryable,
-		}
+		failure := newIncompleteProviderStreamFailover(resp, message)
+		failure.ResponseBody = responseBody
+		failure.RetryableOnSameAccount = retryable
+		return failure
 	}
 	transformLine := func(line string) string {
 		restored := string(reverseToolNamesIfPresent(c, []byte(line)))
@@ -647,10 +649,6 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		}
 		eventStage := takePendingEvent()
 
-		if data != "" {
-			observer.ObserveAnthropic([]byte(data))
-			s.parseSSEUsagePassthrough(data, usage)
-		}
 		if strings.EqualFold(eventName, "error") {
 			eventErr := &sseStreamErrorEventError{RawData: data}
 			if !semanticOutput {
@@ -670,6 +668,27 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				clientDisconnected = true
 			}
 			return errors.Join(eventErr, deliverErr)
+		}
+
+		if data != "" {
+			if data == "[DONE]" {
+				if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
+					return errors.Join(errors.New("anthropic [DONE] arrived before a valid message_start"), eventStage.Close())
+				}
+				providerPhase.state = anthropicProviderTerminated.state
+			} else if gjson.Valid(data) {
+				decodedType := gjson.Get(data, "type").String()
+				if err := validateAnthropicProviderEvent(&providerPhase, eventName, []byte(data), decodedType); err != nil {
+					return errors.Join(err, eventStage.Close())
+				}
+				if decodedType == "message_start" {
+					providerPayloadObserved = true
+				}
+			} else {
+				return errors.Join(fmt.Errorf("invalid JSON for Anthropic event %q", eventName), eventStage.Close())
+			}
+			observer.ObserveAnthropic([]byte(data))
+			s.parseSSEUsagePassthrough(data, usage)
 		}
 
 		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(data)
@@ -699,10 +718,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		if terminal {
 			sawTerminalEvent = true
 		}
-		if eventHasSemanticOutput || terminal {
+		if eventHasSemanticOutput || (terminal && providerPayloadObserved) {
 			commitStage()
 		}
-		if (wasSemanticOutput || eventHasSemanticOutput || terminal) && !clientDisconnected {
+		if (wasSemanticOutput || eventHasSemanticOutput || (terminal && providerPayloadObserved)) && !clientDisconnected {
 			flusher.Flush()
 			lastDataAt = time.Now()
 			resetKeepaliveTimer()
@@ -725,10 +744,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				providerScanFinished = true
 				// A clean EOF may complete a recognized terminal/error event when the
-				// provider omitted the optional trailing blank line. Other partial
-				// events are discarded so a handler fallback cannot become another
-				// data line in an unterminated upstream event.
+				// provider omitted the optional trailing blank line. Any other observed
+				// provider event is a malformed tail: discard its downstream staging,
+				// but preserve the attempt as failover/partial instead of silently
+				// laundering it through an earlier message_stop.
 				if inPartialEvent {
 					finalizeAtEOF := anthropicStreamEventIsTerminal(pendingEventName, pendingEventData) ||
 						(strings.EqualFold(pendingEventName, "error") && pendingEventData != "")
@@ -736,14 +757,13 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 						if eventErr := processPendingEvent(true); eventErr != nil {
 							return handlePendingEventError(eventErr)
 						}
-					} else if cleanupErr := discardPendingEvent(); cleanupErr != nil {
+					} else {
+						cleanupErr := discardPendingEvent()
+						tailErr := errors.New("upstream stream ended with an incomplete Anthropic provider event")
 						if !semanticOutput {
-							return nil, errors.Join(
-								preOutputFailover("upstream stream ended before semantic output", true, nil),
-								cleanupErr,
-							)
+							return nil, errors.Join(preOutputFailover(tailErr.Error(), true, nil), cleanupErr)
 						}
-						return streamResult(), fmt.Errorf("discard incomplete Anthropic passthrough event: %w", cleanupErr)
+						return streamResult(), errors.Join(tailErr, cleanupErr)
 					}
 				}
 				if !sawTerminalEvent {
@@ -752,17 +772,17 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					}
 					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
+				if !providerPayloadObserved {
+					if stageCommitted || semanticOutput {
+						return streamResult(), fmt.Errorf("stream usage incomplete: terminal event arrived before message_start")
+					}
+					return nil, preOutputFailover("upstream stream ended without a valid message_start", true, nil)
+				}
 				return streamResult(), nil
 			}
 			if ev.err != nil {
 				cleanupErr := discardPendingEvent()
-				if sawTerminalEvent {
-					if cleanupErr != nil {
-						return streamResult(), fmt.Errorf("discard incomplete Anthropic passthrough event after terminal event: %w", cleanupErr)
-					}
-					return streamResult(), nil
-				}
-				if !semanticOutput {
+				if !stageCommitted && !semanticOutput {
 					return nil, errors.Join(
 						preOutputFailover("upstream stream disconnected: "+sanitizeStreamError(ev.err), true, nil),
 						cleanupErr,
@@ -842,7 +862,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			return streamResult(), errors.Join(fmt.Errorf("stream usage incomplete: %w", cancelErr), cleanupErr)
 
 		case <-intervalCh:
-			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
+			lastRead := readActivity.LastReadTime()
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
@@ -1065,10 +1085,13 @@ func (s *GatewayService) invalidNonStreamingJSONFailoverError(
 	}
 
 	return &UpstreamFailoverError{
-		StatusCode:             statusCode,
-		ResponseBody:           body,
-		ResponseHeaders:        resp.Header,
-		RetryableOnSameAccount: retryableOnSameAccount,
+		StatusCode:              statusCode,
+		ResponseBody:            body,
+		RequestHeaders:          captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:         resp.Header.Clone(),
+		UpstreamEndpoint:        captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse: true,
+		RetryableOnSameAccount:  retryableOnSameAccount,
 	}
 }
 
@@ -1082,14 +1105,9 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 	}
 
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
-		return nil, err
-	}
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
-		account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
-		captured, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		setCaptureResult(c, resp, captured, truncated)
+		return nil, errors.Join(newInvalidProviderResponseFailover(resp, "failed to read Anthropic passthrough response"), err)
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
@@ -1098,9 +1116,12 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	observer.ObserveAnthropic(body)
 
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		var raw json.RawMessage
-		if err := json.Unmarshal(body, &raw); err != nil {
-			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, err)
+		if !validAnthropicNonStreamingResponse(body) {
+			parseErr := fmt.Errorf("invalid Anthropic message response")
+			if !gjson.ValidBytes(body) {
+				parseErr = fmt.Errorf("invalid JSON response")
+			}
+			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, parseErr)
 		}
 	}
 

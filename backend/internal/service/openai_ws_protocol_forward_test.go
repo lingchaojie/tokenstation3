@@ -79,7 +79,7 @@ func TestOpenAIGatewayService_Forward_PreservePreviousResponseIDWhenWSEnabled(t 
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(
-				`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+				`{"id":"resp_http","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 			)),
 		},
 	}
@@ -138,7 +138,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled(t *testi
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(
-				`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+				`{"id":"resp_http","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 			)),
 		},
 	}
@@ -212,7 +212,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentO
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body: io.NopCloser(strings.NewReader(
-					`{"id":"resp_http_retry_ok","usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+					`{"id":"resp_http_retry_ok","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 				)),
 			},
 		},
@@ -301,7 +301,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedC
 					"x-request-id": []string{"req_http_retry_wrapped_ok"},
 				},
 				Body: io.NopCloser(strings.NewReader(
-					`{"id":"resp_http_retry_wrapped_ok","usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+					`{"id":"resp_http_retry_wrapped_ok","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 				)),
 			},
 		},
@@ -373,7 +373,7 @@ func TestOpenAIGatewayService_Forward_RemovePreviousResponseIDWhenWSDisabled(t *
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(
-				`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+				`{"id":"resp_http_no_previous","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 			)),
 		},
 	}

@@ -368,7 +368,9 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: io.NopCloser(bytes.NewBufferString(
-				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_healthy\",\"model\":\"grok-4.5\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+				"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_healthy\",\"model\":\"grok-4.5\",\"status\":\"in_progress\",\"output\":[],\"usage\":null}}\n\n" +
+					"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_healthy\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
 			)),
 		}, nil
 	}

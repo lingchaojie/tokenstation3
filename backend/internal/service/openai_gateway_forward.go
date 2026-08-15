@@ -967,7 +967,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var responseErr error
 		if reqStream {
 			stopCompactKeepalive()
-			streamResult, streamErr := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
+			streamResult, streamErr := s.handleStreamingResponseWithReasoning(upstreamReq.Context(), resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			finishOpenAIHTTPCapture(resp)
 			if streamErr != nil {
 				var failoverErr *UpstreamFailoverError
@@ -986,7 +986,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = streamResult.imageOutputSizes
 			imageResults = streamResult.imageResults
 		} else {
-			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel, stopCompactKeepalive)
+			nonStreamResult, err := s.handleNonStreamingResponse(upstreamReq.Context(), resp, c, account, originalModel, upstreamModel, stopCompactKeepalive)
 			finishOpenAIHTTPCapture(resp)
 			if err != nil {
 				return nil, err
@@ -1028,6 +1028,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			OpenAIWSMode:                  false,
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
+			CaptureTerminalError:          responseErr != nil,
 			imageResults:                  append([]openAIResponsesImageResult(nil), imageResults...),
 		}
 		if imageCount > 0 {

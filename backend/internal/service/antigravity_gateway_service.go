@@ -92,6 +92,7 @@ type AntigravityAccountSwitchError struct {
 	OriginalAccountID int64
 	RateLimitedModel  string
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
+	Failure           *UpstreamFailoverError
 }
 
 func (e *AntigravityAccountSwitchError) Error() string {
@@ -108,11 +109,29 @@ func IsAntigravityAccountSwitchError(err error) (*AntigravityAccountSwitchError,
 	return nil, false
 }
 
+func antigravitySwitchFailoverError(switchErr *AntigravityAccountSwitchError) *UpstreamFailoverError {
+	if switchErr != nil && switchErr.Failure != nil {
+		failure := *switchErr.Failure
+		failure.ForceCacheBilling = switchErr.IsStickySession
+		// Preserve the historical account-switch contract exposed to callers.
+		// The provider-native status remains in the attempt bridge and is used by
+		// terminal capture, while the failover signal itself stays a 503.
+		failure.StatusCode = http.StatusServiceUnavailable
+		return &failure
+	}
+	return &UpstreamFailoverError{
+		StatusCode:        http.StatusServiceUnavailable,
+		Platform:          PlatformAntigravity,
+		ForceCacheBilling: switchErr != nil && switchErr.IsStickySession,
+	}
+}
+
 // PromptTooLongError 表示上游明确返回 prompt too long
 type PromptTooLongError struct {
 	StatusCode int
 	RequestID  string
 	Body       []byte
+	Failure    *UpstreamFailoverError
 }
 
 func (e *PromptTooLongError) Error() string {
@@ -148,26 +167,7 @@ func (s *AntigravityGatewayService) readUpstreamErrorBody(resp *http.Response) [
 }
 
 func newAntigravityHTTPFailoverError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
-	failure := &UpstreamFailoverError{
-		ResponseBody:            snapshotBytes(body),
-		HasUpstreamHTTPResponse: resp != nil,
-		RetryableOnSameAccount:  retryable,
-	}
-	if account != nil {
-		failure.Platform = account.Platform
-	}
-	if resp == nil {
-		return failure
-	}
-	failure.StatusCode = resp.StatusCode
-	failure.ResponseHeaders = resp.Header.Clone()
-	if resp.Request != nil {
-		failure.RequestHeaders = resp.Request.Header.Clone()
-		if resp.Request.URL != nil {
-			failure.UpstreamEndpoint = resp.Request.URL.String()
-		}
-	}
-	return failure
+	return newProviderHTTPError(account, resp, body, retryable)
 }
 
 func NewAntigravityGatewayService(
@@ -248,7 +248,13 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 	case ErrorPolicyTempUnscheduled:
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
-		return true, statusCode, &AntigravityAccountSwitchError{OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession}
+		return true, statusCode, &AntigravityAccountSwitchError{
+			OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession,
+			Failure: &UpstreamFailoverError{
+				StatusCode: statusCode, ResponseBody: snapshotBytes(respBody), ResponseHeaders: headers.Clone(),
+				Platform: PlatformAntigravity, HasUpstreamHTTPResponse: true,
+			},
+		}
 	}
 	return false, statusCode, nil
 }

@@ -3,14 +3,22 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+)
+
+const (
+	maxGrokPendingSSEFields     = 1024
+	maxGrokPendingSSEFieldBytes = 8 << 20
 )
 
 const grokResponsesClientToolMappingContextKey = "grok_responses_client_tool_mapping"
@@ -85,16 +93,84 @@ func restoreGrokResponsesClientToolPayload(c *gin.Context, payload []byte) ([]by
 
 type grokResponsesClientToolStreamBody struct {
 	*io.PipeReader
-	source io.Closer
+	source    io.Closer
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (b *grokResponsesClientToolStreamBody) providerReadActivity() *providerBodyReadActivity {
+	if b == nil {
+		return nil
+	}
+	if carrier, ok := b.source.(providerBodyReadActivityCarrier); ok {
+		return carrier.providerReadActivity()
+	}
+	return nil
 }
 
 func (b *grokResponsesClientToolStreamBody) Close() error {
+	readerErr := b.closeCaptureUnderlying()
+	b.joinCaptureReaders()
+	b.finishCapture()
+	if readerErr != nil {
+		return readerErr
+	}
+	return b.closeErr
+}
+
+func (b *grokResponsesClientToolStreamBody) closeSource() error {
+	b.closeOnce.Do(func() { b.closeErr = b.source.Close() })
+	return b.closeErr
+}
+
+func (b *grokResponsesClientToolStreamBody) closeCaptureUnderlying() error {
 	readerErr := b.PipeReader.Close()
-	sourceErr := b.source.Close()
+	var sourceErr error
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		sourceErr = source.closeCaptureUnderlying()
+	} else {
+		sourceErr = b.closeSource()
+	}
 	if readerErr != nil {
 		return readerErr
 	}
 	return sourceErr
+}
+
+func (b *grokResponsesClientToolStreamBody) joinCaptureReaders() {
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		source.joinCaptureReaders()
+	}
+	if b.done != nil {
+		<-b.done
+	}
+}
+
+func (b *grokResponsesClientToolStreamBody) finishCapture() {
+	if source, ok := b.source.(captureResponseLifecycle); ok {
+		source.finishCapture()
+	}
+}
+
+func (b *grokResponsesClientToolStreamBody) captureResponseNeedsDrain() bool {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		return source.captureResponseNeedsDrain()
+	}
+	return false
+}
+
+func (b *grokResponsesClientToolStreamBody) captureResponseDrainRemaining() int64 {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		return source.captureResponseDrainRemaining()
+	}
+	return 0
+}
+
+func (b *grokResponsesClientToolStreamBody) markCaptureResponseTruncated() {
+	if source, ok := b.source.(captureResponseDrainLifecycle); ok {
+		source.markCaptureResponseTruncated()
+	}
 }
 
 func newGrokResponsesClientToolStreamBody(
@@ -103,8 +179,11 @@ func newGrokResponsesClientToolStreamBody(
 	maxLineSize int,
 ) io.ReadCloser {
 	reader, writer := io.Pipe()
-	body := &grokResponsesClientToolStreamBody{PipeReader: reader, source: source}
-	go transformGrokResponsesClientToolStream(source, writer, mapping, maxLineSize)
+	body := &grokResponsesClientToolStreamBody{PipeReader: reader, source: source, done: make(chan struct{})}
+	go func() {
+		defer close(body.done)
+		transformGrokResponsesClientToolStream(source, writer, mapping, maxLineSize)
+	}()
 	return body
 }
 
@@ -125,10 +204,18 @@ func transformGrokResponsesClientToolStream(
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	documents := newOpenAISSEJSONDocumentScanner(scanner)
 	restorer := apicompat.NewResponsesClientToolStreamRestorer(mapping)
+	rawProviderState := openAIResponsesSSEAttemptState{}
+	rawProviderTerminal := false
 	buffered := bufio.NewWriterSize(destination, 4*1024)
 	pendingFields := make([]string, 0, 2)
+	pendingFieldBytes := 0
 	frameHadEventField := false
 	frameEmitted := false
+	fail := func(err error) {
+		_ = buffered.Flush()
+		drainCaptureResponseRemainderBounded(context.Background(), source, captureOverflowDrainTimeout)
+		_ = destination.CloseWithError(err)
+	}
 
 	writeLine := func(line string) error {
 		if _, err := buffered.WriteString(line); err != nil {
@@ -180,6 +267,14 @@ func transformGrokResponsesClientToolStream(
 		}
 		return buffered.Flush()
 	}
+	declaredEventType := func() string {
+		for index := len(pendingFields) - 1; index >= 0; index-- {
+			if eventType, ok := extractOpenAISSEEventLine(pendingFields[index]); ok {
+				return eventType
+			}
+		}
+		return ""
+	}
 
 	for documents.Scan() {
 		line := documents.Text()
@@ -188,11 +283,23 @@ func transformGrokResponsesClientToolStream(
 			payload := []byte(data)
 			payloads := [][]byte{payload}
 			if json.Valid(payload) {
+				if rawProviderTerminal {
+					fail(errors.New("Grok Responses data arrived after a terminal event")) //nolint:staticcheck // Protocol name is intentionally capitalized.
+					return
+				}
+				validatedType, validateErr := validateOpenAIResponsesSSEPayload(payload, declaredEventType())
+				if validateErr == nil {
+					validateErr = rawProviderState.observe(payload, validatedType)
+				}
+				if validateErr != nil {
+					fail(fmt.Errorf("validate raw Grok Responses event: %w", validateErr))
+					return
+				}
+				rawProviderTerminal = isOpenAICompatResponsesTerminalEvent(validatedType)
 				var err error
 				payloads, _, err = restorer.RestoreEvent(payload)
 				if err != nil {
-					_ = buffered.Flush()
-					_ = destination.CloseWithError(fmt.Errorf("restore Grok Responses client tool event: %w", err))
+					fail(fmt.Errorf("restore Grok Responses client tool event: %w", err))
 					return
 				}
 			}
@@ -201,6 +308,7 @@ func transformGrokResponsesClientToolStream(
 				return
 			}
 			pendingFields = pendingFields[:0]
+			pendingFieldBytes = 0
 			frameHadEventField = false
 			frameEmitted = true
 			continue
@@ -226,6 +334,7 @@ func transformGrokResponsesClientToolStream(
 				}
 			}
 			pendingFields = pendingFields[:0]
+			pendingFieldBytes = 0
 			frameHadEventField = false
 			frameEmitted = false
 			continue
@@ -234,7 +343,13 @@ func transformGrokResponsesClientToolStream(
 		if _, isEvent := extractOpenAISSEEventLine(line); isEvent {
 			frameHadEventField = true
 		}
+		lineBytes := len(line) + 1
+		if len(pendingFields) >= maxGrokPendingSSEFields || lineBytes > maxGrokPendingSSEFieldBytes-pendingFieldBytes {
+			fail(fmt.Errorf("Grok Responses pending SSE fields exceeded limit: fields=%d bytes=%d", len(pendingFields)+1, pendingFieldBytes+lineBytes)) //nolint:staticcheck // Protocol name is intentionally capitalized.
+			return
+		}
 		pendingFields = append(pendingFields, line)
+		pendingFieldBytes += lineBytes
 	}
 
 	for _, field := range pendingFields {

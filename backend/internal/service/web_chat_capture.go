@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type WebChatResponseCapture struct {
@@ -176,37 +177,33 @@ func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string 
 		var b strings.Builder
 		var terminalText string
 		scanner := bufio.NewScanner(bytes.NewReader(body))
-		maxTokenSize := len(body)
+		maxTokenSize := len(body) + 1
 		if maxTokenSize < 64<<10 {
 			maxTokenSize = 64 << 10
 		}
-		if maxTokenSize > 4<<20 {
-			maxTokenSize = 4 << 20
+		if maxTokenSize > captureHardMaxBodyBytes+1 {
+			maxTokenSize = captureHardMaxBodyBytes + 1
 		}
 		scanner.Buffer(make([]byte, 0, 64<<10), maxTokenSize)
 		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "data:") {
+			line := bytes.TrimSpace(scanner.Bytes())
+			if !bytes.HasPrefix(line, []byte("data:")) {
 				continue
 			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "" || data == "[DONE]" {
+			data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+			if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) || !json.Valid(data) {
 				continue
 			}
-			var chunk chatCompletionChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err == nil && len(chunk.Choices) > 0 {
-				_, _ = b.WriteString(chunk.Choices[0].Delta.Content)
+			root := gjson.ParseBytes(data)
+			if content := root.Get("choices.0.delta.content"); content.Type == gjson.String {
+				_, _ = b.WriteString(content.String())
 				continue
 			}
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(data), &payload); err != nil {
-				continue
-			}
-			switch webChatStringValue(payload["type"]) {
+			switch root.Get("type").String() {
 			case "response.output_text.delta":
-				_, _ = b.WriteString(webChatStringValue(payload["delta"]))
+				_, _ = b.WriteString(root.Get("delta").String())
 			case "response.completed":
-				if text := extractWebChatResponsesOutputText(payload); text != "" {
+				if text := extractWebChatResponsesOutputTextResult(root); text != "" {
 					terminalText = text
 				}
 			}
@@ -221,11 +218,10 @@ func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string 
 	if err := json.Unmarshal(body, &response); err == nil && len(response.Choices) > 0 {
 		return chatCompletionContentText(response.Choices[0].Message.Content)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if !json.Valid(body) {
 		return ""
 	}
-	return extractWebChatResponsesOutputText(payload)
+	return extractWebChatResponsesOutputTextResult(gjson.ParseBytes(body))
 }
 
 type webChatProcessDelta struct {
@@ -252,110 +248,118 @@ func ExtractAssistantProcessFromChatCompletions(body []byte, streamed bool) []ma
 }
 
 func extractAssistantProcessFromStream(body []byte) []map[string]any {
-	blocks := make([]map[string]any, 0)
+	state := newWebChatProcessState(0)
 	scanner := bufio.NewScanner(bytes.NewReader(body))
-	maxTokenSize := len(body)
+	maxTokenSize := len(body) + 1
 	if maxTokenSize < 64<<10 {
 		maxTokenSize = 64 << 10
 	}
-	if maxTokenSize > 4<<20 {
-		maxTokenSize = 4 << 20
+	if maxTokenSize > captureHardMaxBodyBytes+1 {
+		maxTokenSize = captureHardMaxBodyBytes + 1
 	}
 	scanner.Buffer(make([]byte, 0, 64<<10), maxTokenSize)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if !bytes.HasPrefix(line, []byte("data:")) {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) || !json.Valid(data) {
 			continue
 		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			continue
-		}
-		appendWebChatProcessDelta(&blocks, extractWebChatProcessDelta(payload))
+		state.appendDelta(extractWebChatProcessDeltaResult(gjson.ParseBytes(data)))
 	}
-	return blocks
+	return finalizeWebChatProcessBlocks(state.blocks)
 }
 
 func extractAssistantProcessFromResponse(body []byte) []map[string]any {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if !json.Valid(body) {
 		return nil
 	}
-	choices := webChatArrayValue(payload["choices"])
-	if len(choices) == 0 {
-		appendBlocks := make([]map[string]any, 0)
-		appendWebChatProcessDelta(&appendBlocks, extractWebChatProcessDelta(payload))
-		return appendBlocks
+	root := gjson.ParseBytes(body)
+	delta := extractWebChatProcessDeltaResult(root)
+	if message := root.Get("choices.0.message"); message.IsObject() {
+		delta = extractWebChatChatMessageProcessDeltaResult(message)
 	}
-	choice := webChatMapValue(choices[0])
-	message := webChatMapValue(choice["message"])
-	if len(message) == 0 {
-		return nil
-	}
-	delta := webChatProcessDelta{
-		Reasoning: firstWebChatStringValue(
-			message["reasoning_content"],
-			message["reasoning"],
-			message["reasoning_summary"],
-			message["reasoning_text"],
-			message["thinking"],
-		),
-	}
-	for _, rawCall := range webChatArrayValue(message["tool_calls"]) {
-		if call := webChatToolCallFromMap(webChatMapValue(rawCall), false); !call.isZero() {
-			delta.ToolCalls = append(delta.ToolCalls, call)
-		}
-	}
-	blocks := make([]map[string]any, 0, 1+len(delta.ToolCalls))
-	appendWebChatProcessDelta(&blocks, delta)
-	return blocks
+	state := newWebChatProcessState(1 + len(delta.ToolCalls))
+	state.appendDelta(delta)
+	return finalizeWebChatProcessBlocks(state.blocks)
 }
 
-func extractWebChatProcessDelta(payload map[string]any) webChatProcessDelta {
-	if delta := extractWebChatChatCompletionsProcessDelta(payload); !delta.isZero() {
-		return delta
+func extractWebChatProcessDeltaResult(root gjson.Result) webChatProcessDelta {
+	if delta := root.Get("choices.0.delta"); delta.IsObject() {
+		if result := extractWebChatChatMessageProcessDeltaResult(delta); !result.isZero() {
+			return result
+		}
 	}
-	if delta := extractWebChatResponsesProcessDelta(payload); !delta.isZero() {
-		return delta
+	eventType := root.Get("type").String()
+	switch eventType {
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		return webChatProcessDelta{Reasoning: root.Get("delta").String()}
+	case "response.output_item.added", "response.output_item.done":
+		item := root.Get("item")
+		itemType := item.Get("type").String()
+		if item.IsObject() && (itemType == "function_call" || itemType == "tool_call" || strings.HasSuffix(itemType, "_call")) {
+			input := firstWebChatGJSONString(item.Get("arguments"), item.Get("query"), item.Get("input"))
+			if input == "" {
+				input = webChatGJSONTextValue(item.Get("action"))
+			}
+			call := webChatToolCallDelta{
+				ID: firstWebChatGJSONString(item.Get("call_id"), item.Get("id")), Name: firstWebChatGJSONString(item.Get("name"), item.Get("type")),
+				Input: input, ReplaceInput: input != "",
+			}
+			if !call.isZero() {
+				return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
+			}
+		}
+	case "response.function_call_arguments.delta":
+		call := webChatToolCallDelta{ID: firstWebChatGJSONString(root.Get("call_id"), root.Get("item_id")), Input: root.Get("delta").String()}
+		if !call.isZero() {
+			return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
+		}
+	case "content_block_start":
+		block := root.Get("content_block")
+		if block.Get("type").String() == "tool_use" {
+			call := webChatToolCallDelta{ID: block.Get("id").String(), Name: block.Get("name").String(), Input: webChatGJSONTextValue(block.Get("input")), ReplaceInput: true}
+			if index := root.Get("index"); index.Type == gjson.Number {
+				value := int(index.Int())
+				call.Index = &value
+			}
+			if !call.isZero() {
+				return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
+			}
+		}
+	case "content_block_delta":
+		delta := root.Get("delta")
+		switch delta.Get("type").String() {
+		case "thinking_delta":
+			return webChatProcessDelta{Reasoning: delta.Get("thinking").String()}
+		case "input_json_delta":
+			call := webChatToolCallDelta{Input: delta.Get("partial_json").String()}
+			if index := root.Get("index"); index.Type == gjson.Number {
+				value := int(index.Int())
+				call.Index = &value
+			}
+			if !call.isZero() {
+				return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
+			}
+		}
 	}
-	return extractWebChatAnthropicProcessDelta(payload)
+	return webChatProcessDelta{}
 }
 
-func extractWebChatChatCompletionsProcessDelta(payload map[string]any) webChatProcessDelta {
-	choices := webChatArrayValue(payload["choices"])
-	if len(choices) == 0 {
-		return webChatProcessDelta{}
-	}
-	choice := webChatMapValue(choices[0])
-	deltaMap := webChatMapValue(choice["delta"])
-	if len(deltaMap) == 0 {
-		return webChatProcessDelta{}
-	}
-
-	delta := webChatProcessDelta{
-		Reasoning: firstWebChatStringValue(
-			deltaMap["reasoning_content"],
-			deltaMap["reasoning"],
-			deltaMap["reasoning_summary"],
-			deltaMap["reasoning_text"],
-			deltaMap["thinking"],
-		),
-	}
-	for _, rawCall := range webChatArrayValue(deltaMap["tool_calls"]) {
-		if call := webChatToolCallFromMap(webChatMapValue(rawCall), false); !call.isZero() {
+func extractWebChatChatMessageProcessDeltaResult(message gjson.Result) webChatProcessDelta {
+	delta := webChatProcessDelta{Reasoning: firstWebChatGJSONString(
+		message.Get("reasoning_content"), message.Get("reasoning"), message.Get("reasoning_summary"), message.Get("reasoning_text"), message.Get("thinking"),
+	)}
+	message.Get("tool_calls").ForEach(func(_, rawCall gjson.Result) bool {
+		if call := webChatToolCallFromResult(rawCall, false); !call.isZero() {
 			delta.ToolCalls = append(delta.ToolCalls, call)
 		}
-	}
-	functionCall := webChatMapValue(deltaMap["function_call"])
-	if len(functionCall) > 0 {
-		call := webChatToolCallDelta{
-			Name:  webChatStringValue(functionCall["name"]),
-			Input: webChatStringValue(functionCall["arguments"]),
-		}
+		return true
+	})
+	if functionCall := message.Get("function_call"); functionCall.IsObject() {
+		call := webChatToolCallDelta{Name: functionCall.Get("name").String(), Input: functionCall.Get("arguments").String()}
 		if !call.isZero() {
 			delta.ToolCalls = append(delta.ToolCalls, call)
 		}
@@ -363,199 +367,210 @@ func extractWebChatChatCompletionsProcessDelta(payload map[string]any) webChatPr
 	return delta
 }
 
-func extractWebChatResponsesProcessDelta(payload map[string]any) webChatProcessDelta {
-	eventType := webChatStringValue(payload["type"])
-	switch eventType {
-	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		return webChatProcessDelta{Reasoning: webChatStringValue(payload["delta"])}
-	case "response.output_item.added", "response.output_item.done":
-		item := webChatMapValue(payload["item"])
-		itemType := webChatStringValue(item["type"])
-		if itemType != "function_call" && itemType != "tool_call" && !strings.HasSuffix(itemType, "_call") {
-			return webChatProcessDelta{}
+func webChatToolCallFromResult(call gjson.Result, replaceInput bool) webChatToolCallDelta {
+	if !call.IsObject() {
+		return webChatToolCallDelta{}
+	}
+	fn := call.Get("function")
+	input := firstWebChatGJSONString(fn.Get("arguments"), call.Get("arguments"), call.Get("input"))
+	if input == "" {
+		input = webChatGJSONTextValue(call.Get("input"))
+	}
+	result := webChatToolCallDelta{
+		ID: call.Get("id").String(), Name: firstWebChatGJSONString(fn.Get("name"), call.Get("name")), Input: input, ReplaceInput: replaceInput,
+	}
+	if index := call.Get("index"); index.Type == gjson.Number {
+		value := int(index.Int())
+		result.Index = &value
+	}
+	return result
+}
+
+func firstWebChatGJSONString(values ...gjson.Result) string {
+	for _, value := range values {
+		if value.Type == gjson.String && value.String() != "" {
+			return value.String()
 		}
-		input := firstWebChatStringValue(item["arguments"], item["query"], item["input"])
-		if input == "" {
-			input = webChatJSONTextValue(item["action"])
-		}
-		call := webChatToolCallDelta{
-			ID:           firstWebChatStringValue(item["call_id"], item["id"]),
-			Name:         firstWebChatStringValue(item["name"], item["type"]),
-			Input:        input,
-			ReplaceInput: input != "",
-		}
-		if call.isZero() {
-			return webChatProcessDelta{}
-		}
-		return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
-	case "response.function_call_arguments.delta":
-		call := webChatToolCallDelta{
-			ID:    firstWebChatStringValue(payload["call_id"], payload["item_id"]),
-			Input: webChatStringValue(payload["delta"]),
-		}
-		if call.isZero() {
-			return webChatProcessDelta{}
-		}
-		return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
-	default:
-		return webChatProcessDelta{}
+	}
+	return ""
+}
+
+func webChatGJSONTextValue(value gjson.Result) string {
+	if value.Type == gjson.String {
+		return value.String()
+	}
+	if !value.Exists() || value.Type == gjson.Null || value.Raw == "null" {
+		return ""
+	}
+	return value.Raw
+}
+
+const (
+	webChatReasoningBuilderKey = "_sub2api_reasoning_builder"
+	webChatToolInputBuilderKey = "_sub2api_tool_input_builder"
+)
+
+type webChatProcessState struct {
+	blocks         []map[string]any
+	retainedBytes  int
+	toolByID       map[string]int
+	toolByIndex    map[int]int
+	latestByName   map[string]int
+	latestToolCall int
+}
+
+func newWebChatProcessState(capacity int) *webChatProcessState {
+	return &webChatProcessState{
+		blocks:         make([]map[string]any, 0, capacity),
+		toolByID:       make(map[string]int),
+		toolByIndex:    make(map[int]int),
+		latestByName:   make(map[string]int),
+		latestToolCall: -1,
 	}
 }
 
-func extractWebChatAnthropicProcessDelta(payload map[string]any) webChatProcessDelta {
-	eventType := webChatStringValue(payload["type"])
-	switch eventType {
-	case "content_block_start":
-		block := webChatMapValue(payload["content_block"])
-		if webChatStringValue(block["type"]) != "tool_use" {
-			return webChatProcessDelta{}
-		}
-		call := webChatToolCallDelta{
-			ID:           webChatStringValue(block["id"]),
-			Name:         webChatStringValue(block["name"]),
-			Input:        webChatJSONTextValue(block["input"]),
-			ReplaceInput: true,
-		}
-		if index, ok := webChatIntValue(payload["index"]); ok {
-			call.Index = &index
-		}
-		return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
-	case "content_block_delta":
-		delta := webChatMapValue(payload["delta"])
-		switch webChatStringValue(delta["type"]) {
-		case "thinking_delta":
-			return webChatProcessDelta{Reasoning: webChatStringValue(delta["thinking"])}
-		case "input_json_delta":
-			call := webChatToolCallDelta{Input: webChatStringValue(delta["partial_json"])}
-			if index, ok := webChatIntValue(payload["index"]); ok {
-				call.Index = &index
-			}
-			return webChatProcessDelta{ToolCalls: []webChatToolCallDelta{call}}
-		default:
-			return webChatProcessDelta{}
-		}
-	default:
-		return webChatProcessDelta{}
-	}
-}
-
-func appendWebChatProcessDelta(blocks *[]map[string]any, delta webChatProcessDelta) {
+func (s *webChatProcessState) appendDelta(delta webChatProcessDelta) {
 	if delta.Reasoning != "" {
-		appendWebChatReasoningDelta(blocks, delta.Reasoning)
+		s.appendReasoning(delta.Reasoning)
 	}
 	for _, call := range delta.ToolCalls {
-		appendWebChatToolCallDelta(blocks, call)
+		s.appendToolCall(call)
 	}
 }
 
-func appendWebChatReasoningDelta(blocks *[]map[string]any, text string) {
+func (s *webChatProcessState) appendReasoning(text string) {
 	if text == "" {
 		return
 	}
-	if len(*blocks) > 0 {
-		last := (*blocks)[len(*blocks)-1]
+	if len(s.blocks) > 0 {
+		last := s.blocks[len(s.blocks)-1]
 		if last["type"] == "reasoning" {
-			if existing := webChatStringValue(last["text"]); existing != "" {
-				last["text"] = existing + text
+			if builder, ok := last[webChatReasoningBuilderKey].(*strings.Builder); ok {
+				appendWebChatProcessString(builder, text, &s.retainedBytes)
 				return
 			}
 		}
 	}
-	*blocks = append(*blocks, map[string]any{
-		"type": "reasoning",
-		"text": text,
-	})
+	builder := &strings.Builder{}
+	appendWebChatProcessString(builder, text, &s.retainedBytes)
+	s.blocks = append(s.blocks, map[string]any{"type": "reasoning", webChatReasoningBuilderKey: builder})
 }
 
-func appendWebChatToolCallDelta(blocks *[]map[string]any, call webChatToolCallDelta) {
+func (s *webChatProcessState) appendToolCall(call webChatToolCallDelta) {
 	if call.isZero() {
 		return
 	}
-	block := findWebChatToolCallBlock(*blocks, call)
-	if block == nil {
-		block = map[string]any{"type": "tool_call"}
-		if call.ID != "" {
-			block["id"] = call.ID
-		}
-		if call.Index != nil {
-			block["index"] = *call.Index
-		}
-		if call.Name != "" {
-			block["name"] = call.Name
-		}
+	blockIndex := s.findToolCall(call)
+	if blockIndex < 0 {
+		block := map[string]any{"type": "tool_call"}
 		if call.Input != "" {
-			block["input"] = call.Input
+			builder := &strings.Builder{}
+			appendWebChatProcessString(builder, call.Input, &s.retainedBytes)
+			block[webChatToolInputBuilderKey] = builder
 		}
-		*blocks = append(*blocks, block)
+		s.blocks = append(s.blocks, block)
+		s.updateToolCallIdentity(len(s.blocks)-1, call)
 		return
 	}
+	block := s.blocks[blockIndex]
+	s.updateToolCallIdentity(blockIndex, call)
+	if call.Input != "" {
+		builder, _ := block[webChatToolInputBuilderKey].(*strings.Builder)
+		if builder == nil {
+			builder = &strings.Builder{}
+			if existing := webChatStringValue(block["input"]); existing != "" {
+				appendWebChatProcessString(builder, existing, &s.retainedBytes)
+				delete(block, "input")
+			}
+			block[webChatToolInputBuilderKey] = builder
+		}
+		if call.ReplaceInput {
+			s.retainedBytes -= builder.Len()
+			builder.Reset()
+		}
+		appendWebChatProcessString(builder, call.Input, &s.retainedBytes)
+	}
+}
+
+func (s *webChatProcessState) findToolCall(call webChatToolCallDelta) int {
 	if call.ID != "" {
-		block["id"] = call.ID
+		if index, ok := s.toolByID[call.ID]; ok {
+			return index
+		}
+		return -1
 	}
 	if call.Index != nil {
-		block["index"] = *call.Index
+		if index, ok := s.toolByIndex[*call.Index]; ok {
+			return index
+		}
+		return -1
 	}
 	if call.Name != "" {
-		block["name"] = call.Name
-	}
-	if call.Input != "" {
-		if call.ReplaceInput {
-			block["input"] = call.Input
-		} else {
-			block["input"] = webChatStringValue(block["input"]) + call.Input
+		if index, ok := s.latestByName[call.Name]; ok {
+			return index
 		}
+		return -1
 	}
+	return s.latestToolCall
 }
 
-func findWebChatToolCallBlock(blocks []map[string]any, call webChatToolCallDelta) map[string]any {
+func (s *webChatProcessState) updateToolCallIdentity(blockIndex int, call webChatToolCallDelta) {
+	block := s.blocks[blockIndex]
 	if call.ID != "" {
-		for _, block := range blocks {
-			if block["type"] == "tool_call" && webChatStringValue(block["id"]) == call.ID {
-				return block
+		if old := webChatStringValue(block["id"]); old != "" && old != call.ID {
+			if oldIndex, ok := s.toolByID[old]; ok && oldIndex == blockIndex {
+				delete(s.toolByID, old)
 			}
 		}
+		block["id"] = call.ID
+		s.toolByID[call.ID] = blockIndex
 	}
 	if call.Index != nil {
-		for _, block := range blocks {
-			if block["type"] != "tool_call" {
-				continue
-			}
-			if index, ok := webChatIntValue(block["index"]); ok && index == *call.Index {
-				return block
+		if old, ok := webChatIntValue(block["index"]); ok && old != *call.Index {
+			if oldIndex, found := s.toolByIndex[old]; found && oldIndex == blockIndex {
+				delete(s.toolByIndex, old)
 			}
 		}
+		block["index"] = *call.Index
+		s.toolByIndex[*call.Index] = blockIndex
 	}
-	for i := len(blocks) - 1; i >= 0; i-- {
-		block := blocks[i]
-		if block["type"] != "tool_call" {
-			continue
+	if call.Name != "" {
+		if old := webChatStringValue(block["name"]); old != "" && old != call.Name {
+			if oldIndex, ok := s.latestByName[old]; ok && oldIndex == blockIndex {
+				delete(s.latestByName, old)
+			}
 		}
-		if call.Name == "" || webChatStringValue(block["name"]) == call.Name {
-			return block
-		}
+		block["name"] = call.Name
+		s.latestByName[call.Name] = blockIndex
 	}
-	return nil
+	s.latestToolCall = blockIndex
 }
 
-func webChatToolCallFromMap(call map[string]any, replaceInput bool) webChatToolCallDelta {
-	if len(call) == 0 {
-		return webChatToolCallDelta{}
+func appendWebChatProcessString(builder *strings.Builder, value string, retainedBytes *int) {
+	if builder == nil || value == "" {
+		return
 	}
-	fn := webChatMapValue(call["function"])
-	input := firstWebChatStringValue(fn["arguments"], call["arguments"], call["input"])
-	if input == "" {
-		input = webChatJSONTextValue(call["input"])
+	if retainedBytes != nil && (len(value) > captureHardMaxBodyBytes-*retainedBytes) {
+		return
 	}
-	result := webChatToolCallDelta{
-		ID:           webChatStringValue(call["id"]),
-		Name:         firstWebChatStringValue(fn["name"], call["name"]),
-		Input:        input,
-		ReplaceInput: replaceInput,
+	_, _ = builder.WriteString(value)
+	if retainedBytes != nil {
+		*retainedBytes += len(value)
 	}
-	if index, ok := webChatIntValue(call["index"]); ok {
-		result.Index = &index
+}
+
+func finalizeWebChatProcessBlocks(blocks []map[string]any) []map[string]any {
+	for _, block := range blocks {
+		if builder, ok := block[webChatReasoningBuilderKey].(*strings.Builder); ok {
+			block["text"] = builder.String()
+			delete(block, webChatReasoningBuilderKey)
+		}
+		if builder, ok := block[webChatToolInputBuilderKey].(*strings.Builder); ok {
+			block["input"] = builder.String()
+			delete(block, webChatToolInputBuilderKey)
+		}
 	}
-	return result
+	return blocks
 }
 
 func (d webChatProcessDelta) isZero() bool {
@@ -566,48 +581,11 @@ func (d webChatToolCallDelta) isZero() bool {
 	return d.ID == "" && d.Index == nil && d.Name == "" && d.Input == ""
 }
 
-func webChatMapValue(value any) map[string]any {
-	if typed, ok := value.(map[string]any); ok {
-		return typed
-	}
-	return nil
-}
-
-func webChatArrayValue(value any) []any {
-	if typed, ok := value.([]any); ok {
-		return typed
-	}
-	return nil
-}
-
 func webChatStringValue(value any) string {
 	if typed, ok := value.(string); ok {
 		return typed
 	}
 	return ""
-}
-
-func firstWebChatStringValue(values ...any) string {
-	for _, value := range values {
-		if text := webChatStringValue(value); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func webChatJSONTextValue(value any) string {
-	if value == nil {
-		return ""
-	}
-	if text := webChatStringValue(value); text != "" {
-		return text
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil || string(encoded) == "null" {
-		return ""
-	}
-	return string(encoded)
 }
 
 func webChatIntValue(value any) (int, bool) {
@@ -625,14 +603,6 @@ func webChatIntValue(value any) (int, bool) {
 
 func ExtractArtifactsFromChatCompletions(_ []byte, _ bool) []WebChatArtifactCandidate {
 	return nil
-}
-
-type chatCompletionChunk struct {
-	Choices []struct {
-		Delta struct {
-			Content string `json:"content"`
-		} `json:"delta"`
-	} `json:"choices"`
 }
 
 type chatCompletionResponse struct {
@@ -664,29 +634,24 @@ func chatCompletionContentText(content any) string {
 	}
 }
 
-func extractWebChatResponsesOutputText(payload map[string]any) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	if response := webChatMapValue(payload["response"]); len(response) > 0 {
-		payload = response
+func extractWebChatResponsesOutputTextResult(root gjson.Result) string {
+	if response := root.Get("response"); response.IsObject() {
+		root = response
 	}
 	var b strings.Builder
-	for _, rawItem := range webChatArrayValue(payload["output"]) {
-		item := webChatMapValue(rawItem)
-		if len(item) == 0 {
-			continue
+	root.Get("output").ForEach(func(_, item gjson.Result) bool {
+		role := item.Get("role").String()
+		if role != "" && role != WebChatRoleAssistant {
+			return true
 		}
-		if role := webChatStringValue(item["role"]); role != "" && role != WebChatRoleAssistant {
-			continue
-		}
-		for _, rawPart := range webChatArrayValue(item["content"]) {
-			part := webChatMapValue(rawPart)
-			switch webChatStringValue(part["type"]) {
+		item.Get("content").ForEach(func(_, part gjson.Result) bool {
+			switch part.Get("type").String() {
 			case "output_text", "text":
-				_, _ = b.WriteString(webChatStringValue(part["text"]))
+				_, _ = b.WriteString(part.Get("text").String())
 			}
-		}
-	}
+			return true
+		})
+		return true
+	})
 	return b.String()
 }

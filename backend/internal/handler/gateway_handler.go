@@ -159,34 +159,34 @@ func (h *GatewayHandler) submitGatewayResultCapture(
 	upstreamEndpoint string,
 ) {
 	if h == nil || h.capturePool == nil || result == nil || account == nil ||
-		result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+		result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
-	finalRequest := result.UpstreamRequest
-	if finalRequest == nil {
-		finalRequest = fallbackRequest
-	}
-	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(finalRequest, h.captureLimit())
+	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(result.UpstreamRequest, h.captureLimit())
 	thinkingEffort := ""
 	if result.ReasoningEffort != nil {
 		thinkingEffort = *result.ReasoningEffort
 	}
 	h.capturePool.Submit(&service.CaptureRecord{
-		CapturedAt:       time.Now().UTC(),
-		Platform:         string(account.Platform),
-		RequestID:        service.CaptureRequestID(result.RequestID),
-		RequestedModel:   result.Model,
-		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
-		Stream:           result.Stream,
-		HTTPStatus:       result.HTTPStatusForCapture(),
-		ThinkingEffort:   thinkingEffort,
-		RawRequest:       rawRequest,
-		RawResponse:      result.CaptureResponse,
-		RequestHeaders:   result.CaptureRequestHeaders,
-		ResponseHeaders:  result.CaptureResponseHeaders,
-		Truncated:        result.CaptureTruncated || requestTruncated,
-		ContentPolicy:    result.CaptureContentPolicy,
+		CapturedAt:          time.Now().UTC(),
+		Platform:            string(account.Platform),
+		RequestID:           service.CaptureRequestID(result.RequestID),
+		RequestedModel:      result.Model,
+		UpstreamModel:       result.UpstreamModelForCapture(),
+		UpstreamEndpoint:    firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
+		Stream:              result.StreamForCapture(),
+		HTTPStatus:          result.HTTPStatusForCapture(),
+		InputTokens:         result.Usage.InputTokens,
+		OutputTokens:        result.Usage.OutputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		ThinkingEffort:      thinkingEffort,
+		RawRequest:          rawRequest,
+		RawResponse:         result.CaptureResponse,
+		RequestHeaders:      result.CaptureRequestHeaders,
+		ResponseHeaders:     result.CaptureResponseHeaders,
+		Truncated:           result.CaptureTruncated || requestTruncated,
+		ContentPolicy:       result.CaptureContentPolicy,
 	})
 }
 
@@ -548,6 +548,67 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			submitGeminiResult := func(result *service.ForwardResult) {
+				if result == nil {
+					return
+				}
+				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+				h.submitGatewayResultCapture(result, account, body, upstreamEndpoint)
+				if result.UpstreamFailed {
+					return
+				}
+
+				if result.ReasoningEffort == nil {
+					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+				}
+				if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
+					protocolModel := result.UpstreamModel
+					if protocolModel == "" {
+						protocolModel = result.Model
+					}
+					result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
+				}
+
+				userAgent := c.GetHeader("User-Agent")
+				clientIP := ip.GetClientIP(c)
+				requestPayloadHash := result.UpstreamRequestHash
+				if requestPayloadHash == "" {
+					requestPayloadHash = service.HashUsageRequestPayload(body)
+				}
+				inboundEndpoint := GetInboundEndpoint(c)
+				forceCacheBilling := fs.ForceCacheBilling
+				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+				sessionID := service.ExtractClientSessionID(c)
+				h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
+					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+						Result:             result,
+						QuotaPlatform:      quotaPlatform,
+						APIKey:             apiKey,
+						User:               apiKey.User,
+						Account:            account,
+						Subscription:       subscription,
+						PricingAt:          pricingAt,
+						InboundEndpoint:    inboundEndpoint,
+						UpstreamEndpoint:   upstreamEndpoint,
+						UserAgent:          userAgent,
+						IPAddress:          clientIP,
+						SessionID:          sessionID,
+						RequestPayloadHash: requestPayloadHash,
+						ForceCacheBilling:  forceCacheBilling,
+						APIKeyService:      h.apiKeyService,
+						ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+					}); err != nil {
+						logger.L().With(
+							zap.String("component", "handler.gateway.messages"),
+							zap.Int64("user_id", subject.UserID),
+							zap.Int64("api_key_id", apiKey.ID),
+							zap.Any("group_id", apiKey.GroupID),
+							zap.String("model", reqModel),
+							zap.Int64("account_id", account.ID),
+						).Error("gateway.record_usage_failed", zap.Error(err))
+					}
+				})
+			}
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -568,6 +629,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 				}
+				submitGeminiResult(result)
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -604,61 +666,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 
-			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
-			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetClientIP(c)
-			requestPayloadHash := service.HashUsageRequestPayload(body)
-			inboundEndpoint := GetInboundEndpoint(c)
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-
-			if result.ReasoningEffort == nil {
-				result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
-			}
-			// 国产模型 thinking-enabled 默认 effort 填充：Kimi/GLM/MiniMax 这些不支持 effort 档位的
-			// passback-required 上游，仅要 thinking 启用且 OutputEffort 未明确传递时，在 usage_log 写 "high"
-			// 避免该字段长期为 NULL（详见 DefaultEffortForThinkingEnabled 文档）。
-			if result.ReasoningEffort == nil && parsedReq.ThinkingEnabled {
-				protocolModel := result.UpstreamModel
-				if protocolModel == "" {
-					protocolModel = result.Model
-				}
-				result.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
-			}
-
-			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
-			forceCacheBilling := fs.ForceCacheBilling
-			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
-			sessionID := service.ExtractClientSessionID(c)
-			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-					Result:             result,
-					QuotaPlatform:      quotaPlatform,
-					APIKey:             apiKey,
-					User:               apiKey.User,
-					Account:            account,
-					Subscription:       subscription,
-					PricingAt:          pricingAt,
-					InboundEndpoint:    inboundEndpoint,
-					UpstreamEndpoint:   upstreamEndpoint,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					SessionID:          sessionID,
-					RequestPayloadHash: requestPayloadHash,
-					ForceCacheBilling:  forceCacheBilling,
-					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-				}); err != nil {
-					logger.L().With(
-						zap.String("component", "handler.gateway.messages"),
-						zap.Int64("user_id", subject.UserID),
-						zap.Int64("api_key_id", apiKey.ID),
-						zap.Any("group_id", apiKey.GroupID),
-						zap.String("model", reqModel),
-						zap.Int64("account_id", account.ID),
-					).Error("gateway.record_usage_failed", zap.Error(err))
-				}
-			})
+			submitGeminiResult(result)
 			return
 		}
 	}
@@ -945,6 +953,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 提交 usage 记录。成功路径与"流中断但 Forward 已观测到 usage 的部分结果"
 			// 错误路径共用：后者若不入账，上游已计量的请求会完全漏记漏计费（#5148）。
 			submitForwardUsage := func(result *service.ForwardResult) {
+				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+				h.submitGatewayResultCapture(result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
+				if result.UpstreamFailed {
+					return
+				}
 				// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
 				userAgent := c.GetHeader("User-Agent")
 				clientIP := ip.GetClientIP(c)
@@ -954,7 +967,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					requestPayloadHash = service.HashUsageRequestPayload(attemptParsedReq.Body.Bytes())
 				}
 				inboundEndpoint := GetInboundEndpoint(c)
-				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 
 				if result.ReasoningEffort == nil {
 					result.ReasoningEffort = service.NormalizeClaudeOutputEffort(attemptParsedReq.OutputEffort)
@@ -1002,8 +1014,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						).Error("gateway.record_usage_failed", zap.Error(err))
 					}
 				})
-
-				h.submitGatewayResultCapture(result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 			}
 			forwardSideEffects := newGatewayForwardSideEffectSubmitter(submitForwardUsage)
 
@@ -1025,6 +1035,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 				var promptTooLongErr *service.PromptTooLongError
 				if errors.As(err, &promptTooLongErr) {
+					submitPromptTooLongCapture := func() {
+						if h.capturePool != nil && promptTooLongErr.Failure != nil {
+							if rec := service.BuildTerminalErrorCaptureRecord(c, service.PlatformAntigravity, promptTooLongErr.Failure, h.captureLimit()); rec != nil {
+								h.capturePool.Submit(rec)
+							}
+						}
+					}
 					reqLog.Warn("gateway.prompt_too_long_from_antigravity",
 						zap.Any("current_group_id", currentAPIKey.GroupID),
 						zap.Any("fallback_group_id", fallbackGroupID),
@@ -1034,6 +1051,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						fallbackGroup, err := h.gatewayService.ResolveGroupByID(c.Request.Context(), *fallbackGroupID)
 						if err != nil {
 							reqLog.Warn("gateway.resolve_fallback_group_failed", zap.Int64("fallback_group_id", *fallbackGroupID), zap.Error(err))
+							submitPromptTooLongCapture()
 							_ = h.antigravityGatewayService.WriteMappedClaudeError(c, account, promptTooLongErr.StatusCode, promptTooLongErr.RequestID, promptTooLongErr.Body)
 							return
 						}
@@ -1045,6 +1063,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 								zap.String("fallback_platform", fallbackGroup.Platform),
 								zap.String("fallback_subscription_type", fallbackGroup.SubscriptionType),
 							)
+							submitPromptTooLongCapture()
 							_ = h.antigravityGatewayService.WriteMappedClaudeError(c, account, promptTooLongErr.StatusCode, promptTooLongErr.RequestID, promptTooLongErr.Body)
 							return
 						}
@@ -1055,6 +1074,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 								c.Header("Retry-After", strconv.Itoa(retryAfter))
 							}
 							h.handleStreamingAwareError(c, status, code, message, streamStarted)
+							submitPromptTooLongCapture()
 							return
 						}
 						// 兜底重试按"直接请求兜底分组"处理：清除强制平台，允许按分组平台调度
@@ -1066,6 +1086,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						retryWithFallback = true
 						break
 					}
+					submitPromptTooLongCapture()
 					_ = h.antigravityGatewayService.WriteMappedClaudeError(c, account, promptTooLongErr.StatusCode, promptTooLongErr.RequestID, promptTooLongErr.Body)
 					return
 				}
@@ -1791,10 +1812,21 @@ func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotT
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
+	if failoverErr != nil && strings.TrimSpace(failoverErr.Platform) != "" {
+		platform = failoverErr.Platform
+	}
 	if h.capturePool != nil {
 		if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); rec != nil {
 			h.capturePool.Submit(rec)
 		}
+	}
+	// Some service adapters must write a provider-specific JSON error before
+	// returning the typed terminal failure used for capture/account handling.
+	// Once that non-SSE response is on the wire, appending the generic streaming
+	// error frame would corrupt the JSON document. Partial SSE responses still
+	// need the terminal frame, so keep those on the existing path below.
+	if streamStarted && gatewayForwardResponseBodyAlreadyCommunicated(c) {
+		return
 	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
@@ -1930,6 +1962,13 @@ func gatewayForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForw
 		return false
 	}
 
+	return gatewayForwardResponseBodyAlreadyCommunicated(c)
+}
+
+func gatewayForwardResponseBodyAlreadyCommunicated(c *gin.Context) bool {
+	if c == nil || c.Writer == nil || !c.Writer.Written() {
+		return false
+	}
 	contentType := strings.ToLower(strings.TrimSpace(c.Writer.Header().Get("Content-Type")))
 	if contentType == "" {
 		return false

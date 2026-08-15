@@ -541,6 +541,28 @@ func TestAntigravityCompatFirstEventTimeoutTriggersFailover(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestAntigravityCompatTimeoutJoinsScannerBeforePublishingCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityCompatService(
+		config.GatewayConfig{MaxLineSize: defaultMaxLineSize, StreamDataIntervalTimeout: 1},
+		nil,
+	)
+	c, _ := newAntigravityCompatContext(http.MethodPost, "/v1/chat/completions", nil)
+	enableCaptureForTest(t, c)
+	req := httptest.NewRequest(http.MethodPost, "https://antigravity.example/streamGenerateContent", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"gemini-3.1-pro-high"}`), 1024)
+	raw := &closeReleasedCaptureReader{closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: raw, Request: req}
+	_ = beginCaptureResponse(c, resp, true, 1024)
+
+	result, err := svc.handleChatCompletionsStreamingFromAntigravity(c, resp, time.Now(), "gemini-3.1-pro-high", false)
+	require.Nil(t, result)
+	require.Error(t, err)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok, "timeout must publish only after the blocked scanner exits")
+	require.Equal(t, []byte("tail-before-scanner-exit\n"), bridge.Response)
+}
+
 func TestAntigravityCompatClientDisconnectDrainsUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, nil)
@@ -566,6 +588,27 @@ func TestAntigravityCompatClientDisconnectDrainsUsage(t *testing.T) {
 	require.Equal(t, 15, result.usage.OutputTokens)
 }
 
+func TestAntigravityCompatClientDisconnectDoesNotHideProviderReadError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, nil)
+	c, _ := newAntigravityCompatContext(http.MethodPost, "/v1/chat/completions", nil)
+	c.Writer = &antigravityFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &antigravityCompatErrorReader{
+			data: []byte(`data: {"response":{"responseId":"resp_3757","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":1}}}` + "\n\n"),
+			err:  io.ErrUnexpectedEOF,
+		},
+	}
+
+	result, err := svc.handleChatCompletionsStreamingFromAntigravity(c, resp, time.Now(), "gemini-3.1-pro-high", false)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.ErrorContains(t, err, "stream read error")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
 func TestAntigravityCompatStreamErrorCommitsSingleTerminalFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, nil)
@@ -583,7 +626,10 @@ func TestAntigravityCompatStreamErrorCommitsSingleTerminalFrame(t *testing.T) {
 	result, err := svc.handleResponsesStreamingFromAntigravity(c, resp, time.Now(), "gemini-3.1-pro-high")
 
 	require.Error(t, err)
-	require.Nil(t, result)
+	require.NotNil(t, result, "semantic output must retain its partial usage on a terminal read error")
+	require.True(t, result.semanticOutput)
+	require.Equal(t, 8, result.usage.InputTokens)
+	require.Equal(t, 1, result.usage.OutputTokens)
 	require.True(t, IsResponseCommitted(c))
 	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: error"))
 }
@@ -609,6 +655,8 @@ func TestAntigravityCompatKeepaliveAfterFirstEvent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	time.Sleep(1200 * time.Millisecond)
+	_, err = io.WriteString(writer, `data: {"response":{"candidates":[{"finishReason":"STOP"}]}}`+"\n\n")
+	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 	require.NoError(t, <-done)
 	require.Contains(t, recorder.Body.String(), ": ping\n\n")

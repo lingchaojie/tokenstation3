@@ -12,18 +12,23 @@ import (
 type openAIHTTPCaptureReadCloser struct {
 	inner      io.ReadCloser
 	c          *gin.Context
+	attempt    captureAttemptToken
 	resp       *http.Response
 	limit      int
 	mu         sync.Mutex
 	buf        []byte
+	observed   int64
 	truncated  bool
 	finishOnce sync.Once
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (r *openAIHTTPCaptureReadCloser) Read(p []byte) (int, error) {
 	n, err := r.inner.Read(p)
 	if n > 0 {
 		r.mu.Lock()
+		r.observed += int64(n)
 		remaining := r.limit - len(r.buf)
 		if remaining > 0 {
 			copyN := n
@@ -42,7 +47,43 @@ func (r *openAIHTTPCaptureReadCloser) Read(p []byte) (int, error) {
 
 func (r *openAIHTTPCaptureReadCloser) Close() error {
 	r.Finish()
-	return r.inner.Close()
+	return r.closeUnderlying()
+}
+
+func (r *openAIHTTPCaptureReadCloser) closeUnderlying() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() { r.closeErr = r.inner.Close() })
+	return r.closeErr
+}
+
+func (r *openAIHTTPCaptureReadCloser) closeCaptureUnderlying() error { return r.closeUnderlying() }
+func (r *openAIHTTPCaptureReadCloser) joinCaptureReaders()           {}
+func (r *openAIHTTPCaptureReadCloser) finishCapture()                { r.Finish() }
+func (r *openAIHTTPCaptureReadCloser) captureResponseNeedsDrain() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.observed <= int64(r.limit)
+}
+func (r *openAIHTTPCaptureReadCloser) captureResponseDrainRemaining() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return int64(r.limit) + 1 - r.observed
+}
+func (r *openAIHTTPCaptureReadCloser) markCaptureResponseTruncated() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.truncated = true
+	r.mu.Unlock()
 }
 
 func (r *openAIHTTPCaptureReadCloser) Finish() {
@@ -54,7 +95,7 @@ func (r *openAIHTTPCaptureReadCloser) Finish() {
 		body := snapshotBytes(r.buf)
 		truncated := r.truncated
 		r.mu.Unlock()
-		setCaptureResult(r.c, r.resp, body, truncated)
+		setCaptureResultForAttempt(r.attempt, r.resp, body, truncated)
 	})
 }
 
@@ -106,10 +147,11 @@ func (s *OpenAIGatewayService) wrapOpenAIHTTPCaptureResponse(c *gin.Context, acc
 		return
 	}
 	resp.Body = &openAIHTTPCaptureReadCloser{
-		inner: resp.Body,
-		c:     c,
-		resp:  resp,
-		limit: normalizeCaptureLimit(s.cfg.Gateway.Capture.MaxBodyBytes),
+		inner:   resp.Body,
+		c:       c,
+		attempt: currentCaptureAttempt(c, true),
+		resp:    resp,
+		limit:   normalizeCaptureLimit(s.cfg.Gateway.Capture.MaxBodyBytes),
 	}
 }
 
@@ -117,8 +159,8 @@ func finishOpenAIHTTPCapture(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
 	}
-	if capture, ok := resp.Body.(*openAIHTTPCaptureReadCloser); ok {
-		capture.Finish()
+	if capture, ok := resp.Body.(captureResponseLifecycle); ok {
+		capture.finishCapture()
 	}
 }
 
@@ -126,22 +168,33 @@ func (s *OpenAIGatewayService) applyOpenAIHTTPSuccessCapture(c *gin.Context, acc
 	if result == nil || account == nil || s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled {
 		return
 	}
-	content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeSuccess)
+	outcome := CaptureOutcomeSuccess
+	if result.UpstreamFailed || result.CaptureTerminalError {
+		outcome = CaptureOutcomeTerminalError
+	}
+	content, enabled := CaptureDecisionFor(c, string(account.Platform), outcome)
 	if !enabled {
 		return
 	}
 	bridge, ok := takeCaptureResult(c)
-	if !ok || bridge.Response == nil {
+	if !ok || !bridge.ResponseObserved || bridge.RequestCaptureInvalid {
 		return
 	}
 	result.UpstreamRequest = snapshotBytes(bridge.UpstreamRequest)
+	result.UpstreamRequestHash = bridge.UpstreamRequestHash
 	result.CaptureRequest = snapshotBytes(bridge.UpstreamRequest)
-	result.CaptureResponse = snapshotBytes(bridge.Response)
+	result.CaptureResponse = snapshotObservedBytes(bridge.Response)
 	result.CaptureTruncated = bridge.Truncated
 	result.CaptureRequestHeaders = snapshotBytes(bridge.RequestHeaders)
 	result.CaptureResponseHeaders = snapshotBytes(bridge.ResponseHeaders)
 	result.CaptureUpstreamEndpoint = bridge.UpstreamEndpoint
 	result.CaptureHTTPStatus = bridge.HTTPStatus
+	result.CaptureUpstreamModel = bridge.UpstreamModel
+	result.CaptureStream = bridge.UpstreamStream
+	result.CaptureStreamKnown = bridge.UpstreamStreamKnown
+	if providerRequestID := captureProviderRequestIDBytes(bridge.ResponseHeaders); providerRequestID != "" {
+		result.RequestID = providerRequestID
+	}
 	result.CaptureContentPolicy = &content
 }
 

@@ -5,16 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // ForwardUpstream 使用 base_url + /v1/messages + 双 header 认证透传上游 Claude 请求
@@ -113,9 +114,8 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		_, _ = c.Writer.Write(respBody)
 
 		finishCaptureResponse(resp)
-		return finalizeForwardResult(c, &ForwardResult{
-			Model: originalModel,
-		}), nil
+		MarkResponseCommitted(c)
+		return nil, newTerminalProviderHTTPError(account, resp, respBody)
 	}
 
 	// 处理成功响应（流式/非流式）
@@ -129,21 +129,32 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 		c.Header("X-Accel-Buffering", "no")
-		c.Status(http.StatusOK)
-
-		streamRes := s.streamUpstreamResponse(c, resp, startTime)
+		streamRes, streamErr := s.streamUpstreamResponse(c, resp, startTime)
+		if streamErr != nil {
+			if streamRes == nil {
+				return failedForwardResultForError(c, resp, originalModel, originalModel, true, startTime, streamErr), streamErr
+			}
+			return streamErrorForwardResult(c, resp, originalModel, originalModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, streamErr), streamErr
+		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
 		clientDisconnect = streamRes.clientDisconnect
 	} else {
 		// 非流式响应：直接透传
-		respBody, err := io.ReadAll(resp.Body)
+		var cfg *config.Config
+		if s != nil && s.settingService != nil {
+			cfg = s.settingService.cfg
+		}
+		respBody, err := ReadUpstreamResponseBody(resp.Body, cfg, c, nil)
 		if err != nil {
-			return nil, fmt.Errorf("read upstream response: %w", err)
+			return nil, newInvalidProviderResponseFailover(resp, fmt.Sprintf("read antigravity upstream response: %v", err))
 		}
 
 		// 提取 usage
 		upstreamResponseModelObserverFromContext(c).ObserveAnthropic(respBody)
+		if !validAnthropicNonStreamingResponse(respBody) {
+			return nil, newInvalidProviderResponseFailover(resp, "antigravity upstream returned an invalid terminal JSON response")
+		}
 		usage = s.extractClaudeUsage(respBody)
 
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
@@ -158,6 +169,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	finishCaptureResponse(resp)
 	return finalizeForwardResult(c, &ForwardResult{
 		Model:                         originalModel,
+		UpstreamModel:                 originalModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
 		Stream:                        claudeReq.Stream,
@@ -174,11 +186,17 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 }
 
 // streamUpstreamResponse 透传上游 SSE 流并提取 Claude usage
-func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp *http.Response, startTime time.Time) *antigravityStreamResult {
+func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
+	semanticOutput := false
+	terminalObserved := false
+	providerPayloadObserved := false
+	providerPhase := anthropicProviderAwaitingStart
+	declaredEventType := ""
 
-	scanner := bufio.NewScanner(resp.Body)
+	readActivity := newProviderBodyReadActivity(resp.Body)
+	scanner := bufio.NewScanner(readActivity)
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -189,8 +207,9 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
+	scanDone := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
 		case events <- ev:
@@ -199,12 +218,10 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			return false
 		}
 	}
-	var lastReadAt int64
-	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 	go func() {
+		defer close(scanDone)
 		defer close(events)
 		for scanner.Scan() {
-			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 			if !sendEvent(scanEvent{line: scanner.Text()}) {
 				return
 			}
@@ -213,7 +230,17 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			_ = sendEvent(scanEvent{err: err})
 		}
 	}()
-	defer close(done)
+	providerScanFinished := false
+	defer func() {
+		if !providerScanFinished {
+			drainCaptureScannerOnParserFailure(ginRequestContext(c), resp, events, scanDone, &readActivity.lastRead, 0, nil, func() {
+				close(done)
+			})
+			return
+		}
+		close(done)
+		closeCaptureResponseAndJoinScanner(resp, scanDone)
+	}()
 
 	streamInterval := time.Duration(0)
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
@@ -247,26 +274,100 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 
 	flusher, _ := c.Writer.(http.Flusher)
 	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity upstream")
+	var staged stagedConvertedStream
+	var stagedErr error
+	defer func() { _ = staged.close() }()
+	writeStaged := func(payload string, commit bool) bool {
+		if cw.Disconnected() {
+			return false
+		}
+		if err := staged.write(c, func() { c.Status(resp.StatusCode) }, payload, commit); err != nil {
+			var clientWriteErr *stagedConvertedClientWriteError
+			if !errors.As(err, &clientWriteErr) {
+				stagedErr = err
+			}
+			cw.markDisconnected()
+			return false
+		}
+		return true
+	}
 
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}
+				providerScanFinished = true
+				if !terminalObserved {
+					if !staged.committed && !cw.Disconnected() {
+						return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended before semantic output")
+					}
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: true}, fmt.Errorf("stream usage incomplete: missing terminal event")
+				}
+				if !providerPayloadObserved {
+					if staged.committed || semanticOutput {
+						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput}, fmt.Errorf("stream usage incomplete: terminal event arrived before message_start")
+					}
+					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended without a valid message_start")
+				}
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
 			}
 			if ev.err != nil {
+				if terminalObserved {
+					result := &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}
+					if staged.committed || cw.Disconnected() || semanticOutput {
+						return result, fmt.Errorf("antigravity upstream stream read error after terminal event: %w", ev.err)
+					}
+					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream read failed after an uncommitted terminal event")
+				}
 				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity upstream"); handled {
-					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect}
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
+				}
+				if !staged.committed && !cw.Disconnected() {
+					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream read failed before semantic output")
 				}
 				logger.LegacyPrintf("service.antigravity_gateway", "Stream read error (antigravity upstream): %v", ev.err)
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 			}
 
 			lastDataAt = time.Now()
 
 			line := ev.line
+			if eventType, ok := parseAnthropicSSEField(line, "event"); ok {
+				declaredEventType = eventType
+			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
-				upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(strings.TrimSpace(data)))
+				data = strings.TrimSpace(data)
+				if data == "[DONE]" {
+					if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
+						return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream [DONE] arrived before a valid message_start")
+					}
+					providerPhase.state = anthropicProviderTerminated.state
+				} else if gjson.Valid(data) {
+					decodedType := gjson.Get(data, "type").String()
+					if err := validateAnthropicProviderEvent(&providerPhase, declaredEventType, []byte(data), decodedType); err != nil {
+						if !staged.committed && !cw.Disconnected() {
+							return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+						}
+						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, err
+					}
+					if decodedType == "message_start" {
+						providerPayloadObserved = true
+					}
+				} else {
+					invalidEventErr := fmt.Errorf("invalid JSON for Anthropic event %q", declaredEventType)
+					if !staged.committed && !cw.Disconnected() {
+						return nil, newIncompleteProviderStreamFailover(resp, invalidEventErr.Error())
+					}
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, invalidEventErr
+				}
+				upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(data))
+				if anthropicStreamEventIsTerminal("", data) {
+					terminalObserved = true
+				}
+				if anthropicSSEEventHasSemanticOutput(data) {
+					semanticOutput = true
+				}
+				declaredEventType = ""
 			}
 
 			// 记录首 token 时间
@@ -279,19 +380,28 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			s.extractSSEUsage(line, usage)
 
 			// 透传行
-			cw.Fprintf("%s\n", line)
+			writeStaged(line+"\n", semanticOutput || (terminalObserved && providerPayloadObserved))
+			if stagedErr != nil {
+				if !staged.committed {
+					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream pre-output stage exceeded limit")
+				}
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, stagedErr
+			}
 
 		case <-intervalCh:
-			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
+			lastRead := readActivity.LastReadTime()
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
 			if cw.Disconnected() {
-				logger.LegacyPrintf("service.antigravity_gateway", "Upstream timeout after client disconnect (antigravity upstream), returning collected usage")
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}
+				logger.LegacyPrintf("service.antigravity_gateway", "Upstream timeout after client disconnect (antigravity upstream), returning terminal partial usage")
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput}, fmt.Errorf("stream data interval timeout after client disconnect")
+			}
+			if !staged.committed && !cw.Disconnected() {
+				return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream timed out before semantic output")
 			}
 			logger.LegacyPrintf("service.antigravity_gateway", "Stream data interval timeout (antigravity upstream)")
-			return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}
+			return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
 			if cw.Disconnected() {
@@ -302,7 +412,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			}
 			// SSE ping 事件：Anthropic 原生格式，客户端会正确处理，
 			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
-			if !cw.Fprintf("event: ping\ndata: {\"type\": \"ping\"}\n\n") {
+			if !staged.committed || !writeStaged("event: ping\ndata: {\"type\": \"ping\"}\n\n", true) {
 				logger.LegacyPrintf("service.antigravity_gateway", "Client disconnected during keepalive ping (antigravity upstream), continuing to drain upstream for billing")
 				continue
 			}
@@ -320,77 +430,53 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 // 仅读取顶层 event.usage 会漏掉 message_start 的输入侧字段，导致流式透传请求落库的
 // usage_logs 记录 input_tokens=0。
 func (s *AntigravityGatewayService) extractSSEUsage(line string, usage *ClaudeUsage) {
-	if !strings.HasPrefix(line, "data: ") {
+	dataStr, ok := extractAnthropicSSEDataLine(line)
+	if !ok {
 		return
 	}
-	dataStr := strings.TrimPrefix(line, "data: ")
-	var event map[string]any
-	if json.Unmarshal([]byte(dataStr), &event) != nil {
+	event := gjson.Parse(dataStr)
+	if !event.IsObject() {
 		return
 	}
-	var u map[string]any
-	if eventType, _ := event["type"].(string); eventType == "message_start" {
-		if msg, ok := event["message"].(map[string]any); ok {
-			u, _ = msg["usage"].(map[string]any)
-		}
-	} else {
-		u, _ = event["usage"].(map[string]any)
+	u := event.Get("usage")
+	if event.Get("type").String() == "message_start" {
+		u = event.Get("message.usage")
 	}
-	if u == nil {
+	if !u.IsObject() {
 		return
 	}
-	if v, ok := u["input_tokens"].(float64); ok && int(v) > 0 {
-		usage.InputTokens = int(v)
+	if value := int(u.Get("input_tokens").Int()); value > 0 {
+		usage.InputTokens = value
 	}
-	if v, ok := u["output_tokens"].(float64); ok && int(v) > 0 {
-		usage.OutputTokens = int(v)
+	if value := int(u.Get("output_tokens").Int()); value > 0 {
+		usage.OutputTokens = value
 	}
-	if v, ok := u["cache_read_input_tokens"].(float64); ok && int(v) > 0 {
-		usage.CacheReadInputTokens = int(v)
+	if value := int(u.Get("cache_read_input_tokens").Int()); value > 0 {
+		usage.CacheReadInputTokens = value
 	}
-	if v, ok := u["cache_creation_input_tokens"].(float64); ok && int(v) > 0 {
-		usage.CacheCreationInputTokens = int(v)
+	if value := int(u.Get("cache_creation_input_tokens").Int()); value > 0 {
+		usage.CacheCreationInputTokens = value
 	}
-	// 解析嵌套的 cache_creation 对象中的 5m/1h 明细
-	if cc, ok := u["cache_creation"].(map[string]any); ok {
-		if v, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
-			usage.CacheCreation5mTokens = int(v)
-		}
-		if v, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
-			usage.CacheCreation1hTokens = int(v)
-		}
-	}
+	usage.CacheCreation5mTokens = int(u.Get("cache_creation.ephemeral_5m_input_tokens").Int())
+	usage.CacheCreation1hTokens = int(u.Get("cache_creation.ephemeral_1h_input_tokens").Int())
 }
 
 // extractClaudeUsage 从非流式 Claude 响应提取 usage
 func (s *AntigravityGatewayService) extractClaudeUsage(body []byte) *ClaudeUsage {
 	usage := &ClaudeUsage{}
-	var resp map[string]any
-	if json.Unmarshal(body, &resp) != nil {
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
 		return usage
 	}
-	if u, ok := resp["usage"].(map[string]any); ok {
-		if v, ok := u["input_tokens"].(float64); ok {
-			usage.InputTokens = int(v)
-		}
-		if v, ok := u["output_tokens"].(float64); ok {
-			usage.OutputTokens = int(v)
-		}
-		if v, ok := u["cache_read_input_tokens"].(float64); ok {
-			usage.CacheReadInputTokens = int(v)
-		}
-		if v, ok := u["cache_creation_input_tokens"].(float64); ok {
-			usage.CacheCreationInputTokens = int(v)
-		}
-		// 解析嵌套的 cache_creation 对象中的 5m/1h 明细
-		if cc, ok := u["cache_creation"].(map[string]any); ok {
-			if v, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
-				usage.CacheCreation5mTokens = int(v)
-			}
-			if v, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
-				usage.CacheCreation1hTokens = int(v)
-			}
-		}
+	u := root.Get("usage")
+	if !u.IsObject() {
+		return usage
 	}
+	usage.InputTokens = int(u.Get("input_tokens").Int())
+	usage.OutputTokens = int(u.Get("output_tokens").Int())
+	usage.CacheReadInputTokens = int(u.Get("cache_read_input_tokens").Int())
+	usage.CacheCreationInputTokens = int(u.Get("cache_creation_input_tokens").Int())
+	usage.CacheCreation5mTokens = int(u.Get("cache_creation.ephemeral_5m_input_tokens").Int())
+	usage.CacheCreation1hTokens = int(u.Get("cache_creation.ephemeral_1h_input_tokens").Int())
 	return usage
 }

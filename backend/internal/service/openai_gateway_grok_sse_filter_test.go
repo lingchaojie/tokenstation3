@@ -46,7 +46,7 @@ func TestGrokResponsesBillingPingFilter(t *testing.T) {
 		`data: {"type":"ping","cost":"0"}`,
 		"",
 		"event: response.completed",
-		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":5}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":5}}}`,
 		"",
 	}, "\n")
 
@@ -172,7 +172,7 @@ func TestGrokResponsesBillingPingFilterPreservesUsageAndTerminalEvent(t *testing
 		`data: {"type":"ping","x-opencode-type":"inference-cost","cost":"0"}`,
 		"",
 		"event: response.completed",
-		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":5}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":5}}}`,
 		"",
 	}, "\n")
 	account := &Account{ID: 1, Platform: PlatformGrok}

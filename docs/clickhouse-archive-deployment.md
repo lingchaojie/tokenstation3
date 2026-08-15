@@ -1,12 +1,10 @@
 # 上游调用转存：独立 ClickHouse 部署与正式服接入手册
 
-- 更新日期：2026-08-11
+- 更新日期：2026-08-14
 - 适用分支：`dev`
 - 目标：在任意一台独立机器上部署 ClickHouse，并让正式服 `sub2api` 通过 Tailscale 私网写入
 - 数据留存：永久保留，不设置 ClickHouse TTL；容量不足时由管理员扩容或手工归档
-- 关联设计：
-  - `docs/superpowers/specs/2026-07-07-model-call-archive-design.md`
-  - `docs/superpowers/specs/2026-08-11-capture-settings-openai-http-design.md`
+- 关联发布记录：`docs/upstream-sync/2026-08-12-sub2api-0.1.173-0b3f.md`
 
 本文档是部署 runbook，也是本次方案的统一记录。它不再依赖原先讨论的 Windows、WSL 或 D 盘；标准方案是一台独立 Linux 主机。以后换机器时，只需替换 ClickHouse 主机、数据盘和 Tailscale 地址。
 
@@ -81,8 +79,8 @@ ClickHouse 容器 :9000 ─► 独立持久数据盘
 |---|---|---|
 | 管理员左侧「转存设置」 | 已实现 | 正式服更新后应能看到独立菜单 |
 | 静态 ClickHouse provisioning | 已实现，默认关闭 | `gateway.capture.enabled=false` 是安全默认值 |
-| Kiro / Anthropic 转存 | 已实现 | 仍受运行时平台、结果、用户和分组策略控制 |
-| OpenAI 三个 HTTP 文本入口 | 已实现 | OpenAI 平台默认关闭；与 `openai_passthrough` 无关 |
+| Anthropic / Kiro / OpenAI / Gemini / Antigravity / Grok 转存 | 已实现 | 受运行时平台、结果、用户和分组策略控制；Bedrock 随 Anthropic 平台策略 |
+| direct、compat、WebChat 与 provider-native 最终 attempt | 已实现 | 只保存最终成功或最终返回客户端的真实上游 attempt；中间 retry/failover 不入库 |
 | 队列/写入丢失实时可见 | 已实现 | 管理页显示计数、时间、原因、峰值和最近事件 |
 | 30 天丢失历史 | 已实现 | 写入主 PostgreSQL 的 `capture_health_events` |
 | 启动时 ClickHouse 初始化失败后自动重连 | 已实现 | 首次同步尝试失败后按约 2～60 秒指数退避并带 jitter 后台重试，无需重启应用 |
@@ -103,11 +101,14 @@ ClickHouse 容器 :9000 ─► 独立持久数据盘
 
 | 平台 | 当前覆盖 | 备注 |
 |---|---|---|
-| Anthropic | 已接入的 Anthropic capture 路径 | 保存最终实际调用的上游请求/响应边界 |
-| Kiro | Kiro 直连和兼容中转路径 | 保持现有 Anthropic 语义请求/翻译响应边界，同时保存脱敏的真实 Kiro 上游头 |
-| OpenAI | `/v1/responses`、`/v1/chat/completions`、`/v1/messages` | 保存最终 outbound body 和协议转换前的原始上游 JSON/SSE；不依赖 passthrough |
+| Anthropic | native/OAuth、API-key passthrough、Chat/Responses 兼容、Bedrock、WebChat | 保存实际 provider 的最终 request/response；Bedrock 原始 AWS EventStream 由 Anthropic 平台策略控制 |
+| Kiro | Messages、WebSearch、Chat Completions、Responses、WebChat | 保存最终 AWS request envelope 和原始 AWS EventStream，不保存转换后的 Anthropic JSON/SSE |
+| OpenAI | `/v1/responses`、`/v1/chat/completions`、`/v1/messages` 与 direct WebChat HTTP | 保存最终 outbound body 和协议转换前的原始上游 JSON/SSE；不依赖 passthrough |
+| Gemini | native generateContent/streamGenerateContent 与 Messages/Chat 兼容 | 保存 Google provider 原始 JSON/SSE；强制 provider streaming 时 `stream` 记录实际 wire，而不是客户端协议 |
+| Antigravity | native Gemini、Claude compatibility、base_url 与 forced-stream collector | 保存最终 Google/Claude provider attempt；转换后的客户端协议不覆盖原文 |
+| Grok | 已接入的 HTTP 文本转发路径 | 保存最终 observed provider HTTP attempt；本轮排除的 Voice/TTS/STT/Realtime 和独立 Search 不在范围 |
 
-OpenAI WebSocket、图片、视频、Embeddings、Alpha Search/compact 等非上述 HTTP 文本路径不在当前范围。中间 retry/failover 不单独入库：成功只保存最终成功 attempt；错误只保存最终返回客户端的终态上游 HTTP 错误。本地合成、请求到达上游前产生的错误不存。
+OpenAI WebSocket、图片、视频、Embeddings 等未接入 capture 的非 HTTP 文本路径不在当前范围。中间 retry/failover 不单独入库：成功只保存最终成功 attempt；错误只保存最终返回客户端的终态上游 HTTP 响应。没有观察到真实 provider request/response、本地合成、请求到达上游前产生的错误一律不存，不会拿兼容入口 body 伪造 provider-native 记录。
 
 ### 3.2 每条记录的字段
 
@@ -122,6 +123,8 @@ OpenAI WebSocket、图片、视频、Embeddings、Alpha Search/compact 等非上
 | 可选敏感内容 | `raw_request`、`raw_response`、`request_headers`、`response_headers` |
 
 四个敏感内容列受管理员内容开关控制；关闭时写空字符串。元数据列在能抽取时仍会保留。请求头和响应头会删除认证、Cookie 等敏感字段，但原始 body 包含用户对话，仍属于敏感数据。
+
+正文截断与业务读取相互独立：`raw_request`、`raw_response` 各自最多保存 8 MiB，超出保存精确前缀并设置 `is_truncated=1`；网关仍按独立的 functional limit 完整处理合法大响应。endpoint 会删除 URL userinfo 和 credential query；custom headers 中包含 auth、token、key、secret、password、credential、signature 等 marker 的值也会删除。无法证明属于最终 provider attempt 的记录 fail closed，不会回落到客户端兼容请求。
 
 示例记录（内容已缩短和脱敏）：
 
@@ -159,12 +162,15 @@ OpenAI WebSocket、图片、视频、Embeddings、Alpha Search/compact 等非上
 - Anthropic：开启。
 - Kiro：开启。
 - OpenAI：关闭。
+- Gemini：开启。
+- Antigravity：开启。
+- Grok：开启。
 - 成功：开启。
 - 最终上游错误：开启。
 - 原始请求、原始响应、请求头、响应头：开启。
 - 用户和分组：空，表示不按该维度过滤。
 
-如果用户同时有 GPT 和 Kiro 账号，两者是否转存取决于请求实际选择的平台，而不是账号是否存在。要让两者都存，必须同时满足：静态 provisioning 已就绪、运行时总开关打开、Kiro 和 OpenAI 两个平台都打开、结果开关命中、用户/分组过滤命中。OpenAI 不要求开启 `openai_passthrough`。
+是否转存取决于请求实际选择的平台，而不是用户拥有哪些账号。必须同时满足：静态 provisioning 已就绪、运行时总开关打开、实际平台开关打开、结果开关命中、用户/分组过滤命中。Bedrock 账号属于 Anthropic 平台；OpenAI 不要求开启 `openai_passthrough`。
 
 ---
 
@@ -539,7 +545,7 @@ chmod 600 /root/sub2api-deploy/sub2api-deploy/data/config.yaml
 | `batch_max_interval_ms` | 1000 | 2000 | 已有非空批次的最长等待；空闲时不写空批次 |
 | `max_open_conns` | 8 | 8 | ClickHouse 连接池上限 |
 
-启动校验要求：所有队列/worker/batch 正数；`max_queue_bytes` 为 `0` 或至少不小于 `max_body_bytes`；ClickHouse 地址和 database 非空；压缩只允许 `lz4`、`zstd`、`none`。
+启动校验要求：所有队列/worker/batch 正数；`max_body_bytes` 不得超过硬上限 8 MiB；`max_queue_bytes` 为 `0` 或至少是 `2 × max_body_bytes`，以容纳一条请求体和响应体都达到上限的记录；请求/响应 headers 也计入该预算，异常大的诊断头仍可能触发 `byte_budget_exceeded`；ClickHouse 地址和 database 非空；压缩只允许 `lz4`、`zstd`、`none`。
 
 `max_queue_bytes` 或 `queue_size` 太小确实会造成丢失，但不会造成用户请求失败。先用保守值上线，观察管理页峰值再调，不能仅凭感觉把内存上限放大到挤占转发进程。
 
@@ -565,12 +571,13 @@ docker compose logs --tail=200 sub2api
 静态 `ready=true` 后，也不要一次性全开。建议：
 
 1. 保持运行时总开关关闭，确认页面健康数据和容量信息正常。
-2. 打开总开关，只开 Kiro，范围限制到一个测试用户或测试分组。
-3. 发一次真实 Kiro 请求，确认 ClickHouse 有一行。
-4. 显式打开 OpenAI，仍只限测试用户/分组。
-5. 分别验证 `/v1/responses`、`/v1/chat/completions` 或 `/v1/messages` 中正式业务实际使用的入口。
-6. 观察至少 15～30 分钟；确认 `written_records` 增长、`dropped_records` 不增长、队列峰值安全。
-7. 再移除测试范围，扩大到需要转存的用户/分组。
+2. 打开总开关，只开一个平台（建议 Kiro），范围限制到一个测试用户或测试分组。
+3. 发一次该平台的真实请求，确认 ClickHouse 有且只有一行，并核对 request/response 是最终 provider-native wire。
+4. 逐个平台打开 Anthropic、OpenAI、Gemini、Antigravity、Grok；Bedrock 随 Anthropic 开关。仍只限测试用户/分组。
+5. 分别验证正式业务使用的 direct、compat 和 WebChat HTTP 入口；至少包含一次流式、一次非流式、一次最终 provider HTTP 错误。
+6. 对可 failover 的平台做受控双账号演练：首账号返回 pre-semantic malformed 2xx、第二账号正常；只能归档并计费第二账号。
+7. 观察至少 15～30 分钟；确认 `written_records` 增长、`dropped_records` 不增长、队列峰值安全。
+8. 再移除测试范围，扩大到需要转存的用户/分组。
 
 用户和分组同时填写时采用 AND；两个都为空才表示全量。管理员关闭某类正文后，该列从新记录开始写空，不会修改历史记录。
 
@@ -641,6 +648,7 @@ LIMIT 20;
 - 管理页总开关和 Kiro 开关已开。
 - ClickHouse 新增一行，`platform='kiro'`。
 - `requested_model` 与用户请求模型一致；`upstream_model` 表示实际上游模型。
+- `raw_request` 是最终 AWS request envelope，`raw_response` 是原始 AWS EventStream；不得是转换后的 Anthropic JSON/SSE。
 - 管理页 `written_records` 增长，`dropped_records` 不增长。
 
 ### 11.3 OpenAI 验收
@@ -650,7 +658,16 @@ LIMIT 20;
 - 无论账号 `openai_passthrough` 为 true 还是 false，只要实际发生受支持的 OpenAI 上游 HTTP 调用，都应按策略转存。
 - ClickHouse 新增一行，`platform='openai'`，保存最终映射后的 outbound 请求和转换前的原始上游响应。
 
-### 11.4 故障演练
+### 11.4 其他 provider 与 failover 验收
+
+- Anthropic（含 API-key 与 Bedrock）、Gemini、Antigravity、Grok 按实际平台逐一启用并发出真实 HTTP 请求。
+- Gemini/Antigravity 强制使用 provider SSE、客户端请求非流式时，归档 `stream=1`，表示真实上游 wire。
+- Bedrock/Kiro 的 `raw_response` 是原始 AWS EventStream 二进制；Google/OpenAI/Anthropic 路径是转换前的原始 JSON/SSE。
+- 自定义 relay 的 URL userinfo、credential query 和 custom credential headers 不得在 endpoint/headers 中出现。
+- 首账号 pre-semantic malformed 2xx 后第二账号成功时，只有第二账号一行；首账号 usage 为零。单账号耗尽时写一行 terminal error，保留 provider HTTP status/request-id/原始响应。
+- 用合法 >8 MiB 非流式响应验证业务仍成功；归档响应恰为 8 MiB 前缀且 `is_truncated=1`。
+
+### 11.5 故障演练
 
 在受控时段执行：
 
@@ -771,7 +788,7 @@ sudo tailscale serve --tcp=19000 off
 
 全部满足才算完成生产接入：
 
-- [ ] 正式服已更新到包含独立「转存设置」和 OpenAI HTTP capture 的已验证版本。
+- [ ] 正式服已更新到包含独立「转存设置」和多 provider HTTP capture 的已验证版本。
 - [ ] 更新期间静态和运行时转存保持关闭，普通转发无回归。
 - [ ] ClickHouse 使用固定 LTS 镜像，数据在独立持久盘，重启后数据仍在。
 - [ ] ClickHouse 未发布公网/LAN 端口，8123 未暴露。
@@ -784,6 +801,9 @@ sudo tailscale serve --tcp=19000 off
 - [ ] 管理页显示 provisioned/ready。
 - [ ] Kiro 测试请求成功入库。
 - [ ] OpenAI 支持入口测试请求成功入库，且不依赖 passthrough。
+- [ ] Anthropic（含 Bedrock）、Gemini、Antigravity、Grok 的实际启用入口逐一完成 provider-native 边界核对。
+- [ ] 双账号 failover 只归档/计费最终账号，单账号 terminal error exact-once。
+- [ ] 8 MiB 正文截断不限制合法大响应的业务处理。
 - [ ] 空闲时没有周期性空 INSERT。
 - [ ] 故障时用户请求不受影响，丢失在页面/历史中可见。
 - [ ] Ops monitoring 与告警邮件已启用，收件人、最低级别和限速已核对。

@@ -66,6 +66,85 @@ func TestOpenAIHTTPCaptureKeepsActualOutboundAndRawResponse(t *testing.T) {
 	require.NotNil(t, result.CaptureContentPolicy)
 }
 
+func TestFinalizeOpenAIForwardResultKeepsTransportReplacedFinalRequest(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	account := &Account{Platform: PlatformOpenAI}
+	initialBody := []byte(`{"model":"initial","stream":true}`)
+	initial := httptest.NewRequest(http.MethodPost, "https://proxy.example/v1/responses", bytes.NewReader(initialBody))
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, initial, initialBody))
+
+	finalBody := []byte(`{"model":"final","stream":false}`)
+	final := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", bytes.NewReader(finalBody))
+	final.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(finalBody)), nil }
+	final.Header.Set("X-Final-Request", "yes")
+	rawResponse := []byte(`{"id":"final-response"}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Xai-Request-Id": {"final-request-id"}},
+		Body:       io.NopCloser(bytes.NewReader(rawResponse)),
+		Request:    final,
+	}
+	svc.wrapOpenAIHTTPCaptureResponse(c, account, resp)
+	_, err := io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	finishOpenAIHTTPCapture(resp)
+
+	result := &OpenAIForwardResult{UpstreamModel: "initial", Stream: true}
+	svc.applyOpenAIHTTPSuccessCapture(c, account, result)
+	result = finalizeOpenAIForwardResult(c, result, initialBody)
+	require.Equal(t, finalBody, result.UpstreamRequest)
+	require.Equal(t, finalBody, result.CaptureRequest)
+	require.Equal(t, HashUsageRequestPayload(finalBody), result.UpstreamRequestHash)
+	require.Equal(t, "final", result.UpstreamModelForCapture())
+	require.True(t, result.CaptureStreamKnown)
+	require.False(t, result.StreamForCapture())
+	require.Equal(t, "final-request-id", result.RequestID)
+	require.Contains(t, string(result.CaptureRequestHeaders), "X-Final-Request")
+	require.Equal(t, rawResponse, result.CaptureResponse)
+}
+
+func TestFinalizeOpenAIForwardResultCaptureMissDoesNotSnapshotRequest(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := bytes.Repeat([]byte("x"), 1<<20)
+	result := finalizeOpenAIForwardResult(c, &OpenAIForwardResult{}, body)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureRequest)
+	require.Equal(t, HashUsageRequestPayload(body), result.UpstreamRequestHash)
+}
+
+func TestOpenAIHTTPCaptureKeepsObservedEmptySuccessResponse(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	account := &Account{Platform: PlatformOpenAI}
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, req, []byte(`{"model":"gpt-5"}`)))
+	resp := &http.Response{
+		StatusCode: http.StatusNoContent,
+		Header:     http.Header{"X-Request-Id": []string{"empty-success"}},
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+		Request:    req,
+	}
+	svc.wrapOpenAIHTTPCaptureResponse(c, account, resp)
+	_, err := io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	finishOpenAIHTTPCapture(resp)
+
+	result := &OpenAIForwardResult{}
+	svc.applyOpenAIHTTPSuccessCapture(c, account, result)
+	require.NotNil(t, result.CaptureContentPolicy)
+	require.Equal(t, http.StatusNoContent, result.CaptureHTTPStatus)
+	require.Equal(t, http.StatusNoContent, result.HTTPStatusForCapture(), "archive status must come from the final captured provider response")
+	require.Equal(t, []byte(`{"model":"gpt-5"}`), result.CaptureRequest)
+	require.NotNil(t, result.CaptureResponse)
+	require.Empty(t, result.CaptureResponse)
+	require.Contains(t, string(result.CaptureResponseHeaders), "empty-success")
+}
+
 func TestOpenAIHTTPCaptureResponseIsBounded(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -136,6 +215,36 @@ func TestOpenAIHTTPCaptureRetryKeepsOnlyFinalAttempt(t *testing.T) {
 	require.Equal(t, []byte(`{"attempt":2}`), result.CaptureRequest)
 	require.Equal(t, []byte(`{"ok":true}`), result.CaptureResponse)
 	require.Equal(t, "https://final.openai.test/v1/responses", result.CaptureUpstreamEndpoint)
+}
+
+func TestOpenAIHTTPCaptureLateFinalizerCannotOverwriteNewAttempt(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	account := &Account{Platform: PlatformOpenAI}
+
+	firstReq := httptest.NewRequest(http.MethodPost, "https://first.openai.test/v1/responses", nil)
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, firstReq, []byte(`{"attempt":1}`)))
+	firstResp := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(bytes.NewReader([]byte(`{"old":true}`))), Request: firstReq}
+	svc.wrapOpenAIHTTPCaptureResponse(c, account, firstResp)
+	_, err := io.Copy(io.Discard, firstResp.Body)
+	require.NoError(t, err)
+
+	secondReq := httptest.NewRequest(http.MethodPost, "https://second.openai.test/v1/responses", nil)
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, secondReq, []byte(`{"attempt":2}`)))
+	secondResp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"new":true}`))), Request: secondReq}
+	svc.wrapOpenAIHTTPCaptureResponse(c, account, secondResp)
+	_, err = io.Copy(io.Discard, secondResp.Body)
+	require.NoError(t, err)
+	finishOpenAIHTTPCapture(secondResp)
+	finishOpenAIHTTPCapture(firstResp)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, []byte(`{"attempt":2}`), bridge.UpstreamRequest)
+	require.Equal(t, []byte(`{"new":true}`), bridge.Response)
+	require.Equal(t, "https://second.openai.test/v1/responses", bridge.UpstreamEndpoint)
 }
 
 func TestOpenAIHTTPCaptureRejectsNonTextEndpoints(t *testing.T) {

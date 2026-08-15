@@ -1295,7 +1295,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			deadline.reasoningEffort,
 			deadline.timeout,
 			"websocket_first_semantic_output",
-			handshakeHeaders,
+			&http.Response{StatusCode: http.StatusSwitchingProtocols, Header: handshakeHeaders},
 		)
 		if turnCount == 0 && !relayExit.WroteDownstream {
 			relayErr = failoverErr

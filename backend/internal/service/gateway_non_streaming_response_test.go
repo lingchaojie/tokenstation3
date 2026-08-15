@@ -77,7 +77,7 @@ func TestHandleNonStreamingResponse_ValidJSONUnchanged(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -103,7 +103,7 @@ func TestHandleNonStreamingResponse_CaptureDisabledLeavesNoContextResult(t *test
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -129,7 +129,7 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	setCaptureScopeForPlatformTest(t, c, true, true)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -159,7 +159,7 @@ func TestHandleNonStreamingResponse_RuntimePlatformOffAllocatesNoCaptureResult(t
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	setCaptureScopeForPlatformTest(t, c, true, false)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -216,7 +216,7 @@ func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ValidJSONUnchanged
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":5,"output_tokens":3}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -241,18 +241,18 @@ func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ForceCacheBillingR
 	}{
 		{
 			name: "converts input tokens for downstream billing",
-			body: `{"id":"msg_1","type":"message","content":[{"type":"text","text":"unchanged"}],"usage":{"input_tokens":5,"output_tokens":3}}`,
-			want: `{"id":"msg_1","type":"message","content":[{"type":"text","text":"unchanged"}],"usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":5}}`,
+			body: `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"unchanged"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`,
+			want: `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"unchanged"}],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":5}}`,
 		},
 		{
 			name: "adds to genuine cache reads",
-			body: `{"id":"msg_2","type":"message","usage":{"input_tokens":5,"output_tokens":3,"cache_read_input_tokens":7,"cache_creation_input_tokens":11}}`,
-			want: `{"id":"msg_2","type":"message","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":12,"cache_creation_input_tokens":11}}`,
+			body: `{"id":"msg_2","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3,"cache_read_input_tokens":7,"cache_creation_input_tokens":11}}`,
+			want: `{"id":"msg_2","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":12,"cache_creation_input_tokens":11}}`,
 		},
 		{
 			name: "zero input leaves response unchanged",
-			body: `{"id":"msg_3","type":"message","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
-			want: `{"id":"msg_3","type":"message","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
+			body: `{"id":"msg_3","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
+			want: `{"id":"msg_3","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
 		},
 	}
 

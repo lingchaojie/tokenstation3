@@ -6,11 +6,21 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func requireChatCompletionsChunkToResponsesEvents(t *testing.T, chunk *ChatCompletionsChunk, state *ChatCompletionsToResponsesStreamState) []ResponsesStreamEvent {
+	t.Helper()
+	events, err := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	require.NoError(t, err)
+	return events
+}
 
 func TestResponsesToChatCompletionsRequest_CustomToolBecomesFunctionTool(t *testing.T) {
 	req := &ResponsesRequest{
@@ -212,6 +222,45 @@ func TestExtractCustomToolCallInput_FallsBackToRawArguments(t *testing.T) {
 	assert.Equal(t, `{"other": "x"}`, extractCustomToolCallInput(`{"other": "x"}`))
 	assert.Equal(t, "", extractCustomToolCallInput(`{}`))
 	assert.Equal(t, "", extractCustomToolCallInput(""))
+	assert.Equal(t, `{"input":null}`, extractCustomToolCallInput(`{"input":null}`))
+	assert.Equal(t, `{"input":123}`, extractCustomToolCallInput(`{"input":123}`))
+	assert.Equal(t, `[]`, extractCustomToolCallInput(`[]`))
+	assert.Equal(t, "second", extractCustomToolCallInput(`{"input":"first","input":"second"}`))
+}
+
+func TestExtractCustomToolCallInputDenseObjectHasBoundedAllocation(t *testing.T) {
+	const targetBytes = (8 << 20) - 64
+	var body strings.Builder
+	body.Grow(targetBytes)
+	require.NoError(t, body.WriteByte('{'))
+	for i := 0; ; i++ {
+		entry := fmt.Sprintf(`"k%d":0`, i)
+		separator := 0
+		if i > 0 {
+			separator = 1
+		}
+		if body.Len()+separator+len(entry)+1 > targetBytes {
+			break
+		}
+		if separator != 0 {
+			require.NoError(t, body.WriteByte(','))
+		}
+		_, err := body.WriteString(entry)
+		require.NoError(t, err)
+	}
+	require.NoError(t, body.WriteByte('}'))
+	arguments := body.String()
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := extractCustomToolCallInput(arguments)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Equal(t, arguments, got)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20),
+		"extracting an optional input field must not materialize a high-cardinality JSON object")
 }
 
 func TestChatCompletionsChunkToResponsesEvents_CustomToolCallStream(t *testing.T) {
@@ -232,7 +281,7 @@ func TestChatCompletionsChunkToResponsesEvents_CustomToolCallStream(t *testing.T
 		}},
 	}
 
-	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, inputDone, itemDone *ResponsesStreamEvent
@@ -370,7 +419,7 @@ func TestChatCompletionsChunkToResponsesEvents_ToolSearchCallStream(t *testing.T
 		}},
 	}
 
-	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, itemDone *ResponsesStreamEvent
@@ -515,8 +564,8 @@ func TestChatCompletionsChunkToResponsesEvents_CustomToolNameArrivesLate(t *test
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	addedCount := 0
@@ -550,8 +599,8 @@ func TestChatCompletionsChunkToResponsesEvents_FunctionToolNameArrivesLate(t *te
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	deltas := ""
@@ -954,7 +1003,7 @@ func TestChatCompletionsChunkToResponsesEvents_NamespacedToolCallStream(t *testi
 		}},
 	}
 
-	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, itemDone *ResponsesStreamEvent
@@ -1022,8 +1071,8 @@ func TestChatCompletionsChunkToResponsesEvents_NamespacedToolNameArrivesLate(t *
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
-	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
+	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	addedCount := 0
@@ -1061,7 +1110,7 @@ func TestChatCompletionsChunkToResponsesEvents_FunctionToolStreamUnaffected(t *t
 		}},
 	}
 
-	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	sawArgsDelta := false

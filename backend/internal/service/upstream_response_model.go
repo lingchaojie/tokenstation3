@@ -76,6 +76,16 @@ func (o *upstreamResponseModelObserver) ObserveGemini(payload []byte) {
 	o.Observe(model, true)
 }
 
+func (o *upstreamResponseModelObserver) ObserveGeminiString(payload string) {
+	model := firstValidTrimmedGJSONModelString(
+		payload,
+		"modelVersion",
+		"response.modelVersion",
+		"response.response.modelVersion",
+	)
+	o.Observe(model, true)
+}
+
 func (o *upstreamResponseModelObserver) Model() string {
 	if o == nil {
 		return ""
@@ -142,6 +152,25 @@ func firstValidTrimmedGJSONModel(payload []byte, paths ...string) string {
 			// pass on the common model-free delta path while still rejecting malformed
 			// payloads that appear to declare a model.
 			if !gjson.ValidBytes(payload) {
+				return ""
+			}
+			return model
+		}
+	}
+	return ""
+}
+
+func firstValidTrimmedGJSONModelString(payload string, paths ...string) string {
+	if payload == "" {
+		return ""
+	}
+	for _, path := range paths {
+		value := gjson.Get(payload, path)
+		if !value.Exists() || value.Type != gjson.String {
+			continue
+		}
+		if model := strings.TrimSpace(value.String()); model != "" {
+			if !gjson.Valid(payload) {
 				return ""
 			}
 			return model

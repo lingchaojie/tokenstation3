@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -210,6 +211,38 @@ func TestGeminiChatCompletionsCompatCarriesFinalProviderRequest(t *testing.T) {
 	require.NotEmpty(t, recorder.body)
 	require.Equal(t, recorder.body, result.UpstreamRequest)
 	require.NotEqual(t, body, result.UpstreamRequest, "Gemini compat converts Chat Completions into a provider-native request")
+}
+
+func TestWebChatCaptureDoesNotArchiveConvertedFallbackWithoutRawProviderResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 4)}
+	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	gateway := &GatewayService{cfg: cfg, capturePool: pool}
+	openAI := &OpenAIGatewayService{cfg: cfg, capturePool: pool}
+	account := &Account{ID: 777, Platform: PlatformOpenAI}
+	policy := &CaptureContentPolicy{RawRequest: true, RawResponse: true}
+
+	streamCapture := newWebChatStreamCapture(1 << 20)
+	streamCapture.Capture([]byte(`data: {"converted":"stream"}\n\n`))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	downstream := NewWebChatResponseCapture(c.Writer, 1<<20)
+	_, err := downstream.Write([]byte(`{"converted":"buffered"}`))
+	require.NoError(t, err)
+
+	forwardResult := &ForwardResult{UpstreamRequest: []byte(`{"provider":"request"}`), CaptureContentPolicy: policy}
+	attachWebChatGatewayCaptureResponse(forwardResult, streamCapture, downstream)
+	require.Nil(t, forwardResult.CaptureResponse)
+	gateway.SubmitWebChatCapture(forwardResult, account, nil, "/v1/messages")
+
+	openAIResult := &OpenAIForwardResult{UpstreamRequest: []byte(`{"provider":"request"}`), CaptureContentPolicy: policy}
+	attachWebChatOpenAICaptureResponse(openAIResult, streamCapture, downstream)
+	require.Nil(t, openAIResult.CaptureResponse)
+	openAI.SubmitWebChatCapture(openAIResult, account, nil, "/v1/responses")
+	pool.Stop()
+
+	require.Empty(t, writer.records, "converted WebChat bytes must never masquerade as provider-native capture")
 }
 
 func TestCaptureUpstreamRequestKeepsImmutableFinalAttempt(t *testing.T) {
@@ -812,6 +845,152 @@ func TestWebChatKiroFinalHTTPErrorArchivesFinalProviderPayloadExactlyOnce(t *tes
 	require.NotEqual(t, inbound, record.RawRequest)
 	require.True(t, gjson.GetBytes(record.RawRequest, "conversationState").Exists(), "archive must contain the final Kiro provider envelope")
 	require.NotContains(t, string(record.RequestHeaders), "kiro-provider-secret")
+}
+
+func TestWebChatKiroPaymentRequiredArchivesFinalProviderPayloadExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses bool
+		inbound   []byte
+	}{
+		{
+			name:    "chat_completions",
+			inbound: []byte(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}],"stream":false}`),
+		},
+		{
+			name:      "responses",
+			responses: true,
+			inbound:   []byte(`{"model":"claude-sonnet-4","input":"hello","stream":false}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			errorBody := []byte(`{"message":"kiro payment required","reason":"quota_exhausted"}`)
+			readErr := errors.New("forced Kiro provider body read failure")
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusPaymentRequired,
+				Header:     http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-payment-required"}},
+				Body:       &streamReadCloser{payload: errorBody, err: readErr},
+			}}
+			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			cfg := &config.Config{Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+				Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
+			}}
+			svc := &GatewayService{
+				cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{},
+				kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: pool,
+			}
+			account := &Account{
+				ID: 709, Name: "webchat-kiro-payment-required", Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "kiro-provider-secret",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+					"model_mapping": map[string]any{
+						"claude-sonnet-4": "claude-sonnet-4",
+					},
+				},
+			}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(tt.inbound))
+			enableCaptureForTest(t, c)
+			webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
+				withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
+			)
+			parsed := &ParsedRequest{
+				Body: NewRequestBodyRef(tt.inbound), Model: "claude-sonnet-4", Stream: false,
+				Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS},
+			}
+
+			var result *ForwardResult
+			var err error
+			if tt.responses {
+				result, err = svc.ForwardAsResponses(webChatCtx, c, account, tt.inbound, parsed)
+			} else {
+				result, err = svc.ForwardAsChatCompletions(webChatCtx, c, account, tt.inbound, parsed)
+			}
+			pool.Stop()
+
+			require.Error(t, err)
+			require.Nil(t, result, "terminal HTTP errors remain non-billable")
+			require.Len(t, writer.records, 1, "the final Kiro HTTP exchange must be archived once")
+			record := <-writer.records
+			require.Equal(t, http.StatusPaymentRequired, record.HTTPStatus)
+			require.Equal(t, errorBody, record.RawResponse)
+			require.Equal(t, upstream.lastBody, record.RawRequest)
+			require.NotEqual(t, tt.inbound, record.RawRequest)
+			require.True(t, gjson.GetBytes(record.RawRequest, "conversationState").Exists())
+			require.NotContains(t, string(record.RequestHeaders), "kiro-provider-secret")
+		})
+	}
+}
+
+func TestWebChatTerminalCaptureKeepsRedirectedFinalEmptyGET(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 1)}
+	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 2}, writer)
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}, capturePool: pool}
+	account := &Account{ID: 710, Platform: PlatformAnthropic}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
+	enableCaptureForTest(t, c)
+	ctx := withWebChatFinalGatewayErrorCaptureSubmitter(withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(1<<20)), svc)
+
+	initialBody := []byte(`{"initial":"must not survive redirect"}`)
+	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/start", bytes.NewReader(initialBody))
+	setCaptureUpstreamRequest(c, initial, 1<<20)
+	finalReq := httptest.NewRequest(http.MethodGet, "https://provider.example/final", nil)
+	finalReq.Header.Set("X-Final-Attempt", "true")
+	responseBody := []byte(`{"error":"redirect target rejected request"}`)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"X-Request-Id": {"redirect-final"}}, Body: io.NopCloser(bytes.NewReader(responseBody)), Request: finalReq}
+	setCaptureResult(c, resp, responseBody, false)
+
+	svc.submitWebChatFinalGatewayErrorCapture(ctx, c, account, "requested", "mapped", "/v1/messages", false, resp, responseBody)
+	pool.Stop()
+
+	require.Len(t, writer.records, 1)
+	record := <-writer.records
+	require.NotNil(t, record.RawRequest)
+	require.Empty(t, record.RawRequest)
+	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
+	require.Equal(t, responseBody, record.RawResponse)
+	require.Equal(t, "https://provider.example/final", record.UpstreamEndpoint)
+	require.Contains(t, string(record.RequestHeaders), "X-Final-Attempt")
+}
+
+func TestWebChatErrorBodyExpansionRequiresPolicyApprovedCaptureContext(t *testing.T) {
+	const captureLimit = 1 << 20
+	body := bytes.Repeat([]byte("x"), int(gatewayUpstreamErrorBodyReadLimit)+64*1024)
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: captureLimit},
+	}}
+	gateway := &GatewayService{cfg: cfg}
+	gemini := &GeminiMessagesCompatService{cfg: cfg}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
+	ownerCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
+		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(captureLimit)),
+		gateway,
+	)
+
+	newResponse := func() *http.Response {
+		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(body))}
+	}
+	gatewayBody, expanded, err := gateway.readWebChatUpstreamErrorBody(ownerCtx, newResponse())
+	require.NoError(t, err)
+	require.False(t, expanded)
+	require.Len(t, gatewayBody, int(gatewayUpstreamErrorBodyReadLimit))
+	require.Len(t, gemini.readWebChatUpstreamErrorBody(ownerCtx, newResponse()), int(gatewayUpstreamErrorBodyReadLimit))
+
+	approvedCtx := withCaptureUpstreamRequestContext(ownerCtx, c, captureLimit)
+	gatewayBody, expanded, err = gateway.readWebChatUpstreamErrorBody(approvedCtx, newResponse())
+	require.NoError(t, err)
+	require.False(t, expanded)
+	require.Equal(t, body, gatewayBody)
+	require.Equal(t, body, gemini.readWebChatUpstreamErrorBody(approvedCtx, newResponse()))
 }
 
 func TestWebChatKiroRetryArchivesOnlyFinalProviderHTTPError(t *testing.T) {

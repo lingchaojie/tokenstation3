@@ -126,7 +126,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		result, forwardErr = s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	finishOpenAIHTTPCapture(resp)
-	if forwardErr == nil {
+	if result != nil && forwardErr != nil {
+		result.CaptureTerminalError = true
+	}
+	if result != nil {
 		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 	return finalizeOpenAIForwardResult(c, result, chatBody), forwardErr
@@ -235,13 +238,16 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}
 
 	scan := s.scanCCStream(ctx, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
-		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
+		events, err := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
+		if err != nil {
+			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
+		}
 		return writeEvents(events, responsesConvertedEventsHaveSemanticOutput(events))
 	})
 
 	if scan.Err != nil {
 		if !scan.SawOutput {
-			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream read failed before semantic output")
 		}
 		return &OpenAIForwardResult{
 			RequestID:       requestID,
@@ -259,9 +265,12 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	if !scan.SawDone {
 		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
 		if !scan.SawOutput {
-			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
+			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream ended before [DONE]")
 		}
 		return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, errors.New("upstream stream ended without [DONE]")
+	}
+	if !scan.SawProviderPayload {
+		return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream contained only [DONE]")
 	}
 	if scan.SawUsage {
 		// Keep response.completed aligned with the generic scanner used for

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -164,10 +165,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
-				ForceCacheBilling: switchErr.IsStickySession,
-			}
+			return nil, antigravitySwitchFailoverError(switchErr)
 		}
 		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
 		if c.Request.Context().Err() != nil {
@@ -205,12 +203,30 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						prepareAntigravityCaptureAttempt(captureParams, fallbackReq)
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
 						wrapAntigravityCaptureResponse(captureParams, fallbackResp)
-						if err == nil && fallbackResp.StatusCode < 400 {
+						if err != nil || fallbackResp == nil {
+							if fallbackResp != nil && fallbackResp.Body != nil {
+								_ = fallbackResp.Body.Close()
+							}
+							// The fallback request is the final provider attempt. It did
+							// not produce a usable HTTP response, so the initial 404 must
+							// not be paired with the fallback request in an archive.
+							_, _ = takeCaptureResult(c)
+							if err == nil {
+								err = errors.New("upstream returned nil response")
+							}
+							return nil, fmt.Errorf("antigravity fallback request failed: %w", err)
+						}
+						if fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
 							forwardedModel = fallbackModel
-						} else if fallbackResp != nil {
+						} else {
+							fallbackBody := s.readUpstreamErrorBody(fallbackResp)
 							_ = fallbackResp.Body.Close()
+							fallbackResp.Body = io.NopCloser(bytes.NewReader(fallbackBody))
+							resp = fallbackResp
+							respBody = fallbackBody
+							contentType = fallbackResp.Header.Get("Content-Type")
 						}
 					}
 				}
@@ -303,10 +319,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 							Kind:               "failover",
 							Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
 						})
-						return nil, &UpstreamFailoverError{
-							StatusCode:        http.StatusServiceUnavailable,
-							ForceCacheBilling: switchErr.IsStickySession,
-						}
+						return nil, antigravitySwitchFailoverError(switchErr)
 					}
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
@@ -317,6 +330,12 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
 					})
 					logger.LegacyPrintf("service.antigravity_gateway", "Antigravity Gemini account %d: signature retry request failed: %v", account.ID, retryErr)
+					// The signature retry is the final provider attempt and has no
+					// HTTP response. Drop its request-only bridge and do not fall
+					// through to the initial 400, which would create a cross-attempt
+					// request/response record.
+					_, _ = takeCaptureResult(c)
+					return nil, fmt.Errorf("antigravity signature retry failed: %w", retryErr)
 				}
 			} else {
 				logger.LegacyPrintf("service.antigravity_gateway", "Antigravity Gemini account %d: signature retry wrap failed: %v", account.ID, wrapErr)
@@ -391,7 +410,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] upstream error status=%d body=%s", resp.StatusCode, truncateForLog(unwrappedForOps, 500))
 		MarkResponseCommitted(c)
 		c.Data(resp.StatusCode, contentType, unwrappedForOps)
-		return nil, fmt.Errorf("antigravity upstream error: %d", resp.StatusCode)
+		return nil, newTerminalProviderHTTPError(account, resp, unwrappedForOps)
 	}
 
 handleSuccess:
@@ -409,7 +428,10 @@ handleSuccess:
 		streamRes, err := s.handleGeminiStreamingResponse(c, resp, startTime)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, err)
-			return nil, err
+			if streamRes == nil {
+				return failedForwardResultForError(c, resp, originalModel, forwardedModel, true, startTime, err), err
+			}
+			return streamErrorForwardResult(c, resp, originalModel, forwardedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err), err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
@@ -419,7 +441,7 @@ handleSuccess:
 		streamRes, err := s.handleGeminiStreamToNonStreaming(c, resp, startTime)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
-			return nil, err
+			return failedForwardResultForError(c, resp, originalModel, forwardedModel, false, startTime, err), err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs

@@ -2663,14 +2663,45 @@ func TestGatewayCaptureConfigDefaults(t *testing.T) {
 	if cfg.Gateway.Capture.OverflowPolicy != UsageRecordOverflowPolicyDrop {
 		t.Fatalf("default overflow=drop, got %q", cfg.Gateway.Capture.OverflowPolicy)
 	}
-	if cfg.Gateway.Capture.MaxBodyBytes <= 0 || cfg.Gateway.Capture.QueueSize <= 0 {
-		t.Fatal("defaults must be positive")
+	if cfg.Gateway.Capture.MaxBodyBytes != GatewayCaptureMaxBodyBytes {
+		t.Fatalf("default max_body_bytes = %d, want hard limit %d", cfg.Gateway.Capture.MaxBodyBytes, GatewayCaptureMaxBodyBytes)
+	}
+	if cfg.Gateway.Capture.QueueSize <= 0 {
+		t.Fatal("default queue_size must be positive")
 	}
 	if cfg.Gateway.Capture.MaxQueueBytes != int64(1)<<30 {
 		t.Fatalf("default max_queue_bytes = 1GiB, got %d", cfg.Gateway.Capture.MaxQueueBytes)
 	}
 	if cfg.Gateway.Capture.WriterQueueSize != 1024 {
 		t.Fatalf("default writer_queue_size = 1024, got %d", cfg.Gateway.Capture.WriterQueueSize)
+	}
+}
+
+func TestGatewayCaptureValidateRejectsBodyLimitAboveHardMaximum(t *testing.T) {
+	c := GatewayCaptureConfig{
+		Enabled:         true,
+		MaxBodyBytes:    GatewayCaptureMaxBodyBytes + 1,
+		MaxQueueBytes:   int64(GatewayCaptureMaxBodyBytes+1) * 2,
+		QueueSize:       1,
+		WorkerCount:     1,
+		WriterQueueSize: 1,
+		OverflowPolicy:  UsageRecordOverflowPolicyDrop,
+		BatchMaxSize:    1,
+		ClickHouse: CaptureClickHouseConfig{
+			Addr:     []string{"ch:9000"},
+			Database: "llm_archive",
+		},
+	}
+	if err := c.validate(); err == nil {
+		t.Fatalf("max_body_bytes above %d must be rejected", GatewayCaptureMaxBodyBytes)
+	} else if !strings.Contains(err.Error(), "max_body_bytes") || !strings.Contains(err.Error(), "8 MiB") {
+		t.Fatalf("expected explicit 8 MiB max_body_bytes error, got: %v", err)
+	}
+
+	c.MaxBodyBytes = GatewayCaptureMaxBodyBytes
+	c.MaxQueueBytes = int64(GatewayCaptureMaxBodyBytes) * 2
+	if err := c.validate(); err != nil {
+		t.Fatalf("max_body_bytes at hard limit must pass: %v", err)
 	}
 }
 
@@ -2700,17 +2731,17 @@ func TestGatewayCaptureValidateMaxQueueBytes(t *testing.T) {
 	if err := c.Gateway.Capture.validate(); err == nil {
 		t.Fatal("negative max_queue_bytes must be rejected")
 	}
-	// < max_body_bytes：拒绝（单条大 record 永远进不去）
+	// < 2*max_body_bytes：拒绝（请求和响应各自都可达到正文上限）
 	c = base()
-	c.Gateway.Capture.MaxQueueBytes = 50 // < 100
+	c.Gateway.Capture.MaxQueueBytes = 199 // < 2*100
 	if err := c.Gateway.Capture.validate(); err == nil {
-		t.Fatal("max_queue_bytes < max_body_bytes must be rejected")
+		t.Fatal("max_queue_bytes < 2*max_body_bytes must be rejected")
 	}
-	// >= max_body_bytes：放行
+	// >= 2*max_body_bytes：放行
 	c = base()
-	c.Gateway.Capture.MaxQueueBytes = 100
+	c.Gateway.Capture.MaxQueueBytes = 200
 	if err := c.Gateway.Capture.validate(); err != nil {
-		t.Fatalf("max_queue_bytes == max_body_bytes must pass: %v", err)
+		t.Fatalf("max_queue_bytes == 2*max_body_bytes must pass: %v", err)
 	}
 }
 

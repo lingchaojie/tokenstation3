@@ -369,7 +369,8 @@ func TestReconstructResponseOutputFromSSE_PrefersRawDoneItems(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 	}, "\n")
 
-	outputJSON, ok := reconstructResponseOutputFromSSE(bodyText)
+	outputJSON, ok, err := reconstructResponseOutputFromSSE(bodyText)
+	require.NoError(t, err)
 	require.True(t, ok)
 	items := gjson.ParseBytes(outputJSON).Array()
 	require.Len(t, items, 1, "raw done item 与 delta 重建不得重复")
@@ -384,7 +385,8 @@ func TestReconstructResponseOutputFromSSE_CompactionAddedFallback(t *testing.T) 
 		`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 	}, "\n")
 
-	outputJSON, ok := reconstructResponseOutputFromSSE(bodyText)
+	outputJSON, ok, err := reconstructResponseOutputFromSSE(bodyText)
+	require.NoError(t, err)
 	require.True(t, ok)
 	items := gjson.ParseBytes(outputJSON).Array()
 	require.Len(t, items, 1)
@@ -401,7 +403,8 @@ func TestReconstructResponseOutputFromSSE_MixedDoneAndCompactionAdded(t *testing
 		`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 	}, "\n")
 
-	outputJSON, ok := reconstructResponseOutputFromSSE(bodyText)
+	outputJSON, ok, err := reconstructResponseOutputFromSSE(bodyText)
+	require.NoError(t, err)
 	require.True(t, ok)
 	items := gjson.ParseBytes(outputJSON).Array()
 	require.Len(t, items, 2)
@@ -415,7 +418,8 @@ func TestReconstructResponseOutputFromSSE_MixedDoneAndCompactionAdded(t *testing
 		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","status":"completed","encrypted_content":"final"}}`,
 		`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 	}, "\n")
-	outputJSON, ok = reconstructResponseOutputFromSSE(bodyText)
+	outputJSON, ok, err = reconstructResponseOutputFromSSE(bodyText)
+	require.NoError(t, err)
 	require.True(t, ok)
 	items = gjson.ParseBytes(outputJSON).Array()
 	require.Len(t, items, 1)
@@ -491,7 +495,8 @@ func TestReconstructResponseOutputFromSSE_NonCompactionAddedStillUsesDeltas(t *t
 		`data: {"type":"response.completed","response":{"id":"resp_1","output":[]}}`,
 	}, "\n")
 
-	outputJSON, ok := reconstructResponseOutputFromSSE(bodyText)
+	outputJSON, ok, err := reconstructResponseOutputFromSSE(bodyText)
+	require.NoError(t, err)
 	require.True(t, ok)
 	items := gjson.ParseBytes(outputJSON).Array()
 	require.Len(t, items, 1)

@@ -266,6 +266,9 @@ type OpenAIForwardResult struct {
 	// result for capture/billing handoff but must still count as a scheduler
 	// failure. Its zero value preserves success for all existing result builders.
 	UpstreamFailed bool
+	// CaptureTerminalError classifies committed partial/semantic failures under
+	// the terminal_error capture policy without changing their billing contract.
+	CaptureTerminalError bool
 	// UpstreamHTTPStatus is the status of the final response represented by this
 	// result. Zero preserves the legacy successful-capture default of HTTP 200.
 	UpstreamHTTPStatus int
@@ -303,14 +306,34 @@ type OpenAIForwardResult struct {
 	CaptureResponseHeaders  []byte
 	CaptureUpstreamEndpoint string
 	CaptureHTTPStatus       int
+	CaptureUpstreamModel    string
+	CaptureStream           bool
+	CaptureStreamKnown      bool
 	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+func (r *OpenAIForwardResult) UpstreamModelForCapture() string {
+	if r != nil && r.CaptureUpstreamModel != "" {
+		return r.CaptureUpstreamModel
+	}
+	if r == nil {
+		return ""
+	}
+	return r.UpstreamModel
+}
+
+func (r *OpenAIForwardResult) StreamForCapture() bool {
+	if r != nil && r.CaptureStreamKnown {
+		return r.CaptureStream
+	}
+	return r != nil && r.Stream
 }
 
 // SucceededForScheduling reports whether this result is an upstream success
 // that may clear model-scoped transient state. The zero value remains a success
 // for existing non-WS callers.
 func (r *OpenAIForwardResult) SucceededForScheduling() bool {
-	if r != nil && r.UpstreamFailed {
+	if r != nil && (r.UpstreamFailed || r.CaptureTerminalError) {
 		return false
 	}
 	if r == nil || !r.OpenAIWSMode || r.UpstreamTerminalEvent == "" {
@@ -327,6 +350,9 @@ func (r *OpenAIForwardResult) SucceededForScheduling() bool {
 // HTTPStatusForCapture returns the actual final upstream status when a result
 // carries one, while preserving HTTP 200 for legacy successful result builders.
 func (r *OpenAIForwardResult) HTTPStatusForCapture() int {
+	if r != nil && r.CaptureHTTPStatus >= 100 && r.CaptureHTTPStatus <= 599 {
+		return r.CaptureHTTPStatus
+	}
 	if r != nil && r.UpstreamHTTPStatus >= 100 && r.UpstreamHTTPStatus <= 599 {
 		return r.UpstreamHTTPStatus
 	}

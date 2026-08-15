@@ -20,7 +20,7 @@ func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
 	require.Contains(t, string(events[1]), `"type":"input_json_delta"`)
 	require.Contains(t, string(events[1]), `"{\"query\":\"golang concurrency\"}"`)
 	require.Contains(t, string(events[3]), `"type":"web_search_tool_result"`)
-	require.NotContains(t, string(events[3]), `"tool_use_id"`)
+	require.Contains(t, string(events[3]), `"tool_use_id":"srvtoolu_test"`)
 	require.Contains(t, string(events[3]), `"encrypted_content":"result snippet"`)
 }
 

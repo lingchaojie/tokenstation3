@@ -108,6 +108,29 @@ type smartRetryResult struct {
 	switchError *AntigravityAccountSwitchError // 模型限流时返回账号切换信号
 }
 
+// readAntigravityRetryResponse drains enough bytes for the policy-approved raw
+// capture while keeping the retry classifier's historical 8 KiB body view.
+// The returned response is detached from the consumed network body but retains
+// the exact attempt's status, headers and request metadata.
+func readAntigravityRetryResponse(resp *http.Response, functionalLimit int64) (*http.Response, []byte, error) {
+	if resp == nil {
+		return nil, nil, errors.New("antigravity retry returned nil response")
+	}
+	body, readErr := readCaptureAwareUpstreamErrorBody(resp, functionalLimit)
+	_ = resp.Body.Close()
+	detached := &http.Response{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		Proto:      resp.Proto,
+		ProtoMajor: resp.ProtoMajor,
+		ProtoMinor: resp.ProtoMinor,
+		Header:     resp.Header.Clone(),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    resp.Request,
+	}
+	return detached, body, readErr
+}
+
 // handleSmartRetry 处理 OAuth 账号的智能重试逻辑
 // 将 429/503 限流处理逻辑抽取为独立函数，减少 antigravityRetryLoop 的复杂度
 func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParams, resp *http.Response, respBody []byte, baseURL string, urlIdx int, availableURLs []string) *smartRetryResult {
@@ -124,6 +147,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 
 	// 判断是否触发智能重试
 	shouldSmartRetry, shouldRateLimitModel, waitDuration, modelName, isModelCapacityExhausted := shouldTriggerAntigravitySmartRetry(p.account, respBody)
+	var creditsFailure *UpstreamFailoverError
 
 	// AI Credits 超量请求：
 	// 仅在上游明确返回免费配额耗尽时才允许切换到 credits。
@@ -138,6 +162,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				resp:   result.resp,
 			}
 		}
+		creditsFailure = result.failure
 	}
 
 	// 情况1: retryDelay >= 阈值，限流模型并切换账号
@@ -162,6 +187,10 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d rate_limited account=%d (no model mapping)", p.prefix, resp.StatusCode, p.account.ID)
 		}
 		s.clearStickySession(p.ctx, p.groupID, p.sessionHash)
+		switchFailure := creditsFailure
+		if switchFailure == nil {
+			switchFailure = newProviderHTTPError(p.account, resp, respBody, false)
+		}
 
 		// 返回账号切换信号，让上层切换账号重试
 		return &smartRetryResult{
@@ -170,6 +199,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				OriginalAccountID: p.account.ID,
 				RateLimitedModel:  modelName,
 				IsStickySession:   p.isStickySession,
+				Failure:           switchFailure,
 			},
 		}
 	}
@@ -178,6 +208,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 	if shouldSmartRetry {
 		var lastRetryResp *http.Response
 		var lastRetryBody []byte
+		var lastRetryErr error
 
 		// MODEL_CAPACITY_EXHAUSTED 使用独立的重试参数（60 次，固定 1s 间隔）
 		maxAttempts := antigravitySmartRetryMaxAttempts
@@ -250,17 +281,21 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			// 网络错误时，继续重试
 			if retryErr != nil || retryResp == nil {
 				log.Printf("%s status=smart_retry_network_error attempt=%d/%d error=%v", p.prefix, attempt, maxAttempts, retryErr)
+				lastRetryResp = nil
+				lastRetryBody = nil
+				lastRetryErr = retryErr
+				if lastRetryErr == nil {
+					lastRetryErr = errors.New("antigravity smart retry returned nil response")
+				}
 				continue
 			}
 
-			// 重试失败，关闭之前的响应
-			if lastRetryResp != nil {
-				_ = lastRetryResp.Body.Close()
-			}
-			lastRetryResp = retryResp
-			if retryResp != nil {
-				lastRetryBody, _ = io.ReadAll(io.LimitReader(retryResp.Body, 8<<10))
-				_ = retryResp.Body.Close()
+			// 重试失败：完整读取当前 attempt 供 capture tee 使用，业务分类仍只
+			// 接收原有 8 KiB 前缀。保存当前 response 元数据，避免耗尽后把
+			// 初始 status/header 与最后一次 request/body 拼成伪造记录。
+			lastRetryResp, lastRetryBody, lastRetryErr = readAntigravityRetryResponse(retryResp, 8<<10)
+			if lastRetryErr != nil {
+				continue
 			}
 
 			// 解析新的重试信息，用于下次重试的等待时间（MODEL_CAPACITY_EXHAUSTED 使用固定循环，跳过）
@@ -273,6 +308,23 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 		}
 
 		// 所有重试都失败
+		if lastRetryErr != nil {
+			// The retry request is the final network attempt, so the initial HTTP
+			// bridge cannot be paired with it. Preserve the existing multi-account
+			// switch semantics, but discard the request-only capture. Single-account
+			// and shared-capacity modes have no useful account switch and surface the
+			// actual transport failure instead of fabricating an HTTP exchange.
+			_, _ = takeCaptureResult(p.c)
+			if isModelCapacityExhausted || (resp.StatusCode == http.StatusServiceUnavailable && isSingleAccountRetry(p.ctx)) {
+				return &smartRetryResult{action: smartRetryActionBreakWithResp, err: lastRetryErr}
+			}
+		}
+		if lastRetryErr == nil && lastRetryResp == nil {
+			lastRetryResp = &http.Response{
+				StatusCode: resp.StatusCode, Header: resp.Header.Clone(),
+				Body: io.NopCloser(bytes.NewReader(respBody)), Request: resp.Request,
+			}
+		}
 		rateLimitDuration := waitDuration
 		if rateLimitDuration <= 0 {
 			rateLimitDuration = antigravityDefaultRateLimitDuration
@@ -295,11 +347,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				p.prefix, resp.StatusCode, maxAttempts, modelName, p.account.ID, truncateForLog(retryBody, 200))
 			return &smartRetryResult{
 				action: smartRetryActionBreakWithResp,
-				resp: &http.Response{
-					StatusCode: resp.StatusCode,
-					Header:     resp.Header.Clone(),
-					Body:       io.NopCloser(bytes.NewReader(retryBody)),
-				},
+				resp:   lastRetryResp,
 			}
 		}
 
@@ -310,11 +358,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				p.prefix, resp.StatusCode, antigravitySmartRetryMaxAttempts, modelName, p.account.ID, truncateForLog(retryBody, 200))
 			return &smartRetryResult{
 				action: smartRetryActionBreakWithResp,
-				resp: &http.Response{
-					StatusCode: resp.StatusCode,
-					Header:     resp.Header.Clone(),
-					Body:       io.NopCloser(bytes.NewReader(retryBody)),
-				},
+				resp:   lastRetryResp,
 			}
 		}
 
@@ -334,6 +378,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				OriginalAccountID: p.account.ID,
 				RateLimitedModel:  modelName,
 				IsStickySession:   p.isStickySession,
+				Failure:           newProviderHTTPError(p.account, lastRetryResp, retryBody, false),
 			},
 		}
 	}
@@ -376,6 +421,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 	var lastRetryResp *http.Response
 	var lastRetryBody []byte
+	var lastRetryErr error
 	totalWaited := time.Duration(0)
 
 	for attempt := 1; attempt <= antigravitySingleAccountSmartRetryMaxAttempts; attempt++ {
@@ -427,16 +473,19 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 		if retryErr != nil || retryResp == nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s single_account_503_retry: network_error attempt=%d/%d error=%v",
 				p.prefix, attempt, antigravitySingleAccountSmartRetryMaxAttempts, retryErr)
+			lastRetryResp = nil
+			lastRetryBody = nil
+			lastRetryErr = retryErr
+			if lastRetryErr == nil {
+				lastRetryErr = errors.New("antigravity single-account retry returned nil response")
+			}
 			continue
 		}
 
-		// 关闭之前的响应
-		if lastRetryResp != nil {
-			_ = lastRetryResp.Body.Close()
+		lastRetryResp, lastRetryBody, lastRetryErr = readAntigravityRetryResponse(retryResp, 8<<10)
+		if lastRetryErr != nil {
+			continue
 		}
-		lastRetryResp = retryResp
-		lastRetryBody, _ = io.ReadAll(io.LimitReader(retryResp.Body, 8<<10))
-		_ = retryResp.Body.Close()
 
 		// 解析新的重试信息，更新下次等待时间
 		if attempt < antigravitySingleAccountSmartRetryMaxAttempts && lastRetryBody != nil {
@@ -455,6 +504,15 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 	// 所有重试都失败，不设限流，直接返回 503
 	// Handler 层的单账号退避循环会做最终处理
+	if lastRetryErr != nil {
+		return &smartRetryResult{action: smartRetryActionBreakWithResp, err: lastRetryErr}
+	}
+	if lastRetryResp == nil {
+		lastRetryResp = &http.Response{
+			StatusCode: resp.StatusCode, Header: resp.Header.Clone(),
+			Body: io.NopCloser(bytes.NewReader(respBody)), Request: resp.Request,
+		}
+	}
 	retryBody := lastRetryBody
 	if retryBody == nil {
 		retryBody = respBody
@@ -464,11 +522,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 	return &smartRetryResult{
 		action: smartRetryActionBreakWithResp,
-		resp: &http.Response{
-			StatusCode: resp.StatusCode,
-			Header:     resp.Header.Clone(),
-			Body:       io.NopCloser(bytes.NewReader(retryBody)),
-		},
+		resp:   lastRetryResp,
 	}
 }
 

@@ -392,10 +392,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		finishAttemptCapture := s.beginGatewayCaptureResponse(c, account, resp)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
+			finishAttemptCapture()
 			// Transport attempt left local validation; count Ollama Cloud activity.
 			if !errors.Is(err, context.Canceled) {
 				scheduleOllamaCloudUsageActivity(s.deferredService, account)
@@ -475,6 +477,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					if buildErr == nil {
 						s.captureOutboundRequest(c, account, retryReq, retryWireBody)
 						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+						finishRetryCapture := s.beginGatewayCaptureResponse(c, account, retryResp)
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
 								// 重试请求被上游接受后同步 ParsedRequest，保证 usage/日志看到真实请求体。
@@ -490,6 +493,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 							retryRespBody, retryReadErr := s.readUpstreamErrorBody(retryResp)
 							_ = retryResp.Body.Close()
+							finishRetryCapture()
 							if retryReadErr == nil && retryResp.StatusCode == 400 && s.isSignatureErrorPattern(ctx, account, retryRespBody) {
 								appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 									Platform:           account.Platform,
@@ -517,6 +521,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									if buildErr2 == nil {
 										s.captureOutboundRequest(c, account, retryReq2, retryWireBody2)
 										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
+										finishRetry2Capture := s.beginGatewayCaptureResponse(c, account, retryResp2)
 										if retryErr2 == nil {
 											if retryResp2.StatusCode < 400 {
 												// 二阶段工具块降级成功时也必须更新当前 body。
@@ -532,6 +537,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 										if retryResp2 != nil && retryResp2.Body != nil {
 											_ = retryResp2.Body.Close()
 										}
+										finishRetry2Capture()
+										_, _ = takeCaptureResult(c)
 										appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 											Platform:           account.Platform,
 											AccountID:          account.ID,
@@ -542,6 +549,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 											Message:            sanitizeUpstreamErrorMessage(retryErr2.Error()),
 										})
 										logger.LegacyPrintf("service.gateway", "Account %d: tool-downgrade signature retry failed: %v", account.ID, retryErr2)
+										return nil, fmt.Errorf("tool signature retry upstream request failed: %w", retryErr2)
 									} else {
 										logger.LegacyPrintf("service.gateway", "Account %d: tool-downgrade signature retry build failed: %v", account.ID, buildErr2)
 									}
@@ -559,7 +567,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						if retryResp != nil && retryResp.Body != nil {
 							_ = retryResp.Body.Close()
 						}
+						finishRetryCapture()
+						_, _ = takeCaptureResult(c)
 						logger.LegacyPrintf("service.gateway", "Account %d: signature error retry failed: %v", account.ID, retryErr)
+						return nil, fmt.Errorf("signature retry upstream request failed: %w", retryErr)
 					} else {
 						logger.LegacyPrintf("service.gateway", "Account %d: signature error retry build request failed: %v", account.ID, buildErr)
 					}
@@ -597,6 +608,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						if buildErr == nil {
 							s.captureOutboundRequest(c, account, budgetRetryReq, budgetWireBody)
 							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+							finishBudgetCapture := s.beginGatewayCaptureResponse(c, account, budgetRetryResp)
 							if retryErr == nil {
 								if budgetRetryResp.StatusCode < 400 {
 									// budget 修正请求成功后，ParsedRequest 也要描述被接受的修正版。
@@ -612,7 +624,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 							if budgetRetryResp != nil && budgetRetryResp.Body != nil {
 								_ = budgetRetryResp.Body.Close()
 							}
+							finishBudgetCapture()
+							_, _ = takeCaptureResult(c)
 							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry failed: %v", account.ID, retryErr)
+							return nil, fmt.Errorf("budget retry upstream request failed: %w", retryErr)
 						} else {
 							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry build failed: %v", account.ID, buildErr)
 						}
@@ -887,11 +902,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					return partial, err
 				}
 				return nil, &UpstreamFailoverError{
-					StatusCode:       403,
-					ResponseBody:     body,
-					RequestHeaders:   captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:  resp.Header.Clone(),
-					UpstreamEndpoint: captureEndpointFromResponse(resp),
+					StatusCode:              403,
+					ResponseBody:            body,
+					RequestHeaders:          captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamEndpoint:        captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse: true,
 				}
 			}
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的
@@ -899,7 +915,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if partial != nil {
 				return partial, err
 			}
-			return nil, err
+			return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 		}
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
@@ -907,7 +923,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	} else {
 		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
 		if err != nil {
-			return nil, err
+			return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 		}
 	}
 

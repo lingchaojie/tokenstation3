@@ -110,7 +110,7 @@ func TestOpenAIGatewayService_Forward_HTTPPatchPathKeepsLargeInputRaw(t *testing
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(
-				`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+				`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
 			)),
 		},
 	}
@@ -152,7 +152,7 @@ func TestOpenAIGatewayService_Forward_DecodedMutationKeepsLaterFieldDeletes(t *t
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -195,7 +195,7 @@ func TestOpenAIGatewayService_Forward_NormalizesMaxTokensAndStripsPromptCacheOpt
 			resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 			},
 		}
 		cfg := &config.Config{}
@@ -244,7 +244,7 @@ func TestOpenAIGatewayService_Forward_MappedImageModelUsesImageGate(t *testing.T
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -344,7 +344,7 @@ func TestOpenAIGatewayService_Forward_TextResponsesWithoutMappingKeepsRequestedB
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_text_unmapped_billing"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text_unmapped","object":"response","model":"gpt-5.4","status":"completed","usage":{"input_tokens":20,"output_tokens":10,"total_tokens":30}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text_unmapped","object":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":20,"output_tokens":10,"total_tokens":30}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -439,7 +439,7 @@ func TestOpenAIGatewayService_Forward_TextDataImageDoesNotForceMapMarshal(t *tes
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -516,7 +516,7 @@ func TestOpenAIGatewayService_Forward_ImageToolWithImageOnlyModelIsNormalized(t 
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -558,7 +558,7 @@ func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDoesNotDecodeBeforeError(
 			{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 			},
 		},
 	}
@@ -605,7 +605,7 @@ func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDropsCompaction(t *testin
 			{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 			},
 		},
 	}
@@ -645,7 +645,7 @@ func TestOpenAIGatewayService_Forward_CodexSparkRejectsEscapedInputImage(t *test
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -744,7 +744,7 @@ func TestOpenAIGatewayService_Forward_HTTPDeletesPreviousResponseIDWhenPresent(t
 			resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 			},
 		}
 		svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
@@ -766,7 +766,7 @@ func TestOpenAIGatewayService_Forward_StripsImageGenerationToolForSparkAPIKey(t 
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}
@@ -825,7 +825,7 @@ func TestOpenAIGatewayService_Forward_ImageOnlyModelKeepsSupportedVerbosity(t *t
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}`)),
 		},
 	}
 	cfg := &config.Config{}

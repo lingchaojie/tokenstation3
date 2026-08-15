@@ -51,7 +51,8 @@ func TestOpenAIGatewayService_Forward_CompactOnlyModelMappingOverridesOAuthUpstr
 	require.Equal(t, "gpt-5.4", result.Model)
 	require.Equal(t, "gpt-5.4-openai-compact", result.UpstreamModel)
 	require.Equal(t, "gpt-5.4-openai-compact", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest, "result snapshot must be the exact mapped body sent upstream")
+	require.Nil(t, result.UpstreamRequest, "capture-off requests must not allocate a body snapshot")
+	require.Equal(t, HashUsageRequestPayload(upstream.lastBody), result.UpstreamRequestHash)
 }
 
 func TestOpenAIGatewayService_Forward_NonCompactRequestIgnoresCompactOnlyModelMapping(t *testing.T) {
@@ -106,7 +107,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-pass-map"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_124","model":"gpt-5.4-openai-compact","usage":{"input_tokens":2,"output_tokens":3}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_124","model":"gpt-5.4-openai-compact","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3}}`)),
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}

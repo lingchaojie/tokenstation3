@@ -254,7 +254,26 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
 		if err != nil {
-			if result != nil && result.ImageCount > 0 {
+			if result != nil && result.UpstreamFailed {
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, result.FirstTokenMs)
+				h.submitCapture(c, result, account, body, resolveOpenAIUpstreamEndpoint(c, account, result))
+				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
+				wroteFallback := false
+				if !upstreamErrorAlreadyCommunicated {
+					wroteFallback = h.ensureOpenAIStreamReadErrorResponse(c, err, streamStarted)
+					if !wroteFallback {
+						wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					}
+				}
+				reqLog.Warn("openai_chat_completions.forward_failed_after_provider_response",
+					zap.Int64("account_id", account.ID),
+					zap.Bool("fallback_error_response_written", wroteFallback),
+					zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
+					zap.Error(err),
+				)
+				return
+			}
+			if result != nil && (result.ImageCount > 0 || (result.CaptureTerminalError && !result.UpstreamFailed)) {
 				reqLog.Warn("openai_chat_completions.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
 					zap.Int("image_count", result.ImageCount),
@@ -342,7 +361,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), true, nil)
 		}

@@ -30,7 +30,7 @@ func buildKiroCaptureHeaders(resp *http.Response) kiroCaptureHeaders {
 	if resp.Request != nil {
 		h.RequestHeaders = redactHTTPHeader(resp.Request.Header)
 		if resp.Request.URL != nil {
-			h.UpstreamEndpoint = resp.Request.URL.String()
+			h.UpstreamEndpoint = redactCaptureURL(resp.Request.URL)
 		}
 	}
 	h.ResponseHeaders = redactHTTPHeader(resp.Header)
@@ -83,7 +83,11 @@ func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
 		}
 	}
 	if result.CaptureContentPolicy == nil {
-		if content, enabled := CaptureDecisionFor(c, PlatformKiro, CaptureOutcomeSuccess); enabled {
+		outcome := CaptureOutcomeSuccess
+		if result.UpstreamFailed || result.CaptureTerminalError {
+			outcome = CaptureOutcomeTerminalError
+		}
+		if content, enabled := CaptureDecisionFor(c, PlatformKiro, outcome); enabled {
 			result.CaptureContentPolicy = &content
 		}
 	}

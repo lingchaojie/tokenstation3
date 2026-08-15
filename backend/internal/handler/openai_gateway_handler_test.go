@@ -1832,6 +1832,10 @@ type openAIWSFailoverHandlerAccountRepoStub struct {
 	rateLimitedIDs []int64
 }
 
+func (r *openAIWSFailoverHandlerAccountRepoStub) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
+	return nil
+}
+
 type openAIHTTPPassthroughFailoverUpstream struct {
 	service.HTTPUpstream
 	mu         sync.Mutex

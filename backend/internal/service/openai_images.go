@@ -1012,7 +1012,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		line []byte
 		err  error
 	}
-	events := make(chan readEvent, 16)
+	events := make(chan readEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
 	sendEvent := func(ev readEvent) bool {
 		select {

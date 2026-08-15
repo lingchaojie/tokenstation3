@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -70,11 +71,17 @@ func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *te
 		`event: message_start`,
 		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-latest","content":[],"usage":{"input_tokens":11,"cache_read_input_tokens":7}}}`,
 		"",
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"",
 		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
 		"",
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
 		`event: message_delta`,
-		`data: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
 		"",
 		"",
 	}, "\n") + "\n"
@@ -112,7 +119,7 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 	require.NoError(t, err)
-	upstreamSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+	upstreamSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_semantic\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}}
 	svc := newForwardPartialUsageServiceForTest(upstream)
 
@@ -133,7 +140,7 @@ func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalIsCleanFailover(
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 	require.NoError(t, err)
-	upstreamSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\n"
+	upstreamSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_preamble\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\n"
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}}
 	svc := newForwardPartialUsageServiceForTest(upstream)
 
@@ -153,12 +160,13 @@ func TestGatewayService_Forward_SSEErrorUsesSemanticCommitBoundary(t *testing.T)
 	}{
 		{
 			name: "preamble only",
-			upstream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n" +
+			upstream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_error_pre\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n" +
 				"event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n",
 		},
 		{
 			name: "semantic text with zero usage",
-			upstream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{}}}\n\n" +
+			upstream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_error_post\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{}}}\n\n" +
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"visible\"}}\n\n" +
 				"event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n",
 			committed: true,
@@ -221,7 +229,8 @@ func TestGatewayService_Forward_StreamReadErrorAfterOutputPreservesPartialUsage(
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: &streamReadCloser{
-			payload: []byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":4}}}\n\n" +
+			payload: []byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_error\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9,\"cache_creation_input_tokens\":4}}}\n\n" +
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"visible\"}}\n\n"),
 			err: io.ErrUnexpectedEOF,
 		},
@@ -313,11 +322,15 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	}
 
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":9,"cache_read_input_tokens":2}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_partial","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":2}}}`,
 		"",
-		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 		"",
-		`data: {"type":"message_delta","usage":{"output_tokens":3}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		"",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
 		"",
 	}, "\n") + "\n"
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
@@ -353,7 +366,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTer
 	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":9}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_preamble","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9}}}`,
 		"",
 		`event: ping`,
 		`data: {"type":"ping"}`,
@@ -371,8 +384,9 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTer
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, -1, c.Writer.Size())
 	require.Empty(t, recorder.Body.String())
-	_, captured := takeCaptureResult(c)
-	require.False(t, captured, "a retryable preamble-only attempt must not publish capture")
+	bridge, captured := takeCaptureResult(c)
+	require.True(t, captured, "the final-account sink needs the observed HTTP 200 exchange")
+	require.Equal(t, []byte(upstreamSSE), bridge.Response)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageErrorPreservesPartialAndCapture(t *testing.T) {
@@ -384,9 +398,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageE
 	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":0}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_zero","type":"message","role":"assistant","content":[],"usage":{"input_tokens":0}}}`,
 		"",
-		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"visible"}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"visible"}}`,
 		"",
 		`event: error`,
 		`data: {"type":"error","error":{"type":"overloaded_error","message":"boom"}}`,
@@ -409,4 +425,80 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageE
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Equal(t, upstreamSSE, recorder.Body.String(), "committed raw Anthropic SSE, including event:error, must pass through unchanged")
 	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+}
+
+func TestGatewayService_Forward_PreSemanticReadErrorReturnsTerminalCaptureOnlyResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-5-sonnet-latest", Stream: true}
+	providerPrefix := []byte(": provider-preamble\n\n")
+	forcedErr := errors.New("forced provider read failure before semantic output")
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"presemantic-read-error"}},
+		Body:       &streamReadCloser{payload: providerPrefix, err: forcedErr},
+	}}
+
+	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+
+	require.Nil(t, result, "pre-semantic read failures remain eligible for account failover")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok, "the final-account sink still needs the observed provider exchange")
+	require.Equal(t, providerPrefix, bridge.Response)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsRemainFailoverableWithFinalAttemptBridge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	forcedErr := errors.New("forced compatibility provider read failure")
+	tests := []struct {
+		name      string
+		responses bool
+		stream    bool
+		body      []byte
+	}{
+		{name: "chat_stream_presemantic", stream: true, body: []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)},
+		{name: "responses_stream_presemantic", responses: true, stream: true, body: []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"input":"hello"}`)},
+		{name: "chat_buffered", body: []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)},
+		{name: "responses_buffered", responses: true, body: []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"input":"hello"}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/compat", bytes.NewReader(tt.body))
+			enableCaptureForTest(t, c)
+			providerPrefix := []byte(": provider-preamble\n\n")
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"compat-read-error"}},
+				Body:       &streamReadCloser{payload: providerPrefix, err: forcedErr},
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			account := newAnthropicOAuthAccountForPartialUsageTest()
+			parsed := &ParsedRequest{Body: NewRequestBodyRef(tt.body), Model: "claude-3-5-sonnet-latest", Stream: tt.stream}
+
+			var result *ForwardResult
+			var err error
+			if tt.responses {
+				result, err = svc.ForwardAsResponses(context.Background(), c, account, tt.body, parsed)
+			} else {
+				result, err = svc.ForwardAsChatCompletions(context.Background(), c, account, tt.body, parsed)
+			}
+
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.Nil(t, result, "pre-semantic failures must not submit or bill an intermediate account")
+			bridge, ok := takeCaptureResult(c)
+			require.True(t, ok)
+			require.Equal(t, providerPrefix, bridge.Response)
+		})
+	}
 }

@@ -3,18 +3,82 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type repeatedCaptureByteReader struct {
+	remaining int64
+	value     byte
+}
+
+type repeatedCapturePatternReader struct {
+	remaining int64
+	pattern   []byte
+	offset    int
+}
+
+func (r *repeatedCapturePatternReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	for i := range p {
+		p[i] = r.pattern[r.offset]
+		r.offset = (r.offset + 1) % len(r.pattern)
+	}
+	r.remaining -= int64(len(p))
+	return len(p), nil
+}
+
+func (r *repeatedCaptureByteReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	for i := range p {
+		p[i] = r.value
+	}
+	r.remaining -= int64(len(p))
+	return len(p), nil
+}
+
+func largeCaptureMetadataBody(size int64) io.Reader {
+	return io.MultiReader(
+		strings.NewReader(`{"padding":"`),
+		&repeatedCaptureByteReader{remaining: size, value: 'x'},
+		strings.NewReader(`","model":"mapped-tail-model","stream":true}`),
+	)
+}
+
+func denseCaptureMetadataBody(size int64) io.Reader {
+	return io.MultiReader(
+		strings.NewReader(`{"junk":[`),
+		&repeatedCapturePatternReader{remaining: size, pattern: []byte("0,")},
+		strings.NewReader(`0],"model":"mapped-tail-model","stream":true}`),
+	)
+}
 
 type delayedTranslatorSource struct {
 	readStarted  chan struct{}
@@ -23,6 +87,54 @@ type delayedTranslatorSource struct {
 	startOnce    sync.Once
 	closeOnce    sync.Once
 	returnOnce   sync.Once
+}
+
+type closeReleasedCaptureReader struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+type dataAndErrorCaptureBody struct {
+	payload []byte
+	err     error
+	done    bool
+}
+
+func (r *dataAndErrorCaptureBody) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.payload), r.err
+}
+
+func (*dataAndErrorCaptureBody) Close() error { return nil }
+
+func TestSnapshotHTTPRequestBodyForCaptureRestoresPrefixWhenReadReturnsDataAndError(t *testing.T) {
+	payload := []byte(`{"model":"provider-final","input":"must-not-disappear"}`)
+	sentinel := errors.New("forced request body read failure")
+	req := httptest.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+	req.Body = &dataAndErrorCaptureBody{payload: payload, err: sentinel}
+	req.GetBody = nil
+
+	captured, truncated, hash, _, _, _ := snapshotHTTPRequestBodyForCapture(req, 1<<20)
+	require.Nil(t, captured, "failed snapshots must not be archived as complete requests")
+	require.False(t, truncated)
+	require.Empty(t, hash)
+
+	replayed, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, payload, replayed, "capture observation must not consume bytes before the real provider transport")
+}
+
+func (r *closeReleasedCaptureReader) Read(p []byte) (int, error) {
+	<-r.closed
+	return copy(p, []byte("tail-before-scanner-exit\n")), io.EOF
+}
+
+func (r *closeReleasedCaptureReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
 }
 
 func newDelayedTranslatorSource() *delayedTranslatorSource {
@@ -105,6 +217,56 @@ func TestCaptureBridgeIsTakenOnce(t *testing.T) {
 	}
 }
 
+func TestFailedForwardCaptureUsesTerminalOutcomePolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		failed          bool
+		terminalCapture bool
+		wantPolicy      bool
+	}{
+		{name: "success excluded", failed: false, wantPolicy: false},
+		{name: "terminal included", failed: true, wantPolicy: true},
+		{name: "billable partial uses terminal outcome", terminalCapture: true, wantPolicy: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			policy.Platforms.Anthropic = true
+			policy.Outcomes.Success = false
+			policy.Outcomes.TerminalError = true
+			compiled, err := CompileCaptureRuntimePolicy(policy)
+			require.NoError(t, err)
+			setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+			setCapturePlatform(c, PlatformAnthropic)
+			setCaptureResult(c, &http.Response{StatusCode: http.StatusOK}, []byte(`{"provider":"body"}`), false)
+
+			result := attachCaptureToForwardResult(c, &ForwardResult{UpstreamFailed: tt.failed, CaptureTerminalError: tt.terminalCapture})
+			require.NotNil(t, result.CaptureResponse)
+			require.Equal(t, tt.wantPolicy, result.CaptureContentPolicy != nil)
+		})
+	}
+}
+
+func TestFailedOpenAIHTTPCaptureUsesTerminalOutcomePolicy(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	setCapturePlatform(c, PlatformOpenAI)
+	setCaptureResult(c, &http.Response{StatusCode: http.StatusOK}, []byte(`{"provider":"body"}`), false)
+
+	result := attachCaptureToOpenAIForwardResult(c, &OpenAIForwardResult{UpstreamFailed: true})
+	require.NotNil(t, result.CaptureResponse)
+	require.NotNil(t, result.CaptureContentPolicy)
+}
+
 func TestCaptureBridgeAttemptIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -131,6 +293,124 @@ func TestCaptureBridgeAttemptIsolation(t *testing.T) {
 	if len(reused.CaptureResponse) != 0 {
 		t.Fatalf("reused context leaked capture: %q", reused.CaptureResponse)
 	}
+}
+
+func TestCaptureResponseRequestMetadataOverridesPreTransportFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	enableCaptureForTest(t, c)
+	initial := httptest.NewRequest(http.MethodPost, "https://cli-chat-proxy.example/v1/responses", nil)
+	initial.Header.Set("X-XAI-Token-Auth", "cli-secret")
+	setCapturePlatform(c, PlatformOpenAI)
+	SetCaptureOutboundRequest(c, initial, []byte(`{"model":"initial-model","stream":true}`), 1024)
+	finalBody := []byte(`{"model":"final-model","stream":false}`)
+	final, err := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", bytes.NewReader(finalBody))
+	require.NoError(t, err)
+	final.Header.Set("Accept", "application/json")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": {"official-response"}},
+		Request:    final,
+	}
+	setCaptureResult(c, resp, []byte(`{"ok":true}`), false)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, final.URL.String(), bridge.UpstreamEndpoint)
+	require.Contains(t, string(bridge.RequestHeaders), "Accept")
+	require.NotContains(t, string(bridge.RequestHeaders), "X-Xai-Token-Auth")
+	require.Equal(t, finalBody, bridge.UpstreamRequest)
+	require.Equal(t, "final-model", bridge.UpstreamModel)
+	require.True(t, bridge.UpstreamStreamKnown)
+	require.False(t, bridge.UpstreamStream)
+	require.Equal(t, []byte(`{"ok":true}`), bridge.Response)
+}
+
+func TestCaptureResponseReplacementKeepsTailMetadataBeyondRawLimit(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	enableCaptureForTest(t, c)
+	setCapturePlatform(c, PlatformOpenAI)
+	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/initial", nil)
+	SetCaptureOutboundRequest(c, initial, []byte(`{"model":"initial-model","stream":true}`), captureHardMaxBodyBytes)
+
+	endpoint, err := url.Parse("https://provider.example/final")
+	require.NoError(t, err)
+	final := &http.Request{Method: http.MethodPost, URL: endpoint, Header: make(http.Header), Body: http.NoBody}
+	final.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(largeCaptureMetadataBody(16 << 20)), nil }
+	setCaptureResult(c, &http.Response{StatusCode: http.StatusOK, Request: final}, []byte(`{"ok":true}`), false)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Len(t, bridge.UpstreamRequest, captureHardMaxBodyBytes)
+	require.True(t, bridge.RequestTruncated)
+	require.Equal(t, "mapped-tail-model", bridge.UpstreamModel)
+	require.True(t, bridge.UpstreamStreamKnown)
+	require.True(t, bridge.UpstreamStream)
+}
+
+func TestCaptureResponseRedirectReplacesInitialPOSTBodyWithFinalEmptyGET(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	enableCaptureForTest(t, c)
+	setCapturePlatform(c, PlatformOpenAI)
+	initialBody := []byte(`{"model":"initial-model","stream":true}`)
+	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/start", bytes.NewReader(initialBody))
+	SetCaptureOutboundRequest(c, initial, initialBody, 1024)
+	final := httptest.NewRequest(http.MethodGet, "https://provider.example/final", nil)
+	resp := &http.Response{StatusCode: http.StatusOK, Request: final}
+
+	setCaptureResult(c, resp, []byte(`{"ok":true}`), false)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, final.URL.String(), bridge.UpstreamEndpoint)
+	require.NotNil(t, bridge.UpstreamRequest)
+	require.Empty(t, bridge.UpstreamRequest)
+	require.Equal(t, HashUsageRequestPayload(nil), bridge.UpstreamRequestHash)
+	require.Empty(t, bridge.UpstreamModel)
+	require.False(t, bridge.UpstreamStreamKnown)
+}
+
+func TestSetCaptureUpstreamRequestRedirectReplacesInitialPOSTBodyWithFinalEmptyGET(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	initialBody := []byte(`{"initial":"post"}`)
+	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/start", bytes.NewReader(initialBody))
+	setCaptureUpstreamRequest(c, initial, 1024)
+	final := httptest.NewRequest(http.MethodGet, "https://provider.example/final", nil)
+
+	setCaptureResult(c, &http.Response{StatusCode: http.StatusOK, Request: final}, []byte(`{"ok":true}`), false)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.NotNil(t, bridge.UpstreamRequest)
+	require.Empty(t, bridge.UpstreamRequest)
+	require.Equal(t, final.URL.String(), bridge.UpstreamEndpoint)
+}
+
+func TestCompletedRequestSnapshotDoesNotInventEmptyBodyForUnknownLengthReader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://provider.example/final", nil)
+	req.Body = io.NopCloser(strings.NewReader("real-final-body"))
+	req.GetBody = nil
+	req.ContentLength = 0
+
+	body, truncated, hash, observed, _, _, _ := snapshotCompletedHTTPRequestBodyForCapture(req, 1024)
+	require.False(t, observed)
+	require.Nil(t, body)
+	require.False(t, truncated)
+	require.Empty(t, hash)
+}
+
+func TestUnobservableReplacementRequestFailsCaptureClosed(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	initialBody := []byte(`{"initial":"post"}`)
+	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/start", bytes.NewReader(initialBody))
+	setCaptureUpstreamRequest(c, initial, 1024)
+	final := httptest.NewRequest(http.MethodPost, "https://provider.example/final", nil)
+	final.Body = io.NopCloser(strings.NewReader("unknown-final-body"))
+	final.GetBody = nil
+	final.ContentLength = 0
+	setCaptureResult(c, &http.Response{StatusCode: http.StatusOK, Request: final}, []byte(`{"ok":true}`), false)
+
+	result := attachCaptureToForwardResult(c, &ForwardResult{})
+	require.Nil(t, result.CaptureResponse, "an unobservable replacement request must not be paired with stale pre-redirect bytes")
+	require.Nil(t, result.CaptureRequest)
 }
 
 func TestCapturePolicyMissDoesNotCreateAttemptSlot(t *testing.T) {
@@ -230,6 +510,23 @@ func TestBuildTerminalErrorCaptureRecordSkipsLocalOrDisabledOutcomes(t *testing.
 	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, 1024))
 }
 
+func TestBuildTerminalErrorCaptureRecordRequiresObservedProviderRequest(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	c.Set("parsed_request", &ParsedRequest{Model: "client-model", Body: NewRequestBodyRef([]byte(`{"model":"inbound-compat"}`))})
+
+	require.Nil(t, BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, &UpstreamFailoverError{
+		StatusCode:              http.StatusBadGateway,
+		ResponseBody:            []byte(`{"error":"provider"}`),
+		UpstreamEndpoint:        "https://provider.example/v1/messages",
+		HasUpstreamHTTPResponse: true,
+	}, 1024), "an inbound compatibility body must never be labeled as the exact provider request")
+}
+
 func TestBuildTerminalErrorCaptureRecordRejectsSyntheticTransportFailure(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	policy := DefaultCaptureRuntimePolicy()
@@ -293,6 +590,257 @@ func TestBuildTerminalErrorCaptureRecordKeepsRequestedAndMappedModels(t *testing
 	require.Equal(t, "mapped-provider-model", rec.UpstreamModel)
 }
 
+func TestExtractCaptureProviderRequestMetaUsesFinalProviderShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		platform   string
+		body       string
+		endpoint   string
+		wantModel  string
+		wantStream bool
+	}{
+		{
+			name:       "kiro nested runtime envelope",
+			platform:   PlatformKiro,
+			body:       `{"conversationState":{"currentMessage":{"userInputMessage":{"modelId":"kiro-mapped-model"}}}}`,
+			endpoint:   "https://q.example.amazonaws.com/generateAssistantResponse",
+			wantModel:  "kiro-mapped-model",
+			wantStream: true,
+		},
+		{
+			name:       "gemini model and action in endpoint",
+			platform:   PlatformGemini,
+			body:       `{"contents":[]}`,
+			endpoint:   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+			wantModel:  "gemini-2.5-pro",
+			wantStream: true,
+		},
+		{
+			name:       "antigravity wrapper forces provider stream",
+			platform:   PlatformAntigravity,
+			body:       `{"model":"claude-sonnet-4-5","request":{"contents":[]}}`,
+			endpoint:   "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
+			wantModel:  "claude-sonnet-4-5",
+			wantStream: true,
+		},
+		{
+			name:       "bedrock model and action in endpoint",
+			platform:   PlatformAnthropic,
+			body:       `{"anthropic_version":"bedrock-2023-05-31"}`,
+			endpoint:   "https://bedrock-runtime.example/model/anthropic.claude-3-7-sonnet/invoke-with-response-stream",
+			wantModel:  "anthropic.claude-3-7-sonnet",
+			wantStream: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model, stream, streamKnown := extractCaptureProviderRequestMeta(tt.platform, []byte(tt.body), tt.endpoint)
+			require.Equal(t, tt.wantModel, model)
+			require.True(t, streamKnown)
+			require.Equal(t, tt.wantStream, stream)
+		})
+	}
+}
+
+func TestTerminalCaptureKeepsOutboundMetaBeyondRawRequestLimit(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	setCapturePlatform(c, PlatformAnthropic)
+	SetCaptureRequestedModel(c, "client-model")
+
+	body := []byte(`{"padding":"` + strings.Repeat("x", captureHardMaxBodyBytes) + `","model":"mapped-tail-model","stream":true}`)
+	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", bytes.NewReader(body))
+	require.NoError(t, err)
+	SetCaptureOutboundRequest(c, req, body, captureHardMaxBodyBytes)
+	rec := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, &UpstreamFailoverError{
+		StatusCode:              http.StatusBadGateway,
+		ResponseBody:            []byte(`{"error":"provider"}`),
+		UpstreamEndpoint:        req.URL.String(),
+		HasUpstreamHTTPResponse: true,
+	}, captureHardMaxBodyBytes)
+	require.NotNil(t, rec)
+	require.Len(t, rec.RawRequest, captureHardMaxBodyBytes)
+	require.True(t, rec.Truncated)
+	require.Equal(t, "mapped-tail-model", rec.UpstreamModel)
+	require.True(t, rec.Stream)
+}
+
+func TestSetCaptureUpstreamRequestKeepsMetaBeyondRawRequestLimit(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	beginCaptureAttempt(c)
+	setCapturePlatform(c, PlatformAnthropic)
+	const paddingSize = 16 << 20
+	endpoint, err := url.Parse("https://api.anthropic.test/v1/messages")
+	require.NoError(t, err)
+	req := &http.Request{Method: http.MethodPost, URL: endpoint, Header: make(http.Header), Body: http.NoBody}
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(largeCaptureMetadataBody(paddingSize)), nil }
+	hasher := sha256.New()
+	_, err = io.Copy(hasher, largeCaptureMetadataBody(paddingSize))
+	require.NoError(t, err)
+	wantHash := hex.EncodeToString(hasher.Sum(nil))
+
+	setCaptureUpstreamRequest(c, req, captureHardMaxBodyBytes)
+	bridge, ok := takeCaptureResult(c)
+
+	require.True(t, ok)
+	require.Len(t, bridge.UpstreamRequest, captureHardMaxBodyBytes)
+	require.True(t, bridge.RequestTruncated)
+	require.Equal(t, wantHash, bridge.UpstreamRequestHash)
+	require.Equal(t, "mapped-tail-model", bridge.UpstreamModel)
+	require.True(t, bridge.UpstreamStreamKnown)
+	require.True(t, bridge.UpstreamStream)
+}
+
+func TestCaptureMetadataReaderSkipsHugeUnrelatedStringWithoutBodySizedAllocation(t *testing.T) {
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	model, stream, known, err := extractCaptureProviderRequestMetaFromReader(largeCaptureMetadataBody(16 << 20))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Equal(t, "mapped-tail-model", model)
+	require.True(t, known)
+	require.True(t, stream)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
+
+func TestCaptureMetadataReaderSkipsDenseArrayWithoutPerElementAllocation(t *testing.T) {
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	model, stream, known, err := extractCaptureProviderRequestMetaFromReader(denseCaptureMetadataBody(16 << 20))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Equal(t, "mapped-tail-model", model)
+	require.True(t, known)
+	require.True(t, stream)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
+
+func TestCaptureResponseSignatureScanSkipsDenseArrayWithoutPerElementAllocation(t *testing.T) {
+	prefix := []byte(`{"signature":null,"dense":[`)
+	suffix := []byte(`0]}`)
+	repeat := (captureHardMaxBodyBytes - len(prefix) - len(suffix)) / 2
+	body := make([]byte, 0, captureHardMaxBodyBytes)
+	body = append(body, prefix...)
+	body = append(body, strings.Repeat("0,", repeat)...)
+	body = append(body, suffix...)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	cols := extractResponseColumns(body, false)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, cols.SignaturePresent)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
+
+func TestCaptureResponseColumnsExtractExactHardLimitSSELine(t *testing.T) {
+	prefix := []byte(`data: {"response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}},"padding":"`)
+	suffix := []byte(`"}`)
+	body := make([]byte, 0, captureHardMaxBodyBytes)
+	body = append(body, prefix...)
+	body = append(body, strings.Repeat("x", captureHardMaxBodyBytes-len(prefix)-len(suffix))...)
+	body = append(body, suffix...)
+	require.Len(t, body, captureHardMaxBodyBytes)
+
+	cols := extractResponseColumnsForPlatform(body, true, PlatformOpenAI)
+	require.True(t, cols.stopReasonPresent)
+	require.Equal(t, "completed", cols.StopReason)
+	require.True(t, cols.inputTokensPresent)
+	require.Equal(t, 3, cols.InputTokens)
+	require.True(t, cols.outputTokensPresent)
+	require.Equal(t, 2, cols.OutputTokens)
+}
+
+func TestCaptureResponseColumnsExtractNestedOpenAIUsageAliases(t *testing.T) {
+	payload := []byte(`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"prompt_tokens":13,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4,"cache_creation_tokens":3}}}}`)
+	cols := extractResponseColumnsForPlatform(payload, true, PlatformOpenAI)
+
+	require.True(t, cols.stopReasonPresent)
+	require.Equal(t, "completed", cols.StopReason)
+	require.True(t, cols.inputTokensPresent)
+	require.Equal(t, 13, cols.InputTokens)
+	require.True(t, cols.outputTokensPresent)
+	require.Equal(t, 7, cols.OutputTokens)
+	require.True(t, cols.cacheReadPresent)
+	require.Equal(t, 4, cols.CacheReadTokens)
+	require.True(t, cols.cacheCreatePresent)
+	require.Equal(t, 3, cols.CacheCreationTokens)
+}
+
+func TestCaptureResponseColumnsExtractGeminiOutputIncludingThoughtTokens(t *testing.T) {
+	for name, payload := range map[string][]byte{
+		"root":   []byte(`{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":50}}`),
+		"nested": []byte(`{"response":{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":50}}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cols := extractResponseColumnsForPlatform(payload, false, PlatformGemini)
+			require.True(t, cols.outputTokensPresent)
+			require.Equal(t, 70, cols.OutputTokens)
+		})
+	}
+}
+
+func TestCaptureResponseStopReasonScanSkipsDenseArraysWithoutPerElementAllocation(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		item   string
+		suffix string
+	}{
+		{
+			name:   "openai choices",
+			prefix: `{"choices":[`,
+			item:   `{"finish_reason":"stop"},`,
+			suffix: `{"finish_reason":"final"}]}`,
+		},
+		{
+			name:   "gemini candidates",
+			prefix: `{"candidates":[`,
+			item:   `{"finishReason":"STOP"},`,
+			suffix: `{"finishReason":"FINAL"}]}`,
+		},
+		{
+			name:   "nested gemini candidates",
+			prefix: `{"response":{"candidates":[`,
+			item:   `{"finishReason":"STOP"},`,
+			suffix: `{"finishReason":"FINAL"}]}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repeat := (captureHardMaxBodyBytes - len(tt.prefix) - len(tt.suffix)) / len(tt.item)
+			body := []byte(tt.prefix + strings.Repeat(tt.item, repeat) + tt.suffix)
+
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			cols := extractResponseColumns(body, false)
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+
+			require.True(t, cols.stopReasonPresent)
+			require.Equal(t, "final", strings.ToLower(cols.StopReason))
+			// gjson.GetBytes makes at most one body-sized copy for array
+			// iteration. The guard is deliberately above that bounded copy but
+			// far below the former per-element projection (180+ MiB here).
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+		})
+	}
+}
+
 func TestBuildTerminalErrorCaptureRecordAllowsEmptyHTTPErrorBody(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	policy := DefaultCaptureRuntimePolicy()
@@ -311,6 +859,33 @@ func TestBuildTerminalErrorCaptureRecordAllowsEmptyHTTPErrorBody(t *testing.T) {
 	require.NotNil(t, rec)
 	require.Empty(t, rec.RawResponse)
 	require.Equal(t, http.StatusBadGateway, rec.HTTPStatus)
+}
+
+func TestBuildTerminalErrorCaptureRecordUsesObservedEmptyProviderResponse(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.antigravity.test/v1/messages", nil)
+	SetCaptureOutboundRequest(c, req, []byte(`{"model":"claude"}`), 1024)
+	setCaptureResult(c, &http.Response{
+		StatusCode: http.StatusUnprocessableEntity,
+		Header:     http.Header{"X-Request-Id": []string{"provider-empty"}},
+		Request:    req,
+	}, []byte{}, false)
+
+	rec := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, &UpstreamFailoverError{
+		StatusCode:              http.StatusInternalServerError,
+		ResponseHeaders:         http.Header{"X-Request-Id": []string{"mapped-client-status"}},
+		UpstreamEndpoint:        req.URL.String(),
+		HasUpstreamHTTPResponse: true,
+	}, 1024)
+	require.NotNil(t, rec)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.HTTPStatus)
+	require.Equal(t, "provider-empty", rec.RequestID)
+	require.Empty(t, rec.RawResponse)
 }
 
 func TestSnapshotBytesCopiesInput(t *testing.T) {
@@ -372,6 +947,92 @@ func TestKiroTranslatedStreamCloseJoinsTranslator(t *testing.T) {
 	require.False(t, returnedBeforeTranslator, "Close returned while the translator could still publish stale capture state")
 }
 
+func TestKiroTranslatedStreamClosePublishesAfterRawReaderExit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	SetCaptureOutboundRequest(c, c.Request, []byte(`{"model":"kiro"}`), 1024)
+
+	raw := &closeReleasedCaptureReader{closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: raw, Request: c.Request}
+	_ = beginCaptureResponse(c, resp, true, 1024)
+	pipeReader, pipeWriter := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(pipeWriter, resp.Body)
+		_ = resp.Body.Close()
+		_ = pipeWriter.Close()
+	}()
+
+	body := &kiroTranslatedStreamBody{PipeReader: pipeReader, raw: resp.Body, done: done}
+	require.NoError(t, body.Close())
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, []byte("tail-before-scanner-exit\n"), bridge.Response)
+}
+
+func TestCloseCaptureResponseJoinsScannerBeforePublishing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	SetCaptureOutboundRequest(c, c.Request, []byte(`{"model":"test"}`), 1024)
+
+	raw := &closeReleasedCaptureReader{closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: raw, Request: c.Request}
+	_ = beginCaptureResponse(c, resp, true, 1024)
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		_, _ = io.ReadAll(resp.Body)
+	}()
+
+	closeCaptureResponseAndJoinScanner(resp, scanDone)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, []byte("tail-before-scanner-exit\n"), bridge.Response)
+	require.NoError(t, resp.Body.Close(), "the public close remains idempotent after scanner ownership releases it")
+}
+
+func TestGrokNestedTranslatorsJoinBeforePublishingRawCapture(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	account := &Account{Platform: PlatformGrok}
+	// The runtime policy helper above enables OpenAI; use the provider platform
+	// that the real Grok route supplies as well.
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.Grok = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, req, []byte(`{"model":"grok"}`)))
+
+	raw := &closeReleasedCaptureReader{closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: raw, Request: req}
+	svc.wrapOpenAIHTTPCaptureResponse(c, account, resp)
+	resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, defaultMaxLineSize)
+	resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, apicompat.ResponsesClientToolMapping{
+		CustomTools: map[string]bool{"apply_patch": true},
+	}, defaultMaxLineSize)
+
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		_, _ = io.ReadAll(resp.Body)
+	}()
+	closeCaptureResponseAndJoinScanner(resp, scanDone)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, []byte("tail-before-scanner-exit\n"), bridge.Response)
+}
+
 func TestExtractSessionIDFromMetadataUserID(t *testing.T) {
 	body := []byte(`{"model":"claude","metadata":{"user_id":"{\"device_id\":\"d\",\"session_id\":\"11111111-1111-1111-1111-111111111111\"}"}}`)
 	if got := extractCaptureSessionID(body); got != "11111111-1111-1111-1111-111111111111" {
@@ -406,6 +1067,133 @@ func TestNonStreamingCaptureRespectsFlag(t *testing.T) {
 	body[0] = 'X'
 	if got[0] == 'X' {
 		t.Fatal("must be independent copy")
+	}
+}
+
+func TestCaptureEndpointRedactsURLCredentialsAndSensitiveQuery(t *testing.T) {
+	raw := "https://user:password@provider.example/v1/models/model:stream?key=api-secret&access_token=token-secret&proxy=http%3A%2F%2Fproxy-user%3Aproxy-pass%40proxy.example%3A8080&region=us-east-1#private"
+	redacted := redactCaptureEndpoint(raw)
+
+	require.Contains(t, redacted, "provider.example/v1/models/model:stream")
+	require.Contains(t, redacted, "region=us-east-1")
+	require.NotContains(t, redacted, "user")
+	require.NotContains(t, redacted, "password")
+	require.NotContains(t, redacted, "api-secret")
+	require.NotContains(t, redacted, "token-secret")
+	require.NotContains(t, redacted, "proxy-user")
+	require.NotContains(t, redacted, "proxy-pass")
+	require.NotContains(t, redacted, "private")
+	require.Contains(t, redacted, "key=%5BREDACTED%5D")
+	require.Contains(t, redacted, "proxy=%5BREDACTED%5D")
+}
+
+func TestCaptureEndpointRedactsCommonCompoundCredentialKeys(t *testing.T) {
+	raw := "https://provider.example/v1?x-api-key=one&api_token=two&refresh_token=three&id_token=four&x-auth-token=five&client-signature=six&serviceCredential=seven&webhookSecret=eight&hmacSignature=nine&bearerToken=ten&authentication=eleven&code=twelve&authorization_code=thirteen&sig=fourteen&sas=fifteen&request-id=keep-request&status_code=keep-status&monkey=keep-monkey"
+	redacted := redactCaptureEndpoint(raw)
+	for _, secret := range []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"} {
+		require.NotContains(t, redacted, secret)
+	}
+	require.Contains(t, redacted, "request-id=keep-request")
+	require.Contains(t, redacted, "status_code=keep-status")
+	require.Contains(t, redacted, "monkey=keep-monkey")
+}
+
+func TestCaptureEndpointMalformedURLStillDropsUserInfoAndQuery(t *testing.T) {
+	redacted := redactCaptureEndpoint("https://user:password@provider.example/%zz?x-api-key=secret#fragment")
+	require.Equal(t, "https://provider.example/%zz", redacted)
+	require.NotContains(t, redacted, "user")
+	require.NotContains(t, redacted, "password")
+	require.NotContains(t, redacted, "secret")
+}
+
+func TestCaptureHeadersRedactCustomRelayCredentials(t *testing.T) {
+	raw := redactHTTPHeader(http.Header{
+		"X-Relay-Key":                  {"relay-secret"},
+		"X-Auth-Token":                 {"auth-secret"},
+		"X-Custom-Secret":              {"custom-secret"},
+		"X-ApiKey":                     {"api-key-secret"},
+		"ApiToken":                     {"api-token-secret"},
+		"AccessToken":                  {"access-token-secret"},
+		"ClientSecret":                 {"client-secret"},
+		"ClientSignature":              {"client-signature-secret"},
+		"X-CredentialSignature":        {"credential-signature-secret"},
+		"X-ServiceCredential":          {"service-credential-secret"},
+		"X-WebhookSecret":              {"webhook-secret"},
+		"X-HmacSignature":              {"hmac-signature-secret"},
+		"X-BearerToken":                {"bearer-token-secret"},
+		"X-Authentication":             {"authentication-secret"},
+		"Authentication-Info":          {"authentication-info-secret"},
+		"X-Request-Id-Secret":          {"mixed-request-secret"},
+		"X-RateLimit-AuthToken":        {"mixed-ratelimit-token"},
+		"Anthropic-Version-Credential": {"mixed-version-credential"},
+		"X-Request-Id":                 {"request-kept"},
+		"X-Ratelimit-Limit":            {"100"},
+		"Anthropic-Version":            {"2023-06-01"},
+	})
+	text := string(raw)
+	for _, secret := range []string{
+		"relay-secret", "auth-secret", "custom-secret", "api-key-secret", "api-token-secret",
+		"access-token-secret", "client-secret", "client-signature-secret", "credential-signature-secret",
+		"service-credential-secret", "webhook-secret", "hmac-signature-secret", "bearer-token-secret",
+		"authentication-secret", "authentication-info-secret",
+		"mixed-request-secret", "mixed-ratelimit-token", "mixed-version-credential",
+	} {
+		require.NotContains(t, text, secret)
+	}
+	require.Contains(t, text, "request-kept")
+	require.Contains(t, text, "100")
+	require.Contains(t, text, "2023-06-01")
+}
+
+func TestCaptureBridgeAlwaysStoresRedactedEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	enableCaptureForTest(t, c)
+
+	req := httptest.NewRequest(http.MethodPost, "https://u:p@provider.example/v1/messages?api_key=secret&diagnostic=kept", strings.NewReader(`{}`))
+	SetCaptureOutboundRequest(c, req, []byte(`{}`), 1024)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody, Request: req}
+	setCaptureResult(c, resp, nil, false)
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, "https://provider.example/v1/messages?api_key=%5BREDACTED%5D&diagnostic=kept", bridge.UpstreamEndpoint)
+}
+
+func TestAttachCaptureResultUsesFinalProviderRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		header string
+		value  string
+		openAI bool
+	}{
+		{name: "gemini", header: "X-Goog-Request-Id", value: "goog-final"},
+		{name: "grok", header: "Xai-Request-Id", value: "xai-final", openAI: true},
+		{name: "kiro", header: "X-Amzn-Requestid", value: "aws-final"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			enableCaptureForTest(t, c)
+			setCapturePlatform(c, PlatformAnthropic)
+			requestBody := []byte(`{"model":"provider-final","stream":true}`)
+			req := httptest.NewRequest(http.MethodPost, "https://provider.example/v1/messages", bytes.NewReader(requestBody))
+			SetCaptureOutboundRequest(c, req, requestBody, 1024)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{tc.header: []string{tc.value}}, Body: http.NoBody, Request: req}
+			setCaptureResult(c, resp, []byte(`{}`), false)
+
+			if tc.openAI {
+				result := attachCaptureToOpenAIForwardResult(c, &OpenAIForwardResult{RequestID: "stale", UpstreamModel: "business-initial", Stream: false})
+				require.Equal(t, tc.value, result.RequestID)
+				require.Equal(t, "provider-final", result.UpstreamModelForCapture())
+				require.True(t, result.StreamForCapture())
+			} else {
+				result := attachCaptureToForwardResult(c, &ForwardResult{RequestID: "stale", UpstreamModel: "business-initial", Stream: false})
+				require.Equal(t, tc.value, result.RequestID)
+				require.Equal(t, "provider-final", result.UpstreamModelForCapture())
+				require.True(t, result.StreamForCapture())
+			}
+		})
 	}
 }
 
@@ -512,6 +1300,283 @@ func TestExtractResponseColumnsStreamSSE(t *testing.T) {
 	}
 }
 
+func TestExtractResponseColumnsProviderNativeFormats(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		stream bool
+		want   responseColumns
+	}{
+		{
+			name: "openai chat completions json",
+			body: `{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":21,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":5}}}`,
+			want: responseColumns{StopReason: "stop", InputTokens: 21, OutputTokens: 8, CacheReadTokens: 5},
+		},
+		{
+			name:   "openai responses sse",
+			body:   "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":31,\"output_tokens\":9,\"input_tokens_details\":{\"cached_tokens\":7}}}}\n\n",
+			stream: true,
+			want:   responseColumns{StopReason: "completed", InputTokens: 31, OutputTokens: 9, CacheReadTokens: 7},
+		},
+		{
+			name: "gemini json",
+			body: `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"thoughtSignature":"sig"}]}}],"usageMetadata":{"promptTokenCount":41,"candidatesTokenCount":10,"cachedContentTokenCount":6}}`,
+			want: responseColumns{StopReason: "STOP", InputTokens: 41, OutputTokens: 10, CacheReadTokens: 6, SignaturePresent: true},
+		},
+		{
+			name:   "antigravity wrapped sse for non-stream client",
+			body:   "data: {\"response\":{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":51,\"candidatesTokenCount\":11,\"cachedContentTokenCount\":4}}}\n\n",
+			stream: false,
+			want:   responseColumns{StopReason: "MAX_TOKENS", InputTokens: 51, OutputTokens: 11, CacheReadTokens: 4},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractResponseColumns([]byte(tt.body), tt.stream)
+			require.Equal(t, tt.want.StopReason, got.StopReason)
+			require.Equal(t, tt.want.InputTokens, got.InputTokens)
+			require.Equal(t, tt.want.OutputTokens, got.OutputTokens)
+			require.Equal(t, tt.want.CacheReadTokens, got.CacheReadTokens)
+			require.Equal(t, tt.want.SignaturePresent, got.SignaturePresent)
+		})
+	}
+}
+
+func TestExtractCaptureColumnsPreservesTrustedPrefilledUsageWhenRawFormatHasNoUsage(t *testing.T) {
+	rec := &CaptureRecord{
+		RawResponse:         []byte(`{"provider":"opaque"}`),
+		StopReason:          "prefilled",
+		InputTokens:         61,
+		OutputTokens:        12,
+		CacheReadTokens:     3,
+		CacheCreationTokens: 2,
+		SignaturePresent:    true,
+	}
+	extractCaptureColumns(rec)
+	require.Equal(t, "prefilled", rec.StopReason)
+	require.Equal(t, 61, rec.InputTokens)
+	require.Equal(t, 12, rec.OutputTokens)
+	require.Equal(t, 3, rec.CacheReadTokens)
+	require.Equal(t, 2, rec.CacheCreationTokens)
+	require.True(t, rec.SignaturePresent)
+}
+
+func TestExtractCaptureColumnsIgnoresMalformedUsageAndStopFields(t *testing.T) {
+	rec := &CaptureRecord{
+		Stream:       true,
+		StopReason:   "prefilled",
+		InputTokens:  5,
+		OutputTokens: 7,
+		RawResponse: []byte(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":7}}}`,
+			``,
+			`data: {"type":"response.completed","response":{"status":123,"usage":{"input_tokens":-1,"output_tokens":"bad"}}}`,
+			``,
+		}, "\n")),
+	}
+	extractCaptureColumns(rec)
+	require.Equal(t, "completed", rec.StopReason)
+	require.Equal(t, 5, rec.InputTokens)
+	require.Equal(t, 7, rec.OutputTokens)
+
+	rawError := &CaptureRecord{StopReason: "terminal_error", RawResponse: []byte(`{"stop_reason":123,"usage":{"input_tokens":-1,"output_tokens":4294967296}}`)}
+	extractCaptureColumns(rawError)
+	require.Equal(t, "terminal_error", rawError.StopReason)
+	require.Zero(t, rawError.InputTokens)
+	require.Zero(t, rawError.OutputTokens)
+	require.Zero(t, captureUInt32(-1))
+	require.Zero(t, captureUInt32(int(^uint32(0))+1))
+}
+
+func TestExtractCaptureColumnsIgnoresMalformedSignatures(t *testing.T) {
+	rec := &CaptureRecord{Stream: true, RawResponse: []byte(strings.Join([]string{
+		`data: {"signature":null}`,
+		``,
+		`data: {"content":[{"thoughtSignature":123},{"signature":{}}]}`,
+		``,
+		`data: {"delta":{"type":"signature_delta","signature":[]}}`,
+		``,
+	}, "\n"))}
+	extractCaptureColumns(rec)
+	require.False(t, rec.SignaturePresent)
+
+	var kiroRaw bytes.Buffer
+	_, _ = kiroRaw.Write(buildCaptureKiroFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "ok", "signature": nil, "thoughtSignature": 123},
+	}))
+	_, _ = kiroRaw.Write(buildCaptureKiroFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	kiroRec := &CaptureRecord{Platform: PlatformKiro, Stream: true, RawResponse: kiroRaw.Bytes()}
+	extractCaptureColumns(kiroRec)
+	require.False(t, kiroRec.SignaturePresent)
+}
+
+func TestExtractCaptureColumnsKiroProviderNativeEventStream(t *testing.T) {
+	var raw bytes.Buffer
+	_, _ = raw.Write(buildCaptureKiroFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "data: example"},
+	}))
+	_, _ = raw.Write(buildCaptureKiroFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 71, "outputTokens": 13,
+			"cacheReadInputTokens": 8, "cacheWriteInputTokens": 4,
+		}},
+	}))
+	_, _ = raw.Write(buildCaptureKiroFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	rec := &CaptureRecord{Platform: PlatformKiro, Stream: true, UpstreamModel: "claude-sonnet-4-6", RawResponse: raw.Bytes()}
+	extractCaptureColumns(rec)
+	require.Equal(t, "end_turn", rec.StopReason)
+	require.Equal(t, 71, rec.InputTokens)
+	require.Equal(t, 13, rec.OutputTokens)
+	require.Equal(t, 8, rec.CacheReadTokens)
+	require.Equal(t, 4, rec.CacheCreationTokens)
+}
+
+func TestExtractCaptureColumnsKiroProviderNativeUsagePresenceAndRange(t *testing.T) {
+	buildResponse := func(tokenUsage map[string]any) []byte {
+		t.Helper()
+		var raw bytes.Buffer
+		if tokenUsage != nil {
+			_, _ = raw.Write(buildCaptureKiroFrame(t, "messageMetadataEvent", map[string]any{
+				"messageMetadataEvent": map[string]any{"tokenUsage": tokenUsage},
+			}))
+		}
+		_, _ = raw.Write(buildCaptureKiroFrame(t, "messageStopEvent", map[string]any{
+			"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+		}))
+		return raw.Bytes()
+	}
+
+	const beyondUInt32 = uint64(^uint32(0)) + 1
+	tests := []struct {
+		name       string
+		tokenUsage map[string]any
+		wantInput  int
+		wantOutput int
+		wantRead   int
+		wantCreate int
+	}{
+		{
+			name:       "stop only preserves trusted prefill",
+			wantInput:  61,
+			wantOutput: 12,
+			wantRead:   3,
+			wantCreate: 2,
+		},
+		{
+			name: "explicit zero overwrites trusted prefill",
+			tokenUsage: map[string]any{
+				"uncachedInputTokens":   0,
+				"outputTokens":          0,
+				"cacheReadInputTokens":  0,
+				"cacheWriteInputTokens": 0,
+			},
+		},
+		{
+			name: "values beyond archive UInt32 range preserve trusted prefill",
+			tokenUsage: map[string]any{
+				"uncachedInputTokens":   beyondUInt32,
+				"outputTokens":          beyondUInt32,
+				"cacheReadInputTokens":  beyondUInt32,
+				"cacheWriteInputTokens": beyondUInt32,
+			},
+			wantInput:  61,
+			wantOutput: 12,
+			wantRead:   3,
+			wantCreate: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &CaptureRecord{
+				Platform:            PlatformKiro,
+				Stream:              true,
+				RawResponse:         buildResponse(tt.tokenUsage),
+				InputTokens:         61,
+				OutputTokens:        12,
+				CacheReadTokens:     3,
+				CacheCreationTokens: 2,
+			}
+			extractCaptureColumns(rec)
+			require.Equal(t, "end_turn", rec.StopReason)
+			require.Equal(t, tt.wantInput, rec.InputTokens)
+			require.Equal(t, tt.wantOutput, rec.OutputTokens)
+			require.Equal(t, tt.wantRead, rec.CacheReadTokens)
+			require.Equal(t, tt.wantCreate, rec.CacheCreationTokens)
+		})
+	}
+}
+
+func TestExtractCaptureColumnsProviderNativeRequestMetadata(t *testing.T) {
+	tests := []struct {
+		name       string
+		request    string
+		wantID     string
+		wantEffort string
+		wantType   string
+	}{
+		{
+			name:    "antigravity nested metadata user id",
+			request: `{"request":{"sessionId":"{\"device_id\":\"ag-device\",\"session_id\":\"ag-session\"}"}}`,
+			wantID:  "ag-session",
+		},
+		{
+			name:    "gemini nested metadata user id",
+			request: `{"request":{"metadata":{"user_id":"{\"device_id\":\"gemini-device\",\"session_id\":\"gemini-session\"}"}}}`,
+			wantID:  "gemini-session",
+		},
+		{
+			name:       "kiro nested thinking",
+			request:    `{"conversationState":{"conversationId":"kiro-session"},"additionalModelRequestFields":{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}}`,
+			wantID:     "kiro-session",
+			wantEffort: "high",
+			wantType:   "adaptive",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &CaptureRecord{RawRequest: []byte(tt.request)}
+			extractCaptureColumns(rec)
+			require.Equal(t, tt.wantID, rec.SessionID)
+			require.Equal(t, tt.wantEffort, rec.ThinkingEffort)
+			require.Equal(t, tt.wantType, rec.ThinkingType)
+		})
+	}
+}
+
+func buildCaptureKiroFrame(t *testing.T, eventType string, payload map[string]any) []byte {
+	t.Helper()
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	headerName := []byte(":event-type")
+	headerValue := []byte(eventType)
+	headersLen := 1 + len(headerName) + 1 + 2 + len(headerValue)
+	totalLen := 12 + headersLen + len(payloadBytes) + 4
+	frame := make([]byte, totalLen)
+	binary.BigEndian.PutUint32(frame[0:4], uint32(totalLen))
+	binary.BigEndian.PutUint32(frame[4:8], uint32(headersLen))
+	binary.BigEndian.PutUint32(frame[8:12], crc32.ChecksumIEEE(frame[:8]))
+	offset := 12
+	frame[offset] = byte(len(headerName))
+	offset++
+	copy(frame[offset:], headerName)
+	offset += len(headerName)
+	frame[offset] = 7
+	offset++
+	binary.BigEndian.PutUint16(frame[offset:offset+2], uint16(len(headerValue)))
+	offset += 2
+	copy(frame[offset:], headerValue)
+	offset += len(headerValue)
+	copy(frame[offset:], payloadBytes)
+	binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.ChecksumIEEE(frame[:len(frame)-4]))
+	return frame
+}
+
 func TestSnapshotForCaptureWithFlag(t *testing.T) {
 	b, tr := SnapshotForCaptureWithFlag([]byte("abc"), 8)
 	if string(b) != "abc" || tr {
@@ -560,9 +1625,69 @@ func TestExtractCaptureColumnsFallsBackToRawEffort(t *testing.T) {
 	}
 }
 
-// TestKiroCaptureRecordExtraction 模拟 Kiro 路径提交的记录形态（Anthropic 边界：
-// raw_request 为客户端 Anthropic body，raw_response 为翻译后的 Anthropic SSE），
-// 验证 worker 的 extractCaptureColumns 能正确派生下游二次开发所需列。
+func TestCaptureAwareErrorReadDoesNotChangeFunctionalBodyLimit(t *testing.T) {
+	const fallbackLimit = int64(512 << 10)
+	providerBody := bytes.Repeat([]byte("z"), 768<<10)
+
+	readWithoutCapture := func() []byte {
+		resp := &http.Response{Body: io.NopCloser(bytes.NewReader(providerBody))}
+		got, err := readCaptureAwareUpstreamErrorBody(resp, fallbackLimit)
+		require.NoError(t, err)
+		return got
+	}
+	readWithCapture := func() ([]byte, *captureResultBridge) {
+		gin.SetMode(gin.TestMode)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		enableCaptureForTest(t, c)
+		beginCaptureAttempt(c)
+		resp := &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(providerBody))}
+		finish := beginCaptureResponse(c, resp, true, 1<<20)
+		got, err := readCaptureAwareUpstreamErrorBody(resp, fallbackLimit)
+		require.NoError(t, err)
+		finish()
+		bridge, ok := takeCaptureResult(c)
+		require.True(t, ok)
+		return got, bridge
+	}
+
+	withoutCapture := readWithoutCapture()
+	withCapture, bridge := readWithCapture()
+	require.Equal(t, withoutCapture, withCapture)
+	require.Len(t, withCapture, int(fallbackLimit))
+	require.Equal(t, providerBody, bridge.Response, "capture may retain bytes beyond the stable functional limit")
+	require.False(t, bridge.Truncated)
+}
+
+func TestGeminiNonStreamingCaptureProbesPastHardLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	setCapturePlatform(c, PlatformGemini)
+	SetCaptureOutboundRequest(c, c.Request, []byte(`{"model":"gemini-test"}`), captureHardMaxBodyBytes)
+
+	providerBody := bytes.Repeat([]byte("g"), captureHardMaxBodyBytes+1)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+		Request:    c.Request,
+	}
+	finish := beginCaptureResponse(c, resp, true, captureHardMaxBodyBytes)
+	_, err := (&GeminiMessagesCompatService{}).handleNonStreamingResponse(c, resp, "gemini-test")
+	finish()
+	require.Error(t, err, "the intentionally truncated synthetic JSON is not a valid provider response")
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Len(t, bridge.Response, captureHardMaxBodyBytes)
+	require.True(t, bridge.ResponseTruncated)
+	require.True(t, bridge.Truncated)
+}
+
+// TestKiroCaptureRecordExtraction 覆盖历史兼容记录中“Anthropic 请求 +
+// 翻译后 Anthropic SSE”的 worker 抽取回退。当前生产 Kiro 路径归档的是
+// 原生 AWS EventStream，由上方 provider-native 用例覆盖。
 func TestKiroCaptureRecordExtraction(t *testing.T) {
 	rawReq := []byte(`{"model":"CLAUDE_SONNET_4_20250514_V1_0",` +
 		`"metadata":{"user_id":"{\"device_id\":\"d1\",\"account_uuid\":\"a1\",\"session_id\":\"sess-kiro-9\"}"}}`)

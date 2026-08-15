@@ -90,6 +90,59 @@ func TestHandleChatStreamingResponse_ClassifiesHTTP2ReadError(t *testing.T) {
 	require.NotContains(t, message, "INTERNAL_ERROR")
 }
 
+func TestHandleChatStreamingResponseRejectsBufferedPartialTailAfterTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name         string
+		idleInterval int
+	}{{name: "synchronous"}, {name: "with_idle_timer", idleInterval: 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			terminal := `data: {"type":"response.completed","response":{"id":"resp_tail","object":"response","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","id":"msg_tail","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"
+			body := newOpenAICompatBlockingReadCloser([]byte(terminal + "event: response.output_text.delta"))
+			resp := &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: -1,
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+					"x-request-id": []string{"rid_chat_partial_terminal_tail"},
+				},
+				Body: body,
+			}
+			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: tc.idleInterval}}}
+
+			type outcome struct {
+				result *OpenAIForwardResult
+				err    error
+			}
+			resultCh := make(chan outcome, 1)
+			go func() {
+				result, err := svc.handleChatStreamingResponse(
+					context.Background(), resp, c,
+					&Account{ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI},
+					"gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", time.Now(), 0,
+				)
+				resultCh <- outcome{result: result, err: err}
+			}()
+
+			select {
+			case got := <-resultCh:
+				require.Error(t, got.err)
+			case <-time.After(time.Second):
+				require.Fail(t, "terminal tail validation must close the open provider body and return")
+			}
+			select {
+			case <-body.closed:
+			default:
+				require.Fail(t, "terminal tail validation must join the provider reader before returning")
+			}
+		})
+	}
+}
+
 func TestNormalizeResponsesRequestServiceTier(t *testing.T) {
 	t.Parallel()
 
@@ -250,7 +303,8 @@ func TestForwardAsChatCompletions_OAuthImageGenerationStreamCountsImageOutput(t 
 
 	upstreamBody := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_img","model":"gpt-5.4-mini","status":"in_progress"}}`,
-		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw=","revised_prompt":"draw a fox","output_format":"webp","size":"1024x1024","quality":"high"}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"ig_1","type":"image_generation_call","status":"in_progress"}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw=","revised_prompt":"draw a fox","output_format":"webp","size":"1024x1024","quality":"high"}}`,
 		`data: {"type":"response.completed","response":{"id":"resp_img","model":"gpt-5.4-mini","status":"completed","usage":{"input_tokens":5,"output_tokens":9,"output_tokens_details":{"image_tokens":4}},"output":[]}}`,
 		`data: [DONE]`,
 		``,
@@ -578,7 +632,9 @@ func TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErro
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.5")
 	require.Error(t, err)
-	require.Nil(t, result)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
 	require.True(t, c.Writer.Written())
@@ -1087,10 +1143,9 @@ func TestForwardAsChatCompletions_DoneSentinelWithoutTerminalReturnsError(t *tes
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.1")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
-	require.NotNil(t, result)
-	require.Zero(t, result.Usage.InputTokens)
-	require.Zero(t, result.Usage.OutputTokens)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
 }
 
 func TestForwardAsChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.T) {

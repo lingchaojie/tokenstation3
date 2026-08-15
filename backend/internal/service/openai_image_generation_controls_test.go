@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestOpenAIGatewayServiceForward_DisabledGroupAllowsTextOnlyResponses(t *tes
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text","model":"gpt-5.4","usage":{"input_tokens":3,"output_tokens":2}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -102,7 +103,7 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 				resp: &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 				},
 			}
 			svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -161,7 +162,7 @@ func TestOpenAIGatewayServiceForward_ExplicitImageToolWorksWithBridgeDisabled(t 
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_explicit_image","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_explicit_image","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -188,7 +189,7 @@ func TestOpenAIGatewayServiceForward_AccountPolicyStripsExplicitImageTool(t *tes
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_stripped_image","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_stripped_image","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -237,7 +238,7 @@ func TestOpenAIGatewayServiceForward_AccountPolicyStripsImageNamespaceTools(t *t
 				resp: &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_stripped_namespace","model":"gpt-5.5","usage":{"input_tokens":2,"output_tokens":1}}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_stripped_namespace","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`)),
 				},
 			}
 			svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -289,7 +290,7 @@ func TestOpenAIGatewayServiceForward_ChannelBridgeOverrideEnablesCodexInjection(
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_channel_bridge","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_channel_bridge","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -322,7 +323,7 @@ func TestOpenAIGatewayServiceForward_CodexBridgeDoesNotInjectHostedToolAlongside
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_namespace_image","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_namespace_image","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -376,7 +377,7 @@ func TestOpenAIGatewayServiceForward_CodexBridgePreservesImageGenFunction(t *tes
 				resp: &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_function_image","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_function_image","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 				},
 			}
 			svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -408,7 +409,7 @@ func TestOpenAIGatewayServiceForward_CodexBridgePreservesExistingToolChoice(t *t
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex_tool_choice","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex_tool_choice","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -431,7 +432,7 @@ func TestOpenAIGatewayServiceForward_CodexBridgeSkipsCompactRequests(t *testing.
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex_compact","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_codex_compact","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 		},
 	}
 	svc := newOpenAIImageGenerationControlTestService(upstream)
@@ -578,7 +579,8 @@ func TestOpenAIGatewayServiceHandleResponsesImageOutputs_Streaming(t *testing.T)
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader(
-			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"generating\",\"result\":\"final-image\"}}\n\n" +
+			"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"generating\"}}\n\n" +
+				"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"generating\",\"result\":\"final-image\"}}\n\n" +
 				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_stream\",\"model\":\"gpt-5.5\",\"output\":[{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"generating\",\"result\":\"final-image\"}],\"usage\":{\"input_tokens\":11,\"output_tokens\":5,\"output_tokens_details\":{\"image_tokens\":4}}}}\n\n",
 		)),
 	}
@@ -592,7 +594,7 @@ func TestOpenAIGatewayServiceHandleResponsesImageOutputs_Streaming(t *testing.T)
 	require.Equal(t, 11, result.usage.InputTokens)
 	require.Equal(t, 5, result.usage.OutputTokens)
 	require.Equal(t, 4, result.usage.ImageOutputTokens)
-	require.NotContains(t, recorder.Body.String(), `"status":"generating"`)
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `"status":"generating"`), "only output_item.added remains in progress")
 	require.Equal(t, 2, strings.Count(recorder.Body.String(), `"status":"completed"`))
 }
 
@@ -605,7 +607,8 @@ func TestOpenAIGatewayServiceHandleResponsesImageOutputs_StreamingPassthrough(t 
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader(
-			"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\",\"result\":\"final-image\"}}\n\n" +
+			"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\"}}\n\n" +
+				"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\",\"result\":\"final-image\"}}\n\n" +
 				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_stream\",\"model\":\"gpt-5.5\",\"output\":[{\"id\":\"ig_stream_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\",\"result\":\"final-image\"}],\"usage\":{\"input_tokens\":11,\"output_tokens\":5,\"output_tokens_details\":{\"image_tokens\":4}}}}\n\n",
 		)),
 	}
@@ -614,7 +617,7 @@ func TestOpenAIGatewayServiceHandleResponsesImageOutputs_StreamingPassthrough(t 
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotContains(t, recorder.Body.String(), `"status":"in_progress"`)
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `"status":"in_progress"`), "only output_item.added remains in progress")
 	require.Equal(t, 2, strings.Count(recorder.Body.String(), `"status":"completed"`))
 }
 
@@ -665,6 +668,42 @@ func TestNormalizeCompletedImageGenerationStatus(t *testing.T) {
 			require.JSONEq(t, tt.want, string(got))
 		})
 	}
+}
+
+func TestNormalizeCompletedImageGenerationStatusUsesLinearAllocation(t *testing.T) {
+	const itemCount = 256
+	const item = `{"type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}`
+	input := []byte(`{"type":"response.completed","response":{"output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}}`)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, changed := normalizeCompletedImageGenerationStatus(input)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, changed)
+	require.Equal(t, itemCount, strings.Count(string(got), `"status":"completed"`))
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
+
+func TestNormalizeCompletedImageGenerationStatusDenseEightMiBStaysBounded(t *testing.T) {
+	const targetBytes = 8 << 20
+	const item = `{"type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}`
+	itemCount := (targetBytes - len(`{"type":"response.completed","response":{"output":[]}}`)) / (len(item) + 1)
+	input := []byte(`{"type":"response.completed","response":{"output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}}`)
+	require.GreaterOrEqual(t, len(input), targetBytes-(2*len(item)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, changed := normalizeCompletedImageGenerationStatus(input)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, changed)
+	require.Equal(t, itemCount, strings.Count(string(got), `"status":"completed"`))
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(32<<20))
 }
 
 // TestHandleStreamingResponse_CyberPolicyCapturesRealUpstreamTokens 锁定流式

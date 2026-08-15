@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
@@ -399,10 +400,15 @@ func truncateString(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	// 按字节截断可能切断多字节字符，按 rune 处理。
-	runes := []rune(s)
-	for len(string(runes)) > max && len(runes) > 0 {
-		runes = runes[:len(runes)-1]
+	if max <= 0 {
+		return ""
 	}
-	return string(runes)
+	// s is valid UTF-8 after ToValidUTF8. Only inspect the bounded prefix and
+	// retreat over at most one partial rune, keeping adversarial large headers
+	// linear instead of repeatedly converting an ever-shorter []rune (O(n²)).
+	end := max
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end]
 }

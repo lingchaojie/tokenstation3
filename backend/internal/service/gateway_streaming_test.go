@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type blockingAfterPayloadBody struct {
@@ -34,6 +37,24 @@ type signalWriteResponseWriter struct {
 	gin.ResponseWriter
 	wrote chan struct{}
 	once  sync.Once
+}
+
+func TestValidJSONObjectBytesDoesNotMaterializeDenseToolInput(t *testing.T) {
+	const targetBytes = 8 << 20
+	body := []byte(`{"items":[` + strings.Repeat(`"",`, (targetBytes-len(`{"items":[]}`))/3) + `""]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-8)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validJSONObjectBytes(body)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+	require.False(t, validJSONObjectBytes([]byte(`[]`)))
+	require.False(t, validJSONObjectBytes([]byte(`{"ok":true} trailing`)))
 }
 
 func (w *signalWriteResponseWriter) Write(p []byte) (int, error) {
@@ -85,13 +106,23 @@ func newMinimalGatewayService() *GatewayService {
 	}
 }
 
+func anthropicTestMessageStart(inputTokens int) string {
+	return fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":%d}}}\n\n", inputTokens)
+}
+
+func anthropicTestSemanticPrefix(inputTokens int, text string) string {
+	return anthropicTestMessageStart(inputTokens) +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", text)
+}
+
 func TestAnthropicSSEEventHasSemanticOutput(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		data string
 		want bool
 	}{
-		{"message start", `{"type":"message_start","message":{"usage":{"input_tokens":9}}}`, false},
+		{"message start", `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9}}}`, false},
 		{"ping", `{"type":"ping"}`, false},
 		{"usage only", `{"type":"message_delta","usage":{"output_tokens":3}}`, false},
 		{"empty text", `{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`, false},
@@ -113,11 +144,210 @@ func TestAnthropicSSEEventHasSemanticOutput(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderShapeAllowsOfficialAndFutureExtensions(t *testing.T) {
+	require.True(t, validAnthropicStreamContentBlockStart(gjson.Parse(`{"type":"fallback"}`)))
+	phase := anthropicProviderStarted
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		"content_block_start",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_delta",
+		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location","start_char_index":0,"end_char_index":4}}}`),
+		"content_block_delta",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_stop",
+		[]byte(`{"type":"content_block_stop","index":0}`),
+		"content_block_stop",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":1,"content_block":{"type":"fallback"}}`),
+		"content_block_start",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_delta",
+		[]byte(`{"type":"content_block_delta","index":1,"delta":{"type":"future_metadata_delta","metadata":{"trace":"ok"}}}`),
+		"content_block_delta",
+	))
+	require.True(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"future_server_tool_result","content":{"ok":true}}]`)))
+
+	phase = anthropicProviderAwaitingStart
+	require.Error(t, validateAnthropicProviderEvent(
+		&phase, "", []byte(`{"type":123}`), "123",
+	))
+	phase = anthropicProviderStarted
+	require.Error(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":0.5,"content_block":{"type":"text","text":""}}`),
+		"content_block_start",
+	))
+}
+
+func TestAnthropicProviderValidationRejectsDuplicateKnownJSONKeys(t *testing.T) {
+	for name, payload := range map[string]string{
+		"event type":        `{"type":"message_delta","type":"message_stop","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		"delta stop reason": `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_reason":"max_tokens"},"usage":{"output_tokens":1}}`,
+		"usage output":      `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1,"output_tokens":2}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			phase := anthropicProviderStarted
+			_, err := validateAnthropicProviderJSONEvent(&phase, "message_delta", []byte(payload))
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	phase := anthropicProviderStarted
+	_, err := validateAnthropicProviderJSONEvent(&phase, "future_event", []byte(`{"type":"future_event","opaque":{"type":"future-a","type":"future-b"}}`))
+	require.NoError(t, err, "duplicate fields inside an unknown extension remain forward-compatible")
+
+	require.False(t, validAnthropicNonStreamingResponse([]byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"safe","text":"danger"}],"stop_reason":"end_turn"}`)))
+}
+
+func TestAnthropicProviderPhaseRequiresTerminalMessageDeltaAndRejectsLaterContent(t *testing.T) {
+	start := []byte(`{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"stop_reason":null}}`)
+	terminalDelta := []byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`)
+	stop := []byte(`{"type":"message_stop"}`)
+
+	phase := anthropicProviderAwaitingStart
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "message_delta", []byte(`{"type":"message_delta","delta":{},"usage":{"output_tokens":1}}`), "message_delta"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
+
+	phase = anthropicProviderAwaitingStart
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_delta", terminalDelta, "message_delta"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`), "content_block_start"))
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
+}
+
+func TestAnthropicProviderContentStateAndRetainedMetadataAreBounded(t *testing.T) {
+	t.Run("cross-frame content blocks", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		for index := 0; index < maxAnthropicProviderContentBlocks; index++ {
+			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, index))
+			stop := []byte(fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))
+			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start"))
+			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", stop, "content_block_stop"))
+		}
+		overflow := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, maxAnthropicProviderContentBlocks))
+		require.ErrorContains(t, validateAnthropicProviderEvent(&phase, "content_block_start", overflow, "content_block_start"), "state limit")
+	})
+
+	t.Run("retained block type", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		payload := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"` + strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1) + `"}}`)
+		require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", payload, "content_block_start"))
+	})
+
+	t.Run("tool identity", func(t *testing.T) {
+		oversized := strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1)
+		for name, block := range map[string]string{
+			"id":   `{"type":"tool_use","id":"` + oversized + `","name":"lookup","input":{}}`,
+			"name": `{"type":"tool_use","id":"tool-1","name":"` + oversized + `","input":{}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				require.False(t, validAnthropicStreamContentBlockStart(gjson.Parse(block)))
+			})
+		}
+	})
+
+	t.Run("duplicate tool ids", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		for index := 0; index < 2; index++ {
+			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":"tool-1","name":"lookup","input":{}}}`, index))
+			err := validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start")
+			if index == 0 {
+				require.NoError(t, err)
+				require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", []byte(`{"type":"content_block_stop","index":0}`), "content_block_stop"))
+				continue
+			}
+			require.ErrorContains(t, err, "duplicated tool id")
+		}
+		require.False(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"tool_use","id":"tool-1","name":"a","input":{}},{"type":"tool_use","id":"tool-1","name":"b","input":{}}]`)))
+	})
+}
+
+func TestValidAnthropicResponseContentRejectsDenseBlocksWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const block = `{"type":"text","text":""},`
+	blockCount := (targetBytes - len(`[]`)) / len(block)
+	body := `[` + strings.Repeat(block, blockCount) + `{"type":"text","text":""}]`
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(block)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validAnthropicResponseContent(gjson.Parse(body))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestValidAnthropicMessageStartRejectsDenseContentWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const block = `{},`
+	blockCount := (targetBytes - len(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[]}}`)) / len(block)
+	payload := []byte(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[` + strings.Repeat(block, blockCount) + `{ }]}}`)
+	require.GreaterOrEqual(t, len(payload), targetBytes-16)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validAnthropicMessageStartPayload(payload)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestAnthropicUsageAndSemanticReadersIgnoreDenseUnknownSiblingWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	prefix := `{"type":"message_start","message":{"id":"msg_dense","type":"message","role":"assistant","content":[],"usage":{"input_tokens":17,"output_tokens":2}},"junk":[`
+	body := prefix + strings.Repeat(`{},`, (targetBytes-len(prefix)-len(`{}]}`))/3) + `{}]}`
+	require.GreaterOrEqual(t, len(body), targetBytes-8)
+	line := "data: " + body
+	nonstreamBody := []byte(`{"usage":{"input_tokens":17,"output_tokens":2},"junk":` + gjson.Get(body, "junk").Raw + `}`)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	phase := anthropicProviderStreamPhase{}
+	_, validateErr := validateAnthropicProviderJSONEvent(&phase, "message_start", []byte(body))
+	semantic := anthropicSSEEventHasSemanticOutput(body)
+	usage := &ClaudeUsage{}
+	newMinimalGatewayService().parseSSEUsage(body, usage)
+	(&AntigravityGatewayService{}).extractSSEUsage(line, usage)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	streamAlloc := after.TotalAlloc - before.TotalAlloc
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	nonstreamUsage := (&AntigravityGatewayService{}).extractClaudeUsage(nonstreamBody)
+	runtime.ReadMemStats(&after)
+	nonstreamAlloc := after.TotalAlloc - before.TotalAlloc
+
+	require.NoError(t, validateErr)
+	require.False(t, semantic)
+	require.Equal(t, 17, usage.InputTokens)
+	require.Equal(t, 2, usage.OutputTokens)
+	require.Equal(t, 17, nonstreamUsage.InputTokens)
+	require.Equal(t, 2, nonstreamUsage.OutputTokens)
+	require.Less(t, streamAlloc, uint64(12<<20))
+	require.Less(t, nonstreamAlloc, uint64(12<<20))
+}
+
 func TestParseSSEUsage_MessageStart(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
-	data := `{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":200}}}`
+	data := `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":200}}}`
 	svc.parseSSEUsage(data, usage)
 
 	require.Equal(t, 100, usage.InputTokens)
@@ -142,7 +372,7 @@ func TestParseSSEUsage_DeltaDoesNotOverwriteStartValues(t *testing.T) {
 	usage := &ClaudeUsage{}
 
 	// 先处理 message_start
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100}}}`, usage)
 	require.Equal(t, 100, usage.InputTokens)
 
 	// 再处理 message_delta（output_tokens > 0, input_tokens = 0）
@@ -167,7 +397,7 @@ func TestParseSSEUsage_KiroFinalUsageExplicitZerosOverwriteStart(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":30,"output_tokens":0,"cache_creation_input_tokens":30,"cache_read_input_tokens":60}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":30,"output_tokens":0,"cache_creation_input_tokens":30,"cache_read_input_tokens":60}}}`, usage)
 	svc.parseSSEUsage(`{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":120,"_sub2api_kiro_final_usage":true}}`, usage)
 
 	require.Zero(t, usage.InputTokens)
@@ -181,7 +411,7 @@ func TestParseSSEUsage_DeltaDoesNotResetCacheCreationBreakdown(t *testing.T) {
 	usage := &ClaudeUsage{}
 
 	// 先在 message_start 中写入非零 5m/1h 明细
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`, usage)
 	require.Equal(t, 30, usage.CacheCreation5mTokens)
 	require.Equal(t, 70, usage.CacheCreation1hTokens)
 
@@ -244,8 +474,8 @@ func TestHandleStreamingResponse_CacheTokens(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30}}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":15}}\n\n"))
 		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
 	}()
 
@@ -299,9 +529,11 @@ func TestHandleStreamingResponse_SpecialCharactersInJSON(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		// 包含特殊字符的 content_block_delta（引号、换行、Unicode）
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"))
 		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \\\"world\\\"\\n你好\"}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"))
 		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
 	}()
 
@@ -373,7 +605,7 @@ func TestHandleStreamingResponse_StreamReadErrorAfterSemanticOutput_PassesThroug
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: &streamReadCloser{
-			payload: []byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"),
+			payload: []byte(anthropicTestSemanticPrefix(5, "hello")),
 			err:     io.ErrUnexpectedEOF,
 		},
 	}
@@ -426,8 +658,8 @@ func TestHandleStreamingResponse_CancellationUsesSemanticCommitBoundary(t *testi
 		payload   string
 		committed bool
 	}{
-		{"preamble", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n", false},
-		{"text", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n", true},
+		{"preamble", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n", false},
+		{"text", anthropicTestSemanticPrefix(5, "hello"), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
@@ -461,11 +693,11 @@ func TestHandleStreamingResponse_ContextCancellationClosesBlockingBody(t *testin
 	}{
 		{
 			name:    "before semantic output",
-			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n",
 		},
 		{
 			name:      "after semantic output",
-			payload:   "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+			payload:   anthropicTestSemanticPrefix(5, "hello"),
 			committed: true,
 		},
 	} {
@@ -542,7 +774,7 @@ func TestHandleStreamingResponse_ContextCancellationClosesBlockingBody(t *testin
 func TestHandleStreamingResponse_FirstOutputBuffersUseEstablishedBound(t *testing.T) {
 	largeValue := strings.Repeat("x", openAIFirstOutputStageMaxBytes)
 	var unterminated strings.Builder
-	semanticPrefix := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
 	for unterminated.Len() <= openAIFirstOutputStageMaxBytes {
 		unterminated.WriteString(strings.Repeat("m", 64*1024-1))
 		unterminated.WriteByte('\n')
@@ -609,7 +841,7 @@ func TestHandleStreamingResponse_FirstOutputBuffersUseEstablishedBound(t *testin
 }
 
 func TestHandleStreamingResponse_NewlineFreeTokenUsesEstablishedBound(t *testing.T) {
-	semanticPrefix := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
 	oversizedToken := "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)
 	for _, tt := range []struct {
 		name      string
@@ -668,14 +900,14 @@ func TestGatewayService_Forward_SharedAnthropicStreamingOwnsBodyExactlyOnce(t *t
 	requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
 	require.NoError(t, err)
-	semanticPrefix := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
 	for _, tt := range []struct {
 		name      string
 		payload   string
 		committed bool
 		cancel    bool
 	}{
-		{name: "cancel before semantic output", payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n", cancel: true},
+		{name: "cancel before semantic output", payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n", cancel: true},
 		{name: "cancel after semantic output", payload: semanticPrefix, committed: true, cancel: true},
 		{name: "token overflow before semantic output", payload: "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)},
 		{name: "token overflow after semantic output", payload: semanticPrefix + "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024), committed: true},
@@ -751,7 +983,7 @@ func TestGatewayService_Forward_SharedAnthropicStreamingOwnsBodyExactlyOnce(t *t
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_NewlineFreeTokenUsesEstablishedBound(t *testing.T) {
 	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
-	semanticPrefix := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
 	oversizedToken := "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)
 	for _, tt := range []struct {
 		name      string
@@ -819,11 +1051,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CancellationClosesAndJoinsSca
 	}{
 		{
 			name:    "before semantic output",
-			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n",
 		},
 		{
 			name:      "after semantic output",
-			payload:   "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+			payload:   anthropicTestSemanticPrefix(9, "hello"),
 			committed: true,
 		},
 	} {
@@ -905,11 +1137,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_IdleUsesSemanticCommitBoundar
 	}{
 		{
 			name:    "before semantic output",
-			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n",
 		},
 		{
 			name:      "after semantic output",
-			payload:   "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+			payload:   anthropicTestSemanticPrefix(9, "hello"),
 			committed: true,
 		},
 	} {
@@ -998,7 +1230,7 @@ func TestHandleStreamingResponse_ToolUseWithoutUsageCommitsBeforeMissingTerminal
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
-		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{}}}\n\n",
+		anthropicTestMessageStart(0) + "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{}}}\n\n",
 	))}
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
@@ -1068,7 +1300,7 @@ func TestHandleStreamingResponse_IdleAfterSemanticOutputReturnsCommittedPartial(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = io.WriteString(writer, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n")
+		_, _ = io.WriteString(writer, anthropicTestSemanticPrefix(0, "hello"))
 	}()
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
@@ -1260,7 +1492,8 @@ func TestHandleStreamingResponse_SSEErrorEvent_AfterPartialStreamOutput(t *testi
 	go func() {
 		defer func() { _ = pw.Close() }()
 		// message_start 本身暂存；首个非空文本 delta 才跨过提交边界。
-		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}` + "\n\n"))
+		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":5}}}` + "\n\n"))
+		_, _ = pw.Write([]byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n"))
 		_, _ = pw.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n"))
 		// 紧接着发 event:error
 		_, _ = pw.Write([]byte("event: error\ndata: " + errorJSON + "\n\n"))
@@ -1277,6 +1510,31 @@ func TestHandleStreamingResponse_SSEErrorEvent_AfterPartialStreamOutput(t *testi
 	require.Greater(t, rec.Body.Len(), 0)
 	require.Contains(t, rec.Body.String(), "message_start")
 	require.Contains(t, rec.Body.String(), "hello")
+}
+
+func TestHandleStreamingResponse_ClientDisconnectDoesNotHideProviderErrorEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	const errorJSON = `{"type":"error","error":{"type":"overloaded_error","message":"boom"}}`
+	body := anthropicTestSemanticPrefix(0, "hello") + "event: error\ndata: " + errorJSON + "\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Equal(t, errorJSON, sseErr.RawData)
 }
 
 // 对抗用例：上游发 event:error 但 data 行不是合法 JSON。

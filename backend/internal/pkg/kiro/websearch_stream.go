@@ -60,8 +60,9 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 			"type":  "content_block_start",
 			"index": startIndex + 1,
 			"content_block": map[string]any{
-				"type":    "web_search_tool_result",
-				"content": searchContent,
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"content":     searchContent,
 			},
 		},
 		{

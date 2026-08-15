@@ -93,7 +93,7 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 
-	payload := `{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`
+	payload := `{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`
 	resp := &http.Response{
 		Header: make(http.Header),
 		Body: io.NopCloser(strings.NewReader(

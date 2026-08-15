@@ -58,6 +58,10 @@ type webChatOpenAICaptureSubmitter interface {
 	SubmitWebChatCapture(result *OpenAIForwardResult, account *Account, requestBody []byte, upstreamEndpoint string)
 }
 
+type webChatOpenAITerminalCaptureSubmitter interface {
+	SubmitWebChatTerminalCapture(c *gin.Context, failure *UpstreamFailoverError)
+}
+
 type webChatDispatchInput struct {
 	User               *User
 	ConversationID     int64
@@ -188,6 +192,12 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			result, account, err = s.forwardWebChatOpenAI(usageCtx, c, group, body, input)
 		}
 		if err != nil && result == nil {
+			var failure *UpstreamFailoverError
+			if errors.As(err, &failure) {
+				if submitter, ok := s.openAIGatewayService.(webChatOpenAITerminalCaptureSubmitter); ok {
+					submitter.SubmitWebChatTerminalCapture(c, failure)
+				}
+			}
 			return nil, err
 		}
 		dispatchErr = err
@@ -201,6 +211,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		attachWebChatOpenAICaptureResponse(result, upstreamCapture, downstreamCapture)
 		if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
+		}
+		if result.UpstreamFailed {
+			break
 		}
 		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, &OpenAIRecordUsageInput{
 			Result:             result,
@@ -245,6 +258,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
 		}
+		if result.UpstreamFailed {
+			break
+		}
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
@@ -277,6 +293,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
 		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, "/v1/chat/completions")
+		}
+		if result.UpstreamFailed {
+			break
 		}
 		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
 			Result:             result,
@@ -318,34 +337,21 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	return &webChatDispatchResult{ResponseBody: responseBody, UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, dispatchErr
 }
 
-func webChatCapturedResponseBody(upstream *webChatStreamCapture, downstream *WebChatResponseCapture) ([]byte, bool) {
-	if upstream != nil {
-		if body, truncated := upstream.Snapshot(); len(body) > 0 {
-			return body, truncated
-		}
-	}
-	if downstream != nil {
-		return downstream.Snapshot()
-	}
-	return nil, false
-}
-
 func attachWebChatGatewayCaptureResponse(result *ForwardResult, upstream *webChatStreamCapture, downstream *WebChatResponseCapture) {
-	if result == nil || result.CaptureResponse != nil {
-		return
-	}
-	body, truncated := webChatCapturedResponseBody(upstream, downstream)
-	result.CaptureResponse = snapshotBytes(body)
-	result.CaptureTruncated = result.CaptureTruncated || truncated
+	// The stream/downstream captures contain the WebChat-facing converted wire,
+	// not necessarily the provider-native response. Capture archival must fail
+	// closed when the forwarding layer did not attach its raw response snapshot.
+	_ = result
+	_ = upstream
+	_ = downstream
 }
 
 func attachWebChatOpenAICaptureResponse(result *OpenAIForwardResult, upstream *webChatStreamCapture, downstream *WebChatResponseCapture) {
-	if result == nil || result.CaptureResponse != nil {
-		return
-	}
-	body, truncated := webChatCapturedResponseBody(upstream, downstream)
-	result.CaptureResponse = snapshotBytes(body)
-	result.CaptureTruncated = result.CaptureTruncated || truncated
+	// See attachWebChatGatewayCaptureResponse: converted client bytes are only
+	// for WebChat response persistence/artifact extraction, never raw archival.
+	_ = result
+	_ = upstream
+	_ = downstream
 }
 
 func webChatUseResponsesPayload(input webChatDispatchInput) bool {
@@ -452,6 +458,9 @@ func (s *WebChatService) forwardWebChatOpenAI(ctx context.Context, c *gin.Contex
 	if selection == nil || !selection.Acquired || selection.Account == nil {
 		return nil, nil, ErrNoAvailableAccounts
 	}
+	// WebChat is an HTTP/SSE client surface. Do not inherit account-level WSv2
+	// preferences that are reserved for an actual WebSocket ingress request.
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 	result, err := s.openAIGatewayService.ForwardAsChatCompletions(ctx, c, selection.Account, body, "", group.DefaultMappedModel)
 	return result, selection.Account, err
 }
@@ -484,6 +493,9 @@ func (s *WebChatService) forwardWebChatOpenAIResponses(ctx context.Context, c *g
 			return nil, nil, ErrNoAvailableAccounts
 		}
 		defer releaseWebChatSelection(selection)
+		// WebChat is an HTTP/SSE client surface. Do not inherit account-level
+		// WSv2 preferences that are reserved for an actual WebSocket ingress.
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 		result, err := s.openAIGatewayService.Forward(ctx, c, account, body)
 		return result, account, err
 	}

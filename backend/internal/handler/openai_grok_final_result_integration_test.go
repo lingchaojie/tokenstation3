@@ -256,7 +256,7 @@ func TestGrokFinalResultsDriveRealHandlerSchedulingAndCapture(t *testing.T) {
 			upstream: &grokFinalHandlerUpstream{responses: []*http.Response{
 				grokFinalHandlerResponse(http.StatusServiceUnavailable, `{"error":{"message":"temporary unavailable"}}`),
 			}},
-			wantSuccess: false, wantCapture: false, wantStatus: http.StatusBadGateway, wantCalls: 1, wantReports: -1,
+			wantSuccess: false, wantCapture: true, wantCaptureStatus: http.StatusServiceUnavailable, wantStatus: http.StatusBadGateway, wantCalls: 1, wantReports: -1,
 		},
 		{
 			name:        "transport failure",

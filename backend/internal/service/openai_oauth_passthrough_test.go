@@ -170,7 +170,8 @@ func TestOpenAIGatewayService_ResponsesPreservesNativeFileForAPIKeyAndOAuth(t *t
 func TestOpenAIGatewayService_ResponsesStreamingImageResultsRetainedOnlyForWebChat(t *testing.T) {
 	const imageBase64 = "aW1hZ2UtYnl0ZXM="
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station"}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"ig_1","type":"image_generation_call","status":"in_progress"}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station"}}`,
 		`data: {"type":"response.completed","response":{"id":"resp_image","output":[{"id":"ig_1","type":"image_generation_call","result":"` + imageBase64 + `","revised_prompt":"draw a blue station","output_format":"webp","size":"2048x1152","quality":"high"}],"usage":{"input_tokens":8,"output_tokens":5,"output_tokens_details":{"image_tokens":4}}}}`,
 		"",
 	}, "\n\n")
@@ -451,6 +452,41 @@ func TestOpenAIResponsesImageResultDedupKeyIsFixedSize(t *testing.T) {
 
 	require.LessOrEqual(t, len(key), len("sha256:")+64)
 	require.NotContains(t, key, imageBase64)
+}
+
+func TestOpenAIResponsesImageRetentionIsBoundedAcrossEvents(t *testing.T) {
+	results := make([]openAIResponsesImageResult, 0, 1)
+	indexes := make(map[string]int)
+	budget := &openAIResponsesImageRetentionBudget{}
+	for i := 0; i < maxOpenAIResponsesRetainedImageItems; i++ {
+		payload := []byte(fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":{"type":"image_generation_call","id":"img_%d","result":"image-%d"}}`, i, i, i))
+		require.NoError(t, collectOpenAIResponsesImageResultsFromEventPayloadRetained(payload, &results, indexes, budget, 0))
+	}
+	require.Len(t, results, maxOpenAIResponsesRetainedImageItems)
+	overflow := []byte(fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":{"type":"image_generation_call","id":"img_overflow","result":"overflow"}}`, maxOpenAIResponsesRetainedImageItems))
+	require.Error(t, collectOpenAIResponsesImageResultsFromEventPayloadRetained(overflow, &results, indexes, budget, 0))
+	require.Len(t, results, maxOpenAIResponsesRetainedImageItems)
+}
+
+func TestOpenAIResponsesImageRetentionAllowsOneLargeFrameButRejectsFurtherGrowth(t *testing.T) {
+	results := make([]openAIResponsesImageResult, 0, 1)
+	indexes := make(map[string]int)
+	budget := &openAIResponsesImageRetentionBudget{}
+	large := strings.Repeat("A", maxOpenAIResponsesRetainedImageBytes+1)
+	payload, err := json.Marshal(map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": 0,
+		"item": map[string]any{
+			"type": "image_generation_call", "id": "img_large", "result": large,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, collectOpenAIResponsesImageResultsFromEventPayloadRetained(payload, &results, indexes, budget, 0))
+	require.Len(t, results, 1)
+
+	second := []byte(`{"type":"response.output_item.done","output_index":1,"item":{"type":"image_generation_call","id":"img_second","result":"B"}}`)
+	require.Error(t, collectOpenAIResponsesImageResultsFromEventPayloadRetained(second, &results, indexes, budget, 0))
+	require.Len(t, results, 1)
 }
 
 func TestOpenAIGatewayService_WebChatCodexPayloadReachesOAuthPassthrough(t *testing.T) {
@@ -778,6 +814,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyNormali
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","item":{"type":"tool_call","tool_calls":[{"function":{"name":"apply_patch"}}]}}`,
 		"",
+		`data: {"type":"response.completed","response":{"id":"resp_tool","status":"completed","output":[]}}`,
+		"",
 		"data: [DONE]",
 		"",
 	}, "\n")
@@ -874,6 +912,10 @@ func TestOpenAIGatewayService_OAuthPassthrough_PreservesNamespaceRequest(t *test
 	}`)
 
 	upstreamSSE := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":""}}`,
+		"",
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{}"}`,
+		"",
 		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}}`,
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
@@ -943,6 +985,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_FlattenEnabledNamespaceRequestAnd
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":""}}`,
 		"",
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{}"}`,
+		"",
 		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}}`,
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
@@ -1004,6 +1048,10 @@ func TestOpenAIGatewayService_NativeOAuth_FlattenEnabledNamespaceRequestAndStrea
 	}`)
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":""}}`,
+		"",
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{}"}`,
+		"",
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}}`,
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
 		"",
@@ -1137,7 +1185,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_123","usage":{"input_tokens":11,"output_tokens":22}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_123","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":22}}`)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1190,7 +1238,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactNonstreamKeepaliveWritesLe
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-keepalive"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_keepalive","usage":{"input_tokens":11,"output_tokens":22}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_keepalive","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":22}}`)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp, delay: 1200 * time.Millisecond}
 
@@ -1226,7 +1274,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactNonstreamKeepaliveDisabled
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-no-keepalive"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_no_keepalive","usage":{"input_tokens":11,"output_tokens":22}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_no_keepalive","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":22}}`)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1276,7 +1324,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_passthrough_ctx"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":1}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_passthrough","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}}}`,
 			"",
 			"data: [DONE]",
 			"",
@@ -1370,7 +1418,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1416,7 +1464,7 @@ func TestOpenAIGatewayService_OAuthLegacy_UpstreamRequestIgnoresClientCancel(t *
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_legacy_ctx"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_legacy","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
 			"",
 			"data: [DONE]",
 			"",
@@ -1461,7 +1509,7 @@ func TestOpenAIGatewayService_OAuthLegacy_MixedCodexUAUsesCodexOriginator(t *tes
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1518,7 +1566,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_ResponseHeadersAllowXCodex(t *tes
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`data: {"type":"response.output_text.delta","delta":"h"}`,
 			"",
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_headers","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
 			"",
 			"data: [DONE]",
 			"",
@@ -1915,7 +1963,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 			accountType:    AccountTypeOAuth,
 			statusCode:     http.StatusBadGateway,
 			body:           `{"error":{"message":"bad gateway","type":"server_error"}}`,
-			expectFailover: false,
+			expectFailover: true,
 			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
 				require.Empty(t, repo.rateLimitCalls)
 				require.Empty(t, repo.overloadCalls)
@@ -2193,7 +2241,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailo
 				Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact"}},
 				Body:       passthroughErrReadCloser{err: io.ErrUnexpectedEOF},
 			},
-			expectFailover: false,
+			expectFailover: true,
 		},
 	}
 
@@ -2253,7 +2301,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -2302,7 +2350,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testin
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -2347,7 +2395,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityUnified(t *testin
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}}
 
 	svc := &OpenAIGatewayService{
@@ -2443,7 +2491,7 @@ func TestOpenAIGatewayService_CodexCLIOnly_AllowOfficialClientFamilies(t *testin
 			resp := &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+				Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 			}
 			upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -2484,6 +2532,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *test
 
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"h"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_first_token","status":"completed","output":[]}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -2539,7 +2589,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"h"}`,
 		"",
-		`data: {"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3}}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_disconnect","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3}}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -2648,7 +2698,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid-timeout"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\ndata: [DONE]\n\n")),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
@@ -2739,7 +2789,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DefaultFiltersTimeoutHeaders(t *t
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid-filter-default"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_filter_default","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
 			"",
 			"data: [DONE]",
 			"",
@@ -2785,7 +2835,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_AllowTimeoutHeadersWhenConfigured
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid-filter-allow"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_filter_allow","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}}`,
 			"",
 			"data: [DONE]",
 			"",

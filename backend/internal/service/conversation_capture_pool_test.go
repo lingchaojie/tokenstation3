@@ -69,6 +69,37 @@ func TestCapturePoolSubmitAndExtract(t *testing.T) {
 	}
 }
 
+func TestCapturePoolExtractsProviderNativeMetadataBeforeSuppressingRawResponse(t *testing.T) {
+	fw := &fakeWriter{}
+	p := newConversationCapturePool(conversationCapturePoolOptions{
+		WorkerCount: 1, QueueSize: 4, OverflowPolicy: "drop",
+	}, fw)
+	defer p.Stop()
+
+	rec := &CaptureRecord{
+		Platform:      PlatformGemini,
+		RawRequest:    []byte(`{"request":{"sessionId":"nested-session"},"additionalModelRequestFields":{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}}`),
+		RawResponse:   []byte(`{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":17,"candidatesTokenCount":5,"cachedContentTokenCount":3}}`),
+		ContentPolicy: &CaptureContentPolicy{RawRequest: false, RawResponse: false},
+	}
+	p.Submit(rec)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&fw.n) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, int32(1), atomic.LoadInt32(&fw.n))
+	require.Nil(t, rec.RawResponse)
+	require.Nil(t, rec.RawRequest)
+	require.Equal(t, "nested-session", rec.SessionID)
+	require.Equal(t, "high", rec.ThinkingEffort)
+	require.Equal(t, "adaptive", rec.ThinkingType)
+	require.Equal(t, "STOP", rec.StopReason)
+	require.Equal(t, 17, rec.InputTokens)
+	require.Equal(t, 5, rec.OutputTokens)
+	require.Equal(t, 3, rec.CacheReadTokens)
+}
+
 func TestCapturePoolDropsOnFullQueue(t *testing.T) {
 	fw := &fakeWriter{}
 	p := newConversationCapturePool(conversationCapturePoolOptions{
@@ -154,4 +185,24 @@ func TestCapturePoolDropsOnByteBudget(t *testing.T) {
 		t.Fatalf("after drain, inFlight must return to 0, got %d", got)
 	}
 	p.Stop()
+}
+
+func TestCapturePoolAcceptsOneRecordWithRequestAndResponseAtBodyLimit(t *testing.T) {
+	const bodyLimit = 5 << 20
+	fw := &fakeWriter{}
+	p := newConversationCapturePool(conversationCapturePoolOptions{
+		WorkerCount: 1, QueueSize: 1, OverflowPolicy: "drop", MaxQueueBytes: 2 * bodyLimit,
+	}, fw)
+	t.Cleanup(p.Stop)
+
+	rec := &CaptureRecord{
+		RawRequest:  make([]byte, bodyLimit),
+		RawResponse: make([]byte, bodyLimit),
+	}
+	require.Equal(t, int64(2*bodyLimit), recordBytes(rec))
+	p.Submit(rec)
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&fw.n) == 1
+	}, 2*time.Second, 5*time.Millisecond, "one max-sized request/response pair must fit the configured body budget")
 }

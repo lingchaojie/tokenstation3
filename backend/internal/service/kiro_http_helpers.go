@@ -216,13 +216,7 @@ func buildKiroRequestID(resp *http.Response) string {
 	if resp == nil {
 		return ""
 	}
-	if requestID := strings.TrimSpace(resp.Header.Get("x-request-id")); requestID != "" {
-		return requestID
-	}
-	if requestID := strings.TrimSpace(resp.Header.Get("x-amzn-requestid")); requestID != "" {
-		return requestID
-	}
-	return strings.TrimSpace(resp.Header.Get("x-amz-request-id"))
+	return captureProviderRequestID(resp.Header)
 }
 
 func isKiroSuspendedBody(respBody []byte) bool {

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +64,29 @@ func (r *passthroughFlushTestErrorBody) Read(p []byte) (int, error) {
 
 func (r *passthroughFlushTestErrorBody) Close() error { return nil }
 
+type passthroughBlockingAfterPrefixReadCloser struct {
+	reader *bytes.Reader
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newPassthroughBlockingAfterPrefixReadCloser(prefix string) *passthroughBlockingAfterPrefixReadCloser {
+	return &passthroughBlockingAfterPrefixReadCloser{reader: bytes.NewReader([]byte(prefix)), closed: make(chan struct{})}
+}
+
+func (r *passthroughBlockingAfterPrefixReadCloser) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *passthroughBlockingAfterPrefixReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
 func runPassthroughFlushTest(
 	t *testing.T,
 	body io.ReadCloser,
@@ -110,7 +135,7 @@ func TestOpenAIStreamingPassthroughFlushesAtCompleteEventBoundaries(t *testing.T
 		`data: {"type":"response.output_text.delta","delta":"hello"}` + "\n\n"
 	heartbeat := ": keepalive\n\n"
 	terminalEvent := "event: response.completed\n" +
-		`data: {"type":"response.completed","response":{"id":"resp_flush","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}` + "\n\n"
+		`data: {"type":"response.completed","response":{"id":"resp_flush","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}` + "\n\n"
 	upstream := firstEvent + heartbeat + terminalEvent
 
 	result, recorder, writer, err := runPassthroughFlushTest(t, io.NopCloser(strings.NewReader(upstream)), -1)
@@ -127,12 +152,53 @@ func TestOpenAIStreamingPassthroughFlushesAtCompleteEventBoundaries(t *testing.T
 	require.Equal(t, 2, result.usage.OutputTokens)
 }
 
+func TestOpenAIStreamingPassthroughHonorsProviderIdleTimeout(t *testing.T) {
+	body := newPassthroughBlockingAfterPrefixReadCloser(
+		`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n",
+	)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize:               defaultMaxLineSize,
+		StreamDataIntervalTimeout: 1,
+	}}}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+
+	type outcome struct {
+		result *openaiStreamingResultPassthrough
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := svc.handleStreamingResponsePassthrough(
+			context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "gpt", "gpt",
+		)
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NotNil(t, got.result)
+		require.ErrorContains(t, got.err, "stream data interval timeout")
+	case <-time.After(2 * time.Second):
+		_ = body.Close()
+		<-done
+		t.Fatal("OpenAI passthrough provider stream ignored StreamDataIntervalTimeout")
+	}
+	require.NoError(t, body.Close())
+}
+
 func TestOpenAIStreamingPassthroughKeepsPreamblePendingUntilFirstOutputBoundary(t *testing.T) {
 	preamble := "event: response.created\n" +
 		`data: {"type":"response.created","response":{"id":"resp_pending"}}` + "\n\n" +
 		": waiting\n\n"
 	firstOutput := `data: {"type":"response.output_text.delta","delta":"ready"}` + "\n\n"
-	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_pending","usage":{"input_tokens":4,"output_tokens":1,"total_tokens":5}}}` + "\n\n"
+	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_pending","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":1,"total_tokens":5}}}` + "\n\n"
 	upstream := preamble + firstOutput + terminalEvent
 
 	_, recorder, writer, err := runPassthroughFlushTest(t, io.NopCloser(strings.NewReader(upstream)), -1)
@@ -147,7 +213,7 @@ func TestOpenAIStreamingPassthroughKeepsPreamblePendingUntilFirstOutputBoundary(
 
 func TestOpenAIStreamingPassthroughFlushesTerminalEventAtEOFWithoutBlankLine(t *testing.T) {
 	upstream := "event: response.completed\n" +
-		`data: {"type":"response.completed","response":{"id":"resp_eof","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}`
+		`data: {"type":"response.completed","response":{"id":"resp_eof","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}`
 	wantBody := upstream + "\n"
 
 	result, recorder, writer, err := runPassthroughFlushTest(t, io.NopCloser(strings.NewReader(upstream)), -1)
@@ -211,7 +277,7 @@ func TestOpenAIStreamingPassthroughFailedAfterOutputFlushesAtBoundaryAndKeepsUsa
 
 func TestOpenAIStreamingPassthroughClientDisconnectStillDrainsTerminalUsage(t *testing.T) {
 	firstOutput := `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n"
-	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_drain","usage":{"input_tokens":11,"output_tokens":4,"total_tokens":15}}}` + "\n\n"
+	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_drain","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":4,"total_tokens":15}}}` + "\n\n"
 
 	result, recorder, writer, err := runPassthroughFlushTest(
 		t,
@@ -243,7 +309,7 @@ func TestOpenAIStreamingPassthroughScannerErrorFlushesWrittenResidual(t *testing
 	require.Equal(t, []int{len(wantBody)}, writer.flushBodyLengths)
 }
 
-func TestOpenAIStreamingPassthroughNamespaceRestoreErrorFlushesWrittenResidualOnce(t *testing.T) {
+func TestOpenAIStreamingPassthroughNamespaceRestoreIgnoresOpaqueNumericExtension(t *testing.T) {
 	writtenPrefix := `data: {"type":"response.output_text.delta","delta":"prefix"}` + "\n"
 	overflowData := `data: {"type":"response.output_text.delta","delta":"not-written","overflow":1e1000}`
 
@@ -258,14 +324,14 @@ func TestOpenAIStreamingPassthroughNamespaceRestoreErrorFlushesWrittenResidualOn
 		},
 	)
 
-	require.ErrorContains(t, err, "restore OpenAI passthrough namespace response")
-	require.Equal(t, writtenPrefix, recorder.Body.String())
-	require.Equal(t, []int{len(writtenPrefix)}, writer.flushBodyLengths)
+	require.ErrorContains(t, err, "missing terminal event")
+	require.Equal(t, writtenPrefix+overflowData+"\n", recorder.Body.String())
+	require.Equal(t, []int{len(writtenPrefix + overflowData + "\n")}, writer.flushBodyLengths)
 }
 
 func TestOpenAIStreamingPassthroughBlankWriteFailureDoesNotFlushAndStillDrainsUsage(t *testing.T) {
 	writtenDataLine := `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n"
-	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_blank_failure","usage":{"input_tokens":13,"output_tokens":5,"total_tokens":18}}}` + "\n\n"
+	terminalEvent := `data: {"type":"response.completed","response":{"id":"resp_blank_failure","status":"completed","output":[],"usage":{"input_tokens":13,"output_tokens":5,"total_tokens":18}}}` + "\n\n"
 
 	result, recorder, writer, err := runPassthroughFlushTest(
 		t,

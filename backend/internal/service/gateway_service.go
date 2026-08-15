@@ -604,6 +604,8 @@ type ForwardResult struct {
 	Duration                      time.Duration
 	FirstTokenMs                  *int // 首字时间（流式请求）
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
+	UpstreamFailed                bool // final provider attempt was consumed but could not produce a valid response
+	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
 	ReasoningEffort               *string
 
 	// 图片生成计费字段（图片生成模型使用）
@@ -623,7 +625,27 @@ type ForwardResult struct {
 	CaptureResponseHeaders  []byte // 上游响应头(脱敏)JSON
 	CaptureUpstreamEndpoint string
 	CaptureHTTPStatus       int
+	CaptureUpstreamModel    string
+	CaptureStream           bool
+	CaptureStreamKnown      bool
 	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+func (r *ForwardResult) UpstreamModelForCapture() string {
+	if r != nil && r.CaptureUpstreamModel != "" {
+		return r.CaptureUpstreamModel
+	}
+	if r == nil {
+		return ""
+	}
+	return r.UpstreamModel
+}
+
+func (r *ForwardResult) StreamForCapture() bool {
+	if r != nil && r.CaptureStreamKnown {
+		return r.CaptureStream
+	}
+	return r != nil && r.Stream
 }
 
 // HTTPStatusForCapture returns the actual provider status when capture has
@@ -712,6 +734,35 @@ func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
+}
+
+func newProviderHTTPError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
+	failure := &UpstreamFailoverError{
+		ResponseBody:            snapshotBytes(body),
+		HasUpstreamHTTPResponse: resp != nil,
+		RetryableOnSameAccount:  retryable,
+	}
+	if account != nil {
+		failure.Platform = account.Platform
+	}
+	if resp == nil {
+		return failure
+	}
+	failure.StatusCode = resp.StatusCode
+	failure.ResponseHeaders = resp.Header.Clone()
+	if resp.Request != nil {
+		failure.RequestHeaders = resp.Request.Header.Clone()
+		if resp.Request.URL != nil {
+			failure.UpstreamEndpoint = redactCaptureURL(resp.Request.URL)
+		}
+	}
+	return failure
+}
+
+func newTerminalProviderHTTPError(account *Account, resp *http.Response, body []byte) *UpstreamFailoverError {
+	failure := newProviderHTTPError(account, resp, body, false)
+	failure.NextAccountAction = NextAccountStop
+	return failure
 }
 
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。

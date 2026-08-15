@@ -290,10 +290,7 @@ func antigravityCompatProxyURL(account *Account) string {
 
 func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin.Context, err error) error {
 	if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-		return &UpstreamFailoverError{
-			StatusCode:        http.StatusServiceUnavailable,
-			ForceCacheBilling: switchErr.IsStickySession,
-		}
+		return antigravitySwitchFailoverError(switchErr)
 	}
 	if c.Request.Context().Err() != nil {
 		return s.writeAntigravityCompatError(c, http.StatusBadGateway, "client_disconnected", "Client disconnected before upstream response")
@@ -319,7 +316,10 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 	}
 	streamResult, err := s.consumeAntigravityCompatSuccess(c, call, resp)
 	if err != nil {
-		return nil, err
+		if call.request.clientStream && streamResult != nil {
+			return streamErrorForwardResult(c, resp, call.request.originalModel, call.billingModel, call.request.startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err), err
+		}
+		return failedForwardResultForError(c, resp, call.request.originalModel, call.billingModel, call.request.clientStream, call.request.startTime, err), err
 	}
 	if streamResult.usage == nil {
 		streamResult.usage = &ClaudeUsage{}
@@ -407,7 +407,8 @@ func (s *AntigravityGatewayService) handleAntigravityCompatHTTPError(
 		appendOpsUpstreamError(c, event)
 		return newAntigravityHTTPFailoverError(account, resp, body, false)
 	}
-	return s.writeMappedAntigravityCompatError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), body)
+	_ = s.writeMappedAntigravityCompatError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), body)
+	return newTerminalProviderHTTPError(account, resp, body)
 }
 
 func antigravityCredentialRejectedError(resp *http.Response, body []byte) *UpstreamFailoverError {

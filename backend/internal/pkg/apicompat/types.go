@@ -299,6 +299,7 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 type ResponsesContentPart struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
+	Refusal  string `json:"refusal,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	Filename string `json:"filename,omitempty"`
@@ -601,6 +602,7 @@ type ResponsesStreamEvent struct {
 	ContentIndex int    `json:"content_index,omitempty"`
 	Delta        string `json:"delta,omitempty"`
 	Text         string `json:"text,omitempty"`
+	Refusal      string `json:"refusal,omitempty"`
 	ItemID       string `json:"item_id,omitempty"`
 
 	// response.function_call_arguments.delta / done
@@ -665,6 +667,7 @@ type ChatMessage struct {
 	Role             string          `json:"role"` // "system" | "user" | "assistant" | "tool" | "function"
 	Content          json.RawMessage `json:"content,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	Refusal          *string         `json:"refusal,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	ToolCalls        []ChatToolCall  `json:"tool_calls,omitempty"`
 	ToolCallID       string          `json:"tool_call_id,omitempty"`
@@ -794,6 +797,7 @@ type ChatDelta struct {
 	Role             string         `json:"role,omitempty"`
 	Content          *string        `json:"content,omitempty"` // pointer: omit when not present, null vs "" matters
 	ReasoningContent *string        `json:"reasoning_content,omitempty"`
+	Refusal          *string        `json:"refusal,omitempty"`
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
 }
 

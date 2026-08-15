@@ -65,6 +65,54 @@ func TestPatchGrokResponsesBodyWithClientToolsLowersCodexProtocol(t *testing.T) 
 	require.False(t, gjson.GetBytes(patched, "input.4.namespace").Exists())
 }
 
+func TestGrokResponsesClientToolStreamBoundsPendingSSEFields(t *testing.T) {
+	var source strings.Builder
+	for i := 0; i < 1025; i++ {
+		source.WriteString("event: response.in_progress\n")
+	}
+	body := newGrokResponsesClientToolStreamBody(
+		io.NopCloser(strings.NewReader(source.String())),
+		apicompat.ResponsesClientToolMapping{},
+		defaultMaxLineSize,
+	)
+	_, err := io.ReadAll(body)
+	require.ErrorContains(t, err, "pending SSE fields exceeded")
+}
+
+func TestGrokResponsesClientToolParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+
+	first := []byte(`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"apply_patch","arguments":{}}]}}` + "\n\n")
+	tail := []byte(`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_error","message":"tail"}}}` + "\n\n")
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1/responses", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &delayedOpenAITerminalTailBody{
+			terminal: first,
+			tail:     tail,
+			delay:    75 * time.Millisecond,
+			closed:   make(chan struct{}),
+		},
+		Request: request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+	body := newGrokResponsesClientToolStreamBody(resp.Body, apicompat.ResponsesClientToolMapping{
+		CustomTools: map[string]bool{"apply_patch": true},
+	}, defaultMaxLineSize)
+	_, err := io.ReadAll(body)
+	require.Error(t, err)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
+}
+
 func TestPatchGrokResponsesBodyWithClientToolsRewritesEveryToolChoice(t *testing.T) {
 	t.Parallel()
 
@@ -345,6 +393,90 @@ func TestForwardGrokResponsesAPIKeyRestoresClientToolsStreaming(t *testing.T) {
 	require.Equal(t, "collaboration", gjson.GetBytes(completed.data, "response.output.2.namespace").String())
 }
 
+func TestForwardGrokResponsesStreamingRejectsMalformedRawClientToolTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := grokClientToolProtocolRequest(true)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	malformed := `{"type":"response.completed","sequence_number":1,"response":{"id":"resp_bad_raw_tool","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"function_call","id":"item_bad","call_id":"call_bad","name":"apply_patch","arguments":{},"status":"completed"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("event: response.completed\ndata: " + malformed + "\n\n")),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7110), body, "grok", true, time.Now())
+
+	require.Error(t, err, "the client-tool restorer must not repair malformed provider-native arguments")
+	require.Nil(t, result, "a presemantic malformed provider event must remain replay-safe")
+	require.Empty(t, recorder.Body.String(), "malformed provider data must not reach the client")
+}
+
+func TestForwardGrokResponsesBufferedSSERejectsMalformedRawClientToolTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := grokClientToolProtocolRequest(false)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	malformed := `{"type":"response.completed","sequence_number":1,"response":{"id":"resp_bad_raw_tool","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"function_call","id":"item_bad","call_id":"call_bad","name":"apply_patch","arguments":{},"status":"completed"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("event: response.completed\ndata: " + malformed + "\n\n")),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7111), body, "grok", false, time.Now())
+
+	require.Error(t, err, "the buffered client-tool restorer must not repair malformed provider-native arguments")
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.Empty(t, recorder.Body.String(), "malformed provider data must not reach the client")
+}
+
+func TestForwardGrokResponsesStreamingRejectsMissingRawClientToolCorrelation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := grokClientToolProtocolRequest(true)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	frames := []string{
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"function_call","id":"item_bad","call_id":"call_bad","name":"apply_patch","arguments":"","status":"in_progress"}}`,
+		`{"type":"response.function_call_arguments.delta","sequence_number":2,"delta":"{\"input\":\"washed\"}"}`,
+		`{"type":"response.function_call_arguments.done","sequence_number":3,"output_index":0,"item_id":"item_bad","call_id":"call_bad","name":"apply_patch","arguments":"{\"input\":\"washed\"}"}`,
+		`{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"type":"function_call","id":"item_bad","call_id":"call_bad","name":"apply_patch","arguments":"{\"input\":\"washed\"}","status":"completed"}}`,
+		`{"type":"response.completed","sequence_number":5,"response":{"id":"resp_bad_correlation","object":"response","model":"grok-4.5","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+	}
+	var provider strings.Builder
+	for _, frame := range frames {
+		fmt.Fprintf(&provider, "data: %s\n\n", frame)
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(provider.String())),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7112), body, "grok", true, time.Now())
+
+	require.Error(t, err, "the raw provider delta must carry the correlation fields required by the strict lifecycle")
+	require.NotNil(t, result, "the tool item was already committed before the malformed delta")
+	require.True(t, result.CaptureTerminalError)
+	require.NotContains(t, recorder.Body.String(), "washed")
+}
+
 func TestGrokResponsesClientToolStreamBodyFlushesFrameBeforeEOF(t *testing.T) {
 	sourceReader, sourceWriter := io.Pipe()
 	body := newGrokResponsesClientToolStreamBody(sourceReader, apicompat.ResponsesClientToolMapping{
@@ -388,6 +520,28 @@ func TestGrokResponsesClientToolStreamBodyFlushesFrameBeforeEOF(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("first transformed SSE frame was not flushed while the upstream connection remained open")
 	}
+}
+
+func TestGrokResponsesClientToolStreamBodyRejectsOversizedRetainedArguments(t *testing.T) {
+	added := `{"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"apply_patch","arguments":"","status":"in_progress"}}`
+	deltaPayload, err := json.Marshal(apicompat.ResponsesStreamEvent{
+		Type:           "response.function_call_arguments.delta",
+		SequenceNumber: 1,
+		OutputIndex:    0,
+		ItemID:         "item",
+		Delta:          strings.Repeat("x", (8<<20)+1),
+	})
+	require.NoError(t, err)
+	source := io.NopCloser(strings.NewReader("data: " + added + "\n\ndata: " + string(deltaPayload) + "\n\n"))
+	body := newGrokResponsesClientToolStreamBody(source, apicompat.ResponsesClientToolMapping{
+		CustomTools: map[string]bool{"apply_patch": true},
+	}, defaultMaxLineSize)
+	defer func() { _ = body.Close() }()
+
+	output, err := io.ReadAll(body)
+	require.ErrorContains(t, err, "retained-state limit")
+	require.Contains(t, string(output), `"type":"custom_tool_call"`)
+	require.NotContains(t, string(output), strings.Repeat("x", 1024))
 }
 
 type grokProtocolSSEFrame struct {
@@ -464,14 +618,14 @@ func grokProtocolUpstreamSSE() string {
 		`{"type":"response.function_call_arguments.delta","sequence_number":43,"output_index":0,"item_id":"item_custom","delta":" Patch\"}"}`,
 		`{"type":"response.function_call_arguments.done","sequence_number":44,"output_index":0,"item_id":"item_custom","call_id":"call_custom","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}"}`,
 		`{"type":"response.output_item.done","sequence_number":45,"output_index":0,"item":{"type":"function_call","id":"item_custom","call_id":"call_custom","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed"}}`,
-		`{"type":"response.output_item.added","sequence_number":46,"output_index":1,"item":{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"","status":"in_progress"}}`,
-		`{"type":"response.function_call_arguments.done","sequence_number":47,"output_index":1,"item_id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}"}`,
-		`{"type":"response.output_item.done","sequence_number":48,"output_index":1,"item":{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}","status":"completed"}}`,
-		`{"type":"response.output_item.added","sequence_number":49,"output_index":2,"item":{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"","status":"in_progress"}}`,
-		`{"type":"response.function_call_arguments.delta","sequence_number":50,"output_index":2,"item_id":"item_search","delta":"{\"query\":\"github\"}"}`,
-		`{"type":"response.function_call_arguments.done","sequence_number":51,"output_index":2,"item_id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}"}`,
-		`{"type":"response.output_item.done","sequence_number":52,"output_index":2,"item":{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}","status":"completed"}}`,
-		`{"type":"response.completed","sequence_number":53,"response":{"id":"resp_protocol_stream","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"function_call","id":"item_custom","call_id":"call_custom","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}"},{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}"},{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}"}],"usage":{"input_tokens":11,"output_tokens":4,"total_tokens":15}}}`,
+		`{"type":"response.output_item.added","sequence_number":46,"output_index":2,"item":{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"","status":"in_progress"}}`,
+		`{"type":"response.function_call_arguments.done","sequence_number":47,"output_index":2,"item_id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}"}`,
+		`{"type":"response.output_item.done","sequence_number":48,"output_index":2,"item":{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}","status":"completed"}}`,
+		`{"type":"response.output_item.added","sequence_number":49,"output_index":1,"item":{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"","status":"in_progress"}}`,
+		`{"type":"response.function_call_arguments.delta","sequence_number":50,"output_index":1,"item_id":"item_search","delta":"{\"query\":\"github\"}"}`,
+		`{"type":"response.function_call_arguments.done","sequence_number":51,"output_index":1,"item_id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}"}`,
+		`{"type":"response.output_item.done","sequence_number":52,"output_index":1,"item":{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}","status":"completed"}}`,
+		`{"type":"response.completed","sequence_number":53,"response":{"id":"resp_protocol_stream","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"function_call","id":"item_custom","call_id":"call_custom","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\"}","status":"completed"},{"type":"function_call","id":"item_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"github\"}","status":"completed"},{"type":"function_call","id":"item_namespace","call_id":"call_namespace","name":"collaboration__send_message","arguments":"{\"target\":\"root\"}","status":"completed"}],"usage":{"input_tokens":11,"output_tokens":4,"total_tokens":15}}}`,
 	}
 	var out strings.Builder
 	for _, event := range events {

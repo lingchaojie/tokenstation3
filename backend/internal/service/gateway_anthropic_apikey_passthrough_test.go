@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,15 @@ type anthropicHTTPUpstreamRecorder struct {
 	lastBody []byte
 	resp     *http.Response
 	err      error
+}
+
+// This file intentionally has no build tag and must compile under both the
+// unit and integration suites. Keep its protocol fixture local instead of
+// depending on helpers from unit-tagged gateway_streaming_test.go.
+func anthropicAPIKeyPassthroughTestSemanticPrefix(inputTokens int, text string) string {
+	return fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":%d}}}\n\n", inputTokens) +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", text)
 }
 
 type anthropicHTTPUpstreamSequenceRecorder struct {
@@ -138,9 +148,9 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	}
 
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":9,"cached_tokens":7}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9,"cached_tokens":7}}}`,
 		"",
-		`data: {"type":"message_delta","usage":{"output_tokens":3}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -442,7 +452,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 				parsed.Stream = false
 
-				upstreamJSON := `{"id":"msg_1","type":"message","usage":{"input_tokens":5,"output_tokens":3}}`
+				upstreamJSON := `{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`
 				upstream := &anthropicHTTPUpstreamRecorder{
 					resp: &http.Response{
 						StatusCode: http.StatusOK,
@@ -948,7 +958,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 						"Content-Type": []string{"application/json"},
 						"x-request-id": []string{"rid-oauth-mimic"},
 					},
-					Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+					Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)),
 				},
 			}
 
@@ -1061,7 +1071,7 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_PreservesClientHeaders
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"msg_real_cc","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"msg_real_cc","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)),
 	}}
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
 	svc := &GatewayService{
@@ -1110,7 +1120,7 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 				"Content-Type": []string{"application/json"},
 				"x-request-id": []string{"rid-oauth-no-system-injection"},
 			},
-			Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+			Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)),
 		},
 	}
 
@@ -1181,13 +1191,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAf
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":11}}}`,
 			"",
-			`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
 			"",
 			"data: [DONE]",
 			"",
-		}, "\n"))),
+		}, "\n") + "\n")),
 	}
 
 	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-3-7-sonnet-20250219")
@@ -1218,11 +1228,16 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsEr
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":11}}}`,
 			"",
-			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 			"",
-			`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+			"",
+			`data: {"type":"content_block_stop","index":0}`,
+			"",
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			"",
 			"",
 		}, "\n"))),
 	}
@@ -1242,7 +1257,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
-	upstreamJSON := `{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3},"cached_tokens":4}}`
+	upstreamJSON := `{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3},"cached_tokens":4}}`
 	upstream := &anthropicHTTPUpstreamRecorder{
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
@@ -1276,8 +1291,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CommittedPartialCarriesCaptur
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	enableCaptureForTest(t, c)
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
-	upstreamSSE := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":8}}}\n\n" +
-		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n"
+	upstreamSSE := anthropicAPIKeyPassthroughTestSemanticPrefix(8, "partial")
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid-api-partial"}},
@@ -1306,15 +1320,15 @@ func TestCapturePolicyMissAvoidsAnthropicPassthroughResponseTee(t *testing.T) {
 		{
 			name:   "stream",
 			stream: true,
-			body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
-				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
-				"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n\n" +
+			body: anthropicAPIKeyPassthroughTestSemanticPrefix(1, "ok") +
+				"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
 				"data: [DONE]\n\n",
 		},
 		{
 			name:   "nonstream",
 			stream: false,
-			body:   `{"id":"msg_policy_off","type":"message","usage":{"input_tokens":1,"output_tokens":1}}`,
+			body:   `{"id":"msg_policy_off","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1358,7 +1372,7 @@ func TestAnthropicAPIKeyPassthroughCaptureUsesFinalWireRequestAtCustomEndpoint(t
 	account.Credentials["base_url"] = "https://relay.example"
 	account.Credentials["custom_error_codes_enabled"] = true
 	account.Credentials["custom_error_codes"] = []any{float64(http.StatusBadRequest)}
-	upstreamJSON := []byte(`{"id":"msg_final","type":"message","usage":{"input_tokens":2,"output_tokens":1}}`)
+	upstreamJSON := []byte(`{"id":"msg_final","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
 	upstream := &anthropicHTTPUpstreamSequenceRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"retry"}}`))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"final-request"}}, Body: io.NopCloser(bytes.NewReader(upstreamJSON))},
@@ -1414,6 +1428,77 @@ func TestAnthropicAPIKeyPassthroughTerminalHTTPErrorBuildsCaptureRecord(t *testi
 	require.Equal(t, errorBody, record.RawResponse)
 	require.Equal(t, upstream.lastReq.URL.String(), record.UpstreamEndpoint)
 	require.NotContains(t, string(record.RequestHeaders), "upstream-anthropic-key")
+}
+
+func TestAnthropicAPIKeyPassthroughCapturePreservesRawStreamFraming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := newAnthropicAPIKeyAccountForTest()
+	raw := []byte("event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":1}}}\r\n\r\n" +
+		"event: content_block_start\r\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\r\n\r\n" +
+		"event: content_block_delta\r\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\r\n\r\n" +
+		"event: content_block_stop\r\ndata: {\"type\":\"content_block_stop\",\"index\":0}\r\n\r\n" +
+		"event: message_delta\r\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\r\n\r\n" +
+		"data: [DONE]")
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(bytes.NewReader(raw))}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
+		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, raw, result.CaptureResponse)
+}
+
+func TestAnthropicAPIKeyPassthroughCapturePreservesRawNonStreamResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := newAnthropicAPIKeyAccountForTest()
+	raw := []byte("{\r\n  \"id\": \"msg_raw\",\r\n  \"type\": \"message\",\r\n  \"role\": \"assistant\",\r\n  \"content\": [],\r\n  \"stop_reason\": \"end_turn\",\r\n  \"usage\": {\"input_tokens\": 2, \"output_tokens\": 1}\r\n}")
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(raw)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
+		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, raw, result.CaptureResponse)
+}
+
+func TestAnthropicAPIKeyPassthroughTerminalCaptureUsesConfiguredCeiling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := newAnthropicAPIKeyAccountForTest()
+	account.Credentials["pool_mode"] = true
+	errorBody := bytes.Repeat([]byte("e"), 600<<10)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(errorBody))}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
+		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now())
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, cfg.Gateway.Capture.MaxBodyBytes)
+	require.NotNil(t, record)
+	require.Equal(t, errorBody, record.RawResponse)
+	require.False(t, record.Truncated)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {
@@ -1510,7 +1595,7 @@ func TestExtractAnthropicSSEDataLine(t *testing.T) {
 func TestGatewayService_ParseSSEUsagePassthrough_MessageStartFallbacks(t *testing.T) {
 	svc := &GatewayService{}
 	usage := &ClaudeUsage{}
-	data := `{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}}`
+	data := `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}}`
 
 	svc.parseSSEUsagePassthrough(data, usage)
 
@@ -1690,12 +1775,18 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingSendsKeepaliveDuring
 	go func() {
 		defer close(done)
 		_, _ = pw.Write([]byte(strings.Join([]string{
-			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"message_start","message":{"id":"msg_keepalive","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1}}}`,
+			"",
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			"",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
 			"",
 		}, "\n") + "\n"))
 		time.Sleep(1200 * time.Millisecond)
 		_, _ = pw.Write([]byte(strings.Join([]string{
-			`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+			`data: {"type":"content_block_stop","index":0}`,
+			"",
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
 			"",
 			"data: [DONE]",
 			"",
@@ -1739,10 +1830,10 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingKeepaliveDoesNotInte
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":4}}}` + "\n"))
+		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":4}}}` + "\n"))
 		time.Sleep(1200 * time.Millisecond)
 		_, _ = pw.Write([]byte("\n"))
-		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\ndata: [DONE]\n\n"))
 		_ = pw.Close()
 	}()
 
@@ -1753,7 +1844,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingKeepaliveDoesNotInte
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	body := rec.Body.String()
-	require.NotContains(t, body, `data: {"type":"message_start","message":{"usage":{"input_tokens":4}}}`+"\n"+"event: ping")
+	require.NotContains(t, body, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":4}}}`+"\n"+"event: ping")
 	require.NotContains(t, body, "event: ping")
 	require.Contains(t, body, "data: [DONE]")
 }
@@ -1816,9 +1907,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingTimeoutAfterClientDi
 	go func() {
 		defer close(done)
 		_, _ = pw.Write([]byte(strings.Join([]string{
-			`data: {"type":"message_start","message":{"usage":{"input_tokens":9}}}`,
+			`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9}}}`,
 			"",
-			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			"",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
 			"",
 		}, "\n") + "\n"))
 		// 保持上游连接静默，触发数据间隔超时分支。
@@ -1887,9 +1980,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingUpstreamReadErrorAft
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: &streamReadCloser{
 			payload: []byte(strings.Join([]string{
-				`data: {"type":"message_start","message":{"usage":{"input_tokens":8}}}`,
+				`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":8}}}`,
 				"",
-				`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				"",
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
 				"",
 			}, "\n") + "\n"),
 			err: io.ErrUnexpectedEOF,

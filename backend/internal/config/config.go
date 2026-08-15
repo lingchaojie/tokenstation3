@@ -1334,6 +1334,8 @@ type GatewayUsageRecordConfig struct {
 }
 
 // GatewayCaptureConfig 上游调用全量归档异步通道配置（默认关闭，关时零成本）。
+const GatewayCaptureMaxBodyBytes = 8 << 20
+
 type GatewayCaptureConfig struct {
 	Enabled               bool                    `mapstructure:"enabled"`
 	MaxBodyBytes          int                     `mapstructure:"max_body_bytes"`
@@ -1384,12 +1386,18 @@ func (c GatewayCaptureConfig) validate() error {
 	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.WriterQueueSize <= 0 || c.BatchMaxSize <= 0 {
 		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/writer_queue_size/batch_max_size must be > 0")
 	}
-	// max_queue_bytes: 0 = 不限；否则必须 >= max_body_bytes，否则单条大 record 永远预留失败、该类流量永不归档。
+	if c.MaxBodyBytes > GatewayCaptureMaxBodyBytes {
+		return fmt.Errorf("gateway.capture.max_body_bytes must be <= %d (8 MiB hard limit), got %d", GatewayCaptureMaxBodyBytes, c.MaxBodyBytes)
+	}
+	// max_queue_bytes: 0 = 不限；否则至少容纳一条请求体与响应体都达到
+	// max_body_bytes 的 record。Header 同样计入预算，因此极大的诊断头仍可能
+	// 按 byte_budget_exceeded 丢弃，但正文配置本身不能制造必丢区间。
 	if c.MaxQueueBytes < 0 {
 		return fmt.Errorf("gateway.capture.max_queue_bytes must be >= 0 (0 = unlimited)")
 	}
-	if c.MaxQueueBytes > 0 && c.MaxQueueBytes < int64(c.MaxBodyBytes) {
-		return fmt.Errorf("gateway.capture.max_queue_bytes (%d) must be >= max_body_bytes (%d) or 0", c.MaxQueueBytes, c.MaxBodyBytes)
+	minRecordBodyBytes := int64(c.MaxBodyBytes) * 2
+	if c.MaxQueueBytes > 0 && c.MaxQueueBytes < minRecordBodyBytes {
+		return fmt.Errorf("gateway.capture.max_queue_bytes (%d) must be >= 2*max_body_bytes (%d) or 0", c.MaxQueueBytes, minRecordBodyBytes)
 	}
 	return nil
 }
@@ -2499,7 +2507,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_check_interval_seconds", 3)
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
 	viper.SetDefault("gateway.capture.enabled", false)
-	viper.SetDefault("gateway.capture.max_body_bytes", 8388608)
+	viper.SetDefault("gateway.capture.max_body_bytes", GatewayCaptureMaxBodyBytes)
 	viper.SetDefault("gateway.capture.max_queue_bytes", int64(1)<<30) // 1 GiB 在途上界；0 = 不限
 	viper.SetDefault("gateway.capture.queue_size", 8192)
 	viper.SetDefault("gateway.capture.worker_count", 4)

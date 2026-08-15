@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -445,6 +446,209 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, events, 1)
 	require.Equal(t, "prompt_too_long", events[0].Kind)
+}
+
+func TestAntigravityGatewayService_Forward_SignatureRetryCaptureUsesOnlyFinalHTTPAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"bad"}]},{"role":"user","content":"hi"}],"max_tokens":32}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+
+	initialBody := []byte(`{"error":{"message":"Corrupted thought signature."}}`)
+	finalBody := []byte(`{"error":{"message":"` + strings.Repeat("z", 64<<10) + `"}}`)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{
+		{StatusCode: http.StatusBadRequest, Header: http.Header{"X-Request-Id": {"signature-initial-400"}}, Body: io.NopCloser(bytes.NewReader(initialBody))},
+		{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"X-Request-Id": {"signature-final-422"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{ID: 12, Name: "signature-retry-capture", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj"}}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, failure, 1<<20)
+	require.NotNil(t, record)
+	require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+	require.Equal(t, finalBody, record.RawResponse)
+	require.Equal(t, "signature-final-422", record.RequestID)
+	require.Len(t, upstream.requestBodies, 2)
+	require.Equal(t, upstream.requestBodies[1], record.RawRequest)
+}
+
+func TestAntigravityGatewayService_Forward_SignatureRetryReadErrorKeepsFinalHTTPAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"bad"}]},{"role":"user","content":"hi"}],"max_tokens":32}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+
+	initialBody := []byte(`{"error":{"message":"Corrupted thought signature."}}`)
+	finalBody := []byte(`{"error":{"message":"final retry body prefix"}}`)
+	readErr := errors.New("forced signature retry response read failure")
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{
+		{StatusCode: http.StatusBadRequest, Header: http.Header{"X-Request-Id": {"signature-initial-400"}}, Body: io.NopCloser(bytes.NewReader(initialBody))},
+		{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"X-Request-Id": {"signature-final-422"}}, Body: &antigravityCompatErrorReader{data: finalBody, err: readErr}},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{ID: 120, Name: "signature-retry-read-error", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj"}}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, failure, 1<<20)
+	require.NotNil(t, record)
+	require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+	require.Equal(t, finalBody, record.RawResponse)
+	require.Len(t, upstream.requestBodies, 2)
+	require.Equal(t, upstream.requestBodies[1], record.RawRequest)
+}
+
+func TestAntigravityGatewayService_Forward_BudgetRetryReadErrorKeepsFinalHTTPAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}],"max_tokens":4096,"thinking":{"type":"enabled","budget_tokens":1024}}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+
+	initialBody := []byte(`{"error":{"message":"thinking budget_tokens input should be greater than or equal to 1024"}}`)
+	finalBody := []byte(`{"error":{"message":"budget retry body prefix"}}`)
+	readErr := errors.New("forced budget retry response read failure")
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{
+		{StatusCode: http.StatusBadRequest, Header: http.Header{"X-Request-Id": {"budget-initial-400"}}, Body: io.NopCloser(bytes.NewReader(initialBody))},
+		{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"X-Request-Id": {"budget-final-422"}}, Body: &antigravityCompatErrorReader{data: finalBody, err: readErr}},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{ID: 121, Name: "budget-retry-read-error", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj"}}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, failure, 1<<20)
+	require.NotNil(t, record)
+	require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+	require.Equal(t, finalBody, record.RawResponse)
+	require.Len(t, upstream.requestBodies, 2)
+	require.Equal(t, upstream.requestBodies[1], record.RawRequest)
+}
+
+func TestAntigravityGatewayService_Forward_SignatureRetryTransportDoesNotPairInitialHTTPResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"bad"}]},{"role":"user","content":"hi"}],"max_tokens":32}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+
+	initialBody := []byte(`{"error":{"message":"Corrupted thought signature."}}`)
+	transportErr := errors.New("signature retry transport failed")
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{{StatusCode: http.StatusBadRequest, Header: http.Header{"X-Request-Id": {"signature-initial-400"}}, Body: io.NopCloser(bytes.NewReader(initialBody))}},
+		errors:    []error{nil, transportErr, transportErr, transportErr},
+	}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{ID: 13, Name: "signature-retry-transport", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj"}}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), transportErr.Error())
+	_, captured := takeCaptureResult(c)
+	require.False(t, captured, "a request-only signature retry must not be paired with the initial 400")
+}
+
+func TestAntigravityForwardUpstreamTerminalOnlyPolicyArchivesHTTPError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+
+	providerBody := []byte(`{"error":{"message":"provider rejected request"}}`)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusUnprocessableEntity,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"X-Request-Id": []string{"antigravity-upstream-422"},
+		},
+		Body: io.NopCloser(bytes.NewReader(providerBody)),
+	}}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
+		httpUpstream:   upstream,
+	}
+	account := &Account{
+		ID:          14,
+		Name:        "compatible-upstream-terminal",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeUpstream,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"base_url": "https://compatible.example", "api_key": "secret"},
+	}
+
+	result, err := svc.ForwardUpstream(context.Background(), c, account, body)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	require.True(t, IsResponseCommitted(c))
+	require.Equal(t, http.StatusUnprocessableEntity, writer.Code)
+	require.Equal(t, providerBody, writer.Body.Bytes())
+
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, failure, 1<<20)
+	require.NotNil(t, record, "terminal-only policy must archive an upstream-compatible HTTP failure")
+	require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+	require.Equal(t, providerBody, record.RawResponse)
+	require.Equal(t, upstream.requestBodies[0], record.RawRequest)
+	require.Equal(t, "antigravity-upstream-422", record.RequestID)
+}
+
+func TestAntigravityForwardUpstreamNonStreamingUsesFunctionalResponseLimitBeyondCapturePrefix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	requestBody := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+	enableCaptureForTest(t, c)
+
+	providerBody := []byte(`{"id":"msg_large","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":0},"padding":"` + strings.Repeat("x", captureHardMaxBodyBytes) + `"}`)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: captureHardMaxBodyBytes}}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
+		httpUpstream:   upstream,
+	}
+	account := &Account{ID: 15, Name: "large-compatible-response", Platform: PlatformAntigravity, Type: AccountTypeUpstream, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"base_url": "https://compatible.example", "api_key": "secret"}}
+
+	result, err := svc.ForwardUpstream(context.Background(), c, account, requestBody)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, providerBody, writer.Body.Bytes(), "business forwarding must not inherit the smaller capture retention limit")
+	require.Len(t, result.CaptureResponse, captureHardMaxBodyBytes)
+	require.True(t, result.CaptureTruncated)
 }
 
 // TestAntigravityGatewayService_Forward_ModelRateLimitTriggersFailover
@@ -944,6 +1148,71 @@ func TestAntigravityGatewayService_ForwardGemini_FallbackReportsActualUpstreamMo
 	require.Contains(t, string(upstream.requestBodies[1]), `"model":"`+fallbackModel+`"`)
 }
 
+func TestAntigravityGatewayService_ForwardGemini_FallbackFailureCaptureUsesOnlyFinalAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-primary:generateContent", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+	c.Set("parsed_request", &ParsedRequest{Body: NewRequestBodyRef(body), Model: "gemini-primary"})
+
+	const mappedModel, fallbackModel = "gemini-primary-upstream", "gemini-fallback-upstream"
+	initialBody := []byte(`{"error":{"code":404,"message":"model not found"}}`)
+	finalBody := []byte(`{"response":{"error":{"code":422,"message":"fallback rejected"}}}`)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{
+		{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"initial-404"}}, Body: io.NopCloser(bytes.NewReader(initialBody))},
+		{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"fallback-422"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	settings := &antigravitySettingRepoStub{values: map[string]string{
+		SettingKeyEnableModelFallback: "true", SettingKeyFallbackModelAntigravity: fallbackModel,
+	}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(settings, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{
+		ID: 91, Name: "fallback-final-attempt", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj", "model_mapping": map[string]any{"gemini-primary": mappedModel}},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-primary", "generateContent", false, body, false)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformAntigravity, failure, 1<<20)
+	require.NotNil(t, record)
+	require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+	require.Equal(t, finalBody, record.RawResponse)
+	require.NotEqual(t, initialBody, record.RawResponse)
+	require.Contains(t, string(record.RawRequest), `"model":"`+fallbackModel+`"`)
+	require.Equal(t, "fallback-422", record.RequestID)
+	require.Len(t, upstream.requestBodies, 2)
+}
+
+func TestAntigravityGatewayService_ForwardGemini_FallbackTransportDoesNotPairInitialResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-primary:generateContent", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+
+	initialBody := []byte(`{"error":{"code":404,"message":"model not found"}}`)
+	transportErr := errors.New("fallback transport failed")
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(initialBody))}},
+		errors:    []error{nil, transportErr},
+	}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	settings := &antigravitySettingRepoStub{values: map[string]string{SettingKeyEnableModelFallback: "true", SettingKeyFallbackModelAntigravity: "gemini-fallback"}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(settings, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
+	account := &Account{ID: 92, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "proj", "model_mapping": map[string]any{"gemini-primary": "gemini-primary-upstream"}}}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-primary", "generateContent", false, body, false)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, transportErr)
+	_, captured := takeCaptureResult(c)
+	require.False(t, captured, "a request-only fallback attempt must not be paired with the initial HTTP response")
+}
+
 func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignature(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	writer := httptest.NewRecorder()
@@ -1135,14 +1404,18 @@ func TestStreamUpstreamResponse_UsageAndFirstToken(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		fmt.Fprintln(pw, `data: {"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}`)
-		fmt.Fprintln(pw, `data: {"usage":{"output_tokens":5}}`)
+		fmt.Fprintln(pw, `event: message_start`)
+		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":0,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`)
+		fmt.Fprintln(pw, `event: message_stop`)
+		fmt.Fprintln(pw, `data: {"type":"message_stop"}`)
 	}()
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	result := svc.streamUpstreamResponse(c, resp, start)
+	result, err := svc.streamUpstreamResponse(c, resp, start)
 	_ = pr.Close()
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.usage)
 	require.Equal(t, 1, result.usage.InputTokens)
@@ -1176,19 +1449,29 @@ func TestStreamUpstreamResponse_NormalComplete(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		fmt.Fprintln(pw, `event: message_start`)
-		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10}}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `event: content_block_start`)
+		fmt.Fprintln(pw, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
 		fmt.Fprintln(pw, "")
 		fmt.Fprintln(pw, `event: content_block_delta`)
-		fmt.Fprintln(pw, `data: {"type":"content_block_delta","delta":{"text":"hello"}}`)
+		fmt.Fprintln(pw, `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `event: content_block_stop`)
+		fmt.Fprintln(pw, `data: {"type":"content_block_stop","index":0}`)
 		fmt.Fprintln(pw, "")
 		fmt.Fprintln(pw, `event: message_delta`)
-		fmt.Fprintln(pw, `data: {"type":"message_delta","usage":{"output_tokens":5}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `event: message_stop`)
+		fmt.Fprintln(pw, `data: {"type":"message_stop"}`)
 		fmt.Fprintln(pw, "")
 	}()
 
-	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
 	_ = pr.Close()
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.False(t, result.clientDisconnect, "normal completion should not set clientDisconnect")
 	require.NotNil(t, result.usage)
@@ -1247,6 +1530,168 @@ func TestHandleGeminiStreamingResponse_NormalComplete(t *testing.T) {
 	require.Contains(t, body, "world")
 	// 不应包含错误事件
 	require.NotContains(t, body, "event: error")
+}
+
+func TestHandleGeminiStreamingResponseDenseUnknownPayloadAllocatesLinearly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dense := strings.TrimSuffix(strings.Repeat("0,", (8<<20)/2), ",")
+	payload := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"opaque":[` + dense + `]}`
+	body := "data: " + payload + "\n\n"
+	svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: 9 << 20}})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}
+
+	runtime.GC()
+	var before runtime.MemStats
+	var after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.semanticOutput)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(96<<20))
+}
+
+func TestAntigravityForcedBufferedDenseUnknownPayloadAllocatesLinearly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dense := strings.TrimSuffix(strings.Repeat("0,", (4<<20)/2), ",")
+	payload := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1},"opaque":[` + dense + `]}`
+	body := "data: " + payload + "\n\n"
+	svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: 5 << 20}})
+
+	for _, tc := range []struct {
+		name string
+		run  func(*gin.Context, *http.Response) error
+	}{
+		{
+			name: "gemini",
+			run: func(c *gin.Context, resp *http.Response) error {
+				_, err := svc.handleGeminiStreamToNonStreaming(c, resp, time.Now())
+				return err
+			},
+		},
+		{
+			name: "claude",
+			run: func(c *gin.Context, resp *http.Response) error {
+				_, _, err := svc.collectClaudeStreamResponse(c, resp, time.Now(), "claude-test")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}
+
+			runtime.GC()
+			var before runtime.MemStats
+			var after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			err := tc.run(c, resp)
+			runtime.ReadMemStats(&after)
+
+			require.NoError(t, err)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(128<<20))
+		})
+	}
+}
+
+func TestAntigravityDirectStreamReadErrorAfterSemanticOutputPreservesPartialUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	forcedErr := errors.New("forced antigravity stream read failure")
+	tests := []struct {
+		name   string
+		body   []byte
+		invoke func(*AntigravityGatewayService, *gin.Context, *http.Response) (*antigravityStreamResult, error)
+	}{
+		{
+			name: "gemini_native",
+			body: []byte(`data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}` + "\n\n"),
+			invoke: func(s *AntigravityGatewayService, c *gin.Context, resp *http.Response) (*antigravityStreamResult, error) {
+				return s.handleGeminiStreamingResponse(c, resp, time.Now())
+			},
+		},
+		{
+			name: "claude_native",
+			body: []byte(`data: {"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}}` + "\n\n"),
+			invoke: func(s *AntigravityGatewayService, c *gin.Context, resp *http.Response) (*antigravityStreamResult, error) {
+				return s.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}})
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: &antigravityCompatErrorReader{data: tt.body, err: forcedErr}}
+
+			result, err := tt.invoke(svc, c, resp)
+
+			require.ErrorIs(t, err, forcedErr)
+			require.NotNil(t, result)
+			require.True(t, result.semanticOutput)
+			require.NotNil(t, result.usage)
+			require.Equal(t, 8, result.usage.InputTokens)
+			require.Equal(t, 3, result.usage.OutputTokens)
+			require.Contains(t, recorder.Body.String(), "partial")
+		})
+	}
+}
+
+func TestAntigravityBaseURLStreamReadErrorAfterSemanticOutputReturnsBillableTerminalPartial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	forcedErr := errors.New("forced antigravity relay read failure")
+	providerBody := []byte(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":8}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+		``,
+	}, "\n") + "\n")
+	upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"ag-relay-partial"}},
+		Body:       &antigravityCompatErrorReader{data: providerBody, err: forcedErr},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
+	svc := newAntigravityTestService(cfg)
+	svc.httpUpstream = upstream
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+	account := &Account{ID: 130, Platform: PlatformAntigravity, Type: AccountTypeUpstream, Concurrency: 1, Credentials: map[string]any{"base_url": "https://relay.example", "api_key": "relay-secret"}}
+
+	result, err := svc.ForwardUpstream(context.Background(), c, account, body)
+
+	require.ErrorIs(t, err, forcedErr)
+	require.NotNil(t, result)
+	require.False(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.Equal(t, "claude-sonnet-4-5", result.UpstreamModel)
+	require.Equal(t, 8, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, providerBody, result.CaptureResponse)
+	require.Contains(t, recorder.Body.String(), "partial")
 }
 
 // TestHandleClaudeStreamingResponse_NormalComplete
@@ -1382,16 +1827,20 @@ func TestStreamUpstreamResponse_ClientDisconnectDrainsUsage(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		fmt.Fprintln(pw, `event: message_start`)
-		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"usage":{"input_tokens":10}}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10}}}`)
 		fmt.Fprintln(pw, "")
 		fmt.Fprintln(pw, `event: message_delta`)
-		fmt.Fprintln(pw, `data: {"type":"message_delta","usage":{"output_tokens":20}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `event: message_stop`)
+		fmt.Fprintln(pw, `data: {"type":"message_stop"}`)
 		fmt.Fprintln(pw, "")
 	}()
 
-	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
 	_ = pr.Close()
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.NotNil(t, result.usage)
@@ -1399,7 +1848,7 @@ func TestStreamUpstreamResponse_ClientDisconnectDrainsUsage(t *testing.T) {
 }
 
 // TestStreamUpstreamResponse_ContextCanceled
-// 验证：context 取消时返回 usage 且标记 clientDisconnect
+// 验证：context 取消时保留 usage/clientDisconnect，但不能伪装成 provider success。
 func TestStreamUpstreamResponse_ContextCanceled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityTestService(&config.Config{
@@ -1414,8 +1863,9 @@ func TestStreamUpstreamResponse_ContextCanceled(t *testing.T) {
 
 	resp := &http.Response{StatusCode: http.StatusOK, Body: cancelReadCloser{}, Header: http.Header{}}
 
-	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
 
+	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.NotContains(t, rec.Body.String(), "event: error")
@@ -1436,12 +1886,14 @@ func TestStreamUpstreamResponse_Timeout(t *testing.T) {
 	pr, pw := io.Pipe()
 	resp := &http.Response{StatusCode: http.StatusOK, Body: pr, Header: http.Header{}}
 
-	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
 	_ = pw.Close()
 	_ = pr.Close()
 
-	require.NotNil(t, result)
-	require.False(t, result.clientDisconnect)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result, "pre-semantic timeout is replay-safe and must not create a partial result")
+	require.True(t, failoverErr.HasUpstreamHTTPResponse)
 }
 
 // TestStreamUpstreamResponse_TimeoutAfterClientDisconnect
@@ -1461,15 +1913,53 @@ func TestStreamUpstreamResponse_TimeoutAfterClientDisconnect(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Body: pr, Header: http.Header{}}
 
 	go func() {
-		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`)
+		fmt.Fprintln(pw, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":5}}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		fmt.Fprintln(pw, "")
+		fmt.Fprintln(pw, `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`)
 		fmt.Fprintln(pw, "")
 		// 不关闭 pw → 等待超时
 	}()
 
-	result := svc.streamUpstreamResponse(c, resp, time.Now())
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
 	_ = pw.Close()
 	_ = pr.Close()
 
+	require.ErrorContains(t, err, "stream data interval timeout")
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+}
+
+func TestStreamUpstreamResponse_ReadErrorAfterClientDisconnectIsTerminalPartial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	c.Writer = &antigravityFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body: &streamReadCloser{
+			payload: []byte(strings.Join([]string{
+				`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":5}}}`,
+				"",
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				"",
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+				"",
+			}, "\n")),
+			err: io.ErrUnexpectedEOF,
+		},
+	}
+
+	result, err := svc.streamUpstreamResponse(c, resp, time.Now())
+	require.ErrorContains(t, err, "stream read error")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 }
@@ -1492,7 +1982,7 @@ func TestHandleGeminiStreamingResponse_ClientDisconnect(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		fmt.Fprintln(pw, `data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":10}}`)
+		fmt.Fprintln(pw, `data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":10}}`)
 		fmt.Fprintln(pw, "")
 	}()
 
@@ -1506,7 +1996,7 @@ func TestHandleGeminiStreamingResponse_ClientDisconnect(t *testing.T) {
 }
 
 // TestHandleGeminiStreamingResponse_ContextCanceled
-// 验证：context 取消时不注入错误事件
+// 验证：context 取消时不注入错误事件，但返回 terminal partial error。
 func TestHandleGeminiStreamingResponse_ContextCanceled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityTestService(&config.Config{
@@ -1523,7 +2013,7 @@ func TestHandleGeminiStreamingResponse_ContextCanceled(t *testing.T) {
 
 	result, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.NotContains(t, rec.Body.String(), "event: error")
@@ -1558,6 +2048,50 @@ func TestHandleClaudeStreamingResponse_ClientDisconnect(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+}
+
+func TestAntigravityNativeClientDisconnectDoesNotHideProviderReadError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name    string
+		payload string
+		run     func(*AntigravityGatewayService, *gin.Context, *http.Response) (*antigravityStreamResult, error)
+	}{
+		{
+			name:    "gemini native",
+			payload: `data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}` + "\n\n",
+			run: func(svc *AntigravityGatewayService, c *gin.Context, resp *http.Response) (*antigravityStreamResult, error) {
+				return svc.handleGeminiStreamingResponse(c, resp, time.Now())
+			},
+		},
+		{
+			name:    "claude conversion",
+			payload: `data: {"response":{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}}` + "\n\n",
+			run: func(svc *AntigravityGatewayService, c *gin.Context, resp *http.Response) (*antigravityStreamResult, error) {
+				return svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}})
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &antigravityFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &streamReadCloser{payload: []byte(tc.payload), err: io.ErrUnexpectedEOF},
+			}
+
+			result, err := tc.run(svc, c, resp)
+			require.NotNil(t, result)
+			require.True(t, result.clientDisconnect)
+			require.ErrorContains(t, err, "stream read error")
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		})
+	}
 }
 
 // TestHandleClaudeStreamingResponse_EmptyStream
@@ -1601,7 +2135,7 @@ func TestHandleClaudeStreamingResponse_EmptyStream(t *testing.T) {
 }
 
 // TestHandleClaudeStreamingResponse_ContextCanceled
-// 验证：context 取消时不注入错误事件
+// 验证：context 取消时不注入错误事件，但返回 terminal partial error。
 func TestHandleClaudeStreamingResponse_ContextCanceled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityTestService(&config.Config{
@@ -1618,7 +2152,7 @@ func TestHandleClaudeStreamingResponse_ContextCanceled(t *testing.T) {
 
 	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.NotContains(t, rec.Body.String(), "event: error")
@@ -1636,6 +2170,16 @@ func TestExtractSSEUsage(t *testing.T) {
 			name:     "message_delta with output_tokens",
 			line:     `data: {"type":"message_delta","usage":{"output_tokens":42}}`,
 			expected: ClaudeUsage{OutputTokens: 42},
+		},
+		{
+			name:     "compact data field without space",
+			line:     `data:{"type":"message_delta","usage":{"output_tokens":43}}`,
+			expected: ClaudeUsage{OutputTokens: 43},
+		},
+		{
+			name:     "data field with tab",
+			line:     "data:\t{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":44}}}",
+			expected: ClaudeUsage{InputTokens: 44},
 		},
 		{
 			name:     "non-data line ignored",
@@ -1657,7 +2201,7 @@ func TestExtractSSEUsage(t *testing.T) {
 		{
 			// message_start.message.usage.cache_creation 内的 5m/1h 明细也要解析。
 			name:     "message_start nested usage with cache_creation breakdown",
-			line:     `data: {"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`,
+			line:     `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`,
 			expected: ClaudeUsage{InputTokens: 100, CacheCreation5mTokens: 30, CacheCreation1hTokens: 70},
 		},
 	}

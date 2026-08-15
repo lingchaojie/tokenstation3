@@ -261,35 +261,41 @@ func hashFinalOpenAIUpstreamRequest(result *service.OpenAIForwardResult, fallbac
 // submitCapture 把一次 OpenAI 透传调用的原始上游快照提交到归档通道。
 // capturePool 为 nil（未启用/未注入）或结果未采集时直接返回，热路径零成本。
 func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.OpenAIForwardResult, account *service.Account, body []byte, upstreamEndpoint string) {
-	if h.capturePool == nil || result == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+	if h.capturePool == nil || result == nil || result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
-	h.capturePool.Submit(buildOpenAICaptureRecord(result, account, body, upstreamEndpoint, h.captureLimit()))
+	if record := buildOpenAICaptureRecord(result, account, body, upstreamEndpoint, h.captureLimit()); record != nil {
+		h.capturePool.Submit(record)
+	}
 }
 
 func buildOpenAICaptureRecord(result *service.OpenAIForwardResult, account *service.Account, fallbackBody []byte, upstreamEndpoint string, limit int) *service.CaptureRecord {
-	if result == nil || account == nil || result.CaptureResponse == nil {
+	if result == nil || account == nil || result.UpstreamRequest == nil || result.CaptureResponse == nil {
 		return nil
 	}
-	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(finalOpenAIUpstreamRequest(result, fallbackBody), limit)
+	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(result.UpstreamRequest, limit)
 	if result.CaptureUpstreamEndpoint != "" {
 		upstreamEndpoint = result.CaptureUpstreamEndpoint
 	}
 	return &service.CaptureRecord{
-		CapturedAt:       time.Now().UTC(),
-		Platform:         string(account.Platform),
-		RequestID:        result.RequestID,
-		RequestedModel:   result.Model,
-		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: upstreamEndpoint,
-		Stream:           result.Stream,
-		HTTPStatus:       result.HTTPStatusForCapture(),
-		RawRequest:       rawRequest,
-		RawResponse:      result.CaptureResponse,
-		RequestHeaders:   result.CaptureRequestHeaders,
-		ResponseHeaders:  result.CaptureResponseHeaders,
-		Truncated:        requestTruncated || result.CaptureTruncated,
-		ContentPolicy:    result.CaptureContentPolicy,
+		CapturedAt:          time.Now().UTC(),
+		Platform:            string(account.Platform),
+		RequestID:           service.CaptureRequestID(result.RequestID),
+		RequestedModel:      result.Model,
+		UpstreamModel:       result.UpstreamModelForCapture(),
+		UpstreamEndpoint:    upstreamEndpoint,
+		Stream:              result.StreamForCapture(),
+		HTTPStatus:          result.HTTPStatusForCapture(),
+		InputTokens:         result.Usage.InputTokens,
+		OutputTokens:        result.Usage.OutputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		RawRequest:          rawRequest,
+		RawResponse:         result.CaptureResponse,
+		RequestHeaders:      result.CaptureRequestHeaders,
+		ResponseHeaders:     result.CaptureResponseHeaders,
+		Truncated:           requestTruncated || result.CaptureTruncated,
+		ContentPolicy:       result.CaptureContentPolicy,
 	}
 }
 
@@ -760,6 +766,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 		forwardSideEffects := newOpenAIForwardSideEffectSubmitter(func(result *service.OpenAIForwardResult) {
+			h.submitCapture(c, result, account, attemptBody, upstreamEndpoint)
+			if result.UpstreamFailed {
+				return
+			}
 			// A forward error with a cyber mark is billed by
 			// recordCyberPolicyIfMarked. The final error result still reaches this
 			// sink for capture, but must not enqueue a second normal usage record.
@@ -794,7 +804,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					}
 				})
 			}
-			h.submitCapture(c, result, account, attemptBody, upstreamEndpoint)
 		})
 		forwardSideEffects.Submit(result)
 		if err != nil {
@@ -1302,7 +1311,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(currentRoutingModel), true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(currentRoutingModel), openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(currentRoutingModel), true, nil)
 		}
@@ -1317,6 +1326,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 		forwardSideEffects := newOpenAIForwardSideEffectSubmitter(func(result *service.OpenAIForwardResult) {
+			h.submitCapture(c, result, account, forwardBody, upstreamEndpoint)
+			if result.UpstreamFailed {
+				return
+			}
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             result,
@@ -1346,7 +1359,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					).Error("openai_messages.record_usage_failed", zap.Error(err))
 				}
 			})
-			h.submitCapture(c, result, account, forwardBody, upstreamEndpoint)
 		})
 		forwardSideEffects.Submit(result)
 		reqLog.Debug("openai_messages.request_completed",

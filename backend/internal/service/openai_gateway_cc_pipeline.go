@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -34,13 +35,30 @@ import (
 // 调用方，属于有意保留的行为差异，不在此强行统一。
 
 // newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，按配置放大单行上限。
+func resolveUpstreamSSEEventLimit(cfg *config.Config) int64 {
+	maxLineSize := defaultMaxLineSize
+	if cfg != nil && cfg.Gateway.MaxLineSize > 0 {
+		maxLineSize = cfg.Gateway.MaxLineSize
+	}
+	return int64(maxLineSize)
+}
+
+func resolveBufferedProviderSSELineLimit(cfg *config.Config) int {
+	limit := resolveUpstreamSSEEventLimit(cfg)
+	if responseLimit := resolveUpstreamResponseReadLimit(cfg); responseLimit < limit {
+		limit = responseLimit
+	}
+	if limit < 1 {
+		return 1
+	}
+	return int(limit)
+}
+
 func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(r)
-	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
-	}
+	maxLineSize := int(resolveUpstreamSSEEventLimit(s.cfg))
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Split(boundedStreamScanLines(maxLineSize, errStreamScannerTokenLimit))
 	return scanner
 }
 
@@ -250,6 +268,9 @@ type ccStreamScanState struct {
 	FirstTokenMs *int
 	// SawDone 表示上游发出了 [DONE] 哨兵。
 	SawDone bool
+	// SawProviderPayload distinguishes a real Chat Completions payload (choices
+	// or usage) from a framing-only [DONE] response.
+	SawProviderPayload bool
 	// SawOutput means at least one semantic content/reasoning/tool chunk was
 	// observed. It is the commit boundary for retry/failover decisions.
 	SawOutput bool
@@ -279,6 +300,30 @@ type stagedConvertedTrackingWriter struct {
 	written int64
 }
 
+type stagedSemanticWriter struct {
+	stage        *stagedConvertedStream
+	c            *gin.Context
+	writeHeaders func()
+	semantic     *bool
+	terminal     *bool
+	err          error
+}
+
+func (w *stagedSemanticWriter) Write(p []byte) (int, error) {
+	if w == nil || w.stage == nil || w.c == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if w.err != nil {
+		return 0, w.err
+	}
+	commit := (w.semantic != nil && *w.semantic) || (w.terminal != nil && *w.terminal)
+	if err := w.stage.write(w.c, w.writeHeaders, string(p), commit); err != nil {
+		w.err = err
+		return 0, err
+	}
+	return len(p), nil
+}
+
 func (w *stagedConvertedTrackingWriter) Write(p []byte) (int, error) {
 	n, err := w.w.Write(p)
 	w.written += int64(n)
@@ -296,6 +341,10 @@ func restoreStagedConvertedHeaders(dst, snapshot http.Header) {
 }
 
 func (s *stagedConvertedStream) write(c *gin.Context, writeHeaders func(), payload string, commit bool) error {
+	return s.writeWithFlush(c, writeHeaders, payload, commit, true)
+}
+
+func (s *stagedConvertedStream) writeWithFlush(c *gin.Context, writeHeaders func(), payload string, commit, flush bool) error {
 	if s.committed {
 		if payload == "" {
 			return nil
@@ -304,10 +353,12 @@ func (s *stagedConvertedStream) write(c *gin.Context, writeHeaders func(), paylo
 		if err != nil {
 			return &stagedConvertedClientWriteError{err: err}
 		}
-		c.Writer.Flush()
+		if flush {
+			c.Writer.Flush()
+		}
 		return nil
 	}
-	if payload != "" {
+	if payload != "" && !commit {
 		if s.pending == nil {
 			s.pending = newDefaultOpenAIFirstOutputStage()
 		}
@@ -340,10 +391,31 @@ func (s *stagedConvertedStream) write(c *gin.Context, writeHeaders func(), paylo
 			return fmt.Errorf("commit converted stream: %w", combinedErr)
 		}
 		s.committed = true
-	} else {
+	} else if payload == "" {
 		s.committed = true
 	}
-	c.Writer.Flush()
+	if payload != "" {
+		committedBeforePayload := s.committed
+		delivered, err := c.Writer.Write([]byte(payload))
+		if delivered > 0 {
+			s.committed = true
+		} else {
+			s.committed = committedBeforePayload
+		}
+		if err == nil && delivered != len(payload) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			if !s.committed {
+				restoreStagedConvertedHeaders(c.Writer.Header(), headersBeforeCommit)
+			}
+			return &stagedConvertedClientWriteError{err: err}
+		}
+		s.committed = true
+	}
+	if flush {
+		c.Writer.Flush()
+	}
 	return nil
 }
 
@@ -377,96 +449,67 @@ func (s *OpenAIGatewayService) scanCCStream(
 		ctx = context.Background()
 	}
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
-	scanner.Split(boundedStreamScanLines(openAIFirstOutputStageMaxBytes, errStreamScannerTokenLimit))
-	type scanEvent struct {
-		line string
-		err  error
-	}
-	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
-	done := make(chan struct{})
-	scanDone := make(chan struct{})
-	go func() {
-		defer close(scanDone)
-		defer close(events)
-		for scanner.Scan() {
-			select {
-			case events <- scanEvent{line: scanner.Text()}:
-			case <-done:
-				return
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			select {
-			case events <- scanEvent{err: err}:
-			case <-done:
-			}
-		}
-	}()
+	lineReader := newProviderLineReader(resp, s.cfg, s.newUpstreamSSEScanner)
 	defer func() {
-		close(done)
-		_ = resp.Body.Close()
-		<-scanDone
-	}()
-
-	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
-	}
-	var idleTimer *time.Timer
-	var idleCh <-chan time.Time
-	resetIdleTimer := func() {
-		if streamInterval <= 0 {
+		if st.Err != nil {
+			lineReader.DrainCaptureOnParserFailure(ctx)
 			return
 		}
-		if idleTimer == nil {
-			idleTimer = time.NewTimer(streamInterval)
-			idleCh = idleTimer.C
-			return
-		}
-		if !idleTimer.Stop() {
-			select {
-			case <-idleTimer.C:
-			default:
-			}
-		}
-		idleTimer.Reset(streamInterval)
-	}
-	resetIdleTimer()
-	defer func() {
-		if idleTimer != nil {
-			idleTimer.Stop()
-		}
+		lineReader.Close()
 	}()
+	choiceState := openAIChatChoiceStreamState{}
+	var terminalTailDeadline time.Time
+	var bufferedTail []string
+	tailCollected := false
 
 	for {
-		var event scanEvent
+		var line string
 		var ok bool
-		select {
-		case <-ctx.Done():
-			st.Err = ctx.Err()
+		var err error
+		if len(bufferedTail) > 0 {
+			line, ok = bufferedTail[0], true
+			bufferedTail = bufferedTail[1:]
+		} else if tailCollected {
 			return st
-		case <-idleCh:
-			st.Err = fmt.Errorf("upstream stream idle timeout after %s", streamInterval)
-			return st
-		case event, ok = <-events:
-			if !ok {
-				return st
+		} else if st.SawDone {
+			if terminalTailDeadline.IsZero() {
+				terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
 			}
+			var timedOut bool
+			line, ok, timedOut, err = lineReader.NextBefore(terminalTailDeadline)
+			if timedOut {
+				bufferedTail, err = lineReader.CloseAndCollectBufferedTail()
+				tailCollected = true
+				if err != nil {
+					st.Err = err
+					return st
+				}
+				continue
+			}
+		} else {
+			line, ok, err = lineReader.NextContext(ctx)
 		}
-		resetIdleTimer()
-		if event.err != nil {
-			if !errors.Is(event.err, context.Canceled) && !errors.Is(event.err, context.DeadlineExceeded) {
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				logger.L().Warn(logPrefix+": stream read error",
-					zap.Error(event.err),
+					zap.Error(err),
 					zap.String("request_id", requestID),
 				)
 			}
-			st.Err = event.err
+			st.Err = err
 			return st
 		}
-
-		line := event.line
+		if !ok {
+			return st
+		}
+		if st.SawDone {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine == "" || strings.HasPrefix(trimmedLine, ":") {
+				continue
+			}
+			st.Err = errors.New("OpenAI chat_completions data arrived after [DONE]")
+			return st
+		}
 		payload, ok := extractOpenAISSEDataLine(line)
 		if !ok {
 			continue
@@ -476,11 +519,31 @@ func (s *OpenAIGatewayService) scanCCStream(
 			continue
 		}
 		if payload == "[DONE]" {
+			if !choiceState.complete() {
+				st.Err = errors.New("OpenAI chat_completions [DONE] arrived before all choices had a finish_reason")
+				return st
+			}
 			st.SawDone = true
+			terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
+			continue
+		}
+		providerPayload, protocolErr := classifyOpenAIChatStreamPayload(payload)
+		if protocolErr != nil {
+			st.Err = protocolErr
 			return st
 		}
-
+		if _, protocolErr = choiceState.observe(payload); protocolErr != nil {
+			st.Err = protocolErr
+			return st
+		}
+		if openAIChatPayloadContainsAudio([]byte(payload)) {
+			st.Err = errors.New("chat completions audio output is not supported by the Messages/Responses compatibility bridge")
+			return st
+		}
 		usageValue := gjson.Get(payload, "usage")
+		if providerPayload {
+			st.SawProviderPayload = true
+		}
 		parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
 		if sawUsageObject {
 			parsedUsage.mergeInto(&st.Usage)
@@ -573,12 +636,19 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	resp *http.Response,
 	writeError compatErrorWriter,
 ) (*apicompat.ChatCompletionsResponse, parsedCCUsage, bool, error) {
-	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	_ = writeError // Keep the response uncommitted so account failover remains possible.
+	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
-		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
-			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
-		}
-		return nil, parsedCCUsage{}, false, fmt.Errorf("read upstream body: %w", err)
+		return nil, parsedCCUsage{}, false, errors.Join(newOpenAIIncompleteChatStreamFailover(resp, "failed to read upstream Chat Completions response"), err)
+	}
+	if !gjson.ValidBytes(respBody) || !openAIChatPayloadIsValidProviderPayload(string(respBody)) {
+		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained no valid choice payload")
+	}
+	if !openAIChatBufferedChoicesComplete(respBody) {
+		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained incomplete or inconsistent terminal choices")
+	}
+	if openAIChatPayloadContainsAudio(respBody) {
+		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "chat completions audio output is not supported by the Messages/Responses compatibility bridge")
 	}
 
 	usageValue := gjson.GetBytes(respBody, "usage")
@@ -587,14 +657,15 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if usageValue.Exists() {
 		decodeBody, err = sjson.DeleteBytes(respBody, "usage")
 		if err != nil {
-			writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
-			return nil, parsedCCUsage{}, false, fmt.Errorf("isolate chat completions usage: %w", err)
+			return nil, parsedCCUsage{}, false, errors.Join(newOpenAIIncompleteChatStreamFailover(resp, "failed to isolate upstream Chat Completions usage"), err)
 		}
 	}
 	var ccResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(decodeBody, &ccResp); err != nil {
-		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
-		return nil, parsedCCUsage{}, false, fmt.Errorf("parse chat completions response: %w", err)
+		return nil, parsedCCUsage{}, false, errors.Join(newOpenAIIncompleteChatStreamFailover(resp, "invalid upstream Chat Completions JSON response"), err)
+	}
+	if len(ccResp.Choices) == 0 {
+		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained no choices")
 	}
 	if sawUsageObject {
 		ccResp.Usage = parsedUsage.chatUsage()

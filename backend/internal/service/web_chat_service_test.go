@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +55,7 @@ func TestWebChatResponseCapture_CapturesWriteStringBoundedBody(t *testing.T) {
 	require.True(t, truncated)
 }
 
-func TestWebChatDispatch_DefaultCapturePreservesFiveMiBWithoutSilentTruncation(t *testing.T) {
+func TestWebChatDispatch_DefaultResponsePersistencePreservesFiveMiBWithoutForgingProviderCapture(t *testing.T) {
 	svc := newWebChatServiceWithStubs(t)
 	providerOutput := bytes.Repeat([]byte("x"), 5<<20)
 	svc.gatewayResponseBody = providerOutput
@@ -68,8 +70,9 @@ func TestWebChatDispatch_DefaultCapturePreservesFiveMiBWithoutSilentTruncation(t
 
 	require.NoError(t, err)
 	require.Len(t, result.ResponseBody, len(providerOutput))
-	require.Len(t, svc.gatewayForwardResult.CaptureResponse, len(providerOutput))
-	require.False(t, svc.gatewayForwardResult.CaptureTruncated, "a 5 MiB response is below the default 8 MiB capture ceiling")
+	require.Empty(t, svc.gatewayForwardResult.CaptureResponse,
+		"converted WebChat bytes must not be relabeled as a provider-native archive response")
+	require.False(t, svc.gatewayForwardResult.CaptureTruncated)
 }
 
 func TestWebChatResponseCapture_ExtractAssistantTextFromChatCompletions(t *testing.T) {
@@ -100,6 +103,120 @@ func TestWebChatResponseCapture_ExtractAssistantTextFromLongStreamLine(t *testin
 	body := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + longText + "\"}}]}\n\n")
 
 	require.Equal(t, longText, ExtractAssistantTextFromChatCompletions(body, true))
+}
+
+func TestWebChatBufferedDenseUnknownResponseExtractionAllocatesLinearly(t *testing.T) {
+	dense := strings.TrimSuffix(strings.Repeat("0,", (4<<20)/2), ",")
+	body := []byte(`{"object":"response","status":"completed","output":[],"opaque":[` + dense + `]}`)
+	for _, tc := range []struct {
+		name string
+		run  func()
+	}{
+		{name: "text", run: func() { require.Empty(t, ExtractAssistantTextFromChatCompletions(body, false)) }},
+		{name: "process", run: func() { require.Empty(t, ExtractAssistantProcessFromChatCompletions(body, false)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.GC()
+			var before runtime.MemStats
+			var after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			tc.run()
+			runtime.ReadMemStats(&after)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(96<<20))
+		})
+	}
+}
+
+func TestWebChatStreamDenseUnknownFrameExtractionAllocatesLinearly(t *testing.T) {
+	dense := strings.TrimSuffix(strings.Repeat("0,", (3<<20)/2), ",")
+	body := []byte(`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"opaque":[` + dense + `]}}` + "\n\n")
+	for _, tc := range []struct {
+		name string
+		run  func()
+	}{
+		{name: "text", run: func() { require.Equal(t, "ok", ExtractAssistantTextFromChatCompletions(body, true)) }},
+		{name: "process", run: func() { require.Empty(t, ExtractAssistantProcessFromChatCompletions(body, true)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.GC()
+			var before runtime.MemStats
+			var after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			tc.run()
+			runtime.ReadMemStats(&after)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(80<<20))
+		})
+	}
+}
+
+func TestWebChatStreamSemanticLineAboveFourMiBIsNotSilentlyDropped(t *testing.T) {
+	content := strings.Repeat("x", 5<<20)
+	body := []byte(`data: {"choices":[{"delta":{"content":"` + content + `"}}]}` + "\n\n")
+	require.Equal(t, content, ExtractAssistantTextFromChatCompletions(body, true))
+}
+
+func TestWebChatProcessTinyDeltaAggregationAllocatesLinearly(t *testing.T) {
+	const fragments = 16_384
+	var reasoningBody strings.Builder
+	var toolBody strings.Builder
+	for range fragments {
+		_, _ = reasoningBody.WriteString("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"x\"}}]}\n\n")
+		_, _ = toolBody.WriteString("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"x\"}}]}}]}\n\n")
+	}
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{name: "reasoning", body: []byte(reasoningBody.String())},
+		{name: "tool", body: []byte(toolBody.String())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.GC()
+			var before runtime.MemStats
+			var after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			blocks := ExtractAssistantProcessFromChatCompletions(tc.body, true)
+			runtime.ReadMemStats(&after)
+			require.Len(t, blocks, 1)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(128<<20))
+		})
+	}
+}
+
+func TestWebChatProcessKeepsDistinctSameNameToolCalls(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"lookup","arguments":"{\"a\":"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call-b","function":{"name":"lookup","arguments":"{\"b\":"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]}}]}`,
+	}, "\n\n"))
+
+	blocks := ExtractAssistantProcessFromChatCompletions(body, true)
+	require.Len(t, blocks, 2)
+	require.Equal(t, "call-a", blocks[0]["id"])
+	require.Equal(t, `{"a":1}`, blocks[0]["input"])
+	require.Equal(t, "call-b", blocks[1]["id"])
+	require.Equal(t, `{"b":2}`, blocks[1]["input"])
+}
+
+func TestWebChatProcessManyDistinctToolCallsIsLinear(t *testing.T) {
+	const calls = 24_000
+	var body strings.Builder
+	body.Grow(calls * 100)
+	for i := range calls {
+		_, _ = body.WriteString(`data: {"choices":[{"delta":{"tool_calls":[{"index":`)
+		_, _ = body.WriteString(strconv.Itoa(i))
+		_, _ = body.WriteString(`,"id":"call-`)
+		_, _ = body.WriteString(strconv.Itoa(i))
+		_, _ = body.WriteString(`","function":{"name":"lookup","arguments":"{}"}}]}}]}`)
+		_, _ = body.WriteString("\n\n")
+	}
+
+	started := time.Now()
+	blocks := ExtractAssistantProcessFromChatCompletions([]byte(body.String()), true)
+	elapsed := time.Since(started)
+
+	require.Len(t, blocks, calls)
+	require.Less(t, elapsed, 2*time.Second)
 }
 
 func TestWebChatResponseCapture_ExtractAssistantProcessFromChatCompletionsStream(t *testing.T) {
@@ -387,7 +504,9 @@ func TestWebChatDispatch_OpenAIArchivesProviderRequestAndResponseExactlyOnce(t *
 	double := newWebChatServiceWithStubs(t)
 	double.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
 	double.openAIGatewayService = &webChatRealOpenAIHarness{OpenAIGatewayService: openAI, account: account}
-	result, err := double.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+	c := newTestGinContext(context.Background())
+	SetOpenAIClientTransport(c, OpenAIClientTransportWS)
+	result, err := double.dispatchChatCompletions(c, webChatDispatchInput{
 		User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
 		ConversationID: 7, AssistantMessageID: 101, Model: "gpt-5.5", Provider: "openai",
 		Capabilities: WebChatModelCapability{Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true},
@@ -395,6 +514,7 @@ func TestWebChatDispatch_OpenAIArchivesProviderRequestAndResponseExactlyOnce(t *
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Equal(t, OpenAIClientTransportHTTP, GetOpenAIClientTransport(c), "WebChat must force the HTTP provider path even when an account prefers WSv2")
 	require.NotEmpty(t, upstream.lastBody)
 	pool.Stop()
 	require.Len(t, writer.records, 1)
@@ -410,6 +530,61 @@ func TestWebChatDispatch_OpenAIArchivesProviderRequestAndResponseExactlyOnce(t *
 	}
 }
 
+func TestWebChatDispatch_OpenAIFinalHTTPErrorArchivesConfiguredBodyExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name          string
+		bodySize      int
+		expectedSize  int
+		wantTruncated bool
+	}{
+		{name: "body_above_legacy_error_limit", bodySize: 600 << 10, expectedSize: 600 << 10},
+		{name: "body_above_capture_hard_limit", bodySize: captureHardMaxBodyBytes + 1, expectedSize: captureHardMaxBodyBytes, wantTruncated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamBody := bytes.Repeat([]byte("x"), tt.bodySize)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid-openai-webchat-error"}},
+				Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+			}}
+			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			cfg := captureEnabledConfigForTest(captureHardMaxBodyBytes)
+			cfg.Security.URLAllowlist.Enabled = false
+			openAI := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: pool}
+			account := &Account{
+				ID: 503, Name: "webchat-real-openai-error", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key": "openai-secret", "base_url": "https://api.openai.test",
+					"model_mapping": map[string]any{"gpt-5.5": "gpt-5.5-upstream"},
+				},
+				Extra: map[string]any{"use_responses_api": true}, Status: StatusActive, Schedulable: true,
+			}
+
+			double := newWebChatServiceWithStubs(t)
+			double.availableGroups = []Group{{ID: 11, Platform: PlatformOpenAI, Status: StatusActive}}
+			double.openAIGatewayService = &webChatRealOpenAIHarness{OpenAIGatewayService: openAI, account: account}
+			result, err := double.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: "gpt-5.5", Provider: "openai",
+				Capabilities: WebChatModelCapability{Provider: "openai", Platform: PlatformOpenAI, Model: "gpt-5.5", SupportsText: true},
+				Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello from webchat"}}, Stream: false,
+			})
+			require.Error(t, err)
+			require.Nil(t, result)
+			pool.Stop()
+			require.Len(t, writer.records, 1)
+			archived := <-writer.records
+			require.Equal(t, upstream.lastBody, archived.RawRequest)
+			require.Len(t, archived.RawResponse, tt.expectedSize)
+			require.Equal(t, tt.wantTruncated, archived.Truncated)
+			require.Equal(t, http.StatusServiceUnavailable, archived.HTTPStatus)
+		})
+	}
+}
+
 func TestWebChatDispatch_AnthropicArchivesRecorderFinalRequestExactlyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstreamSSE := strings.Join([]string{
@@ -421,6 +596,9 @@ func TestWebChatDispatch_AnthropicArchivesRecorderFinalRequestExactlyOnce(t *tes
 		``,
 		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
 		``,
 		`event: message_delta`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
@@ -629,6 +807,51 @@ func TestWebChatDispatchOpenAIResponsesFailsWhenOnlyAccountLacksNativeResponses(
 	require.Equal(t, 2, svc.openAISelectCalls)
 	require.NotContains(t, svc.events, "forward_openai_responses")
 	require.Nil(t, svc.openAIRecordUsageInput)
+}
+
+func TestWebChatDispatchArchivesFailedProviderResultWithoutRecordingUsage(t *testing.T) {
+	sentinel := errors.New("provider response could not be parsed")
+	tests := []struct {
+		name     string
+		platform string
+		prepare  func(*webChatServiceTestDouble)
+	}{
+		{
+			name: "anthropic", platform: PlatformAnthropic,
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
+				svc.gatewayForwardResult = &ForwardResult{Model: "claude-sonnet-4", UpstreamFailed: true, CaptureResponse: []byte("provider-body")}
+				svc.forwardErr = sentinel
+			},
+		},
+		{
+			name: "openai", platform: PlatformOpenAI,
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 78, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+				svc.openAIForwardResult = &OpenAIForwardResult{Model: "gpt-5.5", UpstreamFailed: true, CaptureResponse: []byte("provider-body")}
+				svc.openAIForwardErr = sentinel
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.availableGroups = []Group{{ID: 11, Platform: tt.platform, Status: StatusActive}}
+			tt.prepare(svc)
+			result, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: map[string]string{PlatformOpenAI: "gpt-5.5", PlatformAnthropic: "claude-sonnet-4"}[tt.platform],
+				Provider: tt.platform, Capabilities: WebChatModelCapability{Provider: tt.platform, Platform: tt.platform, Model: "model", SupportsText: true},
+				Messages: []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}}, Stream: true,
+			})
+			require.ErrorIs(t, err, sentinel)
+			require.NotNil(t, result, "captured downstream bytes must remain available to failed-message persistence")
+			require.False(t, svc.recordUsageCalled)
+			require.Nil(t, svc.openAIRecordUsageInput)
+			require.Equal(t, 0, countWebChatEvent(svc.events, "record_usage")+countWebChatEvent(svc.events, "record_openai_usage"))
+			require.Equal(t, 1, countWebChatEvent(svc.events, map[string]string{PlatformOpenAI: "submit_openai_capture", PlatformAnthropic: "submit_gateway_capture"}[tt.platform]))
+		})
+	}
 }
 
 func TestForwardWebChatOpenAIResponsesAcceptsNativeResponsesAccounts(t *testing.T) {
@@ -1682,7 +1905,7 @@ func (s *webChatGatewayServiceStub) ForwardAsChatCompletions(_ context.Context, 
 		_ = s.double.CancelMessage(context.Background(), 42, 7, s.double.nextMessageID)
 	}
 	if s.double.forwardErr != nil {
-		return nil, s.double.forwardErr
+		return s.double.gatewayForwardResult, s.double.forwardErr
 	}
 	if s.double.gatewayForwardResult == nil {
 		s.double.gatewayForwardResult = &ForwardResult{RequestID: "upstream_req", Model: "claude-sonnet-4"}
@@ -1753,7 +1976,7 @@ func (s *webChatOpenAIGatewayServiceStub) ForwardAsChatCompletions(_ context.Con
 	if s.double.openAIForwardResult == nil {
 		s.double.openAIForwardResult = &OpenAIForwardResult{RequestID: "openai_req", Model: "gpt-image-2"}
 	}
-	return s.double.openAIForwardResult, nil
+	return s.double.openAIForwardResult, s.double.openAIForwardErr
 }
 
 func (s *webChatOpenAIGatewayServiceStub) Forward(_ context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {

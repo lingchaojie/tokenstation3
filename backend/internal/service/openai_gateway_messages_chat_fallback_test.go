@@ -142,7 +142,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_msg_chat_json"}},
 		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":"invalid","input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":5}}}`,
+			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`,
 		)),
 	}}
 	svc := &OpenAIGatewayService{
@@ -170,7 +170,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 5, result.Usage.ImageOutputTokens)
+	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
 	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
 	require.NotEmpty(t, result.CaptureResponse)
@@ -331,9 +331,8 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingLengthMapsToMaxTokens(t
 	require.Contains(t, out, "event: message_stop")
 }
 
-// An upstream that ends immediately with [DONE] must still produce a fully
-// framed (message_start → message_delta → message_stop) Anthropic stream.
-func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamStillFramesMessage(t *testing.T) {
+// A framing-only [DONE] carries no provider result and must remain replayable.
+func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamFailsOverBeforeCommit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
@@ -353,13 +352,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamStillFramesMessage(t 
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	out := rec.Body.String()
-	require.Contains(t, out, "event: message_start")
-	require.Contains(t, out, "event: message_delta")
-	require.Contains(t, out, "event: message_stop")
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Empty(t, rec.Body.String())
 }
 
 // Non-failover 4xx responses must go through the shared compat error handler:
@@ -631,13 +628,15 @@ func TestForwardMessagesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t 
 		name        string
 		upstreamSSE string
 		committed   bool
+		wantOutput  string
 	}{
-		{name: "oversized first semantic converted event", upstreamSSE: firstSemanticLine + "\n\n"},
+		{name: "oversized first semantic converted event", upstreamSSE: firstSemanticLine + "\n\n", committed: true, wantOutput: firstSemantic[:128]},
 		{
 			name: "oversized newline-free token after committed text",
 			upstreamSSE: "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"committed\"}}]}\n\n" +
 				"data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1),
-			committed: true,
+			committed:  true,
+			wantOutput: "committed",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -659,7 +658,7 @@ func TestForwardMessagesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t 
 			if tt.committed {
 				require.NotNil(t, result)
 				require.False(t, errors.As(err, &failoverErr))
-				require.Contains(t, recorder.Body.String(), "committed")
+				require.Contains(t, recorder.Body.String(), tt.wantOutput)
 				return
 			}
 			require.Nil(t, result)

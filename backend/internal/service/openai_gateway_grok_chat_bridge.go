@@ -597,38 +597,22 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, responsesBody)
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		finishOpenAIHTTPCapture(resp)
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
 		}
-		kind := "http_error"
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
-			kind = "failover"
-		}
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: resp.StatusCode,
-			UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
-			Kind:               kind,
-			Message:            upstreamMsg,
-		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+		if failoverErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); failoverErr != nil {
+			return nil, failoverErr
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
@@ -640,6 +624,20 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		result, err = s.handleChatStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
 		result, err = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	finishOpenAIHTTPCapture(resp)
+	captureOnlyFailure := err != nil && result == nil
+	if err != nil && result == nil {
+		result = &OpenAIForwardResult{
+			Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel,
+			Stream: clientStream, Duration: time.Since(startTime), ResponseHeaders: resp.Header.Clone(),
+			UpstreamHTTPStatus: resp.StatusCode,
+		}
+	}
+	if result != nil {
+		result.UpstreamFailed = captureOnlyFailure
+		result.CaptureTerminalError = err != nil
+		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 	if result != nil {
 		result.UpstreamEndpoint = grokChatResponsesEndpoint

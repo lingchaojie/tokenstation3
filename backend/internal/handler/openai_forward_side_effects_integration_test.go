@@ -66,7 +66,7 @@ func TestOpenAIRealForwardFeedsExactOnceUsageAndCaptureSink(t *testing.T) {
 	}{
 		{name: "pre-output failover", response: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n", wantUsage: 0, wantCapture: 0},
 		{name: "committed partial", response: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n", wantUsage: 1, wantCapture: 1},
-		{name: "success", response: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n", wantUsage: 1, wantCapture: 1},
+		{name: "success", response: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n", wantUsage: 1, wantCapture: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

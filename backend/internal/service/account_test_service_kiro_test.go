@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -415,6 +417,64 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
 }
 
+func TestForwardKiroMessagesStreamTreatsPartialAWSFrameBytesAsProviderActivity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := &Account{
+		ID: 39, Name: "kiro-stream-slow-frame", Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/SLOWFRAME",
+		},
+	}
+	firstFrame := buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "slow-ok"},
+	})
+	var remainingFrames bytes.Buffer
+	_, _ = remainingFrames.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 1}},
+	}))
+	_, _ = remainingFrames.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	oneThird := len(firstFrame) / 3
+	providerBody := &providerSlowChunksReader{
+		chunks: [][]byte{
+			append([]byte(nil), firstFrame[:oneThird]...),
+			append([]byte(nil), firstFrame[oneThird:2*oneThird]...),
+			append([]byte(nil), firstFrame[2*oneThird:]...),
+			remainingFrames.Bytes(),
+		},
+		interval: 400 * time.Millisecond,
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body:       providerBody,
+	}}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 1,
+			MaxLineSize:               defaultMaxLineSize,
+		}},
+	}
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err, "raw provider bytes arriving inside the idle interval must keep a partial AWS frame alive")
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "slow-ok")
+}
+
 func TestForwardKiroMessagesCommittedPartialCarriesUsageAndCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -721,6 +781,100 @@ func TestForwardKiroMessagesNonStreamDirectAPIKeyReachesAWSUpstream(t *testing.T
 		"non-stream capture must preserve raw AWS event-stream bytes, not translated JSON")
 }
 
+func TestForwardKiroMessagesNonStreamFunctionalLimitPreservesFiniteProviderCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := &Account{
+		ID: 38, Name: "kiro-nonstream-limit", Platform: PlatformKiro, Type: AccountTypeAPIKey,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "kiro-provider-secret", "api_region": "us-west-2",
+			"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"},
+		},
+	}
+	providerBody := buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": strings.Repeat("x", 512)},
+	})
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			UpstreamResponseReadMaxBytes: 128,
+			Capture:                      config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+		}},
+	}
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	require.Nil(t, result)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, providerBody, bridge.Response)
+	require.False(t, bridge.ResponseTruncated)
+}
+
+func TestForwardKiroMessagesMalformedFirstFrameCapturesFiniteProviderTail(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			enableCaptureForTest(t, c)
+			account := &Account{
+				ID: 39, Name: "kiro-malformed-tail", Platform: PlatformKiro, Type: AccountTypeAPIKey,
+				Status: StatusActive, Schedulable: true, Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key": "kiro-provider-secret", "api_region": "us-west-2",
+					"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"},
+				},
+			}
+			malformed := buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": 123},
+			})
+			tail := buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+				"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+			})
+			providerBody := append(snapshotBytes(malformed), tail...)
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+				Body:       io.NopCloser(io.MultiReader(bytes.NewReader(malformed), bytes.NewReader(tail))),
+			}}}
+			svc := &GatewayService{
+				httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+				cfg: &config.Config{Gateway: config.GatewayConfig{
+					MaxLineSize: defaultMaxLineSize,
+					Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+				}},
+			}
+			requestBody := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":%t,"messages":[{"role":"user","content":"hi"}]}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
+			require.NoError(t, err)
+
+			result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+			require.Error(t, err)
+			require.Nil(t, result)
+			bridge, ok := takeCaptureResult(c)
+			require.True(t, ok)
+			require.Equal(t, providerBody, bridge.Response)
+			require.False(t, bridge.ResponseTruncated)
+		})
+	}
+}
+
 func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -742,12 +896,9 @@ func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"kiro-terminal-id"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
-	t.Cleanup(pool.Stop)
 	svc := &GatewayService{
 		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
-		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{}, capturePool: pool,
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
 		cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}},
 	}
 	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
@@ -758,11 +909,12 @@ func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
 	require.Error(t, err)
 	require.Nil(t, result)
-	pool.Stop()
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	record := BuildTerminalErrorCaptureRecord(c, PlatformKiro, failure, 1<<20)
+	require.NotNil(t, record, "the normal handler must be able to archive the final provider exchange")
 
 	require.Len(t, upstream.requests, 1)
-	require.Len(t, writer.records, 1)
-	record := <-writer.records
 	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
 	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), record.RawRequest)
 	require.NotEqual(t, requestBody, record.RawRequest)
@@ -797,6 +949,9 @@ func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *t
 	}))
 	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 2}},
+	}))
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 	}))
 	rawProviderBody := snapshotBytes(providerBody.Bytes())
 	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
@@ -849,6 +1004,9 @@ func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t 
 	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 2}},
 	}))
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
 	rawProviderBody := snapshotBytes(providerBody.Bytes())
 	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
@@ -867,13 +1025,129 @@ func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t 
 	require.NoError(t, err)
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
-	require.ErrorContains(t, err, "missing terminal event")
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2, "MCP request then final AWS runtime request")
 	require.Equal(t, upstream.bodies[1], result.UpstreamRequest)
 	require.Equal(t, rawProviderBody, result.CaptureResponse,
 		"outer Anthropic stream handling must not overwrite provider-native AWS bytes with translated SSE")
 	require.NotEqual(t, rec.Body.Bytes(), result.CaptureResponse)
+}
+
+func TestForwardKiroMessagesStreamOnlyWebSearchBoundsBufferedTranslation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	endpoint := "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	account := &Account{
+		ID: 37, Name: "kiro-stream-websearch-bounded", Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/BOUNDEDWEBSEARCH",
+			"region":       "us-east-1",
+		},
+	}
+	mcpBody := []byte(`{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+	var providerBody bytes.Buffer
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "x"},
+	}))
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 1}},
+	}))
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	rawProviderBody := snapshotBytes(providerBody.Bytes())
+	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: io.NopCloser(bytes.NewReader(rawProviderBody))},
+	}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize, UpstreamResponseReadMaxBytes: int64(len(rawProviderBody) + 1),
+		}},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure,
+		"the forced-stream collector must fail over when translated SSE exceeds the functional ceiling")
+	require.Equal(t, http.StatusBadGateway, failure.StatusCode)
+	require.Nil(t, result)
+}
+
+func TestForwardKiroMessagesStreamOnlyWebSearchStopsStalledPartialProviderFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	endpoint := "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	account := &Account{
+		ID: 38, Name: "kiro-stream-websearch-idle", Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/IDLEWEBSEARCH",
+			"region":       "us-east-1",
+		},
+	}
+	mcpBody := []byte(`{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+	frame := buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "partial"},
+	})
+	raw := &providerPrefixThenBlockReader{prefix: frame[:20], closed: make(chan struct{})}
+	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: raw},
+	}}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize, UpstreamResponseReadMaxBytes: 1 << 20, StreamDataIntervalTimeout: 1,
+		}},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	type forwardResult struct {
+		result *ForwardResult
+		err    error
+	}
+	done := make(chan forwardResult, 1)
+	go func() {
+		result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+		done <- forwardResult{result: result, err: err}
+	}()
+	select {
+	case got := <-done:
+		require.Nil(t, got.result)
+		var failure *UpstreamFailoverError
+		require.ErrorAs(t, got.err, &failure)
+		require.Equal(t, http.StatusBadGateway, failure.StatusCode)
+	case <-time.After(1500 * time.Millisecond):
+		_ = raw.Close()
+		<-done
+		t.Fatal("KIRO WebSearch forced-stream collector ignored the provider idle timeout")
+	}
+	select {
+	case <-raw.closed:
+	default:
+		t.Fatal("provider idle timeout did not close the stalled KIRO response body")
+	}
 }
 
 func TestForwardKiroMessagesStreamContentBeforeMetadataFinalZerosReplaceProvisionalUsage(t *testing.T) {
@@ -959,6 +1233,7 @@ func buildKiroEventStreamFrame(t *testing.T, eventType string, payload map[strin
 	frame := make([]byte, totalLen)
 	binary.BigEndian.PutUint32(frame[0:4], uint32(totalLen))
 	binary.BigEndian.PutUint32(frame[4:8], uint32(headersLen))
+	binary.BigEndian.PutUint32(frame[8:12], crc32.ChecksumIEEE(frame[:8]))
 	offset := 12
 	frame[offset] = byte(len(headerName))
 	offset++
@@ -971,6 +1246,7 @@ func buildKiroEventStreamFrame(t *testing.T, eventType string, payload map[strin
 	copy(frame[offset:], headerValue)
 	offset += len(headerValue)
 	copy(frame[offset:], payloadBytes)
+	binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.ChecksumIEEE(frame[:len(frame)-4]))
 	return frame
 }
 

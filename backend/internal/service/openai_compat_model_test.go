@@ -1637,6 +1637,59 @@ func TestForwardAsAnthropic_TerminalUsageWithoutUpstreamCloseReturns(t *testing.
 	}
 }
 
+func TestHandleAnthropicStreamingResponseRejectsBufferedPartialTailAfterTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name         string
+		idleInterval int
+	}{{name: "synchronous"}, {name: "with_idle_timer", idleInterval: 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			terminal := `data: {"type":"response.completed","response":{"id":"resp_tail","object":"response","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","id":"msg_tail","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"
+			body := newOpenAICompatBlockingReadCloser([]byte(terminal + "event: response.output_text.delta"))
+			resp := &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: -1,
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+					"x-request-id": []string{"rid_messages_partial_terminal_tail"},
+				},
+				Body: body,
+			}
+			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: tc.idleInterval}}}
+
+			type outcome struct {
+				result *OpenAIForwardResult
+				err    error
+			}
+			resultCh := make(chan outcome, 1)
+			go func() {
+				result, err := svc.handleAnthropicStreamingResponse(
+					resp, c,
+					&Account{ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI},
+					"gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", time.Now(),
+				)
+				resultCh <- outcome{result: result, err: err}
+			}()
+
+			select {
+			case got := <-resultCh:
+				require.Error(t, got.err)
+			case <-time.After(time.Second):
+				require.Fail(t, "terminal tail validation must close the open provider body and return")
+			}
+			select {
+			case <-body.closed:
+			default:
+				require.Fail(t, "terminal tail validation must join the provider reader before returning")
+			}
+		})
+	}
+}
+
 func TestForwardAsAnthropic_EventNamedTerminalWithoutUpstreamCloseReturns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1955,9 +2008,7 @@ func TestForwardAsAnthropic_MissingTerminalBeforeOutputReturnsFailoverAndOps(t *
 	require.True(t, errors.As(err, &failoverErr), "missing terminal before output must use failover path")
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "OpenAI messages stream ended before a terminal event")
-	require.NotNil(t, result)
-	require.Zero(t, result.Usage.InputTokens)
-	require.Zero(t, result.Usage.OutputTokens)
+	require.Nil(t, result, "a pre-output failure must remain eligible for real handler failover")
 	require.False(t, c.Writer.Written(), "no client body/header should be committed before safe failover")
 	require.Empty(t, rec.Body.String())
 
@@ -2037,6 +2088,8 @@ func TestForwardAsAnthropic_MissingTerminalAfterClientDisconnectSkipsOpsAndFailo
 	upstreamBody := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","status":"in_progress","output":[]}}`,
 		"",
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -2058,10 +2111,9 @@ func TestForwardAsAnthropic_MissingTerminalAfterClientDisconnectSkipsOpsAndFailo
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
+	require.NoError(t, err, "a real downstream disconnect is drained for usage and must not trigger account replay")
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
+	require.False(t, errors.As(err, &failoverErr), "a committed client disconnect must not be replayed")
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect)
 	require.Empty(t, rec.Body.String())

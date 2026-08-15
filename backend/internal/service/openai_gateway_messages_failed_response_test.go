@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -89,7 +90,11 @@ func TestForwardAsAnthropic_StreamingBareErrorAfterOutputIsVisible(t *testing.T)
 	ssePayload := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_bare_error","object":"response","model":"gpt-5.4","status":"in_progress","output":[]}}`,
 		"",
-		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_bare_error","type":"message","role":"assistant","status":"in_progress","content":[]}}`,
+		"",
+		`data: {"type":"response.content_part.added","item_id":"msg_bare_error","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}`,
+		"",
+		`data: {"type":"response.output_text.delta","item_id":"msg_bare_error","output_index":0,"content_index":0,"delta":"partial"}`,
 		"",
 		`event: error`,
 		`data: {"type":"error","error":{"type":"server_error","code":"upstream_error","message":"mixed tools failed"}}`,
@@ -118,6 +123,32 @@ func TestForwardAsAnthropic_StreamingBareErrorAfterOutputIsVisible(t *testing.T)
 	require.Contains(t, clientStream, "mixed tools failed")
 	require.NotContains(t, clientStream, "event: message_stop")
 	require.NotContains(t, err.Error(), "missing terminal event")
+}
+
+func TestHandleAnthropicStreamingResponseRejectsKnownFiniteTerminalTailBeforeCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	body := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"terminal-tail","status":"completed","output":[],"usage":{"input_tokens":9,"output_tokens":1}}}`,
+		``,
+		`data: {"type":"response.output_text.delta","delta":"tail"}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(strings.NewReader(body)),
+	}
+	svc := &OpenAIGatewayService{}
+
+	result, err := svc.handleAnthropicStreamingResponse(resp, c, rawChatCompletionsTestAccount(), "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.False(t, c.Writer.Written())
 }
 
 func TestForwardAsAnthropic_StreamingBareErrorBeforeOutputFailsOver(t *testing.T) {

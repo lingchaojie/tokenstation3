@@ -499,10 +499,14 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 				toolIDToName[block.ID] = block.Name
 			}
 
+			args, err := json.Marshal(block.Input)
+			if err != nil {
+				return nil, strippedThinking, fmt.Errorf("marshal tool input: %w", err)
+			}
 			part := GeminiPart{
 				FunctionCall: &GeminiFunctionCall{
 					Name: block.Name,
-					Args: block.Input,
+					Args: args,
 					ID:   block.ID,
 				},
 			}

@@ -50,8 +50,8 @@ func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *
 // NonStreamingProcessor 非流式响应处理器
 type NonStreamingProcessor struct {
 	contentBlocks     []ClaudeContentItem
-	textBuilder       string
-	thinkingBuilder   string
+	textBuilder       strings.Builder
+	thinkingBuilder   strings.Builder
 	thinkingSignature string
 	trailingSignature string
 	hasToolCall       bool
@@ -159,7 +159,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 				p.trailingSignature = ""
 			}
 
-			p.thinkingBuilder += part.Text
+			_, _ = p.thinkingBuilder.WriteString(part.Text)
 			if signature != "" {
 				p.thinkingSignature = signature
 			}
@@ -199,7 +199,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 				})
 			} else {
 				// 普通 text (无签名) - 累积到 builder
-				p.textBuilder += part.Text
+				_, _ = p.textBuilder.WriteString(part.Text)
 			}
 		}
 	}
@@ -209,7 +209,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 		p.flushThinking()
 		markdownImg := fmt.Sprintf("![image](data:%s;base64,%s)",
 			part.InlineData.MimeType, part.InlineData.Data)
-		p.textBuilder += markdownImg
+		_, _ = p.textBuilder.WriteString(markdownImg)
 		p.flushText()
 	}
 }
@@ -222,35 +222,35 @@ func (p *NonStreamingProcessor) processGrounding(grounding *GeminiGroundingMetad
 
 	p.flushThinking()
 	p.flushText()
-	p.textBuilder += groundingText
+	_, _ = p.textBuilder.WriteString(groundingText)
 	p.flushText()
 }
 
 // flushText 刷新 text builder
 func (p *NonStreamingProcessor) flushText() {
-	if p.textBuilder == "" {
+	if p.textBuilder.Len() == 0 {
 		return
 	}
 
 	p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 		Type: "text",
-		Text: p.textBuilder,
+		Text: p.textBuilder.String(),
 	})
-	p.textBuilder = ""
+	p.textBuilder.Reset()
 }
 
 // flushThinking 刷新 thinking builder
 func (p *NonStreamingProcessor) flushThinking() {
-	if p.thinkingBuilder == "" && p.thinkingSignature == "" {
+	if p.thinkingBuilder.Len() == 0 && p.thinkingSignature == "" {
 		return
 	}
 
 	p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 		Type:      "thinking",
-		Thinking:  p.thinkingBuilder,
+		Thinking:  p.thinkingBuilder.String(),
 		Signature: p.thinkingSignature,
 	})
-	p.thinkingBuilder = ""
+	p.thinkingBuilder.Reset()
 	p.thinkingSignature = ""
 }
 

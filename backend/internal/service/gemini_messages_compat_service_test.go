@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +28,272 @@ type geminiCompatHTTPUpstreamStub struct {
 	calls    int
 	lastReq  *http.Request
 }
+
+type geminiPartialThenErrorBody struct {
+	data []byte
+	off  int
+	err  error
+}
+
+func TestValidGeminiProviderPayloadRejectsMalformedCandidateParts(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{
+		"scalar candidate":                       `{"candidates":[123]}`,
+		"malformed later candidate":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]}},{"finishReason":123}]}`,
+		"nonstring text":                         `{"candidates":[{"content":{"parts":[{"text":123}]},"finishReason":"STOP"}]}`,
+		"nonstring function name":                `{"candidates":[{"content":{"parts":[{"functionCall":{"name":123,"args":{}}}]},"finishReason":"STOP"}]}`,
+		"scalar function arguments":              `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":123}}]},"finishReason":"STOP"}]}`,
+		"multiple data variants":                 `{"candidates":[{"content":{"parts":[{"text":"x","functionCall":{"name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`,
+		"nonstring model version":                `{"modelVersion":123,"candidates":[{"finishReason":"STOP"}]}`,
+		"invalid usage sibling":                  `{"usageMetadata":{"promptTokenCount":"bad"},"candidates":[{"finishReason":"STOP"}]}`,
+		"invalid candidate details":              `{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":-7}]},"candidates":[{"finishReason":"STOP"}]}`,
+		"cache exceeds prompt":                   `{"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3},"candidates":[{"finishReason":"STOP"}]}`,
+		"output token overflow":                  `{"usageMetadata":{"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":1},"candidates":[{"finishReason":"STOP"}]}`,
+		"image exceeds output":                   `{"usageMetadata":{"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":3}]},"candidates":[{"finishReason":"STOP"}]}`,
+		"invalid prompt rating":                  `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[123]}}`,
+		"invalid candidate ratings":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","safetyRatings":"bad"}]}`,
+		"invalid finish message":                 `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","finishMessage":123}]}`,
+		"scalar grounding metadata":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":123}]}`,
+		"scalar grounding queries":               `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":"bad"}}]}`,
+		"nonstring grounding query":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":[123]}}]}`,
+		"scalar grounding chunk":                 `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[123]}}]}`,
+		"nonstring grounding web field":          `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":123}}]}}]}`,
+		"implicit then explicit duplicate index": `{"candidates":[{"content":{"parts":[{"text":"first"}]}},{"index":0,"content":{"parts":[{"text":"second"}]},"finishReason":"STOP"}]}`,
+		"explicit then implicit duplicate index": `{"candidates":[{"index":1,"content":{"parts":[{"text":"first"}]}},{"content":{"parts":[{"text":"second"}]},"finishReason":"STOP"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, validGeminiProviderPayload([]byte(body)))
+		})
+	}
+
+	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`)))
+	require.False(t, validGeminiProviderPayload([]byte(`{"candidates":[{"finishReason":"STOP"}]}`)))
+	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"finishReason":"SAFETY"}]}`)))
+	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":""}}]},"finishReason":"STOP"}]}`)))
+}
+
+func TestGeminiProviderValidationRejectsDuplicateKnownJSONKeys(t *testing.T) {
+	for name, body := range map[string]string{
+		"root candidates":  `{"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP"}],"candidates":[{"content":{"parts":[{"text":"danger"}]},"finishReason":"STOP"}]}`,
+		"candidate finish": `{"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP","finishReason":"SAFETY"}]}`,
+		"part text":        `{"candidates":[{"content":{"parts":[{"text":"safe","text":"danger"}]},"finishReason":"STOP"}]}`,
+		"function name":    `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"safe","name":"danger","args":{}}}]},"finishReason":"STOP"}]}`,
+		"usage count":      `{"usageMetadata":{"promptTokenCount":1,"promptTokenCount":2},"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, validGeminiProviderPayload([]byte(body)))
+			_, err := (&geminiProviderStreamState{}).observePayload([]byte(body))
+			require.ErrorContains(t, err, "repeated known field")
+			_, err = decodeGeminiCompatResponse([]byte(body))
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	forwardCompatible := []byte(`{"candidates":[{"content":{"parts":[{"text":"safe","opaque":{"type":"future-a","type":"future-b"}}]},"finishReason":"STOP"}]}`)
+	require.True(t, validGeminiProviderPayload(forwardCompatible))
+	_, err := decodeGeminiCompatResponse(forwardCompatible)
+	require.NoError(t, err)
+}
+
+func TestValidGeminiRootEnvelopeRejectsOversizedRetainedMetadata(t *testing.T) {
+	metadataTooLong := strings.Repeat("m", 1025)
+	signatureTooLong := strings.Repeat("s", (64<<10)+1)
+	quote := func(value string) string {
+		encoded, err := json.Marshal(value)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+
+	for name, body := range map[string]string{
+		"model version":          `{"modelVersion":` + quote(metadataTooLong) + `}`,
+		"response id":            `{"responseId":` + quote(metadataTooLong) + `}`,
+		"block reason":           `{"promptFeedback":{"blockReason":` + quote(metadataTooLong) + `}}`,
+		"block reason message":   `{"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":` + quote(metadataTooLong) + `}}`,
+		"usage modality":         `{"usageMetadata":{"promptTokenCount":1,"promptTokensDetails":[{"modality":` + quote(metadataTooLong) + `,"tokenCount":1}]}}`,
+		"safety category":        `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"category":` + quote(metadataTooLong) + `}]}}`,
+		"safety probability":     `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"probability":` + quote(metadataTooLong) + `}]}}`,
+		"safety severity":        `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"severity":` + quote(metadataTooLong) + `}]}}`,
+		"finish reason":          `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":` + quote(metadataTooLong) + `}]}`,
+		"finish message":         `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","finishMessage":` + quote(metadataTooLong) + `}]}`,
+		"function call name":     `{"candidates":[{"content":{"parts":[{"functionCall":{"name":` + quote(metadataTooLong) + `,"args":{}}}]},"finishReason":"STOP"}]}`,
+		"function response name": `{"candidates":[{"content":{"parts":[{"functionResponse":{"name":` + quote(metadataTooLong) + `,"response":{}}}]},"finishReason":"STOP"}]}`,
+		"thought signature":      `{"candidates":[{"content":{"parts":[{"text":"ok","thoughtSignature":` + quote(signatureTooLong) + `}]},"finishReason":"STOP"}]}`,
+		"inline mime type":       `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":` + quote(metadataTooLong) + `,"data":"AA=="}}]},"finishReason":"STOP"}]}`,
+		"file uri":               `{"candidates":[{"content":{"parts":[{"fileData":{"fileUri":` + quote(metadataTooLong) + `}}]},"finishReason":"STOP"}]}`,
+		"file mime type":         `{"candidates":[{"content":{"parts":[{"fileData":{"mimeType":` + quote(metadataTooLong) + `,"fileUri":"gs://bucket/file"}}]},"finishReason":"STOP"}]}`,
+		"code language":          `{"candidates":[{"content":{"parts":[{"executableCode":{"language":` + quote(metadataTooLong) + `,"code":""}}]},"finishReason":"STOP"}]}`,
+		"execution outcome":      `{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":` + quote(metadataTooLong) + `,"output":""}}]},"finishReason":"STOP"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, validGeminiRootEnvelopeShape([]byte(body)))
+		})
+	}
+
+	validLongOpaqueSignature := strings.Repeat("s", 8<<10)
+	require.True(t, validGeminiRootEnvelopeShape([]byte(
+		`{"candidates":[{"content":{"parts":[{"text":"ok","thoughtSignature":`+quote(validLongOpaqueSignature)+`}]},"finishReason":"STOP"}]}`,
+	)))
+}
+
+func TestGeminiProviderStreamStateRejectsMalformedAncillaryBeforeValidPayload(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{
+		`{"modelVersion":123}`,
+		`{"responseId":{}}`,
+		`{"usageMetadata":{"promptTokenCount":"bad"}}`,
+	} {
+		state := &geminiProviderStreamState{}
+		_, err := state.observePayload([]byte(body))
+		require.Error(t, err)
+	}
+}
+
+func TestGeminiProviderStreamStateTracksCandidateTerminalsIndependently(t *testing.T) {
+	t.Parallel()
+	state := &geminiProviderStreamState{}
+	provider, err := state.observePayload([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"}]}`))
+	require.NoError(t, err)
+	require.True(t, provider)
+	require.False(t, state.terminalObserved(), "a candidate finish is not a framing terminal while more alternatives may follow")
+
+	provider, err = state.observePayload([]byte(`{"candidates":[{"index":1,"content":{"parts":[{"text":"alternative"}]},"finishReason":"STOP"}]}`))
+	require.NoError(t, err)
+	require.True(t, provider)
+	require.True(t, state.applicationTerminalObserved())
+	require.NoError(t, state.observeDone())
+	require.True(t, state.terminalObserved())
+}
+
+func TestGeminiProviderValidationDenseArraysStayWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+
+	t.Run("candidates", func(t *testing.T) {
+		const candidate = `{"content":{"role":"model","parts":[{"text":""}]}},`
+		count := (targetBytes - len(`{"candidates":[]}`)) / len(candidate)
+		body := []byte(`{"candidates":[` + strings.Repeat(candidate, count) + `{"content":{"role":"model","parts":[{"text":""}]}}]}`)
+		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(candidate)))
+
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := (&geminiProviderStreamState{}).observePayload(body)
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+
+		require.ErrorContains(t, err, "too many candidates")
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+	})
+
+	t.Run("parts", func(t *testing.T) {
+		const part = `{"text":""},`
+		count := (targetBytes - len(`{"candidates":[{"content":{"role":"model","parts":[]}}]}`)) / len(part)
+		body := []byte(`{"candidates":[{"content":{"role":"model","parts":[` + strings.Repeat(part, count) + `{"text":""}]}}]}`)
+		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(part)))
+
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := (&geminiProviderStreamState{}).observePayload(body)
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+
+		require.ErrorContains(t, err, "too many parts")
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+	})
+
+	t.Run("grounding chunks", func(t *testing.T) {
+		const chunk = `{},`
+		count := (targetBytes - len(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[]}}]}`)) / len(chunk)
+		body := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[` + strings.Repeat(chunk, count) + `{}` + `]}}]}`)
+		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(chunk)))
+
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := (&geminiProviderStreamState{}).observePayload(body)
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+
+		require.Error(t, err)
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+	})
+}
+
+func TestDecodeGeminiCompatResponseIgnoresDenseUnknownFieldsWithBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const item = `{},`
+	count := (targetBytes - len(`{"junk":[],"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)) / len(item)
+	body := []byte(`{"junk":[` + strings.Repeat(item, count) + `{}` + `],"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(item)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	decoded, err := decodeGeminiCompatResponse(body)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Equal(t, "STOP", extractGeminiFinishReason(decoded))
+	require.Equal(t, "ok", extractGeminiParts(decoded)[0]["text"])
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestGeminiProviderStreamStateBoundsTrackedCandidates(t *testing.T) {
+	state := &geminiProviderStreamState{}
+	for index := 0; index <= 1024; index++ {
+		_, err := state.observePayload([]byte(fmt.Sprintf(`{"candidates":[{"index":%d,"finishReason":"SAFETY"}]}`, index)))
+		if index < 1024 {
+			require.NoError(t, err)
+			continue
+		}
+		require.ErrorContains(t, err, "too many candidates")
+	}
+}
+
+func TestGeminiProviderStreamStateDONERequiresApplicationTerminal(t *testing.T) {
+	t.Parallel()
+	state := &geminiProviderStreamState{}
+	provider, err := state.observePayload([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`))
+	require.NoError(t, err)
+	require.True(t, provider)
+	require.Error(t, state.observeDone())
+}
+
+func TestValidGeminiTerminalResponseRequiresEveryCandidateToFinish(t *testing.T) {
+	t.Parallel()
+	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`)))
+	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"partial"}]}}]}`)))
+	require.False(t, validGeminiTerminalResponse([]byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`)))
+	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"finishReason":"STOP"}]}`)))
+	require.True(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}]}`)))
+}
+
+func TestGeminiProviderStreamStateRejectsBlockedPromptWithCandidates(t *testing.T) {
+	t.Parallel()
+	state := &geminiProviderStreamState{}
+	_, err := state.observePayload([]byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`))
+	require.Error(t, err)
+}
+
+func TestExtractGeminiUsageSumsAllImageDetailsCaseInsensitively(t *testing.T) {
+	usage := extractGeminiUsage([]byte(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":7,"thoughtsTokenCount":1,"candidatesTokensDetails":[{"modality":"image","tokenCount":2},{"modality":"IMAGE","tokenCount":3},{"modality":"TEXT","tokenCount":2}]}}`))
+	require.NotNil(t, usage)
+	require.Equal(t, 8, usage.OutputTokens)
+	require.Equal(t, 5, usage.ImageOutputTokens)
+}
+
+func (b *geminiPartialThenErrorBody) Read(p []byte) (int, error) {
+	if b.off < len(b.data) {
+		n := copy(p, b.data[b.off:])
+		b.off += n
+		return n, nil
+	}
+	return 0, b.err
+}
+
+func (b *geminiPartialThenErrorBody) Close() error { return nil }
 
 func (s *geminiCompatHTTPUpstreamStub) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	s.calls++
@@ -169,6 +438,99 @@ func TestGeminiForwardAsChatCompletions_StreamsOpenAIChunksFromGeminiSSE(t *test
 	require.Contains(t, out, `"content":"lo"`)
 	require.Contains(t, out, `"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}`)
 	require.Contains(t, out, "data: [DONE]")
+}
+
+func TestGeminiForwardAsChatCompletions_SelectsFirstCandidateWithoutMergingAlternatives(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `data: {"candidates":[{"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"},{"content":{"parts":[{"text":"alternative-must-not-merge"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}` + "\n\n" +
+		"data: [DONE]\n\n"
+	httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{}}
+	account := &Account{
+		ID: 103, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "gemini-api-key"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"gemini-2.5-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, recorder.Body.String(), `"content":"primary"`)
+	require.NotContains(t, recorder.Body.String(), "alternative-must-not-merge")
+}
+
+func TestGeminiStreamingReadErrorAfterSemanticOutputPreservesPartialUsageAndTerminalCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	providerBody := []byte(`data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}` + "\n\n")
+	forcedErr := errors.New("forced gemini stream read failure")
+
+	tests := []struct {
+		name    string
+		path    string
+		body    []byte
+		forward func(*GeminiMessagesCompatService, *gin.Context, *Account, []byte) (*ForwardResult, error)
+	}{
+		{
+			name: "anthropic_compat",
+			path: "/v1/messages",
+			body: []byte(`{"model":"gemini-2.5-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}`),
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "chat_completions_compat",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gemini-2.5-flash","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`),
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.ForwardAsChatCompletions(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "gemini_native",
+			path: "/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+			body: []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`),
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.ForwardNative(context.Background(), c, account, "gemini-2.5-flash", "streamGenerateContent", true, body)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Goog-Request-Id": {"gemini-partial"}},
+				Body:       &geminiPartialThenErrorBody{data: providerBody, err: forcedErr},
+			}}
+			svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{Gateway: config.GatewayConfig{
+				Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+			}}}
+			account := &Account{ID: 120, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "gemini-api-key"}}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(tt.body))
+			enableCaptureForTest(t, c)
+
+			result, err := tt.forward(svc, c, account, tt.body)
+
+			require.ErrorIs(t, err, forcedErr)
+			require.NotNil(t, result, "semantic output must retain a billable partial result")
+			require.False(t, result.UpstreamFailed, "committed partial output is not a retryable pre-output failure")
+			require.True(t, result.CaptureTerminalError)
+			require.Equal(t, 2, result.Usage.InputTokens)
+			require.Equal(t, 1, result.Usage.OutputTokens)
+			require.Equal(t, providerBody, result.CaptureResponse)
+			require.Contains(t, recorder.Body.String(), "partial")
+		})
+	}
 }
 
 func TestGeminiForwardAsChatCompletions_MapsImageGenerationConfig(t *testing.T) {
@@ -500,10 +862,10 @@ func TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLo
 			"Content-Type":      []string{"application/json"},
 			"X-RateLimit-Limit": []string{"60"},
 		},
-		Body: io.NopCloser(strings.NewReader(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}`)),
+		Body: io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}`)),
 	}
 
-	usage, err := svc.handleNativeNonStreamingResponse(c, resp, false)
+	usage, err := svc.handleNativeNonStreamingResponse(c, resp, false, "generateContent")
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.False(t, logSink.ContainsMessage("[GeminiAPI]"), "debug 关闭时不应输出 Gemini 响应头日志")
@@ -516,7 +878,7 @@ func TestGeminiMessagesCompatServiceForward_PreservesRequestedModelAndMappedUpst
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	enableCaptureForTest(t, c)
 
-	rawProviderResponse := []byte(`{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)
+	rawProviderResponse := []byte(`{"candidates":[{"content":{"parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)
 	httpStub := &geminiCompatHTTPUpstreamStub{
 		response: &http.Response{
 			StatusCode: http.StatusOK,
@@ -565,7 +927,7 @@ func TestGeminiMessagesCompatServiceForward_NormalizesWebSearchToolForAIStudio(t
 		response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"x-request-id": []string{"gemini-req-2"}},
-			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`)),
 		},
 	}
 	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{}}
@@ -1083,6 +1445,274 @@ func TestGeminiMessagesHandleStreamingResponse_ClosesToolBlockBeforeText(t *test
 	require.True(t, textStarted, "expected a text content block to be emitted after the tool call")
 	require.True(t, toolClosedBeforeText, "tool_use block must be closed before the text block starts")
 	require.Equal(t, -1, open, "stream ended with a content block still open")
+}
+
+type geminiPartialClientWriteErrorWriter struct {
+	gin.ResponseWriter
+	wrote bool
+}
+
+type geminiBlockingAfterPrefixReadCloser struct {
+	reader *bytes.Reader
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newGeminiBlockingAfterPrefixReadCloser(prefix string) *geminiBlockingAfterPrefixReadCloser {
+	return &geminiBlockingAfterPrefixReadCloser{
+		reader: bytes.NewReader([]byte(prefix)),
+		closed: make(chan struct{}),
+	}
+}
+
+func (r *geminiBlockingAfterPrefixReadCloser) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *geminiBlockingAfterPrefixReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func (w *geminiPartialClientWriteErrorWriter) Write(p []byte) (int, error) {
+	if w.wrote || len(p) == 0 {
+		return 0, errors.New("write failed: client disconnected")
+	}
+	w.wrote = true
+	return 1, errors.New("write failed: client disconnected")
+}
+
+func TestGeminiStreamingClientDisconnectDoesNotHideMissingProviderTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	providerBody := "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"
+	for _, tc := range []struct {
+		name string
+		run  func(*GeminiMessagesCompatService, *gin.Context, *http.Response) (any, error)
+	}{
+		{
+			name: "messages compatibility",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleStreamingResponse(c, resp, time.Now(), "claude-3-5-sonnet")
+			},
+		},
+		{
+			name: "native oauth",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleNativeStreamingResponse(c, resp, time.Now(), true)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(providerBody)),
+			}
+
+			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
+			require.NotNil(t, result)
+			require.ErrorContains(t, err, "missing terminal event")
+		})
+	}
+}
+
+func TestGeminiMessagesStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := newGeminiBlockingAfterPrefixReadCloser(
+		"data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+	)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
+
+	type outcome struct {
+		result *geminiStreamResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := svc.handleStreamingResponse(c, resp, time.Now(), "claude-3-5-sonnet")
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NotNil(t, got.result)
+		require.ErrorContains(t, got.err, "stream data interval timeout")
+	case <-time.After(2 * time.Second):
+		_ = body.Close()
+		<-done
+		t.Fatal("Gemini Messages provider stream ignored StreamDataIntervalTimeout")
+	}
+	require.NoError(t, body.Close())
+}
+
+func TestGeminiNativeStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := newGeminiBlockingAfterPrefixReadCloser(
+		"data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+	)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini:streamGenerateContent", nil)
+	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
+
+	type outcome struct {
+		result *geminiNativeStreamResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := svc.handleNativeStreamingResponse(c, resp, time.Now(), true)
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NotNil(t, got.result)
+		require.ErrorContains(t, got.err, "stream data interval timeout")
+	case <-time.After(2 * time.Second):
+		_ = body.Close()
+		<-done
+		t.Fatal("Gemini native provider stream ignored StreamDataIntervalTimeout")
+	}
+	require.NoError(t, body.Close())
+}
+
+func TestGeminiNativeStreamingAllowsSingleInlineDataFrameBeyondFirstOutputGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	imageData := strings.Repeat("A", openAIFirstOutputStageMaxBytes+1024)
+	payload := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"inlineData":{"mimeType":"image/png","data":"` + imageData + `"}}]},"finishReason":"STOP"}]}`
+	body := "data: " + payload + "\n\ndata: [DONE]\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini:streamGenerateContent", nil)
+	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: 16 * 1024 * 1024,
+	}}}
+
+	result, err := svc.handleNativeStreamingResponse(c, resp, time.Now(), false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.terminalObserved)
+	require.Greater(t, rec.Body.Len(), openAIFirstOutputStageMaxBytes)
+	require.Contains(t, rec.Body.String(), `"mimeType":"image/png"`)
+}
+
+func TestGeminiChatCompatibilityStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := newGeminiBlockingAfterPrefixReadCloser(
+		"data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+	)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
+
+	type outcome struct {
+		result *geminiStreamResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := svc.handleChatCompletionsStreamingResponseFromGemini(
+			context.Background(), c, resp, time.Now(), "gemini-2.5-pro", true, false,
+		)
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NotNil(t, got.result)
+		require.ErrorContains(t, got.err, "stream data interval timeout")
+	case <-time.After(2 * time.Second):
+		_ = body.Close()
+		<-done
+		t.Fatal("Gemini Chat compatibility provider stream ignored StreamDataIntervalTimeout")
+	}
+	require.NoError(t, body.Close())
+}
+
+func TestCollectGeminiSSEHonorsProviderIdleTimeout(t *testing.T) {
+	body := newGeminiBlockingAfterPrefixReadCloser(
+		"data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+	)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	started := time.Now()
+
+	result, usage, err := collectGeminiSSE(
+		resp, true, &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}},
+	)
+	require.Nil(t, result)
+	require.Nil(t, usage)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, string(failoverErr.ResponseBody), "data interval timeout")
+	require.Less(t, time.Since(started), 2*time.Second)
+	require.NoError(t, body.Close())
+}
+
+func TestCollectGeminiSSEDrainsCapturePastSmallerFunctionalLimit(t *testing.T) {
+	line := ": " + strings.Repeat("x", 1022) + "\n"
+	providerBody := []byte(strings.Repeat(line, 200))
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	beginCaptureAttempt(c)
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1beta/models/gemini:streamGenerateContent", nil)
+	setCaptureUpstreamRequest(c, request, 1<<20)
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(providerBody)), Request: request}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize:                  2 * 1024 * 1024,
+		UpstreamResponseReadMaxBytes: 1024,
+	}}
+
+	result, usage, err := collectGeminiSSE(resp, false, cfg)
+
+	require.Nil(t, result)
+	require.Nil(t, usage)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	finishCapture()
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Len(t, capture.Response, len(providerBody))
+	require.True(t, bytes.Equal(providerBody, capture.Response), "capture must preserve the finite provider body exactly")
+	require.False(t, capture.ResponseTruncated)
 }
 
 type anthropicContentBlockEvent struct {

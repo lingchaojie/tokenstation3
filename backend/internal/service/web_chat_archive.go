@@ -107,8 +107,13 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 	if !enabled {
 		return
 	}
+	// Some compatibility services submit synchronously from the HTTP error
+	// branch while their outer defer has not published the response wrapper yet.
+	// Finish first so redirect/fallback request ownership and response metadata
+	// are resolved before the bridge is taken.
+	finishCaptureResponse(resp)
 	bridge, ok := takeCaptureResult(c)
-	if !ok || len(bridge.UpstreamRequest) == 0 {
+	if !ok || bridge.RequestCaptureInvalid || bridge.UpstreamRequest == nil {
 		return
 	}
 	limit := s.cfg.Gateway.Capture.MaxBodyBytes
@@ -122,15 +127,28 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 	if len(responseHeaders) == 0 {
 		responseHeaders = redactHTTPHeader(resp.Header)
 	}
+	if bridge.ResponseObserved {
+		rawResponse, responseTruncated = SnapshotForCaptureWithFlag(bridge.Response, limit)
+		responseTruncated = responseTruncated || bridge.ResponseTruncated
+	}
+	captureModel := firstNonEmpty(bridge.UpstreamModel, upstreamModel)
+	captureStream := stream
+	if bridge.UpstreamStreamKnown {
+		captureStream = bridge.UpstreamStream
+	}
+	httpStatus := resp.StatusCode
+	if bridge.ResponseObserved && bridge.HTTPStatus > 0 {
+		httpStatus = bridge.HTTPStatus
+	}
 	s.capturePool.Submit(&CaptureRecord{
 		CapturedAt:       time.Now().UTC(),
 		Platform:         string(account.Platform),
-		RequestID:        CaptureRequestID(buildKiroRequestID(resp)),
+		RequestID:        CaptureRequestID(captureProviderRequestIDBytes(responseHeaders)),
 		RequestedModel:   requestedModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: upstreamEndpoint,
-		Stream:           stream,
-		HTTPStatus:       resp.StatusCode,
+		UpstreamModel:    captureModel,
+		UpstreamEndpoint: redactCaptureEndpoint(firstNonEmpty(bridge.UpstreamEndpoint, upstreamEndpoint)),
+		Stream:           captureStream,
+		HTTPStatus:       httpStatus,
 		RawRequest:       rawRequest,
 		RawResponse:      rawResponse,
 		RequestHeaders:   requestHeaders,
@@ -140,38 +158,58 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 	})
 }
 
+// submitWebChatTerminalCapture owns typed final HTTP failures that are
+// returned before a compatibility forwarder has an *http.Response to pass to
+// submitWebChatFinalGatewayErrorCapture. Only direct WebChat calls carry the
+// ownership token; normal gateway handlers keep their existing terminal sink.
+func (s *GatewayService) submitWebChatTerminalCapture(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	failure *UpstreamFailoverError,
+) {
+	if s == nil || s.capturePool == nil || s.cfg == nil || account == nil || failure == nil ||
+		!ownsWebChatFinalGatewayErrorCapture(ctx) {
+		return
+	}
+	platform := firstNonEmpty(failure.Platform, string(account.Platform))
+	if record := BuildTerminalErrorCaptureRecord(c, platform, failure, s.cfg.Gateway.Capture.MaxBodyBytes); record != nil {
+		s.capturePool.Submit(record)
+	}
+}
+
 // SubmitWebChatCapture archives a gateway result for the WebChat caller, which
 // invokes GatewayService directly and therefore does not pass through the
 // normal HTTP handler capture sink.
 func (s *GatewayService) SubmitWebChatCapture(result *ForwardResult, account *Account, requestBody []byte, upstreamEndpoint string) {
-	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+	if s == nil || s.capturePool == nil || result == nil || account == nil || result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
 	limit := 0
 	if s.cfg != nil {
 		limit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
-	finalRequest := result.UpstreamRequest
-	if finalRequest == nil {
-		finalRequest = requestBody
-	}
-	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(finalRequest, limit)
+	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(result.UpstreamRequest, limit)
 	rawResponse, responseTruncated := SnapshotForCaptureWithFlag(result.CaptureResponse, limit)
 	s.capturePool.Submit(&CaptureRecord{
-		CapturedAt:       time.Now().UTC(),
-		Platform:         string(account.Platform),
-		RequestID:        CaptureRequestID(result.RequestID),
-		RequestedModel:   result.Model,
-		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint),
-		Stream:           result.Stream,
-		HTTPStatus:       result.HTTPStatusForCapture(),
-		RawRequest:       rawRequest,
-		RawResponse:      rawResponse,
-		RequestHeaders:   result.CaptureRequestHeaders,
-		ResponseHeaders:  result.CaptureResponseHeaders,
-		Truncated:        requestTruncated || responseTruncated || result.CaptureTruncated,
-		ContentPolicy:    result.CaptureContentPolicy,
+		CapturedAt:          time.Now().UTC(),
+		Platform:            string(account.Platform),
+		RequestID:           CaptureRequestID(result.RequestID),
+		RequestedModel:      result.Model,
+		UpstreamModel:       result.UpstreamModelForCapture(),
+		UpstreamEndpoint:    redactCaptureEndpoint(firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint)),
+		Stream:              result.StreamForCapture(),
+		HTTPStatus:          result.HTTPStatusForCapture(),
+		InputTokens:         result.Usage.InputTokens,
+		OutputTokens:        result.Usage.OutputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		RawRequest:          rawRequest,
+		RawResponse:         rawResponse,
+		RequestHeaders:      result.CaptureRequestHeaders,
+		ResponseHeaders:     result.CaptureResponseHeaders,
+		Truncated:           requestTruncated || responseTruncated || result.CaptureTruncated,
+		ContentPolicy:       result.CaptureContentPolicy,
 	})
 }
 
@@ -179,33 +217,45 @@ func (s *GatewayService) SubmitWebChatCapture(result *ForwardResult, account *Ac
 // final attempt body after provider-specific rewriting; requestBody is only a
 // compatibility fallback for result producers that predate that snapshot.
 func (s *OpenAIGatewayService) SubmitWebChatCapture(result *OpenAIForwardResult, account *Account, requestBody []byte, upstreamEndpoint string) {
-	if s == nil || s.capturePool == nil || result == nil || account == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+	if s == nil || s.capturePool == nil || result == nil || account == nil || result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
 	limit := 0
 	if s.cfg != nil {
 		limit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
-	finalRequest := result.UpstreamRequest
-	if finalRequest == nil {
-		finalRequest = requestBody
-	}
-	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(finalRequest, limit)
+	rawRequest, requestTruncated := SnapshotForCaptureWithFlag(result.UpstreamRequest, limit)
 	rawResponse, responseTruncated := SnapshotForCaptureWithFlag(result.CaptureResponse, limit)
 	s.capturePool.Submit(&CaptureRecord{
-		CapturedAt:       time.Now().UTC(),
-		Platform:         string(account.Platform),
-		RequestID:        CaptureRequestID(result.RequestID),
-		RequestedModel:   result.Model,
-		UpstreamModel:    result.UpstreamModel,
-		UpstreamEndpoint: firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint),
-		Stream:           result.Stream,
-		HTTPStatus:       result.HTTPStatusForCapture(),
-		RawRequest:       rawRequest,
-		RawResponse:      rawResponse,
-		RequestHeaders:   result.CaptureRequestHeaders,
-		ResponseHeaders:  result.CaptureResponseHeaders,
-		Truncated:        requestTruncated || responseTruncated || result.CaptureTruncated,
-		ContentPolicy:    result.CaptureContentPolicy,
+		CapturedAt:          time.Now().UTC(),
+		Platform:            string(account.Platform),
+		RequestID:           CaptureRequestID(result.RequestID),
+		RequestedModel:      result.Model,
+		UpstreamModel:       result.UpstreamModelForCapture(),
+		UpstreamEndpoint:    redactCaptureEndpoint(firstNonEmpty(result.CaptureUpstreamEndpoint, upstreamEndpoint)),
+		Stream:              result.StreamForCapture(),
+		HTTPStatus:          result.HTTPStatusForCapture(),
+		InputTokens:         result.Usage.InputTokens,
+		OutputTokens:        result.Usage.OutputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		RawRequest:          rawRequest,
+		RawResponse:         rawResponse,
+		RequestHeaders:      result.CaptureRequestHeaders,
+		ResponseHeaders:     result.CaptureResponseHeaders,
+		Truncated:           requestTruncated || responseTruncated || result.CaptureTruncated,
+		ContentPolicy:       result.CaptureContentPolicy,
 	})
+}
+
+// SubmitWebChatTerminalCapture owns the final typed HTTP failure for direct
+// WebChat callers, which do not pass through the normal OpenAI handler sink.
+func (s *OpenAIGatewayService) SubmitWebChatTerminalCapture(c *gin.Context, failure *UpstreamFailoverError) {
+	if s == nil || s.capturePool == nil || s.cfg == nil || failure == nil {
+		return
+	}
+	platform := firstNonEmpty(failure.Platform, PlatformOpenAI)
+	if record := BuildTerminalErrorCaptureRecord(c, platform, failure, s.cfg.Gateway.Capture.MaxBodyBytes); record != nil {
+		s.capturePool.Submit(record)
+	}
 }

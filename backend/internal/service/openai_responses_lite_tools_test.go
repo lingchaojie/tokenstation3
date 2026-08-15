@@ -268,7 +268,7 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 				Body: io.NopCloser(strings.NewReader(
-					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_lite\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_lite\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n" +
 						"data: [DONE]\n\n",
 				)),
 			}}

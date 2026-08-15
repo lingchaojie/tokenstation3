@@ -815,7 +815,8 @@ func TestHandleKiroHTTPErrorAPIKeyInvalidModelDoesNotFailover(t *testing.T) {
 	require.Error(t, err)
 
 	var failoverErr *UpstreamFailoverError
-	require.NotErrorAs(t, err, &failoverErr)
+	require.ErrorAs(t, err, &failoverErr)
+	require.False(t, failoverErr.ShouldRetryNextAccount(), "API-key invalid-model is terminal for this request")
 	require.False(t, repo.called)
 	require.False(t, repo.rateCalled)
 	require.False(t, repo.modelRateCalled)

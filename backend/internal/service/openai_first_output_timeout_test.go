@@ -97,7 +97,7 @@ func TestOpenAINativeFirstOutputTimeoutDisabledPreservesSynchronousStream(t *tes
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_disabled"}}`,
 		"",
-		`data: {"type":"response.completed","response":{"id":"resp_disabled","usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_disabled","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
 		"",
 	}, "\n")))}
 	rec := httptest.NewRecorder()
@@ -173,9 +173,9 @@ func TestOpenAIFirstOutputStageDefaultLimitIsIndependentFromScannerLimit(t *test
 	require.Less(t, stage.limit, int64(defaultMaxLineSize))
 }
 
-func TestOpenAIFirstOutputEventQueueSizeBackpressuresGuardedStreams(t *testing.T) {
+func TestOpenAIFirstOutputEventQueueSizeBackpressuresAllLargeProviderStreams(t *testing.T) {
 	require.Equal(t, 1, openAIFirstOutputEventQueueSize(true))
-	require.Equal(t, 16, openAIFirstOutputEventQueueSize(false))
+	require.Equal(t, 1, openAIFirstOutputEventQueueSize(false))
 }
 
 func TestOpenAIFirstOutputDynamicScannerLimitsOnlyWhileGuardIsActive(t *testing.T) {
@@ -333,7 +333,7 @@ func TestOpenAINativeFirstOutputTimeoutDisarmsAfterSemanticOutput(t *testing.T) 
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ok\"}}\n\n"))
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"))
 		time.Sleep(1100 * time.Millisecond)
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"))
 	}()
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -429,7 +429,7 @@ func TestOpenAINativeFirstOutputEOFDispatchesTerminalEventWithoutBlankLine(t *te
 		MaxLineSize:                     defaultMaxLineSize,
 	}}
 	svc := &OpenAIGatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg)}
-	payload := `data: {"type":"response.completed","response":{"id":"resp_eof","usage":{"input_tokens":3,"output_tokens":2}}}`
+	payload := `data: {"type":"response.completed","response":{"id":"resp_eof","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}`
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -537,7 +537,7 @@ func TestOpenAINativeFirstOutputScannerAllowsLargeEventAfterSemanticBoundary(t *
 		"",
 		`data: {"type":"response.output_text.delta","delta":"` + largeDelta + `"}`,
 		"",
-		`data: {"type":"response.completed","response":{"id":"resp_large_image","usage":{"input_tokens":4,"output_tokens":3}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_large_image","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":3}}}`,
 		"",
 	}, "\n")
 	rec := httptest.NewRecorder()
@@ -563,7 +563,7 @@ func TestOpenAINativeFirstOutputScannerAllowsLargeEventAfterSemanticBoundary(t *
 	require.Equal(t, "request-large-image", rec.Result().Header.Get("X-Request-Id"))
 }
 
-func TestOpenAINativeFirstOutputTimeoutDisabledPreservesKeepaliveFlush(t *testing.T) {
+func TestOpenAINativeFirstOutputTimeoutDisabledKeepsPresemanticKeepalivePrivate(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
 		StreamKeepaliveInterval: 1,
 		MaxLineSize:             defaultMaxLineSize,
@@ -582,10 +582,9 @@ func TestOpenAINativeFirstOutputTimeoutDisabledPreservesKeepaliveFlush(t *testin
 
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
 
-	require.Error(t, err)
-	require.Contains(t, rec.Body.String(), ":\n\n")
-	require.Contains(t, rec.Body.String(), "response.created")
-	require.Contains(t, rec.Body.String(), "response.in_progress")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepaliveCommit(t *testing.T) {
@@ -626,7 +625,7 @@ func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepalive
 	_, firstErr := svc.handleStreamingResponse(c.Request.Context(), firstResp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, firstErr, &failoverErr)
-	require.Contains(t, rec.Body.String(), ":\n\n", "first attempt should have committed only a stable keepalive")
+	require.Empty(t, rec.Body.String(), "pre-semantic keepalives must remain private so the attempt is replayable")
 	require.NotContains(t, rec.Body.String(), "resp_first")
 
 	secondResp := &http.Response{
@@ -639,7 +638,7 @@ func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepalive
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`data: {"type":"response.output_text.delta","delta":"hello"}`,
 			"",
-			`data: {"type":"response.completed","response":{"id":"resp_second","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_second","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
 			"",
 		}, "\n"))),
 	}
@@ -649,10 +648,10 @@ func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepalive
 	require.NotNil(t, result)
 	require.Contains(t, rec.Body.String(), "resp_second")
 	wireHeaders := rec.Result().Header
-	require.Empty(t, wireHeaders.Values("X-Request-Id"))
-	require.Empty(t, wireHeaders.Values("X-Ratelimit-Remaining-Requests"))
-	require.Empty(t, rec.Header().Values("X-Request-Id"))
-	require.Empty(t, rec.Header().Values("X-Ratelimit-Remaining-Requests"))
+	require.Equal(t, []string{"request-second"}, wireHeaders.Values("X-Request-Id"))
+	require.Equal(t, []string{"99"}, wireHeaders.Values("X-Ratelimit-Remaining-Requests"))
+	require.Equal(t, []string{"request-second"}, rec.Header().Values("X-Request-Id"))
+	require.Equal(t, []string{"99"}, rec.Header().Values("X-Ratelimit-Remaining-Requests"))
 	select {
 	case <-firstWriterDone:
 	case <-time.After(time.Second):

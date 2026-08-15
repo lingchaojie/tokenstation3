@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -33,7 +35,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_resp_chat_json"}},
 		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":5}}}`,
+			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`,
 		)),
 	}}
 	svc := &OpenAIGatewayService{
@@ -54,12 +56,12 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 	require.Equal(t, 4, int(gjson.Get(rec.Body.String(), "usage.input_tokens_details.cached_tokens").Int()))
 	require.Equal(t, 6, int(gjson.Get(rec.Body.String(), "usage.input_tokens_details.cache_write_tokens").Int()))
-	require.Equal(t, 5, int(gjson.Get(rec.Body.String(), "usage.output_tokens_details.image_tokens").Int()))
+	require.Equal(t, 2, int(gjson.Get(rec.Body.String(), "usage.output_tokens_details.image_tokens").Int()))
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 5, result.Usage.ImageOutputTokens)
+	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
 }
 
@@ -76,13 +78,13 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		"",
-		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"he"},"finish_reason":null}],"usage":{"prompt_tokens":"invalid","input_tokens":12,"prompt_tokens_details":{"audio_tokens":2},"output_tokens_details":{"reasoning_tokens":7},"_sub2api_kiro_credits":0.17}}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"he"},"finish_reason":null}],"usage":{"prompt_tokens":12,"input_tokens":12,"prompt_tokens_details":{"audio_tokens":2},"output_tokens_details":{"reasoning_tokens":7},"_sub2api_kiro_credits":0.17}}`,
 		"",
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"llo"},"finish_reason":null}]}`,
 		"",
 		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		"",
-		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"audio_tokens":3,"image_tokens":5,"accepted_prediction_tokens":4,"rejected_prediction_tokens":1},"_sub2api_kiro_credits":0}}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"audio_tokens":3,"image_tokens":2,"accepted_prediction_tokens":4,"rejected_prediction_tokens":1},"_sub2api_kiro_credits":0}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -112,7 +114,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.Contains(t, rec.Body.String(), `"cache_write_tokens":6`)
 	require.Contains(t, rec.Body.String(), `"reasoning_tokens":7`)
 	require.Contains(t, rec.Body.String(), `"audio_tokens":3`)
-	require.Contains(t, rec.Body.String(), `"image_tokens":5`)
+	require.Contains(t, rec.Body.String(), `"image_tokens":2`)
 	require.Contains(t, rec.Body.String(), `"accepted_prediction_tokens":4`)
 	require.Contains(t, rec.Body.String(), `"rejected_prediction_tokens":1`)
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
@@ -120,7 +122,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 5, result.Usage.ImageOutputTokens)
+	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.Zero(t, result.Usage.KiroCredits)
 	require.True(t, result.Stream)
 	require.NotNil(t, result.FirstTokenMs)
@@ -215,9 +217,9 @@ func TestForwardResponsesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChun
 }
 
 func rawCCSpilledCommitFailureSSE() string {
-	largeID := strings.Repeat("s", openAIFirstOutputStageMemoryLimit+1024)
+	largeText := strings.Repeat("s", openAIFirstOutputStageMemoryLimit+1024)
 	return strings.Join([]string{
-		`data: {"id":"` + largeID + `","choices":[{"delta":{"role":"assistant"}}]}`,
+		`data: {"id":"x","choices":[{"delta":{"role":"assistant","content":"` + largeText + `"}}]}`,
 		"",
 		`data: {"id":"x","choices":[{"delta":{"content":"hello"}}]}`,
 		"",
@@ -349,7 +351,7 @@ func TestForwardResponsesRawCCCancellationAndStageBoundCloseBody(t *testing.T) {
 				require.False(t, errors.As(err, &failoverErr))
 				require.Contains(t, recorder.Body.String(), "hello")
 				if tt.idle {
-					require.Contains(t, err.Error(), "idle timeout")
+					require.Contains(t, err.Error(), "data interval timeout")
 				}
 			} else {
 				require.Nil(t, result)
@@ -376,13 +378,15 @@ func TestForwardResponsesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t
 		name        string
 		upstreamSSE string
 		committed   bool
+		wantOutput  string
 	}{
-		{name: "oversized first semantic converted event", upstreamSSE: firstSemanticLine + "\n\n"},
+		{name: "oversized first semantic converted event", upstreamSSE: firstSemanticLine + "\n\n", committed: true, wantOutput: firstSemantic[:128]},
 		{
 			name: "oversized newline-free token after committed text",
 			upstreamSSE: "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"committed\"}}]}\n\n" +
 				"data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1),
-			committed: true,
+			committed:  true,
+			wantOutput: "committed",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -404,7 +408,7 @@ func TestForwardResponsesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t
 			if tt.committed {
 				require.NotNil(t, result)
 				require.False(t, errors.As(err, &failoverErr))
-				require.Contains(t, recorder.Body.String(), "committed")
+				require.Contains(t, recorder.Body.String(), tt.wantOutput)
 				return
 			}
 			require.Nil(t, result)
@@ -415,7 +419,7 @@ func TestForwardResponsesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t
 	}
 }
 
-func TestForwardResponses_ForceChatCompletionsNormalizesNegativeUsage(t *testing.T) {
+func TestForwardResponses_ForceChatCompletionsRejectsNegativeUsageBeforeCommit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":false}`)
@@ -437,16 +441,12 @@ func TestForwardResponses_ForceChatCompletionsNormalizesNegativeUsage(t *testing
 	}
 
 	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Zero(t, gjson.Get(rec.Body.String(), "usage.input_tokens").Int())
-	require.Zero(t, gjson.Get(rec.Body.String(), "usage.output_tokens").Int())
-	require.Zero(t, gjson.Get(rec.Body.String(), "usage.total_tokens").Int())
-	require.False(t, gjson.Get(rec.Body.String(), "usage.output_tokens_details").Exists())
-	require.Zero(t, result.Usage.InputTokens)
-	require.Zero(t, result.Usage.OutputTokens)
-	require.Zero(t, result.Usage.ImageOutputTokens)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Equal(t, -1, c.Writer.Size(), "malformed provider usage must remain replay-safe")
+	require.Empty(t, rec.Body.String())
 }
 
 func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *testing.T) {
@@ -521,6 +521,143 @@ func TestForwardResponses_AutoSupportedAccountStillUsesResponsesEndpoint(t *test
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
+}
+
+func TestScanCCStreamRejectsKnownFiniteDataAfterDone(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"tail"},"finish_reason":null}]}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(strings.NewReader(body)),
+	}
+	state := (&OpenAIGatewayService{}).scanCCStream(
+		context.Background(), resp, "test", "rid-tail", time.Now(),
+		func(*apicompat.ChatCompletionsChunk) (bool, error) { return false, nil },
+	)
+
+	require.True(t, state.SawDone)
+	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+}
+
+func TestScanCCStreamParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	beginCaptureAttempt(c)
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1/chat/completions", nil)
+	setCaptureUpstreamRequest(c, request, 1<<20)
+	first := []byte("data: {bad}\n\n")
+	tail := []byte("data: [DONE]\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       &rawChatDelayedFiniteTailReadCloser{first: first, tail: tail, closed: make(chan struct{})},
+		Request:    request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+
+	state := (&OpenAIGatewayService{}).scanCCStream(
+		c.Request.Context(), resp, "test", "rid-parser-tail", time.Now(),
+		func(*apicompat.ChatCompletionsChunk) (bool, error) { return false, nil },
+	)
+	finishCapture()
+
+	require.Error(t, state.Err)
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
+}
+
+func TestScanCCStreamRejectsDelayedChunkedDataAfterDone(t *testing.T) {
+	terminal := []byte(strings.Join([]string{
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"))
+	tail := []byte(`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"tail"},"finish_reason":null}]}` + "\n\n")
+	body := &delayedOpenAITerminalTailBody{terminal: terminal, tail: tail, delay: 5 * time.Millisecond, closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, ContentLength: -1, Body: body}
+
+	state := (&OpenAIGatewayService{}).scanCCStream(
+		context.Background(), resp, "test", "rid-tail", time.Now(),
+		func(*apicompat.ChatCompletionsChunk) (bool, error) { return false, nil },
+	)
+
+	require.True(t, state.SawDone)
+	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+}
+
+func TestScanCCStreamRejectsBufferedPartialDataTailBeforeClosingOpenBody(t *testing.T) {
+	terminal := []byte(strings.Join([]string{
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"))
+	partialTail := []byte(`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"tail"}`)
+	body := &providerPrefixThenBlockReader{
+		prefix: append(append([]byte(nil), terminal...), partialTail...),
+		closed: make(chan struct{}),
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, ContentLength: -1, Body: body}
+
+	state := (&OpenAIGatewayService{}).scanCCStream(
+		context.Background(), resp, "test", "rid-tail", time.Now(),
+		func(*apicompat.ChatCompletionsChunk) (bool, error) { return false, nil },
+	)
+
+	require.True(t, state.SawDone)
+	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("terminal tail validation must close and join the open provider body")
+	}
+}
+
+func TestScanCCStreamAllowsSingleSemanticFrameBeyondFirstOutputGuard(t *testing.T) {
+	largeContent := strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-large","choices":[{"index":0,"delta":{"content":"` + largeContent + `"},"finish_reason":null}]}`,
+		``,
+		`data: {"id":"chatcmpl-large","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(strings.NewReader(body)),
+	}
+	state := (&OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: 16 * 1024 * 1024,
+	}}}).scanCCStream(
+		context.Background(), resp, "test", "rid-large", time.Now(),
+		func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
+			return len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != nil && *chunk.Choices[0].Delta.Content != "", nil
+		},
+	)
+
+	require.NoError(t, state.Err)
+	require.True(t, state.SawOutput)
+	require.True(t, state.SawDone)
 }
 
 func forceChatResponsesFallbackAccount() *Account {

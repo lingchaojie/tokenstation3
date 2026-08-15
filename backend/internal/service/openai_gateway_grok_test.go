@@ -1668,7 +1668,7 @@ func TestForwardAsChatCompletionsForGrokStopFallsBackToXAIChatCompletions(t *tes
 			"X-Ratelimit-Limit-Tokens":       []string{"1000"},
 			"X-Ratelimit-Remaining-Tokens":   []string{"990"},
 		},
-		Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl","object":"chat.completion","model":"grok-4.3","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":1}}}`)),
+		Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl","object":"chat.completion","model":"grok-4.3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":1}}}`)),
 	}}
 	svc := &OpenAIGatewayService{
 		httpUpstream:      upstream,
@@ -1713,7 +1713,7 @@ func TestForwardGrokResponsesStreamingDefaultsEmptyModelTo45AndSnapshots(t *test
 	upstreamBody := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","sequence_number":0,"delta":"ok"}`,
 		"",
-		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_grok","model":"grok-4.3","usage":{"input_tokens":5,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`,
+		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_grok","model":"grok-4.3","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`,
 		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -1760,6 +1760,54 @@ func TestForwardGrokResponsesStreamingDefaultsEmptyModelTo45AndSnapshots(t *test
 	require.NotNil(t, repo.updates[52][grokQuotaSnapshotExtraKey])
 }
 
+func TestForwardGrokResponsesStreamingTreatsFilteredSourceBytesAsProviderActivity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"grok","input":"hi","stream":true,"tools":[{"type":"custom","name":"apply_patch"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	account := &Account{
+		ID: 5301, Name: "grok-api-key-slow-filter", Platform: PlatformGrok,
+		Type: AccountTypeAPIKey, Concurrency: 2,
+		Credentials: map[string]any{
+			"api_key":  "xai-test-key",
+			"base_url": "https://api.x.ai/v1",
+		},
+	}
+	providerBody := &providerSlowChunksReader{
+		chunks: [][]byte{
+			[]byte("event: ping\n"),
+			[]byte("data: {\"type\":\"ping\",\"x-opencode-type\":\"inference-cost\",\"cost\":\"0\"}\n"),
+			[]byte("\n"),
+			[]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_grok_slow\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"),
+		},
+		interval: 400 * time.Millisecond,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       providerBody,
+	}}
+	svc := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize:               defaultMaxLineSize,
+			StreamDataIntervalTimeout: 1,
+		}},
+	}
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, account, body, "grok", true, time.Now())
+
+	require.NoError(t, err, "raw provider bytes consumed by nested filters must keep the stream alive")
+	require.NotNil(t, result)
+	require.Equal(t, "resp_grok_slow", result.ResponseID)
+	require.NotContains(t, recorder.Body.String(), "inference-cost")
+	require.Contains(t, recorder.Body.String(), "response.completed")
+}
+
 func TestForwardGrokResponsesAPIKeyUsesXAIResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1783,7 +1831,7 @@ func TestForwardGrokResponsesAPIKeyUsesXAIResponses(t *testing.T) {
 	upstreamBody := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","sequence_number":0,"delta":"ok"}`,
 		"",
-		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_grok_api_key","model":"grok-4.5","usage":{"input_tokens":2,"output_tokens":1}}}`,
+		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_grok_api_key","model":"grok-4.5","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}}}`,
 		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -2058,7 +2106,7 @@ func TestForwardAsChatCompletionsForGrokAPIKeyUsesConfiguredRawEndpointWithoutOA
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl","object":"chat.completion","model":"grok-4.5","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl","object":"chat.completion","model":"grok-4.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 
@@ -2187,6 +2235,8 @@ func TestForwardAsChatCompletionsForGrokStreamingUsesRawXAIChatCompletions(t *te
 	}
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
+		"",
+		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		"",
 		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[],"usage":{"prompt_tokens":6,"completion_tokens":4,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":1}}}`,
 		"",
@@ -2360,6 +2410,8 @@ func TestForwardAsChatCompletionsForGrokStreamingStopFallsBackToRawXAIChatComple
 	}
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
+		"",
+		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		"",
 		`data: {"id":"chatcmpl_grok","object":"chat.completion.chunk","model":"grok-4.3","choices":[],"usage":{"prompt_tokens":6,"completion_tokens":4,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":1}}}`,
 		"",

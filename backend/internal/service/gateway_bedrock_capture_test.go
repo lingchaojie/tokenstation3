@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
@@ -55,9 +58,10 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 		Type:        AccountTypeBedrock,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"auth_mode":  "apikey",
-			"api_key":    "bedrock-provider-secret",
-			"aws_region": "us-east-1",
+			"aws_access_key_id":     "AKIA_CAPTURE_TEST",
+			"aws_secret_access_key": "bedrock-secret-access-key",
+			"aws_session_token":     "bedrock-temporary-session-token",
+			"aws_region":            "us-east-1",
 		},
 		Status:      StatusActive,
 		Schedulable: true,
@@ -72,7 +76,59 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	require.Equal(t, http.StatusOK, result.CaptureHTTPStatus)
 	require.Contains(t, result.CaptureUpstreamEndpoint, "bedrock-runtime.us-east-1.amazonaws.com")
 	require.NotNil(t, result.CaptureContentPolicy)
-	require.NotContains(t, string(result.CaptureRequestHeaders), "bedrock-provider-secret")
+	require.NotContains(t, string(result.CaptureRequestHeaders), "AKIA_CAPTURE_TEST")
+	require.NotContains(t, string(result.CaptureRequestHeaders), "bedrock-secret-access-key")
+	require.NotContains(t, string(result.CaptureRequestHeaders), "bedrock-temporary-session-token")
+	require.NotContains(t, strings.ToLower(string(result.CaptureRequestHeaders)), "x-amz-security-token")
+	require.Contains(t, string(result.CaptureResponseHeaders), "X-Amzn-Requestid")
+	require.NotContains(t, string(result.CaptureResponseHeaders), "X-Request-Id", "capture must not synthesize provider response headers")
+}
+
+type bedrockCloseReleasedReader struct {
+	tail   []byte
+	closed chan struct{}
+	once   sync.Once
+	done   bool
+}
+
+func (r *bedrockCloseReleasedReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	<-r.closed
+	r.done = true
+	n := copy(p, r.tail)
+	return n, io.EOF
+}
+
+func (r *bedrockCloseReleasedReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestBedrockStreamTimeoutJoinsDecoderBeforePublishingCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	setCapturePlatform(c, PlatformAnthropic)
+	SetCaptureOutboundRequest(c, c.Request, []byte(`{"model":"bedrock"}`), 1024)
+
+	tail := []byte("tail-returned-as-close-unblocks-decoder")
+	body := &bedrockCloseReleasedReader{tail: tail, closed: make(chan struct{})}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: c.Request}
+	beginCaptureResponse(c, resp, true, 1024)
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
+	account := &Account{ID: 1, Platform: PlatformAnthropic}
+
+	_, err := svc.handleBedrockStreamingResponse(context.Background(), resp, c, account, time.Now(), "bedrock")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.HasUpstreamHTTPResponse)
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, tail, bridge.Response)
 }
 
 func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *testing.T) {
@@ -132,4 +188,6 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 	require.Equal(t, errorBody, record.RawResponse)
 	require.Contains(t, record.UpstreamEndpoint, "bedrock-runtime.us-east-1.amazonaws.com")
 	require.NotContains(t, string(record.RequestHeaders), "bedrock-provider-secret")
+	require.Contains(t, string(record.ResponseHeaders), "X-Amzn-Requestid")
+	require.NotContains(t, string(record.ResponseHeaders), "X-Request-Id")
 }
