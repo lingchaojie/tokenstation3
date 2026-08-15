@@ -438,14 +438,30 @@ func TestKiroAPIRegionIgnoresProfileARNRegionFallback(t *testing.T) {
 	require.Equal(t, kiroDefaultRegion, kiroAPIRegion(account))
 }
 
-func TestKiroAPIRegionFallsBackToOIDCRegion(t *testing.T) {
-	account := &Account{
+func TestKiroAPIRegionCredentialPrecedence(t *testing.T) {
+	require.Equal(t, "eu-west-1", kiroAPIRegion(&Account{
+		Type: AccountTypeAPIKey,
 		Credentials: map[string]any{
-			"region": "ap-northeast-2",
+			"api_region": "eu-west-1",
+			"apiRegion":  "us-west-2",
+			"region":     "ap-south-1",
 		},
-	}
-
-	require.Equal(t, "ap-northeast-2", kiroAPIRegion(account))
+	}))
+	require.Equal(t, "us-west-2", kiroAPIRegion(&Account{
+		Type: AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"apiRegion": "us-west-2",
+			"region":    "ap-south-1",
+		},
+	}))
+	require.Equal(t, "ap-south-1", kiroAPIRegion(&Account{
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"region": "ap-south-1"},
+	}))
+	require.Equal(t, kiroDefaultRegion, kiroAPIRegion(&Account{
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"region": "ap-south-1"},
+	}))
 }
 
 func TestBuildKiroEndpointsUsesOnlyAmazonQEndpoint(t *testing.T) {

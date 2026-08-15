@@ -150,7 +150,7 @@ git commit -m "feat(kiro): support GPT-5.6 and Opus 5 models"
 - Consumes: `buildKiroAPIRegionOptions`, current `Select` component, credential merge paths.
 - Produces: a 34-code `KIRO_API_REGIONS` catalog and `kiroAPIRegion(*Account) string` with independent OAuth/API-key fallback rules.
 
-- [ ] **Step 1: Add failing backend and frontend region tests**
+- [x] **Step 1: Add failing backend and frontend region tests**
 
 Backend cases:
 
@@ -175,7 +175,7 @@ expect(KIRO_API_REGIONS).toContain('sa-east-1')
 
 Update modal tests to select `eu-west-1`, submit, and assert `region` and `api_region` are persisted independently. Add an OAuth regression whose IDC region is `ap-south-1` while API region remains `eu-central-1`.
 
-- [ ] **Step 2: Run region tests and confirm RED**
+- [x] **Step 2: Run region tests and confirm RED**
 
 ```bash
 cd backend
@@ -186,7 +186,7 @@ COREPACK_ENABLE_PROJECT_SPEC=0 pnpm exec vitest run src/utils/__tests__/kiroAcco
 
 Expected: failures for catalog length, missing options, camelCase fallback, and OAuth incorrectly falling back to IDC region.
 
-- [ ] **Step 3: Expand the catalog and fix backend precedence**
+- [x] **Step 3: Expand the catalog and fix backend precedence**
 
 Set `KIRO_API_REGIONS` to the exact 34 codes from nianzs `frontend/src/constants/kiroRegions.ts`, preserving `us-east-1` as the first/default value. Keep `buildKiroAPIRegionOptions` so an existing non-list value is appended as a disabled legacy option.
 
@@ -213,7 +213,7 @@ func kiroAPIRegion(account *Account) string {
 
 Use `Select` with the shared option builder for IDC and API-region controls in create/edit/reauthorize flows. Do not render or rewrite API region for KIRO relay API keys.
 
-- [ ] **Step 4: Run region suites GREEN**
+- [x] **Step 4: Run region suites GREEN**
 
 Repeat Step 2 and also run:
 
@@ -224,7 +224,7 @@ COREPACK_ENABLE_PROJECT_SPEC=0 pnpm run typecheck
 
 Expected: tests and typecheck pass; create/edit/reauth preserve independent credential keys.
 
-- [ ] **Step 5: Commit region support**
+- [x] **Step 5: Commit region support**
 
 ```bash
 git add backend/internal/service/kiro_http_helpers.go backend/internal/service/kiro_http_helpers_test.go frontend/src/utils/kiroAccount.ts frontend/src/utils/__tests__/kiroAccount.spec.ts frontend/src/components/account/CreateAccountModal.vue frontend/src/components/account/EditAccountModal.vue frontend/src/components/admin/account/ReAuthAccountModal.vue frontend/src/components/account/__tests__/CreateAccountModal.spec.ts frontend/src/components/account/__tests__/EditAccountModal.spec.ts frontend/src/components/admin/account/__tests__/ReAuthAccountModal.kiro.spec.ts frontend/src/i18n/locales/en/admin/accounts.ts frontend/src/i18n/locales/zh/admin/accounts.ts

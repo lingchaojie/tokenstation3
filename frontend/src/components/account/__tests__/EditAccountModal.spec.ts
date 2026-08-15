@@ -1215,8 +1215,8 @@ describe('EditAccountModal', () => {
     expect(apiRegionSelect.element.value).toBe('us-east-1')
 
     await startUrlInput.setValue('  https://d-1111111111.awsapps.com/start  ')
-    await regionInput.setValue('  eu-west-1  ')
-    await apiRegionSelect.setValue('eu-central-1')
+    await regionInput.setValue('  ap-south-1  ')
+    await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
@@ -1227,8 +1227,8 @@ describe('EditAccountModal', () => {
       client_secret: 'client-secret',
       client_id_hash: 'client-hash',
       start_url: 'https://d-1111111111.awsapps.com/start',
-      region: 'eu-west-1',
-      api_region: 'eu-central-1'
+      region: 'ap-south-1',
+      api_region: 'eu-west-1'
     })
   })
 
@@ -1258,11 +1258,11 @@ describe('EditAccountModal', () => {
       .get('[data-testid="kiro-api-region-select-edit"]')
       .get<HTMLSelectElement>('select')
 
-    await apiRegionSelect.setValue('eu-central-1')
+    await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-central-1')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-west-1')
     expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('upstream_billing_probe_enabled')
   })
 
@@ -1301,7 +1301,7 @@ describe('EditAccountModal', () => {
   })
 
   it('keeps a historical unsupported Kiro API region selected and preserves it on save', async () => {
-    const account = buildKiroAPIKeyAccount('', 'eu-north-1')
+    const account = buildKiroAPIKeyAccount('', 'legacy-1')
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
@@ -1313,15 +1313,15 @@ describe('EditAccountModal', () => {
       .get<HTMLSelectElement>('select')
     const legacyOption = apiRegionSelect
       .findAll('option')
-      .find(option => option.attributes('value') === 'eu-north-1')
+      .find(option => option.attributes('value') === 'legacy-1')
 
-    expect(apiRegionSelect.element.value).toBe('eu-north-1')
+    expect(apiRegionSelect.element.value).toBe('legacy-1')
     expect(legacyOption?.attributes('disabled')).toBeDefined()
 
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-north-1')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('legacy-1')
   })
 
   it('preserves canonical ExternalIdp metadata, API region, and endpoint mode on edit', async () => {

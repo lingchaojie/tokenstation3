@@ -71,6 +71,7 @@ const account = {
     client_id: 'old-client-id',
     token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
     issuer_url: 'https://login.microsoftonline.com/tenant-id/v2.0',
+    region: 'ap-south-1',
     api_region: 'eu-central-1'
   },
   proxy_id: null
@@ -159,6 +160,7 @@ describe('ReAuthAccountModal Kiro import', () => {
   it('preserves existing credentials and the independently configured API region', async () => {
     const wrapper = await openImportMode()
     expect((wrapper.get('select').element as HTMLSelectElement).value).toBe('eu-central-1')
+	await wrapper.get<HTMLSelectElement>('select').setValue('eu-west-1')
     await wrapper.get('textarea').setValue(JSON.stringify({
       accessToken: 'new-access-token',
       refreshToken: 'new-refresh-token',
@@ -179,7 +181,8 @@ describe('ReAuthAccountModal Kiro import', () => {
         provider: 'ExternalIdp',
         client_id: 'new-client-id',
         token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
-        api_region: 'eu-central-1'
+        region: 'ap-south-1',
+        api_region: 'eu-west-1'
       })
     })
   })

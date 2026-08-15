@@ -12,7 +12,11 @@ import {
 describe('kiroAccount helpers', () => {
   it('defines the supported Kiro API regions', () => {
     expect(DEFAULT_KIRO_API_REGION).toBe('us-east-1')
-    expect(KIRO_API_REGIONS).toEqual(['us-east-1', 'eu-central-1'])
+    expect(KIRO_API_REGIONS).toHaveLength(34)
+    expect(KIRO_API_REGIONS[0]).toBe('us-east-1')
+    expect(KIRO_API_REGIONS).toContain('ap-southeast-7')
+    expect(KIRO_API_REGIONS).toContain('mx-central-1')
+    expect(KIRO_API_REGIONS).toContain('sa-east-1')
   })
 
   it('resolves blank API regions to the default and trims configured regions', () => {
@@ -22,11 +26,13 @@ describe('kiroAccount helpers', () => {
   })
 
   it('includes an unsupported current API region as a disabled legacy option', () => {
-    expect(buildKiroAPIRegionOptions('eu-north-1', region => `label:${region}`)).toEqual([
-      { value: 'us-east-1', label: 'label:us-east-1' },
-      { value: 'eu-central-1', label: 'label:eu-central-1' },
-      { value: 'eu-north-1', label: 'label:eu-north-1', disabled: true }
-    ])
+    const options = buildKiroAPIRegionOptions('legacy-1', region => `label:${region}`)
+    expect(options).toHaveLength(35)
+    expect(options.at(-1)).toEqual({
+      value: 'legacy-1',
+      label: 'label:legacy-1',
+      disabled: true
+    })
   })
 
   it('distinguishes Kiro direct API key from relay API key accounts', () => {

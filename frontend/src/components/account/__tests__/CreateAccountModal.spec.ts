@@ -193,10 +193,16 @@ async function openCodexImportStep(toggleClicks = 0) {
   return wrapper
 }
 
-async function openKiroImportStep() {
+async function openKiroImportStep(apiRegion?: string) {
   const wrapper = mountModal()
   await selectButtonByText(wrapper, 'Kiro')
   await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.importTitle')
+  if (apiRegion) {
+    await wrapper
+      .get('[data-testid="kiro-api-region-select-create"]')
+      .get<HTMLSelectElement>('select')
+      .setValue(apiRegion)
+  }
   await wrapper.get('form#create-account-form input[type="text"]').setValue('Kiro import')
   await wrapper.get('form#create-account-form').trigger('submit.prevent')
   await flushPromises()
@@ -431,7 +437,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   it('creates ExternalIdp imports with the independently selected API region', async () => {
-    const wrapper = await openKiroImportStep()
+    const wrapper = await openKiroImportStep('eu-west-1')
     await wrapper.get('input[value="ExternalIdp"]').setValue()
     await wrapper.get('textarea').setValue(JSON.stringify({
       accessToken: 'access-token',
@@ -450,7 +456,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
       provider: 'ExternalIdp',
       token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
-      api_region: 'us-east-1',
+      api_region: 'eu-west-1',
     })
   })
 

@@ -3083,11 +3083,13 @@ const kiroAPIRegionOptions = computed(() =>
     if (legacy) {
       return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
     }
-    const regionLabelKey =
-      region === 'us-east-1'
-        ? 'admin.accounts.oauth.kiro.apiRegionUsEast'
-        : 'admin.accounts.oauth.kiro.apiRegionEuCentral'
-    return `${region} - ${t(regionLabelKey)}`
+    if (region === 'us-east-1') {
+      return `${region} - ${t('admin.accounts.oauth.kiro.apiRegionUsEast')}`
+    }
+    if (region === 'eu-central-1') {
+      return `${region} - ${t('admin.accounts.oauth.kiro.apiRegionEuCentral')}`
+    }
+    return region
   }).map(option => ({ ...option }))
 )
 // Bedrock credentials
