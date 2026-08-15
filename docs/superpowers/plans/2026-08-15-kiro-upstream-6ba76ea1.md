@@ -244,7 +244,7 @@ git commit -m "feat(kiro): support 34 AWS regions"
 - Produces: `shouldMimicClaudeCodeForAccount(account *Account, isClaudeCodeClient bool) bool`.
 - Consumes: `Account.IsOAuth()` and `Account.IsKiro()`.
 
-- [ ] **Step 1: Add the failing table test**
+- [x] **Step 1: Add the failing table test**
 
 ```go
 func TestShouldMimicClaudeCodeForAccount(t *testing.T) {
@@ -266,7 +266,7 @@ func TestShouldMimicClaudeCodeForAccount(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Confirm the helper is missing**
+- [x] **Step 2: Confirm the helper is missing**
 
 ```bash
 cd backend
@@ -275,7 +275,7 @@ go test -tags=unit -count=1 ./internal/service -run TestShouldMimicClaudeCodeFor
 
 Expected: compile failure because the helper does not exist.
 
-- [ ] **Step 3: Add the predicate and use it consistently**
+- [x] **Step 3: Add the predicate and use it consistently**
 
 ```go
 func shouldMimicClaudeCodeForAccount(account *Account, isClaudeCodeClient bool) bool {
@@ -288,14 +288,14 @@ func shouldMimicClaudeCodeForAccount(account *Account, isClaudeCodeClient bool) 
 
 Replace the three local `account.IsOAuth() && !isClaudeCode` predicates in the Messages/Chat path, Responses path, and count-tokens path with this helper. Do not change the mimicry transform itself.
 
-- [ ] **Step 4: Run service tests GREEN**
+- [x] **Step 4: Run service tests GREEN**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/service -run 'ShouldMimicClaudeCodeForAccount|ClaudeOAuth|Kiro.*Responses|CountTokens'
 ```
 
-- [ ] **Step 5: Commit the mimicry gate**
+- [x] **Step 5: Commit the mimicry gate**
 
 ```bash
 git add backend/internal/service/gateway_claude_oauth_body.go backend/internal/service/gateway_claude_oauth_mimicry_gate_test.go backend/internal/service/gateway_forward.go backend/internal/service/gateway_forward_as_responses.go backend/internal/service/gateway_count_tokens.go

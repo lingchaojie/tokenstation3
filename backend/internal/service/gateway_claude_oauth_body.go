@@ -48,6 +48,13 @@ type claudeOAuthNormalizeOptions struct {
 	preserveToolChoice      bool
 }
 
+func shouldMimicClaudeCodeForAccount(account *Account, isClaudeCodeClient bool) bool {
+	if account == nil || isClaudeCodeClient {
+		return false
+	}
+	return account.IsOAuth() && !account.IsKiro()
+}
+
 // sanitizeSystemText rewrites only the fixed OpenCode identity sentence (if present).
 // We intentionally avoid broad keyword replacement in system prompts to prevent
 // accidentally changing user-provided instructions.

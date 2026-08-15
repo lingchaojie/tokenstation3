@@ -71,7 +71,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
+	shouldMimicClaudeCode := shouldMimicClaudeCodeForAccount(account, isClaudeCodeCT)
 
 	if shouldMimicClaudeCode {
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
