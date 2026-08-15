@@ -74,6 +74,26 @@ func TestListSchedulableAccountsRequiredPlatformPreservesKiroMixedEligibility(t 
 	require.Equal(t, int64(2), accounts[0].ID, "required platform must not bypass KIRO mixed_scheduling eligibility")
 }
 
+func TestListSchedulableAccountsSnapshotRequiredPlatformPreservesKiroMixedEligibility(t *testing.T) {
+	cache := &snapshotHydrationCache{snapshot: []*Account{
+		{ID: 1, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true},
+		{ID: 2, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+		{ID: 3, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": false}},
+	}}
+	svc := &GatewayService{
+		cfg:               testConfig(),
+		schedulerSnapshot: NewSchedulerSnapshotService(cache, nil, nil, nil, nil),
+	}
+	ctx := WithGatewayRequiredAccountPlatform(context.Background(), PlatformKiro)
+
+	accounts, useMixed, err := svc.listSchedulableAccounts(ctx, nil, PlatformAnthropic, false)
+
+	require.NoError(t, err)
+	require.True(t, useMixed)
+	require.Len(t, accounts, 1)
+	require.Equal(t, int64(2), accounts[0].ID, "snapshot filtering must re-check KIRO mixed_scheduling eligibility")
+}
+
 func TestSelectAccountWithMixedSchedulingRequiredPlatformRejectsStickyAnthropic(t *testing.T) {
 	repo := &mockAccountRepoForPlatform{
 		accounts: []Account{

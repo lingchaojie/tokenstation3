@@ -962,6 +962,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	if s.schedulerSnapshot != nil {
 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
+			if useMixed {
+				accounts = filterAccountsByMixedPlatformEligibility(accounts, platform)
+			}
 			accounts = s.filterAccountsBySchedulingThreshold(ctx, accounts)
 			if platform == PlatformGrok || strings.EqualFold(platform, PlatformGrok) {
 				accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
@@ -1004,13 +1007,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				"error", err)
 			return nil, useMixed, err
 		}
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			if (acc.Platform == PlatformAntigravity || acc.Platform == PlatformKiro) && !accountEligibleForMixedPlatform(&acc, platform) {
-				continue
-			}
-			filtered = append(filtered, acc)
-		}
+		filtered := filterAccountsByMixedPlatformEligibility(accounts, platform)
 		slog.Debug("account_scheduling_list_mixed",
 			"group_id", derefGroupID(groupID),
 			"platform", platform,
@@ -1068,6 +1065,16 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
 	}
 	return filterAccountsByGatewayRequiredPlatform(ctx, accounts), useMixed, nil
+}
+
+func filterAccountsByMixedPlatformEligibility(accounts []Account, platform string) []Account {
+	filtered := make([]Account, 0, len(accounts))
+	for i := range accounts {
+		if accounts[i].Platform == platform || accountEligibleForMixedPlatform(&accounts[i], platform) {
+			filtered = append(filtered, accounts[i])
+		}
+	}
+	return filtered
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。

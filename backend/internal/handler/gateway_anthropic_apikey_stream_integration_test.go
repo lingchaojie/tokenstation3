@@ -299,6 +299,72 @@ func runGatewayAnthropicHandlerWithStatusAndPassthrough(
 	}
 }
 
+func TestGatewayResponsesKiroCompactionRestoresLazyKeepaliveWriter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const accountID, userID = int64(9641), int64(9642)
+	groupID := int64(9640)
+	group := &service.Group{
+		ID: groupID, Hydrated: true, Platform: service.PlatformKiro,
+		Status: service.StatusActive, RateMultiplier: 1,
+	}
+	account := &service.Account{
+		ID: accountID, Name: "kiro-compaction-handler", Platform: service.PlatformKiro,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+		Concurrency: 1, Priority: 1,
+		Credentials: map[string]any{
+			"api_key":  "test-kiro-relay-key",
+			"base_url": "https://relay.example.com",
+		},
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	require.True(t, shouldStartResponsesCompactionKeepalive(account, true, true))
+
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.StreamKeepaliveInterval = 1
+	scheduler := service.NewSchedulerSnapshotService(&fakeSchedulerCache{accounts: []*service.Account{account}}, nil, nil, nil, nil)
+	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingCache.Stop)
+	upstream := &gatewayAnthropicAPIKeyStreamUpstream{
+		status: http.StatusUnprocessableEntity,
+		newBody: func() io.ReadCloser {
+			return io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"invalid_request_error","message":"rejected"}}`))
+		},
+	}
+	gateway := service.NewGatewayService(
+		nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg, scheduler, nil,
+		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	handler := NewGatewayHandler(
+		gateway, nil, nil, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, nil, nil,
+	)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, strings.NewReader(
+		`{"model":"gpt-5.6-sol","stream":true,"input":[{"type":"message","role":"user","content":"continue"},{"type":"compaction_trigger"}]}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9643, UserID: userID, GroupID: &groupID, Status: service.StatusActive, Group: group,
+		User: &service.User{ID: userID, Status: service.StatusActive, Concurrency: 10, Balance: 100},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: userID, Concurrency: 10})
+	originalWriter := c.Writer
+
+	handler.Responses(c)
+
+	require.Equal(t, 1, upstream.callCount())
+	require.Same(t, originalWriter, c.Writer, "handler return must unwrap the lazily installed keepalive writer")
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+	require.True(t, json.Valid(recorder.Body.Bytes()))
+}
+
 func TestGatewayNativeMessagesCapturePreservesProviderBytes(t *testing.T) {
 	t.Run("stream_crlf_and_unterminated_tail", func(t *testing.T) {
 		providerSSE := "event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_native\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-test\",\"usage\":{\"input_tokens\":2}}}\r\n\r\n" +
