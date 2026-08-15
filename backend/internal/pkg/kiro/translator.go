@@ -1015,20 +1015,29 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return closeStreamingTool(toolUseID)
 	}
 	writeTextDelta := func(text string, allowWhitespace bool) error {
-		if text == "" || (!allowWhitespace && strings.TrimSpace(text) == "") {
+		if text == "" {
 			return nil
 		}
-		if err := closeOpenStreamingTool(); err != nil {
-			return err
-		}
-		if !textBlockOpen && !allowWhitespace {
-			if pendingLeadingWhitespace != "" {
-				text = strings.TrimLeftFunc(pendingLeadingWhitespace+text, unicode.IsSpace)
+		if !allowWhitespace {
+			if strings.TrimSpace(text) == "" {
+				if textBlockOpen {
+					pendingLeadingWhitespace += text
+				}
+				return nil
+			}
+			if !textBlockOpen {
+				text = strings.TrimLeftFunc(text, unicode.IsSpace)
 				pendingLeadingWhitespace = ""
 				if text == "" {
 					return nil
 				}
+			} else if pendingLeadingWhitespace != "" {
+				text = pendingLeadingWhitespace + text
+				pendingLeadingWhitespace = ""
 			}
+		}
+		if err := closeOpenStreamingTool(); err != nil {
+			return err
 		}
 		if err := ensureMessageStart(); err != nil {
 			return err
@@ -1070,7 +1079,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if stopSequenceMatched != "" {
 			return nil
 		}
-		if text == "" || (!allowWhitespace && strings.TrimSpace(text) == "") {
+		if text == "" {
 			return nil
 		}
 		if len(requestCtx.StopSequences) == 0 {
@@ -2616,7 +2625,7 @@ func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, orig
 				if resultContent.IsArray() {
 					textContents = textContents[:0]
 					for _, item := range resultContent.Array() {
-						if item.Get("type").String() == "text" {
+						if itemType := item.Get("type").String(); itemType == "text" || itemType == "input_text" {
 							textContents = append(textContents, KiroTextContent{Text: compactKiroToolResultText(item.Get("text").String(), status == "error")})
 						} else if item.Type == gjson.String {
 							textContents = append(textContents, KiroTextContent{Text: compactKiroToolResultText(item.String(), status == "error")})
@@ -4743,7 +4752,10 @@ func boundedJSONStringEncodedSize(value string, limit int) (int, bool) {
 func normalizeStreamingToolInput(name, raw string) (string, map[string]any, bool) {
 	normalized := strings.TrimSpace(raw)
 	if normalized == "" {
-		return "", nil, false
+		if hasToolRequirements(name) {
+			return "", nil, false
+		}
+		return "{}", map[string]any{}, true
 	}
 	var ok bool
 	normalized, ok = escapeControlCharsInStringsBounded(normalized, maxStreamingToolInputBytes)
@@ -5068,7 +5080,7 @@ func toolUseContentDigestFromJSON(name, inputJSON string) ([sha256.Size]byte, bo
 func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUse, pending string) {
 	complete, pending := splitCompleteEmbeddedToolText(text)
 	if strings.TrimSpace(complete) == "" {
-		return "", nil, pending
+		return complete, nil, pending
 	}
 	cleanText, toolUses = parseEmbeddedToolCalls(complete)
 	return cleanText, deduplicateToolUses(toolUses), pending

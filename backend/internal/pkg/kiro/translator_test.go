@@ -2506,7 +2506,8 @@ func TestNormalizeStreamingToolInput(t *testing.T) {
 		{name: "rejects array", toolName: "custom_tool", raw: `[]`, wantOK: false},
 		{name: "rejects scalar", toolName: "custom_tool", raw: `"value"`, wantOK: false},
 		{name: "rejects null", toolName: "custom_tool", raw: `null`, wantOK: false},
-		{name: "rejects empty input", toolName: "custom_tool", raw: ` `, wantOK: false},
+		{name: "accepts empty input for tool without requirements", toolName: "custom_tool", raw: ` `, want: map[string]any{}, wantOK: true},
+		{name: "rejects empty input for tool with requirements", toolName: "write", raw: ` `, wantOK: false},
 		{name: "rejects malformed syntax", toolName: "custom_tool", raw: `{"x":}`, wantOK: false},
 	}
 
@@ -2527,6 +2528,16 @@ func TestNormalizeStreamingToolInput(t *testing.T) {
 			require.Equal(t, tt.want, decoded)
 		})
 	}
+}
+
+func TestNormalizeStreamingToolInputEmpty(t *testing.T) {
+	jsonText, input, ok := normalizeStreamingToolInput("ExitPlanMode", "")
+	require.True(t, ok)
+	require.Equal(t, "{}", jsonText)
+	require.Empty(t, input)
+
+	_, _, ok = normalizeStreamingToolInput("Write", "")
+	require.False(t, ok)
 }
 
 func TestStreamEventStreamAsAnthropicIgnoresPingFrames(t *testing.T) {

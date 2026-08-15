@@ -405,7 +405,7 @@ git commit -m "fix(kiro): preserve namespaced custom tool calls"
 - Consumes: `normalizeStreamingToolInput`, stream text writer, Responses-to-KIRO tool-result extraction.
 - Produces: valid `{}` for zero-argument tools, preserved mid-stream blank lines, and `input_text` tool-result conversion.
 
-- [ ] **Step 1: Add three failing regression groups**
+- [x] **Step 1: Add three failing regression groups**
 
 ```go
 func TestNormalizeStreamingToolInputEmpty(t *testing.T) {
@@ -421,14 +421,14 @@ func TestNormalizeStreamingToolInputEmpty(t *testing.T) {
 
 Add an event-stream fixture with text deltas `"# Heading"`, `"\n\n"`, and `"Body"`; assert the rendered output contains `# Heading\n\nBody`. Add a tool result with `content:[{"type":"input_text","text":"command output"}]`; assert the KIRO user tool-result text contains `command output`.
 
-- [ ] **Step 2: Run translator tests RED**
+- [x] **Step 2: Run translator tests RED**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/pkg/kiro -run 'NormalizeStreamingToolInputEmpty|MidContent|ToolResult.*InputText'
 ```
 
-- [ ] **Step 3: Implement the minimal translator changes**
+- [x] **Step 3: Implement the minimal translator changes**
 
 At the start of `normalizeStreamingToolInput`:
 
@@ -443,14 +443,14 @@ if normalized == "" {
 
 Track whether visible text has already been emitted. Drop whitespace-only chunks only before the first visible text and at final trailing flush; pass through whitespace-only chunks between visible chunks. Accept both `text` and `input_text` in the tool-result content switch.
 
-- [ ] **Step 4: Run all KIRO translator tests GREEN**
+- [x] **Step 4: Run all KIRO translator tests GREEN**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/pkg/kiro
 ```
 
-- [ ] **Step 5: Commit translator fixes**
+- [x] **Step 5: Commit translator fixes**
 
 ```bash
 git add backend/internal/pkg/kiro/translator.go backend/internal/pkg/kiro/translator_test.go backend/internal/pkg/kiro/midcontent_newline_test.go backend/internal/pkg/kiro/tool_result_input_text_test.go
