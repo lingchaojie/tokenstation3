@@ -118,6 +118,47 @@ func TestExtractJSONOpenAIUsageAliasPriorityDoesNotDependOnObjectOrder(t *testin
 	require.EqualValues(t, 8, got.CacheCreationTokens)
 }
 
+func TestExtractJSONWrappedUsageAliasPriorityDoesNotDependOnObjectOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{
+			name: "lower priority aliases first",
+			response: `{"response":{"usage":{` +
+				`"prompt_tokens":1,"input_tokens":101,` +
+				`"completion_tokens":2,"output_tokens":202,` +
+				`"cached_tokens":3,"prompt_tokens_details":{"cached_tokens":33,"cache_write_tokens":44},` +
+				`"cache_creation_tokens":4,"input_tokens_details":{"cached_tokens":303,"cache_write_tokens":404}` +
+				`}}}`,
+		},
+		{
+			name: "higher priority aliases first",
+			response: `{"response":{"usage":{` +
+				`"input_tokens_details":{"cache_write_tokens":404,"cached_tokens":303},` +
+				`"cache_creation_tokens":4,"prompt_tokens_details":{"cache_write_tokens":44,"cached_tokens":33},` +
+				`"cached_tokens":3,"output_tokens":202,"completion_tokens":2,` +
+				`"input_tokens":101,"prompt_tokens":1` +
+				`}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := FromReaders(context.Background(), Input{
+				Format:   model.PayloadJSON,
+				Response: strings.NewReader(tt.response),
+			})
+
+			require.NoError(t, err)
+			require.EqualValues(t, 101, got.InputTokens)
+			require.EqualValues(t, 202, got.OutputTokens)
+			require.EqualValues(t, 303, got.CacheReadTokens)
+			require.EqualValues(t, 404, got.CacheCreationTokens)
+		})
+	}
+}
+
 func TestExtractJSONMalformedGeminiCounterDoesNotCreatePartialSum(t *testing.T) {
 	got, err := FromReaders(context.Background(), Input{
 		Format: model.PayloadJSON,
@@ -277,22 +318,36 @@ func TestExtractJSONIgnoresNestedContentStopReason(t *testing.T) {
 	require.Equal(t, "stop", got.StopReason)
 }
 
-func TestExtractAWSLargeNonMetadataFrameUsesBoundedScratch(t *testing.T) {
-	payload := awsEventStreamFixture(t, "contentBlockDelta", bytes.Repeat([]byte("x"), 2<<20))
+func TestExtractAWSLargeNonMetadataFrameRetainsBoundedLiveScratch(t *testing.T) {
+	const payloadBytes = 32 << 20
+	prefix, payloadChunk, frameCRC := streamingAWSFrameFixture(t, "contentBlockDelta", payloadBytes)
+	stream, err := New(context.Background(), model.PayloadAWSEventStream)
+	require.NoError(t, err)
+
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	got, err := FromReaders(context.Background(), Input{
-		Format:   model.PayloadAWSEventStream,
-		Response: bytes.NewReader(payload),
-	})
+	require.NoError(t, stream.FeedResponse(prefix))
+	for remaining := payloadBytes; remaining > 0; {
+		n := min(remaining, len(payloadChunk))
+		require.NoError(t, stream.FeedResponse(payloadChunk[:n]))
+		remaining -= n
+	}
 
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
+	runtime.GC()
+	var during runtime.MemStats
+	runtime.ReadMemStats(&during)
+	retainedBytes := int64(during.Alloc) - int64(before.Alloc)
+	require.Less(t, retainedBytes, int64(4<<20))
+
+	require.NoError(t, stream.FeedResponse(frameCRC[:]))
+	got, err := stream.Finalize(model.Final{})
 	require.NoError(t, err)
 	require.Equal(t, model.Extracted{}, got)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+	runtime.KeepAlive(prefix)
+	runtime.KeepAlive(payloadChunk)
+	runtime.KeepAlive(stream)
 }
 
 func TestExtractionErrorsAreSanitized(t *testing.T) {
@@ -352,4 +407,40 @@ func awsEventStreamFixture(t *testing.T, eventType string, payload []byte) []byt
 	copy(frame[offset:], payload)
 	binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.ChecksumIEEE(frame[:len(frame)-4]))
 	return frame
+}
+
+func streamingAWSFrameFixture(t *testing.T, eventType string, payloadBytes int) ([]byte, []byte, [4]byte) {
+	t.Helper()
+	headerName := []byte(":event-type")
+	headerValue := []byte(eventType)
+	headersLen := 1 + len(headerName) + 1 + 2 + len(headerValue)
+	totalLen := 12 + headersLen + payloadBytes + 4
+	require.LessOrEqual(t, uint64(totalLen), uint64(^uint32(0)))
+
+	prefix := make([]byte, 12+headersLen)
+	binary.BigEndian.PutUint32(prefix[0:4], uint32(totalLen))
+	binary.BigEndian.PutUint32(prefix[4:8], uint32(headersLen))
+	binary.BigEndian.PutUint32(prefix[8:12], crc32.ChecksumIEEE(prefix[:8]))
+	offset := 12
+	prefix[offset] = byte(len(headerName))
+	offset++
+	copy(prefix[offset:], headerName)
+	offset += len(headerName)
+	prefix[offset] = 7
+	offset++
+	binary.BigEndian.PutUint16(prefix[offset:offset+2], uint16(len(headerValue)))
+	offset += 2
+	copy(prefix[offset:], headerValue)
+
+	payloadChunk := bytes.Repeat([]byte("x"), 32<<10)
+	checksum := crc32.NewIEEE()
+	_, _ = checksum.Write(prefix)
+	for remaining := payloadBytes; remaining > 0; {
+		n := min(remaining, len(payloadChunk))
+		_, _ = checksum.Write(payloadChunk[:n])
+		remaining -= n
+	}
+	var frameCRC [4]byte
+	binary.BigEndian.PutUint32(frameCRC[:], checksum.Sum32())
+	return prefix, payloadChunk, frameCRC
 }

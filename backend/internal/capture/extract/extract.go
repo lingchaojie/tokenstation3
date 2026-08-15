@@ -1024,6 +1024,7 @@ func responseNumberRank(path []string) int {
 	if kind == 0 {
 		return 0
 	}
+	base := 20
 	switch {
 	case isKiroCounterPath(path):
 		return 70
@@ -1032,13 +1033,9 @@ func responseNumberRank(path []string) int {
 	case len(path) > 0 && path[0] == "usageMetadata":
 		return 50
 	case len(path) > 0 && path[0] == "response":
-		return 40
-	case len(path) > 0 && path[0] == "message":
-		return 30
-	}
-	base := 20
-	if len(path) > 0 && path[0] == "response" {
 		base = 40
+	case len(path) > 0 && path[0] == "message":
+		base = 30
 	}
 	switch kind {
 	case 1, 2:
