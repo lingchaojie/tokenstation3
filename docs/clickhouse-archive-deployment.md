@@ -1,5 +1,12 @@
 # 上游调用转存：独立 ClickHouse 部署与正式服接入手册
 
+> **旧方案提示（2026-08-16）：** 本文描述的是当前已实现的内存队列、ClickHouse
+> native TCP 和 Linux 宿主机 Tailscale 方案，其中“无磁盘 spool”“19000 -> 9000”
+> 等内容不再是下一版目标架构。新的已确认设计见
+> `docs/superpowers/specs/2026-08-16-capture-disk-spool-sidecar-design.md`；独立 Windows
+> ClickHouse 节点请使用 `docs/capture-clickhouse-windows-deployment.md`。在 sidecar/spool
+> 实现完成前，不要混用两份配置和端口。
+
 - 更新日期：2026-08-14
 - 适用分支：`dev`
 - 目标：在任意一台独立机器上部署 ClickHouse，并让正式服 `sub2api` 通过 Tailscale 私网写入
