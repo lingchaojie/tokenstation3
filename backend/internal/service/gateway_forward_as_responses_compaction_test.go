@@ -4,6 +4,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func delayedCompactionHTTPResponse(delay time.Duration, body string) *http.Response {
+	reader, writer := io.Pipe()
+	go func() {
+		defer func() { _ = writer.Close() }()
+		time.Sleep(delay)
+		_, _ = io.WriteString(writer, body)
+	}()
+	resp := compactionHTTPResponse("")
+	resp.Body = reader
+	return resp
+}
 
 func anthropicCompactionSSE(text string) string {
 	encoded, _ := json.Marshal(text)
@@ -104,6 +117,71 @@ func TestHandleResponsesCompactionResponse_EmptyOrIncompleteFailsWithoutItem(t *
 	}
 }
 
+func TestHandleResponsesCompactionResponse_HeartbeatFailureIsTerminalOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	MarkOpenAICompactClientStream(c)
+	stop := StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	_, err := svc.handleResponsesCompactionResponse(
+		delayedCompactionHTTPResponse(20*time.Millisecond, anthropicCompactionSSE("   ")),
+		c, "gpt-5.6-sol", "claude-haiku-4-5", nil, time.Now(), true, true,
+	)
+
+	require.Error(t, err)
+	require.True(t, IsResponseCommitted(c))
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+}
+
+func TestHandleResponsesCompactionResponse_PreOutputHeartbeatRemainsFailoverSafe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	MarkOpenAICompactClientStream(c)
+	stop := StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	before := OpenAICompactKeepaliveAdjustedWrittenSize(c)
+
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	_, err := svc.handleResponsesCompactionResponse(
+		delayedCompactionHTTPResponse(20*time.Millisecond, strings.ReplaceAll(
+			anthropicCompactionSSE("summary"),
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n",
+			"",
+		)),
+		c, "gpt-5.6-sol", "claude-haiku-4-5", nil, time.Now(), true, true,
+	)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, before, OpenAICompactKeepaliveAdjustedWrittenSize(c))
+}
+
+func TestHandleResponsesCompactionResponse_ReportsClientWriteFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 0}
+
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	result, err := svc.handleResponsesCompactionResponse(
+		compactionHTTPResponse(anthropicCompactionSSE("summary")),
+		c, "gpt-5.6-sol", "claude-haiku-4-5", nil, time.Now(), true, true,
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.ErrorContains(t, err, "write failed")
+}
+
 func TestAnthropicResponseTextIgnoresThinking(t *testing.T) {
 	resp := &apicompat.AnthropicResponse{Content: []apicompat.AnthropicContentBlock{
 		{Type: "thinking", Thinking: "private"},
@@ -162,4 +240,81 @@ func TestForwardAsResponses_CompactionRewritesKiroRelayRequest(t *testing.T) {
 	require.False(t, gjson.GetBytes(upstreamBody, "output_config").Exists())
 	require.Len(t, gjson.GetBytes(upstreamBody, "tools").Array(), 1)
 	require.Equal(t, "compaction", gjson.Get(rec.Body.String(), "output.0.type").String())
+}
+
+func TestForwardAsResponses_DirectKiroCompactionStreamAndNonStream(t *testing.T) {
+	for _, clientStream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-stream", true: "stream"}[clientStream], func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(fmt.Sprintf(`{
+				"model":"claude-sonnet-4-6",
+				"stream":%t,
+				"input":[{"type":"message","role":"user","content":"continue"},{"type":"compaction_trigger"}]
+			}`, clientStream))
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{
+				newKiroCacheTransactionSuccessResponse(t, "direct summary"),
+			}}
+			svc := &GatewayService{
+				cfg:                 &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+				httpUpstream:        upstream,
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				kiroCooldownStore:   &stubKiroCooldownStore{},
+			}
+			account := &Account{
+				ID: 702, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "kiro-access-token",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+				},
+			}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+
+			result, err := svc.ForwardAsResponses(c.Request.Context(), c, account, body, &ParsedRequest{
+				Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1)
+			require.Equal(t, "https://runtime.us-east-1.kiro.dev/generateAssistantResponse", upstream.requests[0].URL.String())
+			require.Contains(t, rec.Body.String(), `"type":"compaction"`)
+			if clientStream {
+				require.Contains(t, rec.Body.String(), "event: response.completed")
+			}
+		})
+	}
+}
+
+func TestForwardAsResponses_DirectKiroOrdinaryRequestDoesNotCompact(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":false,"input":"hello"}`)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newKiroCacheTransactionSuccessResponse(t, "ordinary answer"),
+	}}
+	svc := &GatewayService{
+		cfg:                 &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+	}
+	account := &Account{
+		ID: 703, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+
+	result, err := svc.ForwardAsResponses(c.Request.Context(), c, account, body, &ParsedRequest{
+		Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotContains(t, rec.Body.String(), `"type":"compaction"`)
+	require.Contains(t, rec.Body.String(), "ordinary answer")
 }

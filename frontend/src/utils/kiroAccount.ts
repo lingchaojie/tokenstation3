@@ -50,6 +50,28 @@ export function resolveKiroAPIRegion(value: unknown): string {
   return value.trim() || DEFAULT_KIRO_API_REGION
 }
 
+function readConfiguredRegion(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function resolveKiroAPIRegionFromCredentials(
+  credentials: Record<string, unknown> | null | undefined,
+  accountType: Account['type'] | undefined
+): string {
+  const snakeCaseRegion = readConfiguredRegion(credentials?.api_region)
+  if (snakeCaseRegion) return snakeCaseRegion
+
+  const camelCaseRegion = readConfiguredRegion(credentials?.apiRegion)
+  if (camelCaseRegion) return camelCaseRegion
+
+  if (accountType === 'apikey') {
+    const legacyAPIKeyRegion = readConfiguredRegion(credentials?.region)
+    if (legacyAPIKeyRegion) return legacyAPIKeyRegion
+  }
+
+  return DEFAULT_KIRO_API_REGION
+}
+
 export function buildKiroAPIRegionOptions(
   currentValue: unknown,
   labelFor: (region: string, legacy: boolean) => string

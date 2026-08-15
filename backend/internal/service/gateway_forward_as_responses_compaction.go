@@ -53,20 +53,7 @@ func (s *GatewayService) handleResponsesCompactionResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
-	if clientStream {
-		payload, ok := buildOpenAICompactSSEPayload(responseJSON)
-		if !ok {
-			return nil, s.failResponsesCompaction(c, true, http.StatusBadGateway, "Failed to render compaction SSE", requestID)
-		}
-		writeResponsesCompactionSSEHeaders(c)
-		_, _ = c.Writer.Write(payload)
-		c.Writer.Flush()
-	} else {
-		c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		c.Data(http.StatusOK, "application/json; charset=utf-8", responseJSON)
-	}
-
-	return &ForwardResult{
+	result := &ForwardResult{
 		RequestID:       requestID,
 		Usage:           usage,
 		Model:           originalModel,
@@ -74,7 +61,28 @@ func (s *GatewayService) handleResponsesCompactionResponse(
 		ReasoningEffort: reasoningEffort,
 		Stream:          clientStream,
 		Duration:        time.Since(startTime),
-	}, nil
+	}
+	if clientStream {
+		payload, ok := buildOpenAICompactSSEPayload(responseJSON)
+		if !ok {
+			return nil, s.failResponsesCompaction(c, true, http.StatusBadGateway, "Failed to render compaction SSE", requestID)
+		}
+		StopOpenAICompactSSEKeepaliveCommitted(c)
+		writeResponsesCompactionSSEHeaders(c)
+		written, writeErr := c.Writer.Write(payload)
+		if writeErr != nil {
+			return result, fmt.Errorf("write compaction SSE response: %w", writeErr)
+		}
+		if written != len(payload) {
+			return result, fmt.Errorf("write compaction SSE response: %w", io.ErrShortWrite)
+		}
+		c.Writer.Flush()
+	} else {
+		c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		c.Data(http.StatusOK, "application/json; charset=utf-8", responseJSON)
+	}
+
+	return result, nil
 }
 
 func (s *GatewayService) collectResponsesCompactionAnthropicSSE(
@@ -188,8 +196,10 @@ func (s *GatewayService) collectResponsesCompactionAnthropicSSE(
 func (s *GatewayService) failResponsesCompaction(c *gin.Context, clientStream bool, statusCode int, message, requestID string) error {
 	logger.L().Warn("forward_as_responses compaction: failed", zap.String("request_id", requestID), zap.String("message", message))
 	if clientStream {
+		StopOpenAICompactSSEKeepaliveCommitted(c)
 		writeResponsesCompactionSSEHeaders(c)
 		writeOpenAICompactSSEFailureMessage(c, statusCode, "upstream_error", message)
+		MarkResponseCommitted(c)
 	} else {
 		writeResponsesError(c, statusCode, "server_error", message)
 	}

@@ -407,3 +407,43 @@ func TestForwardAsChatCompletionsKiroDirectUsesKiroEndpointMode(t *testing.T) {
 	require.Equal(t, "https://runtime.us-east-1.kiro.dev/generateAssistantResponse", upstream.requests[0].URL.String())
 	require.Equal(t, "Bearer kiro-access-token", upstream.requests[0].Header.Get("Authorization"))
 }
+
+func TestForwardAsChatCompletionsKiroDirectSkipsClaudeCodeMimicry(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
+		t.Run(string(accountType), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{
+				newJSONResponse(http.StatusForbidden, `{"message":"blocked"}`),
+			}}
+			svc := &GatewayService{
+				httpUpstream:        upstream,
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				kiroCooldownStore:   &stubKiroCooldownStore{},
+			}
+			account := &Account{
+				ID: 102, Name: "kiro direct", Platform: PlatformKiro,
+				Type: accountType, Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "kiro-access-token",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+				},
+			}
+			body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","description":"lookup","parameters":{"type":"object"}}}],"stream":false}`)
+
+			_, _ = svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+				Model: "claude-sonnet-4-6", Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS},
+			})
+
+			require.Len(t, upstream.requests, 1)
+			outbound, err := io.ReadAll(upstream.requests[0].Body)
+			require.NoError(t, err)
+			require.False(t, gjson.GetBytes(outbound, "metadata.user_id").Exists())
+			require.False(t, gjson.GetBytes(outbound, "tools.0.cache_control").Exists())
+			require.NotContains(t, string(outbound), strings.TrimSpace(claudeCodeSystemPrompt))
+		})
+	}
+}

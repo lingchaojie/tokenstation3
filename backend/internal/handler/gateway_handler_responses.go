@@ -83,6 +83,12 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	stopCompactionKeepalive := func() {}
+	if reqStream && service.HasCompactionTriggerInInput(body) {
+		service.MarkOpenAICompactClientStream(c)
+		stopCompactionKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.responsesCompactionKeepaliveInterval())
+	}
+	defer stopCompactionKeepalive()
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
@@ -252,7 +258,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
 		// 5. Forward request
-		writerSizeBeforeForward := c.Writer.Size()
+		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
@@ -314,7 +320,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 					failoverErr.Platform = account.Platform
 				}
 				// Can't failover if streaming content already sent
-				if c.Writer.Size() != writerSizeBeforeForward {
+				if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
 					h.handleResponsesFailoverExhausted(c, failoverErr, true)
 					return
 				}
@@ -350,12 +356,23 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 // responsesErrorResponse writes an error in OpenAI Responses API format.
 func (h *GatewayHandler) responsesErrorResponse(c *gin.Context, status int, code, message string) {
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		h.handleStreamingAwareError(c, status, code, message, true)
+		return
+	}
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"code":    code,
 			"message": message,
 		},
 	})
+}
+
+func (h *GatewayHandler) responsesCompactionKeepaliveInterval() time.Duration {
+	if h == nil || h.cfg == nil || h.cfg.Gateway.StreamKeepaliveInterval <= 0 {
+		return 0
+	}
+	return time.Duration(h.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 }
 
 // handleResponsesFailoverExhausted writes a failover-exhausted error in Responses format.
@@ -367,6 +384,10 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 			}
 		}
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
+	}
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "All available accounts exhausted", true)
+		return
 	}
 	if streamStarted {
 		return // Can't write error after stream started

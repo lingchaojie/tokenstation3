@@ -848,12 +848,12 @@
           </div>
           <div>
             <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-            <input
+            <Select
               v-model="editKiroIDCRegion"
-              type="text"
-              class="input font-mono"
-              :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')"
-              data-testid="kiro-idc-region-input"
+              :options="kiroIDCRegionOptions"
+              searchable
+              creatable
+              data-testid="kiro-idc-region-select-edit"
             />
           </div>
         </div>
@@ -2984,7 +2984,7 @@ import {
   DEFAULT_KIRO_API_REGION,
   buildKiroAPIRegionOptions,
   isKiroRelayAccount,
-  resolveKiroAPIRegion
+  resolveKiroAPIRegionFromCredentials
 } from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
@@ -3078,8 +3078,8 @@ const kiroCreditUnitPriceUsd = ref(0)
 const editKiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const editKiroIDCRegion = ref('us-east-1')
 const editKiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
-const kiroAPIRegionOptions = computed(() =>
-  buildKiroAPIRegionOptions(editKiroAPIRegion.value, (region, legacy) => {
+const localizedKiroRegionOptions = (currentValue: string) =>
+  buildKiroAPIRegionOptions(currentValue, (region, legacy) => {
     if (legacy) {
       return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
     }
@@ -3091,7 +3091,8 @@ const kiroAPIRegionOptions = computed(() =>
     }
     return region
   }).map(option => ({ ...option }))
-)
+const kiroAPIRegionOptions = computed(() => localizedKiroRegionOptions(editKiroAPIRegion.value))
+const kiroIDCRegionOptions = computed(() => localizedKiroRegionOptions(editKiroIDCRegion.value))
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3743,7 +3744,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     credentials.region.trim()
       ? credentials.region.trim()
       : 'us-east-1'
-  editKiroAPIRegion.value = resolveKiroAPIRegion(credentials?.api_region)
+  editKiroAPIRegion.value = resolveKiroAPIRegionFromCredentials(credentials, newAccount.type)
   antigravityProjectId.value =
     newAccount.platform === 'antigravity' &&
     newAccount.type === 'oauth' &&

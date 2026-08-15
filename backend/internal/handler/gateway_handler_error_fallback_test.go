@@ -7,12 +7,48 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGatewayResponsesFailoverExhaustedAfterCompactHeartbeatWritesOneTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	service.MarkOpenAICompactClientStream(c)
+	stop := service.StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	time.Sleep(20 * time.Millisecond)
+
+	(&GatewayHandler{}).handleResponsesFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode: http.StatusBadGateway,
+	}, false)
+
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+}
+
+func TestGatewayResponsesLocalErrorAfterCompactHeartbeatWritesOneTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	service.MarkOpenAICompactClientStream(c)
+	stop := service.StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	time.Sleep(20 * time.Millisecond)
+
+	(&GatewayHandler{}).responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+	require.NotContains(t, rec.Body.String(), `{"error":{"code":"api_error"`)
+}
 
 func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)

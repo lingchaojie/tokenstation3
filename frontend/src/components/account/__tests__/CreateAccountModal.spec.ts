@@ -423,6 +423,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(wrapper.get('textarea').attributes('placeholder')).toContain('"tokenEndpoint"')
   })
 
+  it('offers all 34 AWS regions for Kiro IDC and preserves a custom region value', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kiro')
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.kiro.idcTitle')
+
+    const selector = wrapper.get('[data-testid="kiro-idc-region-select-create"]')
+    expect(selector.findAll('option')).toHaveLength(34)
+    expect(selector.text()).toContain('ap-southeast-7')
+    expect(selector.text()).toContain('mx-central-1')
+
+    const component = wrapper.findAllComponents(SelectStub).find(candidate =>
+      candidate.find('[data-testid="kiro-idc-region-select-create"]').exists()
+    )
+    expect(component).toBeDefined()
+    component?.vm.$emit('update:modelValue', 'legacy-idc-1')
+    await flushPromises()
+    expect((component?.props('options') as Array<{ value: string }>).at(-1)?.value).toBe('legacy-idc-1')
+  })
+
   it.each([
     ['invalid JSON', '{not-json'],
     ['provider mismatch', '{"provider":"Github","accessToken":"access-token"}'],

@@ -6,7 +6,8 @@ import {
   isKiroDirectApiKeyAccount,
   isKiroRelayAccount,
   KIRO_API_REGIONS,
-  resolveKiroAPIRegion
+  resolveKiroAPIRegion,
+  resolveKiroAPIRegionFromCredentials
 } from '@/utils/kiroAccount'
 
 describe('kiroAccount helpers', () => {
@@ -23,6 +24,13 @@ describe('kiroAccount helpers', () => {
     expect(resolveKiroAPIRegion(undefined)).toBe('us-east-1')
     expect(resolveKiroAPIRegion('')).toBe('us-east-1')
     expect(resolveKiroAPIRegion(' eu-central-1 ')).toBe('eu-central-1')
+  })
+
+  it('resolves persisted API region aliases without confusing OAuth IDC region', () => {
+    expect(resolveKiroAPIRegionFromCredentials({ api_region: ' eu-west-1 ', apiRegion: 'ap-south-1' }, 'oauth')).toBe('eu-west-1')
+    expect(resolveKiroAPIRegionFromCredentials({ apiRegion: ' ap-south-1 ' }, 'oauth')).toBe('ap-south-1')
+    expect(resolveKiroAPIRegionFromCredentials({ region: ' ca-west-1 ' }, 'apikey')).toBe('ca-west-1')
+    expect(resolveKiroAPIRegionFromCredentials({ region: ' eu-north-1 ' }, 'oauth')).toBe(DEFAULT_KIRO_API_REGION)
   })
 
   it('includes an unsupported current API region as a disabled legacy option', () => {

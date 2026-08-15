@@ -1205,17 +1205,18 @@ describe('EditAccountModal', () => {
     const wrapper = mountModal(account)
 
     const startUrlInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-start-url-input"]')
-    const regionInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-region-input"]')
+    const regionSelect = wrapper.get<HTMLSelectElement>('[data-testid="kiro-idc-region-select-edit"]')
     const apiRegionSelect = wrapper
       .get('[data-testid="kiro-api-region-select-edit"]')
       .get<HTMLSelectElement>('select')
 
     expect(startUrlInput.element.value).toBe('https://d-99674ac649.awsapps.com/start')
-    expect(regionInput.element.value).toBe('eu-north-1')
+    expect(regionSelect.element.value).toBe('eu-north-1')
+    expect(regionSelect.findAll('option')).toHaveLength(34)
     expect(apiRegionSelect.element.value).toBe('us-east-1')
 
     await startUrlInput.setValue('  https://d-1111111111.awsapps.com/start  ')
-    await regionInput.setValue('  ap-south-1  ')
+    await regionSelect.setValue('ap-south-1')
     await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
@@ -1230,6 +1231,31 @@ describe('EditAccountModal', () => {
       region: 'ap-south-1',
       api_region: 'eu-west-1'
     })
+  })
+
+  it('preserves custom IDC regions and legacy Kiro API region credential aliases', async () => {
+    const organization = buildKiroOrganizationAccount()
+    organization.credentials.region = 'legacy-idc-1'
+    delete organization.credentials.api_region
+    organization.credentials.apiRegion = 'ca-west-1'
+
+    const organizationWrapper = mountModal(organization)
+    const idcRegionSelect = organizationWrapper.get<HTMLSelectElement>('[data-testid="kiro-idc-region-select-edit"]')
+    const apiRegionSelect = organizationWrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+
+    expect(idcRegionSelect.element.value).toBe('legacy-idc-1')
+    expect(idcRegionSelect.findAll('option')).toHaveLength(35)
+    expect(apiRegionSelect.element.value).toBe('ca-west-1')
+
+    const directAPIKey = buildKiroAPIKeyAccount()
+    directAPIKey.credentials.region = 'me-central-1'
+    const apiKeyWrapper = mountModal(directAPIKey)
+    const legacyAPIKeyRegion = apiKeyWrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+    expect(legacyAPIKeyRegion.element.value).toBe('me-central-1')
   })
 
   it('defaults a missing Kiro API region independently from the IDC region', () => {

@@ -559,7 +559,13 @@
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-          <input v-model="kiroIDCRegion" type="text" class="input" :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')" />
+          <Select
+            v-model="kiroIDCRegion"
+            :options="kiroIDCRegionOptions"
+            searchable
+            creatable
+            data-testid="kiro-idc-region-select-create"
+          />
         </div>
       </div>
 
@@ -4391,8 +4397,8 @@ const kiroImportTokenPlaceholder = computed(() => {
 const kiroModelMappings = ref<ModelMapping[]>([])
 const kiroCreditUnitPriceUsd = ref(0)
 const kiroPresetMappings = computed(() => getPresetMappingsByPlatform('kiro'))
-const kiroAPIRegionOptions = computed(() =>
-  buildKiroAPIRegionOptions(kiroAPIRegion.value, (region, legacy) => {
+const localizedKiroRegionOptions = (currentValue: string) =>
+  buildKiroAPIRegionOptions(currentValue, (region, legacy) => {
     if (legacy) {
       return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
     }
@@ -4404,7 +4410,8 @@ const kiroAPIRegionOptions = computed(() =>
     }
     return region
   }).map(option => ({ ...option }))
-)
+const kiroAPIRegionOptions = computed(() => localizedKiroRegionOptions(kiroAPIRegion.value))
+const kiroIDCRegionOptions = computed(() => localizedKiroRegionOptions(kiroIDCRegion.value))
 // Kiro mixed-scheduling config refs
 const kiroEndpointMode = ref<KiroEndpointMode>('q')
 const kiroCacheEmulationEnabled = ref(false)

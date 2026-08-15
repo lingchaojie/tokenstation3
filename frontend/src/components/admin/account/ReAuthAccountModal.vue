@@ -251,11 +251,12 @@
           </div>
           <div>
             <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-            <input
+            <Select
               v-model="kiroIDCRegion"
-              type="text"
-              class="input"
-              :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')"
+              :options="kiroIDCRegionOptions"
+              searchable
+              creatable
+              data-testid="kiro-idc-region-select-reauth"
             />
           </div>
         </div>
@@ -410,7 +411,7 @@ import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.
 import {
   DEFAULT_KIRO_API_REGION,
   buildKiroAPIRegionOptions,
-  resolveKiroAPIRegion
+  resolveKiroAPIRegionFromCredentials
 } from '@/utils/kiroAccount'
 
 // Type for exposed OAuthAuthorizationFlow component
@@ -564,8 +565,8 @@ const resolveKiroImportProvider = (
       return 'Google'
   }
 }
-const kiroAPIRegionOptions = computed(() =>
-  buildKiroAPIRegionOptions(kiroAPIRegion.value, (region, legacy) => {
+const localizedKiroRegionOptions = (currentValue: string) =>
+  buildKiroAPIRegionOptions(currentValue, (region, legacy) => {
     if (legacy) {
       return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
     }
@@ -577,7 +578,8 @@ const kiroAPIRegionOptions = computed(() =>
     }
     return region
   }).map(option => ({ ...option }))
-)
+const kiroAPIRegionOptions = computed(() => localizedKiroRegionOptions(kiroAPIRegion.value))
+const kiroIDCRegionOptions = computed(() => localizedKiroRegionOptions(kiroIDCRegion.value))
 
 // Footer "complete auth" only applies to code-exchange flows, not SSO/password/RT.
 const isManualInputMethod = computed(() => {
@@ -635,7 +637,7 @@ watch(
             : 'https://view.awsapps.com/start'
         kiroIDCRegion.value =
           typeof creds.region === 'string' && creds.region ? creds.region : 'us-east-1'
-        kiroAPIRegion.value = resolveKiroAPIRegion(creds.api_region)
+        kiroAPIRegion.value = resolveKiroAPIRegionFromCredentials(creds, props.account.type)
         kiroAccountType.value = authMethod === 'idc' ? 'idc' : 'oauth'
         kiroOAuthProvider.value = provider === 'github' ? 'github' : 'google'
         kiroImportProvider.value = resolveKiroImportProvider(provider)
