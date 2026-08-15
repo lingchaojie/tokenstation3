@@ -1252,15 +1252,15 @@ Expected: service output contains only the existing application service; disable
 - [ ] **Step 1: Write failing tests proving no queue and no response ownership**
 
 ```go
-func TestConversationCapturePoolHasNoWorkerOrWriterQueue(t *testing.T) {
+func TestConversationCapturePoolBeginsTransportAttemptSynchronously(t *testing.T) {
 	transport := &recordingTransport{}
 	p := NewConversationCapturePool(transport, policyOn())
 	a, ok := p.Begin(context.Background(), testBegin())
 	require.True(t, ok)
+	require.Equal(t, 1, transport.Begins())
 	require.True(t, a.WriteResponse([]byte("chunk")))
 	require.True(t, a.Commit())
-	require.Equal(t, 1, transport.Begins())
-	require.Equal(t, 0, runtimeQueueCount(p))
+	require.Equal(t, Committed, transport.TerminalStates()[0])
 }
 
 func TestRuntimeMasterOffDoesNotBeginButLeavesTransportOpen(t *testing.T) {
@@ -1509,7 +1509,7 @@ Expected: all provider fixtures preserve prior client/billing behavior, exactly 
 - Modify: `backend/internal/service/ops_alert_evaluator_service.go`
 - Modify: `backend/internal/service/ops_alert_evaluator_service_test.go`
 - Create: `backend/migrations/229_capture_spool_alert_rules.sql`
-- Create: `backend/migrations/capture_spool_alert_rules_migration_test.go`
+- Create: `backend/internal/repository/capture_spool_migration_integration_test.go`
 - Modify: `frontend/src/api/admin/captureSettings.ts`
 - Modify: `frontend/src/api/__tests__/admin.captureSettings.spec.ts`
 - Modify: `frontend/src/stores/captureHealth.ts`
@@ -1552,14 +1552,16 @@ Add exact loss-reason cases: `ipc_unavailable`, `ipc_backpressure`, `sidecar_dow
 - [ ] **Step 2: Write failing migration/evaluator tests**
 
 ```go
-func TestCaptureSpoolMigrationCreatesSeventyEightyFiveNinetyFiveRules(t *testing.T) {
-	sql := readMigration(t, "229_capture_spool_alert_rules.sql")
-	for _, threshold := range []string{"70", "85", "95"} { require.Contains(t, sql, threshold) }
-	require.Contains(t, sql, "capture_spool_usage_percent")
-	require.Contains(t, sql, "capture_delivery_ready")
-	for _, column := range []string{"spool_used_bytes_peak", "ready_records_peak", "oldest_ready_age_seconds_peak", "upload_retries", "sidecar_restarts"} {
-		require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS "+column)
-	}
+func TestCaptureSpoolMigrationAppliesSchemaRulesAndIsIdempotent(t *testing.T) {
+	db := requireIntegrationDB(t)
+	require.ElementsMatch(t,
+		[]string{"spool_used_bytes_peak", "ready_records_peak", "oldest_ready_age_seconds_peak", "upload_retries", "sidecar_restarts"},
+		queryCaptureHealthColumns(t, db))
+	require.Equal(t, []float64{70, 85, 95}, queryEnabledRuleThresholds(t, db, "capture_spool_usage_percent"))
+	require.Equal(t, 1, queryEnabledRuleCount(t, db, "capture_delivery_ready"))
+	require.Equal(t, 0, queryEnabledRuleCount(t, db, "capture_writer_failures"))
+	require.NoError(t, ApplyMigrations(context.Background(), db))
+	require.Equal(t, []float64{70, 85, 95}, queryEnabledRuleThresholds(t, db, "capture_spool_usage_percent"))
 }
 
 func TestSpoolUsageMetricUsesPhysicalCap(t *testing.T) {
@@ -1592,6 +1594,7 @@ Cover static-off (`sidecar not started`), runtime-off (`not accepting new captur
 ```bash
 cd backend
 go test ./internal/service ./internal/repository ./internal/handler/admin ./migrations -run 'Capture|Spool|Delivery'
+go test -tags=integration ./internal/repository -run CaptureSpoolMigration -v
 cd ../frontend
 pnpm exec vitest run src/api/__tests__/admin.captureSettings.spec.ts src/stores/__tests__/captureHealth.spec.ts src/views/admin/__tests__/CaptureSettingsView.spec.ts
 ```
@@ -1638,7 +1641,7 @@ Define `Ready = SidecarRunning && SpoolReady`; `DeliveryReady` is separate. Obta
 
 ```bash
 cd backend
-go test ./migrations -run CaptureSpool
+go test -tags=integration ./internal/repository -run CaptureSpoolMigration -v
 cd ../frontend
 pnpm exec vitest run src/api/__tests__/admin.captureSettings.spec.ts src/stores/__tests__/captureHealth.spec.ts src/views/admin/__tests__/CaptureSettingsView.spec.ts
 ```
@@ -1654,7 +1657,7 @@ cd ../frontend
 pnpm exec vitest run src/api/__tests__/admin.captureSettings.spec.ts src/stores/__tests__/captureHealth.spec.ts src/views/admin/__tests__/CaptureSettingsView.spec.ts
 cd ..
 git diff --check
-git add backend/internal/service backend/internal/repository backend/internal/handler/admin backend/migrations/229_capture_spool_alert_rules.sql backend/migrations/capture_spool_alert_rules_migration_test.go frontend/src/api frontend/src/stores frontend/src/views/admin/CaptureSettingsView.vue frontend/src/views/admin/__tests__/CaptureSettingsView.spec.ts frontend/src/i18n/locales/zh/admin/captureSettings.ts frontend/src/i18n/locales/en/admin/captureSettings.ts
+git add backend/internal/service backend/internal/repository backend/internal/handler/admin backend/migrations/229_capture_spool_alert_rules.sql backend/internal/repository/capture_spool_migration_integration_test.go frontend/src/api frontend/src/stores frontend/src/views/admin/CaptureSettingsView.vue frontend/src/views/admin/__tests__/CaptureSettingsView.spec.ts frontend/src/i18n/locales/zh/admin/captureSettings.ts frontend/src/i18n/locales/en/admin/captureSettings.ts
 git commit -m "feat(capture): expose spool and delivery health"
 ```
 
