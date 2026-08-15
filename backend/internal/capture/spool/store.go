@@ -108,6 +108,7 @@ type Store struct {
 
 	readyMu sync.RWMutex
 	ready   []RecordRef
+	batchMu sync.Mutex
 
 	recoverMu sync.Mutex
 	dropMu    sync.Mutex
@@ -247,8 +248,13 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 	defer s.recoverMu.Unlock()
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	s.batchMu.Lock()
+	defer s.batchMu.Unlock()
 
 	report := RecoveryReport{}
+	if err := s.recoverAckedLocked(); err != nil {
+		return report, err
+	}
 	partials, err := os.ReadDir(s.partialDir)
 	if err != nil {
 		return report, err

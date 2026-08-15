@@ -151,6 +151,39 @@ func (c *Capacity) ReserveOperational(want int64) error {
 }
 
 func (c *Capacity) reserveOperational(want int64) (Reservation, error) {
+	return c.reserveOperationalWithFreeReserve(want, true)
+}
+
+// reserveOperationalFilesUnblocking admits only pre-bounded sending metadata.
+// It may cross the normal filesystem free-space reserve so an existing ready
+// backlog can still be uploaded and deleted, but it cannot cross actual free
+// space, the spool's physical cap, or its dedicated operational headroom.
+func (c *Capacity) reserveOperationalFilesUnblocking(fileSizes ...int64) (Reservation, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current, err := c.usageFn()
+	if err != nil {
+		return Reservation{}, fmt.Errorf("measure spool capacity: %w", err)
+	}
+	blockSize := current.BlockSize
+	if blockSize <= 0 {
+		blockSize = filesystemBlockSize
+	}
+	var want int64
+	for _, size := range fileSizes {
+		if size < 0 {
+			return Reservation{}, errors.New("reservation size cannot be negative")
+		}
+		allocated := roundUp(size, blockSize)
+		if allocated < 0 || allocated > c.config.OperationalHeadroomBytes-want {
+			return Reservation{}, ErrSpoolCap
+		}
+		want += allocated
+	}
+	return c.reserveOperationalLocked(current, want, false)
+}
+
+func (c *Capacity) reserveOperationalWithFreeReserve(want int64, enforceFreeReserve bool) (Reservation, error) {
 	if want < 0 {
 		return Reservation{}, errors.New("reservation size cannot be negative")
 	}
@@ -160,6 +193,10 @@ func (c *Capacity) reserveOperational(want int64) (Reservation, error) {
 	if err != nil {
 		return Reservation{}, fmt.Errorf("measure spool capacity: %w", err)
 	}
+	return c.reserveOperationalLocked(current, want, enforceFreeReserve)
+}
+
+func (c *Capacity) reserveOperationalLocked(current usage, want int64, enforceFreeReserve bool) (Reservation, error) {
 	totalReserved := c.reservedContent + c.reservedOperational
 	if exceeds(current.OperationalAllocated, c.reservedOperational, want, c.config.OperationalHeadroomBytes) {
 		return Reservation{}, ErrSpoolCap
@@ -167,7 +204,11 @@ func (c *Capacity) reserveOperational(want int64) (Reservation, error) {
 	if exceeds(current.Allocated, totalReserved, want, c.config.MaxBytes) {
 		return Reservation{}, ErrSpoolCap
 	}
-	if current.Free-totalReserved-want < c.config.MinFreeBytes {
+	remainingFree := current.Free - totalReserved
+	if remainingFree < 0 || remainingFree < want {
+		return Reservation{}, ErrFreeReserve
+	}
+	if enforceFreeReserve && remainingFree-want < c.config.MinFreeBytes {
 		return Reservation{}, ErrFreeReserve
 	}
 	c.reservedOperational += want
