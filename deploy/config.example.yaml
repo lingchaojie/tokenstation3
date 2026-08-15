@@ -607,31 +607,34 @@ gateway:
   # 以下容量是 2GiB 应用机的保守起始值，按管理页丢失计数和队列峰值再调优。
   # ==========================================================================
   capture:
-    enabled: false            # 静态 provisioning 开关，默认关；开启后仍需在管理页打开运行时总开关
-    max_body_bytes: 8388608   # 单条原文上限(8MB)，超出停止累积并标 is_truncated
-    max_queue_bytes: 134217728 # 128MiB 全链路在途字节上界；持有到 ClickHouse 成功/明确丢弃；0=不限
-    queue_size: 512           # 一级有界内存队列容量，满时按策略丢弃
-    worker_count: 2           # 抽取并送入二级写入队列的 worker 数
-    writer_queue_size: 1024   # 二级 ClickHouse batcher 队列容量
-    overflow_policy: drop      # 队列满策略：drop（默认，绝不阻塞转发）/ sample
-    overflow_sample_percent: 0 # sample 策略下的采样百分比(1-100)
-    batch_max_size: 100        # 批量 INSERT 行数上限
-    batch_max_interval_ms: 2000 # 非空批次的最长等待时间；没有数据时不会写空批次
+    enabled: false
+    max_body_bytes: 33554432
+    max_header_bytes: 1048576
+    spool:
+      dir: /app/data/capture/spool
+      max_bytes: 12884901888
+      min_free_bytes: 8589934592
+    sidecar:
+      socket: /app/data/capture/capture.sock
+      frame_bytes: 65536
+      memory_limit_bytes: 268435456
+      max_active_attempts: 32
+    tailscale:
+      state_dir: /app/data/capture/tsnet
+      hostname: sub2api-capture-writer
+      auth_key: ""
     clickhouse:
-      # 远端 ClickHouse（独立部署，勿与转发生产机争资源；勿裸暴露公网）。
-      # Docker: 另一台机填其 IP/域名；兄弟容器填 service 名；宿主机填 host.docker.internal
-      addr: ["clickhouse-host:9000"]  # 原生 TCP 端口 9000（TLS 用 9440）
+      url: http://clickhouse-win:18000
       database: llm_archive
       table: model_call_archive
-      username: default
-      password: ""             # 生产用强密码；日志按 key 名引用、绝不回显 value
-      dial_timeout_ms: 2000
-      read_timeout_ms: 10000
-      compression: lz4          # 传输层压缩：lz4 / zstd / none
-      secure: false             # 跨不可信网络传输时开 TLS（端口 9440）
-      max_open_conns: 8
-    # 当前没有本地磁盘 spool。任何容量或写入失败都会非阻塞丢弃，并在“转存设置”显示。
-    # 丢失历史写 PostgreSQL 的待重试聚合固定最多 4096 个 bucket，每批 256 个；触顶淘汰也会在页面计数。
+      username: capture_ingest
+      password: ""
+      compression: zstd
+      batch_max_rows: 100
+      batch_max_bytes: 134217728
+      batch_max_interval_ms: 2000
+      dial_timeout_ms: 5000
+      write_timeout_ms: 60000
 
 # =============================================================================
 # Logging Configuration

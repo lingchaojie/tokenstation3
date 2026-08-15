@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -1024,8 +1025,8 @@ type GatewayConfig struct {
 	// UsageRecord: 使用量记录异步队列配置（有界队列 + 固定 worker）
 	UsageRecord GatewayUsageRecordConfig `mapstructure:"usage_record"`
 
-	// Capture: 上游调用全量归档异步通道配置（有界队列 + ClickHouse）
-	Capture GatewayCaptureConfig `mapstructure:"capture"`
+	// Capture: durable capture-sidecar configuration.
+	Capture CaptureConfig `mapstructure:"capture"`
 
 	// UserGroupRateCacheTTLSeconds: 用户分组倍率热路径缓存 TTL（秒）
 	UserGroupRateCacheTTLSeconds int `mapstructure:"user_group_rate_cache_ttl_seconds"`
@@ -1333,71 +1334,168 @@ type GatewayUsageRecordConfig struct {
 	AutoScaleCooldownSeconds int `mapstructure:"auto_scale_cooldown_seconds"`
 }
 
-// GatewayCaptureConfig 上游调用全量归档异步通道配置（默认关闭，关时零成本）。
-const GatewayCaptureMaxBodyBytes = 8 << 20
+// GatewayCaptureMaxBodyBytes is retained as the shared capture-body ceiling
+// used by existing request capture call sites. The sidecar default is 32 MiB.
+const GatewayCaptureMaxBodyBytes = 32 << 20
 
-type GatewayCaptureConfig struct {
-	Enabled               bool                    `mapstructure:"enabled"`
-	MaxBodyBytes          int                     `mapstructure:"max_body_bytes"`
-	MaxQueueBytes         int64                   `mapstructure:"max_queue_bytes"`
-	QueueSize             int                     `mapstructure:"queue_size"`
-	WorkerCount           int                     `mapstructure:"worker_count"`
-	WriterQueueSize       int                     `mapstructure:"writer_queue_size"`
-	OverflowPolicy        string                  `mapstructure:"overflow_policy"`
-	OverflowSamplePercent int                     `mapstructure:"overflow_sample_percent"`
-	BatchMaxSize          int                     `mapstructure:"batch_max_size"`
-	BatchMaxIntervalMs    int                     `mapstructure:"batch_max_interval_ms"`
-	ClickHouse            CaptureClickHouseConfig `mapstructure:"clickhouse"`
+const (
+	captureDataRoot                    = "/app/data/capture"
+	captureProtocolV2Frame             = 65536
+	captureBatchRowOverheadBytes int64 = 1 << 20
+)
+
+// CaptureConfig configures the durable capture sidecar. It is disabled by
+// default so no sidecar, Tailscale node, or spool is started unless requested.
+type CaptureConfig struct {
+	Enabled        bool                    `mapstructure:"enabled"`
+	MaxBodyBytes   int                     `mapstructure:"max_body_bytes"`
+	MaxHeaderBytes int                     `mapstructure:"max_header_bytes"`
+	Spool          CaptureSpoolConfig      `mapstructure:"spool"`
+	Sidecar        CaptureSidecarConfig    `mapstructure:"sidecar"`
+	Tailscale      CaptureTailscaleConfig  `mapstructure:"tailscale"`
+	ClickHouse     CaptureClickHouseConfig `mapstructure:"clickhouse"`
 }
 
-// CaptureClickHouseConfig 远端 ClickHouse 连接配置。
+// GatewayCaptureConfig remains a type alias while consumers move to the
+// sidecar-specific CaptureConfig name.
+type GatewayCaptureConfig = CaptureConfig
+
+type CaptureSpoolConfig struct {
+	Dir          string `mapstructure:"dir"`
+	MaxBytes     int64  `mapstructure:"max_bytes"`
+	MinFreeBytes int64  `mapstructure:"min_free_bytes"`
+}
+
+type CaptureSidecarConfig struct {
+	Socket            string `mapstructure:"socket"`
+	FrameBytes        int64  `mapstructure:"frame_bytes"`
+	MemoryLimitBytes  int64  `mapstructure:"memory_limit_bytes"`
+	MaxActiveAttempts int    `mapstructure:"max_active_attempts"`
+}
+
+type CaptureTailscaleConfig struct {
+	StateDir string `mapstructure:"state_dir"`
+	Hostname string `mapstructure:"hostname"`
+	AuthKey  string `mapstructure:"auth_key"`
+}
+
 type CaptureClickHouseConfig struct {
-	Addr          []string `mapstructure:"addr"`
-	Database      string   `mapstructure:"database"`
-	Table         string   `mapstructure:"table"`
-	Username      string   `mapstructure:"username"`
-	Password      string   `mapstructure:"password"`
-	DialTimeoutMs int      `mapstructure:"dial_timeout_ms"`
-	ReadTimeoutMs int      `mapstructure:"read_timeout_ms"`
-	Compression   string   `mapstructure:"compression"`
-	Secure        bool     `mapstructure:"secure"`
-	MaxOpenConns  int      `mapstructure:"max_open_conns"`
+	URL                string `mapstructure:"url"`
+	Database           string `mapstructure:"database"`
+	Table              string `mapstructure:"table"`
+	Username           string `mapstructure:"username"`
+	Password           string `mapstructure:"password"`
+	Compression        string `mapstructure:"compression"`
+	BatchMaxRows       int    `mapstructure:"batch_max_rows"`
+	BatchMaxBytes      int64  `mapstructure:"batch_max_bytes"`
+	BatchMaxIntervalMS int    `mapstructure:"batch_max_interval_ms"`
+	DialTimeoutMS      int    `mapstructure:"dial_timeout_ms"`
+	WriteTimeoutMS     int    `mapstructure:"write_timeout_ms"`
 }
 
-// validate 仅在 Enabled=true 时校验；关闭时任意配置都放行。
-// capture 队列绝不允许 overflow=sync：归档链路不能反向阻塞转发主路径。
-func (c GatewayCaptureConfig) validate() error {
+// Validate verifies only enabled capture infrastructure. Disabled capture
+// remains inert, including when a one-release legacy queue setting is present.
+func (c CaptureConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
-	if len(c.ClickHouse.Addr) == 0 || strings.TrimSpace(c.ClickHouse.Database) == "" {
-		return fmt.Errorf("gateway.capture: clickhouse addr/database required when enabled")
+	if c.MaxBodyBytes <= 0 {
+		return fmt.Errorf("gateway.capture.max_body_bytes must be positive")
 	}
-	switch c.OverflowPolicy {
-	case UsageRecordOverflowPolicyDrop, UsageRecordOverflowPolicySample:
-	default:
-		return fmt.Errorf("gateway.capture.overflow_policy must be drop|sample, got %q", c.OverflowPolicy)
+	if c.MaxHeaderBytes <= 0 {
+		return fmt.Errorf("gateway.capture.max_header_bytes must be positive")
+	}
+	if c.Spool.MaxBytes <= 0 {
+		return fmt.Errorf("gateway.capture.spool.max_bytes must be positive")
+	}
+	if c.Spool.MinFreeBytes <= 0 {
+		return fmt.Errorf("gateway.capture.spool.min_free_bytes must be positive")
+	}
+	if err := validateCapturePath("spool.dir", c.Spool.Dir); err != nil {
+		return err
+	}
+	if err := validateCapturePath("sidecar.socket", c.Sidecar.Socket); err != nil {
+		return err
+	}
+	if err := validateCapturePath("tailscale.state_dir", c.Tailscale.StateDir); err != nil {
+		return err
+	}
+	if c.Sidecar.FrameBytes <= 0 {
+		return fmt.Errorf("gateway.capture.sidecar.frame_bytes must be positive")
+	}
+	if c.Sidecar.FrameBytes != captureProtocolV2Frame {
+		return fmt.Errorf("gateway.capture.sidecar.frame_bytes must equal %d for protocol v2", captureProtocolV2Frame)
+	}
+	if c.Sidecar.MemoryLimitBytes <= 0 {
+		return fmt.Errorf("gateway.capture.sidecar.memory_limit_bytes must be positive")
+	}
+	if c.Sidecar.MaxActiveAttempts <= 0 {
+		return fmt.Errorf("gateway.capture.sidecar.max_active_attempts must be positive")
+	}
+	if strings.TrimSpace(c.Tailscale.AuthKey) == "" {
+		return fmt.Errorf("gateway.capture.tailscale.auth_key is required when enabled")
+	}
+	if strings.TrimSpace(c.Tailscale.Hostname) == "" {
+		return fmt.Errorf("gateway.capture.tailscale.hostname is required when enabled")
+	}
+	if err := validateCaptureClickHouseURL(c.ClickHouse.URL); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.ClickHouse.Database) == "" {
+		return fmt.Errorf("gateway.capture.clickhouse.database is required when enabled")
+	}
+	if strings.TrimSpace(c.ClickHouse.Table) == "" {
+		return fmt.Errorf("gateway.capture.clickhouse.table is required when enabled")
+	}
+	if strings.TrimSpace(c.ClickHouse.Username) == "" {
+		return fmt.Errorf("gateway.capture.clickhouse.username is required when enabled")
+	}
+	if strings.TrimSpace(c.ClickHouse.Password) == "" {
+		return fmt.Errorf("gateway.capture.clickhouse.password is required when enabled")
 	}
 	switch c.ClickHouse.Compression {
-	case "lz4", "zstd", "none", "":
+	case "lz4", "zstd", "none":
 	default:
-		return fmt.Errorf("gateway.capture.clickhouse.compression must be lz4|zstd|none, got %q", c.ClickHouse.Compression)
+		return fmt.Errorf("gateway.capture.clickhouse.compression must be lz4|zstd|none")
 	}
-	if c.MaxBodyBytes <= 0 || c.QueueSize <= 0 || c.WorkerCount <= 0 || c.WriterQueueSize <= 0 || c.BatchMaxSize <= 0 {
-		return fmt.Errorf("gateway.capture: max_body_bytes/queue_size/worker_count/writer_queue_size/batch_max_size must be > 0")
+	if c.ClickHouse.BatchMaxRows <= 0 {
+		return fmt.Errorf("gateway.capture.clickhouse.batch_max_rows must be positive")
 	}
-	if c.MaxBodyBytes > GatewayCaptureMaxBodyBytes {
-		return fmt.Errorf("gateway.capture.max_body_bytes must be <= %d (8 MiB hard limit), got %d", GatewayCaptureMaxBodyBytes, c.MaxBodyBytes)
+	if c.ClickHouse.BatchMaxBytes <= 0 {
+		return fmt.Errorf("gateway.capture.clickhouse.batch_max_bytes must be positive")
 	}
-	// max_queue_bytes: 0 = 不限；否则至少容纳一条请求体与响应体都达到
-	// max_body_bytes 的 record。Header 同样计入预算，因此极大的诊断头仍可能
-	// 按 byte_budget_exceeded 丢弃，但正文配置本身不能制造必丢区间。
-	if c.MaxQueueBytes < 0 {
-		return fmt.Errorf("gateway.capture.max_queue_bytes must be >= 0 (0 = unlimited)")
+	minimumBatchBytes := int64(c.MaxBodyBytes)*2 + int64(c.MaxHeaderBytes)*2 + captureBatchRowOverheadBytes
+	if c.ClickHouse.BatchMaxBytes < minimumBatchBytes {
+		return fmt.Errorf("gateway.capture.clickhouse.batch_max_bytes must be at least %d to fit one maximum capture", minimumBatchBytes)
 	}
-	minRecordBodyBytes := int64(c.MaxBodyBytes) * 2
-	if c.MaxQueueBytes > 0 && c.MaxQueueBytes < minRecordBodyBytes {
-		return fmt.Errorf("gateway.capture.max_queue_bytes (%d) must be >= 2*max_body_bytes (%d) or 0", c.MaxQueueBytes, minRecordBodyBytes)
+	if c.ClickHouse.BatchMaxIntervalMS <= 0 {
+		return fmt.Errorf("gateway.capture.clickhouse.batch_max_interval_ms must be positive")
+	}
+	if c.ClickHouse.DialTimeoutMS <= 0 {
+		return fmt.Errorf("gateway.capture.clickhouse.dial_timeout_ms must be positive")
+	}
+	if c.ClickHouse.WriteTimeoutMS <= 0 {
+		return fmt.Errorf("gateway.capture.clickhouse.write_timeout_ms must be positive")
+	}
+	return nil
+}
+
+func validateCapturePath(field, raw string) error {
+	path := strings.TrimSpace(raw)
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("gateway.capture.%s must be an absolute path under %s", field, captureDataRoot)
+	}
+	clean := filepath.Clean(path)
+	if clean != captureDataRoot && !strings.HasPrefix(clean, captureDataRoot+string(filepath.Separator)) {
+		return fmt.Errorf("gateway.capture.%s must remain under %s", field, captureDataRoot)
+	}
+	return nil
+}
+
+func validateCaptureClickHouseURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("gateway.capture.clickhouse.url must be an HTTP(S) URL without userinfo or query secrets")
 	}
 	return nil
 }
@@ -1798,6 +1896,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
+	legacyCaptureSettings := configuredLegacyCaptureSettings()
 	trustedProxiesEnv, trustedProxiesEnvConfigured := os.LookupEnv("SERVER_TRUSTED_PROXIES")
 	forwardedClientIPHeadersEnv, forwardedClientIPHeadersEnvConfigured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") ||
@@ -1806,6 +1905,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
+	}
+	if len(legacyCaptureSettings) > 0 {
+		if cfg.Gateway.Capture.Enabled {
+			return nil, fmt.Errorf("legacy capture setting %s requires migration to spool/HTTP settings", legacyCaptureSettings[0])
+		}
+		slog.Warn("legacy capture queue settings are ignored while disabled", "keys", legacyCaptureSettings)
 	}
 	if trustedProxiesEnvConfigured {
 		cfg.Server.TrustedProxies = normalizeStringSlice(strings.Split(trustedProxiesEnv, ","))
@@ -2508,24 +2613,28 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
 	viper.SetDefault("gateway.capture.enabled", false)
 	viper.SetDefault("gateway.capture.max_body_bytes", GatewayCaptureMaxBodyBytes)
-	viper.SetDefault("gateway.capture.max_queue_bytes", int64(1)<<30) // 1 GiB 在途上界；0 = 不限
-	viper.SetDefault("gateway.capture.queue_size", 8192)
-	viper.SetDefault("gateway.capture.worker_count", 4)
-	viper.SetDefault("gateway.capture.writer_queue_size", 1024)
-	viper.SetDefault("gateway.capture.overflow_policy", UsageRecordOverflowPolicyDrop)
-	viper.SetDefault("gateway.capture.overflow_sample_percent", 0)
-	viper.SetDefault("gateway.capture.batch_max_size", 200)
-	viper.SetDefault("gateway.capture.batch_max_interval_ms", 1000)
-	viper.SetDefault("gateway.capture.clickhouse.addr", []string{})
+	viper.SetDefault("gateway.capture.max_header_bytes", 1<<20)
+	viper.SetDefault("gateway.capture.spool.dir", "/app/data/capture/spool")
+	viper.SetDefault("gateway.capture.spool.max_bytes", int64(12)<<30)
+	viper.SetDefault("gateway.capture.spool.min_free_bytes", int64(8)<<30)
+	viper.SetDefault("gateway.capture.sidecar.socket", "/app/data/capture/capture.sock")
+	viper.SetDefault("gateway.capture.sidecar.frame_bytes", int64(captureProtocolV2Frame))
+	viper.SetDefault("gateway.capture.sidecar.memory_limit_bytes", int64(256)<<20)
+	viper.SetDefault("gateway.capture.sidecar.max_active_attempts", 32)
+	viper.SetDefault("gateway.capture.tailscale.state_dir", "/app/data/capture/tsnet")
+	viper.SetDefault("gateway.capture.tailscale.hostname", "sub2api-capture-writer")
+	viper.SetDefault("gateway.capture.tailscale.auth_key", "")
+	viper.SetDefault("gateway.capture.clickhouse.url", "http://clickhouse-win:18000")
 	viper.SetDefault("gateway.capture.clickhouse.database", "llm_archive")
 	viper.SetDefault("gateway.capture.clickhouse.table", "model_call_archive")
-	viper.SetDefault("gateway.capture.clickhouse.username", "")
+	viper.SetDefault("gateway.capture.clickhouse.username", "capture_ingest")
 	viper.SetDefault("gateway.capture.clickhouse.password", "")
-	viper.SetDefault("gateway.capture.clickhouse.dial_timeout_ms", 2000)
-	viper.SetDefault("gateway.capture.clickhouse.read_timeout_ms", 10000)
-	viper.SetDefault("gateway.capture.clickhouse.compression", "lz4")
-	viper.SetDefault("gateway.capture.clickhouse.secure", false)
-	viper.SetDefault("gateway.capture.clickhouse.max_open_conns", 8)
+	viper.SetDefault("gateway.capture.clickhouse.compression", "zstd")
+	viper.SetDefault("gateway.capture.clickhouse.batch_max_rows", 100)
+	viper.SetDefault("gateway.capture.clickhouse.batch_max_bytes", int64(128)<<20)
+	viper.SetDefault("gateway.capture.clickhouse.batch_max_interval_ms", 2000)
+	viper.SetDefault("gateway.capture.clickhouse.dial_timeout_ms", 5000)
+	viper.SetDefault("gateway.capture.clickhouse.write_timeout_ms", 60000)
 	viper.SetDefault("gateway.user_group_rate_cache_ttl_seconds", 30)
 	viper.SetDefault("gateway.models_list_cache_ttl_seconds", 15)
 	// TLS指纹伪装配置（默认关闭，需要账号级别单独启用）
@@ -2647,6 +2756,31 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("dingtalk_connect.sync_corp_email", false)
 	viper.SetDefault("dingtalk_connect.sync_corp_email_attr_key", "")
 	viper.SetDefault("dingtalk_connect.sync_corp_email_attr_name", "")
+}
+
+func configuredLegacyCaptureSettings() []string {
+	legacy := []string{
+		"max_queue_bytes",
+		"queue_size",
+		"worker_count",
+		"writer_queue_size",
+		"overflow_policy",
+		"overflow_sample_percent",
+		"batch_max_size",
+		"batch_max_interval_ms",
+		"clickhouse.addr",
+		"clickhouse.read_timeout_ms",
+		"clickhouse.secure",
+		"clickhouse.max_open_conns",
+	}
+
+	configured := make([]string, 0, len(legacy))
+	for _, key := range legacy {
+		if viper.InConfig("gateway.capture." + key) {
+			configured = append(configured, key)
+		}
+	}
+	return configured
 }
 
 func (c *Config) Validate() error {
@@ -3612,7 +3746,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("gateway.usage_record.auto_scale_cooldown_seconds must be non-negative")
 		}
 	}
-	if err := c.Gateway.Capture.validate(); err != nil {
+	if err := c.Gateway.Capture.Validate(); err != nil {
 		return err
 	}
 	if c.Gateway.UserGroupRateCacheTTLSeconds <= 0 {
