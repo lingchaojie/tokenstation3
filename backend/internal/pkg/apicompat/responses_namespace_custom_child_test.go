@@ -28,14 +28,20 @@ func TestAdaptResponsesClientTools_NamespaceCustomChild(t *testing.T) {
 	require.True(t, mapping.CustomTools["functions__exec"])
 	require.Equal(t, ResponsesNamespaceName{Namespace: "functions", Name: "exec"}, mapping.NamespaceTools["functions__exec"])
 
-	tools := req["tools"].([]any)
+	tools, ok := req["tools"].([]any)
+	require.True(t, ok)
 	require.Len(t, tools, 1)
-	tool := tools[0].(map[string]any)
+	tool, ok := tools[0].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "function", tool["type"])
 	require.Equal(t, "functions__exec", tool["name"])
 	require.NotNil(t, tool["parameters"])
 
-	history := req["input"].([]any)[0].(map[string]any)
+	input, ok := req["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 1)
+	history, ok := input[0].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "functions__exec", history["name"])
 	require.NotContains(t, history, "namespace")
 
