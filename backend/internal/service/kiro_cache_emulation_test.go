@@ -47,6 +47,39 @@ func TestKiroCacheEmulationUsesSnapshotGroupWithoutRepo(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationPrepareDoesNotMutateUntilCommit(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 55, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("deferred commit", false)
+
+	planA := svc.prepareKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	if planA == nil || planA.result() == nil {
+		t.Fatalf("expected initial cache creation plan, got %+v", planA)
+	}
+	if usage := planA.result(); usage.CacheCreationInputTokens != 2000 || usage.CacheReadInputTokens != 0 {
+		t.Fatalf("unexpected initial plan usage: %+v", usage)
+	}
+
+	planB := svc.prepareKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	if planB == nil || planB.result() == nil {
+		t.Fatalf("expected second cache creation plan, got %+v", planB)
+	}
+	if usage := planB.result(); usage.CacheCreationInputTokens != 2000 || usage.CacheReadInputTokens != 0 {
+		t.Fatalf("uncommitted prepare polluted tracker: %+v", usage)
+	}
+
+	planB.commit()
+	planC := svc.prepareKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	if planC == nil || planC.result() == nil {
+		t.Fatalf("expected cache-read plan after commit, got %+v", planC)
+	}
+	if usage := planC.result(); usage.CacheReadInputTokens != 2000 || usage.CacheCreationInputTokens != 0 {
+		t.Fatalf("committed plan was not visible: %+v", usage)
+	}
+}
+
 func TestKiroCacheEmulationRatioScalesTokens(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}

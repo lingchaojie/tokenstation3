@@ -409,7 +409,8 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	contentAccumulator.materialize(finalResp)
 
 	// Update usage from accumulated delta
-	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 {
+	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 ||
+		usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
 		finalResp.Usage = apicompat.AnthropicUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,

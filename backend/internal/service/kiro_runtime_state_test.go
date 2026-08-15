@@ -3,12 +3,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -440,6 +442,151 @@ func TestOpenKiroAnthropicStreamResponseNormalPathSkipsStandaloneTranslatedEstim
 	require.Greater(t, inputTokens, 0)
 	require.Zero(t, estimateCalls.Load(), "normal runtime must use the actual upstream build result")
 	require.Len(t, upstream.requests, 1)
+}
+
+func TestKiroCacheDirectCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
+	resetKiroCacheTracker()
+	account := newKiroCacheTransactionAccount(614, "DIRECT")
+	group := kiroCacheGroup(1)
+	body := []byte(strings.Replace(string(kiroCacheRequestBody("direct transaction", false)), "{", `{"stream":true,`, 1))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusBadRequest, `{"message":"rejected"}`),
+		newKiroCacheTransactionSuccessResponse(t, "direct success"),
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	failedResp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), c, account, nil, body,
+		"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, group,
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, failedResp.StatusCode)
+	require.NoError(t, failedResp.Body.Close())
+
+	afterFailure := svc.prepareKiroCacheEmulationUsage(
+		context.Background(), account, group, body, "claude-sonnet-4-6", 2000,
+	)
+	require.NotNil(t, afterFailure)
+	require.NotNil(t, afterFailure.result())
+	require.Equal(t, 2000, afterFailure.result().CacheCreationInputTokens)
+	require.Zero(t, afterFailure.result().CacheReadInputTokens)
+
+	successResp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), c, account, nil, body,
+		"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, group,
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, successResp.StatusCode)
+	_, err = io.ReadAll(successResp.Body)
+	require.NoError(t, err)
+	require.NoError(t, successResp.Body.Close())
+
+	afterSuccess := svc.prepareKiroCacheEmulationUsage(
+		context.Background(), account, group, body, "claude-sonnet-4-6", 2000,
+	)
+	require.NotNil(t, afterSuccess)
+	require.NotNil(t, afterSuccess.result())
+	require.Equal(t, 2000, afterSuccess.result().CacheReadInputTokens)
+	require.Zero(t, afterSuccess.result().CacheCreationInputTokens)
+}
+
+func TestKiroCacheWebSearchCommitsOnlyAfterFirstUpstreamSuccess(t *testing.T) {
+	resetKiroCacheTracker()
+	endpoint := "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	account := newKiroCacheTransactionAccount(615, "WEBSEARCH")
+	group := kiroCacheGroup(1)
+	body := []byte(strings.Replace(
+		string(kiroCacheRequestBody("web search transaction", false)),
+		"{", `{"stream":true,"tools":[{"type":"web_search_20250305","name":"web_search"}],`, 1,
+	))
+	mcpBody := `{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`
+	svc := &GatewayService{
+		httpUpstream: &queuedHTTPUpstream{responses: []*http.Response{
+			newJSONResponse(http.StatusOK, mcpBody),
+			newJSONResponse(http.StatusBadRequest, `{"message":"rejected"}`),
+		}},
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	failedResp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), c, account, nil, body,
+		"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, group,
+	)
+	require.NoError(t, err)
+	_, readErr := io.ReadAll(failedResp.Body)
+	require.Error(t, readErr)
+	require.NoError(t, failedResp.Body.Close())
+
+	afterFailure := svc.prepareKiroCacheEmulationUsage(
+		context.Background(), account, group, body, "claude-sonnet-4-6", 2000,
+	)
+	require.NotNil(t, afterFailure)
+	require.NotNil(t, afterFailure.result())
+	require.Equal(t, 2000, afterFailure.result().CacheCreationInputTokens)
+	require.Zero(t, afterFailure.result().CacheReadInputTokens)
+
+	svc.httpUpstream = &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusOK, mcpBody),
+		newKiroCacheTransactionSuccessResponse(t, "web search success"),
+	}}
+	successResp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), c, account, nil, body,
+		"claude-sonnet-4-6", "claude-sonnet-4-6", c.Request.Header, group,
+	)
+	require.NoError(t, err)
+	_, err = io.ReadAll(successResp.Body)
+	require.NoError(t, err)
+	require.NoError(t, successResp.Body.Close())
+
+	afterSuccess := svc.prepareKiroCacheEmulationUsage(
+		context.Background(), account, group, body, "claude-sonnet-4-6", 2000,
+	)
+	require.NotNil(t, afterSuccess)
+	require.NotNil(t, afterSuccess.result())
+	require.Equal(t, 2000, afterSuccess.result().CacheReadInputTokens)
+	require.Zero(t, afterSuccess.result().CacheCreationInputTokens)
+}
+
+func newKiroCacheTransactionAccount(id int64, profileSuffix string) *Account {
+	account := kiroCacheAccount(id, "refresh-"+strings.ToLower(profileSuffix), "access-token")
+	account.Name = "kiro-cache-" + strings.ToLower(profileSuffix)
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+	account.Credentials["profile_arn"] = "arn:aws:codewhisperer:us-east-1:123456789012:profile/" + profileSuffix
+	account.Credentials["region"] = "us-east-1"
+	return account
+}
+
+func newKiroCacheTransactionSuccessResponse(t *testing.T, content string) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	_, _ = body.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": content},
+	}))
+	_, _ = body.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 2}},
+	}))
+	_, _ = body.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(body.Bytes())),
+	}
 }
 
 func TestExecuteKiroUpstreamBuildsPayloadOnceAcrossAuthRetry(t *testing.T) {

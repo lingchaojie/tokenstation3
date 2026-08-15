@@ -679,7 +679,7 @@ git commit -m "fix(kiro): keep direct account usage loading"
 - Produces: `kiroCacheEmulationPlan`, `result() *kiroCacheEmulationUsage`, `commit()`, and prepare variants of existing build helpers.
 - Consumes: local `resolveKiroCacheEmulation`, tracker compute/update, KIRO direct/web-search success boundaries.
 
-- [ ] **Step 1: Add tracker pollution and successful-commit tests**
+- [x] **Step 1: Add tracker pollution and successful-commit tests**
 
 ```go
 func TestKiroCacheEmulationPlanCommitsExplicitly(t *testing.T) {
@@ -706,14 +706,14 @@ func TestKiroCacheEmulationPlanCommitsExplicitly(t *testing.T) {
 
 Add gateway regressions where the first KIRO upstream attempt fails before 2xx and the next identical request is still a cache creation, plus a success case where the next request becomes a cache read. Add the same first-success boundary to web search.
 
-- [ ] **Step 2: Run cache tests RED**
+- [x] **Step 2: Run cache tests RED**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/service -run 'KiroCache.*(Prepare|Commit|Pollution|Success)|CacheOnly'
 ```
 
-- [ ] **Step 3: Split prepare and commit without changing accounting**
+- [x] **Step 3: Split prepare and commit without changing accounting**
 
 ```go
 type kiroCacheEmulationPlan struct {
@@ -740,14 +740,14 @@ func (p *kiroCacheEmulationPlan) commit() {
 
 Prepare computes against the tracker but never updates it. Commit after a normal direct request receives 2xx, and after the first successful web-search iteration. Existing `build...Usage` wrappers may prepare+commit for callers whose success boundary is already established. Preserve local ratio resolution, presence bits, pure-cache usage, capture, and client-disconnect behavior.
 
-- [ ] **Step 4: Run KIRO/service cache suites GREEN**
+- [x] **Step 4: Run KIRO/service cache suites GREEN**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/service ./internal/pkg/kiro -run 'KiroCache|CacheOnly|WebSearch|Usage'
 ```
 
-- [ ] **Step 5: Commit transactional cache state**
+- [x] **Step 5: Commit transactional cache state**
 
 ```bash
 git add backend/internal/service/kiro_cache_emulation.go backend/internal/service/kiro_cache_emulation_test.go backend/internal/service/kiro_runtime.go backend/internal/service/kiro_websearch.go backend/internal/service/gateway_forward_as_responses.go backend/internal/service/gateway_forward_as_chat_completions.go backend/internal/service/gateway_forward_as_responses_cache_only_test.go backend/internal/service/gateway_forward_as_chat_completions_cache_only_test.go

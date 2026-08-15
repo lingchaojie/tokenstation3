@@ -117,7 +117,7 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 }
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
-	ctx context.Context, c *gin.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, cacheUsage *kiroCacheEmulationUsage,
+	ctx context.Context, c *gin.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, cachePlan *kiroCacheEmulationPlan,
 ) error {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
@@ -131,7 +131,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	nextContentBlockIndex := 0
 
-	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cacheUsage); err != nil {
+	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cachePlan.result()); err != nil {
 		return err
 	}
 
@@ -181,6 +181,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				publishWebChatStreamTerminalError(ctx, failure)
 			}
 			return failure
+		}
+		if iteration == 0 {
+			cachePlan.commit()
 		}
 		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 			account != nil && CaptureMayApplyFor(c, string(account.Platform))
@@ -276,8 +279,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	searches := make([]kiropkg.SearchIndicator, 0, 2)
 	requestID := ""
-	var cacheUsage *kiroCacheEmulationUsage
-	cacheUsageResolved := false
+	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+	cacheUsage := cachePlan.result()
+	cacheCommitted := false
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
@@ -317,6 +321,10 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 			}
 			return nil, failure
 		}
+		if !cacheCommitted {
+			cachePlan.commit()
+			cacheCommitted = true
+		}
 		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 			account != nil && CaptureMayApplyFor(c, string(account.Platform))
 		captureLimit := 0
@@ -327,10 +335,6 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 
 		parseResult, parseErr := func() (*kiropkg.ParseResult, error) {
 			defer func() { _ = resp.Body.Close() }()
-			if !cacheUsageResolved {
-				cacheUsage = s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-				cacheUsageResolved = true
-			}
 			providerBody, readErr := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 			if readErr != nil {
 				return nil, readErr

@@ -361,7 +361,11 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body, false)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		cachePlan.commit()
+	}
+	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	captureLimit := 0
 	if s.cfg != nil {
@@ -413,7 +417,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 
 	if isOnlyWebSearchToolInBody(anthropicBody) {
 		inputTokens := estimateKiroInputTokensForRequest(ctx, anthropicBody, mappedModel, requestModel, headers)
-		cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+		cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		translatorCtx, cancelTranslator := context.WithCancel(ctx)
 		translatorDone := make(chan struct{})
@@ -422,7 +426,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		go func() {
 			defer close(translatorDone)
 			defer cancelTranslator()
-			streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
+			streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cachePlan)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -466,7 +470,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
 	finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
-	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+	cachePlan.commit()
+	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
 	pr, pw := io.Pipe()

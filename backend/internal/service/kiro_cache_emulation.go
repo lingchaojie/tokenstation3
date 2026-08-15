@@ -51,7 +51,37 @@ type kiroCacheTracker struct {
 
 var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 
+// kiroCacheEmulationPlan separates the estimated usage from the tracker
+// mutation. Callers can prepare usage before forwarding, then commit only once
+// the provider has accepted the request.
+type kiroCacheEmulationPlan struct {
+	usage    *kiroCacheEmulationUsage
+	cacheKey uint64
+	profile  *kiroCacheProfile
+	tracker  *kiroCacheTracker
+}
+
+func (p *kiroCacheEmulationPlan) result() *kiroCacheEmulationUsage {
+	if p == nil {
+		return nil
+	}
+	return p.usage
+}
+
+func (p *kiroCacheEmulationPlan) commit() {
+	if p == nil || p.tracker == nil || p.profile == nil || p.cacheKey == 0 {
+		return
+	}
+	p.tracker.update(p.cacheKey, p.profile)
+}
+
 func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
+	plan := s.prepareKiroCacheEmulationUsage(ctx, account, group, body, model, inputTokens)
+	plan.commit()
+	return plan.result()
+}
+
+func (s *GatewayService) prepareKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationPlan {
 	NormalizeGroupRuntimeFields(group)
 	cacheEnabled, cacheRatio := resolveKiroCacheEmulation(account, group)
 	if !cacheEnabled || account == nil || account.ID <= 0 || len(body) == 0 {
@@ -66,7 +96,6 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, accou
 		return nil
 	}
 	result := globalKiroCacheTracker.compute(cacheKey, profile)
-	globalKiroCacheTracker.update(cacheKey, profile)
 	ratio := cacheRatio
 	result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
 	result.CacheCreationInputTokens = scaleKiroCacheTokens(result.CacheCreationInputTokens, ratio)
@@ -77,9 +106,14 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, accou
 		result.InputTokens = 0
 	}
 	if result.CacheReadInputTokens == 0 && result.CacheCreationInputTokens == 0 {
-		return nil
+		result = nil
 	}
-	return result
+	return &kiroCacheEmulationPlan{
+		usage:    result,
+		cacheKey: cacheKey,
+		profile:  profile,
+		tracker:  globalKiroCacheTracker,
+	}
 }
 
 func scaleKiroCacheTokens(tokens int, ratio float64) int {
