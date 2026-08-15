@@ -764,7 +764,7 @@ git commit -m "fix(kiro): commit cache emulation after upstream success"
 - Consumes: all prior commits and test evidence.
 - Produces: reproducible semantic-sync archive and updated KIRO reference pin.
 
-- [ ] **Step 1: Audit approved and excluded capabilities**
+- [x] **Step 1: Audit approved and excluded capabilities**
 
 Run:
 
@@ -777,7 +777,7 @@ rg -n "Kiro|kiro|KIRO" backend frontend deploy AGENTS.md docs/kiro-upstream-sync
 
 Confirm the diff contains no KIRO billing-probe eligibility, split cache ratios, pacing removal, prompt rules, profit control, or upstream-cost scheduling.
 
-- [ ] **Step 2: Run full focused verification**
+- [x] **Step 2: Run full focused verification**
 
 ```bash
 cd backend
@@ -793,7 +793,7 @@ COREPACK_ENABLE_PROJECT_SPEC=0 pnpm run build
 
 Expected: every command succeeds, no generated-file drift, and no unintended `packageManager` field appears.
 
-- [ ] **Step 3: Write the sync archive with exact evidence**
+- [x] **Step 3: Write the sync archive with exact evidence**
 
 Record:
 
@@ -806,7 +806,7 @@ Record:
 
 List each included capability, each explicit exclusion with its reason, all preserved local invariants, and the exact fresh verification commands/results.
 
-- [ ] **Step 4: Advance the runbook pin only after verification**
+- [x] **Step 4: Advance the runbook pin only after verification**
 
 Replace only the reference SHA in `docs/kiro-upstream-sync.md`:
 
@@ -814,7 +814,7 @@ Replace only the reference SHA in `docs/kiro-upstream-sync.md`:
 6ba76ea105e065a5aa8dd2b8d2957528ed58935b
 ```
 
-- [ ] **Step 5: Run final repository checks and commit documentation**
+- [x] **Step 5: Run final repository checks and commit documentation**
 
 ```bash
 git diff --check
