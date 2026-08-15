@@ -1354,6 +1354,18 @@ type CaptureConfig struct {
 	Sidecar        CaptureSidecarConfig    `mapstructure:"sidecar"`
 	Tailscale      CaptureTailscaleConfig  `mapstructure:"tailscale"`
 	ClickHouse     CaptureClickHouseConfig `mapstructure:"clickhouse"`
+
+	// Deprecated native-writer fields are an inert compile-time compatibility
+	// boundary for callers that have not yet moved to the sidecar. Viper never
+	// decodes them, and the retired writer is never constructed from this config.
+	MaxQueueBytes         int64  `mapstructure:"-" yaml:"-"`
+	QueueSize             int    `mapstructure:"-" yaml:"-"`
+	WorkerCount           int    `mapstructure:"-" yaml:"-"`
+	WriterQueueSize       int    `mapstructure:"-" yaml:"-"`
+	OverflowPolicy        string `mapstructure:"-" yaml:"-"`
+	OverflowSamplePercent int    `mapstructure:"-" yaml:"-"`
+	BatchMaxSize          int    `mapstructure:"-" yaml:"-"`
+	BatchMaxIntervalMs    int    `mapstructure:"-" yaml:"-"`
 }
 
 // GatewayCaptureConfig remains a type alias while consumers move to the
@@ -1391,6 +1403,14 @@ type CaptureClickHouseConfig struct {
 	BatchMaxIntervalMS int    `mapstructure:"batch_max_interval_ms"`
 	DialTimeoutMS      int    `mapstructure:"dial_timeout_ms"`
 	WriteTimeoutMS     int    `mapstructure:"write_timeout_ms"`
+
+	// Deprecated native-ClickHouse fields are retained only so existing callers
+	// compile during the sidecar migration. They cannot be decoded from config.
+	Addr          []string `mapstructure:"-" yaml:"-"`
+	DialTimeoutMs int      `mapstructure:"-" yaml:"-"`
+	ReadTimeoutMs int      `mapstructure:"-" yaml:"-"`
+	Secure        bool     `mapstructure:"-" yaml:"-"`
+	MaxOpenConns  int      `mapstructure:"-" yaml:"-"`
 }
 
 // Validate verifies only enabled capture infrastructure. Disabled capture

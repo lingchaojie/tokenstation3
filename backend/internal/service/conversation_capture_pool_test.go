@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,6 +116,20 @@ func TestCapturePoolNilSafe(t *testing.T) {
 	var p *ConversationCapturePool
 	p.Submit(&CaptureRecord{}) // must not panic
 	p.Stop()                   // must not panic
+}
+
+func TestNewConversationCapturePoolKeepsSidecarConfigurationInert(t *testing.T) {
+	// This catches a regression where the new sidecar-enabled configuration
+	// recreates the retired in-process queue/native writer before Task 2 wires
+	// the sidecar transport.
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+
+	pool := NewConversationCapturePool(cfg, &captureHealthRepoStub{})
+	if pool != nil {
+		t.Cleanup(pool.Stop)
+	}
+	require.Nil(t, pool)
 }
 
 func TestCapturePoolReadinessDelegatesToWriterStatus(t *testing.T) {

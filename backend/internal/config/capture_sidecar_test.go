@@ -37,6 +37,8 @@ func TestDisabledLegacyCaptureConfigBootsWithoutStartingAnything(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cfg.Gateway.Capture.Enabled)
 	require.Contains(t, warnings, "legacy capture queue settings are ignored while disabled")
+	require.Zero(t, cfg.Gateway.Capture.WorkerCount)
+	require.Zero(t, cfg.Gateway.Capture.QueueSize)
 }
 
 func TestEnabledLegacyCaptureConfigRequiresExplicitMigration(t *testing.T) {

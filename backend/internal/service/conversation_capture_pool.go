@@ -184,29 +184,11 @@ func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
 	p.health.recordDrop(finalReason, 1, n, nil)
 }
 
-// NewConversationCapturePool 是 wire provider。capture 关闭时返回 nil（handler 侧已 nil 保护）；
-// ClickHouse 建连失败时由稳定 manager 降级为 unavailable writer 并后台重试，
-// 仍可 Submit 但在恢复前不落库；绝不阻塞启动、绝不影响转发。
+// NewConversationCapturePool remains an inert compatibility provider until the
+// sidecar transport replaces the retired in-process queue/native writer. The
+// gateway's capture-enabled setting therefore cannot construct old machinery.
 func NewConversationCapturePool(cfg *config.Config, repo CaptureHealthRepository) *ConversationCapturePool {
-	if cfg == nil || !cfg.Gateway.Capture.Enabled {
-		return nil
-	}
-	cc := cfg.Gateway.Capture
-	tracker := newCaptureHealthTracker(captureInstanceID(), time.Now)
-	manager := newCaptureArchiveWriterManager(cc, tracker, captureWriterRetryOptions{})
-	var reporter *captureHealthReporter
-	if repo != nil {
-		reporter = newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{})
-		reporter.Start()
-	}
-	return newConversationCapturePoolWithStatus(conversationCapturePoolOptions{
-		WorkerCount:     cc.WorkerCount,
-		QueueSize:       cc.QueueSize,
-		WriterQueueSize: cc.WriterQueueSize,
-		OverflowPolicy:  cc.OverflowPolicy,
-		SamplePercent:   cc.OverflowSamplePercent,
-		MaxQueueBytes:   cc.MaxQueueBytes,
-	}, manager, manager, tracker, reporter)
+	return nil
 }
 
 func captureInstanceID() string {
