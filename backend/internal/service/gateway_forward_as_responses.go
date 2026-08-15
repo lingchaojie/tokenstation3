@@ -55,6 +55,7 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
+	isCompaction := account != nil && account.IsKiro() && apicompat.HasCompactionTrigger(&responsesReq)
 
 	// 3. Convert Responses → Anthropic
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
@@ -87,9 +88,23 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = normalized
 		}
 	}
+	if isCompaction {
+		if compactModel, matched := account.ResolveCompactMappedModel(originalModel); matched {
+			mappedModel = compactModel
+		}
+	}
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 mapping 完成之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 	anthropicReq.Model = mappedModel
+	if isCompaction {
+		anthropicReq.ToolChoice = json.RawMessage(`{"type":"none"}`)
+		if anthropicReq.MaxTokens < compactionMinMaxTokens {
+			anthropicReq.MaxTokens = compactionMinMaxTokens
+		}
+		anthropicReq.Thinking = nil
+		anthropicReq.OutputConfig = nil
+		reasoningEffort = nil
+	}
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
 		zap.Int64("account_id", account.ID),
@@ -250,7 +265,9 @@ func (s *GatewayService) ForwardAsResponses(
 	// 13. Handle normal response (convert Anthropic → Responses)
 	var result *ForwardResult
 	var handleErr error
-	if clientStream {
+	if isCompaction {
+		result, handleErr = s.handleResponsesCompactionResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientStream, kiroDirectMode)
+	} else if clientStream {
 		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)

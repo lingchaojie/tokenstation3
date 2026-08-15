@@ -539,7 +539,7 @@ git commit -m "feat(responses): add replayable compaction protocol"
 - Consumes: Task 6 compaction helpers, `Account.ResolveCompactMappedModel`, current Anthropic SSE collector, capture/usage ownership in `ForwardAsResponses`.
 - Produces: `handleResponsesCompactionResponse(...) (*ForwardResult, error)` and one compaction item for stream/non-stream callers.
 
-- [ ] **Step 1: Add failing request and response integration tests**
+- [x] **Step 1: Add failing request and response integration tests**
 
 Add local HTTP/SSE fixtures and assert:
 
@@ -553,14 +553,14 @@ require.False(t, gjson.Get(upstreamBody, "thinking").Exists())
 
 For streaming and non-streaming results, assert output has exactly one `compaction` item with non-empty `encrypted_content`. Add empty-summary/no-message-start failures that never emit a compaction item, and a regression that ordinary Responses requests remain unchanged.
 
-- [ ] **Step 2: Run service compaction tests RED**
+- [x] **Step 2: Run service compaction tests RED**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/service -run 'ForwardAsResponses_Compaction|HandleResponsesCompaction|AnthropicResponseText'
 ```
 
-- [ ] **Step 3: Rewrite the compact request before upstream forwarding**
+- [x] **Step 3: Rewrite the compact request before upstream forwarding**
 
 In `ForwardAsResponses`, compute
 `isCompaction := account.IsKiro() && apicompat.HasCompactionTrigger(&responsesReq)`.
@@ -581,7 +581,7 @@ reasoningEffort = nil
 
 Keep tool declarations because historical `tool_use` blocks can reference them. Route the successful upstream response to `handleResponsesCompactionResponse`; do not route ordinary requests through the new handler.
 
-- [ ] **Step 4: Synthesize strict stream/non-stream compaction output**
+- [x] **Step 4: Synthesize strict stream/non-stream compaction output**
 
 Create a summary from visible Anthropic `text` blocks only, encode it with `EncodeCompactionEnvelope`, and emit one item:
 
@@ -599,7 +599,7 @@ For stream callers, use Responses lifecycle events ending in `response.completed
 
 Add missing `fromModel` and `toModel` locale keys at `admin.accounts` because the existing compact mapping UI already references them.
 
-- [ ] **Step 5: Run compaction and strict-state suites GREEN**
+- [x] **Step 5: Run compaction and strict-state suites GREEN**
 
 ```bash
 cd backend
@@ -608,7 +608,7 @@ cd ../frontend
 COREPACK_ENABLE_PROJECT_SPEC=0 pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit KIRO compaction**
+- [x] **Step 6: Commit KIRO compaction**
 
 ```bash
 git add backend/internal/service/gateway_forward_as_responses_compaction.go backend/internal/service/gateway_forward_as_responses_compaction_test.go backend/internal/service/gateway_forward_as_responses.go frontend/src/i18n/locales/en/admin/accounts.ts frontend/src/i18n/locales/zh/admin/accounts.ts
