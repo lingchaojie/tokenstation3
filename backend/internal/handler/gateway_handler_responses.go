@@ -95,7 +95,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		stopCompactionKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.responsesCompactionKeepaliveInterval())
 		compactionKeepaliveStarted = true
 	}
-	defer stopCompactionKeepalive()
+	defer func() { stopCompactionKeepalive() }()
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
