@@ -625,7 +625,7 @@ git commit -m "feat(kiro): support Responses remote compaction"
 - Consumes: `accountSupportsBatchUsage(account: Account)`, `AccountUsageCell.requestBatchedUsage`.
 - Produces: null batching callback for KIRO rows so `AccountUsageCell` uses `adminAPI.accounts.getUsage`.
 
-- [ ] **Step 1: Add a failing mounted-view regression**
+- [x] **Step 1: Add a failing mounted-view regression**
 
 Stub `DataTable` to render `cell-usage` for a KIRO row and stub `AccountUsageCell` to expose whether `requestBatchedUsage` is present. Assert desktop KIRO receives `null`, while Anthropic OAuth receives a function.
 
@@ -634,14 +634,14 @@ expect(wrapper.get('[data-testid="kiro-batch-managed"]').text()).toBe('false')
 expect(wrapper.get('[data-testid="anthropic-batch-managed"]').text()).toBe('true')
 ```
 
-- [ ] **Step 2: Run the view test RED**
+- [x] **Step 2: Run the view test RED**
 
 ```bash
 cd frontend
 COREPACK_ENABLE_PROJECT_SPEC=0 pnpm exec vitest run src/views/admin/__tests__/AccountsView.kiroUsage.spec.ts
 ```
 
-- [ ] **Step 3: Gate the callback with the same capability predicate**
+- [x] **Step 3: Gate the callback with the same capability predicate**
 
 ```vue
 :request-batched-usage="
@@ -649,14 +649,14 @@ COREPACK_ENABLE_PROJECT_SPEC=0 pnpm exec vitest run src/views/admin/__tests__/Ac
 "
 ```
 
-- [ ] **Step 4: Run usage tests GREEN**
+- [x] **Step 4: Run usage tests GREEN**
 
 ```bash
 cd frontend
 COREPACK_ENABLE_PROJECT_SPEC=0 pnpm exec vitest run src/views/admin/__tests__/AccountsView.kiroUsage.spec.ts src/components/account/__tests__/AccountUsageCell.spec.ts
 ```
 
-- [ ] **Step 5: Commit the usage fix**
+- [x] **Step 5: Commit the usage fix**
 
 ```bash
 git add frontend/src/views/admin/AccountsView.vue frontend/src/views/admin/__tests__/AccountsView.kiroUsage.spec.ts
