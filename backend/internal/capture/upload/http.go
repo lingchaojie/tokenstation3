@@ -214,11 +214,11 @@ func (u *HTTPUploader) Probe(ctx context.Context) error {
 	}
 	body, readErr := readBoundedResponse(resp.Body, int64(len("Ok.\n"))+1)
 	_ = stopDeadlineClose()
+	if resp.StatusCode != http.StatusOK {
+		return classifyHTTPStatus(resp.StatusCode)
+	}
 	if readErr != nil {
 		return &RetryableError{Cause: readErr}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return classifyHTTPStatus(resp.StatusCode)
 	}
 	if string(body) != "Ok.\n" {
 		return &RetryableError{Cause: errUnexpectedPing}

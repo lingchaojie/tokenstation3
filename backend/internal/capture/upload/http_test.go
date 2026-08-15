@@ -508,36 +508,73 @@ func TestProbeRejectsAnythingExceptExactClickHousePing(t *testing.T) {
 	}
 }
 
-func TestProbeCancelsAndClosesStalledResponseBodyAfterHeaders(t *testing.T) {
-	body := &prefixThenStalledBody{
-		prefix:      []byte("Ok.\n"),
-		readStarted: make(chan struct{}),
-		closedCh:    make(chan struct{}),
+func TestProbeClassifiesStatusWhenResponseBodyStalls(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		prefix string
+		want   error
+	}{
+		{name: "success without EOF is retryable", status: http.StatusOK, prefix: "Ok.\n", want: ErrRetryable},
+		{name: "unauthenticated", status: http.StatusUnauthorized, prefix: "x", want: ErrUnauthorized},
+		{name: "forbidden", status: http.StatusForbidden, prefix: "x", want: ErrUnauthorized},
+		{name: "schema rejection", status: http.StatusBadRequest, prefix: "x", want: ErrSchema},
+		{name: "server failure", status: http.StatusServiceUnavailable, prefix: "x", want: ErrRetryable},
 	}
-	uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
-	uploader.responseBodyTimeout = 25 * time.Millisecond
-	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		resp := responseFor(req, http.StatusOK, "")
-		resp.Body = body
-		return resp, nil
-	})
 
-	done := make(chan error, 1)
-	go func() { done <- uploader.Probe(context.Background()) }()
-	select {
-	case <-body.readStarted:
-	case <-time.After(time.Second):
-		t.Fatal("Probe did not reach the stalled response body")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &prefixThenStalledBody{
+				prefix:      []byte(tt.prefix),
+				readStarted: make(chan struct{}),
+				closedCh:    make(chan struct{}),
+			}
+			uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+			uploader.responseBodyTimeout = 25 * time.Millisecond
+			uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				resp := responseFor(req, tt.status, "")
+				resp.Body = body
+				return resp, nil
+			})
+
+			done := make(chan error, 1)
+			go func() { done <- uploader.Probe(context.Background()) }()
+			select {
+			case <-body.readStarted:
+			case <-time.After(time.Second):
+				_ = body.Close()
+				t.Fatal("Probe did not reach the stalled response body")
+			}
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, tt.want)
+				switch tt.want {
+				case ErrUnauthorized:
+					var typed *UnauthorizedError
+					require.ErrorAs(t, err, &typed)
+					require.Equal(t, tt.status, typed.StatusCode)
+				case ErrSchema:
+					var typed *SchemaError
+					require.ErrorAs(t, err, &typed)
+					require.Equal(t, tt.status, typed.StatusCode)
+				case ErrRetryable:
+					var typed *RetryableError
+					require.ErrorAs(t, err, &typed)
+					if tt.status == http.StatusOK {
+						require.Zero(t, typed.StatusCode)
+						require.Error(t, typed.Cause)
+					} else {
+						require.Equal(t, tt.status, typed.StatusCode)
+					}
+				}
+			case <-time.After(250 * time.Millisecond):
+				_ = body.Close()
+				<-done
+				t.Fatal("Probe remained blocked after its response body deadline")
+			}
+			require.True(t, body.closed.Load())
+		})
 	}
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, ErrRetryable)
-	case <-time.After(250 * time.Millisecond):
-		_ = body.Close()
-		<-done
-		t.Fatal("Probe remained blocked after its response body deadline")
-	}
-	require.True(t, body.closed.Load())
 }
 
 func TestUploadLargeFieldMakesHTTPProgressBeforeReadingWholeCompressedFile(t *testing.T) {
