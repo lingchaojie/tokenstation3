@@ -121,18 +121,18 @@ func (s *Store) NextBatch(maxRecords int, maxBytes int64) (*Batch, error) {
 	}
 	canonical := make([]RecordRef, 0, len(selected))
 	for _, selectedRef := range selected {
-		ref, err := validateRecord(selectedRef.Path, s.validation)
+		encodedRecordManifest, err := s.readReadyManifest(selectedRef.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read selected manifest %s: %w", selectedRef.CaptureID, err)
+		}
+		ref, err := validateRecordWithManifestBytes(selectedRef.Path, s.validation, encodedRecordManifest)
 		if err != nil {
 			return nil, fmt.Errorf("validate selected record %s: %w", selectedRef.CaptureID, err)
-		}
-		hash, err := fileSHA256(filepath.Join(ref.Path, manifestName))
-		if err != nil {
-			return nil, fmt.Errorf("hash selected manifest %s: %w", ref.CaptureID, err)
 		}
 		canonical = append(canonical, ref)
 		manifest.Records = append(manifest.Records, BatchRecord{
 			CaptureID:      ref.CaptureID,
-			ManifestSHA256: hash,
+			ManifestSHA256: sha256Hex(encodedRecordManifest),
 			StoredBytes:    ref.StoredBytes,
 		})
 	}
@@ -173,7 +173,7 @@ func (s *Store) MarkAcked(batch *Batch) error {
 	defer s.batchMu.Unlock()
 
 	manifestPath := batchManifestPath(s, batch.ID)
-	manifest, encodedManifest, err := readBatchManifest(manifestPath)
+	manifest, encodedManifest, err := s.readBatchManifest(manifestPath)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (s *Store) MarkAcked(batch *Batch) error {
 	}
 	ackPath := batchAckPath(s, batch.ID)
 	if _, err := os.Lstat(ackPath); err == nil {
-		ack, _, readErr := readBatchAck(ackPath)
+		ack, _, readErr := s.readBatchAck(ackPath)
 		if readErr != nil {
 			if errors.Is(readErr, ErrSpoolCorrupt) {
 				if removeErr := s.removeSendingPathLocked(ackPath, "delete:corrupt-batch.acked", true); removeErr != nil {
@@ -301,7 +301,7 @@ func (s *Store) pendingBatchLocked() (*Batch, error) {
 }
 
 func (s *Store) loadBatchLocked(path string) (*Batch, error) {
-	manifest, encoded, err := readBatchManifest(path)
+	manifest, encoded, err := s.readBatchManifest(path)
 	if err != nil {
 		return nil, err
 	}
@@ -311,21 +311,21 @@ func (s *Store) loadBatchLocked(path string) (*Batch, error) {
 	records := make([]RecordRef, 0, len(manifest.Records))
 	for _, batchRecord := range manifest.Records {
 		recordPath := filepath.Join(s.readyDir, batchRecord.CaptureID.String())
-		ref, err := validateRecord(recordPath, s.validation)
+		encodedRecordManifest, err := s.readReadyManifest(recordPath)
+		if err != nil {
+			if errors.Is(err, ErrSpoolCorrupt) || errors.Is(err, os.ErrNotExist) {
+				return nil, ErrSpoolCorrupt
+			}
+			return nil, fmt.Errorf("read sending record manifest %s: %w", batchRecord.CaptureID, err)
+		}
+		ref, err := validateRecordWithManifestBytes(recordPath, s.validation, encodedRecordManifest)
 		if err != nil {
 			if errors.Is(err, ErrSpoolCorrupt) || errors.Is(err, os.ErrNotExist) {
 				return nil, ErrSpoolCorrupt
 			}
 			return nil, fmt.Errorf("validate sending record %s: %w", batchRecord.CaptureID, err)
 		}
-		hash, err := fileSHA256(filepath.Join(recordPath, manifestName))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, ErrSpoolCorrupt
-			}
-			return nil, fmt.Errorf("hash sending record %s: %w", batchRecord.CaptureID, err)
-		}
-		if hash != batchRecord.ManifestSHA256 || ref.StoredBytes != batchRecord.StoredBytes {
+		if sha256Hex(encodedRecordManifest) != batchRecord.ManifestSHA256 || ref.StoredBytes != batchRecord.StoredBytes {
 			return nil, ErrSpoolCorrupt
 		}
 		records = append(records, ref)
@@ -352,7 +352,7 @@ func (s *Store) recoverAckedLocked() error {
 				return err
 			}
 		case strings.HasSuffix(entry.Name(), ".manifest"):
-			manifest, _, readErr := readBatchManifest(path)
+			manifest, _, readErr := s.readBatchManifest(path)
 			if readErr != nil || manifest.BatchID.String()+".manifest" != entry.Name() {
 				if readErr != nil && !errors.Is(readErr, ErrSpoolCorrupt) {
 					return readErr
@@ -364,7 +364,7 @@ func (s *Store) recoverAckedLocked() error {
 			}
 			manifests[manifest.BatchID] = path
 		case strings.HasSuffix(entry.Name(), ".acked"):
-			ack, _, readErr := readBatchAck(path)
+			ack, _, readErr := s.readBatchAck(path)
 			if readErr != nil || ack.BatchID.String()+".acked" != entry.Name() {
 				if readErr != nil && !errors.Is(readErr, ErrSpoolCorrupt) {
 					return readErr
@@ -385,16 +385,16 @@ func (s *Store) recoverAckedLocked() error {
 	for id, ackPath := range acks {
 		manifestPath, hasManifest := manifests[id]
 		if !hasManifest {
-			if err := s.removeSendingPathLocked(ackPath, "delete:batch.acked", false); err != nil {
+			if err := s.retireOrphanAckLocked(ackPath); err != nil {
 				return err
 			}
 			continue
 		}
-		_, encodedManifest, err := readBatchManifest(manifestPath)
+		_, encodedManifest, err := s.readBatchManifest(manifestPath)
 		if err != nil {
 			return err
 		}
-		ack, _, err := readBatchAck(ackPath)
+		ack, _, err := s.readBatchAck(ackPath)
 		if err != nil {
 			return err
 		}
@@ -419,13 +419,13 @@ func (s *Store) discardTempLocked(path string, manifest bool) error {
 	}
 	var readErr error
 	if manifest {
-		parsed, _, err := readBatchManifest(path)
+		parsed, _, err := s.readBatchManifest(path)
 		readErr = err
 		if err == nil && parsed.BatchID.String()+".manifest.tmp" != filepath.Base(path) {
 			readErr = ErrSpoolCorrupt
 		}
 	} else {
-		parsed, _, err := readBatchAck(path)
+		parsed, _, err := s.readBatchAck(path)
 		readErr = err
 		if err == nil && parsed.BatchID.String()+".acked.tmp" != filepath.Base(path) {
 			readErr = ErrSpoolCorrupt
@@ -440,26 +440,26 @@ func (s *Store) discardTempLocked(path string, manifest bool) error {
 func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 	manifestPath := batchManifestPath(s, id)
 	ackPath := batchAckPath(s, id)
-	manifest, encodedManifest, manifestErr := readBatchManifest(manifestPath)
+	manifest, encodedManifest, manifestErr := s.readBatchManifest(manifestPath)
 	if errors.Is(manifestErr, os.ErrNotExist) {
 		if _, err := os.Lstat(ackPath); errors.Is(err, os.ErrNotExist) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("lstat batch ack: %w", err)
 		}
-		ack, _, err := readBatchAck(ackPath)
+		ack, _, err := s.readBatchAck(ackPath)
 		if err != nil {
 			return err
 		}
 		if ack.BatchID != id {
 			return ErrSpoolCorrupt
 		}
-		return s.removeSendingPathLocked(ackPath, "delete:batch.acked", false)
+		return s.retireOrphanAckLocked(ackPath)
 	}
 	if manifestErr != nil {
 		return manifestErr
 	}
-	ack, _, err := readBatchAck(ackPath)
+	ack, _, err := s.readBatchAck(ackPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return ErrBatchNotAcked
 	}
@@ -527,6 +527,13 @@ func (s *Store) removeSendingPathLocked(path, event string, corrupt bool) error 
 	return nil
 }
 
+func (s *Store) retireOrphanAckLocked(path string) error {
+	if err := s.syncSendingDirectoryLocked(); err != nil {
+		return fmt.Errorf("fsync sending directory before orphan ack removal: %w", err)
+	}
+	return s.removeSendingPathLocked(path, "delete:batch.acked", false)
+}
+
 func (s *Store) writeBatchMetadata(tempPath, finalPath string, encoded []byte, tempEvent, finalEvent string) error {
 	f, err := s.config.openFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -552,15 +559,15 @@ func (s *Store) writeBatchMetadata(tempPath, finalPath string, encoded []byte, t
 }
 
 func (s *Store) syncSendingDirectoryLocked() error {
-	if err := syncDirectory(s.sendingDir); err != nil {
+	if err := s.batchSyncDirectory(s.sendingDir); err != nil {
 		return fmt.Errorf("fsync sending directory: %w", err)
 	}
 	s.event("fsync:sending-dir")
 	return nil
 }
 
-func readBatchManifest(path string) (BatchManifest, []byte, error) {
-	encoded, err := readBoundedFile(path, maxBatchManifestBytes)
+func (s *Store) readBatchManifest(path string) (BatchManifest, []byte, error) {
+	encoded, err := s.readBoundedFile(path, maxBatchManifestBytes)
 	if err != nil {
 		return BatchManifest{}, nil, fmt.Errorf("read batch manifest: %w", err)
 	}
@@ -584,8 +591,8 @@ func readBatchManifest(path string) (BatchManifest, []byte, error) {
 	return manifest, encoded, nil
 }
 
-func readBatchAck(path string) (batchAck, []byte, error) {
-	encoded, err := readBoundedFile(path, maxBatchAckBytes)
+func (s *Store) readBatchAck(path string) (batchAck, []byte, error) {
+	encoded, err := s.readBoundedFile(path, maxBatchAckBytes)
 	if err != nil {
 		return batchAck{}, nil, fmt.Errorf("read batch ack: %w", err)
 	}
@@ -599,17 +606,60 @@ func readBatchAck(path string) (batchAck, []byte, error) {
 	return ack, encoded, nil
 }
 
-func readBoundedFile(path string, limit int64) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > limit {
+func (s *Store) readBoundedFile(path string, limit int64) ([]byte, error) {
+	directoryPath := filepath.Dir(path)
+	name := filepath.Base(path)
+	if filepath.Clean(directoryPath) != filepath.Clean(s.sendingDir) || !validBatchFileName(name) {
 		return nil, ErrSpoolCorrupt
 	}
-	f, err := os.Open(path)
+	directory, err := openBatchDirectory(s.sendingDir)
 	if err != nil {
 		return nil, err
+	}
+	defer directory.Close()
+	if s.config.beforeBatchOpen != nil {
+		s.config.beforeBatchOpen(directoryPath, name)
+	}
+	return readBoundedFileAt(directory, name, limit)
+}
+
+func (s *Store) readReadyManifest(path string) ([]byte, error) {
+	recordName := filepath.Base(path)
+	if filepath.Clean(filepath.Dir(path)) != filepath.Clean(s.readyDir) || !validBatchFileName(recordName) {
+		return nil, ErrSpoolCorrupt
+	}
+	readyDirectory, err := openBatchDirectory(s.readyDir)
+	if err != nil {
+		return nil, err
+	}
+	defer readyDirectory.Close()
+	recordDirectory, err := openBatchDirectoryAt(readyDirectory, recordName)
+	if err != nil {
+		return nil, err
+	}
+	defer recordDirectory.Close()
+	if s.config.beforeBatchOpen != nil {
+		s.config.beforeBatchOpen(path, manifestName)
+	}
+	return readBoundedFileAt(recordDirectory, manifestName, maxManifestBytes)
+}
+
+func readBoundedFileAt(directory *os.File, name string, limit int64) ([]byte, error) {
+	if !validBatchFileName(name) {
+		return nil, ErrSpoolCorrupt
+	}
+	f, err := openBatchRegularAt(directory, name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > limit {
+		_ = f.Close()
+		return nil, ErrSpoolCorrupt
 	}
 	encoded, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
@@ -623,6 +673,10 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 		return nil, ErrSpoolCorrupt
 	}
 	return encoded, nil
+}
+
+func validBatchFileName(name string) bool {
+	return name != "" && name != "." && name != ".." && name == filepath.Base(name)
 }
 
 func batchManifestPath(s *Store, id uuid.UUID) string {
@@ -644,23 +698,6 @@ func decodeStrictJSON(encoded []byte, dst any) error {
 		return ErrSpoolCorrupt
 	}
 	return nil
-}
-
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	_, copyErr := io.Copy(hash, io.LimitReader(f, maxManifestBytes+1))
-	closeErr := f.Close()
-	if copyErr != nil {
-		return "", copyErr
-	}
-	if closeErr != nil {
-		return "", closeErr
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func sha256Hex(payload []byte) string {

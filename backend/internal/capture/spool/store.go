@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,8 +53,9 @@ type Config struct {
 	MaxActiveAttempts        int
 	OperationalHeadroomBytes int64
 
-	eventHook func(string)
-	openFile  func(string, int, os.FileMode) (*os.File, error)
+	eventHook       func(string)
+	openFile        func(string, int, os.FileMode) (*os.File, error)
+	beforeBatchOpen func(string, string)
 }
 
 type RecoveryReport struct {
@@ -97,11 +97,12 @@ type validationOps struct {
 type Store struct {
 	config Config
 
-	partialDir string
-	readyDir   string
-	sendingDir string
-	capacity   *Capacity
-	validation validationOps
+	partialDir         string
+	readyDir           string
+	sendingDir         string
+	capacity           *Capacity
+	validation         validationOps
+	batchSyncDirectory func(string) error
 
 	attemptSlots chan struct{}
 	lifecycleMu  sync.RWMutex
@@ -186,14 +187,15 @@ func Open(config Config) (*Store, error) {
 		allocatedBytes: allocatedBytes,
 	}
 	return &Store{
-		config:       config,
-		partialDir:   partialDir,
-		readyDir:     readyDir,
-		sendingDir:   sendingDir,
-		capacity:     capacity,
-		validation:   validation,
-		attemptSlots: make(chan struct{}, config.MaxActiveAttempts),
-		dropped:      make(map[string]uint64),
+		config:             config,
+		partialDir:         partialDir,
+		readyDir:           readyDir,
+		sendingDir:         sendingDir,
+		capacity:           capacity,
+		validation:         validation,
+		batchSyncDirectory: syncDirectory,
+		attemptSlots:       make(chan struct{}, config.MaxActiveAttempts),
+		dropped:            make(map[string]uint64),
 	}, nil
 }
 
@@ -391,47 +393,76 @@ func ensurePrivateDirectory(path string) error {
 }
 
 func validateRecord(path string, validation validationOps) (RecordRef, error) {
-	info, err := validation.lstat(path)
+	info, err := validateRecordDirectory(path, validation)
 	if err != nil {
-		return RecordRef{}, fmt.Errorf("lstat ready record: %w", err)
+		return RecordRef{}, err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	encoded, err := readRecordManifest(path, validation)
+	if err != nil {
+		return RecordRef{}, err
+	}
+	return validateRecordManifestBytes(path, validation, info, encoded)
+}
+
+func validateRecordWithManifestBytes(path string, validation validationOps, encoded []byte) (RecordRef, error) {
+	info, err := validateRecordDirectory(path, validation)
+	if err != nil {
+		return RecordRef{}, err
+	}
+	if int64(len(encoded)) > maxManifestBytes {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
+	return validateRecordManifestBytes(path, validation, info, encoded)
+}
+
+func validateRecordDirectory(path string, validation validationOps) (os.FileInfo, error) {
+	info, err := validation.lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("lstat ready record: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, ErrSpoolCorrupt
+	}
+	return info, nil
+}
+
+func readRecordManifest(path string, validation validationOps) ([]byte, error) {
 	manifestPath := filepath.Join(path, manifestName)
 	manifestInfo, err := validation.lstat(manifestPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return RecordRef{}, ErrSpoolCorrupt
+			return nil, ErrSpoolCorrupt
 		}
-		return RecordRef{}, fmt.Errorf("lstat ready manifest: %w", err)
+		return nil, fmt.Errorf("lstat ready manifest: %w", err)
 	}
-	if !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > maxManifestBytes {
-		return RecordRef{}, ErrSpoolCorrupt
+	if !manifestInfo.Mode().IsRegular() || manifestInfo.Size() < 0 || manifestInfo.Size() > maxManifestBytes {
+		return nil, ErrSpoolCorrupt
 	}
 	f, err := validation.open(manifestPath)
 	if err != nil {
-		return RecordRef{}, fmt.Errorf("open ready manifest: %w", err)
+		return nil, fmt.Errorf("open ready manifest: %w", err)
 	}
 	trackedManifest := &validationReadTracker{validationFile: f}
-	decoder := json.NewDecoder(io.LimitReader(trackedManifest, maxManifestBytes+1))
-	decoder.DisallowUnknownFields()
-	var disk diskManifest
-	decodeErr := decoder.Decode(&disk)
-	if decodeErr == nil {
-		var trailing any
-		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-			decodeErr = ErrSpoolCorrupt
-		}
-	}
+	encoded, readErr := io.ReadAll(io.LimitReader(trackedManifest, maxManifestBytes+1))
 	closeErr := f.Close()
 	if closeErr != nil {
-		return RecordRef{}, fmt.Errorf("close ready manifest: %w", closeErr)
+		return nil, fmt.Errorf("close ready manifest: %w", closeErr)
 	}
-	if decodeErr != nil {
+	if readErr != nil {
 		if trackedManifest.readErr != nil {
-			return RecordRef{}, fmt.Errorf("read ready manifest: %w", trackedManifest.readErr)
+			return nil, fmt.Errorf("read ready manifest: %w", trackedManifest.readErr)
 		}
+		return nil, fmt.Errorf("read ready manifest: %w", readErr)
+	}
+	if int64(len(encoded)) > maxManifestBytes {
+		return nil, ErrSpoolCorrupt
+	}
+	return encoded, nil
+}
+
+func validateRecordManifestBytes(path string, validation validationOps, info os.FileInfo, encoded []byte) (RecordRef, error) {
+	var disk diskManifest
+	if err := decodeStrictJSON(encoded, &disk); err != nil {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
 	manifest := disk.Manifest

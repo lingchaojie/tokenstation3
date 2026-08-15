@@ -634,6 +634,60 @@ func TestRecoveryAfterManifestProofDeletionOnlyRetiresOrphanAck(t *testing.T) {
 	require.Empty(t, readDirectoryNames(t, reopened.sendingDir))
 }
 
+func TestCleanupAckedRetryFsyncsMissingManifestBeforeRemovingAck(t *testing.T) {
+	retries := []struct {
+		name string
+		run  func(*Store, *Batch) error
+	}{
+		{name: "cleanup", run: func(s *Store, batch *Batch) error { return s.CleanupAcked(batch) }},
+		{name: "recovery", run: func(s *Store, _ *Batch) error { return s.RecoverAcked() }},
+	}
+	for _, retry := range retries {
+		t.Run(retry.name, func(t *testing.T) {
+			s := openTestStore(t, nil)
+			id := uuid.MustParse("00000000-0000-0000-0000-000000000075")
+			commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
+			recoverStore(t, s)
+			batch, err := s.NextBatch(100, 64<<20)
+			require.NoError(t, err)
+			require.NoError(t, s.MarkAcked(batch))
+
+			realSync := s.batchSyncDirectory
+			firstFailure := errors.New("injected fsync after manifest unlink")
+			syncCalls := 0
+			s.batchSyncDirectory = func(path string) error {
+				syncCalls++
+				if syncCalls == 2 {
+					return firstFailure
+				}
+				return realSync(path)
+			}
+			err = s.CleanupAcked(batch)
+			require.ErrorIs(t, err, firstFailure)
+			require.NoFileExists(t, batchManifestPath(s, batch.ID))
+			require.FileExists(t, batchAckPath(s, batch.ID))
+			require.NoDirExists(t, filepath.Join(s.readyDir, id.String()))
+
+			retryFailure := errors.New("injected orphan-proof fsync")
+			syncCalls = 0
+			s.batchSyncDirectory = func(path string) error {
+				syncCalls++
+				if syncCalls == 1 {
+					return retryFailure
+				}
+				return realSync(path)
+			}
+			err = retry.run(s, batch)
+			require.ErrorIs(t, err, retryFailure)
+			require.FileExists(t, batchAckPath(s, batch.ID), "ack must remain until manifest deletion is durably established")
+
+			s.batchSyncDirectory = realSync
+			require.NoError(t, retry.run(s, batch))
+			require.Empty(t, readDirectoryNames(t, s.sendingDir))
+		})
+	}
+}
+
 func TestCleanupAckedMakesReadyDurableBeforeRetiringAckProof(t *testing.T) {
 	recorder := &eventRecorder{}
 	s := openTestStore(t, nil)
@@ -789,6 +843,70 @@ func TestSymlinkAckCannotDeleteReadyRecords(t *testing.T) {
 	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
 }
 
+func TestSendingManifestSwapToSymlinkIsNeverTrusted(t *testing.T) {
+	s := openTestStore(t, nil)
+	id := uuid.MustParse("00000000-0000-0000-0000-0000000000a1")
+	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
+	recoverStore(t, s)
+	batch, err := s.NextBatch(100, 64<<20)
+	require.NoError(t, err)
+
+	manifestPath := batchManifestPath(s, batch.ID)
+	externalManifest := filepath.Join(t.TempDir(), "external.manifest")
+	copyFileForSwap(t, manifestPath, externalManifest)
+	installBatchOpenSymlinkSwap(t, s, s.sendingDir, filepath.Base(manifestPath), externalManifest)
+
+	err = s.MarkAcked(batch)
+
+	require.ErrorIs(t, err, ErrSpoolCorrupt)
+	require.NoFileExists(t, batchAckPath(s, batch.ID))
+	require.DirExists(t, filepath.Join(s.readyDir, id.String()))
+	require.FileExists(t, externalManifest)
+}
+
+func TestAckSwapToSymlinkCannotAuthorizeReadyDeletion(t *testing.T) {
+	s := openTestStore(t, nil)
+	id := uuid.MustParse("00000000-0000-0000-0000-0000000000a2")
+	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
+	recoverStore(t, s)
+	batch, err := s.NextBatch(100, 64<<20)
+	require.NoError(t, err)
+	require.NoError(t, s.MarkAcked(batch))
+
+	ackPath := batchAckPath(s, batch.ID)
+	externalAck := filepath.Join(t.TempDir(), "external.acked")
+	copyFileForSwap(t, ackPath, externalAck)
+	installBatchOpenSymlinkSwap(t, s, s.sendingDir, filepath.Base(ackPath), externalAck)
+
+	err = s.CleanupAcked(batch)
+
+	require.ErrorIs(t, err, ErrSpoolCorrupt)
+	require.DirExists(t, filepath.Join(s.readyDir, id.String()))
+	require.FileExists(t, batchManifestPath(s, batch.ID))
+	require.FileExists(t, externalAck)
+}
+
+func TestReadyManifestSwapToSymlinkIsNeverHashedIntoBatch(t *testing.T) {
+	s := openTestStore(t, nil)
+	id := uuid.MustParse("00000000-0000-0000-0000-0000000000a3")
+	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
+	recoverStore(t, s)
+
+	recordDirectory := filepath.Join(s.readyDir, id.String())
+	manifestPath := filepath.Join(recordDirectory, manifestName)
+	externalManifest := filepath.Join(t.TempDir(), "external-ready-manifest.json")
+	copyFileForSwap(t, manifestPath, externalManifest)
+	installBatchOpenSymlinkSwap(t, s, recordDirectory, manifestName, externalManifest)
+
+	batch, err := s.NextBatch(100, 64<<20)
+
+	require.ErrorIs(t, err, ErrSpoolCorrupt)
+	require.Nil(t, batch)
+	require.DirExists(t, recordDirectory)
+	require.Empty(t, readDirectoryNames(t, s.sendingDir))
+	require.FileExists(t, externalManifest)
+}
+
 func TestCorruptSendingTempDoesNotBlockReadyRecords(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)
@@ -898,4 +1016,24 @@ func readDirectoryNames(t *testing.T, directory string) []string {
 		names[i] = entries[i].Name()
 	}
 	return names
+}
+
+func copyFileForSwap(t *testing.T, source, destination string) {
+	t.Helper()
+	encoded, err := os.ReadFile(source)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(destination, encoded, 0o600))
+}
+
+func installBatchOpenSymlinkSwap(t *testing.T, s *Store, directory, name, target string) {
+	t.Helper()
+	s.config.beforeBatchOpen = func(openDirectory, openName string) {
+		if openDirectory != directory || openName != name {
+			return
+		}
+		s.config.beforeBatchOpen = nil
+		path := filepath.Join(directory, name)
+		require.NoError(t, os.Remove(path))
+		require.NoError(t, os.Symlink(target, path))
+	}
 }
