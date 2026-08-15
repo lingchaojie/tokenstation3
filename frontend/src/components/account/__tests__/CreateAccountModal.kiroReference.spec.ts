@@ -165,7 +165,13 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(source).toContain("admin.accounts.oauth.kiro.apiRegionLegacy");
     expect(source).toContain("admin.accounts.oauth.kiro.apiRegionUsEast");
     expect(source).toContain("admin.accounts.oauth.kiro.apiRegionEuCentral");
-    expect(source).toContain("`${region} - ${t(regionLabelKey)}`");
+    expect(source).toContain(
+      "`${region} - ${t('admin.accounts.oauth.kiro.apiRegionUsEast')}`",
+    );
+    expect(source).toContain(
+      "`${region} - ${t('admin.accounts.oauth.kiro.apiRegionEuCentral')}`",
+    );
+    expect(source).toContain("return region");
     expect(buildKiroCredentialsSource).toContain(
       "credentials.api_region = kiroAPIRegion.value",
     );
@@ -242,7 +248,13 @@ describe("CreateAccountModal Kiro reference account modes", () => {
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionLegacy");
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionUsEast");
     expect(reauthSource).toContain("admin.accounts.oauth.kiro.apiRegionEuCentral");
-    expect(reauthSource).toContain("`${region} - ${t(regionLabelKey)}`");
+    expect(reauthSource).toContain(
+      "`${region} - ${t('admin.accounts.oauth.kiro.apiRegionUsEast')}`",
+    );
+    expect(reauthSource).toContain(
+      "`${region} - ${t('admin.accounts.oauth.kiro.apiRegionEuCentral')}`",
+    );
+    expect(reauthSource).toContain("return region");
 
     expect(selectorOpeningTag).not.toBe("");
     expect(selectorOpeningTag).not.toContain("v-if");
