@@ -148,6 +148,34 @@ func TestEncodeBatchClassifiesCompressedContentCorruptionAsSpoolCorrupt(t *testi
 	require.False(t, errors.As(err, &schemaErr))
 }
 
+func TestWriteRawFieldRejectsInvalidZstdWhenDeclaredLengthIsZero(t *testing.T) {
+	batch := fixtureBatch(t, fixtureOptions{
+		Policy: model.ContentPolicy{StoreRequestBody: true},
+		Final:  model.Final{ResponseComplete: true},
+	})
+	rewriteFixtureFile(t, batch, "request.zst", []byte("not-zstd"), nil)
+	ref := &batch.Records[0]
+	var fileStat model.FileStat
+	for _, candidate := range ref.Manifest.Files {
+		if candidate.Name == "request.zst" {
+			fileStat = candidate
+			break
+		}
+	}
+	require.Equal(t, "request.zst", fileStat.Name)
+
+	err := writeRawField(
+		context.Background(),
+		io.Discard,
+		ref.Path,
+		rawField{name: "request.zst", enabled: true, stat: ref.Manifest.Request},
+		fileStat,
+		true,
+		make([]byte, rowBinaryBufferSize),
+	)
+	require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+}
+
 func goldenFixtureBatch(t *testing.T) *spool.Batch {
 	t.Helper()
 	batch := fixtureBatch(t, fixtureOptions{
@@ -185,6 +213,7 @@ func goldenFixtureBatch(t *testing.T) *spool.Batch {
 	batch.Records[0].Manifest.Extracted.ThinkingEffort = "e"
 	batch.Records[0].Manifest.Extracted.ThinkingType = "t"
 	batch.Records[0].Manifest.Extracted.SignaturePresent = true
+	rewriteFixtureManifest(t, batch)
 	batch.ID = uuid.MustParse("ffeeddcc-bbaa-9988-7766-554433221100")
 	return batch
 }

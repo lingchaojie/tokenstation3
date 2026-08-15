@@ -16,7 +16,10 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const maxHTTPResponseBytes int64 = 64 << 10
+const (
+	maxHTTPResponseBytes           int64 = 64 << 10
+	defaultHTTPResponseBodyTimeout       = 5 * time.Second
+)
 
 var (
 	ErrRetryable      = errors.New("clickhouse_retryable")
@@ -46,6 +49,8 @@ type HTTPUploader struct {
 	password string
 	client   *http.Client
 	encoder  RowBinaryEncoder
+
+	responseBodyTimeout time.Duration
 }
 
 type RetryableError struct {
@@ -117,6 +122,7 @@ func NewHTTPUploader(config HTTPConfig) (*HTTPUploader, error) {
 				return http.ErrUseLastResponse
 			},
 		},
+		responseBodyTimeout: defaultHTTPResponseBodyTimeout,
 	}, nil
 }
 
@@ -127,12 +133,14 @@ func (u *HTTPUploader) Upload(ctx context.Context, batch *spool.Batch) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := u.encoder.ValidateBatch(batch); err != nil {
+	if err := u.encoder.Preflight(ctx, batch); err != nil {
 		return err
 	}
 	endpoint := u.uploadURL(batch)
 	pr, pw := io.Pipe()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), pr)
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer cancelRequest()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint.String(), pr)
 	if err != nil {
 		_ = pr.CloseWithError(err)
 		_ = pw.CloseWithError(err)
@@ -143,14 +151,13 @@ func (u *HTTPUploader) Upload(ctx context.Context, batch *spool.Batch) error {
 	req.Header.Set("Content-Type", "application/octet-stream")
 	encodeErr := make(chan error, 1)
 	go func() {
-		streamErr := u.encodeCompressed(ctx, pw, batch)
-		_ = pw.CloseWithError(streamErr)
-		encodeErr <- streamErr
+		encodeErr <- u.encodeCompressed(requestCtx, pw, batch)
 	}()
 
 	resp, requestErr := u.client.Do(req)
 	_ = pr.CloseWithError(errStopUpload)
 	streamErr := <-encodeErr
+	cancelRequest()
 	if streamErr != nil && !errors.Is(streamErr, errStopUpload) && !errors.Is(streamErr, io.ErrClosedPipe) {
 		closeBoundedResponse(resp)
 		return streamErr
@@ -169,29 +176,44 @@ func (u *HTTPUploader) Probe(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	responseTimeout := u.responseBodyTimeout
+	if responseTimeout <= 0 {
+		responseTimeout = defaultHTTPResponseBodyTimeout
+	}
+	requestCtx, cancelRequest := context.WithTimeout(ctx, responseTimeout)
+	defer cancelRequest()
 	endpoint := cloneURL(u.baseURL)
 	endpoint.Path = "/ping"
 	endpoint.RawPath = ""
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return err
 	}
 	req.SetBasicAuth(u.username, u.password)
 	resp, requestErr := u.client.Do(req)
 	if err := ctx.Err(); err != nil {
+		cancelRequest()
 		closeBoundedResponse(resp)
 		return err
 	}
 	if requestErr != nil {
+		cancelRequest()
 		closeBoundedResponse(resp)
 		return &RetryableError{Cause: requestErr}
 	}
 	if resp == nil {
 		return &RetryableError{Cause: errors.New("empty ClickHouse response")}
 	}
+	stopDeadlineClose := func() bool { return true }
+	if resp.Body != nil {
+		stopDeadlineClose = context.AfterFunc(requestCtx, func() {
+			_ = resp.Body.Close()
+		})
+	}
 	body, readErr := readBoundedResponse(resp.Body, int64(len("Ok.\n"))+1)
+	_ = stopDeadlineClose()
 	if readErr != nil {
 		return &RetryableError{Cause: readErr}
 	}
@@ -204,18 +226,26 @@ func (u *HTTPUploader) Probe(ctx context.Context) error {
 	return nil
 }
 
-func (u *HTTPUploader) encodeCompressed(ctx context.Context, dst io.Writer, batch *spool.Batch) error {
-	encoder, err := zstd.NewWriter(dst, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
+func (u *HTTPUploader) encodeCompressed(ctx context.Context, pipe *io.PipeWriter, batch *spool.Batch) error {
+	encoder, err := zstd.NewWriter(pipe, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
 	if err != nil {
-		return fmt.Errorf("create HTTP zstd encoder: %w", err)
+		wrapped := fmt.Errorf("create HTTP zstd encoder: %w", err)
+		_ = pipe.CloseWithError(wrapped)
+		return wrapped
 	}
-	encodeErr := u.encoder.EncodeBatch(ctx, encoder, batch)
-	closeErr := encoder.Close()
+	encodeErr := u.encoder.encodeBatchValidated(ctx, encoder, batch)
 	if encodeErr != nil {
+		_ = pipe.CloseWithError(encodeErr)
+		_ = encoder.Close()
 		return encodeErr
 	}
-	if closeErr != nil {
-		return fmt.Errorf("close HTTP zstd encoder: %w", closeErr)
+	if err := encoder.Close(); err != nil {
+		wrapped := fmt.Errorf("close HTTP zstd encoder: %w", err)
+		_ = pipe.CloseWithError(wrapped)
+		return wrapped
+	}
+	if err := pipe.Close(); err != nil {
+		return fmt.Errorf("close HTTP upload pipe: %w", err)
 	}
 	return nil
 }

@@ -23,7 +23,6 @@ import (
 const (
 	rowBinaryBufferSize = 64 << 10
 	maxRawBodyBytes     = 32 << 20
-	maxRawHeaderBytes   = 1 << 20
 )
 
 var insertColumns = []string{
@@ -37,9 +36,21 @@ var insertColumns = []string{
 	"raw_request", "raw_response", "request_headers", "response_headers",
 }
 
-type RowBinaryEncoder struct{}
+type RowBinaryEncoder struct {
+	openRawFile func(string) (io.ReadCloser, error)
+}
 
-func (RowBinaryEncoder) ValidateBatch(batch *spool.Batch) error {
+func (e RowBinaryEncoder) ValidateBatch(batch *spool.Batch) error {
+	return e.Preflight(context.Background(), batch)
+}
+
+func (RowBinaryEncoder) Preflight(ctx context.Context, batch *spool.Batch) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if batch == nil || batch.ID == uuid.Nil || len(batch.Records) == 0 {
 		return corruptError("batch identity or records")
 	}
@@ -50,7 +61,7 @@ func (RowBinaryEncoder) ValidateBatch(batch *spool.Batch) error {
 			return corruptError("duplicate capture ID")
 		}
 		seen[ref.CaptureID] = struct{}{}
-		if err := validateRecordRef(ref); err != nil {
+		if err := spool.ValidateRecordRef(ctx, *ref); err != nil {
 			return fmt.Errorf("validate capture %s: %w", ref.CaptureID, err)
 		}
 	}
@@ -61,8 +72,21 @@ func (e RowBinaryEncoder) EncodeBatch(ctx context.Context, dst io.Writer, batch 
 	if dst == nil {
 		return errors.New("rowbinary destination is required")
 	}
-	if err := e.ValidateBatch(batch); err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := e.Preflight(ctx, batch); err != nil {
 		return err
+	}
+	return e.encodeBatchValidated(ctx, dst, batch)
+}
+
+func (e RowBinaryEncoder) encodeBatchValidated(ctx context.Context, dst io.Writer, batch *spool.Batch) error {
+	if dst == nil {
+		return errors.New("rowbinary destination is required")
+	}
+	if batch == nil || batch.ID == uuid.Nil || len(batch.Records) == 0 {
+		return corruptError("batch identity or records")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -79,7 +103,7 @@ func (e RowBinaryEncoder) EncodeBatch(ctx context.Context, dst io.Writer, batch 
 	return nil
 }
 
-func (RowBinaryEncoder) encodeRecord(ctx context.Context, dst io.Writer, batchID uuid.UUID, ref *spool.RecordRef, buffer []byte) error {
+func (e RowBinaryEncoder) encodeRecord(ctx context.Context, dst io.Writer, batchID uuid.UUID, ref *spool.RecordRef, buffer []byte) error {
 	m := &ref.Manifest
 	requestTruncated := m.Request.Truncated
 	responseTruncated := m.Response.Truncated || !m.Response.Complete
@@ -137,7 +161,7 @@ func (RowBinaryEncoder) encodeRecord(ctx context.Context, dst io.Writer, batchID
 	}
 	for _, field := range fields {
 		file, exists := files[field.name]
-		if err := writeRawField(ctx, dst, ref.Path, field, file, exists, buffer); err != nil {
+		if err := e.writeRawField(ctx, dst, ref.Path, field, file, exists, buffer); err != nil {
 			return err
 		}
 	}
@@ -150,76 +174,11 @@ type rawField struct {
 	stat    model.BodyStat
 }
 
-func validateRecordRef(ref *spool.RecordRef) error {
-	if ref == nil || ref.CaptureID == uuid.Nil || ref.Manifest.CaptureID != ref.CaptureID || ref.Manifest.Begin.CaptureID != ref.CaptureID {
-		return corruptError("capture identity")
-	}
-	if ref.Path == "" || filepath.Base(filepath.Clean(ref.Path)) != ref.CaptureID.String() {
-		return corruptError("record path")
-	}
-	m := &ref.Manifest
-	for _, value := range []string{
-		m.Request.SHA256,
-		m.Response.SHA256,
-		m.RequestHeaders.SHA256,
-		m.ResponseHeaders.SHA256,
-	} {
-		if !validFixedHash(value) {
-			return corruptError("content hash")
-		}
-	}
-	checks := []struct {
-		name    string
-		enabled bool
-		stat    model.BodyStat
-		limit   uint64
-	}{
-		{name: "request.zst", enabled: m.Begin.Policy.StoreRequestBody, stat: m.Request, limit: maxRawBodyBytes},
-		{name: "response.zst", enabled: m.Begin.Policy.StoreResponseBody, stat: m.Response, limit: maxRawBodyBytes},
-		{name: "request_headers.zst", enabled: m.Begin.Policy.StoreRequestHeaders, stat: model.BodyStat(m.RequestHeaders), limit: maxRawHeaderBytes},
-		{name: "response_headers.zst", enabled: m.Begin.Policy.StoreResponseHeaders, stat: model.BodyStat(m.ResponseHeaders), limit: maxRawHeaderBytes},
-	}
-	files := make(map[string]model.FileStat, len(m.Files))
-	for _, file := range m.Files {
-		if !validRawFileName(file.Name) || !validFixedHash(file.CompressedSHA256) || !validFixedHash(file.UncompressedSHA256) {
-			return corruptError("file metadata")
-		}
-		if _, duplicate := files[file.Name]; duplicate {
-			return corruptError("duplicate file metadata")
-		}
-		files[file.Name] = file
-	}
-	for _, check := range checks {
-		if check.stat.StoredBytes > check.stat.ObservedBytes || check.stat.StoredBytes > check.limit {
-			return corruptError("content length")
-		}
-		file, exists := files[check.name]
-		if !check.enabled {
-			if check.stat.StoredBytes != 0 || exists {
-				return corruptError("disabled content file")
-			}
-			continue
-		}
-		if check.stat.StoredBytes > 0 && !exists {
-			return corruptError("missing content file")
-		}
-		if exists && file.UncompressedBytes != check.stat.StoredBytes {
-			return corruptError("content file length")
-		}
-		if check.stat.ObservedBytes == check.stat.StoredBytes {
-			wantHash := emptySHA256Hex()
-			if exists {
-				wantHash = file.UncompressedSHA256
-			}
-			if check.stat.SHA256 != wantHash {
-				return corruptError("content full hash")
-			}
-		}
-	}
-	return nil
+func writeRawField(ctx context.Context, dst io.Writer, recordPath string, field rawField, fileStat model.FileStat, fileExists bool, buffer []byte) error {
+	return (RowBinaryEncoder{}).writeRawField(ctx, dst, recordPath, field, fileStat, fileExists, buffer)
 }
 
-func writeRawField(ctx context.Context, dst io.Writer, recordPath string, field rawField, fileStat model.FileStat, fileExists bool, buffer []byte) error {
+func (e RowBinaryEncoder) writeRawField(ctx context.Context, dst io.Writer, recordPath string, field rawField, fileStat model.FileStat, fileExists bool, buffer []byte) error {
 	if !field.enabled {
 		return writeStringLength(dst, 0)
 	}
@@ -243,7 +202,11 @@ func writeRawField(ctx context.Context, dst io.Writer, recordPath string, field 
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || uint64(info.Size()) != fileStat.CompressedBytes {
 		return corruptError("raw field type or length")
 	}
-	f, err := os.Open(path)
+	opener := e.openRawFile
+	if opener == nil {
+		opener = func(path string) (io.ReadCloser, error) { return os.Open(path) }
+	}
+	f, err := opener(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return corruptError("missing raw field")
@@ -252,20 +215,6 @@ func writeRawField(ctx context.Context, dst io.Writer, recordPath string, field 
 	}
 	compressedHash := sha256.New()
 	tracked := &errorTrackingReader{reader: &contextReader{ctx: ctx, reader: io.TeeReader(f, compressedHash)}}
-	if field.stat.StoredBytes == 0 {
-		_, copyErr := io.CopyBuffer(io.Discard, tracked, buffer)
-		closeErr := f.Close()
-		if copyErr != nil {
-			return fmt.Errorf("read raw field %s: %w", field.name, copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close raw field %s: %w", field.name, closeErr)
-		}
-		if tracked.count != fileStat.CompressedBytes || hex.EncodeToString(compressedHash.Sum(nil)) != fileStat.CompressedSHA256 || fileStat.UncompressedSHA256 != emptySHA256Hex() {
-			return corruptError("empty raw field checksum")
-		}
-		return nil
-	}
 	zr, err := zstd.NewReader(
 		bufio.NewReaderSize(tracked, rowBinaryBufferSize),
 		zstd.WithDecoderConcurrency(1),
@@ -440,20 +389,6 @@ func validFixedHash(value string) bool {
 	}
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == sha256.Size
-}
-
-func validRawFileName(name string) bool {
-	switch name {
-	case "request.zst", "response.zst", "request_headers.zst", "response_headers.zst":
-		return true
-	default:
-		return false
-	}
-}
-
-func emptySHA256Hex() string {
-	empty := sha256.Sum256(nil)
-	return hex.EncodeToString(empty[:])
 }
 
 func corruptError(detail string) error {

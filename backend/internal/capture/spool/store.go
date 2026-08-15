@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -180,12 +181,7 @@ func Open(config Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	validation := validationOps{
-		lstat:          os.Lstat,
-		open:           func(path string) (validationFile, error) { return os.Open(path) },
-		readDir:        os.ReadDir,
-		allocatedBytes: allocatedBytes,
-	}
+	validation := filesystemValidationOps()
 	return &Store{
 		config:             config,
 		partialDir:         partialDir,
@@ -390,6 +386,104 @@ func ensurePrivateDirectory(path string) error {
 		return err
 	}
 	return os.Chmod(path, 0o700)
+}
+
+// ValidateRecordRef re-runs the canonical spool validation against the record
+// on disk and verifies that the supplied immutable reference still matches it,
+// preserving the validator's corruption, context, and filesystem error classes.
+func ValidateRecordRef(ctx context.Context, ref RecordRef) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ref.CaptureID == uuid.Nil || ref.Path == "" {
+		return ErrSpoolCorrupt
+	}
+	canonical, err := validateRecord(ref.Path, contextualValidationOps(ctx))
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if canonical.CaptureID != ref.CaptureID ||
+		canonical.Path != ref.Path ||
+		canonical.StoredBytes != ref.StoredBytes ||
+		!equalManifest(canonical.Manifest, ref.Manifest) {
+		return ErrSpoolCorrupt
+	}
+	return nil
+}
+
+func equalManifest(left, right model.Manifest) bool {
+	if len(left.Files) == 0 {
+		left.Files = nil
+	}
+	if len(right.Files) == 0 {
+		right.Files = nil
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+func filesystemValidationOps() validationOps {
+	return validationOps{
+		lstat:          os.Lstat,
+		open:           func(path string) (validationFile, error) { return os.Open(path) },
+		readDir:        os.ReadDir,
+		allocatedBytes: allocatedBytes,
+	}
+}
+
+func contextualValidationOps(ctx context.Context) validationOps {
+	base := filesystemValidationOps()
+	return validationOps{
+		lstat: func(path string) (os.FileInfo, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			info, err := base.lstat(path)
+			if err == nil {
+				err = ctx.Err()
+			}
+			return info, err
+		},
+		open: func(path string) (validationFile, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			file, err := base.open(path)
+			if err != nil {
+				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				_ = file.Close()
+				return nil, err
+			}
+			return &contextValidationFile{ctx: ctx, validationFile: file}, nil
+		},
+		readDir: func(path string) ([]os.DirEntry, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			entries, err := base.readDir(path)
+			if err == nil {
+				err = ctx.Err()
+			}
+			return entries, err
+		},
+		allocatedBytes: func(path string) (int64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			allocated, err := base.allocatedBytes(path)
+			if err == nil {
+				err = ctx.Err()
+			}
+			return allocated, err
+		},
+	}
 }
 
 func validateRecord(path string, validation validationOps) (RecordRef, error) {
@@ -621,6 +715,18 @@ type validationReadTracker struct {
 	readErr error
 }
 
+type contextValidationFile struct {
+	ctx context.Context
+	validationFile
+}
+
+func (f *contextValidationFile) Read(payload []byte) (int, error) {
+	if err := f.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return f.validationFile.Read(payload)
+}
+
 func (r *validationReadTracker) Read(p []byte) (int, error) {
 	n, err := r.validationFile.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -758,7 +864,7 @@ func validColumnStat(stat model.BodyStat, enabled, wantComplete bool, limit uint
 }
 
 func validSHA256(value string) bool {
-	if len(value) != sha256.Size*2 {
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
 		return false
 	}
 	decoded, err := hex.DecodeString(value)

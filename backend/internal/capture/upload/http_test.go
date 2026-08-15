@@ -3,6 +3,10 @@ package upload
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"runtime"
-	"runtime/debug"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -110,6 +113,113 @@ func TestUploadRejectsValidButInconsistentFullHashBeforeStartingHTTPRequest(t *t
 	require.Zero(t, requests.Load())
 }
 
+func TestUploadPreflightsImmutableFilesBeforeStartingRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		batch  func(*testing.T) *spool.Batch
+		mutate func(*testing.T, *spool.Batch)
+	}{
+		{
+			name:  "corrupt compressed file",
+			batch: goldenFixtureBatch,
+			mutate: func(t *testing.T, batch *spool.Batch) {
+				path := filepath.Join(batch.Records[0].Path, "request.zst")
+				payload, err := os.ReadFile(path)
+				require.NoError(t, err)
+				payload[len(payload)/2] ^= 0xff
+				require.NoError(t, os.WriteFile(path, payload, 0o600))
+			},
+		},
+		{
+			name:  "missing declared file",
+			batch: goldenFixtureBatch,
+			mutate: func(t *testing.T, batch *spool.Batch) {
+				require.NoError(t, os.Remove(filepath.Join(batch.Records[0].Path, "request.zst")))
+			},
+		},
+		{
+			name: "self-consistent invalid zstd for declared empty file",
+			batch: func(t *testing.T) *spool.Batch {
+				return fixtureBatch(t, fixtureOptions{
+					Policy: model.ContentPolicy{StoreRequestBody: true},
+					Final:  model.Final{ResponseComplete: true},
+				})
+			},
+			mutate: func(t *testing.T, batch *spool.Batch) {
+				rewriteFixtureFile(t, batch, "request.zst", []byte("not-zstd"), nil)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			batch := tt.batch(t)
+			tt.mutate(t, batch)
+			var roundTrips atomic.Int32
+			uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+			uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				if _, err := io.Copy(io.Discard, req.Body); err != nil {
+					return nil, err
+				}
+				return responseFor(req, http.StatusOK, ""), nil
+			})
+
+			err := uploader.Upload(context.Background(), batch)
+			require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+			require.Zero(t, roundTrips.Load(), "authenticated RoundTrip started before local integrity was proven")
+		})
+	}
+}
+
+func TestUploadRejectsCanonicalManifestAndReferenceMismatchesBeforeRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*spool.RecordRef)
+	}{
+		{name: "spool version", mutate: func(ref *spool.RecordRef) { ref.Manifest.SpoolVersion++ }},
+		{name: "capture version", mutate: func(ref *spool.RecordRef) { ref.Manifest.CaptureVersion++ }},
+		{name: "request completeness", mutate: func(ref *spool.RecordRef) { ref.Manifest.Request.Complete = false }},
+		{name: "response completeness", mutate: func(ref *spool.RecordRef) { ref.Manifest.Response.Complete = false }},
+		{name: "truncation consistency", mutate: func(ref *spool.RecordRef) { ref.Manifest.Request.Truncated = true }},
+		{name: "record stored bytes", mutate: func(ref *spool.RecordRef) { ref.StoredBytes++ }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			batch := goldenFixtureBatch(t)
+			tt.mutate(&batch.Records[0])
+			var roundTrips atomic.Int32
+			uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+			uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return responseFor(req, http.StatusOK, ""), nil
+			})
+
+			err := uploader.Upload(context.Background(), batch)
+			require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+			require.Zero(t, roundTrips.Load())
+		})
+	}
+}
+
+func TestUploadPreservesCanceledPreflightContextWithoutRoundTrip(t *testing.T) {
+	batch := goldenFixtureBatch(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var roundTrips atomic.Int32
+	uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		roundTrips.Add(1)
+		return responseFor(req, http.StatusOK, ""), nil
+	})
+
+	err := uploader.Upload(ctx, batch)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, spool.ErrSpoolCorrupt)
+	require.Zero(t, roundTrips.Load())
+}
+
 func TestUploadClassifiesRemoteAndNetworkFailures(t *testing.T) {
 	batch := goldenFixtureBatch(t)
 	tests := []struct {
@@ -193,6 +303,38 @@ func TestUploadBoundsAndClosesHTTPResponseBody(t *testing.T) {
 	require.Equal(t, maxHTTPResponseBytes+1, body.bytesRead.Load())
 }
 
+func TestUploadCancelsRequestBeforeDrainingStalledResponseBody(t *testing.T) {
+	batch := goldenFixtureBatch(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body := &contextStalledBody{readStarted: make(chan struct{})}
+	uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		body.ctx = req.Context()
+		resp := responseFor(req, http.StatusServiceUnavailable, "")
+		resp.Body = body
+		return resp, nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- uploader.Upload(ctx, batch) }()
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("Upload never began bounded response draining")
+	}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrRetryable)
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("Upload remained blocked after response headers stalled")
+	}
+	require.True(t, body.closed.Load())
+}
+
 func TestUploadEarlyHTTPFailureAndContextCancelDoNotDeadlockEncoder(t *testing.T) {
 	batch := goldenFixtureBatch(t)
 	tests := []struct {
@@ -249,6 +391,26 @@ func TestUploadEarlyHTTPFailureAndContextCancelDoNotDeadlockEncoder(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("context cancellation leaked or deadlocked the encoder goroutine")
 	}
+}
+
+func TestEncodeCompressedReportsOriginalErrorBeforeFlushingBackpressuredPipe(t *testing.T) {
+	uploader := &HTTPUploader{}
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- uploader.encodeCompressed(context.Background(), writer, nil)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+	case <-time.After(250 * time.Millisecond):
+		_ = reader.Close()
+		err := <-done
+		require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+		t.Fatal("original encoder error was trapped behind a flushing zstd Close")
+	}
+	_ = reader.Close()
 }
 
 func TestUploadLargeEarlyHTTPFailureIsRemoteRetryableNotLocalCorruption(t *testing.T) {
@@ -346,9 +508,46 @@ func TestProbeRejectsAnythingExceptExactClickHousePing(t *testing.T) {
 	}
 }
 
-func TestEncodeLargeBatchDoesNotMaterializeBodyStringsOrByteSlices(t *testing.T) {
+func TestProbeCancelsAndClosesStalledResponseBodyAfterHeaders(t *testing.T) {
+	body := &prefixThenStalledBody{
+		prefix:      []byte("Ok.\n"),
+		readStarted: make(chan struct{}),
+		closedCh:    make(chan struct{}),
+	}
+	uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
+	uploader.responseBodyTimeout = 25 * time.Millisecond
+	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		resp := responseFor(req, http.StatusOK, "")
+		resp.Body = body
+		return resp, nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- uploader.Probe(context.Background()) }()
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Probe did not reach the stalled response body")
+	}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrRetryable)
+	case <-time.After(250 * time.Millisecond):
+		_ = body.Close()
+		<-done
+		t.Fatal("Probe remained blocked after its response body deadline")
+	}
+	require.True(t, body.closed.Load())
+}
+
+func TestUploadLargeFieldMakesHTTPProgressBeforeReadingWholeCompressedFile(t *testing.T) {
+	const (
+		rawBytes           = 32 << 20
+		compressedReadGate = 4 << 20
+		httpBodyProgress   = 256 << 10
+	)
 	batch := fixtureBatch(t, fixtureOptions{
-		Policy: model.ContentPolicy{StoreRequestBody: true, StoreResponseBody: true},
+		Policy: model.ContentPolicy{StoreRequestBody: true},
 		Final:  model.Final{HTTPStatus: 200, ResponseComplete: true},
 		WriteFixture: func(t *testing.T, sink interface {
 			WriteRequestHeaders([]byte) error
@@ -356,26 +555,75 @@ func TestEncodeLargeBatchDoesNotMaterializeBodyStringsOrByteSlices(t *testing.T)
 			WriteRequest([]byte) error
 			WriteResponse([]byte) error
 		}) {
-			chunk := bytes.Repeat([]byte{0}, 64<<10)
-			for range (32 << 20) / len(chunk) {
+			chunk := make([]byte, 64<<10)
+			state := uint64(0x9e3779b97f4a7c15)
+			for range rawBytes / len(chunk) {
+				for offset := 0; offset < len(chunk); offset += 8 {
+					state ^= state << 13
+					state ^= state >> 7
+					state ^= state << 17
+					binary.LittleEndian.PutUint64(chunk[offset:], state)
+				}
 				require.NoError(t, sink.WriteRequest(chunk))
-			}
-			for range (32 << 20) / len(chunk) {
-				require.NoError(t, sink.WriteResponse(chunk))
 			}
 		},
 	})
+	inputBlocked := make(chan struct{})
+	releaseInput := make(chan struct{})
 	uploader := newTestUploader(t, "http://clickhouse.invalid:8123", nil)
-	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		_, err := io.Copy(io.Discard, req.Body)
-		if err != nil {
-			return nil, err
+	uploader.encoder = RowBinaryEncoder{openRawFile: func(path string) (io.ReadCloser, error) {
+		file, err := os.Open(path)
+		if err != nil || filepath.Base(path) != "request.zst" {
+			return file, err
 		}
-		return responseFor(req, http.StatusOK, ""), nil
+		return &gatedReadCloser{
+			ReadCloser: file,
+			remaining:  compressedReadGate,
+			blocked:    inputBlocked,
+			release:    releaseInput,
+		}, nil
+	}}
+	outputProgress := make(chan struct{})
+	uploader.client.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		buffer := make([]byte, 32<<10)
+		var read int
+		for read < httpBodyProgress {
+			n, err := req.Body.Read(buffer)
+			read += n
+			if err != nil {
+				return nil, err
+			}
+		}
+		close(outputProgress)
+		return responseFor(req, http.StatusServiceUnavailable, "busy"), nil
 	})
+	done := make(chan error, 1)
+	go func() {
+		done <- uploader.Upload(context.Background(), batch)
+	}()
+	waitDone := func() error {
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatal("streaming upload did not terminate")
+			return nil
+		}
+	}
 
-	peak := peakHeapGrowth(t, func() error { return uploader.Upload(context.Background(), batch) })
-	require.Less(t, peak, uint64(48<<20), "a whole 32 MiB field allocation plus streaming codec memory exceeds this bound")
+	select {
+	case <-outputProgress:
+		close(releaseInput)
+		require.ErrorIs(t, waitDone(), ErrRetryable)
+	case <-inputBlocked:
+		close(releaseInput)
+		_ = waitDone()
+		t.Fatal("encoder read more than 4 MiB of compressed input before producing 256 KiB of the HTTP body")
+	case <-time.After(3 * time.Second):
+		close(releaseInput)
+		_ = waitDone()
+		t.Fatal("encoder made no progressive-flow decision")
+	}
 }
 
 func newTestUploader(t *testing.T, endpoint string, dial DialContextFunc) *HTTPUploader {
@@ -401,6 +649,74 @@ type endlessResponseBody struct {
 	closed    atomic.Bool
 }
 
+type contextStalledBody struct {
+	ctx         context.Context
+	readStarted chan struct{}
+	started     atomic.Bool
+	closed      atomic.Bool
+}
+
+type prefixThenStalledBody struct {
+	prefix      []byte
+	readStarted chan struct{}
+	closedCh    chan struct{}
+	started     atomic.Bool
+	closed      atomic.Bool
+}
+
+type gatedReadCloser struct {
+	io.ReadCloser
+	remaining int64
+	blocked   chan struct{}
+	release   chan struct{}
+	signaled  atomic.Bool
+}
+
+type fixtureDiskManifest struct {
+	model.Manifest
+	BodyLimitBytes   uint64 `json:"body_limit_bytes"`
+	HeaderLimitBytes uint64 `json:"header_limit_bytes"`
+}
+
+func rewriteFixtureFile(t *testing.T, batch *spool.Batch, name string, compressed, decoded []byte) {
+	t.Helper()
+	ref := &batch.Records[0]
+	require.NoError(t, os.WriteFile(filepath.Join(ref.Path, name), compressed, 0o600))
+	found := false
+	for i := range ref.Manifest.Files {
+		if ref.Manifest.Files[i].Name != name {
+			continue
+		}
+		ref.Manifest.Files[i].CompressedBytes = uint64(len(compressed))
+		ref.Manifest.Files[i].UncompressedBytes = uint64(len(decoded))
+		ref.Manifest.Files[i].CompressedSHA256 = sha256HexForUploadTest(compressed)
+		ref.Manifest.Files[i].UncompressedSHA256 = sha256HexForUploadTest(decoded)
+		found = true
+		break
+	}
+	require.True(t, found, "fixture manifest has no declared file %q", name)
+	rewriteFixtureManifest(t, batch)
+}
+
+func rewriteFixtureManifest(t *testing.T, batch *spool.Batch) {
+	t.Helper()
+	ref := &batch.Records[0]
+	manifestPath := filepath.Join(ref.Path, "manifest.json")
+	encoded, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	var disk fixtureDiskManifest
+	require.NoError(t, json.Unmarshal(encoded, &disk))
+	disk.Manifest = ref.Manifest
+	encoded, err = json.Marshal(disk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, encoded, 0o600))
+}
+
+func sha256HexForUploadTest(payload []byte) string {
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
+
 func (b *endlessResponseBody) Read(payload []byte) (int, error) {
 	b.bytesRead.Add(int64(len(payload)))
 	return len(payload), nil
@@ -411,6 +727,53 @@ func (b *endlessResponseBody) Close() error {
 	return nil
 }
 
+func (b *contextStalledBody) Read([]byte) (int, error) {
+	if b.started.CompareAndSwap(false, true) {
+		close(b.readStarted)
+	}
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *contextStalledBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+func (b *prefixThenStalledBody) Read(payload []byte) (int, error) {
+	if len(b.prefix) > 0 {
+		n := copy(payload, b.prefix)
+		b.prefix = b.prefix[n:]
+		return n, nil
+	}
+	if b.started.CompareAndSwap(false, true) {
+		close(b.readStarted)
+	}
+	<-b.closedCh
+	return 0, io.ErrClosedPipe
+}
+
+func (b *prefixThenStalledBody) Close() error {
+	if b.closed.CompareAndSwap(false, true) {
+		close(b.closedCh)
+	}
+	return nil
+}
+
+func (r *gatedReadCloser) Read(payload []byte) (int, error) {
+	if r.remaining <= 0 {
+		if r.signaled.CompareAndSwap(false, true) {
+			close(r.blocked)
+		}
+		<-r.release
+	} else if int64(len(payload)) > r.remaining {
+		payload = payload[:r.remaining]
+	}
+	n, err := r.ReadCloser.Read(payload)
+	r.remaining -= int64(n)
+	return n, err
+}
+
 func responseFor(req *http.Request, status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
@@ -418,44 +781,5 @@ func responseFor(req *http.Request, status int, body string) *http.Response {
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     make(http.Header),
 		Request:    req,
-	}
-}
-
-func peakHeapGrowth(t *testing.T, run func() error) uint64 {
-	t.Helper()
-	runtime.GC()
-	previousGC := debug.SetGCPercent(25)
-	defer debug.SetGCPercent(previousGC)
-	var baseline runtime.MemStats
-	runtime.ReadMemStats(&baseline)
-	peak := baseline.HeapAlloc
-	done := make(chan error, 1)
-	go func() { done <- run() }()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.NewTimer(10 * time.Second)
-	defer timeout.Stop()
-	for {
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-			var stats runtime.MemStats
-			runtime.ReadMemStats(&stats)
-			if stats.HeapAlloc > peak {
-				peak = stats.HeapAlloc
-			}
-			if peak <= baseline.HeapAlloc {
-				return 0
-			}
-			return peak - baseline.HeapAlloc
-		case <-ticker.C:
-			var stats runtime.MemStats
-			runtime.ReadMemStats(&stats)
-			if stats.HeapAlloc > peak {
-				peak = stats.HeapAlloc
-			}
-		case <-timeout.C:
-			t.Fatal("large streaming upload timed out")
-		}
 	}
 }

@@ -571,6 +571,56 @@ func TestRecoverRejectsSemanticallyImpossibleManifests(t *testing.T) {
 	}
 }
 
+func TestValidateRecordRefUsesCanonicalDiskManifestAndInvariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*model.Manifest)
+	}{
+		{name: "spool version", mutate: func(manifest *model.Manifest) { manifest.SpoolVersion++ }},
+		{name: "capture version", mutate: func(manifest *model.Manifest) { manifest.CaptureVersion++ }},
+		{name: "request completeness", mutate: func(manifest *model.Manifest) { manifest.Request.Complete = false }},
+		{name: "response completeness", mutate: func(manifest *model.Manifest) { manifest.Response.Complete = false }},
+		{name: "truncation", mutate: func(manifest *model.Manifest) { manifest.Request.Truncated = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openTestStore(t, nil)
+			a := beginAttempt(t, s, policyAll())
+			require.NoError(t, a.WriteRequest([]byte("request")))
+			require.NoError(t, a.Finalize(model.Final{ResponseComplete: true}))
+			require.NoError(t, a.Commit())
+			ready := s.Ready()
+			require.Len(t, ready, 1)
+			manifest := readManifest(t, s, a.ID())
+			tt.mutate(&manifest)
+			writeManifest(t, s, a.ID(), manifest)
+			ref := ready[0]
+			ref.Manifest = manifest
+
+			err := ValidateRecordRef(context.Background(), ref)
+			require.ErrorIs(t, err, ErrSpoolCorrupt)
+		})
+	}
+
+	s := openTestStore(t, nil)
+	a := beginAttempt(t, s, policyAll())
+	require.NoError(t, a.WriteRequest([]byte("request")))
+	require.NoError(t, a.Finalize(model.Final{ResponseComplete: true}))
+	require.NoError(t, a.Commit())
+	ready := s.Ready()
+	require.Len(t, ready, 1)
+	require.NoError(t, ValidateRecordRef(context.Background(), ready[0]))
+	ref := ready[0]
+	ref.StoredBytes++
+	require.ErrorIs(t, ValidateRecordRef(context.Background(), ref), ErrSpoolCorrupt)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := ValidateRecordRef(canceled, ready[0])
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrSpoolCorrupt)
+}
+
 func TestRecoverRejectsSelfConsistentContentOutsideAppliedPrefixLimits(t *testing.T) {
 	t.Run("arbitrarily shortened body", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "spool")
