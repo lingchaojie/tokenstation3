@@ -121,7 +121,14 @@ func (c *Capacity) ReserveFrame(_ uuid.UUID, frameBytes int) (Reservation, error
 func (c *Capacity) reserveContentLocked(current usage, want int64) (Reservation, error) {
 	totalReserved := c.reservedContent + c.reservedOperational
 	contentLimit := c.config.MaxBytes - c.config.OperationalHeadroomBytes
-	if exceeds(current.Allocated, totalReserved, want, contentLimit) {
+	contentAllocated := current.Allocated - current.OperationalAllocated
+	if contentAllocated < 0 {
+		contentAllocated = 0
+	}
+	if exceeds(contentAllocated, c.reservedContent, want, contentLimit) {
+		return Reservation{}, ErrSpoolCap
+	}
+	if exceeds(current.Allocated, totalReserved, want, c.config.MaxBytes) {
 		return Reservation{}, ErrSpoolCap
 	}
 	if current.Free-totalReserved-want < c.config.MinFreeBytes {

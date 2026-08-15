@@ -133,6 +133,44 @@ func TestOperationalReservationIncludesExistingSendingAllocation(t *testing.T) {
 	require.ErrorIs(t, err, ErrSpoolCap)
 }
 
+func TestContentAdmissionDoesNotChargeOperationalAllocationAgainstContentRegion(t *testing.T) {
+	const (
+		maxBytes  = int64(12 << 30)
+		headroom  = int64(16 << 20)
+		operating = int64(8 << 20)
+	)
+	contentAllocated := maxBytes - headroom - 8192
+	c := newTestCapacity(t, CapacityConfig{
+		MaxBytes:                 maxBytes,
+		OperationalHeadroomBytes: headroom,
+	}, usage{
+		Allocated:            contentAllocated + operating,
+		OperationalAllocated: operating,
+		Free:                 20 << 30,
+	})
+
+	reservation, err := c.ReserveContent(uuid.New(), 4096)
+
+	require.NoError(t, err)
+	reservation.Release()
+}
+
+func TestContentAdmissionStillCountsOperationalAllocationAtPhysicalCap(t *testing.T) {
+	const operating = int64(8 << 20)
+	c := newTestCapacity(t, CapacityConfig{
+		MaxBytes:                 12 << 30,
+		OperationalHeadroomBytes: 16 << 20,
+	}, usage{
+		Allocated:            12<<30 - 4096,
+		OperationalAllocated: operating,
+		Free:                 20 << 30,
+	})
+
+	_, err := c.ReserveContent(uuid.New(), 8192)
+
+	require.ErrorIs(t, err, ErrSpoolCap)
+}
+
 func TestWorstCaseReservationUsesZstdMaxEncodedSizeRoundedToFilesystemBlock(t *testing.T) {
 	// For the configured encoder, MaxEncodedSize(4033) is 4048. This catches
 	// replacing the codec bound with a looser guess that rejects an admissible

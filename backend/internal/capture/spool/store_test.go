@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,6 +42,54 @@ func TestDefaultAdmissionPreservesEightGiBOfFilesystemFreeSpace(t *testing.T) {
 	_, err = s.Open(model.Begin{CaptureID: uuid.New()})
 
 	require.ErrorIs(t, err, ErrFreeReserve)
+}
+
+func TestOpenRejectsConfigurationOutsideSafetyEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config Config
+	}{
+		{name: "physical cap above twelve GiB", config: Config{MaxBytes: 12<<30 + 1}},
+		{name: "free reserve below eight GiB", config: Config{MinFreeBytes: 8<<30 - 1}},
+		{name: "body limit above thirty two MiB", config: Config{MaxBodyBytes: 32<<20 + 1}},
+		{name: "header limit above one MiB", config: Config{MaxHeaderBytes: 1<<20 + 1}},
+		{name: "changed operational headroom", config: Config{OperationalHeadroomBytes: 8 << 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.config.RootDir = filepath.Join(t.TempDir(), "spool")
+
+			_, err := Open(tc.config)
+
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenRetainsSmallerSafeCapAndContentLimitsAcrossRecovery(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	config := Config{
+		RootDir:                  root,
+		MaxBytes:                 64 << 20,
+		MinFreeBytes:             9 << 30,
+		MaxBodyBytes:             4,
+		MaxHeaderBytes:           2,
+		OperationalHeadroomBytes: 16 << 20,
+	}
+	s, err := Open(config)
+	require.NoError(t, err)
+	a := beginAttempt(t, s, policyAll())
+	require.NoError(t, a.WriteRequest([]byte("abcdef")))
+	require.NoError(t, a.WriteRequestHeaders([]byte("wxyz")))
+	require.NoError(t, a.Commit())
+
+	reopened, err := Open(config)
+	require.NoError(t, err)
+	report, err := reopened.Recover(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, report.Ready, 1)
+	require.EqualValues(t, 4, report.Ready[0].Manifest.Request.StoredBytes)
+	require.EqualValues(t, 2, report.Ready[0].Manifest.RequestHeaders.StoredBytes)
 }
 
 func TestCommitFsyncsThenAtomicallyPublishesReadyRecord(t *testing.T) {
@@ -264,6 +313,158 @@ func TestRecoverRejectsManifestWithTrailingData(t *testing.T) {
 	require.Equal(t, 1, report.CorruptDeleted)
 }
 
+func TestRecoverAcceptsLegacyV1RecordWithDefaultContentLimits(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s := openTestStoreAt(t, root, nil)
+	a := committedRequestAttempt(t, s)
+	disk := readDiskManifest(t, s, a.ID())
+	require.EqualValues(t, 2, disk.SpoolVersion)
+	writeLegacyManifest(t, s, a.ID(), disk.Manifest)
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, report.Ready, 1)
+	require.Equal(t, a.ID(), report.Ready[0].CaptureID)
+	require.Zero(t, report.CorruptDeleted)
+}
+
+func TestRecoverPreservesLegacyV1RecordWhenAppliedLimitIsAmbiguous(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s := openTestStoreAt(t, root, nil)
+	s.config.MaxBodyBytes = 2
+	a := committedRequestAttempt(t, s)
+	disk := readDiskManifest(t, s, a.ID())
+	writeLegacyManifest(t, s, a.ID(), disk.Manifest)
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+
+	require.ErrorIs(t, err, errLegacyLimitsUnknown)
+	require.Zero(t, report.CorruptDeleted)
+	require.DirExists(t, readyPath(reopened, a.ID(), "."))
+	require.Zero(t, reopened.Snapshot().DroppedByReason["spool_corrupt"])
+}
+
+func TestRecoverPreservesReadyRecordOnOperationalValidationFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inject func(*Store, error)
+	}{
+		{
+			name: "lstat",
+			inject: func(s *Store, injected error) {
+				s.validation.lstat = func(path string) (os.FileInfo, error) {
+					if filepath.Base(path) == manifestName {
+						return nil, injected
+					}
+					return os.Lstat(path)
+				}
+			},
+		},
+		{
+			name: "open",
+			inject: func(s *Store, injected error) {
+				s.validation.open = func(path string) (validationFile, error) {
+					if filepath.Base(path) == manifestName {
+						return nil, injected
+					}
+					return os.Open(path)
+				}
+			},
+		},
+		{
+			name: "read",
+			inject: func(s *Store, injected error) {
+				s.validation.open = func(path string) (validationFile, error) {
+					f, err := os.Open(path)
+					if err != nil {
+						return nil, err
+					}
+					if filepath.Base(path) == manifestName {
+						return &validationFaultFile{File: f, readErr: injected}, nil
+					}
+					return f, nil
+				}
+			},
+		},
+		{
+			name: "close",
+			inject: func(s *Store, injected error) {
+				s.validation.open = func(path string) (validationFile, error) {
+					f, err := os.Open(path)
+					if err != nil {
+						return nil, err
+					}
+					if filepath.Base(path) == manifestName {
+						return &validationFaultFile{File: f, closeErr: injected}, nil
+					}
+					return f, nil
+				}
+			},
+		},
+		{
+			name: "allocation scan",
+			inject: func(s *Store, injected error) {
+				s.validation.allocatedBytes = func(string) (int64, error) {
+					return 0, injected
+				}
+			},
+		},
+		{
+			name: "content lstat",
+			inject: func(s *Store, injected error) {
+				s.validation.lstat = func(path string) (os.FileInfo, error) {
+					if filepath.Base(path) == "request.zst" {
+						return nil, injected
+					}
+					return os.Lstat(path)
+				}
+			},
+		},
+		{
+			name: "content read",
+			inject: func(s *Store, injected error) {
+				s.validation.open = func(path string) (validationFile, error) {
+					f, err := os.Open(path)
+					if err != nil {
+						return nil, err
+					}
+					if filepath.Base(path) == "request.zst" {
+						return &validationFaultFile{File: f, readErr: injected}, nil
+					}
+					return f, nil
+				}
+			},
+		},
+		{
+			name: "record directory read",
+			inject: func(s *Store, injected error) {
+				s.validation.readDir = func(string) ([]os.DirEntry, error) {
+					return nil, injected
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "spool")
+			s := openTestStoreAt(t, root, nil)
+			a := committedRequestAttempt(t, s)
+			reopened := openTestStoreAt(t, root, nil)
+			injected := errors.New("injected transient " + tc.name + " failure")
+			tc.inject(reopened, injected)
+
+			report, err := reopened.Recover(context.Background())
+
+			require.ErrorIs(t, err, injected)
+			require.Zero(t, report.CorruptDeleted)
+			require.DirExists(t, readyPath(reopened, a.ID(), "."))
+			require.Zero(t, reopened.Snapshot().DroppedByReason["spool_corrupt"])
+		})
+	}
+}
+
 func TestRecoverRejectsSemanticallyImpossibleManifests(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -341,6 +542,80 @@ func TestRecoverRejectsSemanticallyImpossibleManifests(t *testing.T) {
 	}
 }
 
+func TestRecoverRejectsSelfConsistentContentOutsideAppliedPrefixLimits(t *testing.T) {
+	t.Run("arbitrarily shortened body", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "spool")
+		s := openTestStoreAt(t, root, nil)
+		a := beginAttempt(t, s, policyAll())
+		full := []byte("abcdef")
+		require.NoError(t, a.WriteRequest(full))
+		require.NoError(t, a.Commit())
+		rewriteContentFile(t, s, a.ID(), "request.zst", []byte("abc"), []byte("abc"))
+		manifest := readManifest(t, s, a.ID())
+		manifest.Request.ObservedBytes = uint64(len(full))
+		manifest.Request.StoredBytes = 3
+		manifest.Request.SHA256 = hashHex(full)
+		manifest.Request.Truncated = true
+		writeManifest(t, s, a.ID(), manifest)
+
+		reopened := openTestStoreAt(t, root, nil)
+		report, err := reopened.Recover(context.Background())
+
+		require.NoError(t, err)
+		require.Empty(t, report.Ready)
+		require.Equal(t, 1, report.CorruptDeleted)
+	})
+
+	t.Run("header above fixed maximum", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "spool")
+		s := openTestStoreAt(t, root, nil)
+		a := beginAttempt(t, s, policyAll())
+		require.NoError(t, a.WriteRequestHeaders([]byte("seed")))
+		require.NoError(t, a.Commit())
+		oversized := bytes.Repeat([]byte("h"), 1<<20+1)
+		rewriteContentFile(t, s, a.ID(), "request_headers.zst", oversized, oversized)
+		manifest := readManifest(t, s, a.ID())
+		manifest.RequestHeaders.ObservedBytes = uint64(len(oversized))
+		manifest.RequestHeaders.StoredBytes = uint64(len(oversized))
+		manifest.RequestHeaders.SHA256 = hashHex(oversized)
+		manifest.RequestHeaders.Truncated = false
+		writeManifest(t, s, a.ID(), manifest)
+
+		reopened := openTestStoreAt(t, root, nil)
+		report, err := reopened.Recover(context.Background())
+
+		require.NoError(t, err)
+		require.Empty(t, report.Ready)
+		require.Equal(t, 1, report.CorruptDeleted)
+	})
+}
+
+func TestRecoverBoundsDecompressionToDeclaredStoredPrefix(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s := openTestStoreAt(t, root, nil)
+	s.config.MaxBodyBytes = 1
+	a := beginAttempt(t, s, policyAll())
+	require.NoError(t, a.WriteRequest([]byte("x")))
+	require.NoError(t, a.Commit())
+	rewriteContentFile(t, s, a.ID(), "request.zst", bytes.Repeat([]byte("x"), 8<<20), []byte("x"))
+	manifest := readManifest(t, s, a.ID())
+	manifest.Request.ObservedBytes = 1
+	manifest.Request.StoredBytes = 1
+	manifest.Request.SHA256 = hashHex([]byte("x"))
+	manifest.Request.Truncated = false
+	writeManifest(t, s, a.ID(), manifest)
+
+	reopened := openTestStoreAt(t, root, nil)
+	var decoded int64
+	reopened.validation.decodedBytes = func(n int64) { decoded = n }
+	report, err := reopened.Recover(context.Background())
+
+	require.NoError(t, err)
+	require.Empty(t, report.Ready)
+	require.Equal(t, 1, report.CorruptDeleted)
+	require.EqualValues(t, 2, decoded)
+}
+
 type eventRecorder struct {
 	mu     sync.Mutex
 	events []string
@@ -380,7 +655,7 @@ func openTestStoreAt(t *testing.T, root string, recorder *eventRecorder) *Store 
 	t.Helper()
 	config := Config{
 		RootDir:                  root,
-		MaxBytes:                 1 << 40,
+		MaxBytes:                 12 << 30,
 		MaxBodyBytes:             32 << 20,
 		MaxHeaderBytes:           1 << 20,
 		MaxActiveAttempts:        32,
@@ -430,18 +705,33 @@ func readyPath(s *Store, id uuid.UUID, name string) string {
 
 func readManifest(t *testing.T, s *Store, id uuid.UUID) model.Manifest {
 	t.Helper()
-	b, err := os.ReadFile(readyPath(s, id, manifestName))
-	require.NoError(t, err)
-	var manifest model.Manifest
-	require.NoError(t, json.Unmarshal(b, &manifest))
-	return manifest
+	return readDiskManifest(t, s, id).Manifest
 }
 
 func writeManifest(t *testing.T, s *Store, id uuid.UUID, manifest model.Manifest) {
 	t.Helper()
+	disk := readDiskManifest(t, s, id)
+	disk.Manifest = manifest
+	b, err := json.Marshal(disk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(readyPath(s, id, manifestName), b, 0o600))
+}
+
+func writeLegacyManifest(t *testing.T, s *Store, id uuid.UUID, manifest model.Manifest) {
+	t.Helper()
+	manifest.SpoolVersion = 1
 	b, err := json.Marshal(manifest)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(readyPath(s, id, manifestName), b, 0o600))
+}
+
+func readDiskManifest(t *testing.T, s *Store, id uuid.UUID) diskManifest {
+	t.Helper()
+	b, err := os.ReadFile(readyPath(s, id, manifestName))
+	require.NoError(t, err)
+	var manifest diskManifest
+	require.NoError(t, json.Unmarshal(b, &manifest))
+	return manifest
 }
 
 func committedRequestAttempt(t *testing.T, s *Store) *Attempt {
@@ -450,4 +740,47 @@ func committedRequestAttempt(t *testing.T, s *Store) *Attempt {
 	require.NoError(t, a.WriteRequest([]byte("request")))
 	require.NoError(t, a.Commit())
 	return a
+}
+
+func rewriteContentFile(t *testing.T, s *Store, id uuid.UUID, name string, decoded, declared []byte) {
+	t.Helper()
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll(decoded, nil)
+	encoder.Close()
+	require.NoError(t, os.WriteFile(readyPath(s, id, name), compressed, 0o600))
+	manifest := readManifest(t, s, id)
+	for index := range manifest.Files {
+		if manifest.Files[index].Name != name {
+			continue
+		}
+		manifest.Files[index].CompressedBytes = uint64(len(compressed))
+		manifest.Files[index].UncompressedBytes = uint64(len(declared))
+		manifest.Files[index].CompressedSHA256 = hashHex(compressed)
+		manifest.Files[index].UncompressedSHA256 = hashHex(declared)
+		writeManifest(t, s, id, manifest)
+		return
+	}
+	t.Fatalf("manifest has no file %q", name)
+}
+
+type validationFaultFile struct {
+	*os.File
+	readErr  error
+	closeErr error
+}
+
+func (f *validationFaultFile) Read(p []byte) (int, error) {
+	if f.readErr != nil {
+		return 0, f.readErr
+	}
+	return f.File.Read(p)
+}
+
+func (f *validationFaultFile) Close() error {
+	err := f.File.Close()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return err
 }

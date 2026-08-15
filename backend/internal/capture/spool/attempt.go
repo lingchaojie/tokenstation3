@@ -284,7 +284,11 @@ func (a *Attempt) commitLocked() error {
 		ResponseHeaders: model.HeaderStat(a.responseHeaders.bodyStat()),
 		Files:           files,
 	}
-	encoded, err := json.Marshal(manifest)
+	encoded, err := json.Marshal(diskManifest{
+		Manifest:         manifest,
+		BodyLimitBytes:   uint64(a.store.config.MaxBodyBytes),
+		HeaderLimitBytes: uint64(a.store.config.MaxHeaderBytes),
+	})
 	if err != nil {
 		return fmt.Errorf("encode spool manifest: %w", err)
 	}

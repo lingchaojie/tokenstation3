@@ -32,15 +32,17 @@ const (
 	attemptOverheadBytes            int64  = 1 << 20
 	manifestName                           = "manifest.json"
 	manifestTempName                       = "manifest.tmp"
-	spoolVersion                    uint16 = 1
+	legacySpoolVersion              uint16 = 1
+	spoolVersion                    uint16 = 2
 	captureVersion                  uint16 = 2
 	maxManifestBytes                       = 2 << 20
 )
 
 var (
-	ErrTooManyAttempts = errors.New("ipc_backpressure")
-	ErrSpoolCorrupt    = errors.New("spool_corrupt")
-	ErrAttemptClosed   = errors.New("capture attempt is closed")
+	ErrTooManyAttempts     = errors.New("ipc_backpressure")
+	ErrSpoolCorrupt        = errors.New("spool_corrupt")
+	ErrAttemptClosed       = errors.New("capture attempt is closed")
+	errLegacyLimitsUnknown = errors.New("legacy spool manifest has ambiguous content limits")
 )
 
 type Config struct {
@@ -62,6 +64,12 @@ type RecoveryReport struct {
 	CorruptDeleted int
 }
 
+type diskManifest struct {
+	model.Manifest
+	BodyLimitBytes   uint64 `json:"body_limit_bytes"`
+	HeaderLimitBytes uint64 `json:"header_limit_bytes"`
+}
+
 type RecordRef struct {
 	CaptureID      uuid.UUID
 	Path           string
@@ -71,6 +79,20 @@ type RecordRef struct {
 	ReadyAt        time.Time
 }
 
+type validationFile interface {
+	io.Reader
+	io.Seeker
+	io.Closer
+}
+
+type validationOps struct {
+	lstat          func(string) (os.FileInfo, error)
+	open           func(string) (validationFile, error)
+	readDir        func(string) ([]os.DirEntry, error)
+	allocatedBytes func(string) (int64, error)
+	decodedBytes   func(int64)
+}
+
 type Store struct {
 	config Config
 
@@ -78,6 +100,7 @@ type Store struct {
 	readyDir   string
 	sendingDir string
 	capacity   *Capacity
+	validation validationOps
 
 	attemptSlots chan struct{}
 	lifecycleMu  sync.RWMutex
@@ -123,7 +146,14 @@ func Open(config Config) (*Store, error) {
 	if config.MaxBytes <= 0 || config.MinFreeBytes < 0 || config.MaxBodyBytes < 0 || config.MaxHeaderBytes < 0 || config.MaxActiveAttempts < 1 {
 		return nil, errors.New("invalid spool configuration")
 	}
-	if config.OperationalHeadroomBytes < 0 || config.OperationalHeadroomBytes >= config.MaxBytes {
+	if config.MaxBytes > defaultMaxBytes ||
+		config.MinFreeBytes < defaultMinFreeBytes ||
+		config.MaxBodyBytes > defaultMaxBodyBytes ||
+		config.MaxHeaderBytes > defaultMaxHeaderBytes ||
+		config.OperationalHeadroomBytes != defaultOperationalHeadroomBytes {
+		return nil, errors.New("spool configuration exceeds safety envelope")
+	}
+	if config.OperationalHeadroomBytes >= config.MaxBytes {
 		return nil, errors.New("invalid spool operational headroom")
 	}
 
@@ -147,12 +177,19 @@ func Open(config Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	validation := validationOps{
+		lstat:          os.Lstat,
+		open:           func(path string) (validationFile, error) { return os.Open(path) },
+		readDir:        os.ReadDir,
+		allocatedBytes: allocatedBytes,
+	}
 	return &Store{
 		config:       config,
 		partialDir:   partialDir,
 		readyDir:     readyDir,
 		sendingDir:   sendingDir,
 		capacity:     capacity,
+		validation:   validation,
 		attemptSlots: make(chan struct{}, config.MaxActiveAttempts),
 		dropped:      make(map[string]uint64),
 	}, nil
@@ -238,8 +275,11 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			return report, err
 		}
 		path := filepath.Join(s.readyDir, entry.Name())
-		ref, validateErr := validateRecord(path)
+		ref, validateErr := validateRecord(path, s.validation)
 		if validateErr != nil {
+			if !errors.Is(validateErr, ErrSpoolCorrupt) {
+				return report, fmt.Errorf("validate ready record %s: %w", entry.Name(), validateErr)
+			}
 			if removeErr := os.RemoveAll(path); removeErr != nil {
 				return report, fmt.Errorf("delete corrupt ready record %s: %w", entry.Name(), removeErr)
 			}
@@ -339,24 +379,34 @@ func ensurePrivateDirectory(path string) error {
 	return os.Chmod(path, 0o700)
 }
 
-func validateRecord(path string) (RecordRef, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+func validateRecord(path string, validation validationOps) (RecordRef, error) {
+	info, err := validation.lstat(path)
+	if err != nil {
+		return RecordRef{}, fmt.Errorf("lstat ready record: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
 	manifestPath := filepath.Join(path, manifestName)
-	manifestInfo, err := os.Lstat(manifestPath)
-	if err != nil || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > maxManifestBytes {
-		return RecordRef{}, ErrSpoolCorrupt
-	}
-	f, err := os.Open(manifestPath)
+	manifestInfo, err := validation.lstat(manifestPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RecordRef{}, ErrSpoolCorrupt
+		}
+		return RecordRef{}, fmt.Errorf("lstat ready manifest: %w", err)
+	}
+	if !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > maxManifestBytes {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
-	decoder := json.NewDecoder(io.LimitReader(f, maxManifestBytes+1))
+	f, err := validation.open(manifestPath)
+	if err != nil {
+		return RecordRef{}, fmt.Errorf("open ready manifest: %w", err)
+	}
+	trackedManifest := &validationReadTracker{validationFile: f}
+	decoder := json.NewDecoder(io.LimitReader(trackedManifest, maxManifestBytes+1))
 	decoder.DisallowUnknownFields()
-	var manifest model.Manifest
-	decodeErr := decoder.Decode(&manifest)
+	var disk diskManifest
+	decodeErr := decoder.Decode(&disk)
 	if decodeErr == nil {
 		var trailing any
 		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
@@ -364,7 +414,30 @@ func validateRecord(path string) (RecordRef, error) {
 		}
 	}
 	closeErr := f.Close()
-	if decodeErr != nil || closeErr != nil || manifest.SpoolVersion != spoolVersion || manifest.CaptureVersion != captureVersion {
+	if closeErr != nil {
+		return RecordRef{}, fmt.Errorf("close ready manifest: %w", closeErr)
+	}
+	if decodeErr != nil {
+		if trackedManifest.readErr != nil {
+			return RecordRef{}, fmt.Errorf("read ready manifest: %w", trackedManifest.readErr)
+		}
+		return RecordRef{}, ErrSpoolCorrupt
+	}
+	manifest := disk.Manifest
+	legacyLimits := false
+	switch {
+	case manifest.SpoolVersion == spoolVersion &&
+		disk.BodyLimitBytes > 0 && disk.BodyLimitBytes <= uint64(defaultMaxBodyBytes) &&
+		disk.HeaderLimitBytes > 0 && disk.HeaderLimitBytes <= uint64(defaultMaxHeaderBytes):
+	case manifest.SpoolVersion == legacySpoolVersion &&
+		disk.BodyLimitBytes == 0 && disk.HeaderLimitBytes == 0:
+		disk.BodyLimitBytes = uint64(defaultMaxBodyBytes)
+		disk.HeaderLimitBytes = uint64(defaultMaxHeaderBytes)
+		legacyLimits = true
+	default:
+		return RecordRef{}, ErrSpoolCorrupt
+	}
+	if manifest.CaptureVersion != captureVersion {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
 	id, err := uuid.Parse(filepath.Base(path))
@@ -372,9 +445,9 @@ func validateRecord(path string) (RecordRef, error) {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
 
-	entries, err := os.ReadDir(path)
+	entries, err := validation.readDir(path)
 	if err != nil {
-		return RecordRef{}, ErrSpoolCorrupt
+		return RecordRef{}, fmt.Errorf("read ready record directory: %w", err)
 	}
 	allowed := map[string]struct{}{manifestName: {}}
 	fileStats := make(map[string]model.FileStat, len(manifest.Files))
@@ -387,21 +460,35 @@ func validateRecord(path string) (RecordRef, error) {
 		}
 		fileStats[fileStat.Name] = fileStat
 		allowed[fileStat.Name] = struct{}{}
-		if err := verifyContentFile(filepath.Join(path, fileStat.Name), fileStat); err != nil {
-			return RecordRef{}, ErrSpoolCorrupt
-		}
 	}
 	for _, entry := range entries {
 		if _, ok := allowed[entry.Name()]; !ok {
 			return RecordRef{}, ErrSpoolCorrupt
 		}
 	}
-	if !statsMatchFiles(manifest, fileStats) {
-		return RecordRef{}, ErrSpoolCorrupt
+	ambiguousLegacyLimits := false
+	if !statsMatchFiles(manifest, fileStats, disk.BodyLimitBytes, disk.HeaderLimitBytes) {
+		if legacyLimits {
+			bodyLimit, headerLimit, plausible := inferredLegacyLimits(manifest, fileStats)
+			if plausible && statsMatchFiles(manifest, fileStats, bodyLimit, headerLimit) {
+				ambiguousLegacyLimits = true
+			}
+		}
+		if !ambiguousLegacyLimits {
+			return RecordRef{}, ErrSpoolCorrupt
+		}
 	}
-	allocated, err := allocatedBytes(path)
+	for _, fileStat := range manifest.Files {
+		if err := verifyContentFile(filepath.Join(path, fileStat.Name), fileStat, validation); err != nil {
+			return RecordRef{}, err
+		}
+	}
+	allocated, err := validation.allocatedBytes(path)
 	if err != nil {
-		return RecordRef{}, ErrSpoolCorrupt
+		return RecordRef{}, fmt.Errorf("scan ready record allocation: %w", err)
+	}
+	if ambiguousLegacyLimits {
+		return RecordRef{}, errLegacyLimitsUnknown
 	}
 	return RecordRef{
 		CaptureID:      id,
@@ -420,86 +507,190 @@ func manifestStoredBytes(manifest model.Manifest) int64 {
 		int64(manifest.ResponseHeaders.StoredBytes)
 }
 
-func verifyContentFile(path string, want model.FileStat) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || uint64(info.Size()) != want.CompressedBytes {
-		return ErrSpoolCorrupt
-	}
-	f, err := os.Open(path)
+func verifyContentFile(path string, want model.FileStat, validation validationOps) error {
+	info, err := validation.lstat(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrSpoolCorrupt
+		}
+		return fmt.Errorf("lstat content file: %w", err)
+	}
+	if !info.Mode().IsRegular() || uint64(info.Size()) != want.CompressedBytes {
 		return ErrSpoolCorrupt
 	}
+	f, err := validation.open(path)
+	if err != nil {
+		return fmt.Errorf("open content file: %w", err)
+	}
+	trackedContent := &validationReadTracker{validationFile: f}
 	compressedHash := sha256.New()
-	compressedBytes, err := io.Copy(compressedHash, f)
-	if err != nil || uint64(compressedBytes) != want.CompressedBytes || hex.EncodeToString(compressedHash.Sum(nil)) != want.CompressedSHA256 {
+	compressedBytes, err := io.Copy(compressedHash, trackedContent)
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("read compressed content: %w", err)
+	}
+	if uint64(compressedBytes) != want.CompressedBytes || hex.EncodeToString(compressedHash.Sum(nil)) != want.CompressedSHA256 {
 		_ = f.Close()
 		return ErrSpoolCorrupt
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		_ = f.Close()
-		return ErrSpoolCorrupt
+		return fmt.Errorf("seek compressed content: %w", err)
 	}
-	zr, err := zstd.NewReader(bufio.NewReaderSize(f, 64<<10), zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+	trackedContent.readErr = nil
+	zr, err := zstd.NewReader(
+		bufio.NewReaderSize(trackedContent, 64<<10),
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderLowmem(true),
+		zstd.WithDecoderMaxMemory(uint64(defaultMaxBodyBytes)),
+		zstd.WithDecoderMaxWindow(uint64(defaultMaxBodyBytes)),
+	)
 	if err != nil {
 		_ = f.Close()
+		if trackedContent.readErr != nil {
+			return fmt.Errorf("read compressed content: %w", trackedContent.readErr)
+		}
 		return ErrSpoolCorrupt
 	}
 	uncompressedHash := sha256.New()
-	uncompressedBytes, copyErr := io.Copy(uncompressedHash, zr)
+	uncompressedBytes, copyErr := io.Copy(uncompressedHash, io.LimitReader(zr, int64(want.UncompressedBytes)+1))
+	if validation.decodedBytes != nil {
+		validation.decodedBytes(uncompressedBytes)
+	}
 	zr.Close()
 	closeErr := f.Close()
-	if copyErr != nil || closeErr != nil || uint64(uncompressedBytes) != want.UncompressedBytes || hex.EncodeToString(uncompressedHash.Sum(nil)) != want.UncompressedSHA256 {
+	if closeErr != nil {
+		return fmt.Errorf("close content file: %w", closeErr)
+	}
+	if copyErr != nil {
+		if trackedContent.readErr != nil {
+			return fmt.Errorf("read compressed content: %w", trackedContent.readErr)
+		}
+		return ErrSpoolCorrupt
+	}
+	if uint64(uncompressedBytes) != want.UncompressedBytes || hex.EncodeToString(uncompressedHash.Sum(nil)) != want.UncompressedSHA256 {
 		return ErrSpoolCorrupt
 	}
 	return nil
 }
 
-func statsMatchFiles(manifest model.Manifest, files map[string]model.FileStat) bool {
+type validationReadTracker struct {
+	validationFile
+	readErr error
+}
+
+func (r *validationReadTracker) Read(p []byte) (int, error) {
+	n, err := r.validationFile.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.readErr = err
+	}
+	return n, err
+}
+
+func statsMatchFiles(manifest model.Manifest, files map[string]model.FileStat, bodyLimit, headerLimit uint64) bool {
 	checks := []struct {
 		name         string
 		stat         model.BodyStat
 		enabled      bool
 		wantComplete bool
+		limit        uint64
 	}{
 		{
 			name:         "request.zst",
 			stat:         manifest.Request,
 			enabled:      manifest.Begin.Policy.StoreRequestBody,
 			wantComplete: true,
+			limit:        bodyLimit,
 		},
 		{
 			name:         "response.zst",
 			stat:         manifest.Response,
 			enabled:      manifest.Begin.Policy.StoreResponseBody,
 			wantComplete: manifest.Final.ResponseComplete,
+			limit:        bodyLimit,
 		},
 		{
 			name:         "request_headers.zst",
 			stat:         model.BodyStat(manifest.RequestHeaders),
 			enabled:      manifest.Begin.Policy.StoreRequestHeaders,
 			wantComplete: true,
+			limit:        headerLimit,
 		},
 		{
 			name:         "response_headers.zst",
 			stat:         model.BodyStat(manifest.ResponseHeaders),
 			enabled:      manifest.Begin.Policy.StoreResponseHeaders,
 			wantComplete: true,
+			limit:        headerLimit,
 		},
 	}
 	for _, check := range checks {
 		file, exists := files[check.name]
-		if !validColumnStat(check.stat, check.enabled, check.wantComplete, file, exists) {
+		if !validColumnStat(check.stat, check.enabled, check.wantComplete, check.limit, file, exists) {
 			return false
 		}
 	}
 	return true
 }
 
-func validColumnStat(stat model.BodyStat, enabled, wantComplete bool, file model.FileStat, fileExists bool) bool {
+func inferredLegacyLimits(manifest model.Manifest, files map[string]model.FileStat) (uint64, uint64, bool) {
+	bodyLimit, ok := inferredLegacyLimit(uint64(defaultMaxBodyBytes), []struct {
+		stat    model.BodyStat
+		enabled bool
+	}{
+		{stat: manifest.Request, enabled: manifest.Begin.Policy.StoreRequestBody},
+		{stat: manifest.Response, enabled: manifest.Begin.Policy.StoreResponseBody},
+	})
+	if !ok {
+		return 0, 0, false
+	}
+	headerLimit, ok := inferredLegacyLimit(uint64(defaultMaxHeaderBytes), []struct {
+		stat    model.BodyStat
+		enabled bool
+	}{
+		{stat: model.BodyStat(manifest.RequestHeaders), enabled: manifest.Begin.Policy.StoreRequestHeaders},
+		{stat: model.BodyStat(manifest.ResponseHeaders), enabled: manifest.Begin.Policy.StoreResponseHeaders},
+	})
+	if !ok || !statsMatchFiles(manifest, files, bodyLimit, headerLimit) {
+		return 0, 0, false
+	}
+	return bodyLimit, headerLimit, true
+}
+
+func inferredLegacyLimit(maximum uint64, columns []struct {
+	stat    model.BodyStat
+	enabled bool
+}) (uint64, bool) {
+	limit := maximum
+	found := false
+	for _, column := range columns {
+		if !column.enabled || !column.stat.Truncated {
+			continue
+		}
+		if column.stat.StoredBytes == 0 || column.stat.StoredBytes > maximum {
+			return 0, false
+		}
+		if found && limit != column.stat.StoredBytes {
+			return 0, false
+		}
+		limit = column.stat.StoredBytes
+		found = true
+	}
+	return limit, true
+}
+
+func validColumnStat(stat model.BodyStat, enabled, wantComplete bool, limit uint64, file model.FileStat, fileExists bool) bool {
 	if stat.StoredBytes > stat.ObservedBytes || !validSHA256(stat.SHA256) || stat.Complete != wantComplete {
 		return false
 	}
-	wantTruncated := enabled && stat.StoredBytes < stat.ObservedBytes
+	wantStored := uint64(0)
+	if enabled {
+		wantStored = min(stat.ObservedBytes, limit)
+	}
+	if stat.StoredBytes != wantStored {
+		return false
+	}
+	wantTruncated := enabled && stat.ObservedBytes > limit
 	if stat.Truncated != wantTruncated {
 		return false
 	}
