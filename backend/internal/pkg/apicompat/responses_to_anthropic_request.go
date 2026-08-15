@@ -197,6 +197,24 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 				Content: blockJSON,
 			})
 
+		case IsCompactionItemType(item.Type):
+			summary := CompactionSummaryFromItem(&item)
+			if summary == "" {
+				continue
+			}
+			text, err := json.Marshal(WrapCompactionSummaryForReplay(summary))
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal compaction summary: %w", err)
+			}
+			messages = append(messages, AnthropicMessage{Role: "user", Content: text})
+
+		case strings.TrimSpace(item.Type) == CompactionTriggerType:
+			prompt, err := json.Marshal(CompactionSummaryPrompt)
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal compaction prompt: %w", err)
+			}
+			messages = append(messages, AnthropicMessage{Role: "user", Content: prompt})
+
 		case item.Type == "reasoning":
 			// Anthropic 无法摄入 OpenAI 的 reasoning：encrypted_content 是不透明的，
 			// 而 thinking 块的重放需要 Anthropic 自己签发的 signature，无法伪造。

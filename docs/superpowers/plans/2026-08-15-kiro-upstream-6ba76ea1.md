@@ -470,7 +470,7 @@ git commit -m "fix(kiro): preserve translator edge cases"
 - Produces: `HasCompactionTrigger(*ResponsesRequest) bool`, `EncodeCompactionEnvelope(string) string`, `DecodeCompactionEnvelope(string) (string, bool)`, `CompactionSummaryFromItem(*ResponsesInputItem) string`, `WrapCompactionSummaryForReplay(string) string`, and shared `CompactionSummaryPrompt`.
 - Consumes: `ResponsesInputItem`, `ResponsesSummary`, and current Grok compact bridge.
 
-- [ ] **Step 1: Add failing compaction codec and request-conversion tests**
+- [x] **Step 1: Add failing compaction codec and request-conversion tests**
 
 Cover envelope round trip, blank rejection, foreign payload rejection, trigger detection, prior compaction replay, plaintext-summary precedence, missing-summary skip, and trigger-to-summary-prompt conversion. Use a Unicode summary to verify base64url envelope fidelity.
 
@@ -485,7 +485,7 @@ func TestCompactionEnvelopeRoundTrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run API compatibility tests RED**
+- [x] **Step 2: Run API compatibility tests RED**
 
 ```bash
 cd backend
@@ -494,7 +494,7 @@ go test -tags=unit -count=1 ./internal/pkg/apicompat -run 'Compaction|ResponsesT
 
 Expected: new compaction functions/types are missing and triggers are dropped.
 
-- [ ] **Step 3: Implement the protocol unit**
+- [x] **Step 3: Implement the protocol unit**
 
 Use the `sub2api-compaction-v1.` prefix followed by raw URL-safe base64 of:
 
@@ -512,14 +512,14 @@ Convert `compaction_trigger` to one user summary-prompt item and a replayable
 `<conversation_summary>...</conversation_summary>` text. Replace the duplicate
 Grok prompt with `apicompat.CompactionSummaryPrompt`.
 
-- [ ] **Step 4: Run API compatibility and Grok compact tests GREEN**
+- [x] **Step 4: Run API compatibility and Grok compact tests GREEN**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/pkg/apicompat ./internal/service -run 'Compaction|GrokCompact'
 ```
 
-- [ ] **Step 5: Commit the compaction protocol**
+- [x] **Step 5: Commit the compaction protocol**
 
 ```bash
 git add backend/internal/pkg/apicompat/responses_compaction.go backend/internal/pkg/apicompat/responses_compaction_test.go backend/internal/pkg/apicompat/types.go backend/internal/pkg/apicompat/responses_to_anthropic_request.go backend/internal/service/openai_gateway_grok_compact.go
