@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -60,6 +61,34 @@ func TestServerDispatchesValidAttemptAndStatus(t *testing.T) {
 	require.NoError(t, server.Close())
 }
 
+func TestServerAppendsConsecutiveMultipartHeaders(t *testing.T) {
+	factory := &recordingFactory{}
+	_, socketPath := startTestServer(t, ServerConfig{MaxSessions: 1}, factory)
+	client := NewClient(ClientConfig{
+		SocketPath:   socketPath,
+		DialTimeout:  100 * time.Millisecond,
+		WriteTimeout: 100 * time.Millisecond,
+		ReadTimeout:  100 * time.Millisecond,
+	})
+	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.NoError(t, err)
+	requestHeaders := bytes.Repeat([]byte("r"), MaxPayloadBytes+19)
+	responseHeaders := bytes.Repeat([]byte("s"), 2*MaxPayloadBytes+7)
+
+	require.True(t, attempt.WriteRequestHeaders(requestHeaders))
+	require.True(t, attempt.WriteResponseHeaders(responseHeaders))
+	require.True(t, attempt.Finalize(model.Final{HTTPStatus: 200, ResponseComplete: true}))
+	require.True(t, attempt.Commit())
+
+	require.Eventually(t, func() bool {
+		sink := factory.firstSink()
+		return sink != nil && sink.committed()
+	}, time.Second, time.Millisecond)
+	sink := factory.firstSink()
+	require.Equal(t, requestHeaders, sink.requestHeadersSnapshot())
+	require.Equal(t, responseHeaders, sink.responseHeadersSnapshot())
+}
+
 func TestServerRejectsVersionMismatchBeforeBegin(t *testing.T) {
 	factory := &recordingFactory{}
 	_, socketPath := startTestServer(t, ServerConfig{MaxSessions: 2}, factory)
@@ -100,6 +129,35 @@ func TestServerBoundsAcceptedSessionsBeforeSpawningHandlers(t *testing.T) {
 	_, _, err := readFrame(extra)
 	require.Error(t, err)
 	require.Equal(t, 2, server.ActiveHandlers())
+}
+
+func TestServerClampsConfiguredMaxSessionsToHardLimit(t *testing.T) {
+	factory := &recordingFactory{}
+	server, socketPath := startTestServer(t, ServerConfig{MaxSessions: 64}, factory)
+
+	connections := make([]net.Conn, 0, 32)
+	for range 32 {
+		conn := dialTestSocket(t, socketPath)
+		require.NoError(t, writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
+		header, _, err := readFrame(conn)
+		require.NoError(t, err)
+		require.Equal(t, KindHandshake, header.Kind)
+		connections = append(connections, conn)
+	}
+	t.Cleanup(func() {
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	})
+	require.Eventually(t, func() bool { return server.ActiveHandlers() == 32 }, time.Second, time.Millisecond)
+
+	extra := dialTestSocket(t, socketPath)
+	defer extra.Close()
+	require.NoError(t, writeFrame(extra, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
+	require.NoError(t, extra.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, _, err := readFrame(extra)
+	require.Error(t, err)
+	require.Equal(t, 32, server.ActiveHandlers())
 }
 
 func TestServerRejectsIllegalOrderAndAbortsOpenedSession(t *testing.T) {
@@ -257,18 +315,26 @@ func (f *recordingFactory) firstSink() *recordingSink {
 }
 
 type recordingSink struct {
-	mu             sync.Mutex
-	events         []string
-	aborted        []error
-	didCommit      bool
-	panicOnRequest bool
+	mu              sync.Mutex
+	events          []string
+	requestHeaders  []byte
+	responseHeaders []byte
+	aborted         []error
+	didCommit       bool
+	panicOnRequest  bool
 }
 
 func (s *recordingSink) WriteRequestHeaders(p []byte) error {
+	s.mu.Lock()
+	s.requestHeaders = append(s.requestHeaders, p...)
+	s.mu.Unlock()
 	s.addEvent("request_headers:" + string(p))
 	return nil
 }
 func (s *recordingSink) WriteResponseHeaders(p []byte) error {
+	s.mu.Lock()
+	s.responseHeaders = append(s.responseHeaders, p...)
+	s.mu.Unlock()
 	s.addEvent("response_headers:" + string(p))
 	return nil
 }
@@ -318,6 +384,18 @@ func (s *recordingSink) committed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.didCommit
+}
+
+func (s *recordingSink) requestHeadersSnapshot() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.requestHeaders...)
+}
+
+func (s *recordingSink) responseHeadersSnapshot() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.responseHeaders...)
 }
 
 func startTestServer(t *testing.T, cfg ServerConfig, factory SessionFactory) (*Server, string) {

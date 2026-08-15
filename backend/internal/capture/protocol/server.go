@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const defaultMaxSessions = 32
+const hardMaxSessions = 32
 
 type SessionFactory interface {
 	Open(model.Begin) (SessionSink, error)
@@ -54,8 +54,8 @@ type Server struct {
 }
 
 func NewServer(config ServerConfig, factory SessionFactory) *Server {
-	if config.MaxSessions <= 0 {
-		config.MaxSessions = defaultMaxSessions
+	if config.MaxSessions <= 0 || config.MaxSessions > hardMaxSessions {
+		config.MaxSessions = hardMaxSessions
 	}
 	if config.WriteTimeout <= 0 {
 		config.WriteTimeout = time.Second
@@ -246,6 +246,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	requestHeadersSeen := false
 	responseHeadersSeen := false
 	finalSeen := false
+	var previousKind Kind
 
 	for {
 		header, payload, err = readFrame(conn)
@@ -265,15 +266,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		switch header.Kind {
 		case KindRequestHeaders:
-			if requestHeadersSeen {
-				err = errors.New("duplicate request headers")
+			if requestHeadersSeen && previousKind != KindRequestHeaders {
+				err = errors.New("non-consecutive request headers")
 			} else {
 				requestHeadersSeen = true
 				err = sink.WriteRequestHeaders(payload)
 			}
 		case KindResponseHeaders:
-			if responseHeadersSeen {
-				err = errors.New("duplicate response headers")
+			if responseHeadersSeen && previousKind != KindResponseHeaders {
+				err = errors.New("non-consecutive response headers")
 			} else {
 				responseHeadersSeen = true
 				err = sink.WriteResponseHeaders(payload)
@@ -316,6 +317,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.protocolError(conn, "capture session rejected")
 			return
 		}
+		previousKind = header.Kind
 	}
 }
 
