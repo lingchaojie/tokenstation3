@@ -1,6 +1,7 @@
 package spool
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,11 +9,13 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/extract"
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
@@ -21,15 +24,21 @@ import (
 type Attempt struct {
 	mu sync.Mutex
 
-	store       *Store
-	begin       model.Begin
-	final       model.Final
-	partialPath string
-	overhead    Reservation
-	terminal    bool
-	published   bool
-	inResponse  bool
-	slotOnce    sync.Once
+	store                   *Store
+	begin                   model.Begin
+	final                   model.Final
+	partialPath             string
+	overhead                Reservation
+	terminal                bool
+	published               bool
+	inResponse              bool
+	slotOnce                sync.Once
+	extractor               extract.Stream
+	extracted               model.Extracted
+	extractorClosed         bool
+	logger                  *slog.Logger
+	extractionWarningLogged bool
+	finalSet                bool
 
 	request         *contentStream
 	response        *contentStream
@@ -64,7 +73,12 @@ func newAttempt(store *Store, begin model.Begin, partialPath string, overhead Re
 			storedHash: sha256.New(),
 		}
 	}
-	return &Attempt{
+	format := begin.Format
+	if format == "" {
+		format = model.PayloadJSON
+	}
+	metadataExtractor, extractionErr := extract.New(context.Background(), format)
+	attempt := &Attempt{
 		store:           store,
 		begin:           begin,
 		partialPath:     partialPath,
@@ -73,7 +87,13 @@ func newAttempt(store *Store, begin model.Begin, partialPath string, overhead Re
 		response:        newStream("response.zst", begin.Policy.StoreResponseBody, store.config.MaxBodyBytes),
 		requestHeaders:  newStream("request_headers.zst", begin.Policy.StoreRequestHeaders, store.config.MaxHeaderBytes),
 		responseHeaders: newStream("response_headers.zst", begin.Policy.StoreResponseHeaders, store.config.MaxHeaderBytes),
+		extractor:       metadataExtractor,
+		logger:          slog.Default(),
 	}
+	if extractionErr != nil {
+		attempt.recordExtractionWarningLocked()
+	}
+	return attempt
 }
 
 func (a *Attempt) ID() uuid.UUID { return a.begin.CaptureID }
@@ -127,6 +147,18 @@ func (a *Attempt) write(stream *contentStream, payload []byte, response bool) er
 	if len(payload) == 0 {
 		return nil
 	}
+	if a.extractor != nil {
+		var extractionErr error
+		switch stream {
+		case a.request:
+			extractionErr = a.extractor.FeedRequest(payload)
+		case a.response:
+			extractionErr = a.extractor.FeedResponse(payload)
+		}
+		if extractionErr != nil {
+			a.recordExtractionWarningLocked()
+		}
+	}
 	_, _ = stream.fullHash.Write(payload)
 	stream.observed += uint64(len(payload))
 	if !stream.enabled {
@@ -174,6 +206,7 @@ func (a *Attempt) Finalize(final model.Final) error {
 		return ErrAttemptClosed
 	}
 	a.final = final
+	a.finalSet = true
 	return nil
 }
 
@@ -214,6 +247,7 @@ func (a *Attempt) abortLocked(_ error) {
 	if a.terminal {
 		return
 	}
+	a.abortExtractorLocked()
 	for _, stream := range a.streams() {
 		_ = a.closeEncoderLocked(stream)
 		if stream.file != nil {
@@ -229,6 +263,7 @@ func (a *Attempt) abortLocked(_ error) {
 }
 
 func (a *Attempt) commitLocked() error {
+	a.finishExtractionLocked()
 	for _, stream := range a.streams() {
 		if stream.file != nil && stream.encoder == nil && !stream.closed {
 			if err := a.ensureEncoderLocked(stream); err != nil {
@@ -278,6 +313,7 @@ func (a *Attempt) commitLocked() error {
 		CaptureID:       a.ID(),
 		Begin:           a.begin,
 		Final:           a.final,
+		Extracted:       a.extracted,
 		Request:         a.request.bodyStat(),
 		Response:        a.response.bodyStat(),
 		RequestHeaders:  model.HeaderStat(a.requestHeaders.bodyStat()),
@@ -340,6 +376,52 @@ func (a *Attempt) commitLocked() error {
 		ReadyAt:        time.Now(),
 	})
 	return nil
+}
+
+func (a *Attempt) finishExtractionLocked() {
+	if a.extractor == nil || a.extractorClosed {
+		return
+	}
+	a.extractorClosed = true
+	var extracted model.Extracted
+	var err error
+	if a.finalSet {
+		extracted, err = a.extractor.Finalize(a.final)
+	} else if finalizer, ok := a.extractor.(interface {
+		FinalizeWithoutFinal() (model.Extracted, error)
+	}); ok {
+		extracted, err = finalizer.FinalizeWithoutFinal()
+	} else {
+		extracted, err = a.extractor.Finalize(model.Final{})
+	}
+	a.extracted = extracted
+	if err != nil {
+		a.recordExtractionWarningLocked()
+	}
+}
+
+func (a *Attempt) recordExtractionWarningLocked() {
+	if a.extractionWarningLogged {
+		return
+	}
+	a.extractionWarningLogged = true
+	a.logger.Warn(
+		"capture metadata extraction failed",
+		"capture_id", a.ID().String(),
+		"error_category", "metadata_extraction_failed",
+	)
+}
+
+func (a *Attempt) abortExtractorLocked() {
+	if a.extractor == nil || a.extractorClosed {
+		return
+	}
+	a.extractorClosed = true
+	if aborter, ok := a.extractor.(interface{ Abort() }); ok {
+		aborter.Abort()
+		return
+	}
+	_, _ = a.extractor.Finalize(model.Final{})
 }
 
 func (a *Attempt) ensureEncoderLocked(stream *contentStream) error {

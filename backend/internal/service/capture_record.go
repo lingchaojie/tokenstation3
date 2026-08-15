@@ -18,6 +18,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	captureextract "github.com/Wei-Shaw/sub2api/internal/capture/extract"
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/gin-gonic/gin"
@@ -2067,6 +2069,42 @@ func captureProviderRequestIDBytes(raw []byte) string {
 		}
 	}
 	return ""
+}
+
+// ExtractCaptureMetadataForCompatibility keeps legacy capture fixtures on the
+// bounded sidecar extractor during migration. Production provider handlers do
+// not call this adapter; they keep their existing lifecycle until protocol
+// attempts are introduced in the later migration tasks.
+func ExtractCaptureMetadataForCompatibility(record *CaptureRecord) (model.Extracted, error) {
+	if record == nil {
+		return model.Extracted{}, nil
+	}
+	format := model.PayloadJSON
+	trimmedResponse := bytes.TrimSpace(record.RawResponse)
+	if strings.EqualFold(strings.TrimSpace(record.Platform), PlatformKiro) &&
+		len(trimmedResponse) > 0 && trimmedResponse[0] != '{' && trimmedResponse[0] != '[' &&
+		!bytes.HasPrefix(trimmedResponse, []byte("data:")) && !bytes.HasPrefix(trimmedResponse, []byte("event:")) {
+		format = model.PayloadAWSEventStream
+	} else if record.Stream || bytes.HasPrefix(trimmedResponse, []byte("data:")) ||
+		bytes.HasPrefix(trimmedResponse, []byte("event:")) || bytes.Contains(record.RawResponse, []byte("\ndata:")) {
+		format = model.PayloadSSE
+	}
+	return captureextract.FromReaders(context.Background(), captureextract.Input{
+		Format:   format,
+		Request:  bytes.NewReader(record.RawRequest),
+		Response: bytes.NewReader(record.RawResponse),
+		Initial: model.Extracted{
+			SessionID:           record.SessionID,
+			ThinkingEffort:      record.ThinkingEffort,
+			ThinkingType:        record.ThinkingType,
+			SignaturePresent:    record.SignaturePresent,
+			InputTokens:         captureUInt32(record.InputTokens),
+			OutputTokens:        captureUInt32(record.OutputTokens),
+			CacheReadTokens:     captureUInt32(record.CacheReadTokens),
+			CacheCreationTokens: captureUInt32(record.CacheCreationTokens),
+			StopReason:          record.StopReason,
+		},
+	})
 }
 
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。

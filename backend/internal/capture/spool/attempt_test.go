@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
@@ -71,6 +73,94 @@ func TestHeaderPoliciesAndLimitsAreIndependent(t *testing.T) {
 	require.Zero(t, manifest.ResponseHeaders.StoredBytes)
 	require.Equal(t, []byte("abc"), readZstdFile(t, readyPath(s, a.ID(), "request_headers.zst")))
 	require.NoFileExists(t, readyPath(s, a.ID(), "response_headers.zst"))
+}
+
+func TestDisabledRawStorageStillExtractsWithoutCreatingContentFile(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		Format:    model.PayloadSSE,
+		Policy:    model.ContentPolicy{StoreResponseBody: false},
+	})
+	require.NoError(t, err)
+	a := sink.(*Attempt)
+
+	require.NoError(t, a.WriteResponse([]byte("data: {\"usage\":{\"output_tokens\":9}}\n\n")))
+	require.NoError(t, a.Commit())
+
+	manifest := readManifest(t, s, a.ID())
+	require.EqualValues(t, 9, manifest.Extracted.OutputTokens)
+	require.NoFileExists(t, readyPath(s, a.ID(), "response.zst"))
+}
+
+func TestMalformedExtractionDoesNotPreventCommitOrLeakPayloadInWarning(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		Format:    model.PayloadJSON,
+		Policy:    model.ContentPolicy{StoreResponseBody: true},
+	})
+	require.NoError(t, err)
+	a := sink.(*Attempt)
+	var logs bytes.Buffer
+	a.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	body := []byte("{\"secret\":\"do-not-log\"")
+
+	require.NoError(t, a.WriteResponse(body))
+	require.NoError(t, a.WriteResponse([]byte("still-do-not-log")))
+	require.NoError(t, a.Finalize(model.Final{HTTPStatus: 200, OutputTokens: 4, StopReason: "terminal"}))
+	require.NoError(t, a.Commit())
+
+	manifest := readManifest(t, s, a.ID())
+	require.EqualValues(t, 4, manifest.Extracted.OutputTokens)
+	require.Equal(t, "terminal", manifest.Extracted.StopReason)
+	require.Equal(t, append(body, []byte("still-do-not-log")...), readZstdFile(t, readyPath(s, a.ID(), "response.zst")))
+	logOutput := logs.String()
+	require.Equal(t, 1, strings.Count(logOutput, `"msg":"capture metadata extraction failed"`))
+	require.Contains(t, logOutput, `"capture_id":"`+a.ID().String()+`"`)
+	require.Contains(t, logOutput, `"error_category":"metadata_extraction_failed"`)
+	require.NotContains(t, logOutput, "do-not-log")
+	require.NotContains(t, logOutput, "still-do-not-log")
+}
+
+func TestNonUTF8RawContentRemainsCommitableWhenExtractionFails(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		Format:    model.PayloadJSON,
+		Policy:    model.ContentPolicy{StoreResponseBody: true},
+	})
+	require.NoError(t, err)
+	a := sink.(*Attempt)
+	body := []byte{0xff, 0x00, 0xfe, 0x7f}
+
+	require.NoError(t, a.WriteResponse(body))
+	require.NoError(t, a.Commit())
+
+	require.Equal(t, body, readZstdFile(t, readyPath(s, a.ID(), "response.zst")))
+}
+
+func TestExtractionWarningIsLoggedOnlyOnceAfterRepeatedFailures(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		Format:    model.PayloadSSE,
+		Policy:    model.ContentPolicy{StoreResponseBody: false},
+	})
+	require.NoError(t, err)
+	a := sink.(*Attempt)
+	var logs bytes.Buffer
+	a.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	secret := []byte("do-not-log-repeated-secret")
+	oversized := append([]byte("data: "), bytes.Repeat(secret, 48<<10)...)
+
+	require.NoError(t, a.WriteResponse(oversized))
+	require.NoError(t, a.WriteResponse(secret))
+	require.NoError(t, a.Commit())
+
+	logOutput := logs.String()
+	require.Equal(t, 1, strings.Count(logOutput, `"msg":"capture metadata extraction failed"`))
+	require.NotContains(t, logOutput, string(secret))
 }
 
 func TestResponseFramingClosesRequestEncoder(t *testing.T) {

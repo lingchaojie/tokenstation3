@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -1545,6 +1546,125 @@ func TestExtractCaptureColumnsProviderNativeRequestMetadata(t *testing.T) {
 			require.Equal(t, tt.wantID, rec.SessionID)
 			require.Equal(t, tt.wantEffort, rec.ThinkingEffort)
 			require.Equal(t, tt.wantType, rec.ThinkingType)
+		})
+	}
+}
+
+func TestCompatibilityExtractionMatchesExistingFixtures(t *testing.T) {
+	var kiroRaw bytes.Buffer
+	_, _ = kiroRaw.Write(buildCaptureKiroFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{
+			"uncachedInputTokens": 71, "outputTokens": 13,
+			"cacheReadInputTokens": 8, "cacheWriteInputTokens": 4,
+		}},
+	}))
+	_, _ = kiroRaw.Write(buildCaptureKiroFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+
+	fixtures := []struct {
+		name   string
+		record *CaptureRecord
+		want   model.Extracted
+	}{
+		{
+			name: "anthropic sse",
+			record: &CaptureRecord{
+				Platform: PlatformAnthropic,
+				Stream:   true,
+				RawRequest: []byte(`{"metadata":{"user_id":"{\"device_id\":\"d\",\"session_id\":\"session-a\"}"},` +
+					`"output_config":{"effort":"high"},"thinking":{"type":"adaptive"}}`),
+				RawResponse: []byte("data: {\"message\":{\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":2}}}\n\n" +
+					"data: {\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig\"}}\n\n" +
+					"data: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":3}}\n\n"),
+			},
+			want: model.Extracted{SessionID: "session-a", ThinkingEffort: "high", ThinkingType: "adaptive", StopReason: "tool_use", InputTokens: 7, OutputTokens: 3, CacheReadTokens: 2, SignaturePresent: true},
+		},
+		{
+			name: "openai responses json aliases",
+			record: &CaptureRecord{
+				Platform:    PlatformOpenAI,
+				RawResponse: []byte(`{"response":{"status":"completed","usage":{"prompt_tokens":13,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4,"cache_creation_tokens":3}}}}`),
+			},
+			want: model.Extracted{StopReason: "completed", InputTokens: 13, OutputTokens: 7, CacheReadTokens: 4, CacheCreationTokens: 3},
+		},
+		{
+			name: "gemini json",
+			record: &CaptureRecord{
+				Platform: PlatformGemini,
+				RawResponse: []byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"thoughtSignature":"sig"}]}}],` +
+					`"usageMetadata":{"promptTokenCount":41,"candidatesTokenCount":10,"thoughtsTokenCount":2,"cachedContentTokenCount":6}}`),
+			},
+			want: model.Extracted{StopReason: "STOP", InputTokens: 41, OutputTokens: 12, CacheReadTokens: 6, SignaturePresent: true},
+		},
+		{
+			name: "kiro aws event stream",
+			record: &CaptureRecord{
+				Platform:     PlatformKiro,
+				Stream:       true,
+				RawResponse:  kiroRaw.Bytes(),
+				ThinkingType: "enabled",
+			},
+			want: model.Extracted{ThinkingType: "enabled", StopReason: "end_turn", InputTokens: 71, OutputTokens: 13, CacheReadTokens: 8, CacheCreationTokens: 4},
+		},
+		{
+			name: "trusted prefill survives omitted payload fields",
+			record: &CaptureRecord{
+				RawResponse:         []byte(`{"provider":"opaque"}`),
+				StopReason:          "prefilled",
+				InputTokens:         61,
+				OutputTokens:        12,
+				CacheReadTokens:     3,
+				CacheCreationTokens: 2,
+				SignaturePresent:    true,
+			},
+			want: model.Extracted{StopReason: "prefilled", InputTokens: 61, OutputTokens: 12, CacheReadTokens: 3, CacheCreationTokens: 2, SignaturePresent: true},
+		},
+		{
+			name: "nested content fields do not override metadata",
+			record: &CaptureRecord{
+				RawResponse: []byte(`{"stop_reason":"stop","content":{"stopReason":"user-supplied-content"}}`),
+			},
+			want: model.Extracted{StopReason: "stop"},
+		},
+		{
+			name: "explicit zero usage overrides trusted prefill",
+			record: &CaptureRecord{
+				Platform:            PlatformOpenAI,
+				RawResponse:         []byte(`{"usage":{"input_tokens":0,"output_tokens":0}}`),
+				InputTokens:         61,
+				OutputTokens:        12,
+				CacheReadTokens:     3,
+				CacheCreationTokens: 2,
+			},
+			want: model.Extracted{InputTokens: 0, OutputTokens: 0, CacheReadTokens: 3, CacheCreationTokens: 2},
+		},
+		{
+			name: "malformed counter types leave trusted prefill intact",
+			record: &CaptureRecord{
+				RawResponse:  []byte(`{"stop_reason":"valid","usage":{"input_tokens":"do-not-use","output_tokens":-1}}`),
+				InputTokens:  5,
+				OutputTokens: 6,
+			},
+			want: model.Extracted{StopReason: "valid", InputTokens: 5, OutputTokens: 6},
+		},
+		{
+			name: "openai alias precedence is deterministic",
+			record: &CaptureRecord{
+				Platform: PlatformOpenAI,
+				RawResponse: []byte(`{"usage":{` +
+					`"input_tokens_details":{"cached_tokens":9,"cache_write_tokens":8},` +
+					`"cached_tokens":1,"cache_creation_tokens":2}}`),
+			},
+			want: model.Extracted{CacheReadTokens: 9, CacheCreationTokens: 8},
+		},
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			got, err := ExtractCaptureMetadataForCompatibility(fixture.record)
+			require.NoError(t, err)
+			require.Equal(t, fixture.want, got)
 		})
 	}
 }
