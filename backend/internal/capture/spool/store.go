@@ -59,9 +59,10 @@ type Config struct {
 }
 
 type RecoveryReport struct {
-	Ready          []RecordRef
-	OrphansDeleted int
-	CorruptDeleted int
+	Ready              []RecordRef
+	OrphansDeleted     int
+	CorruptDeleted     int
+	UnavailableRecords int
 }
 
 type diskManifest struct {
@@ -277,6 +278,10 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 		path := filepath.Join(s.readyDir, entry.Name())
 		ref, validateErr := validateRecord(path, s.validation)
 		if validateErr != nil {
+			if errors.Is(validateErr, errLegacyLimitsUnknown) {
+				report.UnavailableRecords++
+				continue
+			}
 			if !errors.Is(validateErr, ErrSpoolCorrupt) {
 				return report, fmt.Errorf("validate ready record %s: %w", entry.Name(), validateErr)
 			}

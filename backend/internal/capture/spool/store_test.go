@@ -330,7 +330,7 @@ func TestRecoverAcceptsLegacyV1RecordWithDefaultContentLimits(t *testing.T) {
 	require.Zero(t, report.CorruptDeleted)
 }
 
-func TestRecoverPreservesLegacyV1RecordWhenAppliedLimitIsAmbiguous(t *testing.T) {
+func TestRecoverReportsLegacyV1RecordWhenAppliedLimitIsAmbiguous(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)
 	s.config.MaxBodyBytes = 2
@@ -341,9 +341,38 @@ func TestRecoverPreservesLegacyV1RecordWhenAppliedLimitIsAmbiguous(t *testing.T)
 	reopened := openTestStoreAt(t, root, nil)
 	report, err := reopened.Recover(context.Background())
 
-	require.ErrorIs(t, err, errLegacyLimitsUnknown)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.UnavailableRecords)
+	require.Empty(t, report.Ready)
+	require.Empty(t, reopened.Ready())
 	require.Zero(t, report.CorruptDeleted)
 	require.DirExists(t, readyPath(reopened, a.ID(), "."))
+	require.Zero(t, reopened.Snapshot().DroppedByReason["spool_corrupt"])
+}
+
+func TestRecoverKeepsAmbiguousLegacyRecordUnavailableWithoutBlockingValidRecord(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s := openTestStoreAt(t, root, nil)
+	s.config.MaxBodyBytes = 2
+	ambiguous := committedRequestAttempt(t, s)
+	disk := readDiskManifest(t, s, ambiguous.ID())
+	writeLegacyManifest(t, s, ambiguous.ID(), disk.Manifest)
+	s.config.MaxBodyBytes = defaultMaxBodyBytes
+	valid := committedRequestAttempt(t, s)
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, 1, report.UnavailableRecords)
+	require.Len(t, report.Ready, 1)
+	require.Equal(t, valid.ID(), report.Ready[0].CaptureID)
+	require.Len(t, reopened.Ready(), 1)
+	require.Equal(t, valid.ID(), reopened.Ready()[0].CaptureID)
+	require.EqualValues(t, 1, reopened.Snapshot().ReadyRecords)
+	require.DirExists(t, readyPath(reopened, ambiguous.ID(), "."))
+	require.NotEqual(t, ambiguous.ID(), report.Ready[0].CaptureID)
+	require.Zero(t, report.CorruptDeleted)
 	require.Zero(t, reopened.Snapshot().DroppedByReason["spool_corrupt"])
 }
 
