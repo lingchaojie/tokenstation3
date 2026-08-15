@@ -14,10 +14,26 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type delayedResponsesHTTPUpstream struct {
+	delay    time.Duration
+	response *http.Response
+	err      error
+}
+
+func (u *delayedResponsesHTTPUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	return nil, fmt.Errorf("unexpected Do call")
+}
+
+func (u *delayedResponsesHTTPUpstream) DoWithTLS(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
+	time.Sleep(u.delay)
+	return u.response, u.err
+}
 
 func delayedCompactionHTTPResponse(delay time.Duration, body string) *http.Response {
 	reader, writer := io.Pipe()
@@ -287,6 +303,86 @@ func TestForwardAsResponses_DirectKiroCompactionStreamAndNonStream(t *testing.T)
 	}
 }
 
+func TestForwardAsResponses_CompactionHeartbeatErrorsUseSingleTerminalSSE(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":true,
+		"input":[{"type":"message","role":"user","content":"continue"},{"type":"compaction_trigger"}]
+	}`)
+	relayAccount := func() *Account {
+		return &Account{
+			ID: 704, Platform: PlatformKiro, Type: AccountTypeAPIKey, Concurrency: 1,
+			Credentials: map[string]any{"api_key": "sk-relay", "base_url": "https://relay.example.com"},
+		}
+	}
+	directAccount := func() *Account {
+		return &Account{
+			ID: 705, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+			Credentials: map[string]any{
+				"access_token": "kiro-access-token",
+				"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		account  *Account
+		parsed   *ParsedRequest
+		response *http.Response
+		err      error
+	}{
+		{
+			name:    "relay transport error",
+			account: relayAccount(),
+			parsed:  &ParsedRequest{},
+			err:     fmt.Errorf("dial failed"),
+		},
+		{
+			name:     "relay non-failover HTTP error",
+			account:  relayAccount(),
+			parsed:   &ParsedRequest{},
+			response: newJSONResponse(http.StatusBadRequest, `{"message":"rejected"}`),
+		},
+		{
+			name:    "direct transport error",
+			account: directAccount(),
+			parsed:  &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}},
+			err:     fmt.Errorf("dial failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+			MarkOpenAICompactClientStream(c)
+			stop := StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+			defer stop()
+
+			svc := &GatewayService{
+				cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+				httpUpstream: &delayedResponsesHTTPUpstream{
+					delay: 20 * time.Millisecond, response: tt.response, err: tt.err,
+				},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				kiroCooldownStore:   &stubKiroCooldownStore{},
+			}
+
+			_, err := svc.ForwardAsResponses(c.Request.Context(), c, tt.account, body, tt.parsed)
+
+			require.Error(t, err)
+			require.True(t, IsResponseCommitted(c))
+			responseBody := rec.Body.String()
+			require.Contains(t, responseBody, ": keepalive\n\n")
+			require.Equal(t, 1, strings.Count(responseBody, "event: response.failed"))
+			require.NotContains(t, responseBody, "\n\n{\"error\":")
+		})
+	}
+}
+
 func TestForwardAsResponses_DirectKiroOrdinaryRequestDoesNotCompact(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","stream":false,"input":"hello"}`)
 	upstream := &queuedHTTPUpstream{responses: []*http.Response{
@@ -315,6 +411,46 @@ func TestForwardAsResponses_DirectKiroOrdinaryRequestDoesNotCompact(t *testing.T
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.NotContains(t, rec.Body.String(), `"type":"compaction"`)
+	require.Contains(t, rec.Body.String(), "ordinary answer")
+}
+
+func TestForwardAsResponses_NonKiroDoesNotTranslateCompactionItems(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"input":[
+			{"type":"compaction","status":"completed","encrypted_content":"` + apicompat.EncodeCompactionEnvelope("previous summary") + `"},
+			{"type":"message","role":"user","content":"continue"},
+			{"type":"compaction_trigger"}
+		]
+	}`)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		compactionHTTPResponse(anthropicCompactionSSE("ordinary answer")),
+	}}
+	svc := &GatewayService{
+		cfg:                 &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 706, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-anthropic", "base_url": "https://anthropic.example.com"},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	result, err := svc.ForwardAsResponses(c.Request.Context(), c, account, body, &ParsedRequest{})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	upstreamBody, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	require.NotContains(t, string(upstreamBody), apicompat.CompactionSummaryPrompt)
+	require.NotContains(t, string(upstreamBody), "<conversation_summary>")
 	require.NotContains(t, rec.Body.String(), `"type":"compaction"`)
 	require.Contains(t, rec.Body.String(), "ordinary answer")
 }

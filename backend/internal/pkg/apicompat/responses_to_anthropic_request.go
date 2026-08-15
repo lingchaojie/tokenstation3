@@ -11,7 +11,19 @@ import (
 // enables Anthropic platform groups to accept OpenAI Responses API requests
 // by converting them to the native /v1/messages format before forwarding upstream.
 func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, error) {
-	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input)
+	return ResponsesToAnthropicRequestWithOptions(req, ResponsesToAnthropicOptions{})
+}
+
+type ResponsesToAnthropicOptions struct {
+	EnableCompaction bool
+}
+
+// ResponsesToAnthropicRequestWithOptions enables protocol extensions only for
+// callers that explicitly own them. In particular, KIRO remote compaction must
+// not change how unrelated Anthropic-compatible accounts handle unknown input
+// items.
+func ResponsesToAnthropicRequestWithOptions(req *ResponsesRequest, options ResponsesToAnthropicOptions) (*AnthropicRequest, error) {
+	system, messages, err := convertResponsesInputToAnthropicWithCompaction(req.Instructions, req.Input, options.EnableCompaction)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +146,10 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // a Responses API instructions + input array. Returns the system as raw JSON
 // (for Anthropic's polymorphic system field) and a list of Anthropic messages.
 func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+	return convertResponsesInputToAnthropicWithCompaction(instructions, inputRaw, false)
+}
+
+func convertResponsesInputToAnthropicWithCompaction(instructions string, inputRaw json.RawMessage, enableCompaction bool) (json.RawMessage, []AnthropicMessage, error) {
 	var systemParts []string
 	if strings.TrimSpace(instructions) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(instructions))
@@ -197,7 +213,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 				Content: blockJSON,
 			})
 
-		case IsCompactionItemType(item.Type):
+		case enableCompaction && IsCompactionItemType(item.Type):
 			summary := CompactionSummaryFromItem(&item)
 			if summary == "" {
 				continue
@@ -208,7 +224,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			}
 			messages = append(messages, AnthropicMessage{Role: "user", Content: text})
 
-		case strings.TrimSpace(item.Type) == CompactionTriggerType:
+		case enableCompaction && strings.TrimSpace(item.Type) == CompactionTriggerType:
 			prompt, err := json.Marshal(CompactionSummaryPrompt)
 			if err != nil {
 				return nil, nil, fmt.Errorf("marshal compaction prompt: %w", err)

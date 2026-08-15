@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKiroCacheEmulationGroupDefaultsAndNonKiro(t *testing.T) {
@@ -77,6 +78,52 @@ func TestKiroCacheEmulationPrepareDoesNotMutateUntilCommit(t *testing.T) {
 	}
 	if usage := planC.result(); usage.CacheReadInputTokens != 2000 || usage.CacheCreationInputTokens != 0 {
 		t.Fatalf("committed plan was not visible: %+v", usage)
+	}
+}
+
+func TestKiroCacheEmulationPrepareHitDoesNotRefreshExpiryUntilCommit(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 56, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("deferred hit refresh", false)
+
+	initial := svc.prepareKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	require.NotNil(t, initial)
+	initial.commit()
+
+	cacheKey := initial.cacheKey
+	fixedExpiry := time.Now().Add(2 * time.Minute)
+	snapshotExpiries := func() []time.Time {
+		globalKiroCacheTracker.mu.Lock()
+		defer globalKiroCacheTracker.mu.Unlock()
+		expiries := make([]time.Time, 0, len(globalKiroCacheTracker.entries[cacheKey]))
+		for _, entry := range globalKiroCacheTracker.entries[cacheKey] {
+			expiries = append(expiries, entry.expiresAt)
+		}
+		return expiries
+	}
+	globalKiroCacheTracker.mu.Lock()
+	for fingerprint, entry := range globalKiroCacheTracker.entries[cacheKey] {
+		entry.expiresAt = fixedExpiry
+		globalKiroCacheTracker.entries[cacheKey][fingerprint] = entry
+	}
+	globalKiroCacheTracker.mu.Unlock()
+
+	prepared := svc.prepareKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	require.NotNil(t, prepared)
+	require.Equal(t, 2000, prepared.result().CacheReadInputTokens)
+	preparedExpiries := snapshotExpiries()
+	require.NotEmpty(t, preparedExpiries)
+	for _, expiresAt := range preparedExpiries {
+		require.Equal(t, fixedExpiry, expiresAt, "prepare must not refresh a cache hit")
+	}
+
+	prepared.commit()
+	committedExpiries := snapshotExpiries()
+	require.NotEmpty(t, committedExpiries)
+	for _, expiresAt := range committedExpiries {
+		require.True(t, expiresAt.After(fixedExpiry), "commit should refresh the cache hit")
 	}
 }
 

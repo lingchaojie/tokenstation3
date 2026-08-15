@@ -54,7 +54,7 @@ func TestResponsesToAnthropicRequest_CompactionTriggerAndReplay(t *testing.T) {
 			{"type":"compaction_trigger"}
 		]`),
 	}
-	out, err := ResponsesToAnthropicRequest(trigger)
+	out, err := ResponsesToAnthropicRequestWithOptions(trigger, ResponsesToAnthropicOptions{EnableCompaction: true})
 	require.NoError(t, err)
 	require.NotEmpty(t, out.Messages)
 	require.Contains(t, anthropicMessagesText(t, out.Messages), "continue work")
@@ -67,12 +67,30 @@ func TestResponsesToAnthropicRequest_CompactionTriggerAndReplay(t *testing.T) {
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}
 		]`),
 	}
-	out, err = ResponsesToAnthropicRequest(replay)
+	out, err = ResponsesToAnthropicRequestWithOptions(replay, ResponsesToAnthropicOptions{EnableCompaction: true})
 	require.NoError(t, err)
 	text := anthropicMessagesText(t, out.Messages)
 	require.Contains(t, text, "<conversation_summary>")
 	require.Contains(t, text, "previous summary")
 	require.Contains(t, text, "next")
+}
+
+func TestResponsesToAnthropicRequest_CompactionDisabledByDefault(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: json.RawMessage(`[
+			{"type":"compaction","status":"completed","encrypted_content":"` + EncodeCompactionEnvelope("previous summary") + `"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue work"}]},
+			{"type":"compaction_trigger"}
+		]`),
+	}
+
+	out, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	text := anthropicMessagesText(t, out.Messages)
+	require.Contains(t, text, "continue work")
+	require.NotContains(t, text, "previous summary")
+	require.NotContains(t, text, CompactionSummaryPrompt)
 }
 
 func TestResponsesToAnthropicRequest_CompactionWithoutSummaryIsSkipped(t *testing.T) {

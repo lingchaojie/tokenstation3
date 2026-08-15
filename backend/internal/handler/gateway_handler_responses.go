@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -83,10 +84,16 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	hasCompactionTrigger := service.HasCompactionTriggerInInput(body)
 	stopCompactionKeepalive := func() {}
-	if reqStream && service.HasCompactionTriggerInInput(body) {
+	compactionKeepaliveStarted := false
+	startCompactionKeepaliveForAccount := func(account *service.Account) {
+		if compactionKeepaliveStarted || !shouldStartResponsesCompactionKeepalive(account, reqStream, hasCompactionTrigger) {
+			return
+		}
 		service.MarkOpenAICompactClientStream(c)
 		stopCompactionKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.responsesCompactionKeepaliveInterval())
+		compactionKeepaliveStarted = true
 	}
 	defer stopCompactionKeepalive()
 
@@ -171,12 +178,14 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	// 3. Account selection + failover loop
 	fs := NewFailoverState(h.maxAccountSwitches, false)
+	kiroCompactionLocked := false
 
 	for {
 		if requestCtx.Err() != nil {
 			return
 		}
-		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(requestCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
+		selectionCtx := responsesAccountSelectionContext(requestCtx, kiroCompactionLocked)
+		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
 		if err != nil {
 			if len(fs.FailedAccountIDs) == 0 {
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, effectiveAPIKeyPlatform(c, apiKey))
@@ -207,6 +216,17 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			}
 		}
 		account := selection.Account
+		if hasCompactionTrigger && account.IsKiro() {
+			// Once a request enters KIRO compaction, keep failover on KIRO. Falling
+			// through to an Anthropic account would intentionally skip the KIRO-only
+			// prompt yet return an ordinary Responses item to a compaction client.
+			kiroCompactionLocked = true
+		}
+		// Mixed scheduling can select a KIRO account from a non-KIRO entry group,
+		// so compaction transport behavior must follow the actual attempt rather
+		// than apiKey.Group.Platform. Once started it remains safe across failover:
+		// heartbeat comments are transport-only and cannot be uncommitted.
+		startCompactionKeepaliveForAccount(account)
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		// 4. Acquire account concurrency slot
@@ -373,6 +393,17 @@ func (h *GatewayHandler) responsesCompactionKeepaliveInterval() time.Duration {
 		return 0
 	}
 	return time.Duration(h.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+}
+
+func shouldStartResponsesCompactionKeepalive(account *service.Account, reqStream, hasCompactionTrigger bool) bool {
+	return reqStream && hasCompactionTrigger && account != nil && account.IsKiro()
+}
+
+func responsesAccountSelectionContext(ctx context.Context, kiroCompactionLocked bool) context.Context {
+	if !kiroCompactionLocked {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformKiro)
 }
 
 // handleResponsesFailoverExhausted writes a failover-exhausted error in Responses format.

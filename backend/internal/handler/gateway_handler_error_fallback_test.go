@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -48,6 +50,24 @@ func TestGatewayResponsesLocalErrorAfterCompactHeartbeatWritesOneTerminalEvent(t
 	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
 	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
 	require.NotContains(t, rec.Body.String(), `{"error":{"code":"api_error"`)
+}
+
+func TestShouldStartResponsesCompactionKeepaliveIsKiroOnly(t *testing.T) {
+	// The selected account, not the entry group's platform, owns this decision:
+	// mixed scheduling may legally route an Anthropic group to a KIRO account.
+	require.True(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformAnthropic}, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(nil, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, false, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, true, false))
+}
+
+func TestResponsesAccountSelectionContextLocksKiroAfterCompactionSelection(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkey.ForcePlatform, service.PlatformAnthropic)
+
+	require.Same(t, base, responsesAccountSelectionContext(base, false))
+	locked := responsesAccountSelectionContext(base, true)
+	require.Equal(t, service.PlatformKiro, locked.Value(ctxkey.ForcePlatform))
 }
 
 func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testing.T) {

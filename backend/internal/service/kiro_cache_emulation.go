@@ -400,7 +400,6 @@ func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.pruneLocked(now)
 
 	matchedTokens := 0
 	if accountEntries := t.entries[cacheKey]; accountEntries != nil {
@@ -412,8 +411,6 @@ func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *
 			if !ok || !entry.expiresAt.After(now) {
 				continue
 			}
-			entry.expiresAt = now.Add(entry.ttl)
-			accountEntries[candidate.prefixFingerprint] = entry
 			matchedTokens = min(breakpoint.cumulativeTokens, profile.totalInputTokens)
 			break
 		}

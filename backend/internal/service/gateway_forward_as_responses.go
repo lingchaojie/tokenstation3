@@ -58,7 +58,9 @@ func (s *GatewayService) ForwardAsResponses(
 	isCompaction := account != nil && account.IsKiro() && apicompat.HasCompactionTrigger(&responsesReq)
 
 	// 3. Convert Responses → Anthropic
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(&responsesReq, apicompat.ResponsesToAnthropicOptions{
+		EnableCompaction: account != nil && account.IsKiro(),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -968,6 +970,11 @@ func isEmptyJSONObject(raw json.RawMessage) bool {
 
 // writeResponsesError writes an error response in OpenAI Responses API format.
 func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAICompactSSEFailureMessage(c, statusCode, code, message)
+		MarkResponseCommitted(c)
+		return
+	}
 	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
