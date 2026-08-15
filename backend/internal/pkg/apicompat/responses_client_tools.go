@@ -427,12 +427,12 @@ func restoreResponsesClientToolRawItem(raw json.RawMessage, adapter *ResponsesCl
 		delete(item, "name")
 		delete(item, "namespace")
 		changed = true
-	default:
-		if namespace, ok := adapter.NamespaceTools[name]; ok {
-			item["name"] = rawJSONString(namespace.Name)
-			item["namespace"] = rawJSONString(namespace.Namespace)
-			changed = true
-		}
+	}
+	itemType := decodedRawJSONString(item["type"])
+	if namespace, ok := adapter.NamespaceTools[name]; ok && isNamespaceQualifiedCallType(itemType) {
+		item["name"] = rawJSONString(namespace.Name)
+		item["namespace"] = rawJSONString(namespace.Namespace)
+		changed = true
 	}
 	if !changed {
 		return raw, false, nil
@@ -565,7 +565,7 @@ func (r *ResponsesClientToolStreamRestorer) Restore(event ResponsesStreamEvent) 
 				if input != "" {
 					emit(ResponsesStreamEvent{Type: "response.custom_tool_call_input.delta", OutputIndex: call.outputIdx, ItemID: call.itemID, Delta: input})
 				}
-				emit(ResponsesStreamEvent{Type: "response.custom_tool_call_input.done", OutputIndex: call.outputIdx, ItemID: call.itemID, CallID: call.callID, Name: call.name, Input: input})
+				emit(r.restoreNamespaceEvent(ResponsesStreamEvent{Type: "response.custom_tool_call_input.done", OutputIndex: call.outputIdx, ItemID: call.itemID, CallID: call.callID, Name: call.name, Input: input}))
 			}
 			return out
 		}
@@ -671,11 +671,16 @@ func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byt
 		return false
 	}
 	if raw.Item != nil {
-		if raw.Item.Type != "function_call" {
+		switch raw.Item.Type {
+		case "function_call":
+			_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
+			return r.adapter.CustomTools[raw.Item.Name] || (r.adapter.ToolSearch && raw.Item.Name == toolSearchProxyName) || namespaceTool || r.calls[raw.Item.ID] != nil || r.calls[raw.Item.CallID] != nil
+		case "custom_tool_call":
+			_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
+			return namespaceTool
+		default:
 			return false
 		}
-		_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
-		return r.adapter.CustomTools[raw.Item.Name] || (r.adapter.ToolSearch && raw.Item.Name == toolSearchProxyName) || namespaceTool || r.calls[raw.Item.ID] != nil || r.calls[raw.Item.CallID] != nil
 	}
 	if _, namespaceTool := r.adapter.NamespaceTools[raw.Name]; namespaceTool {
 		return true
@@ -688,7 +693,9 @@ func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byt
 
 func clientToolLifecycleEvent(typ string) bool {
 	switch typ {
-	case "response.output_item.added", "response.output_item.done", "response.function_call_arguments.delta", "response.function_call_arguments.done":
+	case "response.output_item.added", "response.output_item.done",
+		"response.function_call_arguments.delta", "response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
 		return true
 	default:
 		return false
@@ -811,12 +818,14 @@ func (r *ResponsesClientToolStreamRestorer) restoreNamespaceEvent(event Response
 	if len(r.adapter.NamespaceTools) == 0 {
 		return event
 	}
-	if event.Item != nil && event.Item.Type == "function_call" {
+	if event.Item != nil && isNamespaceQualifiedCallType(event.Item.Type) {
 		if name, ok := r.adapter.NamespaceTools[event.Item.Name]; ok {
 			event.Item.Name, event.Item.Namespace = name.Name, name.Namespace
 		}
 	}
-	if event.Type == "response.function_call_arguments.delta" || event.Type == "response.function_call_arguments.done" {
+	switch event.Type {
+	case "response.function_call_arguments.delta", "response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
 		if name, ok := r.adapter.NamespaceTools[event.Name]; ok {
 			event.Name = name.Name
 		}
@@ -840,8 +849,10 @@ func restoreResponsesOutputClientTools(outputs []ResponsesOutput, adapter *Respo
 			output.Name = ""
 			output.Namespace = ""
 		}
-		if name, ok := adapter.NamespaceTools[output.Name]; ok && output.Type == "function_call" {
-			output.Name, output.Namespace = name.Name, name.Namespace
+		if isNamespaceQualifiedCallType(output.Type) {
+			if name, ok := adapter.NamespaceTools[output.Name]; ok {
+				output.Name, output.Namespace = name.Name, name.Namespace
+			}
 		}
 	}
 }

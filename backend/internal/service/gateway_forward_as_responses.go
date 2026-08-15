@@ -883,7 +883,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 type anthropicBufferedBlockAccumulator struct {
 	text     strings.Builder
 	thinking strings.Builder
-	input    strings.Builder
+	input    json.RawMessage
 }
 
 type anthropicBufferedContentAccumulator struct {
@@ -897,7 +897,7 @@ func (a *anthropicBufferedContentAccumulator) start(response *apicompat.Anthropi
 	state := &anthropicBufferedBlockAccumulator{}
 	_, _ = state.text.WriteString(block.Text)
 	_, _ = state.thinking.WriteString(block.Thinking)
-	_, _ = state.input.Write(block.Input)
+	state.input = append(json.RawMessage(nil), block.Input...)
 	a.blocks = append(a.blocks, state)
 	response.Content = append(response.Content, block)
 }
@@ -913,7 +913,7 @@ func (a *anthropicBufferedContentAccumulator) delta(index int, delta *apicompat.
 	case "thinking_delta":
 		_, _ = state.thinking.WriteString(delta.Thinking)
 	case "input_json_delta":
-		_, _ = state.input.WriteString(delta.PartialJSON)
+		state.input = appendRawJSON(state.input, delta.PartialJSON)
 	}
 }
 
@@ -927,10 +927,25 @@ func (a *anthropicBufferedContentAccumulator) materialize(response *apicompat.An
 		}
 		response.Content[index].Text = state.text.String()
 		response.Content[index].Thinking = state.thinking.String()
-		if state.input.Len() > 0 {
-			response.Content[index].Input = json.RawMessage(state.input.String())
+		if len(state.input) > 0 {
+			response.Content[index].Input = append(json.RawMessage(nil), state.input...)
 		}
 	}
+}
+
+func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
+	if len(existing) == 0 || isEmptyJSONObject(existing) {
+		return json.RawMessage(fragment)
+	}
+	return json.RawMessage(string(existing) + fragment)
+}
+
+func isEmptyJSONObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return false
+	}
+	return len(bytes.TrimSpace(trimmed[1:len(trimmed)-1])) == 0
 }
 
 // writeResponsesError writes an error response in OpenAI Responses API format.

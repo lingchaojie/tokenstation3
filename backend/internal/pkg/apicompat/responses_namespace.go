@@ -11,7 +11,7 @@ import (
 type ResponsesNamespaceName = NamespacedToolName
 
 // FlattenResponsesNamespaces converts Codex private namespace declarations into
-// public Responses function tools and rewrites namespace-qualified request calls.
+// public Responses tools and rewrites namespace-qualified request calls.
 func FlattenResponsesNamespaces(req map[string]any) (map[string]ResponsesNamespaceName, bool, error) {
 	return FlattenResponsesNamespacesExcept(req, nil)
 }
@@ -52,7 +52,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
+			if !ok || !isFlattenableNamespaceChild(child) {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -89,7 +89,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
+			if !ok || !isFlattenableNamespaceChild(child) {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -136,6 +136,15 @@ func namespaceChildren(tool map[string]any) []any {
 	return children
 }
 
+func isFlattenableNamespaceChild(child map[string]any) bool {
+	switch strings.TrimSpace(stringValue(child["type"])) {
+	case "function", "custom":
+		return true
+	default:
+		return false
+	}
+}
+
 func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespaceName) {
 	switch typed := value.(type) {
 	case []any:
@@ -143,12 +152,21 @@ func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespa
 			rewriteNamespaceQualifiedCalls(item, names)
 		}
 	case map[string]any:
-		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
+		if isNamespaceQualifiedCallType(stringValue(typed["type"])) {
 			rewriteNamespaceQualifiedCall(typed, names)
 		}
 		for _, child := range typed {
 			rewriteNamespaceQualifiedCalls(child, names)
 		}
+	}
+}
+
+func isNamespaceQualifiedCallType(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case "function_call", "custom_tool_call":
+		return true
+	default:
+		return false
 	}
 }
 

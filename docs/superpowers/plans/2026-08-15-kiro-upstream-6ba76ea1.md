@@ -316,7 +316,7 @@ git commit -m "fix(kiro): bypass Claude Code OAuth mimicry"
 - Produces: `isFlattenableNamespaceChild(map[string]any) bool`, `isNamespaceQualifiedCallType(string) bool`, and `isEmptyJSONObject(json.RawMessage) bool`.
 - Consumes: `ResponsesClientToolMapping.NamespaceTools` and existing stream restorer state.
 
-- [ ] **Step 1: Add failing namespace custom-child tests**
+- [x] **Step 1: Add failing namespace custom-child tests**
 
 Build a request with a namespace named `functions` containing a custom child named `exec`; call `AdaptResponsesClientTools`; assert the outgoing tool is a flattened function named `functions__exec`, history calls are flattened, and restored non-stream plus SSE outputs contain `type: custom_tool_call`, `namespace: functions`, `name: exec`.
 
@@ -334,7 +334,7 @@ req := map[string]any{
 
 Add a buffered accumulator regression that starts with `json.RawMessage("{}")`, appends `{"cmd":"ls"}`, and expects exactly `{"cmd":"ls"}`.
 
-- [ ] **Step 2: Run namespace/tool tests RED**
+- [x] **Step 2: Run namespace/tool tests RED**
 
 ```bash
 cd backend
@@ -343,7 +343,7 @@ go test -tags=unit -count=1 ./internal/pkg/apicompat ./internal/service -run 'Na
 
 Expected: custom namespace child is omitted/not restored and buffered input is `{}{...}`.
 
-- [ ] **Step 3: Implement namespace flattening/restoration and placeholder replacement**
+- [x] **Step 3: Implement namespace flattening/restoration and placeholder replacement**
 
 ```go
 func isFlattenableNamespaceChild(child map[string]any) bool {
@@ -379,14 +379,14 @@ func isEmptyJSONObject(raw json.RawMessage) bool {
 
 Make `appendRawJSON` replace, rather than append to, an empty-object placeholder.
 
-- [ ] **Step 4: Run bridge and service tests GREEN**
+- [x] **Step 4: Run bridge and service tests GREEN**
 
 ```bash
 cd backend
 go test -tags=unit -count=1 ./internal/pkg/apicompat ./internal/service -run 'Namespace|ClientTool|Buffered.*ToolInput|AppendRawJSON|ForwardAsResponses.*Tool'
 ```
 
-- [ ] **Step 5: Commit custom-tool compatibility**
+- [x] **Step 5: Commit custom-tool compatibility**
 
 ```bash
 git add backend/internal/pkg/apicompat/responses_namespace.go backend/internal/pkg/apicompat/responses_client_tools.go backend/internal/pkg/apicompat/responses_stream_event_wire.go backend/internal/pkg/apicompat/responses_namespace_custom_child_test.go backend/internal/service/gateway_forward_as_responses.go backend/internal/service/gateway_forward_as_responses_tool_input_test.go
