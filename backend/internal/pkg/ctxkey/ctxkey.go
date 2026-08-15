@@ -8,6 +8,11 @@ const (
 	// ForcePlatform 强制平台（用于 /antigravity 路由），由 middleware.ForcePlatform 设置
 	ForcePlatform Key = "ctx_force_platform"
 
+	// RequiredAccountPlatform narrows an otherwise unchanged scheduler candidate
+	// pool to one account platform. Unlike ForcePlatform it must not change the
+	// entry platform or bypass mixed-scheduling eligibility checks.
+	RequiredAccountPlatform Key = "ctx_required_account_platform"
+
 	// IngressProvider 当前请求按入口路径（SDK 端点）推断出的 provider（anthropic/openai），
 	// 由 handler.InboundEndpointMiddleware 设置。统一（auto 绑定模式）Key 在鉴权时据此
 	// 解析对应 provider 的默认分组。

@@ -83,6 +83,39 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 	return s.hydrateSelectedAccount(ctx, account)
 }
 
+// WithGatewayRequiredAccountPlatform restricts selection to accounts from the
+// given platform without changing the entry platform. This preserves mixed
+// scheduling eligibility (including per-account opt-in) while allowing a
+// protocol-specific failover sequence to remain on one provider.
+func WithGatewayRequiredAccountPlatform(ctx context.Context, platform string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ctxkey.RequiredAccountPlatform, strings.TrimSpace(platform))
+}
+
+func gatewayAccountMatchesRequiredPlatform(ctx context.Context, account *Account) bool {
+	if account == nil {
+		return false
+	}
+	required, _ := ctx.Value(ctxkey.RequiredAccountPlatform).(string)
+	return required == "" || account.Platform == required
+}
+
+func filterAccountsByGatewayRequiredPlatform(ctx context.Context, accounts []Account) []Account {
+	required, _ := ctx.Value(ctxkey.RequiredAccountPlatform).(string)
+	if required == "" {
+		return accounts
+	}
+	filtered := make([]Account, 0, len(accounts))
+	for i := range accounts {
+		if accounts[i].Platform == required {
+			filtered = append(filtered, accounts[i])
+		}
+	}
+	return filtered
+}
+
 // SelectAccountWithLoadAwareness selects account with load-awareness and wait plan.
 // metadataUserID: 用于客户端亲和调度，从中提取客户端 ID
 // sub2apiUserID: 系统用户 ID，用于二维亲和调度
@@ -950,7 +983,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				}
 			}
 		}
-		return accounts, useMixed, err
+		return filterAccountsByGatewayRequiredPlatform(ctx, accounts), useMixed, err
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
@@ -994,7 +1027,8 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 			}
 		}
-		return s.filterAccountsBySchedulingThreshold(ctx, filtered), useMixed, nil
+		filtered = s.filterAccountsBySchedulingThreshold(ctx, filtered)
+		return filterAccountsByGatewayRequiredPlatform(ctx, filtered), useMixed, nil
 	}
 
 	var accounts []Account
@@ -1033,7 +1067,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	if platform == PlatformGrok || strings.EqualFold(platform, PlatformGrok) {
 		accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
 	}
-	return accounts, useMixed, nil
+	return filterAccountsByGatewayRequiredPlatform(ctx, accounts), useMixed, nil
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
@@ -2161,7 +2195,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if s.isAccountAllowedForPlatform(account, nativePlatform, true) {
+							if s.isAccountAllowedForPlatform(account, nativePlatform, true) && gatewayAccountMatchesRequiredPlatform(ctx, account) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -2285,7 +2319,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-						if s.isAccountAllowedForPlatform(account, nativePlatform, true) {
+						if s.isAccountAllowedForPlatform(account, nativePlatform, true) && gatewayAccountMatchesRequiredPlatform(ctx, account) {
 							return account, nil
 						}
 					}

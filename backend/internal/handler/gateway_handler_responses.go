@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -403,7 +402,7 @@ func responsesAccountSelectionContext(ctx context.Context, kiroCompactionLocked 
 	if !kiroCompactionLocked {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformKiro)
+	return service.WithGatewayRequiredAccountPlatform(ctx, service.PlatformKiro)
 }
 
 // handleResponsesFailoverExhausted writes a failover-exhausted error in Responses format.

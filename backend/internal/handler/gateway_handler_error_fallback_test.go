@@ -67,7 +67,8 @@ func TestResponsesAccountSelectionContextLocksKiroAfterCompactionSelection(t *te
 
 	require.Same(t, base, responsesAccountSelectionContext(base, false))
 	locked := responsesAccountSelectionContext(base, true)
-	require.Equal(t, service.PlatformKiro, locked.Value(ctxkey.ForcePlatform))
+	require.Equal(t, service.PlatformAnthropic, locked.Value(ctxkey.ForcePlatform), "entry platform must stay mixed Anthropic")
+	require.Equal(t, service.PlatformKiro, locked.Value(ctxkey.RequiredAccountPlatform))
 }
 
 func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testing.T) {

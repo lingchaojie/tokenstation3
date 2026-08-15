@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,4 +55,47 @@ func TestIsAccountAllowedForPlatform_Kiro(t *testing.T) {
 	// 未开 mixed 的 kiro：拒绝
 	kiroOff := &Account{Platform: PlatformKiro}
 	require.False(t, s.isAccountAllowedForPlatform(kiroOff, PlatformAnthropic, true))
+}
+
+func TestListSchedulableAccountsRequiredPlatformPreservesKiroMixedEligibility(t *testing.T) {
+	repo := &mockAccountRepoForPlatform{accounts: []Account{
+		{ID: 1, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true},
+		{ID: 2, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+		{ID: 3, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": false}},
+	}}
+	svc := &GatewayService{cfg: testConfig(), accountRepo: repo}
+	ctx := WithGatewayRequiredAccountPlatform(context.Background(), PlatformKiro)
+
+	accounts, useMixed, err := svc.listSchedulableAccounts(ctx, nil, PlatformAnthropic, false)
+
+	require.NoError(t, err)
+	require.True(t, useMixed)
+	require.Len(t, accounts, 1)
+	require.Equal(t, int64(2), accounts[0].ID, "required platform must not bypass KIRO mixed_scheduling eligibility")
+}
+
+func TestSelectAccountWithMixedSchedulingRequiredPlatformRejectsStickyAnthropic(t *testing.T) {
+	repo := &mockAccountRepoForPlatform{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformAnthropic, Priority: 1, Status: StatusActive, Schedulable: true},
+			{ID: 2, Platform: PlatformKiro, Priority: 2, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			{ID: 3, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": false}},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+	svc := &GatewayService{
+		cfg:         testConfig(),
+		accountRepo: repo,
+		cache:       &mockGatewayCacheForPlatform{sessionBindings: map[string]int64{"compaction-session": 1}},
+	}
+	ctx := WithGatewayRequiredAccountPlatform(context.Background(), PlatformKiro)
+
+	account, err := svc.selectAccountWithMixedScheduling(ctx, nil, "compaction-session", "", nil, PlatformAnthropic)
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(2), account.ID, "sticky Anthropic and mixed-disabled KIRO must both be skipped")
 }
