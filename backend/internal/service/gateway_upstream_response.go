@@ -828,7 +828,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	providerPayloadObserved := false
 	providerPhase := anthropicProviderAwaitingStart
 	kiroTranslatedBody, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
-	_, rawProviderCapture := resp.Body.(*captureBodyReadCloser)
+	_, legacyRawProviderCapture := resp.Body.(*captureBodyReadCloser)
+	_, streamingAttemptCapture := resp.Body.(*captureResponseReader)
+	rawProviderCapture := legacyRawProviderCapture || streamingAttemptCapture || captureStreamingAttemptPath(c)
 	stageSyntheticKiroWebSearchEvents := providerNativeCapture && kiroTranslatedBody.stageSyntheticWebSearchEvents
 	stagedKiroWebSearchBlockIndexes := make(map[int]struct{})
 	if !rawProviderCapture && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
@@ -2053,7 +2055,7 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 
 	// 归档采集：在任何改写（model/tool 名还原、Kimi/cache-TTL usage 规整）之前，
 	// 快照上游原始响应体，保证与流式 tee 一样是"逐字上游原文"（零成本：关闭时不分配）。
-	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
+	if !captureStreamingAttemptPath(c) && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		capturedResp, truncated := captureWithLimit(body, s.cfg.Gateway.Capture.MaxBodyBytes)
 		setCaptureResult(c, resp, capturedResp, truncated)
 	}

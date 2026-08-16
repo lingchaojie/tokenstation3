@@ -234,7 +234,7 @@ func (h *OpenAIGatewayHandler) prepareCaptureScope(c *gin.Context, userID int64,
 	if h == nil || c == nil {
 		return
 	}
-	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, userID, groupID)
+	service.PrepareCapturePolicyScope(c.Request.Context(), c, h.settingService, userID, groupID)
 }
 
 func (h *OpenAIGatewayHandler) captureLimit() int {
@@ -261,7 +261,14 @@ func hashFinalOpenAIUpstreamRequest(result *service.OpenAIForwardResult, fallbac
 // submitCapture 把一次 OpenAI 透传调用的原始上游快照提交到归档通道。
 // capturePool 为 nil（未启用/未注入）或结果未采集时直接返回，热路径零成本。
 func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.OpenAIForwardResult, account *service.Account, body []byte, upstreamEndpoint string) {
-	if h.capturePool == nil || result == nil || result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+	if h.capturePool == nil || result == nil || account == nil {
+		return
+	}
+	if account.Platform != service.PlatformKiro {
+		service.CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
+		return
+	}
+	if result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
 	if record := buildOpenAICaptureRecord(result, account, body, upstreamEndpoint, h.captureLimit()); record != nil {
@@ -324,6 +331,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
+	defer service.AbortCaptureAttempt(c)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.responses",
@@ -1000,6 +1008,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 	h.prepareCaptureScope(c, subject.UserID, apiKey.GroupID)
+	defer service.AbortCaptureAttempt(c)
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.messages",
@@ -1294,6 +1303,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					continue
 				}
 				if result != nil && result.ClientDisconnect {
+					service.CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
 					reqLog.Info("openai_messages.client_disconnected",
 						zap.Int64("account_id", account.ID),
 						zap.Error(err),
@@ -2649,6 +2659,14 @@ func (h *OpenAIGatewayHandler) submitOpenAITerminalCapture(c *gin.Context, failu
 	if platform == "" {
 		platform = service.PlatformOpenAI
 	}
+	if platform != service.PlatformKiro {
+		if failure.HasUpstreamHTTPResponse {
+			service.CommitTerminalErrorCaptureAttempt(c, platform, failure.StatusCode)
+		} else {
+			service.AbortCaptureAttempt(c)
+		}
+		return
+	}
 	if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failure, h.captureLimit()); rec != nil {
 		h.capturePool.Submit(rec)
 	}
@@ -2693,6 +2711,7 @@ func isSafeRetryAfter(value string) bool {
 
 // handleFailoverExhaustedSimple 简化版本，用于没有响应体的情况
 func (h *OpenAIGatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, statusCode int, streamStarted bool) {
+	service.AbortCaptureAttempt(c)
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	service.SetOpsUpstreamError(c, statusCode, errMsg, "")
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)

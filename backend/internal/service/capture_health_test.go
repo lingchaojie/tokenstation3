@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,20 +52,6 @@ type deferredLifecycleWriter struct {
 	err   error
 }
 
-type blockingLifecycleWriter struct {
-	entered chan *archiveWriteItem
-	release chan struct{}
-}
-
-func (w *blockingLifecycleWriter) Write(_ context.Context, item *archiveWriteItem) error {
-	w.entered <- item
-	<-w.release
-	item.completeSuccess()
-	return nil
-}
-
-func (w *blockingLifecycleWriter) Stop() {}
-
 func newDeferredLifecycleWriter() *deferredLifecycleWriter {
 	return &deferredLifecycleWriter{items: make(chan *archiveWriteItem, 8)}
 }
@@ -105,50 +92,41 @@ func TestCapturePoolKeepsBytesUntilWriterCompletes(t *testing.T) {
 	require.Equal(t, uint64(1), pool.Health().WrittenRecords)
 }
 
-func TestCapturePoolReportsByteBudgetLoss(t *testing.T) {
-	writer := newDeferredLifecycleWriter()
-	pool := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 8, OverflowPolicy: "drop", MaxQueueBytes: 100,
-	}, writer)
-	defer pool.Stop()
+func TestCapturePoolSynchronousAdmissionFailureHasNoQueueState(t *testing.T) {
+	transport := &recordingCaptureTransport{beginErr: errors.New("sidecar unavailable")}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
 
-	pool.Submit(&CaptureRecord{RawResponse: make([]byte, 60)})
-	item := writer.take(t)
-	pool.Submit(&CaptureRecord{RawResponse: make([]byte, 60)})
+	attempt, ok := pool.Begin(context.Background(), model.Begin{})
 
-	got := pool.Health()
-	require.Equal(t, uint64(1), got.DroppedByReason[string(CaptureDropByteBudgetExceeded)].Records)
-	require.Equal(t, uint64(60), got.DroppedByReason[string(CaptureDropByteBudgetExceeded)].Bytes)
-	item.completeSuccess()
+	require.False(t, ok)
+	require.Nil(t, attempt)
+	require.Equal(t, 1, transport.Begins(), "admission must synchronously issue exactly one IPC Begin")
+	health := pool.Health()
+	require.Zero(t, health.WorkerQueue.Current)
+	require.Zero(t, health.WriterQueue.Current)
+	require.Zero(t, health.InFlightBytes.Current)
+	require.Empty(t, health.DroppedByReason, "gateway no longer reports retired queue or byte-budget loss")
 }
 
-func TestCapturePoolReportsWorkerQueueLoss(t *testing.T) {
-	writer := &blockingLifecycleWriter{
-		entered: make(chan *archiveWriteItem, 1),
-		release: make(chan struct{}),
-	}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 1, OverflowPolicy: "drop", MaxQueueBytes: 1024,
-	}, writer)
+func TestCapturePoolSynchronousAttemptHasExactlyOneTerminal(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	attempt, ok := pool.Begin(context.Background(), model.Begin{Policy: model.ContentPolicy{StoreResponseBody: true}})
+	require.True(t, ok)
+	require.True(t, attempt.WriteResponse([]byte("response")))
+	final := model.Final{HTTPStatus: 200, StopReason: "stop", ResponseComplete: true}
+	require.True(t, attempt.Finalize(final))
+	require.True(t, attempt.Commit())
+	require.False(t, attempt.Commit(), "a synchronous attempt may commit only once")
+	attempt.Abort()
 
-	pool.Submit(&CaptureRecord{RawResponse: []byte("first")})
-	select {
-	case <-writer.entered:
-	case <-time.After(time.Second):
-		t.Fatal("first record did not reach the writer")
-	}
-	pool.Submit(&CaptureRecord{RawResponse: []byte("second")})
-	require.Eventually(t, func() bool {
-		return pool.Health().WorkerQueue.Current == 1
-	}, time.Second, time.Millisecond)
-	pool.Submit(&CaptureRecord{RawResponse: []byte("third")})
-
-	got := pool.Health()
-	require.Equal(t, uint64(1), got.DroppedByReason[string(CaptureDropWorkerQueueFull)].Records)
-	require.Equal(t, uint64(len("third")), got.DroppedByReason[string(CaptureDropWorkerQueueFull)].Bytes)
-
-	close(writer.release)
-	pool.Stop()
+	recording := transport.Attempts()[0]
+	require.Equal(t, []captureTerminalState{captureCommitted}, recording.TerminalStates())
+	require.Equal(t, []model.Final{final}, recording.Finals())
+	health := pool.Health()
+	require.Zero(t, health.WorkerQueue.Current)
+	require.Zero(t, health.WriterQueue.Current)
+	require.Zero(t, health.InFlightBytes.Current)
 }
 
 func TestCapturePoolReportsWriterQueueLoss(t *testing.T) {

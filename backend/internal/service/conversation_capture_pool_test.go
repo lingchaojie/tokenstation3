@@ -2,15 +2,28 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
+type captureTerminalState string
+
+const (
+	captureCommitted captureTerminalState = "committed"
+	captureAborted   captureTerminalState = "aborted"
+)
+
+// These compatibility doubles are also consumed by capture_admin_service_test
+// while the admin view is migrated from the retired native writer to sidecar
+// status in a later task.
 type mutableArchiveWriterStatus struct {
 	mu        sync.RWMutex
 	ready     bool
@@ -43,181 +56,524 @@ func (f *fakeWriter) Write(_ context.Context, item *archiveWriteItem) error {
 	item.completeSuccess()
 	return nil
 }
-func (f *fakeWriter) Stop() {}
 
-func TestCapturePoolSubmitAndExtract(t *testing.T) {
-	fw := &fakeWriter{}
-	p := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 2, QueueSize: 16, OverflowPolicy: "drop",
-	}, fw)
-	defer p.Stop()
+func (*fakeWriter) Stop() {}
 
-	rec := &CaptureRecord{
-		RawRequest:  []byte(`{"metadata":{"user_id":"{\"device_id\":\"d\",\"session_id\":\"sess-1\"}"}}`),
-		RawResponse: []byte(`{"stop_reason":"end_turn","usage":{"output_tokens":4}}`),
-	}
-	p.Submit(rec)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for atomic.LoadInt32(&fw.n) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if atomic.LoadInt32(&fw.n) != 1 {
-		t.Fatal("record not written")
-	}
-	if rec.SessionID != "sess-1" || rec.StopReason != "end_turn" {
-		t.Fatalf("columns not extracted in worker: %+v", rec)
-	}
+type conversationCapturePoolOptions struct {
+	WorkerCount     int
+	QueueSize       int
+	OverflowPolicy  string
+	SamplePercent   int
+	MaxQueueBytes   int64
+	WriterQueueSize int
 }
 
-func TestCapturePoolExtractsProviderNativeMetadataBeforeSuppressingRawResponse(t *testing.T) {
-	fw := &fakeWriter{}
-	p := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 4, OverflowPolicy: "drop",
-	}, fw)
-	defer p.Stop()
+type archiveWriterStatus interface {
+	Ready() bool
+	InitializationError() string
+}
 
-	rec := &CaptureRecord{
-		Platform:      PlatformGemini,
-		RawRequest:    []byte(`{"request":{"sessionId":"nested-session"},"additionalModelRequestFields":{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}}`),
-		RawResponse:   []byte(`{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":17,"candidatesTokenCount":5,"cachedContentTokenCount":3}}`),
-		ContentPolicy: &CaptureContentPolicy{RawRequest: false, RawResponse: false},
+type staticArchiveWriterStatus struct {
+	ready     bool
+	initError string
+}
+
+func (s staticArchiveWriterStatus) Ready() bool                 { return s.ready }
+func (s staticArchiveWriterStatus) InitializationError() string { return s.initError }
+
+const archiveWriterReconstructingBodyLimit = 32 << 20
+const archiveWriterReconstructingHeaderLimit = 1 << 20
+
+type archiveWriterReconstructingTransport struct {
+	submit func(*CaptureRecord)
+}
+
+func (t *archiveWriterReconstructingTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
+	if begin.CaptureID == uuid.Nil {
+		return nil, errors.New("capture ID is required")
 	}
-	p.Submit(rec)
+	return &archiveWriterReconstructingAttempt{
+		begin:           begin,
+		submit:          t.submit,
+		request:         boundedCaptureWriter{limit: archiveWriterReconstructingBodyLimit},
+		response:        boundedCaptureWriter{limit: archiveWriterReconstructingBodyLimit},
+		requestHeaders:  boundedCaptureWriter{limit: archiveWriterReconstructingHeaderLimit},
+		responseHeaders: boundedCaptureWriter{limit: archiveWriterReconstructingHeaderLimit},
+	}, nil
+}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for atomic.LoadInt32(&fw.n) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+func (*archiveWriterReconstructingTransport) Status(context.Context) (model.Status, error) {
+	return model.Status{SpoolReady: true, DeliveryReady: true}, nil
+}
+
+func (*archiveWriterReconstructingTransport) Close() error { return nil }
+
+type archiveWriterReconstructingAttempt struct {
+	mu sync.Mutex
+
+	begin  model.Begin
+	final  model.Final
+	submit func(*CaptureRecord)
+
+	request         boundedCaptureWriter
+	response        boundedCaptureWriter
+	requestHeaders  boundedCaptureWriter
+	responseHeaders boundedCaptureWriter
+	finalized       bool
+	terminal        bool
+}
+
+func (a *archiveWriterReconstructingAttempt) ID() uuid.UUID { return a.begin.CaptureID }
+
+func (a *archiveWriterReconstructingAttempt) WriteRequest(p []byte) bool {
+	return a.write(&a.request, p)
+}
+
+func (a *archiveWriterReconstructingAttempt) WriteResponse(p []byte) bool {
+	return a.write(&a.response, p)
+}
+
+func (a *archiveWriterReconstructingAttempt) WriteRequestHeaders(p []byte) bool {
+	return a.write(&a.requestHeaders, p)
+}
+
+func (a *archiveWriterReconstructingAttempt) WriteResponseHeaders(p []byte) bool {
+	return a.write(&a.responseHeaders, p)
+}
+
+func (a *archiveWriterReconstructingAttempt) write(writer *boundedCaptureWriter, p []byte) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.terminal {
+		return false
 	}
-	require.Equal(t, int32(1), atomic.LoadInt32(&fw.n))
-	require.Nil(t, rec.RawResponse)
-	require.Nil(t, rec.RawRequest)
-	require.Equal(t, "nested-session", rec.SessionID)
-	require.Equal(t, "high", rec.ThinkingEffort)
-	require.Equal(t, "adaptive", rec.ThinkingType)
-	require.Equal(t, "STOP", rec.StopReason)
-	require.Equal(t, 17, rec.InputTokens)
-	require.Equal(t, 5, rec.OutputTokens)
-	require.Equal(t, 3, rec.CacheReadTokens)
+	_, _ = writer.Write(p)
+	return true
 }
 
-func TestCapturePoolDropsOnFullQueue(t *testing.T) {
-	fw := &fakeWriter{}
-	p := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 1, OverflowPolicy: "drop",
-	}, fw)
-	defer p.Stop()
-	for i := 0; i < 1000; i++ {
-		p.Submit(&CaptureRecord{RawResponse: []byte(`{}`)})
+func (a *archiveWriterReconstructingAttempt) Finalize(final model.Final) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.terminal {
+		return false
 	}
+	a.final = final
+	a.finalized = true
+	return true
 }
 
-func TestCapturePoolNilSafe(t *testing.T) {
-	var p *ConversationCapturePool
-	p.Submit(&CaptureRecord{}) // must not panic
-	p.Stop()                   // must not panic
-}
-
-func TestNewConversationCapturePoolKeepsSidecarConfigurationInert(t *testing.T) {
-	// This catches a regression where the new sidecar-enabled configuration
-	// recreates the retired in-process queue/native writer before Task 2 wires
-	// the sidecar transport.
-	cfg := &config.Config{}
-	cfg.Gateway.Capture.Enabled = true
-
-	pool := NewConversationCapturePool(cfg, &captureHealthRepoStub{})
-	if pool != nil {
-		t.Cleanup(pool.Stop)
+func (a *archiveWriterReconstructingAttempt) Commit() bool {
+	a.mu.Lock()
+	if a.terminal || !a.finalized {
+		a.mu.Unlock()
+		return false
 	}
-	require.Nil(t, pool)
+	a.terminal = true
+	record := a.recordLocked()
+	submit := a.submit
+	a.mu.Unlock()
+	if submit != nil {
+		submit(record)
+	}
+	return true
 }
 
-func TestCapturePoolReadinessDelegatesToWriterStatus(t *testing.T) {
-	status := &mutableArchiveWriterStatus{initError: "dial failed"}
-	pool := newConversationCapturePoolWithStatus(
-		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1},
-		&fakeWriter{},
-		status,
-		newCaptureHealthTracker("test", time.Now),
-		nil,
-	)
-	t.Cleanup(pool.Stop)
-
-	require.False(t, pool.Ready())
-	require.Equal(t, "dial failed", pool.InitializationError())
-
-	status.set(true, "")
-	require.True(t, pool.Ready())
-	require.Empty(t, pool.InitializationError())
+func (a *archiveWriterReconstructingAttempt) Abort() {
+	a.mu.Lock()
+	a.terminal = true
+	a.mu.Unlock()
 }
 
-// blockingWriter 阻塞在 Write 上直到 release 关闭，用来把 record 卡在 worker 里，
-// 从而让字节预算保持占用，验证超预算 drop。
-type blockingWriter struct {
-	release chan struct{}
-	n       int32
+func (a *archiveWriterReconstructingAttempt) recordLocked() *CaptureRecord {
+	content := CaptureContentPolicy{
+		RawRequest:      a.begin.Policy.StoreRequestBody,
+		RawResponse:     a.begin.Policy.StoreResponseBody,
+		RequestHeaders:  a.begin.Policy.StoreRequestHeaders,
+		ResponseHeaders: a.begin.Policy.StoreResponseHeaders,
+	}
+	record := &CaptureRecord{
+		CapturedAt:          a.begin.CapturedAt,
+		Platform:            a.begin.Platform,
+		RequestID:           a.begin.RequestID,
+		RequestedModel:      a.begin.RequestedModel,
+		UpstreamModel:       a.begin.UpstreamModel,
+		UpstreamEndpoint:    a.begin.UpstreamEndpoint,
+		Stream:              a.begin.Stream,
+		HTTPStatus:          int(a.final.HTTPStatus),
+		RawRequest:          snapshotBytes(a.request.buf),
+		RawResponse:         snapshotBytes(a.response.buf),
+		RequestHeaders:      snapshotBytes(a.requestHeaders.buf),
+		ResponseHeaders:     snapshotBytes(a.responseHeaders.buf),
+		Truncated:           a.request.truncated || a.response.truncated || a.requestHeaders.truncated || a.responseHeaders.truncated || !a.final.ResponseComplete,
+		ContentPolicy:       &content,
+		StopReason:          a.final.StopReason,
+		InputTokens:         int(a.final.InputTokens),
+		OutputTokens:        int(a.final.OutputTokens),
+		CacheReadTokens:     int(a.final.CacheReadTokens),
+		CacheCreationTokens: int(a.final.CacheCreationTokens),
+	}
+	if record.CapturedAt.IsZero() {
+		record.CapturedAt = time.Now().UTC()
+	}
+	if record.RequestID == "" {
+		record.RequestID = CaptureRequestID("")
+	}
+	return record
 }
 
-func (b *blockingWriter) Write(_ context.Context, item *archiveWriteItem) error {
-	atomic.AddInt32(&b.n, 1)
-	<-b.release
-	item.completeSuccess()
+// newConversationCapturePool is a synchronous test-only compatibility shim for
+// archive-writer fixtures that predate the sidecar transport.
+func newConversationCapturePool(opts conversationCapturePoolOptions, writer ArchiveWriter) *ConversationCapturePool {
+	tracker := newCaptureHealthTracker("test", time.Now)
+	tracker.setCapacities(int64(opts.QueueSize), int64(opts.WriterQueueSize), opts.MaxQueueBytes)
+	submit := func(record *CaptureRecord) {
+		if record == nil || writer == nil {
+			return
+		}
+		tracker.recordSubmitted()
+		tracker.recordAccepted()
+		size := recordBytes(record)
+		tracker.inFlightBytes.add(size)
+		item := newArchiveWriteItem(record, size, func(result archiveWriteResult) {
+			tracker.inFlightBytes.add(-size)
+			if result.success {
+				tracker.recordWritten(1)
+			} else {
+				tracker.recordDrop(result.reason, 1, size, result.err)
+			}
+		})
+		extractCaptureColumns(record)
+		if record.ContentPolicy != nil {
+			ApplyCaptureContentPolicy(record, *record.ContentPolicy)
+		}
+		if err := writer.Write(context.Background(), item); err != nil {
+			reason := CaptureDropWriterUnavailable
+			if errors.Is(err, errArchiveQueueFull) {
+				reason = CaptureDropWriterQueueFull
+			}
+			item.completeDrop(reason, err)
+		}
+	}
+	pool := newConversationCapturePoolForTransport(&archiveWriterReconstructingTransport{submit: submit}, func() bool { return true })
+	pool.testHealth = tracker.snapshot
+	pool.testReady = func() bool { return true }
+	pool.testStop = func() {
+		if writer != nil {
+			writer.Stop()
+		}
+	}
+	pool.testSubmit = submit
+	return pool
+}
+
+func newConversationCapturePoolWithStatus(
+	opts conversationCapturePoolOptions,
+	writer ArchiveWriter,
+	status archiveWriterStatus,
+	tracker *captureHealthTracker,
+	reporter *captureHealthReporter,
+) *ConversationCapturePool {
+	pool := newConversationCapturePool(opts, writer)
+	if tracker != nil {
+		pool.testHealth = tracker.snapshot
+	}
+	if status != nil {
+		pool.testReady = status.Ready
+		pool.testInitializationError = status.InitializationError
+	}
+	if reporter != nil {
+		previousStop := pool.testStop
+		pool.testStop = func() {
+			previousStop()
+			reporter.Stop()
+		}
+	}
+	return pool
+}
+
+func newConversationCapturePoolWithState(
+	opts conversationCapturePoolOptions,
+	writer ArchiveWriter,
+	tracker *captureHealthTracker,
+	reporter *captureHealthReporter,
+	ready bool,
+	initError string,
+) *ConversationCapturePool {
+	return newConversationCapturePoolWithStatus(opts, writer, staticArchiveWriterStatus{
+		ready: ready, initError: sanitizeCaptureHealthError(errors.New(initError)),
+	}, tracker, reporter)
+}
+
+type recordingCaptureTransport struct {
+	mu       sync.Mutex
+	beginErr error
+	begins   int
+	closed   bool
+	attempts []*recordingCaptureAttempt
+}
+
+func (t *recordingCaptureTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.begins++
+	if t.beginErr != nil {
+		return nil, t.beginErr
+	}
+	attempt := &recordingCaptureAttempt{id: begin.CaptureID, begin: begin}
+	t.attempts = append(t.attempts, attempt)
+	return attempt, nil
+}
+
+func (*recordingCaptureTransport) Status(context.Context) (model.Status, error) {
+	return model.Status{}, nil
+}
+
+func (t *recordingCaptureTransport) Close() error {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
 	return nil
 }
-func (b *blockingWriter) Stop() {}
 
-func TestCapturePoolDropsOnByteBudget(t *testing.T) {
-	bw := &blockingWriter{release: make(chan struct{})}
-	// 单 worker，队列够大（不靠条数限流），字节预算=100。
-	p := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 64, OverflowPolicy: "drop", MaxQueueBytes: 100,
-	}, bw)
-
-	// 第一条 60 字节：进 worker 并阻塞在 Write（预留 60，未释放）。
-	p.Submit(&CaptureRecord{RawResponse: make([]byte, 60)})
-	deadline := time.Now().Add(2 * time.Second)
-	for atomic.LoadInt32(&bw.n) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if atomic.LoadInt32(&bw.n) != 1 {
-		t.Fatal("first record should reach writer")
-	}
-	// 在途已占 60/100。再来一条 60（>剩余 40）必须被 drop（inFlight 保持 60）。
-	p.Submit(&CaptureRecord{RawResponse: make([]byte, 60)})
-	if got := p.bytes.inFlight.Load(); got != 60 {
-		t.Fatalf("over-budget submit must be dropped; inFlight=%d want 60", got)
-	}
-
-	// 放行第一条，其 defer release 归还 60 → 回到 0。
-	close(bw.release)
-	for time.Now().Before(deadline) {
-		if p.bytes.inFlight.Load() == 0 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := p.bytes.inFlight.Load(); got != 0 {
-		t.Fatalf("after drain, inFlight must return to 0, got %d", got)
-	}
-	p.Stop()
+func (t *recordingCaptureTransport) Begins() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.begins
 }
 
-func TestCapturePoolAcceptsOneRecordWithRequestAndResponseAtBodyLimit(t *testing.T) {
-	const bodyLimit = 5 << 20
-	fw := &fakeWriter{}
-	p := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 1, OverflowPolicy: "drop", MaxQueueBytes: 2 * bodyLimit,
-	}, fw)
-	t.Cleanup(p.Stop)
+func (t *recordingCaptureTransport) Closed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
 
-	rec := &CaptureRecord{
-		RawRequest:  make([]byte, bodyLimit),
-		RawResponse: make([]byte, bodyLimit),
+func (t *recordingCaptureTransport) Attempts() []*recordingCaptureAttempt {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]*recordingCaptureAttempt(nil), t.attempts...)
+}
+
+type recordingCaptureAttempt struct {
+	mu sync.Mutex
+
+	id    uuid.UUID
+	begin model.Begin
+
+	request         []byte
+	requestInputs   [][]byte
+	response        []byte
+	requestHeaders  []byte
+	responseHeaders []byte
+	finals          []model.Final
+	terminals       []captureTerminalState
+
+	failNextWrite bool
+	writeCalls    int
+}
+
+func (a *recordingCaptureAttempt) ID() uuid.UUID { return a.id }
+
+func (a *recordingCaptureAttempt) WriteRequest(p []byte) bool {
+	a.mu.Lock()
+	a.requestInputs = append(a.requestInputs, p)
+	a.mu.Unlock()
+	return a.write(&a.request, p)
+}
+
+func (a *recordingCaptureAttempt) WriteResponse(p []byte) bool {
+	return a.write(&a.response, p)
+}
+
+func (a *recordingCaptureAttempt) WriteRequestHeaders(p []byte) bool {
+	return a.write(&a.requestHeaders, p)
+}
+
+func (a *recordingCaptureAttempt) WriteResponseHeaders(p []byte) bool {
+	return a.write(&a.responseHeaders, p)
+}
+
+func (a *recordingCaptureAttempt) write(dst *[]byte, p []byte) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.writeCalls++
+	if a.failNextWrite {
+		a.failNextWrite = false
+		return false
 	}
-	require.Equal(t, int64(2*bodyLimit), recordBytes(rec))
-	p.Submit(rec)
+	*dst = append(*dst, p...)
+	return true
+}
 
-	require.Eventually(t, func() bool {
-		return atomic.LoadInt32(&fw.n) == 1
-	}, 2*time.Second, 5*time.Millisecond, "one max-sized request/response pair must fit the configured body budget")
+func (a *recordingCaptureAttempt) Finalize(final model.Final) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finals = append(a.finals, final)
+	return true
+}
+
+func (a *recordingCaptureAttempt) Commit() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.terminals = append(a.terminals, captureCommitted)
+	return true
+}
+
+func (a *recordingCaptureAttempt) Abort() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.terminals = append(a.terminals, captureAborted)
+}
+
+func (a *recordingCaptureAttempt) setFailNextWrite() {
+	a.mu.Lock()
+	a.failNextWrite = true
+	a.mu.Unlock()
+}
+
+func (a *recordingCaptureAttempt) WriteCalls() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.writeCalls
+}
+
+func (a *recordingCaptureAttempt) ResponseBytes() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]byte(nil), a.response...)
+}
+
+func (a *recordingCaptureAttempt) RequestBytes() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]byte(nil), a.request...)
+}
+
+func (a *recordingCaptureAttempt) RequestHeaderBytes() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]byte(nil), a.requestHeaders...)
+}
+
+func (a *recordingCaptureAttempt) ResponseHeaderBytes() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]byte(nil), a.responseHeaders...)
+}
+
+func (a *recordingCaptureAttempt) RequestInputs() [][]byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([][]byte(nil), a.requestInputs...)
+}
+
+func (a *recordingCaptureAttempt) TerminalStates() []captureTerminalState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]captureTerminalState(nil), a.terminals...)
+}
+
+func (a *recordingCaptureAttempt) Finals() []model.Final {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]model.Final(nil), a.finals...)
+}
+
+func testCaptureBegin() model.Begin {
+	return model.Begin{
+		CaptureID: uuid.New(),
+		Platform:  PlatformAnthropic,
+		Policy: model.ContentPolicy{
+			StoreRequestBody:     true,
+			StoreResponseBody:    true,
+			StoreRequestHeaders:  true,
+			StoreResponseHeaders: true,
+		},
+	}
+}
+
+func TestConversationCapturePoolBeginsTransportAttemptSynchronously(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	require.Equal(t, 1, transport.Begins())
+	require.True(t, attempt.WriteResponse([]byte("chunk")))
+	require.True(t, attempt.Finalize(model.Final{HTTPStatus: 200, ResponseComplete: true}))
+	require.True(t, attempt.Commit())
+	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+}
+
+func TestConversationCapturePoolBeginFailureIsAttemptedOnceWithoutRetry(t *testing.T) {
+	transport := &recordingCaptureTransport{beginErr: errors.New("sidecar unavailable")}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.False(t, ok)
+	require.Nil(t, attempt)
+	require.Equal(t, 1, transport.Begins())
+}
+
+func TestRuntimeMasterOffDoesNotBeginButLeavesTransportOpen(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	var enabled atomic.Bool
+	pool := newConversationCapturePoolForTransport(transport, enabled.Load)
+
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.False(t, ok)
+	require.Nil(t, attempt)
+	require.Zero(t, transport.Begins())
+	require.False(t, transport.Closed())
+}
+
+func TestCaptureAttemptDoesNotRetryAfterIPCWriteFailure(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	recording := transport.Attempts()[0]
+	recording.setFailNextWrite()
+
+	require.False(t, attempt.WriteResponse([]byte("first")))
+	require.False(t, attempt.WriteResponse([]byte("second")))
+	require.False(t, attempt.Finalize(model.Final{HTTPStatus: 200}))
+	require.False(t, attempt.Commit())
+	require.Equal(t, 1, recording.WriteCalls(), "a failed IPC handle must become a no-op")
+	require.Empty(t, recording.TerminalStates())
+}
+
+func TestCaptureAttemptContentPolicySkipsDisabledPayloads(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	begin := testCaptureBegin()
+	begin.Policy = model.ContentPolicy{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	attempt, ok := pool.Begin(context.Background(), begin)
+	require.True(t, ok)
+
+	require.True(t, attempt.WriteRequest([]byte("request")))
+	require.True(t, attempt.WriteResponse([]byte("response")))
+	require.True(t, attempt.WriteRequestHeaders([]byte("request headers")))
+	require.True(t, attempt.WriteResponseHeaders([]byte("response headers")))
+	require.True(t, attempt.Finalize(model.Final{ResponseComplete: true}))
+	require.True(t, attempt.Commit())
+	require.Zero(t, transport.Attempts()[0].WriteCalls(), "disabled content columns must never enter IPC")
+}
+
+func TestCaptureAttemptOwnsExactlyOneTerminalOperation(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	committed, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	require.True(t, committed.Commit())
+	require.False(t, committed.Commit())
+	committed.Abort()
+	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+
+	aborted, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	aborted.Abort()
+	aborted.Abort()
+	require.False(t, aborted.Commit())
+	require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[1].TerminalStates())
 }

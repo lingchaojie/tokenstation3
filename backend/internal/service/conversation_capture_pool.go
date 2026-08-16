@@ -2,223 +2,264 @@ package service
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"math/rand/v2"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/alitto/pond/v2"
-
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/google/uuid"
 )
 
-type conversationCapturePoolOptions struct {
-	WorkerCount     int
-	QueueSize       int
-	OverflowPolicy  string // drop | sample
-	SamplePercent   int
-	MaxQueueBytes   int64 // 0 = 不限；按字节限流在途 record，防大 body 突发打爆内存
-	WriterQueueSize int
-}
-
-// ConversationCapturePool 是与转发/计费隔离的第三条异步通道。
-// 队列满时按 overflow 策略 drop/sample，绝不 sync 回写、绝不阻塞热路径。
+// ConversationCapturePool is retained as the gateway compatibility name, but
+// it owns only the synchronous IPC transport. There is no worker, queue, or
+// body storage in the gateway process.
 type ConversationCapturePool struct {
-	pool     pond.Pool
-	writer   ArchiveWriter
-	overflow string
-	sample   int
-	bytes    *captureByteGauge
-	health   *captureHealthTracker
-	reporter *captureHealthReporter
-	status   archiveWriterStatus
-	queueMu  sync.Mutex
-	stopOnce sync.Once
+	transport      protocol.Transport
+	runtimeEnabled func() bool
+	stopOnce       sync.Once
+
+	// Tests in this package can install synchronous compatibility hooks for
+	// legacy archive-writer fixtures. Production/Wire construction never does.
+	testSubmit              func(*CaptureRecord)
+	testStop                func()
+	testHealth              func() CaptureHealthSnapshot
+	testReady               func() bool
+	testInitializationError func() string
 }
 
-type archiveWriterStatus interface {
-	Ready() bool
-	InitializationError() string
+// CaptureAttempt is the gateway-owned façade for one synchronous sidecar
+// session. It serializes writes with the terminal operation and owns no body
+// storage; after the first IPC failure all later capture calls are no-ops.
+type CaptureAttempt struct {
+	mu          sync.Mutex
+	attempt     protocol.Attempt
+	policy      model.ContentPolicy
+	headerLimit int
+	failed      bool
+	terminal    bool
 }
 
-type staticArchiveWriterStatus struct {
-	ready     bool
-	initError string
-}
-
-func (s staticArchiveWriterStatus) Ready() bool                 { return s.ready }
-func (s staticArchiveWriterStatus) InitializationError() string { return s.initError }
-
-func newConversationCapturePool(opts conversationCapturePoolOptions, writer ArchiveWriter) *ConversationCapturePool {
-	tracker := newCaptureHealthTracker(captureInstanceID(), time.Now)
-	return newConversationCapturePoolWithStatus(
-		opts,
-		writer,
-		staticArchiveWriterStatus{ready: true},
-		tracker,
-		nil,
-	)
-}
-
-func newConversationCapturePoolWithState(
-	opts conversationCapturePoolOptions,
-	writer ArchiveWriter,
-	tracker *captureHealthTracker,
-	reporter *captureHealthReporter,
-	ready bool,
-	initError string,
-) *ConversationCapturePool {
-	return newConversationCapturePoolWithStatus(
-		opts,
-		writer,
-		staticArchiveWriterStatus{ready: ready, initError: sanitizeCaptureHealthError(errors.New(initError))},
-		tracker,
-		reporter,
-	)
-}
-
-func newConversationCapturePoolWithStatus(
-	opts conversationCapturePoolOptions,
-	writer ArchiveWriter,
-	status archiveWriterStatus,
-	tracker *captureHealthTracker,
-	reporter *captureHealthReporter,
-) *ConversationCapturePool {
-	workers := opts.WorkerCount
-	if workers <= 0 {
-		workers = 1
+func newConversationCapturePoolForTransport(transport protocol.Transport, runtimeEnabled func() bool) *ConversationCapturePool {
+	if transport == nil {
+		return nil
 	}
-	queue := opts.QueueSize
-	if queue <= 0 {
-		queue = 1
+	if runtimeEnabled == nil {
+		runtimeEnabled = func() bool { return true }
 	}
-	if tracker == nil {
-		tracker = newCaptureHealthTracker(captureInstanceID(), time.Now)
-	}
-	tracker.setCapacities(int64(queue), int64(opts.WriterQueueSize), opts.MaxQueueBytes)
-	return &ConversationCapturePool{
-		pool:     pond.NewPool(workers, pond.WithQueueSize(queue)),
-		writer:   writer,
-		overflow: opts.OverflowPolicy,
-		sample:   opts.SamplePercent,
-		bytes:    &captureByteGauge{max: opts.MaxQueueBytes},
-		health:   tracker,
-		reporter: reporter,
-		status:   status,
-	}
+	return &ConversationCapturePool{transport: transport, runtimeEnabled: runtimeEnabled}
 }
 
-// Submit 非阻塞提交。队列满时按策略丢弃/采样，绝不阻塞调用方。
-func (p *ConversationCapturePool) Submit(rec *CaptureRecord) {
-	if p == nil || rec == nil || p.pool == nil || p.pool.Stopped() {
+// NewConversationCapturePool is the Wire-facing constructor. Static capture
+// disabled returns nil and therefore creates neither a socket client nor an
+// attempt. Runtime master-off is enforced before Begin by the immutable request
+// policy snapshot and leaves this transport open so sidecar spool upload can
+// continue draining.
+func NewConversationCapturePool(cfg *config.Config, _ CaptureHealthRepository) *ConversationCapturePool {
+	if cfg == nil || !cfg.Gateway.Capture.Enabled {
+		return nil
+	}
+	transport := protocol.NewClient(protocol.ClientConfig{
+		SocketPath:   cfg.Gateway.Capture.Sidecar.Socket,
+		DialTimeout:  time.Millisecond,
+		WriteTimeout: time.Millisecond,
+		ReadTimeout:  time.Millisecond,
+	})
+	return newConversationCapturePoolForTransport(transport, func() bool { return true })
+}
+
+// Begin performs the one allowed transport admission synchronously. Capture
+// unavailability is reported only to the caller as a missing attempt; callers
+// continue proxying unchanged.
+func (p *ConversationCapturePool) Begin(ctx context.Context, begin model.Begin) (*CaptureAttempt, bool) {
+	if p == nil || p.transport == nil || (p.runtimeEnabled != nil && !p.runtimeEnabled()) {
+		return nil, false
+	}
+	attempt, err := p.transport.Begin(ctx, begin)
+	if err != nil || attempt == nil {
+		return nil, false
+	}
+	return &CaptureAttempt{attempt: attempt, policy: begin.Policy}, true
+}
+
+func (a *CaptureAttempt) ID() uuid.UUID {
+	if a == nil || a.attempt == nil {
+		return uuid.Nil
+	}
+	return a.attempt.ID()
+}
+
+func (a *CaptureAttempt) WriteRequest(payload []byte) bool {
+	return a.write(a != nil && a.policy.StoreRequestBody, func(attempt protocol.Attempt) bool {
+		return attempt.WriteRequest(payload)
+	})
+}
+
+func (a *CaptureAttempt) WriteResponse(payload []byte) bool {
+	return a.write(a != nil && a.policy.StoreResponseBody, func(attempt protocol.Attempt) bool {
+		return attempt.WriteResponse(payload)
+	})
+}
+
+func (a *CaptureAttempt) WriteRequestHeaders(payload []byte) bool {
+	return a.write(a != nil && a.policy.StoreRequestHeaders, func(attempt protocol.Attempt) bool {
+		return attempt.WriteRequestHeaders(payload)
+	})
+}
+
+func (a *CaptureAttempt) WriteResponseHeaders(payload []byte) bool {
+	return a.write(a != nil && a.policy.StoreResponseHeaders, func(attempt protocol.Attempt) bool {
+		return attempt.WriteResponseHeaders(payload)
+	})
+}
+
+func (a *CaptureAttempt) write(enabled bool, write func(protocol.Attempt) bool) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failed || a.terminal || a.attempt == nil {
+		return false
+	}
+	if !enabled {
+		return true
+	}
+	if !write(a.attempt) {
+		a.failed = true
+		return false
+	}
+	return true
+}
+
+func (a *CaptureAttempt) Finalize(final model.Final) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failed || a.terminal || a.attempt == nil {
+		return false
+	}
+	if !a.attempt.Finalize(final) {
+		a.failed = true
+		return false
+	}
+	return true
+}
+
+func (a *CaptureAttempt) Commit() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failed || a.terminal || a.attempt == nil {
+		return false
+	}
+	a.terminal = true
+	if !a.attempt.Commit() {
+		a.failed = true
+		return false
+	}
+	return true
+}
+
+func (a *CaptureAttempt) Abort() {
+	if a == nil {
 		return
 	}
-	p.health.recordSubmitted()
-	// reserveAndSubmit 预留字节 + 入队，两者都成功才返回 true；任一失败都撤销预留。
-	// task 顶部 defer release 覆盖所有退出路径（Write 成功/失败/drop、panic），单点释放不泄漏。
-	n := recordBytes(rec)
-	reserveAndSubmit := func() (bool, CaptureDropReason) {
-		if !p.bytes.tryReserve(n) {
-			return false, CaptureDropByteBudgetExceeded
-		}
-		p.health.inFlightBytes.add(n)
-		item := newArchiveWriteItem(rec, n, func(result archiveWriteResult) {
-			if result.success {
-				p.health.recordWritten(1)
-			} else {
-				p.health.recordDrop(result.reason, 1, n, result.err)
-			}
-			p.bytes.release(n)
-			p.health.inFlightBytes.add(-n)
-		})
-		task := func() {
-			p.queueMu.Lock()
-			p.health.workerQueue.add(-1)
-			p.queueMu.Unlock()
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					item.completeDrop(CaptureDropWriterUnavailable, fmt.Errorf("capture worker panic: %v", recovered))
-				}
-			}()
-			extractCaptureColumns(rec)
-			if rec.ContentPolicy != nil {
-				ApplyCaptureContentPolicy(rec, *rec.ContentPolicy)
-			}
-			err := p.writer.Write(context.Background(), item)
-			if err == nil {
-				return
-			}
-			reason := CaptureDropWriterUnavailable
-			if errors.Is(err, errArchiveQueueFull) {
-				reason = CaptureDropWriterQueueFull
-			}
-			item.completeDrop(reason, err)
-		}
-		p.queueMu.Lock()
-		if _, ok := p.pool.TrySubmit(task); ok {
-			p.health.workerQueue.add(1)
-			p.health.recordAccepted()
-			p.queueMu.Unlock()
-			return true, ""
-		}
-		p.queueMu.Unlock()
-		p.bytes.release(n) // 入队失败，撤销预留
-		p.health.inFlightBytes.add(-n)
-		return false, CaptureDropWorkerQueueFull
-	}
-	ok, finalReason := reserveAndSubmit()
-	if ok {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failed || a.terminal || a.attempt == nil {
 		return
 	}
-	// 队列满或超字节预算：drop（默认）。sample 策略下按概率再试一次入队，失败即丢。
-	if p.overflow == "sample" && p.sample > 0 && rand.IntN(100) < p.sample {
-		if ok, reason := reserveAndSubmit(); ok {
-			return
-		} else {
-			p.health.recordDrop(reason, 1, n, nil)
-			return
-		}
-	}
-	p.health.recordDrop(finalReason, 1, n, nil)
+	a.terminal = true
+	a.attempt.Abort()
 }
 
-// NewConversationCapturePool remains an inert compatibility provider until the
-// sidecar transport replaces the retired in-process queue/native writer. The
-// gateway's capture-enabled setting therefore cannot construct old machinery.
-func NewConversationCapturePool(cfg *config.Config, repo CaptureHealthRepository) *ConversationCapturePool {
-	return nil
-}
-
-func captureInstanceID() string {
-	host, err := os.Hostname()
-	if err != nil {
-		return "unknown"
+// Submit synchronously translates remaining compatibility CaptureRecord
+// producers into the sidecar protocol. It has no queue or body copy; Task 9
+// gateway paths use Begin directly, while provider-native migrations follow in
+// their own task.
+func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
+	if p == nil || record == nil {
+		return
 	}
-	return host
+	if p.testSubmit != nil {
+		p.testSubmit(record)
+		return
+	}
+	policy := model.ContentPolicy{
+		StoreRequestBody:     true,
+		StoreResponseBody:    true,
+		StoreRequestHeaders:  true,
+		StoreResponseHeaders: true,
+	}
+	if record.ContentPolicy != nil {
+		policy = captureModelContentPolicy(*record.ContentPolicy)
+	}
+	format := model.PayloadJSON
+	if record.Stream {
+		format = model.PayloadSSE
+	}
+	begin := model.Begin{
+		CaptureID:        uuid.New(),
+		CapturedAt:       record.CapturedAt,
+		RequestID:        record.RequestID,
+		Platform:         record.Platform,
+		RequestedModel:   record.RequestedModel,
+		UpstreamModel:    record.UpstreamModel,
+		UpstreamEndpoint: record.UpstreamEndpoint,
+		Stream:           record.Stream,
+		Format:           format,
+		Policy:           policy,
+	}
+	attempt, ok := p.Begin(context.Background(), begin)
+	if !ok {
+		return
+	}
+	attempt.WriteRequestHeaders(record.RequestHeaders)
+	attempt.WriteRequest(record.RawRequest)
+	attempt.WriteResponseHeaders(record.ResponseHeaders)
+	attempt.WriteResponse(record.RawResponse)
+	if !attempt.Finalize(model.Final{
+		HTTPStatus:          boundedCaptureUint16(record.HTTPStatus),
+		InputTokens:         boundedCaptureUint32(record.InputTokens),
+		OutputTokens:        boundedCaptureUint32(record.OutputTokens),
+		CacheReadTokens:     boundedCaptureUint32(record.CacheReadTokens),
+		CacheCreationTokens: boundedCaptureUint32(record.CacheCreationTokens),
+		StopReason:          record.StopReason,
+		ResponseComplete:    !record.Truncated,
+	}) {
+		attempt.Abort()
+		return
+	}
+	attempt.Commit()
 }
 
 func (p *ConversationCapturePool) Health() CaptureHealthSnapshot {
-	if p == nil {
-		return CaptureHealthSnapshot{DroppedByReason: map[string]CaptureReasonStats{}, RecentIncidents: []CaptureLossIncident{}}
+	if p != nil && p.testHealth != nil {
+		return p.testHealth()
 	}
-	return p.health.snapshot()
+	return CaptureHealthSnapshot{DroppedByReason: map[string]CaptureReasonStats{}, RecentIncidents: []CaptureLossIncident{}}
 }
 
 func (p *ConversationCapturePool) Ready() bool {
-	return p != nil && p.status != nil && p.status.Ready()
+	if p == nil {
+		return false
+	}
+	if p.testReady != nil {
+		return p.testReady()
+	}
+	return p.transport != nil
 }
 
 func (p *ConversationCapturePool) InitializationError() string {
-	if p == nil || p.status == nil {
+	if p == nil || p.testInitializationError == nil {
 		return ""
 	}
-	initError := p.status.InitializationError()
-	if initError == "" {
-		return ""
-	}
-	return sanitizeCaptureHealthError(errors.New(initError))
+	return p.testInitializationError()
 }
 
 func (p *ConversationCapturePool) Stop() {
@@ -226,14 +267,11 @@ func (p *ConversationCapturePool) Stop() {
 		return
 	}
 	p.stopOnce.Do(func() {
-		if p.pool != nil {
-			p.pool.StopAndWait()
+		if p.transport != nil {
+			_ = p.transport.Close()
 		}
-		if p.writer != nil {
-			p.writer.Stop()
-		}
-		if p.reporter != nil {
-			p.reporter.Stop()
+		if p.testStop != nil {
+			p.testStop()
 		}
 	})
 }

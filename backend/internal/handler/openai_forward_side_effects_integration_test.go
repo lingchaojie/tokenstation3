@@ -49,7 +49,7 @@ func task6RealOpenAIForward(t *testing.T, responseBody string) (*service.OpenAIF
 	c, _ := gin.CreateTestContext(recorder)
 	body := []byte(`{"model":"gpt-5.4","stream":true,"input":"hello"}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	service.PrepareCaptureScope(context.Background(), c, settingService, 9, nil)
+	service.PrepareCapturePolicyScope(context.Background(), c, settingService, 9, nil)
 	account := &service.Account{
 		ID: 9, Name: "task6", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "acct"},
@@ -58,30 +58,26 @@ func task6RealOpenAIForward(t *testing.T, responseBody string) (*service.OpenAIF
 	return svc.Forward(context.Background(), c, account, body)
 }
 
-func TestOpenAIRealForwardFeedsExactOnceUsageAndCaptureSink(t *testing.T) {
+func TestOpenAIRealForwardFeedsExactOnceSideEffectSinkWithoutResultCaptureBuffer(t *testing.T) {
 	tests := []struct {
 		name, response string
-		wantUsage      int
-		wantCapture    int
+		wantSink       int
 	}{
-		{name: "pre-output failover", response: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n", wantUsage: 0, wantCapture: 0},
-		{name: "committed partial", response: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n", wantUsage: 1, wantCapture: 1},
-		{name: "success", response: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n", wantUsage: 1, wantCapture: 1},
+		{name: "pre-output failover", response: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n", wantSink: 0},
+		{name: "committed partial", response: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n", wantSink: 1},
+		{name: "success", response: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n", wantSink: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, _ := task6RealOpenAIForward(t, tt.response)
-			usageCalls, captureCalls := 0, 0
+			sinkCalls := 0
 			sink := newOpenAIForwardSideEffectSubmitter(func(got *service.OpenAIForwardResult) {
-				usageCalls++
-				if got.CaptureResponse != nil {
-					captureCalls++
-				}
+				sinkCalls++
+				require.Nil(t, got.CaptureResponse, "typed capture must not retain a whole response in the forward result")
 			})
 			sink.Submit(result)
 			sink.Submit(result)
-			require.Equal(t, tt.wantUsage, usageCalls)
-			require.Equal(t, tt.wantCapture, captureCalls)
+			require.Equal(t, tt.wantSink, sinkCalls)
 		})
 	}
 }

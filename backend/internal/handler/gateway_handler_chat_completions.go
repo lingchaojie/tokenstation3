@@ -35,7 +35,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		h.chatCompletionsErrorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
-	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
+	service.PrepareCapturePolicyScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.chat_completions",

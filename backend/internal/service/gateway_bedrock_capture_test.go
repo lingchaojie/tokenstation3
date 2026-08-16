@@ -40,16 +40,19 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture: config.GatewayCaptureConfig{
-			Enabled:      true,
-			MaxBodyBytes: 1 << 20,
+			Enabled:        true,
+			MaxBodyBytes:   1 << 20,
+			MaxHeaderBytes: 1 << 20,
 		},
 	}}
+	transport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		cfg:                  cfg,
 		httpUpstream:         upstream,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		rateLimitService:     &RateLimitService{},
 		deferredService:      &DeferredService{},
+		capturePool:          newConversationCapturePoolForTransport(transport, func() bool { return true }),
 	}
 	account := &Account{
 		ID:          811,
@@ -71,17 +74,29 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, upstream.lastBody)
-	require.Equal(t, upstream.lastBody, result.CaptureRequest)
-	require.Equal(t, rawProviderResponse, result.CaptureResponse)
-	require.Equal(t, http.StatusOK, result.CaptureHTTPStatus)
-	require.Contains(t, result.CaptureUpstreamEndpoint, "bedrock-runtime.us-east-1.amazonaws.com")
-	require.NotNil(t, result.CaptureContentPolicy)
-	require.NotContains(t, string(result.CaptureRequestHeaders), "AKIA_CAPTURE_TEST")
-	require.NotContains(t, string(result.CaptureRequestHeaders), "bedrock-secret-access-key")
-	require.NotContains(t, string(result.CaptureRequestHeaders), "bedrock-temporary-session-token")
-	require.NotContains(t, strings.ToLower(string(result.CaptureRequestHeaders)), "x-amz-security-token")
-	require.Contains(t, string(result.CaptureResponseHeaders), "X-Amzn-Requestid")
-	require.NotContains(t, string(result.CaptureResponseHeaders), "X-Request-Id", "capture must not synthesize provider response headers")
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.Zero(t, result.CaptureHTTPStatus)
+	require.Empty(t, result.CaptureUpstreamEndpoint)
+	require.Nil(t, result.CaptureContentPolicy)
+
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	attempt := attempts[0]
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.Equal(t, rawProviderResponse, attempt.ResponseBytes())
+	require.Equal(t, captureHeaderBytes(upstream.lastReq.Header, cfg.Gateway.Capture.MaxHeaderBytes), attempt.RequestHeaderBytes())
+	require.Equal(t, redactHTTPHeader(upstream.resp.Header), attempt.ResponseHeaderBytes())
+	require.Contains(t, attempt.begin.UpstreamEndpoint, "bedrock-runtime.us-east-1.amazonaws.com")
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "AKIA_CAPTURE_TEST")
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "bedrock-secret-access-key")
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "bedrock-temporary-session-token")
+	require.NotContains(t, strings.ToLower(string(attempt.RequestHeaderBytes())), "x-amz-security-token")
+	require.Contains(t, string(attempt.ResponseHeaderBytes()), "X-Amzn-Requestid")
+	require.NotContains(t, string(attempt.ResponseHeaderBytes()), "X-Request-Id", "capture must not synthesize provider response headers")
+	require.Empty(t, attempt.TerminalStates(), "the handler-side usage sink owns commit")
+	AbortCaptureAttempt(c)
 }
 
 type bedrockCloseReleasedReader struct {
@@ -154,7 +169,7 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 		Body: io.NopCloser(bytes.NewReader(errorBody)),
 	}}
 	cfg := &config.Config{Gateway: config.GatewayConfig{
-		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
 	}}
 	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
 	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
@@ -178,6 +193,7 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.Error(t, err)
 	require.Nil(t, result)
+	require.True(t, CommitTerminalErrorCaptureAttempt(c, PlatformAnthropic, upstream.resp.StatusCode))
 	pool.Stop()
 
 	require.Len(t, writer.records, 1)

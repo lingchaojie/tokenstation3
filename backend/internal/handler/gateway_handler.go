@@ -153,6 +153,53 @@ func (h *GatewayHandler) captureLimit() int {
 	return h.cfg.Gateway.Capture.MaxBodyBytes
 }
 
+func (h *GatewayHandler) submitGatewayResultCaptureForRequest(
+	c *gin.Context,
+	result *service.ForwardResult,
+	account *service.Account,
+	fallbackRequest []byte,
+	upstreamEndpoint string,
+) {
+	if h == nil || h.capturePool == nil || result == nil || account == nil {
+		return
+	}
+	if account.Platform != service.PlatformKiro {
+		service.CommitForwardCaptureAttempt(c, string(account.Platform), result)
+		return
+	}
+	if result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
+		return
+	}
+	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(result.UpstreamRequest, h.captureLimit())
+	thinkingEffort := ""
+	if result.ReasoningEffort != nil {
+		thinkingEffort = *result.ReasoningEffort
+	}
+	h.capturePool.Submit(&service.CaptureRecord{
+		CapturedAt:          time.Now().UTC(),
+		Platform:            string(account.Platform),
+		RequestID:           service.CaptureRequestID(result.RequestID),
+		RequestedModel:      result.Model,
+		UpstreamModel:       result.UpstreamModelForCapture(),
+		UpstreamEndpoint:    firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
+		Stream:              result.StreamForCapture(),
+		HTTPStatus:          result.HTTPStatusForCapture(),
+		InputTokens:         result.Usage.InputTokens,
+		OutputTokens:        result.Usage.OutputTokens,
+		CacheReadTokens:     result.Usage.CacheReadInputTokens,
+		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+		ThinkingEffort:      thinkingEffort,
+		RawRequest:          rawRequest,
+		RawResponse:         result.CaptureResponse,
+		RequestHeaders:      result.CaptureRequestHeaders,
+		ResponseHeaders:     result.CaptureResponseHeaders,
+		Truncated:           result.CaptureTruncated || requestTruncated,
+		ContentPolicy:       result.CaptureContentPolicy,
+	})
+}
+
+// submitGatewayResultCapture keeps Task 10 provider-native callers on their
+// existing bridge until their attempt ownership is migrated separately.
 func (h *GatewayHandler) submitGatewayResultCapture(
 	result *service.ForwardResult,
 	account *service.Account,
@@ -206,7 +253,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
-	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
+	service.PrepareCapturePolicyScope(c.Request.Context(), c, h.settingService, subject.UserID, apiKey.GroupID)
+	defer service.AbortCaptureAttempt(c)
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.messages",
@@ -554,7 +602,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-				h.submitGatewayResultCapture(result, account, body, upstreamEndpoint)
+				h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
 				if result.UpstreamFailed {
 					return
 				}
@@ -955,7 +1003,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 错误路径共用：后者若不入账，上游已计量的请求会完全漏记漏计费（#5148）。
 			submitForwardUsage := func(result *service.ForwardResult) {
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-				h.submitGatewayResultCapture(result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
+				h.submitGatewayResultCaptureForRequest(c, result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 				if result.UpstreamFailed {
 					return
 				}
@@ -1822,10 +1870,14 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 	if failoverErr != nil && strings.TrimSpace(failoverErr.Platform) != "" {
 		platform = failoverErr.Platform
 	}
-	if h.capturePool != nil {
+	if failoverErr != nil && h.capturePool != nil && platform != service.PlatformKiro && failoverErr.HasUpstreamHTTPResponse {
+		service.CommitTerminalErrorCaptureAttempt(c, platform, failoverErr.StatusCode)
+	} else if h.capturePool != nil && platform == service.PlatformKiro {
 		if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); rec != nil {
 			h.capturePool.Submit(rec)
 		}
+	} else {
+		service.AbortCaptureAttempt(c)
 	}
 	// Some service adapters must write a provider-specific JSON error before
 	// returning the typed terminal failure used for capture/account handling.
@@ -1878,6 +1930,7 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 // handleFailoverExhaustedSimple 简化版本，用于没有响应体的情况
 func (h *GatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, statusCode int, streamStarted bool) {
+	service.AbortCaptureAttempt(c)
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	service.SetOpsUpstreamError(c, statusCode, errMsg, "")
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)

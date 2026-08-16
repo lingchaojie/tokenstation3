@@ -24,8 +24,9 @@ func newForwardPartialUsageServiceForTest(upstream *anthropicHTTPUpstreamRecorde
 		Gateway: config.GatewayConfig{
 			MaxLineSize: defaultMaxLineSize,
 			Capture: config.GatewayCaptureConfig{
-				Enabled:      true,
-				MaxBodyBytes: 64 * 1024,
+				Enabled:        true,
+				MaxBodyBytes:   64 * 1024,
+				MaxHeaderBytes: 1 << 20,
 			},
 		},
 	}
@@ -36,6 +37,13 @@ func newForwardPartialUsageServiceForTest(upstream *anthropicHTTPUpstreamRecorde
 		rateLimitService:     &RateLimitService{},
 		deferredService:      &DeferredService{},
 	}
+}
+
+func newForwardPartialUsageCaptureServiceForTest(upstream *anthropicHTTPUpstreamRecorder) (*GatewayService, *recordingCaptureTransport) {
+	transport := &recordingCaptureTransport{}
+	svc := newForwardPartialUsageServiceForTest(upstream)
+	svc.capturePool = newConversationCapturePoolForTransport(transport, func() bool { return true })
+	return svc, transport
 }
 
 func newAnthropicOAuthAccountForPartialUsageTest() *Account {
@@ -93,7 +101,7 @@ func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *te
 		},
 		Body: io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	svc := newForwardPartialUsageServiceForTest(upstream)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 	account := newAnthropicOAuthAccountForPartialUsageTest()
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
@@ -106,8 +114,14 @@ func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *te
 	require.Equal(t, 5, result.Usage.OutputTokens)
 	require.Equal(t, "rid-partial", result.RequestID)
 	require.NotNil(t, result.FirstTokenMs)
-	require.Equal(t, upstreamSSE, string(result.CaptureResponse), "committed partial result must carry the real upstream response capture")
+	require.Nil(t, result.CaptureResponse)
 	require.False(t, result.CaptureTruncated)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates(), "the handler-side partial-result sink owns commit")
+	AbortCaptureAttempt(c)
 }
 
 func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCapture(t *testing.T) {
@@ -121,15 +135,21 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	require.NoError(t, err)
 	upstreamSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_semantic\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamSSE))}}
-	svc := newForwardPartialUsageServiceForTest(upstream)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 
 	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
 	require.Error(t, err)
 	require.NotNil(t, result)
 	require.Zero(t, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
-	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
 	require.Contains(t, rec.Body.String(), `"text":"hello"`)
+	AbortCaptureAttempt(c)
 }
 
 func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalIsCleanFailover(t *testing.T) {
@@ -187,10 +207,17 @@ func TestGatewayService_Forward_SSEErrorUsesSemanticCommitBoundary(t *testing.T)
 				Body:       io.NopCloser(strings.NewReader(tt.upstream)),
 			}}
 
-			result, err := newForwardPartialUsageServiceForTest(upstream).Forward(
+			svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+			result, err := svc.Forward(
 				context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed,
 			)
 			require.Error(t, err)
+			attempts := transport.Attempts()
+			require.Len(t, attempts, 1)
+			require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+			require.Equal(t, []byte(tt.upstream), attempts[0].ResponseBytes())
+			require.Empty(t, attempts[0].TerminalStates())
+			defer AbortCaptureAttempt(c)
 			var failoverErr *UpstreamFailoverError
 			if !tt.committed {
 				require.Nil(t, result)
@@ -206,7 +233,7 @@ func TestGatewayService_Forward_SSEErrorUsesSemanticCommitBoundary(t *testing.T)
 			require.ErrorAs(t, err, &streamErr)
 			require.Zero(t, result.Usage.InputTokens)
 			require.Zero(t, result.Usage.OutputTokens)
-			require.Equal(t, tt.upstream, string(result.CaptureResponse))
+			require.Nil(t, result.CaptureResponse)
 			require.Contains(t, rec.Body.String(), `"text":"visible"`)
 		})
 	}
@@ -341,7 +368,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 		},
 		Body: io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	svc := newForwardPartialUsageServiceForTest(upstream)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 	account := newAnthropicAPIKeyAccountForTest()
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
@@ -354,7 +381,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, "claude-3-7-sonnet-20250219", result.Model)
 	require.Equal(t, upstreamSSE, rec.Body.String(), "committed passthrough bytes must remain unchanged")
-	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
+	AbortCaptureAttempt(c)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTerminalFailsOverCleanly(t *testing.T) {
@@ -378,15 +411,19 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTer
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
 
-	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+	result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
 	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, -1, c.Writer.Size())
 	require.Empty(t, recorder.Body.String())
-	bridge, captured := takeCaptureResult(c)
-	require.True(t, captured, "the final-account sink needs the observed HTTP 200 exchange")
-	require.Equal(t, []byte(upstreamSSE), bridge.Response)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates(), "the final-account handler sink owns terminal classification")
+	AbortCaptureAttempt(c)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageErrorPreservesPartialAndCapture(t *testing.T) {
@@ -414,7 +451,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageE
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
 
-	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+	result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
 	require.Error(t, err)
 	var streamErr *sseStreamErrorEventError
 	require.ErrorAs(t, err, &streamErr)
@@ -424,7 +462,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPostSemanticZeroUsageE
 	require.Zero(t, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Equal(t, upstreamSSE, recorder.Body.String(), "committed raw Anthropic SSE, including event:error, must pass through unchanged")
-	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
+	AbortCaptureAttempt(c)
 }
 
 func TestGatewayService_Forward_PreSemanticReadErrorReturnsTerminalCaptureOnlyResult(t *testing.T) {
@@ -443,14 +487,18 @@ func TestGatewayService_Forward_PreSemanticReadErrorReturnsTerminalCaptureOnlyRe
 		Body:       &streamReadCloser{payload: providerPrefix, err: forcedErr},
 	}}
 
-	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
 
 	require.Nil(t, result, "pre-semantic read failures remain eligible for account failover")
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	bridge, ok := takeCaptureResult(c)
-	require.True(t, ok, "the final-account sink still needs the observed provider exchange")
-	require.Equal(t, providerPrefix, bridge.Response)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.Equal(t, providerPrefix, attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates(), "the final-account handler sink owns terminal classification")
+	AbortCaptureAttempt(c)
 	require.Empty(t, recorder.Body.String())
 }
 

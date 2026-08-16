@@ -151,7 +151,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		googleError(c, http.StatusInternalServerError, "User context not found")
 		return
 	}
-	service.PrepareCaptureScope(c.Request.Context(), c, h.settingService, authSubject.UserID, apiKey.GroupID)
+	service.PrepareCapturePolicyScope(c.Request.Context(), c, h.settingService, authSubject.UserID, apiKey.GroupID)
 	reqLog := requestLogger(
 		c,
 		"handler.gemini_v1beta.models",

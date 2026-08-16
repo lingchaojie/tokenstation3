@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -1300,13 +1301,26 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CommittedPartialCarriesCaptur
 	cfg := &config.Config{}
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 64 * 1024
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg.Gateway.Capture.MaxHeaderBytes = 1 << 20
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, newAnthropicAPIKeyAccountForTest(), body, "claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
 	require.ErrorContains(t, err, "missing terminal event")
 	require.NotNil(t, result)
 	require.Equal(t, 8, result.Usage.InputTokens)
-	require.Equal(t, upstreamSSE, string(result.CaptureResponse))
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, body, attempts[0].RequestBytes())
+	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates(), "the handler-side partial-result sink owns commit")
+	AbortCaptureAttempt(c)
 }
 
 func TestCapturePolicyMissAvoidsAnthropicPassthroughResponseTee(t *testing.T) {
@@ -1377,8 +1391,14 @@ func TestAnthropicAPIKeyPassthroughCaptureUsesFinalWireRequestAtCustomEndpoint(t
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"retry"}}`))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"final-request"}}, Body: io.NopCloser(bytes.NewReader(upstreamJSON))},
 	}}
-	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(
@@ -1388,12 +1408,23 @@ func TestAnthropicAPIKeyPassthroughCaptureUsesFinalWireRequestAtCustomEndpoint(t
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, upstream.bodies[1], result.UpstreamRequest)
-	require.Equal(t, upstreamJSON, result.CaptureResponse)
-	require.Equal(t, upstream.requests[1].URL.String(), result.CaptureUpstreamEndpoint)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.Empty(t, result.CaptureUpstreamEndpoint)
 	require.Equal(t, "relay.example", upstream.requests[1].URL.Host)
-	require.NotNil(t, result.CaptureContentPolicy, "custom endpoints require the account platform, not endpoint inference")
-	require.NotContains(t, string(result.CaptureRequestHeaders), "upstream-anthropic-key")
+	require.Nil(t, result.CaptureContentPolicy)
+
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 2)
+	require.Equal(t, []captureTerminalState{captureAborted}, attempts[0].TerminalStates())
+	require.Equal(t, upstream.bodies[1], attempts[1].RequestBytes())
+	require.Equal(t, upstreamJSON, attempts[1].ResponseBytes())
+	require.Equal(t, captureHeaderBytes(upstream.requests[1].Header, cfg.Gateway.Capture.MaxHeaderBytes), attempts[1].RequestHeaderBytes())
+	require.Equal(t, redactHTTPHeader(http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"final-request"}}), attempts[1].ResponseHeaderBytes())
+	require.Empty(t, attempts[1].TerminalStates(), "the handler-side usage sink owns commit")
+	require.NotContains(t, string(attempts[1].RequestHeaderBytes()), "upstream-anthropic-key")
+	AbortCaptureAttempt(c)
 }
 
 func TestAnthropicAPIKeyPassthroughTerminalHTTPErrorBuildsCaptureRecord(t *testing.T) {
@@ -1410,8 +1441,14 @@ func TestAnthropicAPIKeyPassthroughTerminalHTTPErrorBuildsCaptureRecord(t *testi
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"terminal-request"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(
@@ -1421,13 +1458,18 @@ func TestAnthropicAPIKeyPassthroughTerminalHTTPErrorBuildsCaptureRecord(t *testi
 	require.Nil(t, result)
 	var failure *UpstreamFailoverError
 	require.ErrorAs(t, err, &failure)
-	record := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, cfg.Gateway.Capture.MaxBodyBytes)
-	require.NotNil(t, record, "a final real upstream HTTP response must be eligible for terminal-error capture")
-	require.Equal(t, http.StatusServiceUnavailable, record.HTTPStatus)
-	require.Equal(t, upstream.lastBody, record.RawRequest)
-	require.Equal(t, errorBody, record.RawResponse)
-	require.Equal(t, upstream.lastReq.URL.String(), record.UpstreamEndpoint)
-	require.NotContains(t, string(record.RequestHeaders), "upstream-anthropic-key")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	attempt := attempts[0]
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.Equal(t, errorBody, attempt.ResponseBytes())
+	require.Equal(t, captureHeaderBytes(upstream.lastReq.Header, cfg.Gateway.Capture.MaxHeaderBytes), attempt.RequestHeaderBytes())
+	require.Equal(t, redactHTTPHeader(upstream.resp.Header), attempt.ResponseHeaderBytes())
+	require.Empty(t, attempt.TerminalStates(), "the handler-side terminal-error sink owns commit")
+	require.True(t, CommitTerminalErrorCaptureAttempt(c, PlatformAnthropic, failure.StatusCode))
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
+	require.Equal(t, []model.Final{{HTTPStatus: http.StatusServiceUnavailable, ResponseComplete: true}}, attempt.Finals())
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "upstream-anthropic-key")
 }
 
 func TestAnthropicAPIKeyPassthroughCapturePreservesRawStreamFraming(t *testing.T) {
@@ -1443,15 +1485,27 @@ func TestAnthropicAPIKeyPassthroughCapturePreservesRawStreamFraming(t *testing.T
 		"event: message_delta\r\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\r\n\r\n" +
 		"data: [DONE]")
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(bytes.NewReader(raw))}}
-	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
 		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, raw, result.CaptureResponse)
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, body, attempts[0].RequestBytes())
+	require.Equal(t, raw, attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
+	AbortCaptureAttempt(c)
 }
 
 func TestAnthropicAPIKeyPassthroughCapturePreservesRawNonStreamResponse(t *testing.T) {
@@ -1466,18 +1520,30 @@ func TestAnthropicAPIKeyPassthroughCapturePreservesRawNonStreamResponse(t *testi
 		Header:     http.Header{"Content-Type": {"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(raw)),
 	}}
-	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
 		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", false, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, raw, result.CaptureResponse)
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, body, attempts[0].RequestBytes())
+	require.Equal(t, raw, attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
+	AbortCaptureAttempt(c)
 }
 
-func TestAnthropicAPIKeyPassthroughTerminalCaptureUsesConfiguredCeiling(t *testing.T) {
+func TestAnthropicAPIKeyPassthroughTerminalCaptureUsesNaturallyConsumedBytes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
@@ -1486,8 +1552,14 @@ func TestAnthropicAPIKeyPassthroughTerminalCaptureUsesConfiguredCeiling(t *testi
 	account.Credentials["pool_mode"] = true
 	errorBody := bytes.Repeat([]byte("e"), 600<<10)
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(errorBody))}}
-	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":"hello"}]}`)
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, account, body,
@@ -1495,10 +1567,12 @@ func TestAnthropicAPIKeyPassthroughTerminalCaptureUsesConfiguredCeiling(t *testi
 	require.Nil(t, result)
 	var failure *UpstreamFailoverError
 	require.ErrorAs(t, err, &failure)
-	record := BuildTerminalErrorCaptureRecord(c, PlatformAnthropic, failure, cfg.Gateway.Capture.MaxBodyBytes)
-	require.NotNil(t, record)
-	require.Equal(t, errorBody, record.RawResponse)
-	require.False(t, record.Truncated)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, errorBody[:gatewayUpstreamErrorBodyReadLimit], attempts[0].ResponseBytes())
+	require.Empty(t, attempts[0].TerminalStates())
+	require.True(t, CommitTerminalErrorCaptureAttempt(c, PlatformAnthropic, failure.StatusCode))
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {

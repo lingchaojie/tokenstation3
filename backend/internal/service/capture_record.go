@@ -199,6 +199,43 @@ type sseTee struct {
 	truncated bool
 }
 
+// captureResponseReader mirrors only the bytes returned by the provider read
+// already requested by the functional consumer. It never drains, buffers, or
+// owns the attempt's terminal operation.
+type captureResponseReader struct {
+	upstream  io.ReadCloser
+	attempt   *CaptureAttempt
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func newCaptureResponseReader(upstream io.ReadCloser, attempt *CaptureAttempt) *captureResponseReader {
+	return &captureResponseReader{upstream: upstream, attempt: attempt}
+}
+
+func (r *captureResponseReader) Read(p []byte) (int, error) {
+	if r == nil || r.upstream == nil {
+		return 0, io.EOF
+	}
+	n, err := r.upstream.Read(p)
+	if n > 0 && r.attempt != nil {
+		r.attempt.WriteResponse(p[:n])
+	}
+	return n, err
+}
+
+func (r *captureResponseReader) Close() error {
+	if r == nil || r.upstream == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() { r.closeErr = r.upstream.Close() })
+	return r.closeErr
+}
+
+func (r *captureResponseReader) closeCaptureUnderlying() error { return r.Close() }
+func (*captureResponseReader) joinCaptureReaders()             {}
+func (*captureResponseReader) finishCapture()                  {}
+
 // captureBodyReadCloser captures the exact bytes consumed from an upstream
 // response without changing read/close behavior. It lets callers finalize the
 // same capture on success and committed-error paths.
@@ -317,6 +354,19 @@ func (r *captureBodyReadCloser) Finish(resp *http.Response) {
 }
 
 func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, limit int) func() {
+	// Main Gateway paths admitted through the typed attempt own capture at the
+	// natural response-read boundary. A failed typed admission is still an
+	// explicit no-fallback decision; provider-native/KIRO paths remain on the
+	// legacy bridge until their dedicated migration.
+	if captureStreamingAttemptPath(c) {
+		attempt := captureAttemptForRequest(c)
+		if attempt == nil || resp == nil || resp.Body == nil {
+			return func() {}
+		}
+		attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, attempt.headerLimit))
+		resp.Body = newCaptureResponseReader(resp.Body, attempt)
+		return func() {}
+	}
 	limit = normalizeCaptureLimit(limit)
 	if !enabled || limit <= 0 || resp == nil || resp.Body == nil {
 		return func() {}
@@ -590,6 +640,7 @@ func beginCaptureAttempt(c *gin.Context) {
 // ResetCaptureExchange clears snapshots from an intermediate failover attempt
 // without replacing the synchronized slot shared by response finalization.
 func ResetCaptureExchange(c *gin.Context) {
+	AbortCaptureAttempt(c)
 	if existingCaptureSlot(c) == nil {
 		return
 	}
@@ -825,6 +876,7 @@ const (
 	captureJSONMetaMaxDepth = 128
 	captureJSONMetaMaxKey   = 256
 	captureJSONMetaMaxModel = 4096
+	captureJSONMetaMaxStop  = 4096
 )
 
 // captureJSONMetaScanner is a deliberately small, allocation-bounded JSON
@@ -832,12 +884,16 @@ const (
 // unrelated provider field containing a very large string would allocate the
 // entire value merely to discover a model field later in the request.
 type captureJSONMetaScanner struct {
-	r                *bufio.Reader
-	model            string
-	stream           bool
-	streamKnown      bool
-	detectSignature  bool
-	signaturePresent bool
+	r                 *bufio.Reader
+	model             string
+	stream            bool
+	streamKnown       bool
+	detectSignature   bool
+	signaturePresent  bool
+	detectStopReason  bool
+	stopReasonSnake   []byte
+	stopReasonCamel   []byte
+	stopReasonScratch []byte
 }
 
 type captureJSONMetaPath uint8
@@ -852,6 +908,13 @@ const (
 	captureJSONMetaCurrentMessage
 	captureJSONMetaUserInputMessage
 	captureJSONMetaSignature
+	captureJSONMetaStopReasonSnake
+	captureJSONMetaStopReasonCamel
+	captureJSONMetaChoices
+	captureJSONMetaCandidates
+	captureJSONMetaResponse
+	captureJSONMetaChoiceItem
+	captureJSONMetaCandidateItem
 )
 
 func extractCaptureProviderRequestMetaFromReader(r io.Reader) (model string, stream bool, streamKnown bool, err error) {
@@ -886,6 +949,9 @@ func (s *captureJSONMetaScanner) scanValue(path captureJSONMetaPath, depth int) 
 			}
 			return nil
 		}
+		if path == captureJSONMetaStopReasonSnake || path == captureJSONMetaStopReasonCamel {
+			return s.readJSONStopReason(path)
+		}
 		limit := 0
 		if path == captureJSONMetaModel && s.model == "" {
 			limit = captureJSONMetaMaxModel
@@ -895,7 +961,8 @@ func (s *captureJSONMetaScanner) scanValue(path captureJSONMetaPath, depth int) 
 			return err
 		}
 		if retained && limit > 0 {
-			s.model = strings.TrimSpace(value)
+			value = strings.TrimSpace(value)
+			s.model = value
 		}
 		return nil
 	default:
@@ -933,12 +1000,19 @@ func (s *captureJSONMetaScanner) scanObject(path captureJSONMetaPath, depth int)
 			}
 			return errors.New("invalid capture metadata JSON object key")
 		}
-		key, retained, err := s.readJSONString(captureJSONMetaMaxKey)
+		key := ""
+		stopReasonPath := captureJSONMetaIgnore
+		if s.detectStopReason {
+			stopReasonPath, err = s.readJSONStopReasonKey()
+		} else {
+			var retained bool
+			key, retained, err = s.readJSONString(captureJSONMetaMaxKey)
+			if !retained {
+				key = ""
+			}
+		}
 		if err != nil {
 			return err
-		}
-		if !retained {
-			key = ""
 		}
 		if b, err = s.readNonSpace(); err != nil || b != ':' {
 			if err != nil {
@@ -949,6 +1023,22 @@ func (s *captureJSONMetaScanner) scanObject(path captureJSONMetaPath, depth int)
 		childPath := captureJSONMetaChildPath(path, key)
 		if s.detectSignature && (key == "signature" || key == "thoughtSignature") {
 			childPath = captureJSONMetaSignature
+		}
+		if s.detectStopReason {
+			switch {
+			case path == captureJSONMetaRoot && stopReasonPath == captureJSONMetaChoices:
+				childPath = captureJSONMetaChoices
+			case path == captureJSONMetaRoot && stopReasonPath == captureJSONMetaCandidates:
+				childPath = captureJSONMetaCandidates
+			case path == captureJSONMetaRoot && stopReasonPath == captureJSONMetaResponse:
+				childPath = captureJSONMetaResponse
+			case path == captureJSONMetaResponse && stopReasonPath == captureJSONMetaCandidates:
+				childPath = captureJSONMetaCandidates
+			case path == captureJSONMetaChoiceItem && stopReasonPath == captureJSONMetaStopReasonSnake:
+				childPath = captureJSONMetaStopReasonSnake
+			case path == captureJSONMetaCandidateItem && stopReasonPath == captureJSONMetaStopReasonCamel:
+				childPath = captureJSONMetaStopReasonCamel
+			}
 		}
 		if err := s.scanValue(childPath, depth); err != nil {
 			return err
@@ -964,6 +1054,144 @@ func (s *captureJSONMetaScanner) scanObject(path captureJSONMetaPath, depth int)
 			continue
 		default:
 			return errors.New("invalid capture metadata JSON object terminator")
+		}
+	}
+}
+
+// readJSONStopReasonKey consumes a JSON object key without materializing it.
+// Provider stop-reason keys are fixed ASCII spellings, so byte matching keeps
+// dense choices/candidates arrays allocation-bounded.
+func (s *captureJSONMetaScanner) readJSONStopReasonKey() (captureJSONMetaPath, error) {
+	keys := [...]string{"finish_reason", "finishReason", "choices", "candidates", "response"}
+	paths := [...]captureJSONMetaPath{
+		captureJSONMetaStopReasonSnake,
+		captureJSONMetaStopReasonCamel,
+		captureJSONMetaChoices,
+		captureJSONMetaCandidates,
+		captureJSONMetaResponse,
+	}
+	matches := [...]bool{true, true, true, true, true}
+	index := 0
+	escaped := false
+	for {
+		b, err := s.r.ReadByte()
+		if err != nil {
+			return captureJSONMetaIgnore, err
+		}
+		if escaped {
+			escaped = false
+			matches = [len(keys)]bool{}
+			continue
+		}
+		if b == '\\' {
+			escaped = true
+			matches = [len(keys)]bool{}
+			continue
+		}
+		if b == '"' {
+			for i, key := range keys {
+				if matches[i] && index == len(key) {
+					return paths[i], nil
+				}
+			}
+			return captureJSONMetaIgnore, nil
+		}
+		if b < 0x20 {
+			return captureJSONMetaIgnore, errors.New("invalid control byte in capture metadata JSON object key")
+		}
+		for i, key := range keys {
+			if index >= len(key) || b != key[index] {
+				matches[i] = false
+			}
+		}
+		index++
+	}
+}
+
+// readJSONStopReason retains only the latest non-empty encoded value in two
+// reused capped buffers. Dense response arrays therefore do not allocate per
+// candidate merely to discover the terminal finish reason.
+func (s *captureJSONMetaScanner) readJSONStopReason(path captureJSONMetaPath) error {
+	s.stopReasonScratch = s.stopReasonScratch[:0]
+	s.stopReasonScratch = append(s.stopReasonScratch, '"')
+	retained := true
+	nonEmpty := false
+	escaped := false
+	for {
+		b, err := s.r.ReadByte()
+		if err != nil {
+			return err
+		}
+		if retained {
+			if len(s.stopReasonScratch) >= captureJSONMetaMaxStop+1 {
+				retained = false
+				s.stopReasonScratch = s.stopReasonScratch[:0]
+			} else {
+				s.stopReasonScratch = append(s.stopReasonScratch, b)
+			}
+		}
+		if escaped {
+			escaped = false
+			switch b {
+			case 'n', 'r', 't', 'f':
+				// Decoded whitespace does not make the reason non-empty.
+			case 'u':
+				var value rune
+				for range 4 {
+					h, err := s.r.ReadByte()
+					if err != nil {
+						return err
+					}
+					if retained {
+						if len(s.stopReasonScratch) >= captureJSONMetaMaxStop+1 {
+							retained = false
+							s.stopReasonScratch = s.stopReasonScratch[:0]
+						} else {
+							s.stopReasonScratch = append(s.stopReasonScratch, h)
+						}
+					}
+					value <<= 4
+					switch {
+					case h >= '0' && h <= '9':
+						value += rune(h - '0')
+					case h >= 'a' && h <= 'f':
+						value += rune(h-'a') + 10
+					case h >= 'A' && h <= 'F':
+						value += rune(h-'A') + 10
+					default:
+						return errors.New("invalid unicode escape in capture stop reason JSON string")
+					}
+				}
+				if !unicode.IsSpace(value) {
+					nonEmpty = true
+				}
+			case '"', '\\', '/', 'b':
+				nonEmpty = true
+			default:
+				return errors.New("invalid escape in capture stop reason JSON string")
+			}
+			continue
+		}
+		switch {
+		case b == '\\':
+			escaped = true
+		case b == '"':
+			if retained && nonEmpty {
+				if path == captureJSONMetaStopReasonSnake {
+					s.stopReasonSnake = append(s.stopReasonSnake[:0], s.stopReasonScratch...)
+				} else {
+					s.stopReasonCamel = append(s.stopReasonCamel[:0], s.stopReasonScratch...)
+				}
+			}
+			return nil
+		case b < 0x20:
+			return errors.New("invalid control byte in capture stop reason JSON string")
+		case b < utf8.RuneSelf:
+			if !unicode.IsSpace(rune(b)) {
+				nonEmpty = true
+			}
+		default:
+			nonEmpty = true
 		}
 	}
 }
@@ -1052,7 +1280,42 @@ func captureResponseHasNonEmptySignature(js []byte) bool {
 	return scanner.signaturePresent
 }
 
-func (s *captureJSONMetaScanner) scanArray(_ captureJSONMetaPath, depth int) error {
+func captureResponseLastStopReason(js []byte) string {
+	snake, camel := captureResponseStopReasons(js)
+	if camel != "" {
+		return camel
+	}
+	return snake
+}
+
+func captureResponseStopReasons(js []byte) (snake string, camel string) {
+	if len(js) == 0 {
+		return "", ""
+	}
+	scanner := &captureJSONMetaScanner{
+		r:                 bufio.NewReaderSize(bytes.NewReader(js), 32<<10),
+		detectStopReason:  true,
+		stopReasonSnake:   make([]byte, 0, captureJSONMetaMaxStop+2),
+		stopReasonCamel:   make([]byte, 0, captureJSONMetaMaxStop+2),
+		stopReasonScratch: make([]byte, 0, captureJSONMetaMaxStop+2),
+	}
+	if err := scanner.scanValue(captureJSONMetaRoot, 0); err != nil {
+		return "", ""
+	}
+	decode := func(raw []byte) string {
+		if len(raw) == 0 {
+			return ""
+		}
+		value, err := strconv.Unquote(string(raw))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(value)
+	}
+	return decode(scanner.stopReasonSnake), decode(scanner.stopReasonCamel)
+}
+
+func (s *captureJSONMetaScanner) scanArray(path captureJSONMetaPath, depth int) error {
 	b, err := s.readNonSpace()
 	if err != nil {
 		return err
@@ -1063,8 +1326,14 @@ func (s *captureJSONMetaScanner) scanArray(_ captureJSONMetaPath, depth int) err
 	if err := s.r.UnreadByte(); err != nil {
 		return err
 	}
+	childPath := captureJSONMetaIgnore
+	if path == captureJSONMetaChoices {
+		childPath = captureJSONMetaChoiceItem
+	} else if path == captureJSONMetaCandidates {
+		childPath = captureJSONMetaCandidateItem
+	}
 	for {
-		if err := s.scanValue(captureJSONMetaIgnore, depth); err != nil {
+		if err := s.scanValue(childPath, depth); err != nil {
 			return err
 		}
 		b, err = s.readNonSpace()
@@ -1601,15 +1870,6 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 			setStringValue(result.String())
 		}
 	}
-	setLastArrayFieldString := func(result gjson.Result, field string) {
-		if !result.IsArray() {
-			return
-		}
-		result.ForEach(func(_, item gjson.Result) bool {
-			setString(item.Get(field))
-			return true
-		})
-	}
 	setInt := func(result gjson.Result, target *int, present *bool) {
 		if !result.Exists() || !nonNegativeIntegerGJSON(result) {
 			return
@@ -1643,10 +1903,10 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 	apply := func(js []byte) {
 		setString(gjson.GetBytes(js, "stop_reason"))
 		setString(gjson.GetBytes(js, "delta.stop_reason"))
-		setLastArrayFieldString(gjson.GetBytes(js, "choices"), "finish_reason")
+		finishReason, finishReasonCamel := captureResponseStopReasons(js)
+		setStringValue(finishReason)
 		setString(gjson.GetBytes(js, "response.status"))
-		setLastArrayFieldString(gjson.GetBytes(js, "candidates"), "finishReason")
-		setLastArrayFieldString(gjson.GetBytes(js, "response.candidates"), "finishReason")
+		setStringValue(finishReasonCamel)
 
 		setInt(gjson.GetBytes(js, "usage.input_tokens"), &cols.InputTokens, &cols.inputTokensPresent)
 		setInt(gjson.GetBytes(js, "usage.prompt_tokens"), &cols.InputTokens, &cols.inputTokensPresent)

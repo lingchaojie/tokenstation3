@@ -2745,10 +2745,12 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			ForceCodexCLI: false,
-			Capture:       config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 64 * 1024},
+			Capture:       config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 64 * 1024, MaxHeaderBytes: 1 << 20},
 		}},
 		httpUpstream: upstream,
 	}
+	transport := &recordingCaptureTransport{}
+	svc.capturePool = newConversationCapturePoolForTransport(transport, func() bool { return true })
 	account := &Account{
 		ID:             654,
 		Name:           "acc",
@@ -2766,9 +2768,18 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.EqualError(t, err, "stream usage incomplete: missing terminal event")
 	require.NotNil(t, result, "client-visible partial output must preserve the attempt result")
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.False(t, gjson.GetBytes(result.UpstreamRequest, "store").Bool())
-	require.Contains(t, string(result.CaptureResponse), `response.output_text.delta`)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureRequest)
+	require.Nil(t, result.CaptureResponse)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
+	require.False(t, gjson.GetBytes(attempts[0].RequestBytes(), "store").Bool())
+	require.Equal(t, []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"h\"}\n\n"), attempts[0].ResponseBytes())
+	require.Equal(t, captureHeaderBytes(upstream.lastReq.Header, svc.cfg.Gateway.Capture.MaxHeaderBytes), attempts[0].RequestHeaderBytes())
+	require.Equal(t, redactHTTPHeader(resp.Header), attempts[0].ResponseHeaderBytes())
+	require.Empty(t, attempts[0].TerminalStates(), "the handler-side partial-result sink owns commit")
+	AbortCaptureAttempt(c)
 	require.True(t, logSink.ContainsMessage("上游流在未收到 [DONE] 时结束，疑似断流"))
 	require.True(t, logSink.ContainsMessageAtLevel("上游流在未收到 [DONE] 时结束，疑似断流", "info"))
 	require.True(t, logSink.ContainsFieldValue("upstream_request_id", "rid-truncate"))

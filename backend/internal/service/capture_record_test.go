@@ -3,16 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -327,26 +324,30 @@ func TestCaptureResponseRequestMetadataOverridesPreTransportFallback(t *testing.
 	require.Equal(t, []byte(`{"ok":true}`), bridge.Response)
 }
 
-func TestCaptureResponseReplacementKeepsTailMetadataBeyondRawLimit(t *testing.T) {
+func TestCaptureResponseReplacementStreamsFinalWireSliceWithTailMetadata(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	enableCaptureForTest(t, c)
-	setCapturePlatform(c, PlatformOpenAI)
-	initial := httptest.NewRequest(http.MethodPost, "https://provider.example/initial", nil)
-	SetCaptureOutboundRequest(c, initial, []byte(`{"model":"initial-model","stream":true}`), captureHardMaxBodyBytes)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	svc := &GatewayService{cfg: captureEnabledConfigForTest(captureHardMaxBodyBytes), capturePool: pool}
+	account := &Account{Platform: PlatformOpenAI}
+	initialBody := []byte(`{"model":"initial-model","stream":true}`)
+	svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://provider.example/initial", nil), initialBody)
 
-	endpoint, err := url.Parse("https://provider.example/final")
+	finalBody, err := io.ReadAll(largeCaptureMetadataBody(16 << 20))
 	require.NoError(t, err)
-	final := &http.Request{Method: http.MethodPost, URL: endpoint, Header: make(http.Header), Body: http.NoBody}
-	final.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(largeCaptureMetadataBody(16 << 20)), nil }
-	setCaptureResult(c, &http.Response{StatusCode: http.StatusOK, Request: final}, []byte(`{"ok":true}`), false)
+	final := httptest.NewRequest(http.MethodPost, "https://provider.example/final", nil)
+	svc.captureOutboundRequest(c, account, final, finalBody)
 
-	bridge, ok := takeCaptureResult(c)
-	require.True(t, ok)
-	require.Len(t, bridge.UpstreamRequest, captureHardMaxBodyBytes)
-	require.True(t, bridge.RequestTruncated)
-	require.Equal(t, "mapped-tail-model", bridge.UpstreamModel)
-	require.True(t, bridge.UpstreamStreamKnown)
-	require.True(t, bridge.UpstreamStream)
+	require.Equal(t, 2, transport.Begins())
+	require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[0].TerminalStates())
+	recording := transport.Attempts()[1]
+	require.Equal(t, "mapped-tail-model", recording.begin.UpstreamModel)
+	require.True(t, recording.begin.Stream)
+	require.Len(t, recording.RequestInputs(), 1)
+	require.Equal(t, &finalBody[0], &recording.RequestInputs()[0][0], "final retry must stream the existing wire slice without snapshotting it")
+	AbortCaptureAttempt(c)
 }
 
 func TestCaptureResponseRedirectReplacesInitialPOSTBodyWithFinalEmptyGET(t *testing.T) {
@@ -670,30 +671,28 @@ func TestTerminalCaptureKeepsOutboundMetaBeyondRawRequestLimit(t *testing.T) {
 	require.True(t, rec.Stream)
 }
 
-func TestSetCaptureUpstreamRequestKeepsMetaBeyondRawRequestLimit(t *testing.T) {
+func TestCaptureWireRequestStreamsTailMetadataWithoutSnapshot(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	beginCaptureAttempt(c)
-	setCapturePlatform(c, PlatformAnthropic)
-	const paddingSize = 16 << 20
-	endpoint, err := url.Parse("https://api.anthropic.test/v1/messages")
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
-	req := &http.Request{Method: http.MethodPost, URL: endpoint, Header: make(http.Header), Body: http.NoBody}
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(largeCaptureMetadataBody(paddingSize)), nil }
-	hasher := sha256.New()
-	_, err = io.Copy(hasher, largeCaptureMetadataBody(paddingSize))
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	body, err := io.ReadAll(largeCaptureMetadataBody(16 << 20))
 	require.NoError(t, err)
-	wantHash := hex.EncodeToString(hasher.Sum(nil))
-
-	setCaptureUpstreamRequest(c, req, captureHardMaxBodyBytes)
-	bridge, ok := takeCaptureResult(c)
-
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	attempt, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformAnthropic, req, body, 1<<20)
 	require.True(t, ok)
-	require.Len(t, bridge.UpstreamRequest, captureHardMaxBodyBytes)
-	require.True(t, bridge.RequestTruncated)
-	require.Equal(t, wantHash, bridge.UpstreamRequestHash)
-	require.Equal(t, "mapped-tail-model", bridge.UpstreamModel)
-	require.True(t, bridge.UpstreamStreamKnown)
-	require.True(t, bridge.UpstreamStream)
+	require.NotNil(t, attempt)
+	recording := transport.Attempts()[0]
+	require.Equal(t, "mapped-tail-model", recording.begin.UpstreamModel)
+	require.True(t, recording.begin.Stream)
+	require.Len(t, recording.RequestInputs(), 1)
+	require.Equal(t, &body[0], &recording.RequestInputs()[0][0], "capture must frame the existing wire slice without a production snapshot")
+	AbortCaptureAttempt(c)
 }
 
 func TestCaptureMetadataReaderSkipsHugeUnrelatedStringWithoutBodySizedAllocation(t *testing.T) {
@@ -793,6 +792,38 @@ func TestCaptureResponseColumnsExtractGeminiOutputIncludingThoughtTokens(t *test
 	}
 }
 
+func TestCaptureResponseStopReasonScannerRetainsBoundedAllocation(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		item   string
+		suffix string
+	}{
+		{name: "openai choices", prefix: `{"choices":[`, item: `{"finish_reason":"stop"},`, suffix: `{"finish_reason":"final"}]}`},
+		{name: "gemini candidates", prefix: `{"candidates":[`, item: `{"finishReason":"STOP"},`, suffix: `{"finishReason":"FINAL"}]}`},
+		{name: "nested gemini candidates", prefix: `{"response":{"candidates":[`, item: `{"finishReason":"STOP"},`, suffix: `{"finishReason":"FINAL"}]}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repeat := (captureHardMaxBodyBytes - len(tt.prefix) - len(tt.suffix)) / len(tt.item)
+			body := []byte(tt.prefix + strings.Repeat(tt.item, repeat) + tt.suffix)
+
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := captureResponseLastStopReason(body)
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+
+			require.Equal(t, "final", strings.ToLower(got))
+			allocated := after.TotalAlloc - before.TotalAlloc
+			t.Logf("bounded stop-reason scanner allocated %d bytes", allocated)
+			require.Less(t, allocated, uint64(12<<20))
+		})
+	}
+}
+
 func TestCaptureResponseStopReasonScanSkipsDenseArraysWithoutPerElementAllocation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -840,6 +871,12 @@ func TestCaptureResponseStopReasonScanSkipsDenseArraysWithoutPerElementAllocatio
 			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
 		})
 	}
+}
+
+func TestCaptureResponseStopReasonScannerIgnoresUnrelatedNestedFields(t *testing.T) {
+	body := []byte(`{"choices":[{"finish_reason":"stop"}],"metadata":{"finish_reason":"wrong"}}`)
+	cols := extractResponseColumns(body, false)
+	require.Equal(t, "stop", cols.StopReason)
 }
 
 func TestBuildTerminalErrorCaptureRecordAllowsEmptyHTTPErrorBody(t *testing.T) {
@@ -904,21 +941,24 @@ func TestSnapshotBytesCopiesInput(t *testing.T) {
 	}
 }
 
-func TestCaptureRequestSnapshotsUseEightMiBHardCeiling(t *testing.T) {
-	const hardLimit = 8 << 20
-	body := bytes.Repeat([]byte("x"), hardLimit+1024)
-
-	direct, truncated := captureWithLimit(body, hardLimit*2)
-	require.Len(t, direct, hardLimit)
-	require.True(t, truncated)
-
+func TestCaptureRequestAboveEightMiBUsesExistingWireSlice(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	body := bytes.Repeat([]byte("x"), (8<<20)+1024)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	req := httptest.NewRequest(http.MethodPost, "https://api.example/v1/messages", bytes.NewReader(body))
-	setCaptureUpstreamRequest(c, req, hardLimit*2)
-	bridge, ok := takeCaptureResult(c)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	req := httptest.NewRequest(http.MethodPost, "https://api.example/v1/messages", nil)
+	attempt, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformAnthropic, req, body, 1<<20)
 	require.True(t, ok)
-	require.Len(t, bridge.UpstreamRequest, hardLimit)
-	require.True(t, bridge.RequestTruncated)
+	require.NotNil(t, attempt)
+	require.Len(t, transport.Attempts()[0].RequestInputs(), 1)
+	require.Equal(t, &body[0], &transport.Attempts()[0].RequestInputs()[0][0], "gateway capture must not allocate the retired 8 MiB snapshot")
+	AbortCaptureAttempt(c)
 }
 
 func TestKiroTranslatedStreamCloseJoinsTranslator(t *testing.T) {

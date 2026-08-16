@@ -132,6 +132,10 @@ func (s *OpenAIGatewayService) prepareOpenAIHTTPCaptureAttempt(c *gin.Context, a
 	if !s.openAIHTTPCaptureEnabled(c, account) {
 		return false
 	}
+	if account.Platform == PlatformOpenAI && openAIHTTPCaptureEndpointEligible(c) {
+		_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+		return ok
+	}
 	setCapturePlatform(c, string(account.Platform))
 	SetCaptureOutboundRequest(c, req, body, s.cfg.Gateway.Capture.MaxBodyBytes)
 	return true
@@ -144,6 +148,18 @@ func (s *OpenAIGatewayService) wrapOpenAIHTTPCaptureResponse(c *gin.Context, acc
 		return
 	}
 	if _, exists := resp.Body.(*openAIHTTPCaptureReadCloser); exists {
+		return
+	}
+	if captureStreamingAttemptPath(c) {
+		if _, exists := resp.Body.(*captureResponseReader); exists {
+			return
+		}
+		attempt := captureAttemptForRequest(c)
+		if attempt == nil {
+			return
+		}
+		attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, s.cfg.Gateway.Capture.MaxHeaderBytes))
+		resp.Body = newCaptureResponseReader(resp.Body, attempt)
 		return
 	}
 	resp.Body = &openAIHTTPCaptureReadCloser{
@@ -176,6 +192,11 @@ func (s *OpenAIGatewayService) applyOpenAIHTTPSuccessCapture(c *gin.Context, acc
 	if !enabled {
 		return
 	}
+	if account.Platform != PlatformKiro {
+		// The streamed attempt stays request-owned until the handler's existing
+		// usage/billing side-effect sink commits the client-visible outcome.
+		return
+	}
 	bridge, ok := takeCaptureResult(c)
 	if !ok || !bridge.ResponseObserved || bridge.RequestCaptureInvalid {
 		return
@@ -203,6 +224,11 @@ func (s *OpenAIGatewayService) submitOpenAIHTTPTerminalCapture(c *gin.Context, a
 		return
 	}
 	finishOpenAIHTTPCapture(resp)
+	if account.Platform != PlatformKiro {
+		// Typed OpenAI attempts remain request-owned until the handler's single
+		// terminal-error side-effect sink classifies the final account outcome.
+		return
+	}
 	failure := &UpstreamFailoverError{
 		StatusCode:              resp.StatusCode,
 		RequestHeaders:          captureRequestHeadersFromResponse(resp),
