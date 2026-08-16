@@ -40,6 +40,17 @@ type RowBinaryEncoder struct {
 	openRawFile func(string) (io.ReadCloser, error)
 }
 
+// CorruptRecordError identifies the exact immutable spool record that failed
+// local validation without requiring callers to inspect an error string (which
+// may otherwise contain a filesystem path or captured data).
+type CorruptRecordError struct {
+	CaptureID uuid.UUID
+}
+
+func (*CorruptRecordError) Error() string { return "capture spool record corrupt" }
+
+func (*CorruptRecordError) Unwrap() error { return spool.ErrSpoolCorrupt }
+
 func (e RowBinaryEncoder) ValidateBatch(batch *spool.Batch) error {
 	return e.Preflight(context.Background(), batch)
 }
@@ -62,6 +73,9 @@ func (RowBinaryEncoder) Preflight(ctx context.Context, batch *spool.Batch) error
 		}
 		seen[ref.CaptureID] = struct{}{}
 		if err := spool.ValidateRecordRef(ctx, *ref); err != nil {
+			if errors.Is(err, spool.ErrSpoolCorrupt) {
+				return &CorruptRecordError{CaptureID: ref.CaptureID}
+			}
 			return fmt.Errorf("validate capture %s: %w", ref.CaptureID, err)
 		}
 	}
@@ -97,6 +111,9 @@ func (e RowBinaryEncoder) encodeBatchValidated(ctx context.Context, dst io.Write
 			return err
 		}
 		if err := e.encodeRecord(ctx, dst, batch.ID, &batch.Records[i], buffer); err != nil {
+			if errors.Is(err, spool.ErrSpoolCorrupt) {
+				return &CorruptRecordError{CaptureID: batch.Records[i].CaptureID}
+			}
 			return fmt.Errorf("encode capture %s: %w", batch.Records[i].CaptureID, err)
 		}
 	}

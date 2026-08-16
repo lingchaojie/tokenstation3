@@ -127,16 +127,39 @@ func TestLocallyCorruptBatchIsRecoveredWithoutBlockingOtherReadyRecords(t *testi
 	store := openRuntimeStore(t, root)
 	corruptID := seedRuntimeRecord(t, store, "corrupt me")
 	seedRuntimeRecord(t, store, "deliver me")
-	uploader := &corruptFirstUploader{captureID: corruptID}
+	uploader := &corruptFirstUploader{
+		captureID:      corruptID,
+		corruptReady:   make(chan struct{}),
+		releaseCorrupt: make(chan struct{}),
+	}
 	runtime := newTestRuntime(t, root, store, uploader, newManualClock(time.Now()), &blockingReceiver{})
 	startRuntime(t, runtime)
+	<-uploader.corruptReady
+	liveAttempt, err := store.Open(model.Begin{CaptureID: uuid.New(), Policy: model.ContentPolicy{}})
+	require.NoError(t, err)
+	close(uploader.releaseCorrupt)
 	require.Eventually(t, func() bool {
 		return uploader.successCount() == 1 && store.Snapshot().ReadyRecords == 0 && runtime.Status().CurrentBatchID == ""
 	}, time.Second, time.Millisecond)
+	newAdmission := make(chan error, 1)
+	go func() {
+		sink, openErr := store.Open(model.Begin{CaptureID: uuid.New(), Policy: model.ContentPolicy{}})
+		if openErr == nil {
+			sink.Abort(errors.New("test cleanup"))
+		}
+		newAdmission <- openErr
+	}()
+	select {
+	case openErr := <-newAdmission:
+		require.NoError(t, openErr)
+	case <-time.After(time.Second):
+		t.Fatal("targeted quarantine blocked new admission behind a waiting lifecycle writer")
+	}
 	status := runtime.Status()
 	require.EqualValues(t, 1, status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
 	require.Zero(t, status.UploadRetries)
 	require.Empty(t, status.CurrentBatchID)
+	liveAttempt.Abort(errors.New("test cleanup"))
 	require.NoError(t, runtime.Shutdown(context.Background()))
 }
 
@@ -412,6 +435,207 @@ func TestPreviousHealthBucketRotatesOnlyAfterSuccessfulStatusResponse(t *testing
 	require.NoError(t, runtime.Shutdown(context.Background()))
 }
 
+func TestDelayedStatusDeliveryDoesNotAcknowledgeIncompleteRotatedBucket(t *testing.T) {
+	root := t.TempDir()
+	base := openRuntimeStore(t, root)
+	store := &mutableDropStore{SpoolStore: base}
+	clock := newManualClock(time.Unix(1_800_000_058, 0).UTC())
+	manager, err := openStatusManager(testConfig(root).StatusPath, store, clock, slog.Default())
+	require.NoError(t, err)
+
+	incomplete, err := manager.snapshot()
+	require.NoError(t, err)
+	store.setCorruptDrops(1)
+	completeCurrent, err := manager.snapshot()
+	require.NoError(t, err)
+	require.NotEqual(t, incomplete.HealthBuckets[0].DroppedRecords, completeCurrent.HealthBuckets[0].DroppedRecords)
+	clock.Advance(2 * time.Second)
+	completeRotated, err := manager.snapshot()
+	require.NoError(t, err)
+	require.Len(t, completeRotated.HealthBuckets, 2)
+
+	require.NoError(t, manager.delivered(incomplete))
+	clock.Advance(time.Minute)
+	stillUnacknowledged, err := manager.snapshot()
+	require.NoError(t, err)
+	require.Equal(t, completeRotated.HealthBuckets[0], stillUnacknowledged.HealthBuckets[0])
+
+	require.NoError(t, manager.delivered(completeRotated))
+	clock.Advance(time.Minute)
+	afterCompleteDelivery, err := manager.snapshot()
+	require.NoError(t, err)
+	require.Equal(t, stillUnacknowledged.HealthBuckets[1].Minute, afterCompleteDelivery.HealthBuckets[0].Minute)
+}
+
+func TestCorruptionCounterAndAppliedMarkerResumeCleanupExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	base := openRuntimeStore(t, root)
+	corruptID := seedRuntimeRecord(t, base, "corrupt once")
+	uploader := &corruptFirstUploader{captureID: corruptID}
+	store := &cleanupCorruptionFailingStore{SpoolStore: base}
+	first := newTestRuntime(t, root, store, uploader, newManualClock(time.Now()), &blockingReceiver{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- first.Run(context.Background()) }()
+	<-first.Started()
+	require.EqualError(t, <-runDone, "capture sidecar corruption cleanup failed")
+
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.EqualValues(t, 1, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.NotNil(t, checkpoint.AppliedCorruptionID)
+	require.Equal(t, corruptID, *checkpoint.AppliedCorruptionID)
+
+	reopened := openRuntimeStore(t, root)
+	second := newTestRuntime(t, root, reopened, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, second)
+	require.EqualValues(t, 1, second.Status().DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	checkpoint, found, err = readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Nil(t, checkpoint.AppliedCorruptionID)
+	require.Empty(t, readRuntimeDirectoryNames(t, filepath.Join(root, "spool", "sending")))
+	require.NoError(t, second.Shutdown(context.Background()))
+}
+
+func TestAppliedCorruptionResumesWhenStatusCounterCheckpointFails(t *testing.T) {
+	root := t.TempDir()
+	base := openRuntimeStore(t, root)
+	corruptID := seedRuntimeRecord(t, base, "checkpoint crash")
+	failure := &checkpointFailure{}
+	store := &checkpointEnablingStore{SpoolStore: base, failure: failure}
+	first, err := New(testConfig(root), Dependencies{
+		Store: store, Uploader: &corruptFirstUploader{captureID: corruptID}, Receiver: &blockingReceiver{}, Clock: newManualClock(time.Now()),
+		StatusInterval: time.Hour, WriteStatusCheckpoint: failure.write,
+	})
+	require.NoError(t, err)
+	runErr := first.Run(context.Background())
+	require.EqualError(t, runErr, "capture sidecar status checkpoint failed")
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Zero(t, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.Nil(t, checkpoint.AppliedCorruptionID)
+
+	reopened := openRuntimeStore(t, root)
+	second := newTestRuntime(t, root, reopened, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, second)
+	require.EqualValues(t, 1, second.Status().DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	checkpoint, found, err = readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Nil(t, checkpoint.AppliedCorruptionID)
+	require.Empty(t, readRuntimeDirectoryNames(t, filepath.Join(root, "spool", "sending")))
+	require.NoError(t, second.Shutdown(context.Background()))
+}
+
+func TestAppliedMarkerClearsAfterCrashFollowingTombstoneCleanup(t *testing.T) {
+	root := t.TempDir()
+	base := openRuntimeStore(t, root)
+	corruptID := seedRuntimeRecord(t, base, "cleanup checkpoint crash")
+	failure := &checkpointFailure{}
+	store := &cleanupCheckpointEnablingStore{SpoolStore: base, failure: failure}
+	first, err := New(testConfig(root), Dependencies{
+		Store: store, Uploader: &corruptFirstUploader{captureID: corruptID}, Receiver: &blockingReceiver{}, Clock: newManualClock(time.Now()),
+		StatusInterval: time.Hour, WriteStatusCheckpoint: failure.write,
+	})
+	require.NoError(t, err)
+	require.EqualError(t, first.Run(context.Background()), "capture sidecar status checkpoint failed")
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.EqualValues(t, 1, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.NotNil(t, checkpoint.AppliedCorruptionID)
+	require.Empty(t, readRuntimeDirectoryNames(t, filepath.Join(root, "spool", "sending")), "tombstone cleanup completed before the crash")
+
+	reopened := openRuntimeStore(t, root)
+	second := newTestRuntime(t, root, reopened, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, second)
+	require.EqualValues(t, 1, second.Status().DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	checkpoint, found, err = readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Nil(t, checkpoint.AppliedCorruptionID)
+	require.NoError(t, second.Shutdown(context.Background()))
+}
+
+func TestStatusSnapshotCannotSplitQuarantineCounterMarkerTransaction(t *testing.T) {
+	root := t.TempDir()
+	base := openRuntimeStore(t, root)
+	corruptID := seedRuntimeRecord(t, base, "atomic counter marker")
+	store := &postQuarantineBlockingStore{
+		SpoolStore: base,
+		applied:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	runtime := newTestRuntime(t, root, store, &corruptFirstUploader{captureID: corruptID}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, runtime)
+	<-store.applied
+
+	snapshot := make(chan model.Status, 1)
+	go func() { snapshot <- runtime.Status() }()
+	select {
+	case <-snapshot:
+		t.Fatal("status checkpoint split the durable quarantine from its applied marker")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(store.release)
+	status := <-snapshot
+	require.EqualValues(t, 1, status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.Eventually(t, func() bool { return base.Snapshot().ReadyRecords == 0 }, time.Second, time.Millisecond)
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.EqualValues(t, 1, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.NoError(t, runtime.Shutdown(context.Background()))
+}
+
+func TestNonRetryableUploadPropagatesCheckpointFailureWithoutPersistingFalseTransition(t *testing.T) {
+	root := t.TempDir()
+	store := openRuntimeStore(t, root)
+	seedRuntimeRecord(t, store, "reject")
+	clock := newManualClock(time.Now())
+	manager, err := openStatusManager(testConfig(root).StatusPath, store, clock, slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, manager.recordDelivery(true, false))
+	failure := &checkpointFailure{}
+	runtime, err := New(testConfig(root), Dependencies{
+		Store: store, Uploader: &checkpointFailingUploader{failure: failure}, Receiver: &blockingReceiver{}, Clock: clock,
+		StatusInterval: time.Hour, WriteStatusCheckpoint: failure.write,
+	})
+	require.NoError(t, err)
+	runErr := runtime.Run(context.Background())
+	require.EqualError(t, runErr, "capture sidecar status checkpoint failed")
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, checkpoint.Status.DeliveryReady)
+}
+
+func TestNonRetryableProbePropagatesCheckpointFailureWithoutPersistingFalseTransition(t *testing.T) {
+	root := t.TempDir()
+	store := openRuntimeStore(t, root)
+	clock := newManualClock(time.Now())
+	manager, err := openStatusManager(testConfig(root).StatusPath, store, clock, slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, manager.recordDelivery(true, false))
+	failure := &checkpointFailure{}
+	runtime, err := New(testConfig(root), Dependencies{
+		Store: store, Uploader: &checkpointFailingUploader{failure: failure}, Receiver: &blockingReceiver{}, Clock: clock,
+		StatusInterval: time.Hour, WriteStatusCheckpoint: failure.write,
+	})
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(context.Background()) }()
+	<-runtime.Started()
+	clock.Advance(idleProbeInterval)
+	require.EqualError(t, <-done, "capture sidecar status checkpoint failed")
+	checkpoint, found, err := readStatusCheckpoint(testConfig(root).StatusPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, checkpoint.Status.DeliveryReady)
+}
+
 func TestConstructionDoesNotCreateSpoolStatusOrTailnetState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "capture")
 	cfg := testConfig(root)
@@ -645,6 +869,94 @@ func (s *cleanupFailingStore) CleanupAcked(*spool.Batch) error {
 	return errors.New("injected cleanup failure with clickhouse-password-super-secret")
 }
 
+type cleanupCorruptionFailingStore struct {
+	SpoolStore
+	failed bool
+}
+
+type checkpointEnablingStore struct {
+	SpoolStore
+	failure *checkpointFailure
+}
+
+type cleanupCheckpointEnablingStore struct {
+	SpoolStore
+	failure *checkpointFailure
+}
+
+type postQuarantineBlockingStore struct {
+	SpoolStore
+	applied chan struct{}
+	release chan struct{}
+}
+
+func (s *postQuarantineBlockingStore) QuarantineCorrupt(batch *spool.Batch, id uuid.UUID) (spool.AppliedCorruption, error) {
+	corruption, err := s.SpoolStore.QuarantineCorrupt(batch, id)
+	if err != nil {
+		return spool.AppliedCorruption{}, err
+	}
+	close(s.applied)
+	<-s.release
+	return corruption, nil
+}
+
+func (s *cleanupCheckpointEnablingStore) CleanupCorruption(id uuid.UUID) error {
+	if err := s.SpoolStore.CleanupCorruption(id); err != nil {
+		return err
+	}
+	s.failure.enable()
+	return nil
+}
+
+func (s *checkpointEnablingStore) QuarantineCorrupt(batch *spool.Batch, id uuid.UUID) (spool.AppliedCorruption, error) {
+	corruption, err := s.SpoolStore.QuarantineCorrupt(batch, id)
+	if err == nil {
+		s.failure.enable()
+	}
+	return corruption, err
+}
+
+func (s *cleanupCorruptionFailingStore) CleanupCorruption(id uuid.UUID) error {
+	if !s.failed {
+		s.failed = true
+		return errors.New("injected corruption cleanup failure")
+	}
+	return s.SpoolStore.CleanupCorruption(id)
+}
+
+type checkpointFailure struct {
+	mu      sync.Mutex
+	enabled bool
+}
+
+func (f *checkpointFailure) enable() {
+	f.mu.Lock()
+	f.enabled = true
+	f.mu.Unlock()
+}
+
+func (f *checkpointFailure) write(path string, encoded []byte) error {
+	f.mu.Lock()
+	enabled := f.enabled
+	f.mu.Unlock()
+	if enabled {
+		return errors.New("injected checkpoint failure with secret-path")
+	}
+	return writeStatusCheckpoint(path, encoded)
+}
+
+type checkpointFailingUploader struct{ failure *checkpointFailure }
+
+func (u *checkpointFailingUploader) Upload(context.Context, *spool.Batch) error {
+	u.failure.enable()
+	return errors.New("permanent upload rejection with secret")
+}
+
+func (u *checkpointFailingUploader) Probe(context.Context) error {
+	u.failure.enable()
+	return errors.New("permanent probe rejection with secret")
+}
+
 type mutableDropStore struct {
 	SpoolStore
 	mu      sync.Mutex
@@ -698,10 +1010,12 @@ func (r *orderingReceiver) Serve(ctx context.Context) error {
 func (*orderingReceiver) Close() error { return nil }
 
 type corruptFirstUploader struct {
-	mu        sync.Mutex
-	captureID uuid.UUID
-	calls     int
-	successes int
+	mu             sync.Mutex
+	captureID      uuid.UUID
+	calls          int
+	successes      int
+	corruptReady   chan struct{}
+	releaseCorrupt chan struct{}
 }
 
 type routingTSNetNode struct {
@@ -750,12 +1064,27 @@ func (u *corruptFirstUploader) Upload(_ context.Context, batch *spool.Batch) err
 		if err := os.WriteFile(filepath.Join(ref.Path, "manifest.json"), []byte("corrupt"), 0o600); err != nil {
 			return err
 		}
-		return spool.ErrSpoolCorrupt
+		if u.corruptReady != nil {
+			close(u.corruptReady)
+			<-u.releaseCorrupt
+		}
+		return &upload.CorruptRecordError{CaptureID: u.captureID}
 	}
 	u.mu.Lock()
 	u.successes++
 	u.mu.Unlock()
 	return nil
+}
+
+func readRuntimeDirectoryNames(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func (*corruptFirstUploader) Probe(context.Context) error { return nil }

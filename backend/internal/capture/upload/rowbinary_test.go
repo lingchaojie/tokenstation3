@@ -144,8 +144,27 @@ func TestEncodeBatchClassifiesCompressedContentCorruptionAsSpoolCorrupt(t *testi
 
 	err = (RowBinaryEncoder{}).EncodeBatch(context.Background(), &bytes.Buffer{}, batch)
 	require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+	var corrupt *CorruptRecordError
+	require.ErrorAs(t, err, &corrupt)
+	require.Equal(t, batch.Records[0].CaptureID, corrupt.CaptureID)
 	var schemaErr *SchemaError
 	require.False(t, errors.As(err, &schemaErr))
+}
+
+func TestPreflightCorruptionIdentifiesExactCaptureWithoutErrorStringParsing(t *testing.T) {
+	batch := goldenFixtureBatch(t)
+	wantID := batch.Records[0].CaptureID
+	secretPath := batch.Records[0].Path
+	batch.Records[0].Manifest.Request.SHA256 = "invalid"
+
+	err := (RowBinaryEncoder{}).Preflight(context.Background(), batch)
+
+	var corrupt *CorruptRecordError
+	require.ErrorAs(t, err, &corrupt)
+	require.ErrorIs(t, err, spool.ErrSpoolCorrupt)
+	require.Equal(t, wantID, corrupt.CaptureID)
+	require.NotContains(t, err.Error(), wantID.String())
+	require.NotContains(t, err.Error(), secretPath)
 }
 
 func TestWriteRawFieldRejectsInvalidZstdWhenDeclaredLengthIsZero(t *testing.T) {

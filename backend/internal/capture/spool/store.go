@@ -61,6 +61,7 @@ type Config struct {
 
 type RecoveryReport struct {
 	Ready              []RecordRef
+	AppliedCorruptions []AppliedCorruption
 	OrphansDeleted     int
 	CorruptDeleted     int
 	UnavailableRecords int
@@ -104,6 +105,7 @@ type Store struct {
 	capacity           *Capacity
 	validation         validationOps
 	batchSyncDirectory func(string) error
+	readySyncDirectory func(string) error
 
 	attemptSlots chan struct{}
 	lifecycleMu  sync.RWMutex
@@ -112,9 +114,10 @@ type Store struct {
 	ready   []RecordRef
 	batchMu sync.Mutex
 
-	recoverMu sync.Mutex
-	dropMu    sync.Mutex
-	dropped   map[string]uint64
+	recoverMu            sync.Mutex
+	dropMu               sync.Mutex
+	dropped              map[string]uint64
+	accountedCorruptions map[uuid.UUID]struct{}
 }
 
 var _ protocol.SessionFactory = (*Store)(nil)
@@ -183,15 +186,17 @@ func Open(config Config) (*Store, error) {
 	}
 	validation := filesystemValidationOps()
 	return &Store{
-		config:             config,
-		partialDir:         partialDir,
-		readyDir:           readyDir,
-		sendingDir:         sendingDir,
-		capacity:           capacity,
-		validation:         validation,
-		batchSyncDirectory: syncDirectory,
-		attemptSlots:       make(chan struct{}, config.MaxActiveAttempts),
-		dropped:            make(map[string]uint64),
+		config:               config,
+		partialDir:           partialDir,
+		readyDir:             readyDir,
+		sendingDir:           sendingDir,
+		capacity:             capacity,
+		validation:           validation,
+		batchSyncDirectory:   syncDirectory,
+		readySyncDirectory:   syncDirectory,
+		attemptSlots:         make(chan struct{}, config.MaxActiveAttempts),
+		dropped:              make(map[string]uint64),
+		accountedCorruptions: make(map[uuid.UUID]struct{}),
 	}, nil
 }
 
@@ -253,6 +258,11 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 	if err := s.recoverAckedLocked(); err != nil {
 		return report, err
 	}
+	applied, err := s.recoverCorruptionsLocked()
+	if err != nil {
+		return report, err
+	}
+	report.AppliedCorruptions = append(report.AppliedCorruptions, applied...)
 	partials, err := os.ReadDir(s.partialDir)
 	if err != nil {
 		return report, err
@@ -289,22 +299,31 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			if !errors.Is(validateErr, ErrSpoolCorrupt) {
 				return report, fmt.Errorf("validate ready record %s: %w", entry.Name(), validateErr)
 			}
-			if id, parseErr := uuid.Parse(entry.Name()); parseErr == nil {
-				if retireErr := s.retirePendingBatchReferencesLocked(id); retireErr != nil {
-					return report, fmt.Errorf("retire batch for corrupt ready record %s: %w", entry.Name(), retireErr)
+			id, parseErr := uuid.Parse(entry.Name())
+			if parseErr == nil {
+				corruption, quarantineErr := s.quarantineCorruptLocked(nil, id)
+				if quarantineErr != nil {
+					return report, fmt.Errorf("quarantine corrupt ready record: %w", quarantineErr)
 				}
-			}
-			if removeErr := os.RemoveAll(path); removeErr != nil {
-				return report, fmt.Errorf("delete corrupt ready record %s: %w", entry.Name(), removeErr)
+				report.AppliedCorruptions = appendCorruption(report.AppliedCorruptions, corruption)
+			} else {
+				if removeErr := os.RemoveAll(path); removeErr != nil {
+					return report, fmt.Errorf("delete corrupt ready record: %w", removeErr)
+				}
+				if syncErr := s.readySyncDirectory(s.readyDir); syncErr != nil {
+					return report, fmt.Errorf("fsync ready directory: %w", syncErr)
+				}
+				s.recordDrop(ErrSpoolCorrupt)
 			}
 			report.CorruptDeleted++
-			s.recordDrop(ErrSpoolCorrupt)
 			continue
 		}
 		ready = append(ready, ref)
 	}
 	if report.CorruptDeleted > 0 {
-		_ = syncDirectory(s.readyDir)
+		if err := s.readySyncDirectory(s.readyDir); err != nil {
+			return report, fmt.Errorf("fsync ready directory: %w", err)
+		}
 	}
 	sortRecordRefs(ready)
 	report.Ready = cloneRecordRefs(ready)

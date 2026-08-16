@@ -257,6 +257,82 @@ func TestRecoverCrashPoints(t *testing.T) {
 	}
 }
 
+func TestTargetedCorruptQuarantineDoesNotWaitForOpenAttempt(t *testing.T) {
+	s := openTestStoreWithMaxAttempts(t, 2)
+	corrupt := committedRequestAttempt(t, s)
+	unrelated := committedRequestAttempt(t, s)
+	batch, err := s.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+	require.Len(t, batch.Records, 1)
+	require.Equal(t, corrupt.ID(), batch.Records[0].CaptureID)
+	require.NoError(t, os.WriteFile(readyPath(s, corrupt.ID(), manifestName), []byte("corrupt"), 0o600))
+
+	openAttempt := beginAttempt(t, s, policyAll())
+	result := make(chan error, 1)
+	go func() {
+		_, quarantineErr := s.QuarantineCorrupt(batch, corrupt.ID())
+		result <- quarantineErr
+	}()
+	select {
+	case quarantineErr := <-result:
+		require.NoError(t, quarantineErr)
+	case <-time.After(time.Second):
+		t.Fatal("targeted quarantine waited for an unrelated live attempt")
+	}
+
+	next, err := s.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+	require.Len(t, next.Records, 1)
+	require.Equal(t, unrelated.ID(), next.Records[0].CaptureID)
+	newAdmission, err := s.Open(model.Begin{CaptureID: uuid.New(), Policy: policyAll()})
+	require.NoError(t, err)
+	newAdmission.Abort(errors.New("test cleanup"))
+	openAttempt.Abort(errors.New("test cleanup"))
+}
+
+func TestCorruptQuarantineReplaysDurablyAndCountsExactlyOnce(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s := openTestStoreAt(t, root, nil)
+	corrupt := committedRequestAttempt(t, s)
+	batch, err := s.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(readyPath(s, corrupt.ID(), manifestName), []byte("corrupt"), 0o600))
+
+	s.readySyncDirectory = func(string) error { return errors.New("injected ready directory fsync failure") }
+	_, err = s.QuarantineCorrupt(batch, corrupt.ID())
+	require.ErrorContains(t, err, "fsync ready directory")
+	require.Zero(t, s.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+	require.Len(t, readDirectoryNames(t, s.sendingDir), 1, "prepared tombstone must survive")
+	require.NoFileExists(t, batchManifestPath(s, batch.ID), "derivative batch must be durably retired first")
+	prepared, err := s.readCorruptionTombstone(corruptionPath(s, corrupt.ID()))
+	require.NoError(t, err)
+	require.False(t, prepared.Applied, "ready deletion is not durable when its directory fsync fails")
+	tombstoneBytes, err := os.ReadFile(corruptionPath(s, corrupt.ID()))
+	require.NoError(t, err)
+	require.NotContains(t, string(tombstoneBytes), root)
+	require.NotContains(t, string(tombstoneBytes), "corrupt")
+	tombstoneInfo, err := os.Stat(corruptionPath(s, corrupt.ID()))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), tombstoneInfo.Mode().Perm())
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.AppliedCorruptions, 1)
+	require.Equal(t, corrupt.ID(), report.AppliedCorruptions[0].CaptureID)
+	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+	applied, err := reopened.readCorruptionTombstone(corruptionPath(reopened, corrupt.ID()))
+	require.NoError(t, err)
+	require.True(t, applied.Applied)
+	report, err = reopened.Recover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.AppliedCorruptions, 1)
+	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+
+	require.NoError(t, reopened.CleanupCorruption(corrupt.ID()))
+	require.Empty(t, readDirectoryNames(t, reopened.sendingDir))
+}
+
 func TestReadyReturnsCopyAndSnapshotReflectsRecoveredRecords(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)

@@ -374,6 +374,13 @@ func (s *Store) recoverAckedLocked() error {
 	for _, entry := range entries {
 		path := filepath.Join(s.sendingDir, entry.Name())
 		switch {
+		case strings.HasSuffix(entry.Name(), corruptionTempSuffix):
+			if err := s.removeSendingPathLocked(path, "delete:corruption.tmp", false); err != nil {
+				return err
+			}
+		case strings.HasSuffix(entry.Name(), corruptionSuffix):
+			// Durable corruption transactions are reconciled by Store.Recover.
+			continue
 		case strings.HasSuffix(entry.Name(), ".manifest.tmp"):
 			if err := s.discardTempLocked(path, true); err != nil {
 				return err
