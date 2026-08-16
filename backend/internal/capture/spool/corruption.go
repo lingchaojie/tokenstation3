@@ -50,6 +50,18 @@ type corruptionTombstoneWire struct {
 	Applied        bool       `json:"applied"`
 }
 
+type readyEntryInspection struct {
+	sourceName    string
+	canonicalTwin bool
+}
+
+type corruptionDirectoryView struct {
+	ready           *os.File
+	quarantine      *os.File
+	readyNames      []string
+	quarantineNames []string
+}
+
 // QuarantineCorrupt durably retires only the named private batch member. It
 // deliberately does not take lifecycleMu, so a live IPC attempt cannot block
 // unrelated backlog delivery or admission.
@@ -113,6 +125,20 @@ func (s *Store) quarantineReadyEntryLocked(batchID *uuid.UUID, readyName string)
 }
 
 func (s *Store) applyCorruptionTombstoneLocked(batchID *uuid.UUID, tombstone corruptionTombstone) (AppliedCorruption, error) {
+	view, err := openCorruptionDirectoryView(s)
+	if err != nil {
+		return AppliedCorruption{}, err
+	}
+	defer view.close()
+	inspection, err := inspectReadyEntryNames(tombstone, view.readyNames)
+	if err != nil {
+		return AppliedCorruption{}, err
+	}
+	destinationFound := exactNamePresent(view.quarantineNames, string(tombstone.ID))
+	if inspection.sourceName != "" && destinationFound {
+		return AppliedCorruption{}, ErrSpoolCorrupt
+	}
+
 	if tombstone.CaptureID != uuid.Nil {
 		if batchID != nil {
 			if err := s.retireExactBatchReferenceLocked(*batchID, tombstone.CaptureID); err != nil {
@@ -122,11 +148,15 @@ func (s *Store) applyCorruptionTombstoneLocked(batchID *uuid.UUID, tombstone cor
 			return AppliedCorruption{}, err
 		}
 	} else if tombstone.AliasCaptureID != uuid.Nil {
-		canonicalExists, err := readyEntryExists(s.readyDir, tombstone.AliasCaptureID.String())
-		if err != nil {
-			return AppliedCorruption{}, err
-		}
-		if !canonicalExists {
+		if inspection.sourceName != "" && inspection.canonicalTwin {
+			canonicalManifest, err := readReadyManifestAt(view.ready, tombstone.AliasCaptureID.String())
+			if err != nil {
+				return AppliedCorruption{}, ErrSpoolCorrupt
+			}
+			if err := s.retirePendingBatchReferencesExceptManifestLocked(tombstone.AliasCaptureID, sha256Hex(canonicalManifest)); err != nil {
+				return AppliedCorruption{}, err
+			}
+		} else if inspection.sourceName != "" {
 			// Before canonical-name enforcement, NextBatch could publish a
 			// manifest from this alias. With no canonical twin, a manifest
 			// referencing the parsed UUID can only be an unusable derivative
@@ -137,18 +167,17 @@ func (s *Store) applyCorruptionTombstoneLocked(batchID *uuid.UUID, tombstone cor
 		}
 	}
 	if !tombstone.Applied {
-		if err := s.moveCorruptReadyEntryLocked(tombstone); err != nil {
+		if err := s.moveCorruptReadyEntryLocked(tombstone, view, inspection); err != nil {
 			return AppliedCorruption{}, err
 		}
 		if tombstone.CaptureID != uuid.Nil {
 			s.removeReady(tombstone.CaptureID)
 		}
-		quarantinedPath := filepath.Join(s.quarantineDir, string(tombstone.ID))
-		if err := os.RemoveAll(quarantinedPath); err != nil {
+		if err := removeDirectoryEntryNoFollow(view.quarantine, string(tombstone.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return AppliedCorruption{}, fmt.Errorf("delete quarantined ready record: %w", err)
 		}
 		s.event("delete:quarantined-ready-record")
-		if err := s.quarantineSyncDirectory(s.quarantineDir); err != nil {
+		if err := s.quarantineSyncDirectory(view.quarantine); err != nil {
 			return AppliedCorruption{}, fmt.Errorf("fsync quarantine directory after delete: %w", err)
 		}
 		s.event("fsync:quarantine-dir")
@@ -161,77 +190,104 @@ func (s *Store) applyCorruptionTombstoneLocked(batchID *uuid.UUID, tombstone cor
 	return AppliedCorruption{ID: tombstone.ID, CaptureID: tombstone.CaptureID}, nil
 }
 
-func readyEntryExists(directory, name string) (bool, error) {
-	_, err := os.Lstat(filepath.Join(directory, name))
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, fmt.Errorf("lstat canonical ready record: %w", err)
-}
-
-func (s *Store) moveCorruptReadyEntryLocked(tombstone corruptionTombstone) error {
-	sourceName, sourceFound, err := s.findReadyEntryForTombstone(tombstone)
-	if err != nil {
-		return err
-	}
+func (s *Store) moveCorruptReadyEntryLocked(tombstone corruptionTombstone, view *corruptionDirectoryView, inspection readyEntryInspection) error {
+	sourceName := inspection.sourceName
 	destinationName := string(tombstone.ID)
-	destinationPath := filepath.Join(s.quarantineDir, destinationName)
-	_, destinationErr := os.Lstat(destinationPath)
-	destinationFound := destinationErr == nil
-	if destinationErr != nil && !errors.Is(destinationErr, os.ErrNotExist) {
-		return fmt.Errorf("lstat quarantined record: %w", destinationErr)
-	}
-	if sourceFound && destinationFound {
-		return ErrSpoolCorrupt
-	}
-	if sourceFound {
-		if err := renameDirectoryEntryNoReplace(s.readyDir, sourceName, s.quarantineDir, destinationName); err != nil {
+	if sourceName != "" {
+		if err := renameDirectoryEntryNoReplace(view.ready, sourceName, view.quarantine, destinationName); err != nil {
 			return fmt.Errorf("quarantine ready record: %w", err)
 		}
 		s.event("rename:ready-to-quarantine")
 	}
-	if err := s.readySyncDirectory(s.readyDir); err != nil {
+	if err := s.readySyncDirectory(view.ready); err != nil {
 		return fmt.Errorf("fsync ready directory: %w", err)
 	}
 	s.event("fsync:ready-dir")
-	if err := s.quarantineSyncDirectory(s.quarantineDir); err != nil {
+	if err := s.quarantineSyncDirectory(view.quarantine); err != nil {
 		return fmt.Errorf("fsync quarantine directory: %w", err)
 	}
 	s.event("fsync:quarantine-dir")
 	return nil
 }
 
-func (s *Store) findReadyEntryForTombstone(tombstone corruptionTombstone) (string, bool, error) {
+func inspectReadyEntryNames(tombstone corruptionTombstone, names []string) (readyEntryInspection, error) {
+	var inspection readyEntryInspection
 	if tombstone.NameSHA256 == "" {
 		name := tombstone.CaptureID.String()
-		_, err := os.Lstat(filepath.Join(s.readyDir, name))
-		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
+		if exactNamePresent(names, name) {
+			inspection.sourceName = name
 		}
-		if err != nil {
-			return "", false, fmt.Errorf("lstat corrupt ready record: %w", err)
+		return inspection, nil
+	}
+	canonicalName := ""
+	if tombstone.AliasCaptureID != uuid.Nil {
+		canonicalName = tombstone.AliasCaptureID.String()
+	}
+	for _, name := range names {
+		if canonicalName != "" && name == canonicalName {
+			inspection.canonicalTwin = true
 		}
-		return name, true, nil
-	}
-	entries, err := os.ReadDir(s.readyDir)
-	if err != nil {
-		return "", false, fmt.Errorf("read ready directory: %w", err)
-	}
-	found := ""
-	for _, entry := range entries {
-		name := entry.Name()
 		if isCanonicalCaptureName(name) || opaqueReadyNameID(name) != tombstone.ID {
 			continue
 		}
-		if found != "" {
-			return "", false, ErrSpoolCorrupt
+		parsedAlias := uuid.Nil
+		if parsed, err := uuid.Parse(name); err == nil {
+			parsedAlias = parsed
 		}
-		found = name
+		if parsedAlias != tombstone.AliasCaptureID || inspection.sourceName != "" {
+			return readyEntryInspection{}, ErrSpoolCorrupt
+		}
+		inspection.sourceName = name
 	}
-	return found, found != "", nil
+	return inspection, nil
+}
+
+func openCorruptionDirectoryView(s *Store) (*corruptionDirectoryView, error) {
+	ready, err := openBatchDirectory(s.readyDir)
+	if err != nil {
+		return nil, fmt.Errorf("open ready directory: %w", err)
+	}
+	quarantine, err := openBatchDirectory(s.quarantineDir)
+	if err != nil {
+		_ = ready.Close()
+		return nil, fmt.Errorf("open quarantine directory: %w", err)
+	}
+	view := &corruptionDirectoryView{ready: ready, quarantine: quarantine}
+	view.readyNames, err = readExactDirectoryNames(ready)
+	if err == nil {
+		view.quarantineNames, err = readExactDirectoryNames(quarantine)
+	}
+	if err != nil {
+		view.close()
+		return nil, fmt.Errorf("read corruption directory view: %w", err)
+	}
+	return view, nil
+}
+
+func (view *corruptionDirectoryView) close() {
+	_ = view.quarantine.Close()
+	_ = view.ready.Close()
+}
+
+func readExactDirectoryNames(directory *os.File) ([]string, error) {
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for index := range entries {
+		names[index] = entries[index].Name()
+	}
+	return names, nil
+}
+
+func exactNamePresent(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) retireExactBatchReferenceLocked(batchID, captureID uuid.UUID) error {

@@ -106,8 +106,8 @@ type Store struct {
 	capacity                *Capacity
 	validation              validationOps
 	batchSyncDirectory      func(string) error
-	readySyncDirectory      func(string) error
-	quarantineSyncDirectory func(string) error
+	readySyncDirectory      func(*os.File) error
+	quarantineSyncDirectory func(*os.File) error
 
 	attemptSlots chan struct{}
 	lifecycleMu  sync.RWMutex
@@ -197,8 +197,8 @@ func Open(config Config) (*Store, error) {
 		capacity:                capacity,
 		validation:              validation,
 		batchSyncDirectory:      syncDirectory,
-		readySyncDirectory:      syncDirectory,
-		quarantineSyncDirectory: syncDirectory,
+		readySyncDirectory:      syncOpenedDirectory,
+		quarantineSyncDirectory: syncOpenedDirectory,
 		attemptSlots:            make(chan struct{}, config.MaxActiveAttempts),
 		dropped:                 make(map[string]uint64),
 		accountedCorruptions:    make(map[CorruptionID]struct{}),
@@ -928,4 +928,8 @@ func syncDirectory(path string) error {
 		return err
 	}
 	return closeErr
+}
+
+func syncOpenedDirectory(directory *os.File) error {
+	return directory.Sync()
 }

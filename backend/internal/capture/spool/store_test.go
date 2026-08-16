@@ -299,7 +299,7 @@ func TestCorruptQuarantineReplaysDurablyAndCountsExactlyOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(readyPath(s, corrupt.ID(), manifestName), []byte("corrupt"), 0o600))
 
-	s.readySyncDirectory = func(string) error { return errors.New("injected ready directory fsync failure") }
+	s.readySyncDirectory = func(*os.File) error { return errors.New("injected ready directory fsync failure") }
 	_, err = s.QuarantineCorrupt(batch, corrupt.ID())
 	require.ErrorContains(t, err, "fsync ready directory")
 	require.Zero(t, s.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
@@ -380,8 +380,8 @@ func TestMalformedReadyNameCrashAfterDirectoryFsyncRetainsDurableAccountingIdent
 	require.NoError(t, os.WriteFile(filepath.Join(untrustedPath, manifestName), []byte("corrupt"), 0o600))
 
 	crashing := openTestStoreAt(t, root, nil)
-	crashing.readySyncDirectory = func(path string) error {
-		require.NoError(t, syncDirectory(path))
+	crashing.readySyncDirectory = func(directory *os.File) error {
+		require.NoError(t, directory.Sync())
 		panic("simulated process crash after directory fsync")
 	}
 	require.PanicsWithValue(t, "simulated process crash after directory fsync", func() {
@@ -418,7 +418,7 @@ func TestMalformedReadyTombstoneIsOpaqueAndSymlinkSafe(t *testing.T) {
 
 	injected := errors.New("injected ready fsync failure")
 	crashing := openTestStoreAt(t, root, nil)
-	crashing.readySyncDirectory = func(string) error { return injected }
+	crashing.readySyncDirectory = func(*os.File) error { return injected }
 	_, err := crashing.Recover(context.Background())
 	require.ErrorIs(t, err, injected)
 	require.FileExists(t, secretFile)

@@ -10,7 +10,7 @@ import (
 )
 
 func TestCorruptionRenameFailsClosedWhenAtomicNoReplaceIsUnavailable(t *testing.T) {
-	err := renameDirectoryEntryNoReplace("ready", "malformed", "quarantine", "opaque")
+	err := renameDirectoryEntryNoReplace(nil, "malformed", nil, "opaque")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errAtomicCorruptionRenameUnsupported))
 }

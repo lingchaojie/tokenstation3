@@ -305,6 +305,16 @@ func (s *Store) pendingBatchLocked() (*Batch, error) {
 // record itself accounts for the single lost archive row; retiring its batch
 // manifest must not count the same loss a second time.
 func (s *Store) retirePendingBatchReferencesLocked(captureID uuid.UUID) error {
+	return s.retirePendingBatchReferencesExceptManifestLocked(captureID, "")
+}
+
+// retirePendingBatchReferencesExceptManifestLocked retires only pending
+// manifests that cannot belong to the exact canonical twin. An empty retained
+// digest means no canonical owner exists and all references are derivative.
+func (s *Store) retirePendingBatchReferencesExceptManifestLocked(captureID uuid.UUID, retainedManifestSHA256 string) error {
+	if retainedManifestSHA256 != "" && !validSHA256(retainedManifestSHA256) {
+		return ErrSpoolCorrupt
+	}
 	entries, err := os.ReadDir(s.sendingDir)
 	if err != nil {
 		return fmt.Errorf("read sending directory: %w", err)
@@ -320,6 +330,9 @@ func (s *Store) retirePendingBatchReferencesLocked(captureID uuid.UUID) error {
 		}
 		for _, record := range manifest.Records {
 			if record.CaptureID != captureID {
+				continue
+			}
+			if retainedManifestSHA256 != "" && record.ManifestSHA256 == retainedManifestSHA256 {
 				continue
 			}
 			if err := s.removeSendingPathLocked(path, "delete:corrupt-batch.manifest", false); err != nil {
@@ -511,15 +524,29 @@ func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 		return err
 	}
 
+	readyDirectory, err := openBatchDirectory(s.readyDir)
+	if err != nil {
+		return fmt.Errorf("open ready directory for ack cleanup: %w", err)
+	}
+	defer readyDirectory.Close()
+	readyNames, err := readExactDirectoryNames(readyDirectory)
+	if err != nil {
+		return fmt.Errorf("read ready directory for ack cleanup: %w", err)
+	}
 	for _, record := range manifest.Records {
-		path := filepath.Join(s.readyDir, record.CaptureID.String())
-		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("delete acked ready record %s: %w", record.CaptureID, err)
+		ownedNames, err := ackOwnedReadyNames(readyDirectory, readyNames, record)
+		if err != nil {
+			return err
+		}
+		for _, name := range ownedNames {
+			if err := removeDirectoryEntryNoFollow(readyDirectory, name); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("delete acked ready record %s: %w", record.CaptureID, err)
+			}
+			s.event("delete:ready-record")
 		}
 		s.removeReady(record.CaptureID)
-		s.event("delete:ready-record")
 	}
-	if err := syncDirectory(s.readyDir); err != nil {
+	if err := s.readySyncDirectory(readyDirectory); err != nil {
 		return fmt.Errorf("fsync ready directory: %w", err)
 	}
 	s.event("fsync:ready-dir")
@@ -538,6 +565,39 @@ func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 		return fmt.Errorf("fsync sending directory after ack delete: %w", err)
 	}
 	return nil
+}
+
+func ackOwnedReadyNames(readyDirectory *os.File, names []string, record BatchRecord) ([]string, error) {
+	owned := make([]string, 0, 1)
+	for _, name := range names {
+		parsed, err := uuid.Parse(name)
+		if err != nil || parsed != record.CaptureID {
+			continue
+		}
+		encodedManifest, err := readReadyManifestAt(readyDirectory, name)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrSpoolCorrupt) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read acked ready manifest %s: %w", record.CaptureID, err)
+		}
+		if sha256Hex(encodedManifest) == record.ManifestSHA256 {
+			owned = append(owned, name)
+		}
+	}
+	return owned, nil
+}
+
+func readReadyManifestAt(readyDirectory *os.File, recordName string) ([]byte, error) {
+	if !validBatchFileName(recordName) {
+		return nil, ErrSpoolCorrupt
+	}
+	recordDirectory, err := openBatchDirectoryAt(readyDirectory, recordName)
+	if err != nil {
+		return nil, err
+	}
+	defer recordDirectory.Close()
+	return readBoundedFileAt(recordDirectory, manifestName, maxManifestBytes)
 }
 
 func (s *Store) removeReady(id uuid.UUID) {
