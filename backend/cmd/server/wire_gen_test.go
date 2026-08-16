@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,6 +22,26 @@ func TestProvideServiceBuildInfo(t *testing.T) {
 }
 
 func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
+	cleanup := provideCleanupWithMinimalDependenciesForTest(t, nil)
+	require.NotPanics(t, cleanup)
+}
+
+// Removing the concrete supervisor cleanup step leaves the child lifecycle
+// active after application cleanup. Repeating Stop afterward also proves the
+// supervisor path remains idempotent.
+func TestProvideCleanupStopsCaptureSidecarSupervisor(t *testing.T) {
+	supervisor := &service.CaptureSidecarSupervisor{}
+	cleanup := provideCleanupWithMinimalDependenciesForTest(t, supervisor)
+	require.NotPanics(t, cleanup)
+	require.True(t, reflect.ValueOf(supervisor).Elem().FieldByName("stopping").Bool())
+	require.NotPanics(t, func() {
+		supervisor.Stop()
+		supervisor.Stop()
+	})
+}
+
+func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSupervisor *service.CaptureSidecarSupervisor) func() {
+	t.Helper()
 	cfg := &config.Config{}
 
 	oauthSvc := service.NewOAuthService(nil, nil)
@@ -81,6 +102,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
 		nil, // conversationCapturePool
+		captureSidecarSupervisor,
 		&service.SubscriptionService{},
 		oauthSvc,
 		openAIOAuthSvc,
@@ -101,7 +123,5 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // auditLog
 	)
 
-	require.NotPanics(t, func() {
-		cleanup()
-	})
+	return cleanup
 }

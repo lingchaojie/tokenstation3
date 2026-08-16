@@ -886,6 +886,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUserMessageQueueService,
 	NewUsageRecordWorkerPool,
 	NewConversationCapturePool,
+	ProvideCaptureSidecarSupervisor,
 	NewCaptureAdminService,
 	ProvideSchedulerSnapshotService,
 	NewIdentityService,

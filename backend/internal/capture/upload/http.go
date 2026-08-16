@@ -19,6 +19,8 @@ import (
 const (
 	maxHTTPResponseBytes           int64 = 64 << 10
 	defaultHTTPResponseBodyTimeout       = 5 * time.Second
+	defaultHTTPDialTimeout               = 5 * time.Second
+	defaultHTTPWriteTimeout              = 60 * time.Second
 )
 
 var (
@@ -33,12 +35,14 @@ var (
 type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 type HTTPConfig struct {
-	URL         string
-	Database    string
-	Table       string
-	Username    string
-	Password    string
-	DialContext DialContextFunc
+	URL          string
+	Database     string
+	Table        string
+	Username     string
+	Password     string
+	DialContext  DialContextFunc
+	DialTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 type HTTPUploader struct {
@@ -94,10 +98,27 @@ func NewHTTPUploader(config HTTPConfig) (*HTTPUploader, error) {
 	if !identifierPattern.MatchString(config.Database) || !identifierPattern.MatchString(config.Table) {
 		return nil, errors.New("valid ClickHouse database and table identifiers are required")
 	}
-	dial := config.DialContext
-	if dial == nil {
-		dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
-		dial = dialer.DialContext
+	dialTimeout := config.DialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = defaultHTTPDialTimeout
+	}
+	writeTimeout := config.WriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultHTTPWriteTimeout
+	}
+	dialBase := config.DialContext
+	if dialBase == nil {
+		dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+		dialBase = dialer.DialContext
+	}
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+		conn, err := dialBase(dialCtx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return withWriteDeadline(conn, writeTimeout), nil
 	}
 	transport := &http.Transport{
 		Proxy:                 nil,
@@ -124,6 +145,25 @@ func NewHTTPUploader(config HTTPConfig) (*HTTPUploader, error) {
 		},
 		responseBodyTimeout: defaultHTTPResponseBodyTimeout,
 	}, nil
+}
+
+type writeDeadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func withWriteDeadline(conn net.Conn, timeout time.Duration) net.Conn {
+	if conn == nil || timeout <= 0 {
+		return conn
+	}
+	return &writeDeadlineConn{Conn: conn, timeout: timeout}
+}
+
+func (c *writeDeadlineConn) Write(payload []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(payload)
 }
 
 func (u *HTTPUploader) Upload(ctx context.Context, batch *spool.Batch) error {

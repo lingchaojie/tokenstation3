@@ -97,6 +97,7 @@ func provideCleanup(
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	conversationCapturePool *service.ConversationCapturePool,
+	captureSidecarSupervisor *service.CaptureSidecarSupervisor,
 	subscriptionService *service.SubscriptionService,
 	oauth *service.OAuthService,
 	openaiOAuth *service.OpenAIOAuthService,
@@ -127,6 +128,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"CaptureSidecarSupervisor", func() error {
+				if captureSidecarSupervisor != nil {
+					captureSidecarSupervisor.Stop()
+				}
+				return nil
+			}},
 			{"RewardCreditExpiryService", func() error {
 				if rewardCreditExpiry != nil {
 					rewardCreditExpiry.Stop()

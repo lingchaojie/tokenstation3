@@ -1473,10 +1473,8 @@ func (c CaptureConfig) Validate() error {
 	if strings.TrimSpace(c.ClickHouse.Password) == "" {
 		return fmt.Errorf("gateway.capture.clickhouse.password is required when enabled")
 	}
-	switch c.ClickHouse.Compression {
-	case "lz4", "zstd", "none":
-	default:
-		return fmt.Errorf("gateway.capture.clickhouse.compression must be lz4|zstd|none")
+	if c.ClickHouse.Compression != "zstd" {
+		return fmt.Errorf("gateway.capture.clickhouse.compression must be zstd")
 	}
 	if c.ClickHouse.BatchMaxRows <= 0 {
 		return fmt.Errorf("gateway.capture.clickhouse.batch_max_rows must be positive")
@@ -1916,7 +1914,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
-	legacyCaptureSettings := configuredLegacyCaptureSettings()
+	legacyCaptureSettings := configuredLegacyCaptureSettings(viper.InConfig)
 	trustedProxiesEnv, trustedProxiesEnvConfigured := os.LookupEnv("SERVER_TRUSTED_PROXIES")
 	forwardedClientIPHeadersEnv, forwardedClientIPHeadersEnvConfigured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") ||
@@ -1926,10 +1924,10 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
+	if err := rejectEnabledLegacyCaptureSettings(cfg.Gateway.Capture.Enabled, legacyCaptureSettings); err != nil {
+		return nil, err
+	}
 	if len(legacyCaptureSettings) > 0 {
-		if cfg.Gateway.Capture.Enabled {
-			return nil, fmt.Errorf("legacy capture setting %s requires migration to spool/HTTP settings", legacyCaptureSettings[0])
-		}
 		slog.Warn("legacy capture queue settings are ignored while disabled", "keys", legacyCaptureSettings)
 	}
 	if trustedProxiesEnvConfigured {
@@ -2128,24 +2126,7 @@ func setDefaults() {
 	viper.SetDefault("server.h2c.max_upload_buffer_per_connection", 2<<20) // 2MB
 	viper.SetDefault("server.h2c.max_upload_buffer_per_stream", 512<<10)   // 512KB
 
-	// Log
-	viper.SetDefault("log.level", "info")
-	viper.SetDefault("log.format", "console")
-	viper.SetDefault("log.service_name", "sub2api")
-	viper.SetDefault("log.env", "production")
-	viper.SetDefault("log.caller", true)
-	viper.SetDefault("log.stacktrace_level", "error")
-	viper.SetDefault("log.output.to_stdout", true)
-	viper.SetDefault("log.output.to_file", true)
-	viper.SetDefault("log.output.file_path", "")
-	viper.SetDefault("log.rotation.max_size_mb", 100)
-	viper.SetDefault("log.rotation.max_backups", 10)
-	viper.SetDefault("log.rotation.max_age_days", 7)
-	viper.SetDefault("log.rotation.compress", true)
-	viper.SetDefault("log.rotation.local_time", true)
-	viper.SetDefault("log.sampling.enabled", false)
-	viper.SetDefault("log.sampling.initial", 100)
-	viper.SetDefault("log.sampling.thereafter", 100)
+	setLogAndCaptureDefaults(viper.SetDefault)
 
 	// CORS
 	viper.SetDefault("cors.allowed_origins", []string{})
@@ -2631,30 +2612,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_down_step", 16)
 	viper.SetDefault("gateway.usage_record.auto_scale_check_interval_seconds", 3)
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
-	viper.SetDefault("gateway.capture.enabled", false)
-	viper.SetDefault("gateway.capture.max_body_bytes", GatewayCaptureMaxBodyBytes)
-	viper.SetDefault("gateway.capture.max_header_bytes", 1<<20)
-	viper.SetDefault("gateway.capture.spool.dir", "/app/data/capture/spool")
-	viper.SetDefault("gateway.capture.spool.max_bytes", int64(12)<<30)
-	viper.SetDefault("gateway.capture.spool.min_free_bytes", int64(8)<<30)
-	viper.SetDefault("gateway.capture.sidecar.socket", "/app/data/capture/capture.sock")
-	viper.SetDefault("gateway.capture.sidecar.frame_bytes", int64(captureProtocolV2Frame))
-	viper.SetDefault("gateway.capture.sidecar.memory_limit_bytes", int64(256)<<20)
-	viper.SetDefault("gateway.capture.sidecar.max_active_attempts", 32)
-	viper.SetDefault("gateway.capture.tailscale.state_dir", "/app/data/capture/tsnet")
-	viper.SetDefault("gateway.capture.tailscale.hostname", "sub2api-capture-writer")
-	viper.SetDefault("gateway.capture.tailscale.auth_key", "")
-	viper.SetDefault("gateway.capture.clickhouse.url", "http://clickhouse-win:18000")
-	viper.SetDefault("gateway.capture.clickhouse.database", "llm_archive")
-	viper.SetDefault("gateway.capture.clickhouse.table", "model_call_archive")
-	viper.SetDefault("gateway.capture.clickhouse.username", "capture_ingest")
-	viper.SetDefault("gateway.capture.clickhouse.password", "")
-	viper.SetDefault("gateway.capture.clickhouse.compression", "zstd")
-	viper.SetDefault("gateway.capture.clickhouse.batch_max_rows", 100)
-	viper.SetDefault("gateway.capture.clickhouse.batch_max_bytes", int64(128)<<20)
-	viper.SetDefault("gateway.capture.clickhouse.batch_max_interval_ms", 2000)
-	viper.SetDefault("gateway.capture.clickhouse.dial_timeout_ms", 5000)
-	viper.SetDefault("gateway.capture.clickhouse.write_timeout_ms", 60000)
 	viper.SetDefault("gateway.user_group_rate_cache_ttl_seconds", 30)
 	viper.SetDefault("gateway.models_list_cache_ttl_seconds", 15)
 	// TLS指纹伪装配置（默认关闭，需要账号级别单独启用）
@@ -2778,7 +2735,7 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("dingtalk_connect.sync_corp_email_attr_name", "")
 }
 
-func configuredLegacyCaptureSettings() []string {
+func configuredLegacyCaptureSettings(inConfig func(string) bool) []string {
 	legacy := []string{
 		"max_queue_bytes",
 		"queue_size",
@@ -2796,11 +2753,18 @@ func configuredLegacyCaptureSettings() []string {
 
 	configured := make([]string, 0, len(legacy))
 	for _, key := range legacy {
-		if viper.InConfig("gateway.capture." + key) {
+		if inConfig("gateway.capture." + key) {
 			configured = append(configured, key)
 		}
 	}
 	return configured
+}
+
+func rejectEnabledLegacyCaptureSettings(enabled bool, configured []string) error {
+	if enabled && len(configured) > 0 {
+		return fmt.Errorf("legacy capture setting %s requires migration to spool/HTTP settings", configured[0])
+	}
+	return nil
 }
 
 func (c *Config) Validate() error {

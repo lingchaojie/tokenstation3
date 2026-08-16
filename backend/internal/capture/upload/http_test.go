@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,46 @@ import (
 )
 
 const expectedInsertQuery = "INSERT INTO llm_archive.model_call_archive (captured_at, capture_id, ingest_batch_id, request_id, session_id, platform, requested_model, upstream_model, upstream_endpoint, stream, http_status, stop_reason, thinking_effort, thinking_type, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, signature_present, is_truncated, request_truncated, response_truncated, request_observed_bytes, request_stored_bytes, response_observed_bytes, response_stored_bytes, request_sha256, response_sha256, spool_version, capture_version, raw_request, raw_response, request_headers, response_headers) FORMAT RowBinary"
+
+// A tsnet-injected dialer must receive the configured bound, not an unbounded
+// context. Losing this wrapper can leave a sidecar stuck in a tailnet dial.
+func TestHTTPUploaderBoundsInjectedDialContext(t *testing.T) {
+	seen := make(chan time.Time, 1)
+	uploader, err := NewHTTPUploader(HTTPConfig{
+		URL:         "http://clickhouse.internal:8123",
+		Database:    "llm_archive",
+		Table:       "model_call_archive",
+		DialTimeout: 5 * time.Second,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			seen <- deadline
+			return nil, errors.New("dial failed")
+		},
+	})
+	require.NoError(t, err)
+	transport := uploader.client.Transport.(*http.Transport)
+	before := time.Now()
+	_, err = transport.DialContext(context.Background(), "tcp", "clickhouse.internal:8123")
+	require.Error(t, err)
+	deadline := <-seen
+	require.WithinDuration(t, before.Add(5*time.Second), deadline, time.Second)
+}
+
+// A write deadline must be refreshed for every write; applying it only once
+// lets a long RowBinary stream bypass the configured bound.
+func TestWriteDeadlineConnRefreshesDeadlineBeforeEachWrite(t *testing.T) {
+	conn := &deadlineRecordingConn{}
+	wrapped := withWriteDeadline(conn, 60*time.Second)
+	_, err := wrapped.Write([]byte("first"))
+	require.NoError(t, err)
+	first := conn.lastDeadline()
+	_, err = wrapped.Write([]byte("second"))
+	require.NoError(t, err)
+	second := conn.lastDeadline()
+	require.True(t, second.After(first) || second.Equal(first))
+	require.Equal(t, 2, conn.deadlineCalls())
+}
 
 func TestUploadUsesZstdRowBinaryAndStableDedupToken(t *testing.T) {
 	batch := goldenFixtureBatch(t)
@@ -820,3 +861,37 @@ func responseFor(req *http.Request, status int, body string) *http.Response {
 		Request:    req,
 	}
 }
+
+type deadlineRecordingConn struct {
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (c *deadlineRecordingConn) Read([]byte) (int, error)          { return 0, io.EOF }
+func (c *deadlineRecordingConn) Write(payload []byte) (int, error) { return len(payload), nil }
+func (c *deadlineRecordingConn) Close() error                      { return nil }
+func (c *deadlineRecordingConn) LocalAddr() net.Addr               { return testConnAddr("local") }
+func (c *deadlineRecordingConn) RemoteAddr() net.Addr              { return testConnAddr("remote") }
+func (c *deadlineRecordingConn) SetDeadline(time.Time) error       { return nil }
+func (c *deadlineRecordingConn) SetReadDeadline(time.Time) error   { return nil }
+func (c *deadlineRecordingConn) SetWriteDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.deadlines = append(c.deadlines, deadline)
+	c.mu.Unlock()
+	return nil
+}
+func (c *deadlineRecordingConn) lastDeadline() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deadlines[len(c.deadlines)-1]
+}
+func (c *deadlineRecordingConn) deadlineCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.deadlines)
+}
+
+type testConnAddr string
+
+func (a testConnAddr) Network() string { return "test" }
+func (a testConnAddr) String() string  { return string(a) }

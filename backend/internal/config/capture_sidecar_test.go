@@ -75,6 +75,18 @@ func TestCaptureValidationRejectsProtocolAndBatchCapacityErrors(t *testing.T) {
 	}
 }
 
+// The v2 child always writes zstd RowBinary. Allowing a different configured
+// compression would advertise a choice the runtime cannot honor.
+func TestCaptureValidationAcceptsOnlyZstdCompression(t *testing.T) {
+	for _, compression := range []string{"lz4", "none"} {
+		t.Run(compression, func(t *testing.T) {
+			cfg := validCaptureConfig()
+			cfg.ClickHouse.Compression = compression
+			require.ErrorContains(t, cfg.Validate(), "compression")
+		})
+	}
+}
+
 func validCaptureConfig() CaptureConfig {
 	return CaptureConfig{
 		Enabled:        true,
