@@ -325,7 +325,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 
+	wirePayload := openAIWSJSONWireBytes(payload)
+	s.beginOpenAIWSCaptureAttempt(ctx, c, account, wsURL, wsHeaders, wirePayload, lease.HandshakeHeaders())
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
+		AbortCaptureAttempt(c)
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",
@@ -457,6 +460,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		} else {
 			message, readErr = lease.ReadMessageWithContextTimeout(ctx, readTimeout)
 			if readErr == nil {
+				if attempt := captureAttemptForRequest(c); attempt != nil {
+					attempt.WriteResponse(message)
+				}
 				if documents, repaired := splitOpenAIConcatenatedJSONDocuments(message); repaired {
 					logOpenAIWSModeInfo(
 						"concatenated_json_repaired account_id=%d conn_id=%s documents=%d bytes=%d",
@@ -780,6 +786,39 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		FirstTokenMs:                  firstTokenMs,
 		UpstreamRequest:               payloadAsJSONBytes(payload),
 	}, nil
+}
+
+func openAIWSJSONWireBytes(payload any) []byte {
+	var wire bytes.Buffer
+	if err := json.NewEncoder(&wire).Encode(payload); err != nil {
+		return []byte("{}\n")
+	}
+	return wire.Bytes()
+}
+
+func (s *OpenAIGatewayService) beginOpenAIWSCaptureAttempt(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	wsURL string,
+	requestHeaders http.Header,
+	wirePayload []byte,
+	responseHeaders http.Header,
+) *CaptureAttempt {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil || !CaptureMayApplyFor(c, string(account.Platform)) {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header = requestHeaders.Clone()
+	attempt, ok := beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), req, wirePayload, s.cfg.Gateway.Capture.MaxHeaderBytes)
+	if !ok {
+		return nil
+	}
+	attempt.WriteResponseHeaders(captureHeaderBytes(responseHeaders, s.cfg.Gateway.Capture.MaxHeaderBytes))
+	return attempt
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。

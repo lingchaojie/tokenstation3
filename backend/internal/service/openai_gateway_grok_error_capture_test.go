@@ -48,8 +48,10 @@ func TestForwardGrokResponsesFinalHTTPErrorCarriesFinalAttemptCapture(t *testing
 		Header:     http.Header{"Content-Type": {"application/json"}, "Xai-Request-Id": {"final-error"}},
 		Body:       io.NopCloser(strings.NewReader(errorBody)),
 	}}
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
 
-	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream}).Forward(
+	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: pool}).Forward(
 		context.Background(), c, grokErrorCaptureTestAccount(), body,
 	)
 	require.Error(t, err)
@@ -57,8 +59,14 @@ func TestForwardGrokResponsesFinalHTTPErrorCarriesFinalAttemptCapture(t *testing
 	require.False(t, result.SucceededForScheduling(), "a final Grok HTTP error must not clear scheduler failure state")
 	require.Equal(t, http.StatusBadRequest, result.UpstreamHTTPStatus)
 	require.Equal(t, http.StatusBadRequest, result.HTTPStatusForCapture())
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.Equal(t, errorBody, string(result.CaptureResponse))
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformGrok, result))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.Equal(t, errorBody, string(attempt.ResponseBytes()))
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestForwardGrokResponsesRetryableFinalHTTPErrorBuildsTerminalCapture(t *testing.T) {
@@ -71,8 +79,9 @@ func TestForwardGrokResponsesRetryableFinalHTTPErrorBuildsTerminalCapture(t *tes
 		Header:     http.Header{"Content-Type": {"application/json"}, "Xai-Request-Id": {"final-retryable"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
+	transport := &recordingCaptureTransport{}
 
-	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream}).Forward(
+	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true })}).Forward(
 		context.Background(), c, grokErrorCaptureTestAccount(), body,
 	)
 	require.Error(t, err)
@@ -81,11 +90,12 @@ func TestForwardGrokResponsesRetryableFinalHTTPErrorBuildsTerminalCapture(t *tes
 	require.ErrorAs(t, err, &failure)
 	require.True(t, failure.HasUpstreamHTTPResponse)
 	require.Equal(t, string(PlatformGrok), failure.Platform)
-	record := BuildTerminalErrorCaptureRecord(c, failure.Platform, failure, 1<<20)
-	require.NotNil(t, record)
-	require.Equal(t, http.StatusServiceUnavailable, record.HTTPStatus)
-	require.Equal(t, errorBody, record.RawResponse)
-	require.Equal(t, upstream.lastBody, record.RawRequest)
+	require.True(t, CommitTerminalErrorCaptureAttemptWithCompleteness(c, failure.Platform, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, errorBody, attempt.ResponseBytes())
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestForwardGrokResponsesFinal2xxParseErrorCarriesConsumedCapture(t *testing.T) {
@@ -98,8 +108,9 @@ func TestForwardGrokResponsesFinal2xxParseErrorCarriesConsumedCapture(t *testing
 		Header:     http.Header{"Content-Type": {"application/json"}, "Xai-Request-Id": {"parse-error"}},
 		Body:       io.NopCloser(strings.NewReader(malformed)),
 	}}
+	transport := &recordingCaptureTransport{}
 
-	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream}).forwardGrokResponses(
+	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true })}).forwardGrokResponses(
 		context.Background(), c, grokErrorCaptureTestAccount(), body, "grok", false, time.Now(),
 	)
 	require.Error(t, err)
@@ -107,8 +118,13 @@ func TestForwardGrokResponsesFinal2xxParseErrorCarriesConsumedCapture(t *testing
 	require.False(t, result.SucceededForScheduling(), "a consumed 2xx parse failure must be reported as a scheduler failure")
 	require.Equal(t, http.StatusOK, result.UpstreamHTTPStatus)
 	require.Equal(t, http.StatusOK, result.HTTPStatusForCapture())
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.Equal(t, malformed, string(result.CaptureResponse))
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformGrok, result))
+	require.Len(t, transport.Attempts(), 1)
+	require.Equal(t, upstream.lastBody, transport.Attempts()[0].RequestBytes())
+	require.Equal(t, malformed, string(transport.Attempts()[0].ResponseBytes()))
+	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
 }
 
 func TestForwardGrokResponsesSuccessKeepsSchedulingAndCaptureStatus(t *testing.T) {
@@ -121,8 +137,9 @@ func TestForwardGrokResponsesSuccessKeepsSchedulingAndCaptureStatus(t *testing.T
 		Header:     http.Header{"Content-Type": {"application/json"}, "Xai-Request-Id": {"success"}},
 		Body:       io.NopCloser(strings.NewReader(responseBody)),
 	}}
+	transport := &recordingCaptureTransport{}
 
-	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream}).forwardGrokResponses(
+	result, err := (&OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true })}).forwardGrokResponses(
 		context.Background(), c, grokErrorCaptureTestAccount(), body, "grok", false, time.Now(),
 	)
 	require.NoError(t, err)
@@ -130,10 +147,15 @@ func TestForwardGrokResponsesSuccessKeepsSchedulingAndCaptureStatus(t *testing.T
 	require.True(t, result.SucceededForScheduling())
 	require.Equal(t, http.StatusOK, result.UpstreamHTTPStatus)
 	require.Equal(t, http.StatusOK, result.HTTPStatusForCapture())
-	require.Equal(t, responseBody, string(result.CaptureResponse))
+	require.Nil(t, result.CaptureResponse)
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformGrok, result))
+	require.Len(t, transport.Attempts(), 1)
+	require.Equal(t, upstream.lastBody, transport.Attempts()[0].RequestBytes())
+	require.Equal(t, responseBody, string(transport.Attempts()[0].ResponseBytes()))
+	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
 }
 
-func TestForwardAsAnthropicGrokFinalInitial400CapturesBeyondFunctionalLimit(t *testing.T) {
+func TestForwardAsAnthropicGrokFinalInitial400CapturesNaturalFunctionalLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	requestBody := []byte(`{"model":"grok","max_tokens":32,"stream":false,"messages":[{"role":"user","content":"hi"}]}`)
 	c, _ := newGrokErrorCaptureTestContext(t, requestBody)
@@ -145,19 +167,18 @@ func TestForwardAsAnthropicGrokFinalInitial400CapturesBeyondFunctionalLimit(t *t
 		Header:     http.Header{"Content-Type": {"application/json"}, "Xai-Request-Id": {"grok-initial-400"}},
 		Body:       io.NopCloser(bytes.NewReader(providerBody)),
 	}}
-	records := make(chan *CaptureRecord, 2)
-	pool := NewConversationCapturePoolForUnitTest(records)
-	svc := &OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: pool}
+	transport := &recordingCaptureTransport{}
+	svc := &OpenAIGatewayService{cfg: grokErrorCaptureTestConfig(), httpUpstream: upstream, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true })}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, grokErrorCaptureTestAccount(), requestBody, "", "")
 	require.Error(t, err)
 	require.Nil(t, result)
-	pool.Stop()
-	require.Len(t, records, 1, "the final Grok provider attempt must be archived exactly once")
-	record := <-records
-	require.Equal(t, providerBody, record.RawResponse)
-	require.False(t, record.Truncated)
-	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
-	require.Equal(t, upstream.lastBody, record.RawRequest)
+	require.True(t, CommitTerminalErrorCaptureAttemptWithCompleteness(c, PlatformGrok, http.StatusBadRequest, false))
+	require.Len(t, transport.Attempts(), 1, "the final Grok provider attempt must be archived exactly once")
+	attempt := transport.Attempts()[0]
+	require.Equal(t, providerBody[:gatewayUpstreamErrorBodyReadLimit], attempt.ResponseBytes())
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.False(t, attempt.Finals()[0].ResponseComplete)
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 	require.Len(t, upstream.requests, 1, "ordinary 400 without encrypted reasoning must not retry")
 }

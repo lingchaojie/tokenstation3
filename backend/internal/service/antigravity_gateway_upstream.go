@@ -88,11 +88,18 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	captureEnabled := s.settingService != nil && s.settingService.cfg != nil &&
 		s.settingService.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform))
 	if captureEnabled {
-		setCapturePlatform(c, string(account.Platform))
-		setCaptureUpstreamRequest(c, req, captureLimit)
+		if s.capturePool != nil {
+			beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), req, body, s.settingService.cfg.Gateway.Capture.MaxHeaderBytes)
+		} else {
+			setCapturePlatform(c, string(account.Platform))
+			setCaptureUpstreamRequest(c, req, captureLimit)
+		}
 	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if s.capturePool != nil {
+			AbortCaptureAttempt(c)
+		}
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}

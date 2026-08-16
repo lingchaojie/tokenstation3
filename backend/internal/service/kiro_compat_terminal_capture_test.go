@@ -52,11 +52,13 @@ func TestKiroCompatibilityWrappersPreserveProviderHTTPFailureForTerminalCapture(
 			}}}
 			cfg := &config.Config{Gateway: config.GatewayConfig{
 				MaxLineSize: defaultMaxLineSize,
-				Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+				Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 16 << 10},
 			}}
+			transport := &recordingCaptureTransport{}
 			svc := &GatewayService{
 				cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{},
 				kiroCooldownStore: &stubKiroCooldownStore{}, rateLimitService: &RateLimitService{},
+				capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
 			}
 			account := &Account{
 				ID: 38, Name: "kiro-compat-terminal", Platform: PlatformKiro, Type: AccountTypeAPIKey,
@@ -78,13 +80,14 @@ func TestKiroCompatibilityWrappersPreserveProviderHTTPFailureForTerminalCapture(
 			require.Equal(t, errorBody, failure.ResponseBody)
 			require.Equal(t, PlatformKiro, failure.Platform)
 
-			record := BuildTerminalErrorCaptureRecord(c, PlatformKiro, failure, cfg.Gateway.Capture.MaxBodyBytes)
-			require.NotNil(t, record)
+			require.True(t, CommitTerminalErrorCaptureAttemptWithCompleteness(c, PlatformKiro, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete))
+			require.Len(t, transport.Attempts(), 1)
+			attempt := transport.Attempts()[0]
 			require.Len(t, upstream.requests, 1)
-			require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), record.RawRequest)
-			require.Equal(t, errorBody, record.RawResponse)
-			require.Equal(t, http.StatusPaymentRequired, record.HTTPStatus)
-			require.NotContains(t, string(record.RequestHeaders), "kiro-provider-secret")
+			require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), attempt.RequestBytes())
+			require.Equal(t, errorBody, attempt.ResponseBytes())
+			require.NotContains(t, string(attempt.RequestHeaderBytes()), "kiro-provider-secret")
+			require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 		})
 	}
 }

@@ -19,6 +19,7 @@ type webChatFinalGatewayErrorCaptureSubmitter interface {
 		stream bool,
 		resp *http.Response,
 		responseBody []byte,
+		responseComplete ...bool,
 	)
 }
 
@@ -70,6 +71,7 @@ func submitWebChatFinalGatewayErrorCaptureFromContext(
 	stream bool,
 	resp *http.Response,
 	responseBody []byte,
+	responseComplete ...bool,
 ) {
 	if ctx == nil {
 		return
@@ -79,7 +81,7 @@ func submitWebChatFinalGatewayErrorCaptureFromContext(
 		return
 	}
 	submitter.submitWebChatFinalGatewayErrorCapture(
-		ctx, c, account, requestedModel, upstreamModel, upstreamEndpoint, stream, resp, responseBody,
+		ctx, c, account, requestedModel, upstreamModel, upstreamEndpoint, stream, resp, responseBody, responseComplete...,
 	)
 }
 
@@ -98,9 +100,19 @@ func (s *GatewayService) submitWebChatFinalGatewayErrorCapture(
 	stream bool,
 	resp *http.Response,
 	responseBody []byte,
+	responseCompleteOverride ...bool,
 ) {
 	if s == nil || s.capturePool == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled ||
 		!ownsWebChatFinalGatewayErrorCapture(ctx) || account == nil || resp == nil {
+		return
+	}
+	if captureStreamingAttemptPath(c) {
+		finishCaptureResponse(resp)
+		responseComplete := boundedUpstreamErrorResponseComplete(responseBody, nil, s.upstreamErrorBodyReadLimit())
+		if len(responseCompleteOverride) > 0 {
+			responseComplete = responseCompleteOverride[0]
+		}
+		CommitTerminalErrorCaptureAttemptWithCompleteness(c, string(account.Platform), resp.StatusCode, responseComplete)
 		return
 	}
 	content, enabled := CaptureDecisionFor(c, string(account.Platform), CaptureOutcomeTerminalError)
@@ -173,6 +185,14 @@ func (s *GatewayService) submitWebChatTerminalCapture(
 		return
 	}
 	platform := firstNonEmpty(failure.Platform, string(account.Platform))
+	if captureStreamingAttemptPath(c) {
+		if failure.HasUpstreamHTTPResponse {
+			CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete)
+		} else {
+			AbortCaptureAttempt(c)
+		}
+		return
+	}
 	if record := BuildTerminalErrorCaptureRecord(c, platform, failure, s.cfg.Gateway.Capture.MaxBodyBytes); record != nil {
 		s.capturePool.Submit(record)
 	}
@@ -255,6 +275,14 @@ func (s *OpenAIGatewayService) SubmitWebChatTerminalCapture(c *gin.Context, fail
 		return
 	}
 	platform := firstNonEmpty(failure.Platform, PlatformOpenAI)
+	if captureStreamingAttemptPath(c) {
+		if failure.HasUpstreamHTTPResponse {
+			CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete)
+		} else {
+			AbortCaptureAttempt(c)
+		}
+		return
+	}
 	if record := BuildTerminalErrorCaptureRecord(c, platform, failure, s.cfg.Gateway.Capture.MaxBodyBytes); record != nil {
 		s.capturePool.Submit(record)
 	}

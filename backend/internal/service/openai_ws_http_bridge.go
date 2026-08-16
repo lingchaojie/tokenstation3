@@ -230,14 +230,24 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	turnStart := time.Now()
+	var captureAttempt *CaptureAttempt
+	if s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
+		captureAttempt, _ = beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), upstreamReq, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		AbortCaptureAttempt(c)
 		if turn == 1 {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(http.StatusBadGateway, "Upstream request failed"))
 		return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
+	}
+	if captureAttempt != nil && resp != nil && resp.Body != nil {
+		setCaptureAttemptResponseHTTPStatus(c, captureAttempt, resp.StatusCode)
+		captureAttempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, s.cfg.Gateway.Capture.MaxHeaderBytes))
+		resp.Body = newCaptureResponseReader(resp.Body, captureAttempt)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -252,16 +262,22 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 			if turn == 1 && shouldFailover {
+				AbortCaptureAttempt(c)
 				return nil, newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, false)
 			}
 		} else if turn == 1 && shouldFailover {
+			AbortCaptureAttempt(c)
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, respBody)
 		}
 		if account.Platform != PlatformGrok && (shouldFailover || shouldCooldownOpenAITransientUpstreamError(resp.StatusCode, respBody)) {
 			canonicalModel := canonicalOpenAIAccountSchedulingModel(account, originalModel)
 			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, canonicalModel)
 		}
-		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg))
+		if writeErr := writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg)); writeErr == nil {
+			CommitTerminalErrorCaptureAttemptWithCompleteness(c, string(account.Platform), resp.StatusCode, boundedUpstreamErrorResponseComplete(respBody, nil, openAIWSHTTPBridgeErrorBodyLimitBytes))
+		} else {
+			AbortCaptureAttempt(c)
+		}
 		return nil, fmt.Errorf("upstream http bridge error: status=%d message=%s", resp.StatusCode, upstreamMsg)
 	}
 	if account.Platform == PlatformGrok {

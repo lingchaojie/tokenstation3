@@ -804,6 +804,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
+		wirePayload := openAIWSJSONWireBytes(json.RawMessage(payload))
+		captureAttempt := s.beginOpenAIWSCaptureAttempt(ctx, c, account, baseAcquireReq.WSURL, baseAcquireReq.Headers, wirePayload, lease.HandshakeHeaders())
+		captureHandedOff := false
+		defer func() {
+			if captureAttempt != nil && !captureHandedOff {
+				AbortCaptureAttempt(c)
+			}
+		}()
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
@@ -860,6 +868,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					fmt.Errorf("read upstream websocket event: %w", readErr),
 					wroteDownstream,
 				)
+			}
+			if captureAttempt != nil {
+				captureAttempt.WriteResponse(upstreamMessage)
 			}
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
@@ -1067,6 +1078,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.ImageOutputSizes = imageCounter.Sizes()
 					result.BillingModel = imageBillingModel
 				}
+				captureHandedOff = true
 				return result, nil
 			}
 		}

@@ -886,9 +886,10 @@ func TestGeminiMessagesCompatServiceForward_PreservesRequestedModelAndMappedUpst
 			Body:       io.NopCloser(bytes.NewReader(rawProviderResponse)),
 		},
 	}
+	transport := &recordingCaptureTransport{}
 	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{Gateway: config.GatewayConfig{
-		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
-	}}}
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
+	}}, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true })}
 	account := &Account{
 		ID:       1,
 		Platform: PlatformGemini,
@@ -910,11 +911,17 @@ func TestGeminiMessagesCompatServiceForward_PreservesRequestedModelAndMappedUpst
 	require.Equal(t, 1, httpStub.calls)
 	require.NotNil(t, httpStub.lastReq)
 	require.Contains(t, httpStub.lastReq.URL.String(), "/models/claude-sonnet-4-20250514:")
-	require.Equal(t, snapshotHTTPRequestBody(httpStub.lastReq), result.CaptureRequest)
-	require.Equal(t, rawProviderResponse, result.CaptureResponse)
-	require.Equal(t, http.StatusOK, result.CaptureHTTPStatus)
-	require.NotNil(t, result.CaptureContentPolicy)
-	require.NotContains(t, string(result.CaptureRequestHeaders), "test-key")
+	require.Nil(t, result.CaptureRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.Zero(t, result.CaptureHTTPStatus)
+	require.Nil(t, result.CaptureContentPolicy)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformGemini, result))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, snapshotHTTPRequestBody(httpStub.lastReq), attempt.RequestBytes())
+	require.Equal(t, rawProviderResponse, attempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "test-key")
 }
 
 func TestGeminiMessagesCompatServiceForward_NormalizesWebSearchToolForAIStudio(t *testing.T) {

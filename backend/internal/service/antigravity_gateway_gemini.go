@@ -199,10 +199,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
-						captureParams := antigravityRetryLoopParams{c: c, account: account, settingService: s.settingService}
-						prepareAntigravityCaptureAttempt(captureParams, fallbackReq)
+						captureParams := antigravityRetryLoopParams{ctx: ctx, c: c, account: account, settingService: s.settingService}
+						s.prepareAntigravityCaptureAttempt(captureParams, fallbackReq, fallbackWrapped)
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
-						wrapAntigravityCaptureResponse(captureParams, fallbackResp)
+						s.wrapAntigravityCaptureResponse(captureParams, fallbackResp)
 						if err != nil || fallbackResp == nil {
 							if fallbackResp != nil && fallbackResp.Body != nil {
 								_ = fallbackResp.Body.Close()

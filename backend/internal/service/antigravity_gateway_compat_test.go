@@ -72,6 +72,7 @@ func newAntigravityCompatService(cfg config.GatewayConfig, upstream HTTPUpstream
 		upstream,
 		NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: cfg}),
 		nil,
+		nil,
 	)
 }
 

@@ -669,6 +669,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if wsErr == nil {
 				break
 			}
+			// Every failed WS turn is non-client-visible to the handler-owned
+			// success side-effect sink. Retire it before recovery or backoff.
+			AbortCaptureAttempt(c)
 			if c != nil && c.Writer != nil && c.Writer.Written() {
 				break
 			}

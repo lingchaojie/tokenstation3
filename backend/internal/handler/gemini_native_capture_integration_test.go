@@ -172,7 +172,7 @@ func TestGeminiNativeRouterArchivesProviderAttemptExactlyOnce(t *testing.T) {
 				service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 				nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 			)
-			gemini := service.NewGeminiMessagesCompatService(accountRepo, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg)
+			gemini := service.NewGeminiMessagesCompatService(accountRepo, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg, capturePool)
 			h := NewGatewayHandler(
 				gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -217,7 +217,15 @@ func TestGeminiNativeRouterArchivesProviderAttemptExactlyOnce(t *testing.T) {
 			actualRequest := append([]byte(nil), upstream.lastBody...)
 			upstream.mu.Unlock()
 			require.Equal(t, actualRequest, archived.RawRequest)
-			require.Equal(t, tt.upstreamResponse, archived.RawResponse)
+			wantResponse := tt.upstreamResponse
+			wantTruncated := tt.upstreamReadErr != nil
+			if tt.upstreamStatus >= http.StatusBadRequest && len(wantResponse) > 512<<10 {
+				wantResponse = wantResponse[:512<<10]
+				wantTruncated = true
+			}
+			require.Len(t, archived.RawResponse, len(wantResponse))
+			require.True(t, bytes.Equal(wantResponse, archived.RawResponse), "capture must contain exactly the bytes naturally consumed by the Gemini response parser")
+			require.Equal(t, wantTruncated, archived.Truncated)
 			require.Equal(t, tt.upstreamStatus, archived.HTTPStatus)
 			require.NotContains(t, string(archived.RequestHeaders), "gemini-secret")
 		})
@@ -274,7 +282,7 @@ func TestGeminiMessagesNonStreamingLargeProviderResponseIsNotLimitedByCaptureCei
 				service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 				nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 			)
-			gemini := service.NewGeminiMessagesCompatService(accountRepo, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg)
+			gemini := service.NewGeminiMessagesCompatService(accountRepo, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg, capturePool)
 			h := NewGatewayHandler(
 				gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -366,7 +374,7 @@ func testAntigravityGeminiNativeRouterFailover(t *testing.T, firstBody []byte) {
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
 	tokenProvider := service.NewAntigravityTokenProvider(nil, &antigravityCaptureTokenCache{}, nil)
-	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil)
+	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, nil, antigravityService, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -524,7 +532,7 @@ func testGeminiNativeStreamPresemanticFailover(t *testing.T, firstBody []byte, e
 		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
-	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg)
+	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -657,7 +665,7 @@ func testGeminiNativeGenerateContentPresemanticFailover(t *testing.T, firstBody 
 		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
-	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg)
+	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -837,7 +845,7 @@ func testGeminiCompatibilityPresemanticFailover(t *testing.T, endpoint string, f
 		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
-	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg)
+	gemini := service.NewGeminiMessagesCompatService(nil, &fakeGroupRepo{group: group}, nil, scheduler, nil, nil, upstream, nil, cfg, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,

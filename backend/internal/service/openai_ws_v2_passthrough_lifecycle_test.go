@@ -152,6 +152,7 @@ func startPassthroughLifecycleServer(
 	controlCtx context.Context,
 	svc *OpenAIGatewayService,
 	account *Account,
+	hookFactories ...func(*gin.Context) *OpenAIWSIngressHooks,
 ) (*httptest.Server, <-chan error) {
 	t.Helper()
 	serverErr := make(chan error, 1)
@@ -184,7 +185,11 @@ func startPassthroughLifecycleServer(
 		req := r.Clone(controlCtx)
 		req.Header = req.Header.Clone()
 		ginCtx.Request = req
-		serverErr <- svc.ProxyResponsesWebSocketFromClient(controlCtx, ginCtx, conn, account, "sk-test", firstMessage, nil)
+		var hooks *OpenAIWSIngressHooks
+		if len(hookFactories) > 0 && hookFactories[0] != nil {
+			hooks = hookFactories[0](ginCtx)
+		}
+		serverErr <- svc.ProxyResponsesWebSocketFromClient(controlCtx, ginCtx, conn, account, "sk-test", firstMessage, hooks)
 	}))
 	return server, serverErr
 }
@@ -289,9 +294,26 @@ func TestPassthroughLifecycle_CompletedTurnStartsInterTurnIdle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
+	requestWire := []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`)
+	responseWire := []byte(`{"type":"response.completed","response":{"id":"resp_idle","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	upstream := newStagedPassthroughConn()
-	upstream.Send(`{"type":"response.completed","response":{"id":"resp_idle","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
-	server, serverErr := startPassthroughLifecycleServer(t, controlCtx, newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream), passthroughLifecycleAccount())
+	upstream.Send(string(responseWire))
+	cfg := passthroughLifecycleConfig()
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	cfg.Gateway.Capture.MaxHeaderBytes = 16 << 10
+	captureTransport := &recordingCaptureTransport{}
+	svc := newPassthroughLifecycleService(cfg, upstream)
+	svc.capturePool = newConversationCapturePoolForTransport(captureTransport, func() bool { return true })
+	captureCommit := make(chan bool, 1)
+	server, serverErr := startPassthroughLifecycleServer(t, controlCtx, svc, passthroughLifecycleAccount(), func(c *gin.Context) *OpenAIWSIngressHooks {
+		enableCaptureForTest(t, c)
+		return &OpenAIWSIngressHooks{AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
+			if turnErr == nil && result != nil {
+				captureCommit <- CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result)
+			}
+		}}
+	})
 	defer server.Close()
 	clientConn := dialPassthroughLifecycleClient(t, server)
 	defer func() { _ = clientConn.CloseNow() }()
@@ -299,6 +321,7 @@ func TestPassthroughLifecycle_CompletedTurnStartsInterTurnIdle(t *testing.T) {
 	event, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+	require.True(t, <-captureCommit)
 	_, err = readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
 	var closeErr coderws.CloseError
 	require.ErrorAs(t, err, &closeErr)
@@ -309,6 +332,11 @@ func TestPassthroughLifecycle_CompletedTurnStartsInterTurnIdle(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("passthrough idle reader did not exit")
 	}
+	require.Len(t, captureTransport.Attempts(), 1)
+	attempt := captureTransport.Attempts()[0]
+	require.Equal(t, requestWire, attempt.RequestBytes())
+	require.Equal(t, responseWire, attempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestPassthroughLifecycle_ActiveTurnInactivityUsesReadTimeout(t *testing.T) {

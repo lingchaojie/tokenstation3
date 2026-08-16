@@ -519,7 +519,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			accountReleaseFunc()
 		}
 		if result != nil {
-			h.submitGatewayResultCapture(result, account, body, GetUpstreamEndpoint(c, account.Platform))
+			h.submitGatewayResultCaptureForRequest(c, result, account, body, GetUpstreamEndpoint(c, account.Platform))
 		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
@@ -643,7 +643,13 @@ func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverE
 	if strings.TrimSpace(failoverErr.Platform) != "" {
 		platform = failoverErr.Platform
 	}
-	if h.capturePool != nil {
+	if h.capturePool != nil && service.CaptureUsesStreamingAttempt(c) {
+		if failoverErr.HasUpstreamHTTPResponse {
+			service.CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, failoverErr.HTTPStatusForCapture(), !failoverErr.CaptureResponseIncomplete)
+		} else {
+			service.AbortCaptureAttempt(c)
+		}
+	} else if h.capturePool != nil {
 		if record := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); record != nil {
 			h.capturePool.Submit(record)
 		}

@@ -176,7 +176,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 					markCaptureResultTruncated(c)
 				}
 				s.submitWebChatFinalGatewayErrorCapture(
-					ctx, c, account, requestModel, mappedModel, "/v1/messages", true, resp, responseBody,
+					ctx, c, account, requestModel, mappedModel, "/v1/messages", true, resp, responseBody, readErr == nil && !truncated,
 				)
 				publishWebChatStreamTerminalError(ctx, failure)
 			}
@@ -390,6 +390,7 @@ func (s *GatewayService) prefetchKiroWebSearchDescription(ctx context.Context, a
 	if err != nil || resp == nil {
 		return
 	}
+	defer abortKiroNativeCaptureAttempt(ctx)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return
@@ -426,6 +427,7 @@ func (s *GatewayService) callKiroWebSearchMCP(ctx context.Context, account *Acco
 	if resp == nil {
 		return nil, nextToken, fmt.Errorf("kiro web search returned nil response")
 	}
+	defer abortKiroNativeCaptureAttempt(ctx)
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := readUpstreamResponseBodyLimited(resp.Body, resolveUpstreamResponseReadLimit(s.cfg))
@@ -494,10 +496,19 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			return nil, currentToken, err
 		}
 
-		setCaptureUpstreamRequestFromContext(ctx, req)
+		if s.capturePool != nil {
+			s.beginKiroNativeCaptureAttempt(ctx, account, req, payload)
+		} else {
+			setCaptureUpstreamRequestFromContext(ctx, req)
+		}
 		resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
-		setCaptureUpstreamResponseFromContext(ctx, resp)
+		if s.capturePool != nil {
+			s.beginKiroNativeCaptureResponse(ctx, resp)
+		} else {
+			setCaptureUpstreamResponseFromContext(ctx, resp)
+		}
 		if err != nil {
+			abortKiroNativeCaptureAttempt(ctx)
 			return nil, currentToken, err
 		}
 
@@ -530,6 +541,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			currentToken = refreshedToken
 			machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 			accountKey = buildKiroAccountKey(account)
+			abortKiroNativeCaptureAttempt(ctx)
 			if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 				return nil, currentToken, sleepErr
 			}
@@ -538,12 +550,14 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if _, err := s.markKiro429(ctx, account.ID, accountKey); err != nil {
+				abortKiroNativeCaptureAttempt(ctx)
 				_ = resp.Body.Close()
 				return nil, currentToken, err
 			}
 		}
 		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 {
 			if attempt < 2 {
+				abortKiroNativeCaptureAttempt(ctx)
 				_ = resp.Body.Close()
 				if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 					return nil, currentToken, sleepErr
@@ -553,6 +567,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			if err := s.markKiroSuccess(ctx, account.ID, accountKey); err != nil {
+				abortKiroNativeCaptureAttempt(ctx)
 				_ = resp.Body.Close()
 				return nil, currentToken, err
 			}

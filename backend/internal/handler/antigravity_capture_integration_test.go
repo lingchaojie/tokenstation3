@@ -371,7 +371,7 @@ func testAntigravityBaseURLMessagesFailover(t *testing.T, groupID int64, stream 
 		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
 		nil, nil, nil, nil, nil, nil, settings, nil, nil, nil, nil, nil, capturePool,
 	)
-	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, nil, nil, upstream, settings, nil)
+	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, nil, nil, upstream, settings, nil, capturePool)
 	handler := NewGatewayHandler(
 		gateway, nil, nil, antigravityService, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settings, capturePool,
@@ -449,7 +449,7 @@ func testAntigravityRouterFailoverArchivesOnlyFinalSemanticAccount(t *testing.T,
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
 	tokenProvider := service.NewAntigravityTokenProvider(nil, &antigravityCaptureTokenCache{}, nil)
-	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil)
+	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, nil, antigravityService, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -558,7 +558,7 @@ func testAntigravityCompatibilityRouterArchivesTerminalProviderAttemptExactlyOnc
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
 	tokenProvider := service.NewAntigravityTokenProvider(nil, &antigravityCaptureTokenCache{}, nil)
-	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil)
+	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, nil, antigravityService, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -629,7 +629,7 @@ func TestAntigravityCompatibilityRouterSmartRetryArchivesFinalHTTPAttemptExactly
 		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
 	)
 	tokenProvider := service.NewAntigravityTokenProvider(nil, &antigravityCaptureTokenCache{}, nil)
-	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil)
+	antigravityService := service.NewAntigravityGatewayService(nil, nil, scheduler, tokenProvider, nil, upstream, settingService, nil, capturePool)
 	h := NewGatewayHandler(
 		gateway, nil, nil, antigravityService, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
@@ -656,7 +656,9 @@ func TestAntigravityCompatibilityRouterSmartRetryArchivesFinalHTTPAttemptExactly
 	upstream.mu.Unlock()
 	require.GreaterOrEqual(t, len(requests), 2)
 	require.Equal(t, requests[len(requests)-1], record.RawRequest)
-	require.Equal(t, terminalBody, record.RawResponse)
+	require.Len(t, record.RawResponse, 8<<10)
+	require.True(t, bytes.Equal(terminalBody[:8<<10], record.RawResponse), "capture must contain exactly the bytes naturally consumed by the bounded smart-retry classifier")
+	require.True(t, record.Truncated)
 	require.Equal(t, http.StatusServiceUnavailable, record.HTTPStatus)
 	require.Equal(t, "final-503", record.RequestID)
 }

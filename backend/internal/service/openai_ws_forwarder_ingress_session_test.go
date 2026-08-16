@@ -109,15 +109,23 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	cfg.Gateway.Capture.MaxHeaderBytes = 16 << 10
 
+	firstImageEvent := []byte(`{"type":"response.output_item.done","item":{"id":"ig_ingress_1","type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}}`)
+	firstCompletedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	secondCompletedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.output_item.done","item":{"id":"ig_ingress_1","type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			firstImageEvent,
+			firstCompletedEvent,
+			secondCompletedEvent,
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+	captureTransport := &recordingCaptureTransport{}
+	capturePool := newConversationCapturePoolForTransport(captureTransport, func() bool { return true })
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(captureDialer)
 
@@ -128,6 +136,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
+		capturePool:      capturePool,
 	}
 
 	account := &Account{
@@ -148,9 +157,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 
 	serverErrCh := make(chan error, 1)
 	turnTerminalCh := make(chan string, 2)
+	turnCaptureCommitCh := make(chan bool, 2)
+	var captureCtx *gin.Context
 	hooks := &OpenAIWSIngressHooks{
 		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
 			if turnErr == nil && result != nil {
+				turnCaptureCommitCh <- CommitOpenAIForwardCaptureAttempt(captureCtx, PlatformOpenAI, result)
 				turnTerminalCh <- result.UpstreamTerminalEvent
 			}
 		},
@@ -169,10 +181,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
+		captureCtx = ginCtx
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
 		req.Header.Set("User-Agent", "unit-test-agent/1.0")
 		ginCtx.Request = req
+		enableCaptureForTest(t, ginCtx)
 
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		msgType, firstMessage, readErr := conn.Read(readCtx)
@@ -227,6 +241,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Equal(t, "resp_ingress_turn_2", gjson.GetBytes(secondTurnEvent, "response.id").String())
 	require.Equal(t, "response.completed", <-turnTerminalCh, "首轮 turn 应保留成功终态")
 	require.Equal(t, "response.completed", <-turnTerminalCh, "第二轮 turn 应保留成功终态")
+	require.True(t, <-turnCaptureCommitCh)
+	require.True(t, <-turnCaptureCommitCh)
 
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
@@ -241,6 +257,16 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Equal(t, int64(1), metrics.AcquireTotal, "同一 ingress 会话多 turn 应只获取一次上游 lease")
 	require.Equal(t, 1, captureDialer.DialCount(), "同一 ingress 会话应保持同一上游连接")
 	require.Len(t, captureConn.writes, 2, "应向同一上游连接发送两轮 response.create")
+	require.Len(t, captureTransport.Attempts(), 2)
+	firstAttempt := captureTransport.Attempts()[0]
+	secondAttempt := captureTransport.Attempts()[1]
+	require.Len(t, captureConn.rawWrites, 2)
+	require.Equal(t, captureConn.rawWrites[0], firstAttempt.RequestBytes())
+	require.Equal(t, append(append([]byte(nil), firstImageEvent...), firstCompletedEvent...), firstAttempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, firstAttempt.TerminalStates())
+	require.Equal(t, captureConn.rawWrites[1], secondAttempt.RequestBytes())
+	require.Equal(t, secondCompletedEvent, secondAttempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, secondAttempt.TerminalStates())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_LeaseLossSendsRetryClose(t *testing.T) {
@@ -1251,24 +1277,28 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 	cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModeCtxPool
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	cfg.Gateway.Capture.MaxHeaderBytes = 16 << 10
 
+	upstreamWire := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_http_bridge_1\",\"output\":[{\"id\":\"ig_bridge_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\",\"result\":\"final-image\"}],\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n" +
+		"data: [DONE]\n\n"
 	upstream := &httpUpstreamRecorder{
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_bridge_1"}},
-			Body: io.NopCloser(strings.NewReader(
-				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
-					"data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_http_bridge_1\",\"output\":[{\"id\":\"ig_bridge_1\",\"type\":\"image_generation_call\",\"status\":\"in_progress\",\"result\":\"final-image\"}],\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n" +
-					"data: [DONE]\n\n",
-			)),
+			Body:       io.NopCloser(strings.NewReader(upstreamWire)),
 		},
 	}
+	captureTransport := &recordingCaptureTransport{}
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
 		httpUpstream:     upstream,
 		cache:            &stubGatewayCache{},
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
 		toolCorrector:    NewCodexToolCorrector(),
+		capturePool:      newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
 	}
 
 	account := &Account{
@@ -1289,9 +1319,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 
 	serverErrCh := make(chan error, 1)
 	resultCh := make(chan *OpenAIForwardResult, 1)
+	captureCommitCh := make(chan bool, 1)
+	var captureCtx *gin.Context
 	hooks := &OpenAIWSIngressHooks{
 		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
 			if turnErr == nil && result != nil {
+				captureCommitCh <- CommitOpenAIForwardCaptureAttempt(captureCtx, PlatformOpenAI, result)
 				resultCh <- result
 			}
 		},
@@ -1311,10 +1344,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
+		captureCtx = ginCtx
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
 		req.Header.Set("User-Agent", "unit-test-agent/1.0")
 		ginCtx.Request = req
+		enableCaptureForTest(t, ginCtx)
 
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		msgType, firstMessage, readErr := conn.Read(readCtx)
@@ -1371,6 +1406,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 
 	select {
 	case result := <-resultCh:
+		require.True(t, <-captureCommitCh)
 		require.Equal(t, "resp_http_bridge_1", result.RequestID)
 		require.True(t, result.OpenAIWSMode)
 		require.Equal(t, 2, result.Usage.InputTokens)
@@ -1382,6 +1418,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 	}
 
 	require.NotNil(t, upstream.lastReq, "http_bridge 模式应调用 HTTP 上游")
+	require.Len(t, captureTransport.Attempts(), 1)
+	attempt := captureTransport.Attempts()[0]
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes())
+	require.Equal(t, []byte(upstreamWire), attempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ModeOffReturnsPolicyViolation(t *testing.T) {

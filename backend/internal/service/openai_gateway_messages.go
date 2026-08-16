@@ -2,7 +2,6 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -373,7 +372,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
 			break
 		}
-		respBody := s.readUpstreamErrorBody(resp)
+		respBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
 		finishOpenAIHTTPCapture(resp)
 		if resp.Body != nil {
 			closeCaptureResponseUnderlying(resp)
@@ -384,7 +383,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		shouldStrip := isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) ||
 			requestHasGrokEncryptedReasoning(responsesBody)
 		if !shouldStrip {
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
 			break
 		}
 		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(responsesBody)
@@ -392,7 +391,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
 		}
 		if !changed {
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
 			break
 		}
 		responsesBody = retryBody

@@ -191,10 +191,16 @@ func (r *webChatGeminiFinalRequestRecorder) DoWithTLS(req *http.Request, proxyUR
 
 func TestGeminiChatCompletionsCompatCarriesFinalProviderRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	recorder := &webChatGeminiFinalRequestRecorder{}
+	providerBody := []byte(`{"candidates":[{"content":{"parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}}`)
+	recorder := &webChatGeminiFinalRequestRecorder{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"gemini-compat-final"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}
+	captureTransport := &recordingCaptureTransport{}
 	svc := &GeminiMessagesCompatService{httpUpstream: recorder, cfg: &config.Config{Gateway: config.GatewayConfig{
-		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
-	}}}
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 16 << 10},
+	}}, capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true })}
 	account := &Account{
 		ID: 601, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1,
 		Credentials: map[string]any{"api_key": "gemini-key"},
@@ -209,8 +215,15 @@ func TestGeminiChatCompletionsCompatCarriesFinalProviderRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, recorder.body)
-	require.Equal(t, recorder.body, result.UpstreamRequest)
-	require.NotEqual(t, body, result.UpstreamRequest, "Gemini compat converts Chat Completions into a provider-native request")
+	require.Nil(t, result.UpstreamRequest, "typed capture must not reconstruct a legacy whole-body result")
+	require.NotEqual(t, body, recorder.body, "Gemini compat converts Chat Completions into a provider-native request")
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformGemini, result))
+	require.Len(t, captureTransport.Attempts(), 1)
+	attempt := captureTransport.Attempts()[0]
+	require.Equal(t, recorder.body, attempt.RequestBytes())
+	require.Equal(t, providerBody, attempt.ResponseBytes())
+	require.Contains(t, string(attempt.ResponseHeaderBytes()), "gemini-compat-final")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestWebChatCaptureDoesNotArchiveConvertedFallbackWithoutRawProviderResponse(t *testing.T) {
@@ -426,8 +439,8 @@ func TestWebChatFinalHTTPErrorCaptureUsesConfiguredCeiling(t *testing.T) {
 		wantSize  int
 		truncated bool
 	}{
-		{name: "retains response above safe logging limit", bodySize: 600 << 10, wantSize: 600 << 10},
-		{name: "marks response above archive ceiling", bodySize: (8 << 20) + 1024, wantSize: 8 << 20, truncated: true},
+		{name: "retains naturally consumed classifier prefix", bodySize: 600 << 10, wantSize: int(gatewayUpstreamErrorBodyReadLimit), truncated: true},
+		{name: "does not drain to archive ceiling", bodySize: (8 << 20) + 1024, wantSize: int(gatewayUpstreamErrorBodyReadLimit), truncated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prefix := `{"type":"error","error":{"message":"reject"},"padding":"`
@@ -691,7 +704,7 @@ func TestWebChatKiroOnlyWebSearchFinal429RetainsNativeBodyAboveSafeLogLimit(t *t
 		wantTruncated bool
 	}{
 		{name: "retains 600 KiB exactly", bodySize: 600 << 10, wantSize: 600 << 10},
-		{name: "bounds body above 8 MiB", bodySize: (8 << 20) + 1024, wantSize: 8 << 20, wantTruncated: true},
+		{name: "records the natural 8 MiB detection read", bodySize: (8 << 20) + 1024, wantSize: (8 << 20) + 1, wantTruncated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mcpBody := []byte(`{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
@@ -729,7 +742,8 @@ func TestWebChatKiroOnlyWebSearchFinal429RetainsNativeBodyAboveSafeLogLimit(t *t
 			record := <-writer.records
 			require.Equal(t, http.StatusTooManyRequests, record.HTTPStatus)
 			require.Equal(t, recorder.bodies[1], record.RawRequest)
-			require.Equal(t, finalBody[:tc.wantSize], record.RawResponse, "429 restoration must preserve bytes up to the WebChat ceiling")
+			require.Len(t, record.RawResponse, tc.wantSize)
+			require.True(t, bytes.Equal(finalBody[:tc.wantSize], record.RawResponse), "429 restoration must preserve every byte naturally consumed at the WebChat boundary")
 			require.Equal(t, tc.wantTruncated, record.Truncated)
 		})
 	}

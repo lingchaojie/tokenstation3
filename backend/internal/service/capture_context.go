@@ -511,13 +511,6 @@ func (s *GatewayService) captureOutboundRequest(c *gin.Context, account *Account
 	if !CaptureMayApplyFor(c, string(account.Platform)) {
 		return
 	}
-	// KIRO keeps its existing forwarding/capture contract until its dedicated
-	// upstream-tracked migration. This task must not alter KIRO semantics.
-	if account.Platform == PlatformKiro || isWebChatCaptureOwner(c) {
-		setCapturePlatform(c, string(account.Platform))
-		SetCaptureOutboundRequest(c, req, body, s.cfg.Gateway.Capture.MaxBodyBytes)
-		return
-	}
 	beginCaptureAttemptForWireRequest(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
 }
 
@@ -529,9 +522,6 @@ func (s *GatewayService) beginGatewayCaptureResponse(c *gin.Context, account *Ac
 	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil ||
 		!CaptureMayApplyFor(c, string(account.Platform)) {
 		return func() {}
-	}
-	if account.Platform == PlatformKiro || isWebChatCaptureOwner(c) {
-		return beginCaptureResponse(c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
 	}
 	attempt := captureAttemptForRequest(c)
 	if attempt == nil || resp == nil {

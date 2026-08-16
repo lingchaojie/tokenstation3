@@ -59,16 +59,23 @@ func TestHandleSmartRetryCaptureKeepsOnlyFinalHTTPAttempt(t *testing.T) {
 	}}, errors: []error{nil}}
 	params := newAntigravityRetryCaptureParams(t, c, upstream)
 	initialResp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"X-Request-Id": {"initial-429"}}, Body: io.NopCloser(bytes.NewReader(initialBody))}
+	captureTransport := &recordingCaptureTransport{}
+	svc := &AntigravityGatewayService{capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true })}
 
-	result := (&AntigravityGatewayService{}).handleSmartRetry(params, initialResp, initialBody, "https://ag.test", 0, []string{"https://ag.test"})
+	result := svc.handleSmartRetry(params, initialResp, initialBody, "https://ag.test", 0, []string{"https://ag.test"})
 	require.NotNil(t, result)
 	require.NotNil(t, result.switchError, "multi-account retry exhaustion keeps its existing switch behavior")
-	bridge, ok := takeCaptureResult(c)
-	require.True(t, ok)
-	require.Equal(t, http.StatusServiceUnavailable, bridge.HTTPStatus)
-	require.Equal(t, finalBody, bridge.Response, "capture tee must drain the final provider body past the 8 KiB classifier bound")
-	require.Contains(t, string(bridge.ResponseHeaders), "final-503")
-	require.NotContains(t, string(bridge.ResponseHeaders), "initial-429")
+	require.True(t, result.switchError.Failure.CaptureResponseIncomplete)
+	require.True(t, CommitTerminalErrorCaptureAttemptWithCompleteness(c, PlatformAntigravity, http.StatusServiceUnavailable, !result.switchError.Failure.CaptureResponseIncomplete))
+	require.Len(t, captureTransport.Attempts(), 1)
+	attempt := captureTransport.Attempts()[0]
+	require.Equal(t, upstream.requestBodies[0], attempt.RequestBytes())
+	require.Equal(t, finalBody[:8<<10], attempt.ResponseBytes(), "capture must contain exactly the bytes naturally consumed by the bounded classifier")
+	require.Contains(t, string(attempt.ResponseHeaderBytes()), "final-503")
+	require.NotContains(t, string(attempt.ResponseHeaderBytes()), "initial-429")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
+	require.Len(t, attempt.Finals(), 1)
+	require.False(t, attempt.Finals()[0].ResponseComplete)
 }
 
 func TestReadAntigravityRetryResponseKeepsCompleteHTTPExchangeWhenCloseFails(t *testing.T) {

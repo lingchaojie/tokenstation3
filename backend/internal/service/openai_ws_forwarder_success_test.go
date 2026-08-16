@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1749,6 +1750,7 @@ type openAIWSCaptureConn struct {
 	events     [][]byte
 	lastWrite  map[string]any
 	writes     []map[string]any
+	rawWrites  [][]byte
 	closed     bool
 }
 
@@ -1758,6 +1760,10 @@ func (c *openAIWSCaptureConn) WriteJSON(ctx context.Context, value any) error {
 	defer c.mu.Unlock()
 	if c.closed {
 		return errOpenAIWSConnClosed
+	}
+	var wire bytes.Buffer
+	if err := json.NewEncoder(&wire).Encode(value); err == nil {
+		c.rawWrites = append(c.rawWrites, append([]byte(nil), wire.Bytes()...))
 	}
 	switch payload := value.(type) {
 	case map[string]any:

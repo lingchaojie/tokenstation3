@@ -763,7 +763,8 @@ func TestKiroRoutersFailOverEmptyOrUsageOnlyEventStreamWithoutCapturingOrBilling
 			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 			t.Cleanup(billingCache.Stop)
 			captureRecords := make(chan *service.CaptureRecord, 4)
-			capturePool := service.NewConversationCapturePoolForUnitTest(captureRecords)
+			terminals := make(chan string, 32)
+			capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(captureRecords, terminals)
 			usageRepo := &gatewayAnthropicUsageRepo{}
 			gateway := service.NewGatewayService(
 				&antigravityCaptureAccountRepo{}, &fakeGroupRepo{group: group}, usageRepo, nil, nil, nil, nil, nil, cfg, scheduler, nil,
@@ -801,6 +802,17 @@ func TestKiroRoutersFailOverEmptyOrUsageOnlyEventStreamWithoutCapturingOrBilling
 			require.Equal(t, secondBody, record.RawResponse)
 			require.Len(t, secondRequests, 1)
 			require.Equal(t, secondRequests[0], record.RawRequest)
+			require.Len(t, terminals, len(calls), "each real KIRO attempt must reach exactly one terminal state")
+			terminalStates := make([]string, 0, len(calls))
+			for range calls {
+				terminalStates = append(terminalStates, <-terminals)
+			}
+			expectedTerminals := make([]string, len(calls))
+			for i := range expectedTerminals[:len(expectedTerminals)-1] {
+				expectedTerminals[i] = "abort"
+			}
+			expectedTerminals[len(expectedTerminals)-1] = "commit"
+			require.Equal(t, expectedTerminals, terminalStates)
 			require.Len(t, usageRepo.snapshot(), 1, "only the second account is billed")
 			require.Equal(t, secondAccountID, usageRepo.snapshot()[0].AccountID)
 		})

@@ -2216,6 +2216,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return nil
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
+				if result != nil {
+					if turnErr == nil {
+						service.CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
+					} else {
+						service.CommitTerminalErrorCaptureAttemptWithCompleteness(c, string(account.Platform), 0, false)
+					}
+				} else if turnErr != nil {
+					service.AbortCaptureAttempt(c)
+				}
 				// F1: cyber 标记按 turn 生命周期清理——defer 保证任意早返回路径都执行；
 				// CyberBlocked 必须在 submit 前同步预捕获（task 闭包由 worker 池异步执行，
 				// 届时 defer 已清除标记）。

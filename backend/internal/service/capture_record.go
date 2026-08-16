@@ -363,6 +363,9 @@ func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, lim
 		if attempt == nil || resp == nil || resp.Body == nil {
 			return func() {}
 		}
+		if _, alreadyWrapped := resp.Body.(*captureResponseReader); alreadyWrapped {
+			return func() {}
+		}
 		setCaptureAttemptResponseHTTPStatus(c, attempt, resp.StatusCode)
 		attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, attempt.headerLimit))
 		resp.Body = newCaptureResponseReader(resp.Body, attempt)

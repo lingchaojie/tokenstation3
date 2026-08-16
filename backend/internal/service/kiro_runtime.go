@@ -564,16 +564,18 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				return nil, requestCtx, err
 			}
 
-			setCaptureUpstreamRequestFromContext(ctx, req)
+			s.beginKiroNativeCaptureAttempt(ctx, account, req, payload)
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
-			setCaptureUpstreamResponseFromContext(ctx, resp)
+			s.beginKiroNativeCaptureResponse(ctx, resp)
 			if err != nil {
 				if attempt < maxRetries {
+					abortKiroNativeCaptureAttempt(ctx)
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
 					}
 					continue
 				}
+				abortKiroNativeCaptureAttempt(ctx)
 				return nil, requestCtx, err
 			}
 
@@ -582,10 +584,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 				_, err := s.markKiro429(ctx, account.ID, accountKey)
 				if err != nil {
+					abortKiroNativeCaptureAttempt(ctx)
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
 				}
 				if idx+1 < len(endpoints) {
+					abortKiroNativeCaptureAttempt(ctx)
 					_ = resp.Body.Close()
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
@@ -597,6 +601,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 			if resp.StatusCode == http.StatusRequestTimeout || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
 				if attempt < maxRetries {
+					abortKiroNativeCaptureAttempt(ctx)
 					_ = resp.Body.Close()
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
@@ -604,6 +609,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					continue
 				}
 				if idx+1 < len(endpoints) {
+					abortKiroNativeCaptureAttempt(ctx)
 					_ = resp.Body.Close()
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
@@ -651,6 +657,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				if s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
+						abortKiroNativeCaptureAttempt(ctx)
 						currentToken = refreshedToken
 						machineID = ensureKiroMachineIDPersisted(ctx, s.accountRepo, account)
 						accountKey = buildKiroAccountKey(account)
@@ -687,6 +694,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				if err := s.markKiroSuccess(ctx, account.ID, accountKey); err != nil {
+					abortKiroNativeCaptureAttempt(ctx)
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
 				}

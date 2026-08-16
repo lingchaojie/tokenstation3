@@ -104,6 +104,71 @@ func TestAccountTestService_KiroUsesKiroUpstreamInsteadOfAnthropic(t *testing.T)
 	require.NotContains(t, req.URL.Host, "api.anthropic.com")
 }
 
+func TestKiroRetryAbortsCaptureAttemptBeforeBackoff(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+
+	enteredBackoff := make(chan struct{})
+	releaseBackoff := make(chan struct{})
+	originalRetrySleep := kiroRetrySleep
+	kiroRetrySleep = func(ctx context.Context, _ time.Duration) error {
+		close(enteredBackoff)
+		select {
+		case <-releaseBackoff:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	t.Cleanup(func() {
+		kiroRetrySleep = originalRetrySleep
+		select {
+		case <-releaseBackoff:
+		default:
+			close(releaseBackoff)
+		}
+	})
+
+	firstBody := []byte(`{"message":"retry"}`)
+	finalBody := []byte(`{"message":"final"}`)
+	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(firstBody))},
+		{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(finalBody))},
+	}}
+	transport := &recordingCaptureTransport{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20}}}
+	svc := &GatewayService{
+		cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{},
+		kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
+	account := &Account{ID: 38, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
+		"access_token": "secret", "profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+	}}
+	ctx := withCaptureUpstreamRequestContext(context.Background(), c, 1<<20)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := svc.executeKiroUpstream(ctx, account, []byte(`{"model":"claude-sonnet-4-6"}`), "claude-sonnet-4-6", "claude-sonnet-4-6", "secret", nil)
+		done <- err
+	}()
+
+	select {
+	case <-enteredBackoff:
+	case <-time.After(time.Second):
+		t.Fatal("KIRO retry did not enter its existing backoff")
+	}
+	require.Len(t, transport.Attempts(), 1)
+	require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[0].TerminalStates(), "retryable native attempt must abort before backoff")
+	close(releaseBackoff)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("KIRO retry did not finish after backoff release")
+	}
+	AbortCaptureAttempt(c)
+}
+
 func TestAccountTestService_Kiro429DoesNotFallbackToCodeWhispererEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
@@ -386,6 +451,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 			Body:       io.NopCloser(upstreamBody),
 		}},
 	}
+	captureTransport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		httpUpstream:        upstream,
 		kiroCooldownStore:   &stubKiroCooldownStore{},
@@ -398,6 +464,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 			},
 		},
 		rateLimitService: &RateLimitService{},
+		capturePool:      newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
 	}
 	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
@@ -409,11 +476,17 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.True(t, result.Stream)
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.Equal(t, 3, result.Usage.OutputTokens)
-	require.Equal(t, rawUpstreamBody, result.CaptureResponse, "capture must preserve the provider-native AWS event stream")
+	require.Nil(t, result.CaptureResponse, "typed capture must not reconstruct a legacy whole-body result")
 	require.Len(t, upstream.requests, 1)
-	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), result.UpstreamRequest,
+	require.Nil(t, result.UpstreamRequest, "typed capture must not reconstruct a legacy whole-body result")
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	require.Len(t, captureTransport.Attempts(), 1)
+	attempt := captureTransport.Attempts()[0]
+	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), attempt.RequestBytes(),
 		"native KIRO capture must preserve the final provider request")
-	require.NotContains(t, string(result.CaptureResponse), "_sub2api_kiro_credits")
+	require.Equal(t, rawUpstreamBody, attempt.ResponseBytes(), "capture must preserve the provider-native AWS event stream")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
+	require.NotContains(t, string(attempt.ResponseBytes()), "_sub2api_kiro_credits")
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
 }
 
@@ -755,10 +828,12 @@ func TestForwardKiroMessagesNonStreamDirectAPIKeyReachesAWSUpstream(t *testing.T
 		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
 		Body:       io.NopCloser(upstreamBody),
 	}}}
+	transport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		httpUpstream:        upstream,
 		kiroCooldownStore:   &stubKiroCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{},
+		capturePool:         newConversationCapturePoolForTransport(transport, func() bool { return true }),
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
 		}},
@@ -775,10 +850,14 @@ func TestForwardKiroMessagesNonStreamDirectAPIKeyReachesAWSUpstream(t *testing.T
 	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[0].URL.Host)
 	require.Equal(t, "Bearer kiro-api-key", upstream.requests[0].Header.Get("Authorization"))
 	require.Equal(t, []string{"API_KEY"}, upstream.requests[0].Header["tokentype"])
-	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), result.UpstreamRequest,
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), attempt.RequestBytes(),
 		"native KIRO capture must preserve the final provider request")
-	require.Equal(t, rawUpstreamBody, result.CaptureResponse,
+	require.Equal(t, rawUpstreamBody, attempt.ResponseBytes(),
 		"non-stream capture must preserve raw AWS event-stream bytes, not translated JSON")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestForwardKiroMessagesNonStreamFunctionalLimitPreservesFiniteProviderCapture(t *testing.T) {
@@ -896,10 +975,12 @@ func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"kiro-terminal-id"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}}
+	transport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
-		cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}},
+		capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+		cfg:         &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}},
 	}
 	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), domain.PlatformAnthropic)
@@ -911,16 +992,18 @@ func TestForwardKiroMessagesTerminalErrorArchivesFinalProviderRequest(t *testing
 	require.Nil(t, result)
 	var failure *UpstreamFailoverError
 	require.ErrorAs(t, err, &failure)
-	record := BuildTerminalErrorCaptureRecord(c, PlatformKiro, failure, 1<<20)
-	require.NotNil(t, record, "the normal handler must be able to archive the final provider exchange")
+	require.True(t, CommitTerminalErrorCaptureAttemptWithCompleteness(c, PlatformKiro, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete))
+	require.Len(t, transport.Attempts(), 1, "the normal handler must archive exactly one final provider exchange")
+	attempt := transport.Attempts()[0]
 
 	require.Len(t, upstream.requests, 1)
-	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
-	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), record.RawRequest)
-	require.NotEqual(t, requestBody, record.RawRequest)
-	require.Equal(t, errorBody, record.RawResponse)
-	require.Contains(t, record.UpstreamEndpoint, "q.us-west-2.amazonaws.com")
-	require.NotContains(t, string(record.RequestHeaders), "kiro-provider-secret")
+	require.EqualValues(t, http.StatusBadRequest, attempt.Finals()[0].HTTPStatus)
+	require.Equal(t, snapshotHTTPRequestBody(upstream.requests[0]), attempt.RequestBytes())
+	require.NotEqual(t, requestBody, attempt.RequestBytes())
+	require.Equal(t, errorBody, attempt.ResponseBytes())
+	require.Contains(t, attempt.begin.UpstreamEndpoint, "q.us-west-2.amazonaws.com")
+	require.NotContains(t, string(attempt.RequestHeaderBytes()), "kiro-provider-secret")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *testing.T) {
@@ -958,11 +1041,13 @@ func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *t
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: io.NopCloser(bytes.NewReader(rawProviderBody))},
 	}}
+	captureTransport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
 		cfg: &config.Config{Gateway: config.GatewayConfig{
-			Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+			Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
 		}},
 	}
 	body := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
@@ -973,8 +1058,16 @@ func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *t
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2, "MCP request then final AWS runtime request")
-	require.Equal(t, upstream.bodies[1], result.UpstreamRequest)
-	require.Equal(t, rawProviderBody, result.CaptureResponse)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	require.Len(t, captureTransport.Attempts(), 2)
+	require.Equal(t, upstream.bodies[0], captureTransport.Attempts()[0].RequestBytes())
+	require.Equal(t, mcpBody, captureTransport.Attempts()[0].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureAborted}, captureTransport.Attempts()[0].TerminalStates())
+	require.Equal(t, upstream.bodies[1], captureTransport.Attempts()[1].RequestBytes())
+	require.Equal(t, rawProviderBody, captureTransport.Attempts()[1].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, captureTransport.Attempts()[1].TerminalStates())
 }
 
 func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t *testing.T) {
@@ -1012,12 +1105,14 @@ func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t 
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: io.NopCloser(bytes.NewReader(rawProviderBody))},
 	}}
+	captureTransport := &recordingCaptureTransport{}
 	svc := &GatewayService{
 		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			MaxLineSize: defaultMaxLineSize,
-			Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+			Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
 		}},
 	}
 	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
@@ -1028,10 +1123,18 @@ func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2, "MCP request then final AWS runtime request")
-	require.Equal(t, upstream.bodies[1], result.UpstreamRequest)
-	require.Equal(t, rawProviderBody, result.CaptureResponse,
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	require.Len(t, captureTransport.Attempts(), 2)
+	require.Equal(t, upstream.bodies[0], captureTransport.Attempts()[0].RequestBytes())
+	require.Equal(t, mcpBody, captureTransport.Attempts()[0].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureAborted}, captureTransport.Attempts()[0].TerminalStates())
+	require.Equal(t, upstream.bodies[1], captureTransport.Attempts()[1].RequestBytes())
+	require.Equal(t, rawProviderBody, captureTransport.Attempts()[1].ResponseBytes(),
 		"outer Anthropic stream handling must not overwrite provider-native AWS bytes with translated SSE")
-	require.NotEqual(t, rec.Body.Bytes(), result.CaptureResponse)
+	require.NotEqual(t, rec.Body.Bytes(), captureTransport.Attempts()[1].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, captureTransport.Attempts()[1].TerminalStates())
 }
 
 func TestForwardKiroMessagesStreamOnlyWebSearchBoundsBufferedTranslation(t *testing.T) {

@@ -53,20 +53,26 @@ type GeminiMessagesCompatService struct {
 	rateLimitService          *RateLimitService
 	httpUpstream              HTTPUpstream
 	antigravityGatewayService *AntigravityGatewayService
+	capturePool               *ConversationCapturePool
 	cfg                       *config.Config
 	responseHeaderFilter      *responseheaders.CompiledHeaderFilter
 }
 
 func (s *GeminiMessagesCompatService) readUpstreamErrorBody(resp *http.Response) []byte {
+	body, _ := s.readUpstreamErrorBodyWithCompleteness(resp)
+	return body
+}
+
+func (s *GeminiMessagesCompatService) readUpstreamErrorBodyWithCompleteness(resp *http.Response) ([]byte, bool) {
 	if resp == nil || resp.Body == nil {
-		return nil
+		return nil, true
 	}
 	limit := gatewayUpstreamErrorBodyReadLimit
 	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
 		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
 	}
-	body, _ := readCaptureAwareUpstreamErrorBody(resp, limit)
-	return body
+	body, readErr := readCaptureAwareUpstreamErrorBody(resp, limit)
+	return body, boundedUpstreamErrorResponseComplete(body, readErr, limit)
 }
 
 func (s *GeminiMessagesCompatService) readWebChatUpstreamErrorBody(ctx context.Context, resp *http.Response) []byte {
@@ -91,6 +97,7 @@ func NewGeminiMessagesCompatService(
 	httpUpstream HTTPUpstream,
 	antigravityGatewayService *AntigravityGatewayService,
 	cfg *config.Config,
+	capturePool *ConversationCapturePool,
 ) *GeminiMessagesCompatService {
 	return &GeminiMessagesCompatService{
 		accountRepo:               accountRepo,
@@ -101,6 +108,7 @@ func NewGeminiMessagesCompatService(
 		rateLimitService:          rateLimitService,
 		httpUpstream:              httpUpstream,
 		antigravityGatewayService: antigravityGatewayService,
+		capturePool:               capturePool,
 		cfg:                       cfg,
 		responseHeaderFilter:      compileResponseHeaderFilter(cfg),
 	}
@@ -599,13 +607,16 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	startTime := time.Now()
 	captureEnabled := s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 		account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	typedCapture := captureEnabled && s.capturePool != nil
 	captureLimit := 0
 	if s != nil && s.cfg != nil {
 		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
 	if captureEnabled {
-		setCapturePlatform(c, string(account.Platform))
 		ctx = withCaptureUpstreamRequestContext(ctx, c, captureLimit)
+		if !typedCapture {
+			setCapturePlatform(c, string(account.Platform))
+		}
 	}
 
 	var req struct {
@@ -638,6 +649,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	}
 
 	var requestIDHeader string
+	var captureWireBody []byte
 	var buildReq func(ctx context.Context) (*http.Request, string, error)
 	useUpstreamStream := req.Stream
 	if account.Type == AccountTypeOAuth && !req.Stream && strings.TrimSpace(account.GetCredential("project_id")) != "" {
@@ -669,6 +681,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			}
 
 			restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
+			captureWireBody = restGeminiReq
 			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 			if err != nil {
 				return nil, "", err
@@ -720,6 +733,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				}
 				wrapped["request"] = inner
 				wrappedBytes, _ := json.Marshal(wrapped)
+				captureWireBody = wrappedBytes
 
 				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
 				if err != nil {
@@ -743,6 +757,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				}
 
 				restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
+				captureWireBody = restGeminiReq
 				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 				if err != nil {
 					return nil, "", err
@@ -774,6 +789,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			}
 
 			restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
+			captureWireBody = restGeminiReq
 			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 			if err != nil {
 				return nil, "", err
@@ -804,7 +820,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		}
 		requestIDHeader = idHeader
 
-		if captureEnabled {
+		if typedCapture {
+			beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), upstreamReq, captureWireBody, s.cfg.Gateway.Capture.MaxHeaderBytes)
+		} else if captureEnabled {
 			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
@@ -820,9 +838,15 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				Message:            safeErr,
 			})
 			if attempt < geminiMaxRetries {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
 				sleepGeminiBackoff(attempt)
 				continue
+			}
+			if typedCapture {
+				AbortCaptureAttempt(c)
 			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
@@ -882,6 +906,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: detected signature-related 400, retrying with downgraded Claude blocks (%s)", account.ID, stageName)
 					geminiReq = retryGeminiReq
 					// Consume one retry budget attempt and continue with the updated request payload.
+					if typedCapture {
+						AbortCaptureAttempt(c)
+					}
 					sleepGeminiBackoff(1)
 					continue
 				}
@@ -946,6 +973,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					Detail:             upstreamDetail,
 				})
 
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream status %d, retry %d/%d", account.ID, resp.StatusCode, attempt, geminiMaxRetries)
 				sleepGeminiBackoff(attempt)
 				continue
@@ -1165,13 +1195,16 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	captureEnabled := (action == "generateContent" || action == "streamGenerateContent") &&
 		s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 		account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	typedCapture := captureEnabled && s.capturePool != nil
 	captureLimit := 0
 	if s != nil && s.cfg != nil {
 		captureLimit = s.cfg.Gateway.Capture.MaxBodyBytes
 	}
 	if captureEnabled {
-		setCapturePlatform(c, string(account.Platform))
 		ctx = withCaptureUpstreamRequestContext(ctx, c, captureLimit)
+		if !typedCapture {
+			setCapturePlatform(c, string(account.Platform))
+		}
 	}
 
 	if strings.TrimSpace(originalModel) == "" {
@@ -1220,6 +1253,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	forceAIStudio := action == "countTokens"
 
 	var requestIDHeader string
+	var captureWireBody []byte
 	var buildReq func(ctx context.Context) (*http.Request, string, error)
 
 	switch account.Type {
@@ -1241,6 +1275,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
+			captureWireBody = body
 			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
 			if err != nil {
 				return nil, "", err
@@ -1287,6 +1322,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				}
 				wrapped["request"] = inner
 				wrappedBytes, _ := json.Marshal(wrapped)
+				captureWireBody = wrappedBytes
 
 				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
 				if err != nil {
@@ -1309,6 +1345,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					return nil, "", err
 				}
 
+				captureWireBody = body
 				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
 				if err != nil {
 					return nil, "", err
@@ -1335,6 +1372,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
+			captureWireBody = body
 			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
 			if err != nil {
 				return nil, "", err
@@ -1365,7 +1403,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		}
 		requestIDHeader = idHeader
 
-		if captureEnabled {
+		if typedCapture {
+			beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), upstreamReq, captureWireBody, s.cfg.Gateway.Capture.MaxHeaderBytes)
+		} else if captureEnabled {
 			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
@@ -1383,11 +1423,17 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				Message:            safeErr,
 			})
 			if attempt < geminiMaxRetries {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
 				sleepGeminiBackoff(attempt)
 				continue
 			}
 			if action == "countTokens" {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				estimated := estimateGeminiCountTokens(body)
 				c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
 				return &ForwardResult{
@@ -1399,6 +1445,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Duration:      time.Since(startTime),
 					FirstTokenMs:  nil,
 				}, nil
+			}
+			if typedCapture {
+				AbortCaptureAttempt(c)
 			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries: "+safeErr)
@@ -1464,11 +1513,17 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Detail:             upstreamDetail,
 				})
 
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream status %d, retry %d/%d", account.ID, resp.StatusCode, attempt, geminiMaxRetries)
 				sleepGeminiBackoff(attempt)
 				continue
 			}
 			if action == "countTokens" {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				estimated := estimateGeminiCountTokens(body)
 				c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
 				return &ForwardResult{
@@ -1506,7 +1561,13 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	isOAuth := account.Type == AccountTypeOAuth
 
 	if resp.StatusCode >= 400 {
-		respBody := s.readUpstreamErrorBody(resp)
+		respBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
+		withCaptureCompleteness := func(failure *UpstreamFailoverError) *UpstreamFailoverError {
+			if failure != nil {
+				failure.CaptureResponseIncomplete = !responseComplete
+			}
+			return failure
+		}
 		// Best-effort fallback for OAuth tokens missing AI Studio scopes when calling countTokens.
 		// This avoids Gemini SDKs failing hard during preflight token counting.
 		// Checked before error policy so it always works regardless of custom error codes.
@@ -1530,7 +1591,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			switch policy {
 			case ErrorPolicySkipped:
 				if failoverErr := s.poolModeSkippedFailoverError(c, account, resp, respBody, requestID); failoverErr != nil {
-					return nil, failoverErr
+					return nil, withCaptureCompleteness(failoverErr)
 				}
 				respBody = unwrapIfNeeded(isOAuth, respBody)
 				contentType := resp.Header.Get("Content-Type")
@@ -1539,7 +1600,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				}
 				MarkResponseCommitted(c)
 				c.Data(http.StatusInternalServerError, contentType, respBody)
-				return nil, newTerminalProviderHTTPError(account, resp, respBody)
+				return nil, withCaptureCompleteness(newTerminalProviderHTTPError(account, resp, respBody))
 			case ErrorPolicyMatched, ErrorPolicyTempUnscheduled:
 				if policy == ErrorPolicyMatched {
 					s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
@@ -1565,7 +1626,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, newGeminiHTTPFailoverError(account, resp, respBody, false)
+				return nil, withCaptureCompleteness(newGeminiHTTPFailoverError(account, resp, respBody, false))
 			}
 		}
 
@@ -1596,7 +1657,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, newGeminiHTTPFailoverError(account, resp, evBody, true)
+				return nil, withCaptureCompleteness(newGeminiHTTPFailoverError(account, resp, evBody, true))
 			}
 		}
 		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
@@ -1621,7 +1682,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
-			return nil, newGeminiHTTPFailoverError(account, resp, evBody, false)
+			return nil, withCaptureCompleteness(newGeminiHTTPFailoverError(account, resp, evBody, false))
 		}
 
 		respBody = unwrapIfNeeded(isOAuth, respBody)
@@ -1657,7 +1718,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			"code":    resp.StatusCode,
 			"message": clientMessage,
 		}})
-		return nil, newTerminalProviderHTTPError(account, resp, respBody)
+		return nil, withCaptureCompleteness(newTerminalProviderHTTPError(account, resp, respBody))
 	}
 
 	var usage *ClaudeUsage

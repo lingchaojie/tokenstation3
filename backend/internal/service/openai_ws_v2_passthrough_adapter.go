@@ -879,6 +879,31 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		statusCode,
 		openAIWSHeaderValueForLog(handshakeHeaders, "x-request-id"),
 	)
+	var captureMu sync.Mutex
+	var captureAttempt *CaptureAttempt
+	beginTurnCapture := func(payload []byte) {
+		attempt := s.beginOpenAIWSCaptureAttempt(ctx, c, account, wsURL, headers, payload, handshakeHeaders)
+		captureMu.Lock()
+		captureAttempt = attempt
+		captureMu.Unlock()
+	}
+	writeCaptureRequestFrame := func(payload []byte) {
+		captureMu.Lock()
+		attempt := captureAttempt
+		captureMu.Unlock()
+		if attempt != nil {
+			attempt.WriteRequest(payload)
+		}
+	}
+	writeCaptureResponseFrame := func(payload []byte) {
+		captureMu.Lock()
+		attempt := captureAttempt
+		captureMu.Unlock()
+		if attempt != nil {
+			attempt.WriteResponse(payload)
+		}
+	}
+	defer AbortCaptureAttempt(c)
 
 	upstreamFrameConn, ok := upstreamConn.(openaiwsv2.FrameConn)
 	if !ok {
@@ -1037,6 +1062,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				acceptedTurn = true
 			}
+			if policyErr == nil && blocked == nil {
+				if isResponseCreate {
+					beginTurnCapture(out)
+				} else {
+					writeCaptureRequestFrame(out)
+				}
+			}
 			return out, blocked, policyErr
 		},
 		onBlock: func(blocked *OpenAIFastBlockedError) {
@@ -1054,6 +1086,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	upstreamFirstMessageSent := false
+	beginTurnCapture(firstClientMessage)
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
@@ -1168,6 +1201,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				_ = clientConn.CloseNow()
 			},
 			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
+				writeCaptureResponseFrame(payload)
 				if msgType != coderws.MessageText {
 					return nil
 				}

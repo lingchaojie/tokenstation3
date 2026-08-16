@@ -74,6 +74,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	originalChatBody []byte,
 ) (*ForwardResult, error) {
 	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
+	typedCapture := captureEnabled && s.capturePool != nil
 	if captureEnabled {
 		setCapturePlatform(c, string(account.Platform))
 	}
@@ -136,7 +137,10 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		}
 		requestIDHeader = idHeader
 
-		if captureEnabled {
+		if typedCapture {
+			captureWireBody := snapshotHTTPRequestBody(upstreamReq)
+			beginCaptureAttemptForWireRequest(ctx, c, s.capturePool, string(account.Platform), upstreamReq, captureWireBody, s.cfg.Gateway.Capture.MaxHeaderBytes)
+		} else if captureEnabled {
 			setCaptureUpstreamRequest(c, upstreamReq, captureLimit)
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
@@ -153,9 +157,15 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 				Message:            safeErr,
 			})
 			if attempt < geminiMaxRetries {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				logger.LegacyPrintf("service.gemini_chat_completions", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
 				sleepGeminiBackoff(attempt)
 				continue
+			}
+			if typedCapture {
+				AbortCaptureAttempt(c)
 			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
@@ -183,6 +193,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 				s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 			}
 			if attempt < geminiMaxRetries {
+				if typedCapture {
+					AbortCaptureAttempt(c)
+				}
 				upstreamReqID := resp.Header.Get(requestIDHeader)
 				if upstreamReqID == "" {
 					upstreamReqID = resp.Header.Get("x-goog-request-id")

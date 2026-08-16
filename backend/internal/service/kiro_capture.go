@@ -1,10 +1,41 @@
 package service
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
+
+func (s *GatewayService) beginKiroNativeCaptureAttempt(ctx context.Context, account *Account, req *http.Request, body []byte) {
+	if s == nil || s.capturePool == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil || req == nil || ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	if captureCtx.c == nil {
+		return
+	}
+	beginCaptureAttemptForWireRequest(ctx, captureCtx.c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+}
+
+func (s *GatewayService) beginKiroNativeCaptureResponse(ctx context.Context, resp *http.Response) {
+	if s == nil || s.cfg == nil || resp == nil || ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	if captureCtx.c == nil || !captureStreamingAttemptPath(captureCtx.c) {
+		return
+	}
+	beginCaptureResponse(captureCtx.c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
+}
+
+func abortKiroNativeCaptureAttempt(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	AbortCaptureAttempt(captureCtx.c)
+}
 
 // Kiro 走独立的 forwardKiroMessages，其流式响应经 io.Pipe 包装后返回的
 // *http.Response 只带合成头（wrappedHeaders，含网关自造的 x-request-id）。
@@ -64,6 +95,9 @@ func takeKiroCaptureHeaders(c *gin.Context) ([]byte, []byte) {
 func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
 	if result == nil {
 		return nil
+	}
+	if captureStreamingAttemptPath(c) {
+		return result
 	}
 	if len(result.CaptureResponse) == 0 {
 		attachCaptureToForwardResult(c, result)

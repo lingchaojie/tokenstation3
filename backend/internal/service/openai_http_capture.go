@@ -132,13 +132,8 @@ func (s *OpenAIGatewayService) prepareOpenAIHTTPCaptureAttempt(c *gin.Context, a
 	if !s.openAIHTTPCaptureEnabled(c, account) {
 		return false
 	}
-	if account.Platform == PlatformOpenAI && openAIHTTPCaptureEndpointEligible(c) {
-		_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
-		return ok
-	}
-	setCapturePlatform(c, string(account.Platform))
-	SetCaptureOutboundRequest(c, req, body, s.cfg.Gateway.Capture.MaxBodyBytes)
-	return true
+	_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+	return ok
 }
 
 // wrapOpenAIHTTPCaptureResponse records bytes as the existing response parser
@@ -148,6 +143,11 @@ func (s *OpenAIGatewayService) wrapOpenAIHTTPCaptureResponse(c *gin.Context, acc
 		return
 	}
 	if _, exists := resp.Body.(*openAIHTTPCaptureReadCloser); exists {
+		return
+	}
+	// Functional error handling may replay bytes already consumed from the real
+	// provider body. That replay is not another provider-native read boundary.
+	if _, replayed := resp.Body.(*replayedOpenAIUpstreamErrorBody); replayed {
 		return
 	}
 	if captureStreamingAttemptPath(c) {

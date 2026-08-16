@@ -538,8 +538,8 @@ func TestWebChatDispatch_OpenAIFinalHTTPErrorArchivesConfiguredBodyExactlyOnce(t
 		expectedSize  int
 		wantTruncated bool
 	}{
-		{name: "body_above_legacy_error_limit", bodySize: 600 << 10, expectedSize: 600 << 10},
-		{name: "body_above_capture_hard_limit", bodySize: captureHardMaxBodyBytes + 1, expectedSize: captureHardMaxBodyBytes, wantTruncated: true},
+		{name: "body_above_legacy_error_limit", bodySize: 600 << 10, expectedSize: int(gatewayUpstreamErrorBodyReadLimit), wantTruncated: true},
+		{name: "body_above_capture_hard_limit", bodySize: captureHardMaxBodyBytes + 1, expectedSize: int(gatewayUpstreamErrorBodyReadLimit), wantTruncated: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

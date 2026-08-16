@@ -242,11 +242,13 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	require.NoError(t, err)
 	upstreamResp.Body = io.NopCloser(bytes.NewReader(rawUpstreamResponse))
 	upstream := &httpUpstreamRecorder{resp: upstreamResp}
+	transport := &recordingCaptureTransport{}
 	svc := &OpenAIGatewayService{
 		cfg:               captureEnabledConfigForTest(1 << 20),
 		httpUpstream:      upstream,
 		grokTokenProvider: NewGrokTokenProvider(repo, nil),
 		accountRepo:       repo,
+		capturePool:       newConversationCapturePoolForTransport(transport, func() bool { return true }),
 	}
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
@@ -258,11 +260,15 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	require.Equal(t, 9908, result.Usage.InputTokens)
 	require.Equal(t, 12, result.Usage.OutputTokens)
 	require.Equal(t, 9856, result.Usage.CacheReadInputTokens)
-	require.Equal(t, upstream.lastBody, result.CaptureRequest, "capture must store the converted Responses request sent to xAI")
-	require.Equal(t, rawUpstreamResponse, result.CaptureResponse, "capture must store the provider-native Responses SSE bytes")
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformGrok, result))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, upstream.lastBody, attempt.RequestBytes(), "capture must store the converted Responses request sent to xAI")
+	require.Equal(t, rawUpstreamResponse, attempt.ResponseBytes(), "capture must store the provider-native Responses SSE bytes")
 	require.Equal(t, http.StatusOK, result.HTTPStatusForCapture())
-	require.Equal(t, upstream.lastReq.URL.String(), result.CaptureUpstreamEndpoint)
-	require.Contains(t, string(result.CaptureResponseHeaders), "Xai-Request-Id")
+	require.Equal(t, upstream.lastReq.URL.String(), attempt.begin.UpstreamEndpoint)
+	require.Contains(t, string(attempt.ResponseHeaderBytes()), "Xai-Request-Id")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 
 	identity := gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String()
 	require.NotEmpty(t, identity)

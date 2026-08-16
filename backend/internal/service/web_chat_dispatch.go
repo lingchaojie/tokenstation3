@@ -209,7 +209,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			applyWebChatOpenAIUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		}
 		attachWebChatOpenAICaptureResponse(result, upstreamCapture, downstreamCapture)
-		if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
+		if CaptureUsesStreamingAttempt(c) {
+			CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
 		}
 		if result.UpstreamFailed {
@@ -255,7 +257,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
-		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+		if CaptureUsesStreamingAttempt(c) {
+			CommitForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
 		}
 		if result.UpstreamFailed {
@@ -291,7 +295,9 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
-		if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+		if CaptureUsesStreamingAttempt(c) {
+			CommitForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
 			captureSubmitter.SubmitWebChatCapture(result, account, body, "/v1/chat/completions")
 		}
 		if result.UpstreamFailed {

@@ -194,9 +194,9 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 		return &creditsOveragesRetryResult{handled: true}
 	}
 
-	prepareAntigravityCaptureAttempt(p, creditsReq)
+	s.prepareAntigravityCaptureAttempt(p, creditsReq, creditsBody)
 	creditsResp, err := p.httpUpstream.Do(creditsReq, p.proxyURL, p.account.ID, p.account.Concurrency)
-	wrapAntigravityCaptureResponse(p, creditsResp)
+	s.wrapAntigravityCaptureResponse(p, creditsResp)
 	if err == nil && creditsResp != nil && creditsResp.StatusCode < 400 {
 		s.clearCreditsExhausted(p.ctx, p.account)
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d credit_overages_success model=%s account=%d",
@@ -215,7 +215,11 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 		// HTTP response. Drop its request-only bridge and carry a non-HTTP failure
 		// marker so later account-switch logic cannot pair the initial quota 429
 		// with this credits request.
-		_, _ = takeCaptureResult(p.c)
+		if s.capturePool != nil {
+			AbortCaptureAttempt(p.c)
+		} else {
+			_, _ = takeCaptureResult(p.c)
+		}
 		failure = newProviderHTTPError(p.account, nil, nil, false)
 		if err != nil {
 			failure.ClientMessage = sanitizeUpstreamErrorMessage(err.Error())

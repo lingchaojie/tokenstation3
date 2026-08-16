@@ -1041,7 +1041,11 @@ func TestGrokNestedTranslatorsJoinBeforePublishingRawCapture(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	setOpenAIHTTPCaptureScopeForTest(t, c, true)
-	svc := &OpenAIGatewayService{cfg: captureEnabledConfigForTest(1024)}
+	transport := &recordingCaptureTransport{}
+	svc := &OpenAIGatewayService{
+		cfg:         captureEnabledConfigForTest(1024),
+		capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
 	account := &Account{Platform: PlatformGrok}
 	// The runtime policy helper above enables OpenAI; use the provider platform
 	// that the real Grok route supplies as well.
@@ -1069,9 +1073,15 @@ func TestGrokNestedTranslatorsJoinBeforePublishingRawCapture(t *testing.T) {
 	}()
 	closeCaptureResponseAndJoinScanner(resp, scanDone)
 
-	bridge, ok := takeCaptureResult(c)
-	require.True(t, ok)
-	require.Equal(t, []byte("tail-before-scanner-exit\n"), bridge.Response)
+	require.True(t, CommitCaptureAttempt(c, PlatformGrok, CaptureOutcomeSuccess, model.Final{
+		HTTPStatus:       http.StatusOK,
+		ResponseComplete: true,
+	}))
+	require.Len(t, transport.Attempts(), 1)
+	attempt := transport.Attempts()[0]
+	require.Equal(t, []byte(`{"model":"grok"}`), attempt.RequestBytes())
+	require.Equal(t, []byte("tail-before-scanner-exit\n"), attempt.ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 func TestExtractSessionIDFromMetadataUserID(t *testing.T) {
