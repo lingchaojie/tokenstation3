@@ -79,7 +79,7 @@ func TestCaptureSidecarSupervisorRestartsWithBoundedBackoffAndStableReset(t *tes
 	nowMu.Unlock()
 	second.exit(errors.New("exit 2"))
 	require.Equal(t, 3*time.Second, <-waits)
-	require.EqualValues(t, 2, s.Status().RestartCount)
+	require.EqualValues(t, 1, s.Status().RestartCount)
 	s.Stop()
 }
 
@@ -130,6 +130,114 @@ func TestCaptureSidecarSupervisorStartFailureIsIsolatedAndSanitized(t *testing.T
 	require.Equal(t, "start_failed", status.LastErrorClass)
 	require.NotContains(t, status.LastErrorClass, "secret")
 	s.Stop()
+}
+
+func TestCaptureSidecarSupervisorRestartStatusCountsRetryLaunchesAfterStartFailures(t *testing.T) {
+	runner := &captureSupervisorRunner{
+		startErr: errors.New("secret=do-not-store"),
+		started:  make(chan struct{}, 3),
+	}
+	waits := make(chan time.Duration, 3)
+	allowWait := make(chan struct{}, 2)
+	s := newCaptureSidecarSupervisor(config.CaptureConfig{Enabled: true}, captureSidecarSupervisorOptions{
+		Runner: runner,
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Wait: func(ctx context.Context, delay time.Duration) bool {
+			waits <- delay
+			select {
+			case <-allowWait:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+	})
+
+	s.Start()
+	<-runner.started
+	require.Equal(t, 2*time.Second, <-waits)
+	status := s.Status()
+	require.Zero(t, status.RestartCount)
+	require.True(t, status.LastExitAt.IsZero())
+	require.Equal(t, "start_failed", status.LastErrorClass)
+
+	allowWait <- struct{}{}
+	<-runner.started
+	require.Equal(t, 4*time.Second, <-waits)
+	require.EqualValues(t, 1, s.Status().RestartCount)
+	require.True(t, s.Status().LastExitAt.IsZero())
+
+	allowWait <- struct{}{}
+	<-runner.started
+	require.Equal(t, 8*time.Second, <-waits)
+	require.EqualValues(t, 2, s.Status().RestartCount)
+	require.True(t, s.Status().LastExitAt.IsZero())
+
+	s.Stop()
+	require.Equal(t, 3, runner.callCount())
+	require.EqualValues(t, 2, s.Status().RestartCount)
+}
+
+func TestCaptureSidecarSupervisorRestartStatusCountsCrashRetryAndRecordsRealExit(t *testing.T) {
+	first := newCaptureSupervisorProcess()
+	second := newCaptureSupervisorProcess()
+	runner := &captureSupervisorRunner{
+		processes: []*captureSupervisorProcess{first, second},
+		started:   make(chan struct{}, 2),
+	}
+	waits := make(chan time.Duration, 2)
+	allowWait := make(chan struct{}, 1)
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	var nowMu sync.Mutex
+	s := newCaptureSidecarSupervisor(config.CaptureConfig{Enabled: true}, captureSidecarSupervisorOptions{
+		Runner: runner,
+		Now: func() time.Time {
+			nowMu.Lock()
+			defer nowMu.Unlock()
+			return now
+		},
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Wait: func(ctx context.Context, delay time.Duration) bool {
+			waits <- delay
+			select {
+			case <-allowWait:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+	})
+
+	s.Start()
+	<-runner.started
+	<-first.waitStarted
+	require.Zero(t, s.Status().RestartCount)
+	require.True(t, s.Status().LastExitAt.IsZero())
+
+	exitAt := now.Add(time.Minute)
+	nowMu.Lock()
+	now = exitAt
+	nowMu.Unlock()
+	first.exit(errors.New("exit"))
+	require.Equal(t, 2*time.Second, <-waits)
+	status := s.Status()
+	require.Zero(t, status.RestartCount)
+	require.Equal(t, exitAt, status.LastExitAt)
+	require.Equal(t, "exit_failed", status.LastErrorClass)
+
+	allowWait <- struct{}{}
+	<-runner.started
+	<-second.waitStarted
+	status = s.Status()
+	require.EqualValues(t, 1, status.RestartCount)
+	require.Equal(t, exitAt, status.LastExitAt)
+	require.True(t, status.Running)
+
+	stopDone := make(chan struct{})
+	go func() { s.Stop(); close(stopDone) }()
+	require.Equal(t, os.Signal(syscall.SIGTERM), <-second.signals)
+	second.exit(nil)
+	<-stopDone
 }
 
 func TestCaptureSidecarJitterStaysWithinConfiguredBounds(t *testing.T) {
@@ -288,4 +396,10 @@ func (r *captureSupervisorRunner) calls() []string {
 		return nil
 	}
 	return append([]string(nil), r.arguments[0]...)
+}
+
+func (r *captureSupervisorRunner) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.arguments)
 }

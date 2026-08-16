@@ -117,10 +117,10 @@ func (s *CaptureSidecarSupervisor) Start() {
 	}
 	s.started = true
 	s.mu.Unlock()
-	s.launch()
+	s.launch(false)
 }
 
-func (s *CaptureSidecarSupervisor) launch() {
+func (s *CaptureSidecarSupervisor) launch(retry bool) {
 	if s == nil {
 		return
 	}
@@ -128,6 +128,9 @@ func (s *CaptureSidecarSupervisor) launch() {
 	if s.stopping {
 		s.mu.Unlock()
 		return
+	}
+	if retry {
+		s.status.RestartCount++
 	}
 	launchDone := make(chan struct{})
 	s.launchDone = launchDone
@@ -139,7 +142,6 @@ func (s *CaptureSidecarSupervisor) launch() {
 		s.mu.Lock()
 		if !s.stopping {
 			s.status.Running = false
-			s.status.LastExitAt = s.opts.Now()
 			s.status.LastErrorClass = "start_failed"
 			s.mu.Unlock()
 			go s.restartAfter(s.nextDelay(false))
@@ -184,7 +186,6 @@ func (s *CaptureSidecarSupervisor) watch(process captureSidecarProcess, startedA
 		return
 	}
 	s.status.Running = false
-	s.status.RestartCount++
 	s.status.LastExitAt = s.opts.Now()
 	if err == nil {
 		s.status.LastErrorClass = "exit_clean"
@@ -221,12 +222,7 @@ func (s *CaptureSidecarSupervisor) restartAfter(delay time.Duration) {
 	if !s.opts.Wait(s.ctx, delay) {
 		return
 	}
-	s.mu.Lock()
-	stopping := s.stopping
-	s.mu.Unlock()
-	if !stopping {
-		s.launch()
-	}
+	s.launch(true)
 }
 
 func (s *CaptureSidecarSupervisor) Status() CaptureSidecarSupervisorStatus {
