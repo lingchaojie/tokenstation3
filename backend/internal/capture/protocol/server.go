@@ -33,10 +33,11 @@ type SessionSink interface {
 }
 
 type ServerConfig struct {
-	SocketPath   string
-	MaxSessions  int
-	WriteTimeout time.Duration
-	Status       func() model.Status
+	SocketPath      string
+	MaxSessions     int
+	WriteTimeout    time.Duration
+	Status          func() model.Status
+	StatusDelivered func(model.Status)
 }
 
 type Server struct {
@@ -224,7 +225,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.protocolError(conn, "encode status")
 			return
 		}
-		_ = s.writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindStatusResponse}, encoded)
+		if err := s.writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindStatusResponse}, encoded); err == nil && s.config.StatusDelivered != nil {
+			s.config.StatusDelivered(status)
+		}
 		return
 	}
 	if header.Kind != KindBegin || header.CaptureID == uuid.Nil {

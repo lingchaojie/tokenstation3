@@ -289,6 +289,11 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			if !errors.Is(validateErr, ErrSpoolCorrupt) {
 				return report, fmt.Errorf("validate ready record %s: %w", entry.Name(), validateErr)
 			}
+			if id, parseErr := uuid.Parse(entry.Name()); parseErr == nil {
+				if retireErr := s.retirePendingBatchReferencesLocked(id); retireErr != nil {
+					return report, fmt.Errorf("retire batch for corrupt ready record %s: %w", entry.Name(), retireErr)
+				}
+			}
 			if removeErr := os.RemoveAll(path); removeErr != nil {
 				return report, fmt.Errorf("delete corrupt ready record %s: %w", entry.Name(), removeErr)
 			}

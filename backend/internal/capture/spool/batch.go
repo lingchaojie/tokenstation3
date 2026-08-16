@@ -300,6 +300,37 @@ func (s *Store) pendingBatchLocked() (*Batch, error) {
 	return nil, nil
 }
 
+// retirePendingBatchReferencesLocked removes derivative sending metadata for
+// a ready record that recovery has already classified as corrupt. The ready
+// record itself accounts for the single lost archive row; retiring its batch
+// manifest must not count the same loss a second time.
+func (s *Store) retirePendingBatchReferencesLocked(captureID uuid.UUID) error {
+	entries, err := os.ReadDir(s.sendingDir)
+	if err != nil {
+		return fmt.Errorf("read sending directory: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".manifest") {
+			continue
+		}
+		path := filepath.Join(s.sendingDir, entry.Name())
+		manifest, _, err := s.readBatchManifest(path)
+		if err != nil {
+			return err
+		}
+		for _, record := range manifest.Records {
+			if record.CaptureID != captureID {
+				continue
+			}
+			if err := s.removeSendingPathLocked(path, "delete:corrupt-batch.manifest", false); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
 func (s *Store) loadBatchLocked(path string) (*Batch, error) {
 	manifest, encoded, err := s.readBatchManifest(path)
 	if err != nil {

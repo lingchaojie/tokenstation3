@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,9 +21,11 @@ import (
 func TestServerDispatchesValidAttemptAndStatus(t *testing.T) {
 	factory := &recordingFactory{}
 	wantStatus := model.Status{SpoolReady: true, SpoolUsedBytes: 1234}
+	delivered := make(chan model.Status, 1)
 	server, socketPath := startTestServer(t, ServerConfig{
-		MaxSessions: 4,
-		Status:      func() model.Status { return wantStatus },
+		MaxSessions:     4,
+		Status:          func() model.Status { return wantStatus },
+		StatusDelivered: func(status model.Status) { delivered <- status },
 	}, factory)
 
 	client := NewClient(ClientConfig{
@@ -58,7 +62,30 @@ func TestServerDispatchesValidAttemptAndStatus(t *testing.T) {
 	gotStatus, err := client.Status(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, wantStatus, gotStatus)
+	require.Equal(t, wantStatus, <-delivered)
+	select {
+	case duplicate := <-delivered:
+		t.Fatalf("status delivery callback called twice: %+v", duplicate)
+	default:
+	}
 	require.NoError(t, server.Close())
+}
+
+func TestServerDoesNotAcknowledgeFailedStatusResponse(t *testing.T) {
+	var input bytes.Buffer
+	require.NoError(t, writeFrame(&input, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
+	require.NoError(t, writeFrame(&input, Header{Version: ProtocolVersion, Kind: KindStatusRequest}, nil))
+	conn := &failSecondWriteConn{Reader: &input}
+	acknowledged := false
+	server := NewServer(ServerConfig{
+		Status:          func() model.Status { return model.Status{SpoolReady: true} },
+		StatusDelivered: func(model.Status) { acknowledged = true },
+	}, &recordingFactory{})
+
+	server.handleConnection(conn)
+
+	require.False(t, acknowledged)
+	require.Equal(t, 2, conn.writes)
 }
 
 func TestServerAppendsConsecutiveMultipartHeaders(t *testing.T) {
@@ -286,6 +313,31 @@ type recordingFactory struct {
 	openErr        error
 	panicOnRequest bool
 }
+
+type failSecondWriteConn struct {
+	io.Reader
+	writes int
+}
+
+func (c *failSecondWriteConn) Write(p []byte) (int, error) {
+	c.writes++
+	if c.writes == 2 {
+		return 0, errors.New("injected status write failure")
+	}
+	return len(p), nil
+}
+
+func (*failSecondWriteConn) Close() error                     { return nil }
+func (*failSecondWriteConn) LocalAddr() net.Addr              { return testAddr("local") }
+func (*failSecondWriteConn) RemoteAddr() net.Addr             { return testAddr("remote") }
+func (*failSecondWriteConn) SetDeadline(time.Time) error      { return nil }
+func (*failSecondWriteConn) SetReadDeadline(time.Time) error  { return nil }
+func (*failSecondWriteConn) SetWriteDeadline(time.Time) error { return nil }
+
+type testAddr string
+
+func (a testAddr) Network() string { return string(a) }
+func (a testAddr) String() string  { return string(a) }
 
 func (f *recordingFactory) Open(begin model.Begin) (SessionSink, error) {
 	if f.openErr != nil {
