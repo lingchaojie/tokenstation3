@@ -693,6 +693,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
 							)
+							service.AbortCaptureAttempt(c)
 							select {
 							case <-c.Request.Context().Done():
 								return
@@ -1274,6 +1275,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
 							)
+							service.AbortCaptureAttempt(c)
 							select {
 							case <-c.Request.Context().Done():
 								return

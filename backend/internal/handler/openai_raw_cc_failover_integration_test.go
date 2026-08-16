@@ -145,6 +145,101 @@ func TestOpenAIChatCompletionsAbortsAttemptBeforeSameAccountRetryDelay(t *testin
 	require.Empty(t, terminals, "request defer must not emit a duplicate terminal")
 }
 
+func TestOpenAIResponsesAndMessagesAbortAttemptBeforeSameAccountRetryDelay(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		path string
+		body string
+		run  func(*OpenAIGatewayHandler, *gin.Context)
+	}{
+		{
+			name: "responses", path: "/openai/v1/responses",
+			body: `{"model":"gpt-5.4","input":"hello","stream":false}`,
+			run:  func(h *OpenAIGatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+		{
+			name: "messages", path: "/openai/v1/messages",
+			body: `{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`,
+			run:  func(h *OpenAIGatewayHandler, c *gin.Context) { h.Messages(c) },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			groupID := int64(9384)
+			account := service.Account{
+				ID: 9385, Name: "openai-handler-retry-delay", Platform: service.PlatformOpenAI,
+				Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key":                      "test",
+					"base_url":                     "https://api.example.test",
+					"pool_mode":                    true,
+					"pool_mode_retry_count":        float64(1),
+					"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+				},
+				Extra: map[string]any{"openai_passthrough": true},
+			}
+			cfg := &config.Config{RunMode: config.RunModeSimple}
+			cfg.Default.RateMultiplier = 1
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Gateway.MaxAccountSwitches = 1
+			cfg.Gateway.Capture.Enabled = true
+			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+			settings := newEnabledCaptureSettingService(t, cfg)
+			billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+			t.Cleanup(billing.Stop)
+			terminals := make(chan string, 4)
+			capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(make(chan *service.CaptureRecord, 1), terminals)
+			t.Cleanup(capturePool.Stop)
+			upstream := &openAIChatRetryDelayCaptureUpstream{calls: make(chan struct{}, 2)}
+			gateway := service.NewOpenAIGatewayService(
+				&openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+				service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, settings, nil, capturePool,
+			)
+			h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, capturePool)
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			requestCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c.Request = httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body)).WithContext(requestCtx)
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+				ID: 9386, GroupID: &groupID, User: &service.User{ID: 9387, Status: service.StatusActive},
+				Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 1, AllowMessagesDispatch: true},
+			})
+			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 9387})
+
+			done := make(chan struct{})
+			go func() {
+				tt.run(h, c)
+				close(done)
+			}()
+			select {
+			case <-upstream.calls:
+			case <-time.After(time.Second):
+				cancel()
+				<-done
+				t.Fatal("first upstream call did not start")
+			}
+			select {
+			case terminal := <-terminals:
+				require.Equal(t, "abort", terminal)
+			case <-time.After(250 * time.Millisecond):
+				cancel()
+				<-done
+				t.Fatal("failed typed attempt remained open during the same-account retry delay")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("handler did not stop after request cancellation")
+			}
+			require.Empty(t, terminals, "request defer must not emit a duplicate terminal")
+		})
+	}
+}
+
 func TestOpenAIChatCompletionsCommitsPreCommitDisconnectExactlyOnce(t *testing.T) {
 	providerSSE := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_disconnect","model":"gpt-5.4","status":"in_progress","output":[]}}`,

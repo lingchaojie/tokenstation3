@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -31,6 +32,7 @@ type geminiNativeCaptureUpstream struct {
 	status   int
 	response []byte
 	readErr  error
+	calls    chan struct{}
 }
 
 type geminiNativeDataErrorBody struct {
@@ -57,6 +59,9 @@ func (u *geminiNativeCaptureUpstream) responseFor(req *http.Request) (*http.Resp
 	u.mu.Lock()
 	u.lastBody = append([]byte(nil), body...)
 	u.mu.Unlock()
+	if u.calls != nil {
+		u.calls <- struct{}{}
+	}
 	status := u.status
 	if status == 0 {
 		status = http.StatusOK
@@ -71,6 +76,96 @@ func (u *geminiNativeCaptureUpstream) responseFor(req *http.Request) (*http.Resp
 		Body:       responseBody,
 		Request:    req,
 	}, nil
+}
+
+func TestGeminiNativeRouterAbortsAttemptBeforeSameAccountRetryDelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const (
+		groupID   = int64(9737)
+		accountID = int64(9738)
+		userID    = int64(9739)
+	)
+	group := &service.Group{ID: groupID, Hydrated: true, Platform: service.PlatformGemini, Status: service.StatusActive, RateMultiplier: 1}
+	account := &service.Account{
+		ID: accountID, Name: "gemini-native-retry-delay", Platform: service.PlatformGemini,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1, Priority: 1,
+		Credentials: map[string]any{
+			"api_key": "gemini-secret", "base_url": "https://generativelanguage.googleapis.com",
+			"pool_mode": true, "pool_mode_retry_count": float64(1),
+			"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+			"model_mapping":                map[string]any{"gemini-test": "gemini-test-upstream"},
+		},
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	upstream := &geminiNativeCaptureUpstream{
+		status: http.StatusBadGateway, response: []byte(`{"error":{"code":502,"message":"temporary"}}`), calls: make(chan struct{}, 2),
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitchesGemini = 1
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settingService := newEnabledCaptureSettingService(t, cfg)
+	scheduler := service.NewSchedulerSnapshotService(&fakeSchedulerCache{accounts: []*service.Account{account}}, nil, nil, nil, nil)
+	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingCache.Stop)
+	terminals := make(chan string, 4)
+	capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(make(chan *service.CaptureRecord, 1), terminals)
+	t.Cleanup(capturePool.Stop)
+	accountRepo := &antigravityCaptureAccountRepo{}
+	rateLimits := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	gateway := service.NewGatewayService(
+		accountRepo, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg, scheduler, nil,
+		service.NewBillingService(cfg, nil), nil, billingCache, nil, upstream, &service.DeferredService{},
+		nil, nil, nil, nil, nil, nil, settingService, nil, nil, nil, nil, nil, capturePool,
+	)
+	gemini := service.NewGeminiMessagesCompatService(accountRepo, &fakeGroupRepo{group: group}, nil, scheduler, nil, rateLimits, upstream, nil, cfg, capturePool)
+	h := NewGatewayHandler(
+		gateway, nil, gemini, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billingCache, nil,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
+	)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-test:generateContent", strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)).WithContext(requestCtx)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "modelAction", Value: "/gemini-test:generateContent"}}
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9740, UserID: userID, GroupID: func() *int64 { id := groupID; return &id }(), Status: service.StatusActive,
+		Group: group, User: &service.User{ID: userID, Status: service.StatusActive, Concurrency: 10, Balance: 100},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: userID, Concurrency: 10})
+
+	done := make(chan struct{})
+	go func() {
+		h.GeminiV1BetaModels(c)
+		close(done)
+	}()
+	select {
+	case <-upstream.calls:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("first upstream call did not start")
+	}
+	select {
+	case terminal := <-terminals:
+		require.Equal(t, "abort", terminal)
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("failed typed attempt remained open during the same-account retry delay")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not stop after request cancellation")
+	}
+	require.Empty(t, terminals, "request defer must not emit a duplicate terminal")
 }
 
 func (u *geminiNativeCaptureUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {

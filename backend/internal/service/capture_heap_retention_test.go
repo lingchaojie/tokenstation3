@@ -13,11 +13,18 @@ import (
 )
 
 type discardingBoundedTransport struct {
-	terminals atomic.Int64
+	terminals     atomic.Int64
+	requestBytes  atomic.Int64
+	responseBytes atomic.Int64
 }
 
 func (t *discardingBoundedTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
-	return &discardingBoundedAttempt{id: begin.CaptureID, terminals: &t.terminals}, nil
+	return &discardingBoundedAttempt{
+		id:            begin.CaptureID,
+		terminals:     &t.terminals,
+		requestBytes:  &t.requestBytes,
+		responseBytes: &t.responseBytes,
+	}, nil
 }
 
 func (*discardingBoundedTransport) Status(context.Context) (model.Status, error) {
@@ -30,14 +37,30 @@ func (t *discardingBoundedTransport) TerminalAttempts() int64 {
 	return t.terminals.Load()
 }
 
-type discardingBoundedAttempt struct {
-	id        uuid.UUID
-	terminals *atomic.Int64
+func (t *discardingBoundedTransport) AcceptedRequestBytes() int64 {
+	return t.requestBytes.Load()
 }
 
-func (a *discardingBoundedAttempt) ID() uuid.UUID                  { return a.id }
-func (*discardingBoundedAttempt) WriteRequest([]byte) bool         { return true }
-func (*discardingBoundedAttempt) WriteResponse([]byte) bool        { return true }
+func (t *discardingBoundedTransport) AcceptedResponseBytes() int64 {
+	return t.responseBytes.Load()
+}
+
+type discardingBoundedAttempt struct {
+	id            uuid.UUID
+	terminals     *atomic.Int64
+	requestBytes  *atomic.Int64
+	responseBytes *atomic.Int64
+}
+
+func (a *discardingBoundedAttempt) ID() uuid.UUID { return a.id }
+func (a *discardingBoundedAttempt) WriteRequest(payload []byte) bool {
+	a.requestBytes.Add(int64(len(payload)))
+	return true
+}
+func (a *discardingBoundedAttempt) WriteResponse(payload []byte) bool {
+	a.responseBytes.Add(int64(len(payload)))
+	return true
+}
 func (*discardingBoundedAttempt) WriteRequestHeaders([]byte) bool  { return true }
 func (*discardingBoundedAttempt) WriteResponseHeaders([]byte) bool { return true }
 func (*discardingBoundedAttempt) Finalize(model.Final) bool        { return true }
@@ -53,7 +76,7 @@ func forceGCAndReadHeap(t *testing.T) uint64 {
 	return stats.HeapAlloc
 }
 
-func runCaptureFixture(t *testing.T, pool *ConversationCapturePool, payload []byte) {
+func runCaptureFixture(t *testing.T, pool *ConversationCapturePool, requestPayload, responsePayload []byte) {
 	t.Helper()
 	attempt, ok := pool.Begin(context.Background(), model.Begin{
 		CaptureID: uuid.New(),
@@ -65,8 +88,8 @@ func runCaptureFixture(t *testing.T, pool *ConversationCapturePool, payload []by
 		},
 	})
 	require.True(t, ok)
-	require.True(t, attempt.WriteRequest(payload))
-	require.True(t, attempt.WriteResponse(payload))
+	require.True(t, attempt.WriteRequest(requestPayload))
+	require.True(t, attempt.WriteResponse(responsePayload))
 	require.True(t, attempt.Finalize(model.Final{HTTPStatus: 200, ResponseComplete: true}))
 	require.True(t, attempt.Commit())
 }
@@ -75,9 +98,17 @@ func TestFiveHundredLargeCapturesDoNotAccumulateInGatewayHeap(t *testing.T) {
 	transport := &discardingBoundedTransport{}
 	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
 	baseline := forceGCAndReadHeap(t)
-	payload := make([]byte, 8<<20)
 	for i := 0; i < 500; i++ {
-		runCaptureFixture(t, pool, payload)
+		requestPayload := make([]byte, 8<<20)
+		responsePayload := make([]byte, 8<<20)
+		runCaptureFixture(t, pool, requestPayload, responsePayload)
+		runtime.KeepAlive(requestPayload)
+		runtime.KeepAlive(responsePayload)
+		requestPayload = nil
+		responsePayload = nil
+		if i%16 == 15 {
+			runtime.GC()
+		}
 	}
 	after := forceGCAndReadHeap(t)
 	retained := uint64(0)
@@ -86,5 +117,7 @@ func TestFiveHundredLargeCapturesDoNotAccumulateInGatewayHeap(t *testing.T) {
 	}
 	require.Less(t, retained, uint64(64<<20))
 	require.Equal(t, int64(500), transport.TerminalAttempts())
-	runtime.KeepAlive(payload)
+	require.Equal(t, int64(500*(8<<20)), transport.AcceptedRequestBytes())
+	require.Equal(t, int64(500*(8<<20)), transport.AcceptedResponseBytes())
+	t.Logf("retained=%d request_bytes=%d response_bytes=%d terminals=%d", retained, transport.AcceptedRequestBytes(), transport.AcceptedResponseBytes(), transport.TerminalAttempts())
 }

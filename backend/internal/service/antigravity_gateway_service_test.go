@@ -151,6 +151,7 @@ type queuedHTTPUpstreamStub struct {
 	requestBodies [][]byte
 	callCount     int
 	onCall        func(*http.Request, *queuedHTTPUpstreamStub)
+	allowNilReply bool
 }
 
 func (s *queuedHTTPUpstreamStub) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -176,7 +177,7 @@ func (s *queuedHTTPUpstreamStub) Do(req *http.Request, _ string, _ int64, _ int)
 	if idx < len(s.errors) {
 		err = s.errors[idx]
 	}
-	if resp == nil && err == nil {
+	if resp == nil && err == nil && !s.allowNilReply {
 		return nil, errors.New("unexpected upstream call")
 	}
 	return resp, err
@@ -1187,30 +1188,53 @@ func TestAntigravityGatewayService_ForwardGemini_FallbackFailureCaptureUsesOnlyF
 	require.Len(t, upstream.requestBodies, 2)
 }
 
-func TestAntigravityGatewayService_ForwardGemini_FallbackTransportDoesNotPairInitialResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-primary:generateContent", bytes.NewReader(body))
-	enableCaptureForTest(t, c)
-
-	initialBody := []byte(`{"error":{"code":404,"message":"model not found"}}`)
+func TestAntigravityGatewayService_ForwardGemini_FallbackTransportOrNilResponseAbortsFinalAttempt(t *testing.T) {
 	transportErr := errors.New("fallback transport failed")
-	upstream := &queuedHTTPUpstreamStub{
-		responses: []*http.Response{{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(initialBody))}},
-		errors:    []error{nil, transportErr},
-	}
-	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
-	settings := &antigravitySettingRepoStub{values: map[string]string{SettingKeyEnableModelFallback: "true", SettingKeyFallbackModelAntigravity: "gemini-fallback"}}
-	svc := &AntigravityGatewayService{settingService: NewSettingService(settings, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream}
-	account := &Account{ID: 92, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
-		Credentials: map[string]any{"access_token": "token", "project_id": "proj", "model_mapping": map[string]any{"gemini-primary": "gemini-primary-upstream"}}}
+	for _, tt := range []struct {
+		name          string
+		fallbackError error
+		allowNilReply bool
+	}{
+		{name: "transport_error", fallbackError: transportErr},
+		{name: "nil_response", allowNilReply: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-primary:generateContent", bytes.NewReader(body))
+			enableCaptureForTest(t, c)
 
-	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-primary", "generateContent", false, body, false)
-	require.Nil(t, result)
-	require.ErrorIs(t, err, transportErr)
-	_, captured := takeCaptureResult(c)
-	require.False(t, captured, "a request-only fallback attempt must not be paired with the initial HTTP response")
+			initialBody := []byte(`{"error":{"code":404,"message":"model not found"}}`)
+			upstream := &queuedHTTPUpstreamStub{
+				responses:     []*http.Response{{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(initialBody))}},
+				errors:        []error{nil, tt.fallbackError},
+				allowNilReply: tt.allowNilReply,
+			}
+			cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 16 << 10}}}
+			settings := &antigravitySettingRepoStub{values: map[string]string{SettingKeyEnableModelFallback: "true", SettingKeyFallbackModelAntigravity: "gemini-fallback"}}
+			captureTransport := &recordingCaptureTransport{}
+			svc := &AntigravityGatewayService{
+				settingService: NewSettingService(settings, cfg), tokenProvider: &AntigravityTokenProvider{}, httpUpstream: upstream,
+				capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
+			}
+			account := &Account{ID: 92, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "token", "project_id": "proj", "model_mapping": map[string]any{"gemini-primary": "gemini-primary-upstream"}}}
+
+			result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-primary", "generateContent", false, body, false)
+			require.Nil(t, result)
+			if tt.fallbackError != nil {
+				require.ErrorIs(t, err, tt.fallbackError)
+			} else {
+				require.ErrorContains(t, err, "upstream returned nil response")
+			}
+			require.Len(t, captureTransport.Attempts(), 2)
+			require.Equal(t, []captureTerminalState{captureAborted}, captureTransport.Attempts()[0].TerminalStates(), "starting the fallback must abort the initial 404 attempt")
+			finalAttempt := captureTransport.Attempts()[1]
+			require.Equal(t, []captureTerminalState{captureAborted}, finalAttempt.TerminalStates(), "the request-only fallback attempt must terminate exactly once")
+			require.NotContains(t, finalAttempt.TerminalStates(), captureCommitted)
+		})
+	}
 }
 
 func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignature(t *testing.T) {

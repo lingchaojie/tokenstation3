@@ -152,6 +152,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		return
 	}
 	service.PrepareCapturePolicyScope(c.Request.Context(), c, h.settingService, authSubject.UserID, apiKey.GroupID)
+	defer service.AbortCaptureAttempt(c)
 	reqLog := requestLogger(
 		c,
 		"handler.gemini_v1beta.models",
@@ -524,7 +525,11 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if result == nil && errors.As(err, &failoverErr) {
-				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
+				retryLimit := account.GetPoolModeRetryCount()
+				if failoverErr.RetryableOnSameAccount && fs.SameAccountRetryCount[account.ID] < retryLimit {
+					service.AbortCaptureAttempt(c)
+				}
+				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, retryLimit, failoverErr)
 				switch failoverAction {
 				case FailoverContinue:
 					continue

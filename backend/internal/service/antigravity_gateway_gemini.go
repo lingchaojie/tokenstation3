@@ -210,7 +210,11 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 							// The fallback request is the final provider attempt. It did
 							// not produce a usable HTTP response, so the initial 404 must
 							// not be paired with the fallback request in an archive.
-							_, _ = takeCaptureResult(c)
+							if s.capturePool != nil {
+								AbortCaptureAttempt(c)
+							} else {
+								_, _ = takeCaptureResult(c)
+							}
 							if err == nil {
 								err = errors.New("upstream returned nil response")
 							}
