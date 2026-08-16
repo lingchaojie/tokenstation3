@@ -288,6 +288,35 @@ func TestQuarantineRecursiveDeleteFailsClosedAtEntryBound(t *testing.T) {
 	require.FileExists(t, second)
 }
 
+func TestQuarantineRecursiveDeletePreflightsWholeSubtreeBeforeUnlink(t *testing.T) {
+	root := t.TempDir()
+	quarantinePath := filepath.Join(root, "quarantine")
+	require.NoError(t, os.Mkdir(quarantinePath, 0o700))
+	const entryName = "opaque-entry"
+	entryPath := filepath.Join(quarantinePath, entryName)
+	require.NoError(t, os.Mkdir(entryPath, 0o700))
+	earlyFile := filepath.Join(entryPath, "a-early")
+	require.NoError(t, os.WriteFile(earlyFile, []byte("early"), 0o600))
+	lateDirectory := filepath.Join(entryPath, "z-late")
+	deepDirectory := filepath.Join(lateDirectory, "deep")
+	require.NoError(t, os.MkdirAll(deepDirectory, 0o700))
+	deepFile := filepath.Join(deepDirectory, "payload")
+	require.NoError(t, os.WriteFile(deepFile, []byte("payload"), 0o600))
+	directory, err := openBatchDirectory(quarantinePath)
+	require.NoError(t, err)
+	defer directory.Close()
+	remaining := 4
+
+	err = removeDirectoryEntryNoFollowBounded(directory, entryName, 0, &remaining)
+
+	require.ErrorIs(t, err, ErrSpoolCorrupt)
+	require.DirExists(t, entryPath)
+	require.FileExists(t, earlyFile)
+	require.DirExists(t, lateDirectory)
+	require.DirExists(t, deepDirectory)
+	require.FileExists(t, deepFile)
+}
+
 func TestRecoverRejectsTombstoneAliasIDNotBoundToDigestMatchedBasename(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	seed := openTestStoreAt(t, root, nil)

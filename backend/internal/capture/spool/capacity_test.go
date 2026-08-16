@@ -76,6 +76,45 @@ func TestCapacityScanIncludesAllocatedBlocksFromEverySpoolDirectory(t *testing.T
 	require.Greater(t, got.Free, int64(0))
 }
 
+func TestCapacityScanIncludesRenamedPinnedDirectoryWithoutFollowingSymlink(t *testing.T) {
+	root := t.TempDir()
+	for _, directory := range []string{"partial", "ready", "sending", "quarantine"} {
+		require.NoError(t, os.Mkdir(filepath.Join(root, directory), 0o700))
+	}
+	pinnedReady := filepath.Join(root, "ready-pinned")
+	require.NoError(t, os.Rename(filepath.Join(root, "ready"), pinnedReady))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "ready"), 0o700))
+	baseline, err := scanUsage(root)
+	require.NoError(t, err)
+
+	ownedSibling := filepath.Join(pinnedReady, "unrelated-allocated-sibling")
+	require.NoError(t, os.WriteFile(ownedSibling, make([]byte, filesystemBlockSize), 0o600))
+	ownedInfo, err := os.Stat(ownedSibling)
+	require.NoError(t, err)
+	ownedAllocated := allocatedFileInfo(ownedInfo)
+	require.Positive(t, ownedAllocated)
+	external := filepath.Join(t.TempDir(), "external-allocated-target")
+	require.NoError(t, os.WriteFile(external, make([]byte, 8<<20), 0o600))
+	externalInfo, err := os.Stat(external)
+	require.NoError(t, err)
+	externalAllocated := allocatedFileInfo(externalInfo)
+	require.NoError(t, os.Symlink(external, filepath.Join(root, "external-link")))
+
+	got, err := scanUsage(root)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, got.Allocated, baseline.Allocated+ownedAllocated)
+	require.Less(t, got.Allocated-baseline.Allocated, ownedAllocated+externalAllocated,
+		"the scanner must not charge blocks owned by a symlink target outside the spool root")
+
+	capacity, err := newCapacity(CapacityConfig{
+		RootDir:  root,
+		MaxBytes: baseline.Allocated + ownedAllocated,
+	}, nil)
+	require.NoError(t, err)
+	_, err = capacity.ReserveContent(uuid.New(), 1)
+	require.ErrorIs(t, err, ErrSpoolCap)
+}
+
 func TestReservationConsumeAndReleaseNeverMakeAccountingNegative(t *testing.T) {
 	c := newTestCapacity(t, CapacityConfig{MaxBytes: 1 << 20}, usage{Free: 1 << 30})
 	r, err := c.Reserve(uuid.New(), 4096)
