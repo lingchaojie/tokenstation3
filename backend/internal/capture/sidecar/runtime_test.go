@@ -484,7 +484,7 @@ func TestCorruptionCounterAndAppliedMarkerResumeCleanupExactlyOnce(t *testing.T)
 	require.True(t, found)
 	require.EqualValues(t, 1, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
 	require.NotNil(t, checkpoint.AppliedCorruptionID)
-	require.Equal(t, corruptID, *checkpoint.AppliedCorruptionID)
+	require.Equal(t, spool.CorruptionID(corruptID.String()), *checkpoint.AppliedCorruptionID)
 
 	reopened := openRuntimeStore(t, root)
 	second := newTestRuntime(t, root, reopened, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
@@ -588,6 +588,31 @@ func TestStatusSnapshotCannotSplitQuarantineCounterMarkerTransaction(t *testing.
 	require.True(t, found)
 	require.EqualValues(t, 1, checkpoint.Status.DroppedByReason[spool.ErrSpoolCorrupt.Error()])
 	require.NoError(t, runtime.Shutdown(context.Background()))
+}
+
+func TestMalformedReadyLossSurvivesCrashBeforeStatusInitializationExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	seed := openRuntimeStore(t, root)
+	id := seedRuntimeRecord(t, seed, "malformed crash")
+	const malformedName = "..%2Frequest-header-secret%0Ainvalid"
+	malformedPath := filepath.Join(root, "spool", "ready", malformedName)
+	require.NoError(t, os.Rename(filepath.Join(root, "spool", "ready", id.String()), malformedPath))
+	require.NoError(t, os.WriteFile(filepath.Join(malformedPath, "manifest.json"), []byte("corrupt"), 0o600))
+
+	first := newTestRuntime(t, root, &crashAfterRecoverStore{SpoolStore: seed}, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	require.EqualError(t, first.Run(context.Background()), "capture sidecar spool recovery failed")
+
+	reopened := openRuntimeStore(t, root)
+	second := newTestRuntime(t, root, reopened, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, second)
+	require.EqualValues(t, 1, second.Status().DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.NoError(t, second.Shutdown(context.Background()))
+
+	again := openRuntimeStore(t, root)
+	third := newTestRuntime(t, root, again, &recordingUploader{}, newManualClock(time.Now()), &blockingReceiver{})
+	startRuntime(t, third)
+	require.EqualValues(t, 1, third.Status().DroppedByReason[spool.ErrSpoolCorrupt.Error()])
+	require.NoError(t, third.Shutdown(context.Background()))
 }
 
 func TestNonRetryableUploadPropagatesCheckpointFailureWithoutPersistingFalseTransition(t *testing.T) {
@@ -857,6 +882,16 @@ type cancelableRecoveryStore struct {
 	once    sync.Once
 }
 
+type crashAfterRecoverStore struct{ SpoolStore }
+
+func (s *crashAfterRecoverStore) Recover(ctx context.Context) (spool.RecoveryReport, error) {
+	report, err := s.SpoolStore.Recover(ctx)
+	if err != nil {
+		return report, err
+	}
+	return report, errors.New("simulated crash before status initialization")
+}
+
 func (s *cancelableRecoveryStore) Recover(ctx context.Context) (spool.RecoveryReport, error) {
 	s.once.Do(func() { close(s.entered) })
 	<-ctx.Done()
@@ -900,7 +935,7 @@ func (s *postQuarantineBlockingStore) QuarantineCorrupt(batch *spool.Batch, id u
 	return corruption, nil
 }
 
-func (s *cleanupCheckpointEnablingStore) CleanupCorruption(id uuid.UUID) error {
+func (s *cleanupCheckpointEnablingStore) CleanupCorruption(id spool.CorruptionID) error {
 	if err := s.SpoolStore.CleanupCorruption(id); err != nil {
 		return err
 	}
@@ -916,7 +951,7 @@ func (s *checkpointEnablingStore) QuarantineCorrupt(batch *spool.Batch, id uuid.
 	return corruption, err
 }
 
-func (s *cleanupCorruptionFailingStore) CleanupCorruption(id uuid.UUID) error {
+func (s *cleanupCorruptionFailingStore) CleanupCorruption(id spool.CorruptionID) error {
 	if !s.failed {
 		s.failed = true
 		return errors.New("injected corruption cleanup failure")

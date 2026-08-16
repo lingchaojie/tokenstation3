@@ -336,7 +336,7 @@ func roundUp(value, block int64) int64 {
 func scanUsage(root string) (usage, error) {
 	var allocated int64
 	var operationalAllocated int64
-	for _, name := range []string{"partial", "ready", "sending"} {
+	for _, name := range []string{"partial", "ready", "sending", "quarantine"} {
 		directory := filepath.Join(root, name)
 		var directoryAllocated int64
 		err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {

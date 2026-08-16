@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,7 +39,7 @@ type SpoolStore interface {
 	protocol.SessionFactory
 	Recover(context.Context) (spool.RecoveryReport, error)
 	QuarantineCorrupt(*spool.Batch, uuid.UUID) (spool.AppliedCorruption, error)
-	CleanupCorruption(uuid.UUID) error
+	CleanupCorruption(spool.CorruptionID) error
 	NextBatch(int, int64) (*spool.Batch, error)
 	MarkAcked(*spool.Batch) error
 	CleanupAcked(*spool.Batch) error
@@ -280,7 +281,7 @@ func (r *Runtime) run(ctx context.Context) error {
 
 func (r *Runtime) reconcileCorruptions(store SpoolStore, status *statusManager, pending []spool.AppliedCorruption) error {
 	remaining := append([]spool.AppliedCorruption(nil), pending...)
-	if applied := status.appliedCorruption(); applied != uuid.Nil {
+	if applied := status.appliedCorruption(); applied != "" {
 		if err := store.CleanupCorruption(applied); err != nil {
 			return errors.New("capture sidecar corruption cleanup failed")
 		}
@@ -288,20 +289,20 @@ func (r *Runtime) reconcileCorruptions(store SpoolStore, status *statusManager, 
 			return errors.New("capture sidecar status checkpoint failed")
 		}
 		for index := range remaining {
-			if remaining[index].CaptureID == applied {
+			if remaining[index].ID == applied {
 				remaining = append(remaining[:index], remaining[index+1:]...)
 				break
 			}
 		}
 	}
 	for _, corruption := range remaining {
-		if err := status.recordCorruption(corruption.CaptureID); err != nil {
+		if err := status.recordCorruption(corruption.ID); err != nil {
 			return errors.New("capture sidecar status checkpoint failed")
 		}
-		if err := store.CleanupCorruption(corruption.CaptureID); err != nil {
+		if err := store.CleanupCorruption(corruption.ID); err != nil {
 			return errors.New("capture sidecar corruption cleanup failed")
 		}
-		if err := status.clearAppliedCorruption(corruption.CaptureID); err != nil {
+		if err := status.clearAppliedCorruption(corruption.ID); err != nil {
 			return errors.New("capture sidecar status checkpoint failed")
 		}
 	}
@@ -370,10 +371,10 @@ func (r *Runtime) uploadLoop(ctx context.Context, store SpoolStore, uploaderClie
 				if quarantineErr != nil {
 					return errors.New("capture sidecar corrupt record quarantine failed")
 				}
-				if cleanupErr := store.CleanupCorruption(corruption.CaptureID); cleanupErr != nil {
+				if cleanupErr := store.CleanupCorruption(corruption.ID); cleanupErr != nil {
 					return errors.New("capture sidecar corruption cleanup failed")
 				}
-				if statusErr := r.status.clearAppliedCorruption(corruption.CaptureID); statusErr != nil {
+				if statusErr := r.status.clearAppliedCorruption(corruption.ID); statusErr != nil {
 					return errors.New("capture sidecar status checkpoint failed")
 				}
 				if statusErr := r.status.clearCurrentBatch(); statusErr != nil {
@@ -556,10 +557,10 @@ func randomFloat() float64 {
 }
 
 type statusCheckpoint struct {
-	Version              int          `json:"version"`
-	Status               model.Status `json:"status"`
-	PreviousAcknowledged bool         `json:"previous_acknowledged"`
-	AppliedCorruptionID  *uuid.UUID   `json:"applied_corruption_id,omitempty"`
+	Version              int                 `json:"version"`
+	Status               model.Status        `json:"status"`
+	PreviousAcknowledged bool                `json:"previous_acknowledged"`
+	AppliedCorruptionID  *spool.CorruptionID `json:"applied_corruption_id,omitempty"`
 }
 
 type statusManager struct {
@@ -574,7 +575,7 @@ type statusManager struct {
 	previous             *model.HealthBucket
 	current              model.HealthBucket
 	previousAcknowledged bool
-	appliedCorruptionID  *uuid.UUID
+	appliedCorruptionID  *spool.CorruptionID
 	writer               func(string, []byte) error
 }
 
@@ -584,7 +585,7 @@ type statusManagerState struct {
 	previous             *model.HealthBucket
 	current              model.HealthBucket
 	previousAcknowledged bool
-	appliedCorruptionID  *uuid.UUID
+	appliedCorruptionID  *spool.CorruptionID
 }
 
 func openStatusManager(path string, store SpoolStore, clock Clock, logger *slog.Logger, pendingGroups ...[]spool.AppliedCorruption) (*statusManager, error) {
@@ -609,7 +610,7 @@ func openStatusManager(path string, store SpoolStore, clock Clock, logger *slog.
 	}
 	if found {
 		if checkpoint.Status.HealthSourceID == uuid.Nil || len(checkpoint.Status.HealthBuckets) > 2 ||
-			(checkpoint.AppliedCorruptionID != nil && *checkpoint.AppliedCorruptionID == uuid.Nil) {
+			(checkpoint.AppliedCorruptionID != nil && !validStatusCorruptionID(*checkpoint.AppliedCorruptionID)) {
 			return nil, errors.New("invalid capture status checkpoint")
 		}
 		manager.status = cloneStatus(checkpoint.Status)
@@ -686,23 +687,23 @@ func (m *statusManager) recordDelivery(ready bool, uploaded bool) error {
 	return nil
 }
 
-func (m *statusManager) appliedCorruption() uuid.UUID {
+func (m *statusManager) appliedCorruption() spool.CorruptionID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.appliedCorruptionID == nil {
-		return uuid.Nil
+		return ""
 	}
 	return *m.appliedCorruptionID
 }
 
-func (m *statusManager) recordCorruption(captureID uuid.UUID) error {
+func (m *statusManager) recordCorruption(corruptionID spool.CorruptionID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if captureID == uuid.Nil {
+	if !validStatusCorruptionID(corruptionID) {
 		return errors.New("invalid corruption identity")
 	}
 	if m.appliedCorruptionID != nil {
-		if *m.appliedCorruptionID == captureID {
+		if *m.appliedCorruptionID == corruptionID {
 			return nil
 		}
 		return errors.New("another corruption acknowledgement is pending")
@@ -715,7 +716,7 @@ func (m *statusManager) recordCorruption(captureID uuid.UUID) error {
 		m.status.DroppedByReason = make(map[string]uint64)
 	}
 	m.status.DroppedByReason[reason]++
-	applied := captureID
+	applied := corruptionID
 	m.appliedCorruptionID = &applied
 	m.refreshLocked()
 	if err := m.persistLocked(); err != nil {
@@ -739,7 +740,7 @@ func (m *statusManager) quarantineCorruption(quarantine func() (spool.AppliedCor
 	if err != nil {
 		return spool.AppliedCorruption{}, false, err
 	}
-	if corruption.CaptureID == uuid.Nil {
+	if !validStatusCorruptionID(corruption.ID) {
 		return spool.AppliedCorruption{}, false, errors.New("invalid corruption transaction")
 	}
 	spoolStatus := m.store.Snapshot()
@@ -749,7 +750,7 @@ func (m *statusManager) quarantineCorruption(quarantine func() (spool.AppliedCor
 		m.status.DroppedByReason = make(map[string]uint64)
 	}
 	m.status.DroppedByReason[reason]++
-	applied := corruption.CaptureID
+	applied := corruption.ID
 	m.appliedCorruptionID = &applied
 	m.refreshLocked()
 	if err := m.persistLocked(); err != nil {
@@ -761,13 +762,13 @@ func (m *statusManager) quarantineCorruption(quarantine func() (spool.AppliedCor
 	return corruption, false, nil
 }
 
-func (m *statusManager) clearAppliedCorruption(captureID uuid.UUID) error {
+func (m *statusManager) clearAppliedCorruption(corruptionID spool.CorruptionID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.appliedCorruptionID == nil {
 		return nil
 	}
-	if *m.appliedCorruptionID != captureID {
+	if *m.appliedCorruptionID != corruptionID {
 		return errors.New("corruption acknowledgement mismatch")
 	}
 	before := m.captureStateLocked()
@@ -785,7 +786,7 @@ func (m *statusManager) captureStateLocked() statusManagerState {
 		observedDrops:        cloneCounts(m.observedDrops),
 		current:              cloneBucket(m.current),
 		previousAcknowledged: m.previousAcknowledged,
-		appliedCorruptionID:  cloneUUIDPointer(m.appliedCorruptionID),
+		appliedCorruptionID:  cloneCorruptionIDPointer(m.appliedCorruptionID),
 	}
 	if m.previous != nil {
 		previous := cloneBucket(*m.previous)
@@ -906,7 +907,7 @@ func (m *statusManager) persistLocked() error {
 		Version:              statusCheckpointVersion,
 		Status:               m.buildLocked(),
 		PreviousAcknowledged: m.previousAcknowledged,
-		AppliedCorruptionID:  cloneUUIDPointer(m.appliedCorruptionID),
+		AppliedCorruptionID:  cloneCorruptionIDPointer(m.appliedCorruptionID),
 	}
 	encoded, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -1040,7 +1041,19 @@ func cloneCounts(counts map[string]uint64) map[string]uint64 {
 	return clone
 }
 
-func cloneUUIDPointer(value *uuid.UUID) *uuid.UUID {
+func validStatusCorruptionID(id spool.CorruptionID) bool {
+	value := string(id)
+	if parsed, err := uuid.Parse(value); err == nil && value == parsed.String() {
+		return true
+	}
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 32
+}
+
+func cloneCorruptionIDPointer(value *spool.CorruptionID) *spool.CorruptionID {
 	if value == nil {
 		return nil
 	}

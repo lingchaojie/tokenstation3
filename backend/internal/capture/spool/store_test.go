@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestOpenCreatesPrivateSpoolDirectories(t *testing.T) {
 	s := openTestStoreAt(t, root, nil)
 	require.NotNil(t, s)
 
-	for _, name := range []string{"partial", "ready", "sending"} {
+	for _, name := range []string{"partial", "ready", "sending", "quarantine"} {
 		info, err := os.Stat(filepath.Join(root, name))
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
@@ -304,14 +305,15 @@ func TestCorruptQuarantineReplaysDurablyAndCountsExactlyOnce(t *testing.T) {
 	require.Zero(t, s.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
 	require.Len(t, readDirectoryNames(t, s.sendingDir), 1, "prepared tombstone must survive")
 	require.NoFileExists(t, batchManifestPath(s, batch.ID), "derivative batch must be durably retired first")
-	prepared, err := s.readCorruptionTombstone(corruptionPath(s, corrupt.ID()))
+	corruptionID := CorruptionID(corrupt.ID().String())
+	prepared, err := s.readCorruptionTombstone(corruptionPath(s, corruptionID))
 	require.NoError(t, err)
 	require.False(t, prepared.Applied, "ready deletion is not durable when its directory fsync fails")
-	tombstoneBytes, err := os.ReadFile(corruptionPath(s, corrupt.ID()))
+	tombstoneBytes, err := os.ReadFile(corruptionPath(s, corruptionID))
 	require.NoError(t, err)
 	require.NotContains(t, string(tombstoneBytes), root)
 	require.NotContains(t, string(tombstoneBytes), "corrupt")
-	tombstoneInfo, err := os.Stat(corruptionPath(s, corrupt.ID()))
+	tombstoneInfo, err := os.Stat(corruptionPath(s, corruptionID))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), tombstoneInfo.Mode().Perm())
 
@@ -321,7 +323,7 @@ func TestCorruptQuarantineReplaysDurablyAndCountsExactlyOnce(t *testing.T) {
 	require.Len(t, report.AppliedCorruptions, 1)
 	require.Equal(t, corrupt.ID(), report.AppliedCorruptions[0].CaptureID)
 	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
-	applied, err := reopened.readCorruptionTombstone(corruptionPath(reopened, corrupt.ID()))
+	applied, err := reopened.readCorruptionTombstone(corruptionPath(reopened, corruptionID))
 	require.NoError(t, err)
 	require.True(t, applied.Applied)
 	report, err = reopened.Recover(context.Background())
@@ -329,8 +331,166 @@ func TestCorruptQuarantineReplaysDurablyAndCountsExactlyOnce(t *testing.T) {
 	require.Len(t, report.AppliedCorruptions, 1)
 	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
 
-	require.NoError(t, reopened.CleanupCorruption(corrupt.ID()))
+	require.NoError(t, reopened.CleanupCorruption(corruptionID))
 	require.Empty(t, readDirectoryNames(t, reopened.sendingDir))
+}
+
+func TestRecoverRetiresActualNoncanonicalUUIDEntryExactlyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		readyName func(uuid.UUID) string
+	}{
+		{name: "raw hex", readyName: func(id uuid.UUID) string { return strings.ReplaceAll(id.String(), "-", "") }},
+		{name: "urn", readyName: func(id uuid.UUID) string { return "urn:uuid:" + id.String() }},
+		{name: "microsoft", readyName: func(id uuid.UUID) string { return "{" + id.String() + "}" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "spool")
+			seed := openTestStoreAt(t, root, nil)
+			attempt := committedRequestAttempt(t, seed)
+			actualName := tc.readyName(attempt.ID())
+			actualPath := filepath.Join(seed.readyDir, actualName)
+			require.NoError(t, os.Rename(readyPath(seed, attempt.ID(), "."), actualPath))
+			require.NoError(t, os.WriteFile(filepath.Join(actualPath, manifestName), []byte("corrupt"), 0o600))
+
+			first := openTestStoreAt(t, root, nil)
+			report, err := first.Recover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, report.AppliedCorruptions, 1)
+			require.NoDirExists(t, actualPath)
+			require.EqualValues(t, 1, first.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+			require.NoError(t, first.CleanupCorruption(report.AppliedCorruptions[0].ID))
+
+			second := openTestStoreAt(t, root, nil)
+			report, err = second.Recover(context.Background())
+			require.NoError(t, err)
+			require.Empty(t, report.AppliedCorruptions)
+			require.Zero(t, second.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+		})
+	}
+}
+
+func TestMalformedReadyNameCrashAfterDirectoryFsyncRetainsDurableAccountingIdentity(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	seed := openTestStoreAt(t, root, nil)
+	attempt := committedRequestAttempt(t, seed)
+	const untrustedName = "..%2Fraw-secret%0Ainvalid-uuid"
+	untrustedPath := filepath.Join(seed.readyDir, untrustedName)
+	require.NoError(t, os.Rename(readyPath(seed, attempt.ID(), "."), untrustedPath))
+	require.NoError(t, os.WriteFile(filepath.Join(untrustedPath, manifestName), []byte("corrupt"), 0o600))
+
+	crashing := openTestStoreAt(t, root, nil)
+	crashing.readySyncDirectory = func(path string) error {
+		require.NoError(t, syncDirectory(path))
+		panic("simulated process crash after directory fsync")
+	}
+	require.PanicsWithValue(t, "simulated process crash after directory fsync", func() {
+		_, _ = crashing.Recover(context.Background())
+	})
+	preparedNames := readDirectoryNames(t, crashing.sendingDir)
+	require.Len(t, preparedNames, 1)
+	preparedID := CorruptionID(strings.TrimSuffix(preparedNames[0], corruptionSuffix))
+	require.True(t, validOpaqueCorruptionID(preparedID))
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.AppliedCorruptions, 1)
+	require.Equal(t, preparedID, report.AppliedCorruptions[0].ID)
+	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+	require.NoDirExists(t, untrustedPath)
+	require.NoError(t, reopened.CleanupCorruption(report.AppliedCorruptions[0].ID))
+
+	again := openTestStoreAt(t, root, nil)
+	report, err = again.Recover(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, report.AppliedCorruptions)
+}
+
+func TestMalformedReadyTombstoneIsOpaqueAndSymlinkSafe(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	seed := openTestStoreAt(t, root, nil)
+	external := t.TempDir()
+	secretFile := filepath.Join(external, "must-survive")
+	require.NoError(t, os.WriteFile(secretFile, []byte("external"), 0o600))
+	const maliciousName = "..\\..\nheader-secret"
+	require.NoError(t, os.Symlink(external, filepath.Join(seed.readyDir, maliciousName)))
+
+	injected := errors.New("injected ready fsync failure")
+	crashing := openTestStoreAt(t, root, nil)
+	crashing.readySyncDirectory = func(string) error { return injected }
+	_, err := crashing.Recover(context.Background())
+	require.ErrorIs(t, err, injected)
+	require.FileExists(t, secretFile)
+
+	entries := readDirectoryNames(t, crashing.sendingDir)
+	require.Len(t, entries, 1)
+	tombstoneBytes, err := os.ReadFile(filepath.Join(crashing.sendingDir, entries[0]))
+	require.NoError(t, err)
+	require.NotContains(t, string(tombstoneBytes), maliciousName)
+	require.NotContains(t, string(tombstoneBytes), external)
+	require.NotContains(t, entries[0], maliciousName)
+}
+
+func TestMalformedUUIDAliasCannotRetireCanonicalRecordOrItsBatch(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	seed := openTestStoreAt(t, root, nil)
+	canonical := committedRequestAttempt(t, seed)
+	batch, err := seed.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+
+	rawName := strings.ReplaceAll(canonical.ID().String(), "-", "")
+	rawPath := filepath.Join(seed.readyDir, rawName)
+	copyRecordDirectory(t, readyPath(seed, canonical.ID(), "."), rawPath)
+	require.NoError(t, os.WriteFile(filepath.Join(rawPath, manifestName), []byte("corrupt"), 0o600))
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.AppliedCorruptions, 1)
+	require.DirExists(t, readyPath(reopened, canonical.ID(), "."))
+	require.NoDirExists(t, rawPath)
+	pending := reopened.PendingBatches()
+	require.Len(t, pending, 1)
+	require.Equal(t, batch.ID, pending[0].ID)
+}
+
+func TestRecoverRetiresPreUpgradeAliasOnlyBatchWithoutDoubleCounting(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	seed := openTestStoreAt(t, root, nil)
+	aliasOnly := committedRequestAttempt(t, seed)
+	batch, err := seed.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+
+	rawName := strings.ReplaceAll(aliasOnly.ID().String(), "-", "")
+	rawPath := filepath.Join(seed.readyDir, rawName)
+	require.NoError(t, os.Rename(readyPath(seed, aliasOnly.ID(), "."), rawPath))
+
+	reopened := openTestStoreAt(t, root, nil)
+	report, err := reopened.Recover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.AppliedCorruptions, 1)
+	require.NoDirExists(t, rawPath)
+	require.NoFileExists(t, batchManifestPath(reopened, batch.ID), "the alias-derived manifest must retire at the same loss boundary")
+	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+
+	next, err := reopened.NextBatch(1, 64<<20)
+	require.NoError(t, err)
+	require.Nil(t, next)
+	require.EqualValues(t, 1, reopened.Snapshot().DroppedByReason[ErrSpoolCorrupt.Error()])
+}
+
+func copyRecordDirectory(t *testing.T, source, destination string) {
+	t.Helper()
+	require.NoError(t, os.Mkdir(destination, 0o700))
+	entries, err := os.ReadDir(source)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.False(t, entry.IsDir())
+		payload, err := os.ReadFile(filepath.Join(source, entry.Name()))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(destination, entry.Name()), payload, 0o600))
+	}
 }
 
 func TestReadyReturnsCopyAndSnapshotReflectsRecoveredRecords(t *testing.T) {

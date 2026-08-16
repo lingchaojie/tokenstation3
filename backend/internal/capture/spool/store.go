@@ -99,13 +99,15 @@ type validationOps struct {
 type Store struct {
 	config Config
 
-	partialDir         string
-	readyDir           string
-	sendingDir         string
-	capacity           *Capacity
-	validation         validationOps
-	batchSyncDirectory func(string) error
-	readySyncDirectory func(string) error
+	partialDir              string
+	readyDir                string
+	sendingDir              string
+	quarantineDir           string
+	capacity                *Capacity
+	validation              validationOps
+	batchSyncDirectory      func(string) error
+	readySyncDirectory      func(string) error
+	quarantineSyncDirectory func(string) error
 
 	attemptSlots chan struct{}
 	lifecycleMu  sync.RWMutex
@@ -117,7 +119,7 @@ type Store struct {
 	recoverMu            sync.Mutex
 	dropMu               sync.Mutex
 	dropped              map[string]uint64
-	accountedCorruptions map[uuid.UUID]struct{}
+	accountedCorruptions map[CorruptionID]struct{}
 }
 
 var _ protocol.SessionFactory = (*Store)(nil)
@@ -170,7 +172,8 @@ func Open(config Config) (*Store, error) {
 	partialDir := filepath.Join(config.RootDir, "partial")
 	readyDir := filepath.Join(config.RootDir, "ready")
 	sendingDir := filepath.Join(config.RootDir, "sending")
-	for _, directory := range []string{partialDir, readyDir, sendingDir} {
+	quarantineDir := filepath.Join(config.RootDir, "quarantine")
+	for _, directory := range []string{partialDir, readyDir, sendingDir, quarantineDir} {
 		if err := ensurePrivateDirectory(directory); err != nil {
 			return nil, fmt.Errorf("create spool directory %s: %w", filepath.Base(directory), err)
 		}
@@ -186,17 +189,19 @@ func Open(config Config) (*Store, error) {
 	}
 	validation := filesystemValidationOps()
 	return &Store{
-		config:               config,
-		partialDir:           partialDir,
-		readyDir:             readyDir,
-		sendingDir:           sendingDir,
-		capacity:             capacity,
-		validation:           validation,
-		batchSyncDirectory:   syncDirectory,
-		readySyncDirectory:   syncDirectory,
-		attemptSlots:         make(chan struct{}, config.MaxActiveAttempts),
-		dropped:              make(map[string]uint64),
-		accountedCorruptions: make(map[uuid.UUID]struct{}),
+		config:                  config,
+		partialDir:              partialDir,
+		readyDir:                readyDir,
+		sendingDir:              sendingDir,
+		quarantineDir:           quarantineDir,
+		capacity:                capacity,
+		validation:              validation,
+		batchSyncDirectory:      syncDirectory,
+		readySyncDirectory:      syncDirectory,
+		quarantineSyncDirectory: syncDirectory,
+		attemptSlots:            make(chan struct{}, config.MaxActiveAttempts),
+		dropped:                 make(map[string]uint64),
+		accountedCorruptions:    make(map[CorruptionID]struct{}),
 	}, nil
 }
 
@@ -299,31 +304,15 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			if !errors.Is(validateErr, ErrSpoolCorrupt) {
 				return report, fmt.Errorf("validate ready record %s: %w", entry.Name(), validateErr)
 			}
-			id, parseErr := uuid.Parse(entry.Name())
-			if parseErr == nil {
-				corruption, quarantineErr := s.quarantineCorruptLocked(nil, id)
-				if quarantineErr != nil {
-					return report, fmt.Errorf("quarantine corrupt ready record: %w", quarantineErr)
-				}
-				report.AppliedCorruptions = appendCorruption(report.AppliedCorruptions, corruption)
-			} else {
-				if removeErr := os.RemoveAll(path); removeErr != nil {
-					return report, fmt.Errorf("delete corrupt ready record: %w", removeErr)
-				}
-				if syncErr := s.readySyncDirectory(s.readyDir); syncErr != nil {
-					return report, fmt.Errorf("fsync ready directory: %w", syncErr)
-				}
-				s.recordDrop(ErrSpoolCorrupt)
+			corruption, quarantineErr := s.quarantineReadyEntryLocked(nil, entry.Name())
+			if quarantineErr != nil {
+				return report, fmt.Errorf("quarantine corrupt ready record: %w", quarantineErr)
 			}
+			report.AppliedCorruptions = appendCorruption(report.AppliedCorruptions, corruption)
 			report.CorruptDeleted++
 			continue
 		}
 		ready = append(ready, ref)
-	}
-	if report.CorruptDeleted > 0 {
-		if err := s.readySyncDirectory(s.readyDir); err != nil {
-			return report, fmt.Errorf("fsync ready directory: %w", err)
-		}
 	}
 	sortRecordRefs(ready)
 	report.Ready = cloneRecordRefs(ready)
@@ -600,8 +589,9 @@ func validateRecordManifestBytes(path string, validation validationOps, info os.
 	if manifest.CaptureVersion != captureVersion {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
-	id, err := uuid.Parse(filepath.Base(path))
-	if err != nil || id != manifest.CaptureID || manifest.Begin.CaptureID != id {
+	readyName := filepath.Base(path)
+	id, err := uuid.Parse(readyName)
+	if err != nil || readyName != id.String() || id != manifest.CaptureID || manifest.Begin.CaptureID != id {
 		return RecordRef{}, ErrSpoolCorrupt
 	}
 
