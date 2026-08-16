@@ -94,9 +94,11 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_resp_chat_stream"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
 	svc.cfg.Gateway.Capture.Enabled = true
 	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
@@ -126,8 +128,9 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.Zero(t, result.Usage.KiroCredits)
 	require.True(t, result.Stream)
 	require.NotNil(t, result.FirstTokenMs)
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.Equal(t, upstreamBody, string(result.CaptureResponse))
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	capture.commit(t, c, result, upstream.lastBody, []byte(upstreamBody), false)
 }
 
 func TestForwardResponsesRawCCMissingDoneClassifiesCommitBoundary(t *testing.T) {
@@ -149,12 +152,14 @@ func TestForwardResponsesRawCCMissingDoneClassifiesCommitBoundary(t *testing.T) 
 			cfg := rawChatCompletionsTestConfig()
 			cfg.Gateway.Capture.Enabled = true
 			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
-			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+			capture := newOpenAITypedCaptureTestHarness(t)
+			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
 			require.Error(t, err)
 			if tt.committed {
 				require.NotNil(t, result)
-				require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-				require.Equal(t, tt.sse, string(result.CaptureResponse))
+				require.Nil(t, result.UpstreamRequest)
+				require.Nil(t, result.CaptureResponse)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
 				require.Contains(t, recorder.Body.String(), `"delta":"hi"`)
 			} else {
 				require.Nil(t, result)
@@ -162,6 +167,7 @@ func TestForwardResponsesRawCCMissingDoneClassifiesCommitBoundary(t *testing.T) 
 				require.ErrorAs(t, err, &fo)
 				require.Equal(t, -1, c.Writer.Size(), "protocol preamble must remain retryable")
 				require.Empty(t, recorder.Body.String(), "discard staged preamble before failover")
+				capture.abort(t, c)
 			}
 		})
 	}
@@ -197,21 +203,24 @@ func TestForwardResponsesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChun
 			cfg := rawChatCompletionsTestConfig()
 			cfg.Gateway.Capture.Enabled = true
 			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+			capture := newOpenAITypedCaptureTestHarness(t)
 
-			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			if tt.committed {
 				require.NotNil(t, result)
 				require.False(t, errors.As(err, &failoverErr))
 				require.Contains(t, recorder.Body.String(), `"delta":"hello"`)
-				require.Equal(t, tt.sse, string(result.CaptureResponse))
+				require.Nil(t, result.CaptureResponse)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
 				return
 			}
 			require.Nil(t, result)
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, -1, c.Writer.Size())
 			require.Empty(t, recorder.Body.String())
+			capture.abort(t, c)
 		})
 	}
 }

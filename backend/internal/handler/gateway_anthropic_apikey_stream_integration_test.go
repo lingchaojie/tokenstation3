@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -28,6 +30,112 @@ type gatewayAnthropicAPIKeyStreamUpstream struct {
 	calls   int
 	status  int
 	newBody func() io.ReadCloser
+}
+
+type gatewayRetryDelayCaptureUpstream struct {
+	calls chan struct{}
+}
+
+func (u *gatewayRetryDelayCaptureUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	return u.DoWithTLS(req, proxyURL, accountID, accountConcurrency, nil)
+}
+
+func (u *gatewayRetryDelayCaptureUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.calls <- struct{}{}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"incomplete\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{}}}\n\n",
+		)),
+		Request: req,
+	}, nil
+}
+
+func TestGatewayChatCompletionsAbortsTypedAttemptBeforeSameAccountRetryDelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const groupID, accountID, userID = int64(9620), int64(9621), int64(9622)
+	group := &service.Group{
+		ID: groupID, Hydrated: true, Platform: service.PlatformAnthropic,
+		Status: service.StatusActive, RateMultiplier: 1,
+	}
+	account := &service.Account{
+		ID: accountID, Name: "anthropic-retry-delay", Platform: service.PlatformAnthropic,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+		Concurrency: 1, Priority: 1,
+		Credentials: map[string]any{
+			"api_key":                      "test-anthropic-key",
+			"pool_mode":                    true,
+			"pool_mode_retry_count":        float64(1),
+			"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+		},
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settings := newEnabledCaptureSettingService(t, cfg)
+	scheduler := service.NewSchedulerSnapshotService(&fakeSchedulerCache{accounts: []*service.Account{account}}, nil, nil, nil, nil)
+	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	terminals := make(chan string, 4)
+	capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(make(chan *service.CaptureRecord, 1), terminals)
+	t.Cleanup(capturePool.Stop)
+	upstream := &gatewayRetryDelayCaptureUpstream{calls: make(chan struct{}, 2)}
+	gateway := service.NewGatewayService(
+		nil, &fakeGroupRepo{group: group}, &gatewayAnthropicUsageRepo{}, nil, nil, nil, nil, nil, cfg, scheduler, nil,
+		service.NewBillingService(cfg, nil), nil, billing, nil, upstream, &service.DeferredService{},
+		nil, nil, nil, nil, nil, nil, settings, nil, nil, nil, nil, nil, capturePool,
+	)
+	handler := NewGatewayHandler(
+		gateway, nil, nil, nil, nil, service.NewConcurrencyService(&fakeConcurrencyCache{}), billing, nil,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settings, capturePool,
+	)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointChatCompletions, strings.NewReader(
+		`{"model":"claude-test","stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+	)).WithContext(requestCtx)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9623, UserID: userID, GroupID: func() *int64 { id := groupID; return &id }(), Status: service.StatusActive,
+		Group: group, User: &service.User{ID: userID, Status: service.StatusActive, Concurrency: 10, Balance: 100},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: userID, Concurrency: 10})
+
+	done := make(chan struct{})
+	go func() {
+		handler.ChatCompletions(c)
+		close(done)
+	}()
+	select {
+	case <-upstream.calls:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("first upstream call did not start")
+	}
+	select {
+	case terminal := <-terminals:
+		require.Equal(t, "abort", terminal)
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("failed typed attempt remained open during the same-account retry delay")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not stop after request cancellation")
+	}
+	require.Empty(t, terminals, "request defer must not emit a duplicate terminal")
 }
 
 type gatewayAnthropicTwoAccountUpstream struct {
@@ -187,6 +295,22 @@ func runGatewayAnthropicHandlerWithStatusAndPassthrough(
 	passthrough bool,
 	accountMutators ...func(*service.Account),
 ) gatewayAnthropicHandlerRunResult {
+	return runGatewayAnthropicHandlerWithConfig(
+		t, endpoint, requestBody, status, newBody, handle, passthrough, nil, accountMutators...,
+	)
+}
+
+func runGatewayAnthropicHandlerWithConfig(
+	t *testing.T,
+	endpoint string,
+	requestBody string,
+	status int,
+	newBody func() io.ReadCloser,
+	handle func(*GatewayHandler, *gin.Context),
+	passthrough bool,
+	configure func(*config.Config),
+	accountMutators ...func(*service.Account),
+) gatewayAnthropicHandlerRunResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -220,6 +344,9 @@ func runGatewayAnthropicHandlerWithStatusAndPassthrough(
 	cfg.Gateway.MaxAccountSwitches = 1
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	if configure != nil {
+		configure(cfg)
+	}
 	settingService := newEnabledCaptureSettingService(t, cfg)
 
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
@@ -230,14 +357,14 @@ func runGatewayAnthropicHandlerWithStatusAndPassthrough(
 	usageRepo := &gatewayAnthropicUsageRepo{}
 	upstream := &gatewayAnthropicAPIKeyStreamUpstream{status: status, newBody: newBody}
 	gateway := service.NewGatewayService(
-		nil,                          // accountRepo
-		&fakeGroupRepo{group: group}, // groupRepo
-		usageRepo,                    // usageLogRepo
-		nil,                          // usageBillingRepo
-		nil,                          // userRepo
-		nil,                          // userSubRepo
-		nil,                          // userGroupRateRepo
-		nil,                          // cache
+		&antigravityCaptureAccountRepo{}, // accountRepo
+		&fakeGroupRepo{group: group},     // groupRepo
+		usageRepo,                        // usageLogRepo
+		nil,                              // usageBillingRepo
+		nil,                              // userRepo
+		nil,                              // userSubRepo
+		nil,                              // userGroupRateRepo
+		nil,                              // cache
 		cfg,
 		schedulerSnapshot,
 		nil, // concurrencyService: scheduler snapshot acquires directly
@@ -392,10 +519,173 @@ func TestGatewayNativeMessagesCapturePreservesProviderBytes(t *testing.T) {
 			func(h *GatewayHandler, c *gin.Context) { h.Messages(c) }, false,
 		)
 		require.Len(t, got.captures, 1)
-		require.Equal(t, errorBody, got.captures[0].RawResponse)
-		require.False(t, got.captures[0].Truncated)
+		require.Equal(t, errorBody[:512<<10], got.captures[0].RawResponse, "typed capture must contain only bytes consumed by the provider-error reader")
+		require.True(t, got.captures[0].Truncated, "reaching the functional read ceiling leaves response completeness unknown")
 		require.Equal(t, http.StatusUnprocessableEntity, got.captures[0].HTTPStatus)
 	})
+}
+
+func TestGatewayCompatibilityFinalIncompleteAttemptIsTruncated(t *testing.T) {
+	providerSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-incomplete\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":2}}}\n\n"
+	routes := []struct {
+		name, endpoint, requestBody string
+		handle                      func(*GatewayHandler, *gin.Context)
+	}{
+		{
+			name: "messages", endpoint: EndpointMessages,
+			requestBody: `{"model":"claude-test","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
+		},
+		{
+			name: "chat_completions", endpoint: EndpointChatCompletions,
+			requestBody: `{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.ChatCompletions(c) },
+		},
+		{
+			name: "responses", endpoint: EndpointResponses,
+			requestBody: `{"model":"claude-test","stream":true,"input":"hello"}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+	}
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			got := runGatewayAnthropicHandlerWithStatusAndPassthrough(
+				t, route.endpoint, route.requestBody, http.StatusOK,
+				func() io.ReadCloser { return io.NopCloser(strings.NewReader(providerSSE)) },
+				route.handle, false, func(account *service.Account) {
+					account.Credentials["pool_mode"] = true
+					account.Credentials["pool_mode_retry_count"] = float64(0)
+				},
+			)
+			require.Equal(t, 1, got.calls)
+			require.Len(t, got.captures, 1)
+			require.Equal(t, providerSSE, string(got.captures[0].RawResponse))
+			require.True(t, got.captures[0].Truncated, "an incomplete provider stream must finalize with response_complete=false")
+			require.Equal(t, http.StatusOK, got.captures[0].HTTPStatus)
+		})
+	}
+}
+
+func TestGatewayCompatibilityCapturePreservesSuccessfulUpstreamHTTPStatus(t *testing.T) {
+	providerSSE := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-status\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-test\",\"usage\":{\"input_tokens\":2}}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	routes := []struct {
+		name, endpoint, requestBody string
+		handle                      func(*GatewayHandler, *gin.Context)
+	}{
+		{
+			name: "messages", endpoint: EndpointMessages,
+			requestBody: `{"model":"claude-test","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
+		},
+		{
+			name: "chat_completions", endpoint: EndpointChatCompletions,
+			requestBody: `{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.ChatCompletions(c) },
+		},
+		{
+			name: "responses", endpoint: EndpointResponses,
+			requestBody: `{"model":"claude-test","stream":true,"input":"hello"}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+	}
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			got := runGatewayAnthropicHandlerWithStatusAndPassthrough(
+				t, route.endpoint, route.requestBody, http.StatusCreated,
+				func() io.ReadCloser { return io.NopCloser(strings.NewReader(providerSSE)) },
+				route.handle, false,
+			)
+			require.Equal(t, 1, got.calls)
+			require.Len(t, got.captures, 1)
+			require.Equal(t, http.StatusCreated, got.captures[0].HTTPStatus)
+		})
+	}
+}
+
+func TestGatewayCompatibilityBoundedHTTPFailoverCaptureIsIncomplete(t *testing.T) {
+	const functionalErrorLimit = 512 << 10
+	providerBody := `{"type":"error","error":{"type":"api_error","message":"` + strings.Repeat("x", functionalErrorLimit) + `"}}`
+	routes := []struct {
+		name, endpoint, requestBody string
+		handle                      func(*GatewayHandler, *gin.Context)
+	}{
+		{
+			name: "messages", endpoint: EndpointMessages,
+			requestBody: `{"model":"claude-test","max_tokens":64,"stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
+		},
+		{
+			name: "chat_completions", endpoint: EndpointChatCompletions,
+			requestBody: `{"model":"claude-test","stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.ChatCompletions(c) },
+		},
+		{
+			name: "responses", endpoint: EndpointResponses,
+			requestBody: `{"model":"claude-test","stream":false,"input":"hello"}`,
+			handle:      func(h *GatewayHandler, c *gin.Context) { h.Responses(c) },
+		},
+	}
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			got := runGatewayAnthropicHandlerWithStatusAndPassthrough(
+				t, route.endpoint, route.requestBody, http.StatusServiceUnavailable,
+				func() io.ReadCloser { return io.NopCloser(strings.NewReader(providerBody)) },
+				route.handle, false, func(account *service.Account) {
+					account.Credentials["pool_mode"] = true
+					account.Credentials["pool_mode_retry_count"] = float64(0)
+				},
+			)
+			require.Equal(t, 2, got.calls, "the fixture exhausts its configured initial attempt plus one account switch")
+			require.Len(t, got.captures, 1)
+			require.Equal(t, []byte(providerBody[:functionalErrorLimit]), got.captures[0].RawResponse)
+			require.True(t, got.captures[0].Truncated, "a bounded provider-error prefix cannot be finalized complete")
+			require.Equal(t, http.StatusServiceUnavailable, got.captures[0].HTTPStatus)
+		})
+	}
+}
+
+func TestGatewayMessagesShortHTTPErrorReadCaptureIsIncomplete(t *testing.T) {
+	providerBody := `{"type":"error","error":{"type":"invalid_request_error","message":"short"}}`
+	got := runGatewayAnthropicHandlerWithStatusAndPassthrough(
+		t, EndpointMessages,
+		`{"model":"claude-test","max_tokens":64,"stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+		http.StatusBadRequest,
+		func() io.ReadCloser {
+			return io.NopCloser(io.MultiReader(strings.NewReader(providerBody), iotest.ErrReader(io.ErrUnexpectedEOF)))
+		},
+		func(h *GatewayHandler, c *gin.Context) { h.Messages(c) }, false,
+	)
+	require.Equal(t, 1, got.calls)
+	require.Len(t, got.captures, 1)
+	require.Equal(t, []byte(providerBody), got.captures[0].RawResponse)
+	require.True(t, got.captures[0].Truncated, "a short failed provider read must not be replayed as complete")
+	require.Equal(t, http.StatusBadRequest, got.captures[0].HTTPStatus)
+}
+
+func TestGatewayMessagesBoundedFailoverOn400CaptureIsIncomplete(t *testing.T) {
+	const functionalErrorLimit = 512 << 10
+	providerBody := `{"type":"error","error":{"type":"invalid_request_error","message":"requires beta"}}` + strings.Repeat(" ", functionalErrorLimit)
+	got := runGatewayAnthropicHandlerWithConfig(
+		t, EndpointMessages,
+		`{"model":"claude-test","max_tokens":64,"stream":false,"messages":[{"role":"user","content":"hello"}]}`,
+		http.StatusBadRequest,
+		func() io.ReadCloser { return io.NopCloser(strings.NewReader(providerBody)) },
+		func(h *GatewayHandler, c *gin.Context) { h.Messages(c) }, false,
+		func(cfg *config.Config) { cfg.Gateway.FailoverOn400 = true },
+	)
+	require.Equal(t, 1, got.calls)
+	require.Len(t, got.captures, 1)
+	require.Equal(t, []byte(providerBody[:functionalErrorLimit]), got.captures[0].RawResponse)
+	require.True(t, got.captures[0].Truncated, "a bounded 400 failover prefix cannot be finalized complete")
+	require.Equal(t, http.StatusBadRequest, got.captures[0].HTTPStatus)
 }
 
 func TestGatewayAnthropicTwoAccountMalformedProviderResponseArchivesOnlyFinalAttempt(t *testing.T) {

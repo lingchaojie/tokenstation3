@@ -269,6 +269,10 @@ type OpenAIForwardResult struct {
 	// CaptureTerminalError classifies committed partial/semantic failures under
 	// the terminal_error capture policy without changing their billing contract.
 	CaptureTerminalError bool
+	// CaptureResponseComplete distinguishes a fully consumed provider error
+	// response from parse/stream failures that also use UpstreamFailed for the
+	// handler's capture-only side-effect path.
+	CaptureResponseComplete bool
 	// UpstreamHTTPStatus is the status of the final response represented by this
 	// result. Zero preserves the legacy successful-capture default of HTTP 200.
 	UpstreamHTTPStatus int

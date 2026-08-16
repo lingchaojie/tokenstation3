@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,6 +142,68 @@ func TestAttemptDoesNotRetryOrBlockWhenSocketBackpressures(t *testing.T) {
 	require.Equal(t, 1, dialer.Calls())
 }
 
+func TestBeginUsesOneAbsoluteDeadlineForHandshakeAndBeginFrame(t *testing.T) {
+	conn := newDeadlineAwareSlowConn(0)
+	conn.expireWhenDeadlineReusedOnWrite(3)
+	dialer := &countingDialer{dial: func(context.Context) (net.Conn, error) { return conn, nil }}
+	client := NewClient(ClientConfig{
+		Dial:         dialer.DialContext,
+		WriteTimeout: 10 * time.Millisecond,
+		ReadTimeout:  10 * time.Millisecond,
+	})
+
+	started := time.Now()
+	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+
+	require.Error(t, err)
+	require.Nil(t, attempt)
+	require.Less(t, time.Since(started), 40*time.Millisecond)
+	require.Equal(t, 1, dialer.Calls(), "Begin must not retry the logical IPC operation")
+	require.Equal(t, 3, conn.Writes(), "handshake header and Begin header/payload must share one budget")
+}
+
+func TestAttemptMultiFrameWriteUsesOneAbsoluteDeadlineWithoutRetry(t *testing.T) {
+	conn := newDeadlineAwareSlowConn(0)
+	dialer := &countingDialer{dial: func(context.Context) (net.Conn, error) { return conn, nil }}
+	client := NewClient(ClientConfig{
+		Dial:         dialer.DialContext,
+		WriteTimeout: 10 * time.Millisecond,
+		ReadTimeout:  10 * time.Millisecond,
+	})
+	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.NoError(t, err)
+	conn.SetWriteDelay(3 * time.Millisecond)
+	conn.ResetWrites()
+
+	started := time.Now()
+	require.False(t, attempt.WriteResponse(make([]byte, 2*MaxPayloadBytes+1)))
+	require.Less(t, time.Since(started), 40*time.Millisecond)
+	writes := conn.Writes()
+	require.Less(t, writes, 6, "the shared deadline must stop before all three frame header/payload pairs succeed")
+	require.False(t, attempt.WriteResponse([]byte("must not retry")))
+	require.Equal(t, writes, conn.Writes(), "a failed logical operation must make the attempt inert")
+	require.Equal(t, 1, dialer.Calls())
+}
+
+func TestAttemptFinalizeHeaderAndPayloadShareOneAbsoluteDeadline(t *testing.T) {
+	conn := newDeadlineAwareSlowConn(0)
+	client := NewClient(ClientConfig{
+		Dial:         func(context.Context, string, string) (net.Conn, error) { return conn, nil },
+		WriteTimeout: 10 * time.Millisecond,
+		ReadTimeout:  10 * time.Millisecond,
+	})
+	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.NoError(t, err)
+	conn.SetWriteDelay(6 * time.Millisecond)
+	conn.ResetWrites()
+
+	started := time.Now()
+	require.False(t, attempt.Finalize(model.Final{HTTPStatus: 200, StopReason: "stop", ResponseComplete: true}))
+	require.Less(t, time.Since(started), 40*time.Millisecond)
+	require.Equal(t, 2, conn.Writes(), "Finalize header and payload must consume one shared budget")
+	require.False(t, attempt.Commit(), "failed Finalize must leave no terminal retry path")
+}
+
 func TestAttemptShortWritePermanentlyFailsAndCloses(t *testing.T) {
 	conn := &scriptedConn{writesBeforeShort: 3}
 	dialer := &countingDialer{dial: func(context.Context) (net.Conn, error) { return conn, nil }}
@@ -223,3 +287,93 @@ type stubAddr string
 
 func (a stubAddr) Network() string { return "test" }
 func (a stubAddr) String() string  { return string(a) }
+
+type deadlineAwareSlowConn struct {
+	mu            sync.Mutex
+	writeDeadline time.Time
+	writeDelay    time.Duration
+	writes        int
+	closed        atomic.Bool
+	readBuffer    []byte
+	firstDeadline time.Time
+	expireOnWrite int
+}
+
+func newDeadlineAwareSlowConn(delay time.Duration) *deadlineAwareSlowConn {
+	return &deadlineAwareSlowConn{writeDelay: delay}
+}
+
+func (c *deadlineAwareSlowConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.readBuffer) == 0 {
+		c.readBuffer = Header{Version: ProtocolVersion, Kind: KindHandshake}.MarshalBinary()
+	}
+	n := copy(p, c.readBuffer)
+	c.readBuffer = c.readBuffer[n:]
+	return n, nil
+}
+
+func (c *deadlineAwareSlowConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	delay := c.writeDelay
+	deadline := c.writeDeadline
+	c.writes++
+	writes := c.writes
+	if c.firstDeadline.IsZero() {
+		c.firstDeadline = deadline
+	}
+	firstDeadline := c.firstDeadline
+	expireOnWrite := c.expireOnWrite
+	c.mu.Unlock()
+	time.Sleep(delay)
+	if expireOnWrite == writes && deadline.Equal(firstDeadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+	if !deadline.IsZero() && time.Now().After(deadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+	return len(p), nil
+}
+
+func (c *deadlineAwareSlowConn) SetWriteDelay(delay time.Duration) {
+	c.mu.Lock()
+	c.writeDelay = delay
+	c.mu.Unlock()
+}
+
+func (c *deadlineAwareSlowConn) ResetWrites() {
+	c.mu.Lock()
+	c.writes = 0
+	c.firstDeadline = time.Time{}
+	c.mu.Unlock()
+}
+
+func (c *deadlineAwareSlowConn) expireWhenDeadlineReusedOnWrite(write int) {
+	c.mu.Lock()
+	c.expireOnWrite = write
+	c.mu.Unlock()
+}
+
+func (c *deadlineAwareSlowConn) Writes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writes
+}
+
+func (c *deadlineAwareSlowConn) Close() error       { c.closed.Store(true); return nil }
+func (*deadlineAwareSlowConn) LocalAddr() net.Addr  { return stubAddr("local") }
+func (*deadlineAwareSlowConn) RemoteAddr() net.Addr { return stubAddr("remote") }
+func (c *deadlineAwareSlowConn) SetDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.writeDeadline = deadline
+	c.mu.Unlock()
+	return nil
+}
+func (*deadlineAwareSlowConn) SetReadDeadline(time.Time) error { return nil }
+func (c *deadlineAwareSlowConn) SetWriteDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.writeDeadline = deadline
+	c.mu.Unlock()
+	return nil
+}

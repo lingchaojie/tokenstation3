@@ -457,7 +457,13 @@ func TestOpenAIHTTPCaptureRealForwardStoresEmptyTerminalHTTPBody(t *testing.T) {
 
 			result, err := svc.Forward(context.Background(), c, account, body)
 			require.Error(t, err)
-			require.Nil(t, result)
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.True(t, result.CaptureResponseComplete)
+			require.Equal(t, http.StatusBadRequest, result.UpstreamHTTPStatus)
+			require.Nil(t, result.CaptureRequest)
+			require.Nil(t, result.CaptureResponse)
 			attempts := transport.Attempts()
 			require.Len(t, attempts, 1)
 			require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
@@ -465,7 +471,7 @@ func TestOpenAIHTTPCaptureRealForwardStoresEmptyTerminalHTTPBody(t *testing.T) {
 			require.Equal(t, captureHeaderBytes(upstream.lastReq.Header, cfg.Gateway.Capture.MaxHeaderBytes), attempts[0].RequestHeaderBytes())
 			require.Equal(t, captureHeaderBytes(upstream.resp.Header, cfg.Gateway.Capture.MaxHeaderBytes), attempts[0].ResponseHeaderBytes())
 			require.Empty(t, attempts[0].TerminalStates(), "the handler-side terminal-error sink owns commit")
-			require.True(t, CommitTerminalErrorCaptureAttempt(c, PlatformOpenAI, http.StatusBadRequest))
+			require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result))
 			require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 		})
 	}

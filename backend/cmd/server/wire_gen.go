@@ -146,7 +146,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	notificationEmailService := service.NewNotificationEmailService(settingRepository, emailService)
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository, notificationEmailService)
 	captureHealthRepository := repository.NewCaptureHealthRepository(db)
-	conversationCapturePool := service.NewConversationCapturePool(configConfig, captureHealthRepository)
+	conversationCapturePool := service.NewConversationCapturePool(configConfig, captureHealthRepository, settingService)
 	accountUpstreamUserAgentRepository := repository.NewAccountUpstreamUserAgentRepository(db)
 	v := service.ProvideAccountUpstreamUserAgentRepositories(accountUpstreamUserAgentRepository)
 	gatewayService := service.NewGatewayService(accountRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, kiroTokenProvider, kiroCooldownStore, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, balanceNotifyService, serviceUserPlatformQuotaRepository, conversationCapturePool, v...)

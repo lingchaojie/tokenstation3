@@ -34,9 +34,12 @@ type Transport interface {
 type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 type ClientConfig struct {
-	SocketPath   string
-	Dial         DialContextFunc
-	DialTimeout  time.Duration
+	SocketPath  string
+	Dial        DialContextFunc
+	DialTimeout time.Duration
+	// WriteTimeout is the total budget for one logical client operation. The
+	// same absolute deadline covers dial/handshake/Begin, every frame in one
+	// Write* call, or one terminal operation. It is never refreshed per frame.
 	WriteTimeout time.Duration
 	ReadTimeout  time.Duration
 }
@@ -55,10 +58,10 @@ func NewClient(config ClientConfig) *Client {
 		config.Dial = dialer.DialContext
 	}
 	if config.DialTimeout <= 0 {
-		config.DialTimeout = time.Millisecond
+		config.DialTimeout = 10 * time.Millisecond
 	}
 	if config.WriteTimeout <= 0 {
-		config.WriteTimeout = time.Millisecond
+		config.WriteTimeout = 10 * time.Millisecond
 	}
 	if config.ReadTimeout <= 0 {
 		config.ReadTimeout = config.WriteTimeout
@@ -70,7 +73,8 @@ func (c *Client) Begin(ctx context.Context, begin model.Begin) (Attempt, error) 
 	if begin.CaptureID == uuid.Nil {
 		return nil, errors.New("capture ID is required")
 	}
-	conn, err := c.open(ctx)
+	deadline := logicalOperationDeadline(ctx, c.config.WriteTimeout)
+	conn, err := c.open(ctx, deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +89,7 @@ func (c *Client) Begin(ctx context.Context, begin model.Begin) (Attempt, error) 
 		_ = conn.Close()
 		return nil, err
 	}
-	if !attempt.writeFrameLocked(KindBegin, payload) {
+	if !attempt.writeFrameLocked(deadline, KindBegin, payload) {
 		return nil, errors.New("send capture begin")
 	}
 	c.mu.Lock()
@@ -100,18 +104,19 @@ func (c *Client) Begin(ctx context.Context, begin model.Begin) (Attempt, error) 
 }
 
 func (c *Client) Status(ctx context.Context) (model.Status, error) {
-	conn, err := c.open(ctx)
+	deadline := logicalOperationDeadline(ctx, c.config.WriteTimeout)
+	conn, err := c.open(ctx, deadline)
 	if err != nil {
 		return model.Status{}, err
 	}
 	defer conn.Close()
-	if err := writeFrameWithDeadline(conn, c.config.WriteTimeout, Header{
+	if err := writeFrameWithAbsoluteDeadline(conn, deadline, Header{
 		Version: ProtocolVersion,
 		Kind:    KindStatusRequest,
 	}, nil); err != nil {
 		return model.Status{}, err
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(c.config.ReadTimeout)); err != nil {
+	if err := conn.SetReadDeadline(deadline); err != nil {
 		return model.Status{}, err
 	}
 	header, payload, err := readFrame(conn)
@@ -152,27 +157,27 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) open(ctx context.Context) (net.Conn, error) {
+func (c *Client) open(ctx context.Context, deadline time.Time) (net.Conn, error) {
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
 		return nil, net.ErrClosed
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, c.config.DialTimeout)
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	conn, err := c.config.Dial(dialCtx, "unix", c.config.SocketPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeFrameWithDeadline(conn, c.config.WriteTimeout, Header{
+	if err := writeFrameWithAbsoluteDeadline(conn, deadline, Header{
 		Version: ProtocolVersion,
 		Kind:    KindHandshake,
 	}, nil); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(c.config.ReadTimeout)); err != nil {
+	if err := conn.SetReadDeadline(deadline); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -232,7 +237,7 @@ func (a *clientAttempt) Finalize(final model.Final) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.writeFrameLocked(KindFinal, payload)
+	return a.writeFrameLocked(time.Now().Add(a.writeTimeout), KindFinal, payload)
 }
 
 func (a *clientAttempt) Commit() bool {
@@ -241,7 +246,7 @@ func (a *clientAttempt) Commit() bool {
 	if a.failed {
 		return false
 	}
-	ok := a.writeFrameLocked(KindCommit, nil)
+	ok := a.writeFrameLocked(time.Now().Add(a.writeTimeout), KindCommit, nil)
 	a.finishLocked()
 	return ok
 }
@@ -250,7 +255,7 @@ func (a *clientAttempt) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.failed {
-		_ = a.writeFrameLocked(KindAbort, nil)
+		_ = a.writeFrameLocked(time.Now().Add(a.writeTimeout), KindAbort, nil)
 	}
 	a.finishLocked()
 }
@@ -261,15 +266,16 @@ func (a *clientAttempt) writePayload(kind Kind, payload []byte) bool {
 	if a.failed {
 		return false
 	}
+	deadline := time.Now().Add(a.writeTimeout)
 	if len(payload) == 0 {
-		return a.writeFrameLocked(kind, nil)
+		return a.writeFrameLocked(deadline, kind, nil)
 	}
 	for len(payload) > 0 {
 		chunkSize := len(payload)
 		if chunkSize > MaxPayloadBytes {
 			chunkSize = MaxPayloadBytes
 		}
-		if !a.writeFrameLocked(kind, payload[:chunkSize]) {
+		if !a.writeFrameLocked(deadline, kind, payload[:chunkSize]) {
 			return false
 		}
 		payload = payload[chunkSize:]
@@ -277,11 +283,11 @@ func (a *clientAttempt) writePayload(kind Kind, payload []byte) bool {
 	return true
 }
 
-func (a *clientAttempt) writeFrameLocked(kind Kind, payload []byte) bool {
+func (a *clientAttempt) writeFrameLocked(deadline time.Time, kind Kind, payload []byte) bool {
 	if a.failed {
 		return false
 	}
-	err := writeFrameWithDeadline(a.conn, a.writeTimeout, Header{
+	err := writeFrameWithAbsoluteDeadline(a.conn, deadline, Header{
 		Version:   ProtocolVersion,
 		Kind:      kind,
 		CaptureID: a.id,
@@ -315,23 +321,27 @@ func (a *clientAttempt) closeWithoutFrame() {
 }
 
 func writeFrameWithDeadline(conn net.Conn, timeout time.Duration, header Header, payload []byte) error {
+	return writeFrameWithAbsoluteDeadline(conn, time.Now().Add(timeout), header, payload)
+}
+
+func writeFrameWithAbsoluteDeadline(conn net.Conn, deadline time.Time, header Header, payload []byte) error {
 	if len(payload) > MaxPayloadBytes {
 		return ErrFrameTooLarge
 	}
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
 	header.Length = uint32(len(payload))
-	if err := writeConnOnce(conn, timeout, header.MarshalBinary()); err != nil {
+	if err := writeConnOnce(conn, header.MarshalBinary()); err != nil {
 		return err
 	}
 	if len(payload) == 0 {
 		return nil
 	}
-	return writeConnOnce(conn, timeout, payload)
+	return writeConnOnce(conn, payload)
 }
 
-func writeConnOnce(conn net.Conn, timeout time.Duration, payload []byte) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		return err
-	}
+func writeConnOnce(conn net.Conn, payload []byte) error {
 	written, err := conn.Write(payload)
 	if err != nil {
 		return err
@@ -340,4 +350,12 @@ func writeConnOnce(conn net.Conn, timeout time.Duration, payload []byte) error {
 		return fmt.Errorf("%w: wrote %d of %d bytes", io.ErrShortWrite, written, len(payload))
 	}
 	return nil
+}
+
+func logicalOperationDeadline(ctx context.Context, timeout time.Duration) time.Time {
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		return ctxDeadline
+	}
+	return deadline
 }

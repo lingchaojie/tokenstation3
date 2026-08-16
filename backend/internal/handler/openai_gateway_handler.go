@@ -264,7 +264,7 @@ func (h *OpenAIGatewayHandler) submitCapture(c *gin.Context, result *service.Ope
 	if h.capturePool == nil || result == nil || account == nil {
 		return
 	}
-	if account.Platform != service.PlatformKiro {
+	if service.CaptureUsesStreamingAttempt(c) {
 		service.CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
 		return
 	}
@@ -2659,9 +2659,9 @@ func (h *OpenAIGatewayHandler) submitOpenAITerminalCapture(c *gin.Context, failu
 	if platform == "" {
 		platform = service.PlatformOpenAI
 	}
-	if platform != service.PlatformKiro {
+	if service.CaptureUsesStreamingAttempt(c) {
 		if failure.HasUpstreamHTTPResponse {
-			service.CommitTerminalErrorCaptureAttempt(c, platform, failure.StatusCode)
+			service.CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, failure.HTTPStatusForCapture(), !failure.CaptureResponseIncomplete)
 		} else {
 			service.AbortCaptureAttempt(c)
 		}

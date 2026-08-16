@@ -724,6 +724,7 @@ func TestWebChatAnthropicChatFinalHTTPErrorArchivesProviderAttemptExactlyOnce(t 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
 	enableCaptureForTest(t, c)
+	markWebChatCaptureOwner(c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)
@@ -773,6 +774,7 @@ func TestWebChatAnthropicResponsesFinalHTTPErrorArchivesProviderAttemptExactlyOn
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", bytes.NewReader(inbound))
 	enableCaptureForTest(t, c)
+	markWebChatCaptureOwner(c)
 	webChatCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
 		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(8<<20)), svc,
 	)
@@ -979,14 +981,14 @@ func TestWebChatErrorBodyExpansionRequiresPolicyApprovedCaptureContext(t *testin
 	newResponse := func() *http.Response {
 		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(body))}
 	}
-	gatewayBody, expanded, err := gateway.readWebChatUpstreamErrorBody(ownerCtx, newResponse())
+	gatewayBody, expanded, _, err := gateway.readWebChatUpstreamErrorBody(ownerCtx, newResponse())
 	require.NoError(t, err)
 	require.False(t, expanded)
 	require.Len(t, gatewayBody, int(gatewayUpstreamErrorBodyReadLimit))
 	require.Len(t, gemini.readWebChatUpstreamErrorBody(ownerCtx, newResponse()), int(gatewayUpstreamErrorBodyReadLimit))
 
 	approvedCtx := withCaptureUpstreamRequestContext(ownerCtx, c, captureLimit)
-	gatewayBody, expanded, err = gateway.readWebChatUpstreamErrorBody(approvedCtx, newResponse())
+	gatewayBody, expanded, _, err = gateway.readWebChatUpstreamErrorBody(approvedCtx, newResponse())
 	require.NoError(t, err)
 	require.False(t, expanded)
 	require.Equal(t, body, gatewayBody)

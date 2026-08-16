@@ -52,20 +52,20 @@ func newConversationCapturePoolForTransport(transport protocol.Transport, runtim
 
 // NewConversationCapturePool is the Wire-facing constructor. Static capture
 // disabled returns nil and therefore creates neither a socket client nor an
-// attempt. Runtime master-off is enforced before Begin by the immutable request
-// policy snapshot and leaves this transport open so sidecar spool upload can
-// continue draining.
-func NewConversationCapturePool(cfg *config.Config, _ CaptureHealthRepository) *ConversationCapturePool {
+// attempt. Runtime master-off is re-sampled from the atomically published
+// setting immediately before Begin and leaves this transport open so sidecar
+// spool upload can continue draining.
+func NewConversationCapturePool(cfg *config.Config, _ CaptureHealthRepository, settings *SettingService) *ConversationCapturePool {
 	if cfg == nil || !cfg.Gateway.Capture.Enabled {
 		return nil
 	}
 	transport := protocol.NewClient(protocol.ClientConfig{
 		SocketPath:   cfg.Gateway.Capture.Sidecar.Socket,
-		DialTimeout:  time.Millisecond,
-		WriteTimeout: time.Millisecond,
-		ReadTimeout:  time.Millisecond,
+		DialTimeout:  10 * time.Millisecond,
+		WriteTimeout: 10 * time.Millisecond,
+		ReadTimeout:  10 * time.Millisecond,
 	})
-	return newConversationCapturePoolForTransport(transport, func() bool { return true })
+	return newConversationCapturePoolForTransport(transport, settings.CaptureRuntimeMasterEnabledHot)
 }
 
 // Begin performs the one allowed transport admission synchronously. Capture

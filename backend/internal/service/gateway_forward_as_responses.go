@@ -38,9 +38,6 @@ func (s *GatewayService) ForwardAsResponses(
 	startTime := time.Now()
 	beginCaptureAttempt(c)
 	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
-	if captureEnabled {
-		setCapturePlatform(c, string(account.Platform))
-	}
 
 	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
 	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
@@ -141,6 +138,7 @@ func (s *GatewayService) ForwardAsResponses(
 	finishCapture := func() {}
 	if kiroDirectMode {
 		if captureEnabled {
+			setCapturePlatform(c, string(account.Platform))
 			ctx = withCaptureUpstreamRequestContext(ctx, c, s.cfg.Gateway.Capture.MaxBodyBytes)
 		}
 		var group *Group
@@ -192,14 +190,9 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 
 		// 11. Send request
-		if captureEnabled {
-			setCaptureUpstreamRequest(c, upstreamReq, s.cfg.Gateway.Capture.MaxBodyBytes)
-		}
+		s.captureOutboundRequest(c, account, upstreamReq, anthropicBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-		if captureEnabled {
-			setCaptureUpstreamResponse(c, resp)
-			finishCapture = beginCaptureResponse(c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
-		}
+		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -222,10 +215,10 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, responseTruncated, _ := s.readWebChatUpstreamErrorBody(ctx, resp)
+		respBody, responseTruncated, responseComplete, _ := s.readWebChatUpstreamErrorBody(ctx, resp)
 		_ = resp.Body.Close()
 		finishCapture()
-		if responseTruncated {
+		if responseTruncated || !responseComplete {
 			markCaptureResultTruncated(c)
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -248,20 +241,23 @@ func (s *GatewayService) ForwardAsResponses(
 			}
 			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody)
 			return nil, &UpstreamFailoverError{
-				StatusCode:              resp.StatusCode,
-				ResponseBody:            respBody,
-				RequestHeaders:          captureRequestHeadersFromResponse(resp),
-				ResponseHeaders:         resp.Header.Clone(),
-				UpstreamEndpoint:        captureEndpointFromResponse(resp),
-				Platform:                string(account.Platform),
-				HasUpstreamHTTPResponse: true,
+				StatusCode:                resp.StatusCode,
+				ResponseBody:              respBody,
+				RequestHeaders:            captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:           resp.Header.Clone(),
+				UpstreamEndpoint:          captureEndpointFromResponse(resp),
+				Platform:                  string(account.Platform),
+				HasUpstreamHTTPResponse:   true,
+				CaptureResponseIncomplete: !responseComplete,
 			}
 		}
 
 		// Non-failover error: return Responses-formatted error to client
 		s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody)
 		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
-		return nil, newTerminalProviderHTTPError(account, resp, respBody)
+		failure := newTerminalProviderHTTPError(account, resp, respBody)
+		failure.CaptureResponseIncomplete = !responseComplete
+		return nil, failure
 	}
 
 	// 13. Handle normal response (convert Anthropic → Responses)

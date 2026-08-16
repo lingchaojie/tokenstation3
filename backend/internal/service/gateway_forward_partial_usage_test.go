@@ -502,7 +502,7 @@ func TestGatewayService_Forward_PreSemanticReadErrorReturnsTerminalCaptureOnlyRe
 	require.Empty(t, recorder.Body.String())
 }
 
-func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsRemainFailoverableWithFinalAttemptBridge(t *testing.T) {
+func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsUseTypedAttemptAtWireBoundary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	forcedErr := errors.New("forced compatibility provider read failure")
 	tests := []struct {
@@ -529,7 +529,7 @@ func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsRemainFailoverable
 				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"compat-read-error"}},
 				Body:       &streamReadCloser{payload: providerPrefix, err: forcedErr},
 			}}
-			svc := newForwardPartialUsageServiceForTest(upstream)
+			svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 			account := newAnthropicOAuthAccountForPartialUsageTest()
 			parsed := &ParsedRequest{Body: NewRequestBodyRef(tt.body), Model: "claude-3-5-sonnet-latest", Stream: tt.stream}
 
@@ -544,9 +544,14 @@ func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsRemainFailoverable
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
 			require.Nil(t, result, "pre-semantic failures must not submit or bill an intermediate account")
-			bridge, ok := takeCaptureResult(c)
-			require.True(t, ok)
-			require.Equal(t, providerPrefix, bridge.Response)
+			attempts := transport.Attempts()
+			require.Len(t, attempts, 1)
+			require.Equal(t, upstream.lastBody, attempts[0].RequestBytes(), "capture must use the final transformed wire request")
+			require.Equal(t, providerPrefix, attempts[0].ResponseBytes(), "capture must contain only bytes naturally returned to the parser")
+			require.Empty(t, attempts[0].TerminalStates(), "the final-account handler sink owns terminal classification")
+			_, legacy := takeCaptureResult(c)
+			require.False(t, legacy, "typed paths must not publish the retired whole-body bridge")
+			AbortCaptureAttempt(c)
 		})
 	}
 }

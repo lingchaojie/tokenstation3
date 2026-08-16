@@ -427,9 +427,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 优先检测thinking block签名错误（400）并重试一次
 		if resp.StatusCode == 400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 			if readErr == nil {
-				_ = resp.Body.Close()
-
 				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
@@ -460,7 +460,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 					// 避免在重试预算已耗尽时再发起额外请求
 					if time.Since(retryStart) >= maxRetryElapsed {
-						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 						break
 					}
 					logger.LegacyPrintf("service.gateway", "[warn] Account %d: thinking blocks have invalid signature, retrying with filtered blocks", account.ID)
@@ -560,7 +560,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 							resp = &http.Response{
 								StatusCode: retryResp.StatusCode,
 								Header:     retryResp.Header.Clone(),
-								Body:       io.NopCloser(bytes.NewReader(retryRespBody)),
+								Body:       replayGatewayUpstreamErrorBody(retryRespBody, retryReadErr),
 							}
 							break
 						}
@@ -576,7 +576,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					}
 
 					// Retry failed: restore original response body and continue handling.
-					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+					resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 					break
 				}
 				// 不是签名错误（或整流器已关闭），继续检查 budget 约束
@@ -634,7 +634,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					}
 				}
 
-				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 			}
 		}
 
@@ -707,7 +707,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// 处理重试耗尽的情况
 	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
-			respBody, _ := s.readUpstreamErrorBody(resp)
+			respBody, readErr := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -732,13 +732,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}(),
 			})
 			return nil, &UpstreamFailoverError{
-				StatusCode:              resp.StatusCode,
-				ResponseBody:            respBody,
-				RequestHeaders:          captureRequestHeadersFromResponse(resp),
-				ResponseHeaders:         resp.Header.Clone(),
-				UpstreamEndpoint:        captureEndpointFromResponse(resp),
-				HasUpstreamHTTPResponse: true,
-				RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				StatusCode:                resp.StatusCode,
+				ResponseBody:              respBody,
+				RequestHeaders:            captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:           resp.Header.Clone(),
+				UpstreamEndpoint:          captureEndpointFromResponse(resp),
+				HasUpstreamHTTPResponse:   true,
+				RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -746,7 +747,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 处理可切换账号的错误
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
-		respBody, _ := s.readUpstreamErrorBody(resp)
+		respBody, readErr := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -770,25 +771,26 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}(),
 		})
 		return nil, &UpstreamFailoverError{
-			StatusCode:              resp.StatusCode,
-			ResponseBody:            respBody,
-			RequestHeaders:          captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:         resp.Header.Clone(),
-			UpstreamEndpoint:        captureEndpointFromResponse(resp),
-			HasUpstreamHTTPResponse: true,
-			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:                resp.StatusCode,
+			ResponseBody:              respBody,
+			RequestHeaders:            captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:           resp.Header.Clone(),
+			UpstreamEndpoint:          captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse:   true,
+			RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 		}
 	}
 	if resp.StatusCode >= 400 {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
 		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.Gateway.FailoverOn400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 			if readErr != nil {
-				// ReadAll failed, fall back to normal error handling without consuming the stream
+				// Replayed terminal read errors remain visible to normal handling.
 				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
 			}
-			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
 			if s.shouldFailoverOn400(respBody) {
 				upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
@@ -823,12 +825,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}
 				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
 				return nil, &UpstreamFailoverError{
-					StatusCode:              resp.StatusCode,
-					ResponseBody:            respBody,
-					RequestHeaders:          captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:         resp.Header.Clone(),
-					UpstreamEndpoint:        captureEndpointFromResponse(resp),
-					HasUpstreamHTTPResponse: true,
+					StatusCode:                resp.StatusCode,
+					ResponseBody:              respBody,
+					RequestHeaders:            captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:           resp.Header.Clone(),
+					UpstreamEndpoint:          captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse:   true,
+					CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 				}
 			}
 		}

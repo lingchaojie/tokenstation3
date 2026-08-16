@@ -300,6 +300,32 @@ func TestCaptureOutboundRequestAbortsPriorRetryAttempt(t *testing.T) {
 	require.Equal(t, []byte(`{"attempt":2}`), transport.Attempts()[1].RequestBytes())
 }
 
+func TestCaptureOutboundRequestPolicyOffRetryAbortsPriorTypedAttempt(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.Anthropic = true
+	policy.Platforms.Gemini = false
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	svc := &GatewayService{cfg: captureEnabledConfigForTest(32 << 20), capturePool: pool}
+
+	svc.captureOutboundRequest(c, &Account{Platform: PlatformAnthropic}, httptest.NewRequest(http.MethodPost, "https://first.test/v1/messages", nil), []byte(`{"attempt":1}`))
+	require.Equal(t, 1, transport.Begins())
+	first := transport.Attempts()[0]
+	require.True(t, CaptureUsesStreamingAttempt(c))
+
+	svc.captureOutboundRequest(c, &Account{Platform: PlatformGemini}, httptest.NewRequest(http.MethodPost, "https://second.test/v1/messages", nil), []byte(`{"attempt":2}`))
+
+	require.Equal(t, 1, transport.Begins(), "a policy-off retry must not begin another capture")
+	require.Equal(t, []captureTerminalState{captureAborted}, first.TerminalStates())
+	require.False(t, CaptureUsesStreamingAttempt(c), "a policy-off retry must clear the stale typed owner")
+}
+
 func TestGatewayResponseTeeStreamsOnlyConsumedBytesIntoCurrentAttempt(t *testing.T) {
 	transport := &recordingCaptureTransport{}
 	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
@@ -336,6 +362,30 @@ func TestGatewayResponseTeeStreamsOnlyConsumedBytesIntoCurrentAttempt(t *testing
 	require.Contains(t, string(recording.responseHeaders), "X-Request-Id")
 	require.NotContains(t, string(recording.responseHeaders), "secret")
 	require.Empty(t, recording.TerminalStates(), "response finalization must not own commit")
+}
+
+func TestTypedBeginCaptureResponsePreservesSuccessfulUpstreamHTTPStatus(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	svc := &GatewayService{cfg: captureEnabledConfigForTest(32 << 20), capturePool: pool}
+	account := &Account{Platform: PlatformAnthropic}
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	svc.captureOutboundRequest(c, account, req, []byte(`{"model":"mapped"}`))
+	resp := &http.Response{StatusCode: http.StatusCreated, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: req}
+	finish := beginCaptureResponse(c, resp, true, 1<<20)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	finish()
+
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, &ForwardResult{}))
+	require.Equal(t, []model.Final{{HTTPStatus: http.StatusCreated, ResponseComplete: true}}, transport.Attempts()[0].Finals())
 }
 
 func TestGatewayStreamingAttemptDoesNotPublishLegacyWholeBodyBridge(t *testing.T) {
@@ -403,6 +453,69 @@ func TestGatewayFailedSynchronousAdmissionDoesNotFallbackToLegacyBridge(t *testi
 	require.NotNil(t, result)
 	_, legacyBridge := takeCaptureResult(c)
 	require.False(t, legacyBridge, "failed typed admission must fail open without allocating the retired whole-body bridge")
+}
+
+func TestTypedAdmissionFailureCanTransitionToLaterLegacyOwner(t *testing.T) {
+	transport := &recordingCaptureTransport{beginErr: context.DeadlineExceeded}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	typedReq := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformOpenAI, typedReq, []byte(`{"model":"typed"}`), 1<<20)
+	require.False(t, ok)
+	require.True(t, captureStreamingAttemptPath(c), "the failed typed owner must not fall back within the same attempt")
+
+	legacyReq := httptest.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
+	setCapturePlatform(c, PlatformGrok)
+	SetCaptureOutboundRequest(c, legacyReq, []byte(`{"model":"grok"}`), 1<<20)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("legacy-response")), Request: legacyReq}
+	finish := beginCaptureResponse(c, resp, true, 1<<20)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	finish()
+
+	bridge, exists := takeCaptureResult(c)
+	require.True(t, exists)
+	require.Equal(t, []byte("legacy-response"), bridge.Response)
+	require.False(t, captureStreamingAttemptPath(c), "a later explicit legacy owner must replace the failed typed owner")
+}
+
+func TestTypedRetryCanTransitionToLaterLegacyOwnerAndAbortsTypedAttempt(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+	typedReq := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+	_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformOpenAI, typedReq, []byte(`{"model":"typed"}`), 1<<20)
+	require.True(t, ok)
+	typed := transport.Attempts()[0]
+
+	legacyReq := httptest.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
+	setCapturePlatform(c, PlatformGrok)
+	SetCaptureOutboundRequest(c, legacyReq, []byte(`{"model":"grok"}`), 1<<20)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("legacy-final")), Request: legacyReq}
+	finish := beginCaptureResponse(c, resp, true, 1<<20)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	finish()
+
+	require.Equal(t, []captureTerminalState{captureAborted}, typed.TerminalStates())
+	bridge, exists := takeCaptureResult(c)
+	require.True(t, exists)
+	require.Equal(t, []byte("legacy-final"), bridge.Response)
+	require.False(t, captureStreamingAttemptPath(c))
 }
 
 func TestGatewayNonStreamingAttemptDoesNotPublishLegacyWholeBodyBridge(t *testing.T) {

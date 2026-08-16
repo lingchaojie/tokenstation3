@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -293,9 +292,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 	// retry exhausted + failover
 	if s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
-			respBody, _ := s.readUpstreamErrorBody(resp)
+			respBody, readErr := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 			logger.LegacyPrintf("service.gateway", "[Bedrock] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d Body=%s",
 				account.ID, account.Name, resp.StatusCode, truncateString(string(respBody), 1000))
@@ -309,16 +308,18 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 				Kind:               "retry_exhausted_failover",
 				Message:            extractUpstreamErrorMessage(respBody),
 			})
-			return nil, newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+			failure := newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+			failure.CaptureResponseIncomplete = !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit())
+			return nil, failure
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
 
 	// non-retryable failover
 	if s.shouldFailoverUpstreamError(resp.StatusCode) {
-		respBody, _ := s.readUpstreamErrorBody(resp)
+		respBody, readErr := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 		s.handleFailoverSideEffects(ctx, resp, account)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -329,7 +330,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 			Kind:               "failover",
 			Message:            extractUpstreamErrorMessage(respBody),
 		})
-		return nil, newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+		failure := newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+		failure.CaptureResponseIncomplete = !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit())
+		return nil, failure
 	}
 
 	// other errors

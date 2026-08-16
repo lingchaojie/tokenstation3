@@ -158,6 +158,7 @@ func (s *OpenAIGatewayService) wrapOpenAIHTTPCaptureResponse(c *gin.Context, acc
 		if attempt == nil {
 			return
 		}
+		setCaptureAttemptResponseHTTPStatus(c, attempt, resp.StatusCode)
 		attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, s.cfg.Gateway.Capture.MaxHeaderBytes))
 		resp.Body = newCaptureResponseReader(resp.Body, attempt)
 		return
@@ -192,7 +193,7 @@ func (s *OpenAIGatewayService) applyOpenAIHTTPSuccessCapture(c *gin.Context, acc
 	if !enabled {
 		return
 	}
-	if account.Platform != PlatformKiro {
+	if captureStreamingAttemptPath(c) {
 		// The streamed attempt stays request-owned until the handler's existing
 		// usage/billing side-effect sink commits the client-visible outcome.
 		return
@@ -224,7 +225,7 @@ func (s *OpenAIGatewayService) submitOpenAIHTTPTerminalCapture(c *gin.Context, a
 		return
 	}
 	finishOpenAIHTTPCapture(resp)
-	if account.Platform != PlatformKiro {
+	if captureStreamingAttemptPath(c) {
 		// Typed OpenAI attempts remain request-owned until the handler's single
 		// terminal-error side-effect sink classifies the final account outcome.
 		return

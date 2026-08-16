@@ -329,10 +329,7 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	if resp == nil || resp.Body == nil {
 		return nil, nil
 	}
-	limit := gatewayUpstreamErrorBodyReadLimit
-	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
-		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
-	}
+	limit := s.upstreamErrorBodyReadLimit()
 	body, err := readCaptureAwareUpstreamErrorBody(resp, limit)
 	// The capture-aware reader may consume beyond the functional error prefix.
 	// Publish those raw bytes before terminal classification constructs/submits a
@@ -342,16 +339,70 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	return body, err
 }
 
+func (s *GatewayService) upstreamErrorBodyReadLimit() int64 {
+	limit := gatewayUpstreamErrorBodyReadLimit
+	if s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody && s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes > int(limit) {
+		limit = int64(s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+	}
+	return limit
+}
+
+func boundedUpstreamErrorResponseComplete(body []byte, readErr error, limit int64) bool {
+	return readErr == nil && limit > 0 && int64(len(body)) < limit
+}
+
+func captureAwareUpstreamErrorResponseComplete(resp *http.Response, body []byte, readErr error, limit int64) bool {
+	if readErr != nil {
+		return false
+	}
+	// Legacy WebChat ownership deliberately lets the capture wrapper finish its
+	// existing bounded drain beyond the smaller business/logging prefix. In that
+	// case the wrapper's archive-ceiling state, rather than the returned prefix
+	// length, is the authoritative completeness signal.
+	if resp != nil {
+		if captureReader, ok := resp.Body.(*captureBodyReadCloser); ok {
+			_, truncated := captureReader.bytes()
+			return !truncated
+		}
+	}
+	return boundedUpstreamErrorResponseComplete(body, nil, limit)
+}
+
+type replayedGatewayUpstreamErrorBody struct {
+	*bytes.Reader
+	terminalErr error
+}
+
+func (r *replayedGatewayUpstreamErrorBody) Read(p []byte) (int, error) {
+	if r == nil || r.Reader == nil {
+		return 0, io.EOF
+	}
+	if r.Len() > 0 {
+		return r.Reader.Read(p)
+	}
+	if r.terminalErr != nil {
+		return 0, r.terminalErr
+	}
+	return 0, io.EOF
+}
+
+func (r *replayedGatewayUpstreamErrorBody) Close() error { return nil }
+
+func replayGatewayUpstreamErrorBody(body []byte, terminalErr error) io.ReadCloser {
+	return &replayedGatewayUpstreamErrorBody{Reader: bytes.NewReader(body), terminalErr: terminalErr}
+}
+
 // readWebChatUpstreamErrorBody preserves the normal 512 KiB safety bound for
 // handlers while allowing the explicitly-tokened one-account WebChat boundary
 // to archive the terminal provider body up to its configured capture ceiling.
-func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp *http.Response) ([]byte, bool, error) {
+func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp *http.Response) ([]byte, bool, bool, error) {
 	captureLimit, captureApproved := captureUpstreamRequestLimitFromContext(ctx)
 	if !ownsWebChatFinalGatewayErrorCapture(ctx) || !captureApproved {
 		body, err := s.readUpstreamErrorBody(resp)
-		return body, false, err
+		return body, false, captureAwareUpstreamErrorResponseComplete(resp, body, err, s.upstreamErrorBodyReadLimit()), err
 	}
-	return readUpstreamBodyWithCeiling(ctx, resp, captureLimit, resolveProviderBodyIdleTimeout(s.cfg))
+	body, truncated, err := readUpstreamBodyWithCeiling(ctx, resp, captureLimit, resolveProviderBodyIdleTimeout(s.cfg))
+	return body, truncated, err == nil && !truncated, err
 }
 
 func readUpstreamBodyWithCeiling(ctx context.Context, resp *http.Response, limit int, idleTimeout time.Duration) ([]byte, bool, error) {
@@ -369,6 +420,7 @@ func readUpstreamBodyWithCeiling(ctx context.Context, resp *http.Response, limit
 }
 
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
+	startedAt := time.Now()
 	// Upstream returned a non-success HTTP status; count Ollama Cloud activity.
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	body, readErr := s.readUpstreamErrorBody(resp)
@@ -430,21 +482,28 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		}
 	}
 	if shouldDisable {
+		responseComplete := boundedUpstreamErrorResponseComplete(body, readErr, s.upstreamErrorBodyReadLimit())
 		return nil, &UpstreamFailoverError{
-			StatusCode:              resp.StatusCode,
-			ResponseBody:            body,
-			RequestHeaders:          captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:         resp.Header.Clone(),
-			UpstreamEndpoint:        captureEndpointFromResponse(resp),
-			HasUpstreamHTTPResponse: true,
+			StatusCode:                resp.StatusCode,
+			ResponseBody:              body,
+			RequestHeaders:            captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:           resp.Header.Clone(),
+			UpstreamEndpoint:          captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse:   true,
+			CaptureResponseIncomplete: !responseComplete,
 		}
 	}
 
 	MarkResponseCommitted(c)
+	model := ""
+	if len(requestedModel) > 0 {
+		model = requestedModel[0]
+	}
+	typedCaptureResult := terminalHTTPErrorForwardResult(c, resp, model, model, false, startedAt, boundedUpstreamErrorResponseComplete(body, readErr, s.upstreamErrorBodyReadLimit()))
 
 	// 归档采集（错误响应）：仅在此终态提交——failover 重试路径在上面 shouldDisable 分支已返回，
 	// 不会走到这里，故不会归档中间重试。drop-safe，绝不影响转发。
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && !captureStreamingAttemptPath(c) {
 		failure := &UpstreamFailoverError{
 			StatusCode:              resp.StatusCode,
 			ResponseBody:            body,
@@ -494,9 +553,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 			summary = errMsg
 		}
 		if summary == "" {
-			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+			return typedCaptureResult, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, summary)
+		return typedCaptureResult, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, summary)
 	}
 
 	// 根据状态码返回适当的自定义错误响应（不透传上游详细信息）
@@ -511,9 +570,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 			summary = truncateForLog(body, 512)
 		}
 		if summary == "" {
-			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return typedCaptureResult, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, summary)
+		return typedCaptureResult, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, summary)
 	case 401:
 		statusCode = http.StatusBadGateway
 		errType = "upstream_error"
@@ -550,9 +609,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	})
 
 	if upstreamMsg == "" {
-		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		return typedCaptureResult, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
-	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	return typedCaptureResult, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
 func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
@@ -582,11 +641,13 @@ func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *ht
 // OAuth 403：标记账号异常
 // API Key 未配置错误码：仅返回错误，不标记账号
 func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*ForwardResult, error) {
+	startedAt := time.Now()
 	MarkResponseCommitted(c)
 	// Capture upstream error body before side-effects consume the stream.
-	respBody, _ := s.readUpstreamErrorBody(resp)
+	respBody, readErr := s.readUpstreamErrorBody(resp)
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
+	typedCaptureResult := terminalHTTPErrorForwardResult(c, resp, "", "", false, startedAt, boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()))
 
 	s.handleRetryExhaustedSideEffects(ctx, resp, account)
 
@@ -628,7 +689,7 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 	// custom error-code policy classified it as retryable and all retries were
 	// exhausted. It returns a normal communicated error rather than a typed
 	// failover, so the handler has no later terminal sink; archive it here once.
-	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled {
+	if s.capturePool != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && !captureStreamingAttemptPath(c) {
 		failure := &UpstreamFailoverError{
 			StatusCode:              resp.StatusCode,
 			ResponseBody:            respBody,
@@ -676,9 +737,9 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 			summary = errMsg
 		}
 		if summary == "" {
-			return nil, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched)", resp.StatusCode)
+			return typedCaptureResult, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched)", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched) message=%s", resp.StatusCode, summary)
+		return typedCaptureResult, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched) message=%s", resp.StatusCode, summary)
 	}
 
 	// 返回统一的重试耗尽错误响应
@@ -691,9 +752,9 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 	})
 
 	if upstreamMsg == "" {
-		return nil, fmt.Errorf("upstream error: %d (retries exhausted)", resp.StatusCode)
+		return typedCaptureResult, fmt.Errorf("upstream error: %d (retries exhausted)", resp.StatusCode)
 	}
-	return nil, fmt.Errorf("upstream error: %d (retries exhausted) message=%s", resp.StatusCode, upstreamMsg)
+	return typedCaptureResult, fmt.Errorf("upstream error: %d (retries exhausted) message=%s", resp.StatusCode, upstreamMsg)
 }
 
 // streamingResult 流式响应结果

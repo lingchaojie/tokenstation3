@@ -138,16 +138,17 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	enableCaptureForTest(t, c)
 
+	upstreamBody := []byte(`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_msg_chat_json"}},
-		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`,
-		)),
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
 	svc.cfg.Gateway.Capture.Enabled = true
 	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
@@ -172,8 +173,9 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.NotEmpty(t, result.CaptureResponse)
+	require.Nil(t, result.UpstreamRequest, "typed capture must not republish a legacy whole-body snapshot")
+	require.Nil(t, result.CaptureResponse, "typed capture must not republish a legacy whole-body snapshot")
+	capture.commit(t, c, result, upstream.lastBody, upstreamBody, false)
 }
 
 // Covers the fully-new streaming composition: text block is still open when
@@ -208,9 +210,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingClosesOpenBlockOnDone(t
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_msg_chat_stream"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
 	svc.cfg.Gateway.Capture.Enabled = true
 	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
@@ -237,8 +241,9 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingClosesOpenBlockOnDone(t
 	require.Equal(t, 4, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.True(t, result.Stream)
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.Equal(t, upstreamBody, string(result.CaptureResponse))
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	capture.commit(t, c, result, upstream.lastBody, []byte(upstreamBody), false)
 	require.NotNil(t, result.FirstTokenMs)
 }
 
@@ -428,9 +433,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_msg_chat_err"}},
 		Body:       &errTailReader{data: []byte(partial), err: errors.New("simulated upstream read failure")},
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
 	svc.cfg.Gateway.Capture.Enabled = true
 	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
@@ -440,8 +447,9 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 	require.Contains(t, err.Error(), "stream usage incomplete")
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
-	require.Equal(t, upstream.lastBody, result.UpstreamRequest)
-	require.Equal(t, partial, string(result.CaptureResponse))
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	capture.commit(t, c, result, upstream.lastBody, []byte(partial), true)
 
 	out := rec.Body.String()
 	require.Contains(t, out, `"text":"he"`, "delta emitted before the failure must reach the client")
@@ -478,21 +486,24 @@ func TestForwardMessagesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk
 			cfg := rawChatCompletionsTestConfig()
 			cfg.Gateway.Capture.Enabled = true
 			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+			capture := newOpenAITypedCaptureTestHarness(t)
 
-			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
+			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			if tt.committed {
 				require.NotNil(t, result)
 				require.False(t, errors.As(err, &failoverErr))
 				require.Contains(t, recorder.Body.String(), `"text":"hello"`)
-				require.Equal(t, tt.sse, string(result.CaptureResponse))
+				require.Nil(t, result.CaptureResponse)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
 				return
 			}
 			require.Nil(t, result)
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, -1, c.Writer.Size())
 			require.Empty(t, recorder.Body.String())
+			capture.abort(t, c)
 		})
 	}
 }

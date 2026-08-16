@@ -213,14 +213,15 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 				return nil, &UpstreamFailoverError{
-					StatusCode:              resp.StatusCode,
-					ResponseBody:            respBody,
-					RequestHeaders:          captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:         resp.Header.Clone(),
-					UpstreamEndpoint:        captureEndpointFromResponse(resp),
-					HasUpstreamHTTPResponse: true,
-					Platform:                string(account.Platform),
-					RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+					StatusCode:                resp.StatusCode,
+					ResponseBody:              respBody,
+					RequestHeaders:            captureRequestHeadersFromResponse(resp),
+					ResponseHeaders:           resp.Header.Clone(),
+					UpstreamEndpoint:          captureEndpointFromResponse(resp),
+					HasUpstreamHTTPResponse:   true,
+					Platform:                  string(account.Platform),
+					RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+					CaptureResponseIncomplete: !openAIUpstreamErrorResponseComplete(resp, respBody, openAIUpstreamErrorBodyReadLimitForConfig(s.cfg)),
 				}
 			}
 			return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
@@ -1367,9 +1368,10 @@ func validateOpenAIChatPromptAnnotations(root gjson.Result) (bool, error) {
 
 func newOpenAIIncompleteChatStreamFailover(resp *http.Response, message string) *UpstreamFailoverError {
 	failure := &UpstreamFailoverError{
-		StatusCode:             http.StatusBadGateway,
-		ResponseBody:           []byte(`{"error":{"type":"upstream_error","message":` + strconv.Quote(message) + `}}`),
-		RetryableOnSameAccount: true,
+		StatusCode:                http.StatusBadGateway,
+		ResponseBody:              []byte(`{"error":{"type":"upstream_error","message":` + strconv.Quote(message) + `}}`),
+		RetryableOnSameAccount:    true,
+		CaptureResponseIncomplete: true,
 	}
 	if resp == nil {
 		return failure
@@ -1378,6 +1380,7 @@ func newOpenAIIncompleteChatStreamFailover(resp *http.Response, message string) 
 	failure.ResponseHeaders = resp.Header.Clone()
 	failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
 	failure.HasUpstreamHTTPResponse = true
+	failure.UpstreamHTTPStatus = resp.StatusCode
 	return failure
 }
 

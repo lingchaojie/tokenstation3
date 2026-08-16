@@ -36,9 +36,6 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	startTime := time.Now()
 	beginCaptureAttempt(c)
 	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
-	if captureEnabled {
-		setCapturePlatform(c, string(account.Platform))
-	}
 
 	// 1. Parse Chat Completions request
 	var ccReq apicompat.ChatCompletionsRequest
@@ -119,6 +116,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	finishCapture := func() {}
 	if kiroDirectMode {
 		if captureEnabled {
+			setCapturePlatform(c, string(account.Platform))
 			ctx = withCaptureUpstreamRequestContext(ctx, c, s.cfg.Gateway.Capture.MaxBodyBytes)
 		}
 		var group *Group
@@ -170,14 +168,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		}
 
 		// 11. Send request
-		if captureEnabled {
-			setCaptureUpstreamRequest(c, upstreamReq, s.cfg.Gateway.Capture.MaxBodyBytes)
-		}
+		s.captureOutboundRequest(c, account, upstreamReq, anthropicBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-		if captureEnabled {
-			setCaptureUpstreamResponse(c, resp)
-			finishCapture = beginCaptureResponse(c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
-		}
+		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -200,10 +193,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, responseTruncated, _ := s.readWebChatUpstreamErrorBody(ctx, resp)
+		respBody, responseTruncated, responseComplete, _ := s.readWebChatUpstreamErrorBody(ctx, resp)
 		_ = resp.Body.Close()
 		finishCapture()
-		if responseTruncated {
+		if responseTruncated || !responseComplete {
 			markCaptureResultTruncated(c)
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -226,19 +219,22 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			}
 			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody)
 			return nil, &UpstreamFailoverError{
-				StatusCode:              resp.StatusCode,
-				ResponseBody:            respBody,
-				RequestHeaders:          captureRequestHeadersFromResponse(resp),
-				ResponseHeaders:         resp.Header.Clone(),
-				UpstreamEndpoint:        captureEndpointFromResponse(resp),
-				Platform:                string(account.Platform),
-				HasUpstreamHTTPResponse: true,
+				StatusCode:                resp.StatusCode,
+				ResponseBody:              respBody,
+				RequestHeaders:            captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:           resp.Header.Clone(),
+				UpstreamEndpoint:          captureEndpointFromResponse(resp),
+				Platform:                  string(account.Platform),
+				HasUpstreamHTTPResponse:   true,
+				CaptureResponseIncomplete: !responseComplete,
 			}
 		}
 
 		s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody)
 		writeGatewayCCError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
-		return nil, newTerminalProviderHTTPError(account, resp, respBody)
+		failure := newTerminalProviderHTTPError(account, resp, respBody)
+		failure.CaptureResponseIncomplete = !responseComplete
+		return nil, failure
 	}
 
 	// 13. Extract reasoning effort from CC request body
@@ -738,15 +734,20 @@ func newIncompleteProviderStreamFailover(resp *http.Response, message string) *U
 			"message": message,
 		},
 	})
-	return &UpstreamFailoverError{
-		StatusCode:              http.StatusBadGateway,
-		ResponseBody:            body,
-		RequestHeaders:          captureRequestHeadersFromResponse(resp),
-		ResponseHeaders:         resp.Header.Clone(),
-		UpstreamEndpoint:        captureEndpointFromResponse(resp),
-		HasUpstreamHTTPResponse: true,
-		RetryableOnSameAccount:  true,
+	failure := &UpstreamFailoverError{
+		StatusCode:                http.StatusBadGateway,
+		ResponseBody:              body,
+		RequestHeaders:            captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:           resp.Header.Clone(),
+		UpstreamEndpoint:          captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse:   true,
+		CaptureResponseIncomplete: true,
+		RetryableOnSameAccount:    true,
 	}
+	if resp != nil {
+		failure.UpstreamHTTPStatus = resp.StatusCode
+	}
+	return failure
 }
 
 // newInvalidProviderResponseFailover marks a fully selected HTTP 2xx response

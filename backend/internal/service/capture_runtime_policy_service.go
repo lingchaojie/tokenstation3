@@ -65,6 +65,17 @@ func (s *SettingService) GetCompiledCaptureRuntimePolicyHot() CompiledCapturePol
 	return fallback
 }
 
+// CaptureRuntimeMasterEnabledHot returns the master bit from the latest
+// atomically published runtime policy. It never refreshes or reads storage and
+// is therefore safe to re-sample immediately before synchronous IPC admission.
+func (s *SettingService) CaptureRuntimeMasterEnabledHot() bool {
+	if s == nil {
+		return false
+	}
+	cached, _ := s.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy)
+	return cached != nil && cached.compiled.Enabled()
+}
+
 func (s *SettingService) loadCaptureRuntimePolicy(ctx context.Context) *cachedCaptureRuntimePolicy {
 	if s != nil {
 		if cached, ok := s.captureRuntimePolicyCache.Load().(*cachedCaptureRuntimePolicy); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {

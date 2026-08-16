@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -870,12 +869,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Handle error response
 		if resp.StatusCode >= 400 {
 			stopCompactKeepalive()
-			respBody := s.readUpstreamErrorBody(resp)
+			respBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
 			finishOpenAIHTTPCapture(resp)
 			_ = resp.Body.Close()
 			if openAICompactKeepaliveCommitted(c) {
 				respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
-				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
 				logOpenAICompactKeepaliveCommitted(ctx, c, account, resp)
 				return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
 			}
@@ -888,7 +887,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				continue
 			}
 			respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)

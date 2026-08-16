@@ -163,7 +163,7 @@ func (h *GatewayHandler) submitGatewayResultCaptureForRequest(
 	if h == nil || h.capturePool == nil || result == nil || account == nil {
 		return
 	}
-	if account.Platform != service.PlatformKiro {
+	if service.CaptureUsesStreamingAttempt(c) {
 		service.CommitForwardCaptureAttempt(c, string(account.Platform), result)
 		return
 	}
@@ -666,7 +666,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, service.PlatformGemini, true)
 						return
 					}
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
+					retryLimit := account.GetPoolModeRetryCount()
+					if failoverErr.RetryableOnSameAccount && fs.SameAccountRetryCount[account.ID] < retryLimit {
+						service.AbortCaptureAttempt(c)
+					}
+					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, retryLimit, failoverErr)
 					switch action {
 					case FailoverContinue:
 						continue
@@ -1146,7 +1150,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)
 						return
 					}
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
+					retryLimit := account.GetPoolModeRetryCount()
+					if failoverErr.RetryableOnSameAccount && fs.SameAccountRetryCount[account.ID] < retryLimit {
+						service.AbortCaptureAttempt(c)
+					}
+					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, retryLimit, failoverErr)
 					switch action {
 					case FailoverContinue:
 						continue
@@ -1870,9 +1878,9 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 	if failoverErr != nil && strings.TrimSpace(failoverErr.Platform) != "" {
 		platform = failoverErr.Platform
 	}
-	if failoverErr != nil && h.capturePool != nil && platform != service.PlatformKiro && failoverErr.HasUpstreamHTTPResponse {
-		service.CommitTerminalErrorCaptureAttempt(c, platform, failoverErr.StatusCode)
-	} else if h.capturePool != nil && platform == service.PlatformKiro {
+	if failoverErr != nil && h.capturePool != nil && service.CaptureUsesStreamingAttempt(c) && failoverErr.HasUpstreamHTTPResponse {
+		service.CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, failoverErr.HTTPStatusForCapture(), !failoverErr.CaptureResponseIncomplete)
+	} else if h.capturePool != nil && !service.CaptureUsesStreamingAttempt(c) {
 		if rec := service.BuildTerminalErrorCaptureRecord(c, platform, failoverErr, h.captureLimit()); rec != nil {
 			h.capturePool.Submit(rec)
 		}

@@ -655,6 +655,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			ImageCount:                    len(imageResults),
 			ImageOutputSizes:              openAIResponsesImageResultSizes(imageResults),
 			imageResults:                  append([]openAIResponsesImageResult(nil), imageResults...),
+			ClientDisconnect:              clientDisconnected,
 		}
 		return out
 	}

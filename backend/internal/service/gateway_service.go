@@ -606,6 +606,7 @@ type ForwardResult struct {
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
 	UpstreamFailed                bool // final provider attempt was consumed but could not produce a valid response
 	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
+	CaptureResponseComplete       bool // final provider response bytes were fully consumed despite a terminal error
 	ReasoningEffort               *string
 
 	// 图片生成计费字段（图片生成模型使用）
@@ -692,23 +693,37 @@ type GatewayFailureReason string
 // trigger account failover. Additive metadata keeps existing composite literals
 // source-compatible and preserves their legacy retry-next-account behavior.
 type UpstreamFailoverError struct {
-	StatusCode               int
-	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
-	RequestHeaders           http.Header // 最终上游请求头，仅供脱敏归档
-	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	UpstreamEndpoint         string
-	Platform                 string
-	HasUpstreamHTTPResponse  bool // true only when an actual HTTP response produced this failure
-	ForceCacheBilling        bool // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	RequestScopedTransient   bool // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
-	SafeToFailoverAfterWrite bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
-	Stage                    GatewayFailureStage
-	Scope                    GatewayFailureScope
-	Reason                   GatewayFailureReason
-	NextAccountAction        NextAccountAction
-	ClientStatusCode         int
-	ClientMessage            string
+	StatusCode                int
+	ResponseBody              []byte      // 上游响应体，用于错误透传规则匹配
+	RequestHeaders            http.Header // 最终上游请求头，仅供脱敏归档
+	ResponseHeaders           http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	UpstreamEndpoint          string
+	Platform                  string
+	HasUpstreamHTTPResponse   bool // true only when an actual HTTP response produced this failure
+	UpstreamHTTPStatus        int  // actual provider status when StatusCode is a synthesized client/failover status
+	CaptureResponseIncomplete bool // true when the provider response was not consumed to a valid terminal boundary
+	ForceCacheBilling         bool // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount    bool // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	RequestScopedTransient    bool // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite  bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                     GatewayFailureStage
+	Scope                     GatewayFailureScope
+	Reason                    GatewayFailureReason
+	NextAccountAction         NextAccountAction
+	ClientStatusCode          int
+	ClientMessage             string
+}
+
+// HTTPStatusForCapture keeps the provider's observed HTTP status separate from
+// a synthesized status used to classify or render a failover error.
+func (e *UpstreamFailoverError) HTTPStatusForCapture() int {
+	if e != nil && e.UpstreamHTTPStatus >= 100 && e.UpstreamHTTPStatus <= 599 {
+		return e.UpstreamHTTPStatus
+	}
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
 }
 
 func (e *UpstreamFailoverError) Error() string {

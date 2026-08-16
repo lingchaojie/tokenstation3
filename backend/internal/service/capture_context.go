@@ -16,7 +16,6 @@ import (
 const captureScopeContextKey = "gateway_capture_scope"
 const captureRequestedModelContextKey = "gateway_capture_requested_model"
 const captureAttemptRequestContextKey = "gateway_capture_attempt"
-const captureStreamingAttemptPathContextKey = "gateway_capture_streaming_attempt_path"
 
 type captureRequestScope struct {
 	policy   CompiledCapturePolicy
@@ -26,9 +25,19 @@ type captureRequestScope struct {
 }
 
 type captureAttemptRequestSlot struct {
-	mu      sync.Mutex
-	attempt *CaptureAttempt
+	mu                 sync.Mutex
+	attempt            *CaptureAttempt
+	owner              captureAttemptOwner
+	responseHTTPStatus int
 }
+
+type captureAttemptOwner uint8
+
+const (
+	captureAttemptOwnerNone captureAttemptOwner = iota
+	captureAttemptOwnerTyped
+	captureAttemptOwnerLegacy
+)
 
 type captureAttemptContextKey struct{}
 
@@ -166,19 +175,51 @@ func captureAttemptSlotForRequest(c *gin.Context, create bool) *captureAttemptRe
 	return slot
 }
 
-func markCaptureStreamingAttemptPath(c *gin.Context) {
-	if c != nil {
-		c.Set(captureStreamingAttemptPathContextKey, true)
+func captureStreamingAttemptPath(c *gin.Context) bool {
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.owner == captureAttemptOwnerTyped
+}
+
+// CaptureUsesStreamingAttempt reports whether the current provider owner
+// attempted typed admission. It remains true after admission failure so the
+// same owner cannot fall back to a whole-body bridge.
+func CaptureUsesStreamingAttempt(c *gin.Context) bool {
+	return captureStreamingAttemptPath(c)
+}
+
+func transitionCaptureAttemptOwner(c *gin.Context, owner captureAttemptOwner) {
+	slot := captureAttemptSlotForRequest(c, owner != captureAttemptOwnerNone)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	previous := slot.attempt
+	slot.attempt = nil
+	slot.owner = owner
+	slot.responseHTTPStatus = 0
+	slot.mu.Unlock()
+	if previous != nil {
+		previous.Abort()
 	}
 }
 
-func captureStreamingAttemptPath(c *gin.Context) bool {
-	if c == nil {
-		return false
+func markCaptureLegacyOwner(c *gin.Context) {
+	if captureStreamingAttemptPath(c) {
+		transitionCaptureAttemptOwner(c, captureAttemptOwnerLegacy)
+		return
 	}
-	value, exists := c.Get(captureStreamingAttemptPathContextKey)
-	enabled, _ := value.(bool)
-	return exists && enabled
+	slot := captureAttemptSlotForRequest(c, true)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	slot.owner = captureAttemptOwnerLegacy
+	slot.mu.Unlock()
 }
 
 func captureAttemptForRequest(c *gin.Context) *CaptureAttempt {
@@ -199,6 +240,9 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot.mu.Lock()
 	previous := slot.attempt
 	slot.attempt = next
+	if previous != next {
+		slot.responseHTTPStatus = 0
+	}
 	slot.mu.Unlock()
 	if previous != nil && previous != next {
 		previous.Abort()
@@ -206,7 +250,7 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 }
 
 func abortCaptureAttemptForRequest(c *gin.Context) {
-	replaceCaptureAttemptForRequest(c, nil)
+	transitionCaptureAttemptOwner(c, captureAttemptOwnerNone)
 }
 
 func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
@@ -217,8 +261,38 @@ func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	slot.mu.Lock()
 	attempt := slot.attempt
 	slot.attempt = nil
+	slot.owner = captureAttemptOwnerNone
+	slot.responseHTTPStatus = 0
 	slot.mu.Unlock()
 	return attempt
+}
+
+func setCaptureAttemptResponseHTTPStatus(c *gin.Context, attempt *CaptureAttempt, status int) {
+	if attempt == nil || status < 100 || status > 599 {
+		return
+	}
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.owner == captureAttemptOwnerTyped && slot.attempt == attempt {
+		slot.responseHTTPStatus = status
+	}
+	slot.mu.Unlock()
+}
+
+func captureAttemptResponseHTTPStatus(c *gin.Context) int {
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return 0
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.owner != captureAttemptOwnerTyped || slot.attempt == nil {
+		return 0
+	}
+	return slot.responseHTTPStatus
 }
 
 // AbortCaptureAttempt transfers and terminates the request's current attempt.
@@ -259,9 +333,15 @@ func CommitCapturePreCommitDisconnect(c *gin.Context, platform string, final mod
 // HTTP response. Callers must reject local/synthetic failures before invoking
 // it.
 func CommitTerminalErrorCaptureAttempt(c *gin.Context, platform string, httpStatus int) bool {
+	return CommitTerminalErrorCaptureAttemptWithCompleteness(c, platform, httpStatus, true)
+}
+
+// CommitTerminalErrorCaptureAttemptWithCompleteness preserves whether the
+// provider response reached its terminal boundary before the failure.
+func CommitTerminalErrorCaptureAttemptWithCompleteness(c *gin.Context, platform string, httpStatus int, responseComplete bool) bool {
 	return CommitCaptureAttempt(c, platform, CaptureOutcomeTerminalError, model.Final{
 		HTTPStatus:       boundedCaptureUint16(httpStatus),
-		ResponseComplete: true,
+		ResponseComplete: responseComplete,
 	})
 }
 
@@ -292,13 +372,21 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		AbortCaptureAttempt(c)
 		return false
 	}
+	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
+	if result.CaptureResponseComplete && !result.ClientDisconnect {
+		responseComplete = true
+	}
+	httpStatus := result.HTTPStatusForCapture()
+	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
+		httpStatus = observed
+	}
 	final := model.Final{
-		HTTPStatus:          boundedCaptureUint16(result.HTTPStatusForCapture()),
+		HTTPStatus:          boundedCaptureUint16(httpStatus),
 		InputTokens:         boundedCaptureUint32(result.Usage.InputTokens),
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    !result.UpstreamFailed && !result.ClientDisconnect,
+		ResponseComplete:    responseComplete,
 	}
 	if result.ClientDisconnect {
 		return CommitCapturePreCommitDisconnect(c, platform, final)
@@ -317,13 +405,21 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		AbortCaptureAttempt(c)
 		return false
 	}
+	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
+	if result.CaptureResponseComplete && !result.ClientDisconnect {
+		responseComplete = true
+	}
+	httpStatus := result.HTTPStatusForCapture()
+	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
+		httpStatus = observed
+	}
 	final := model.Final{
-		HTTPStatus:          boundedCaptureUint16(result.HTTPStatusForCapture()),
+		HTTPStatus:          boundedCaptureUint16(httpStatus),
 		InputTokens:         boundedCaptureUint32(result.Usage.InputTokens),
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    !result.UpstreamFailed && !result.ClientDisconnect,
+		ResponseComplete:    responseComplete,
 	}
 	if result.ClientDisconnect {
 		return CommitCapturePreCommitDisconnect(c, platform, final)
@@ -364,8 +460,7 @@ func beginCaptureAttemptForWireRequest(
 	body []byte,
 	headerLimit int,
 ) (*CaptureAttempt, bool) {
-	abortCaptureAttemptForRequest(c)
-	markCaptureStreamingAttemptPath(c)
+	transitionCaptureAttemptOwner(c, captureAttemptOwnerTyped)
 	if pool == nil || req == nil {
 		return nil, false
 	}
@@ -406,6 +501,10 @@ func beginCaptureAttemptForWireRequest(
 }
 
 func (s *GatewayService) captureOutboundRequest(c *gin.Context, account *Account, req *http.Request, body []byte) {
+	// Every wire attempt owns a fresh capture boundary, including retries whose
+	// platform or current runtime policy makes capture ineligible. Retire any
+	// prior typed owner before an admission guard can return.
+	transitionCaptureAttemptOwner(c, captureAttemptOwnerNone)
 	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil {
 		return
 	}
@@ -431,14 +530,17 @@ func (s *GatewayService) beginGatewayCaptureResponse(c *gin.Context, account *Ac
 		!CaptureMayApplyFor(c, string(account.Platform)) {
 		return func() {}
 	}
-	if account.Platform == PlatformKiro {
+	if account.Platform == PlatformKiro || isWebChatCaptureOwner(c) {
 		return beginCaptureResponse(c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
 	}
 	attempt := captureAttemptForRequest(c)
-	if attempt == nil || resp == nil || resp.Body == nil {
+	if attempt == nil || resp == nil {
 		return func() {}
 	}
+	setCaptureAttemptResponseHTTPStatus(c, attempt, resp.StatusCode)
 	attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, s.cfg.Gateway.Capture.MaxHeaderBytes))
-	resp.Body = newCaptureResponseReader(resp.Body, attempt)
+	if resp.Body != nil {
+		resp.Body = newCaptureResponseReader(resp.Body, attempt)
+	}
 	return func() {}
 }

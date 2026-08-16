@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -263,6 +264,7 @@ func newOpenAIUpstreamFailoverError(
 		if resp, ok := metadata[0].(*http.Response); ok && resp != nil {
 			failoverErr.RequestHeaders = captureRequestHeadersFromResponse(resp)
 			failoverErr.UpstreamEndpoint = captureEndpointFromResponse(resp)
+			failoverErr.CaptureResponseIncomplete = !openAIUpstreamErrorResponseComplete(resp, responseBody, openAIUpstreamErrorBodyReadLimit)
 		}
 	}
 	if len(metadata) > 1 {
@@ -309,15 +311,45 @@ func openAIUpstreamErrorBodyReadLimitForConfig(cfg *config.Config) int64 {
 	return limit
 }
 
-func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte {
+type replayedOpenAIUpstreamErrorBody struct {
+	*bytes.Reader
+	responseComplete bool
+}
+
+func (r *replayedOpenAIUpstreamErrorBody) Close() error { return nil }
+
+func replayOpenAIUpstreamErrorBody(body []byte, responseComplete bool) io.ReadCloser {
+	return &replayedOpenAIUpstreamErrorBody{Reader: bytes.NewReader(body), responseComplete: responseComplete}
+}
+
+func openAIUpstreamErrorResponseComplete(resp *http.Response, body []byte, limit int64) bool {
+	if resp != nil {
+		if replay, ok := resp.Body.(*replayedOpenAIUpstreamErrorBody); ok {
+			return replay.responseComplete
+		}
+	}
+	return boundedUpstreamErrorResponseComplete(body, nil, limit)
+}
+
+func (s *OpenAIGatewayService) readUpstreamErrorBodyWithCompleteness(resp *http.Response) ([]byte, bool) {
 	if resp == nil || resp.Body == nil {
-		return nil
+		return nil, true
 	}
 	cfg := (*config.Config)(nil)
 	if s != nil {
 		cfg = s.cfg
 	}
-	body, _ := readCaptureAwareUpstreamErrorBody(resp, openAIUpstreamErrorBodyReadLimitForConfig(cfg))
+	limit := openAIUpstreamErrorBodyReadLimitForConfig(cfg)
+	priorComplete := true
+	if replay, ok := resp.Body.(*replayedOpenAIUpstreamErrorBody); ok {
+		priorComplete = replay.responseComplete
+	}
+	body, readErr := readCaptureAwareUpstreamErrorBody(resp, limit)
+	return body, priorComplete && boundedUpstreamErrorResponseComplete(body, readErr, limit)
+}
+
+func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte {
+	body, _ := s.readUpstreamErrorBodyWithCompleteness(resp)
 	return body
 }
 
@@ -336,13 +368,33 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	requestBody []byte,
 	requestedModel ...string,
 ) (result *OpenAIForwardResult, retErr error) {
+	var body []byte
+	responseComplete := false
 	defer func() {
 		var failoverErr *UpstreamFailoverError
 		if retErr != nil && !errors.As(retErr, &failoverErr) {
+			if captureStreamingAttemptPath(c) {
+				model := ""
+				if len(requestedModel) > 0 {
+					model = requestedModel[0]
+				}
+				result = &OpenAIForwardResult{
+					RequestID:               resp.Header.Get("x-request-id"),
+					Model:                   model,
+					BillingModel:            model,
+					UpstreamModel:           model,
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamHTTPStatus:      resp.StatusCode,
+					UpstreamFailed:          true,
+					CaptureTerminalError:    true,
+					CaptureResponseComplete: responseComplete,
+				}
+				return
+			}
 			s.submitOpenAIHTTPTerminalCapture(c, account, resp)
 		}
 	}()
-	body := s.readUpstreamErrorBody(resp)
+	body, responseComplete = s.readUpstreamErrorBodyWithCompleteness(resp)
 	body = s.redactAgentIdentitySensitiveBody(ctx, account, body)
 
 	// cyber_policy 硬阻断：透传上游原始错误体给客户端（不重包成通用 502），不冷却账号。
@@ -417,13 +469,15 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Detail:             upstreamDetail,
 		})
 		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel...)
-		return nil, newOpenAIUpstreamFailoverError(
+		failure := newOpenAIUpstreamFailoverError(
 			resp.StatusCode,
 			resp.Header,
 			body,
 			upstreamMsg,
 			false,
 		)
+		failure.CaptureResponseIncomplete = !responseComplete
+		return nil, failure
 	}
 
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
@@ -502,14 +556,15 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:              resp.StatusCode,
-			ResponseBody:            body,
-			RequestHeaders:          captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:         resp.Header.Clone(),
-			UpstreamEndpoint:        captureEndpointFromResponse(resp),
-			HasUpstreamHTTPResponse: true,
-			Platform:                string(account.Platform),
-			RetryableOnSameAccount:  false,
+			StatusCode:                resp.StatusCode,
+			ResponseBody:              body,
+			RequestHeaders:            captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:           resp.Header.Clone(),
+			UpstreamEndpoint:          captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse:   true,
+			Platform:                  string(account.Platform),
+			RetryableOnSameAccount:    false,
+			CaptureResponseIncomplete: !responseComplete,
 		}
 	}
 
@@ -574,13 +629,33 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	writeError compatErrorWriter,
 	requestedModel ...string,
 ) (result *OpenAIForwardResult, retErr error) {
+	var body []byte
+	responseComplete := false
 	defer func() {
 		var failoverErr *UpstreamFailoverError
 		if retErr != nil && !errors.As(retErr, &failoverErr) {
+			if captureStreamingAttemptPath(c) {
+				model := ""
+				if len(requestedModel) > 0 {
+					model = requestedModel[0]
+				}
+				result = &OpenAIForwardResult{
+					RequestID:               resp.Header.Get("x-request-id"),
+					Model:                   model,
+					BillingModel:            model,
+					UpstreamModel:           model,
+					ResponseHeaders:         resp.Header.Clone(),
+					UpstreamHTTPStatus:      resp.StatusCode,
+					UpstreamFailed:          true,
+					CaptureTerminalError:    true,
+					CaptureResponseComplete: responseComplete,
+				}
+				return
+			}
 			s.submitOpenAIHTTPTerminalCapture(c, account, resp)
 		}
 	}()
-	body := s.readUpstreamErrorBody(resp)
+	body, responseComplete = s.readUpstreamErrorBodyWithCompleteness(resp)
 	body = s.redactAgentIdentitySensitiveBody(context.Background(), account, body)
 
 	// cyber_policy：兼容路径（Chat Completions / Anthropic）以各自格式回写错误，
@@ -690,14 +765,15 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{
-			StatusCode:              resp.StatusCode,
-			ResponseBody:            body,
-			RequestHeaders:          captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:         resp.Header.Clone(),
-			UpstreamEndpoint:        captureEndpointFromResponse(resp),
-			HasUpstreamHTTPResponse: true,
-			Platform:                string(account.Platform),
-			RetryableOnSameAccount:  false,
+			StatusCode:                resp.StatusCode,
+			ResponseBody:              body,
+			RequestHeaders:            captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:           resp.Header.Clone(),
+			UpstreamEndpoint:          captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse:   true,
+			Platform:                  string(account.Platform),
+			RetryableOnSameAccount:    false,
+			CaptureResponseIncomplete: !responseComplete,
 		}
 	}
 

@@ -17,9 +17,10 @@ const recordReconstructingTestBodyLimit = 32 << 20
 const recordReconstructingTestHeaderLimit = 1 << 20
 
 type recordReconstructingTestTransport struct {
-	mu      sync.Mutex
-	records chan<- *CaptureRecord
-	closed  bool
+	mu        sync.Mutex
+	records   chan<- *CaptureRecord
+	terminals chan<- string
+	closed    bool
 }
 
 func newRecordReconstructingTestTransport(records chan<- *CaptureRecord) protocol.Transport {
@@ -38,6 +39,7 @@ func (t *recordReconstructingTestTransport) Begin(_ context.Context, begin model
 	return &recordReconstructingTestAttempt{
 		begin:           begin,
 		records:         t.records,
+		terminals:       t.terminals,
 		request:         boundedCaptureWriter{limit: recordReconstructingTestBodyLimit},
 		response:        boundedCaptureWriter{limit: recordReconstructingTestBodyLimit},
 		requestHeaders:  boundedCaptureWriter{limit: recordReconstructingTestHeaderLimit},
@@ -59,9 +61,10 @@ func (t *recordReconstructingTestTransport) Close() error {
 type recordReconstructingTestAttempt struct {
 	mu sync.Mutex
 
-	begin   model.Begin
-	final   model.Final
-	records chan<- *CaptureRecord
+	begin     model.Begin
+	final     model.Final
+	records   chan<- *CaptureRecord
+	terminals chan<- string
 
 	request         boundedCaptureWriter
 	response        boundedCaptureWriter
@@ -123,13 +126,25 @@ func (a *recordReconstructingTestAttempt) Commit() bool {
 	if records != nil {
 		records <- record
 	}
+	a.publishTerminal("commit")
 	return true
 }
 
 func (a *recordReconstructingTestAttempt) Abort() {
 	a.mu.Lock()
+	if a.terminal {
+		a.mu.Unlock()
+		return
+	}
 	a.terminal = true
 	a.mu.Unlock()
+	a.publishTerminal("abort")
+}
+
+func (a *recordReconstructingTestAttempt) publishTerminal(state string) {
+	if a.terminals != nil {
+		a.terminals <- state
+	}
 }
 
 func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
@@ -152,7 +167,7 @@ func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
 		RawResponse:         snapshotBytes(a.response.buf),
 		RequestHeaders:      snapshotBytes(a.requestHeaders.buf),
 		ResponseHeaders:     snapshotBytes(a.responseHeaders.buf),
-		Truncated:           a.request.truncated || a.response.truncated || a.requestHeaders.truncated || a.responseHeaders.truncated,
+		Truncated:           !a.final.ResponseComplete || a.request.truncated || a.response.truncated || a.requestHeaders.truncated || a.responseHeaders.truncated,
 		ContentPolicy:       &content,
 		StopReason:          a.final.StopReason,
 		InputTokens:         int(a.final.InputTokens),
@@ -163,10 +178,16 @@ func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
 	if record.CapturedAt.IsZero() {
 		record.CapturedAt = time.Now().UTC()
 	}
+	if providerRequestID := captureProviderRequestIDBytes(record.ResponseHeaders); providerRequestID != "" {
+		record.RequestID = providerRequestID
+	}
 	if record.RequestID == "" {
 		record.RequestID = CaptureRequestID("")
 	}
 	extractCaptureColumns(record)
+	if a.final.StopReason != "" {
+		record.StopReason = a.final.StopReason
+	}
 	ApplyCaptureContentPolicy(record, content)
 	return record
 }
@@ -175,6 +196,12 @@ func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
 // cross-package handler tests compiled with the unit tag.
 func NewConversationCapturePoolForUnitTest(records chan<- *CaptureRecord) *ConversationCapturePool {
 	return newConversationCapturePoolForTransport(newRecordReconstructingTestTransport(records), func() bool { return true })
+}
+
+// NewConversationCapturePoolWithTerminalEventsForUnitTest additionally exposes
+// exact attempt terminal ownership to cross-package handler tests.
+func NewConversationCapturePoolWithTerminalEventsForUnitTest(records chan<- *CaptureRecord, terminals chan<- string) *ConversationCapturePool {
+	return newConversationCapturePoolForTransport(&recordReconstructingTestTransport{records: records, terminals: terminals}, func() bool { return true })
 }
 
 // InstallOpenAIAccountSchedulerForUnitTest installs a scheduler spy and a

@@ -69,3 +69,22 @@ func TestRecordReconstructingUnitTransportPublishesOnlyCommittedAttempt(t *testi
 	default:
 	}
 }
+
+func TestRecordReconstructingUnitTransportReportsEachTerminalOnce(t *testing.T) {
+	records := make(chan *CaptureRecord, 1)
+	terminals := make(chan string, 3)
+	pool := NewConversationCapturePoolWithTerminalEventsForUnitTest(records, terminals)
+	t.Cleanup(pool.Stop)
+	begin := model.Begin{CaptureID: uuid.New(), Platform: PlatformOpenAI}
+	attempt, ok := pool.Begin(context.Background(), begin)
+	require.True(t, ok)
+	attempt.Abort()
+	attempt.Abort()
+
+	require.Equal(t, "abort", <-terminals)
+	select {
+	case extra := <-terminals:
+		t.Fatalf("attempt published duplicate terminal event %q", extra)
+	default:
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -232,14 +231,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		// Peek only to identify an invalid task. Restore the body so the existing
 		// passthrough error handling sees the same response after recovery fails.
-		probeBody := s.readUpstreamErrorBody(resp)
+		probeBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
 		finishOpenAIHTTPCapture(resp)
 		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
+		resp.Body = replayOpenAIUpstreamErrorBody(probeBody, responseComplete)
 		if openAICompactKeepaliveCommitted(c) {
 			stopCompactKeepalive()
 			logOpenAICompactKeepaliveCommitted(ctx, c, account, resp)
-			return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
+			return s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 		}
 		if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
 			agentTaskRecoveryTried = true
@@ -258,7 +257,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, probeBody) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 		}
-		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
+		return s.handleErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -701,7 +700,7 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	account *Account,
 	requestBody []byte,
 	responseBody []byte,
-) error {
+) (*OpenAIForwardResult, error) {
 	MarkResponseCommitted(c)
 	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 
@@ -758,6 +757,22 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
 	}
 
+	if captureStreamingAttemptPath(c) {
+		model, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
+		result := &OpenAIForwardResult{
+			RequestID:               resp.Header.Get("x-request-id"),
+			Model:                   model,
+			BillingModel:            model,
+			UpstreamModel:           model,
+			ResponseHeaders:         resp.Header.Clone(),
+			UpstreamHTTPStatus:      resp.StatusCode,
+			UpstreamFailed:          true,
+			CaptureTerminalError:    true,
+			CaptureResponseComplete: openAIUpstreamErrorResponseComplete(resp, responseBody, openAIUpstreamErrorBodyReadLimitForConfig(s.cfg)),
+		}
+		return result, fmt.Errorf("upstream error: %d (client response sanitized)", resp.StatusCode)
+	}
+
 	if s != nil && s.cfg != nil && s.capturePool != nil {
 		rec := BuildTerminalErrorCaptureRecord(c, string(account.Platform), &UpstreamFailoverError{
 			StatusCode: resp.StatusCode, ResponseBody: responseBody,
@@ -769,7 +784,7 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		}
 	}
 
-	return fmt.Errorf("upstream error: %d (client response sanitized)", resp.StatusCode)
+	return nil, fmt.Errorf("upstream error: %d (client response sanitized)", resp.StatusCode)
 }
 
 func isOpenAIPassthroughAllowedRequestHeader(lowerKey string, allowTimeoutHeaders bool) bool {

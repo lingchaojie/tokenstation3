@@ -32,6 +32,253 @@ type rawCCHandlerFailoverUpstream struct {
 	firstDelayedTail     string
 	firstTailDelay       time.Duration
 	requestIDPerCall     bool
+	status               int
+}
+
+type openAIChatRetryDelayCaptureUpstream struct {
+	service.HTTPUpstream
+	calls chan struct{}
+}
+
+type openAIChatFinalHTTPErrorCaptureUpstream struct {
+	service.HTTPUpstream
+	body string
+}
+
+type openAIChatLocalErrorCaptureUpstream struct {
+	service.HTTPUpstream
+}
+
+func (*openAIChatLocalErrorCaptureUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return nil, fmt.Errorf("synthetic transport failure")
+}
+
+func (u *openAIChatFinalHTTPErrorCaptureUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusUnprocessableEntity,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(u.body)),
+	}, nil
+}
+
+func (u *openAIChatRetryDelayCaptureUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.calls <- struct{}{}
+	return &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"retry this account"}}`)),
+	}, nil
+}
+
+func TestOpenAIChatCompletionsAbortsAttemptBeforeSameAccountRetryDelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(9380)
+	account := service.Account{
+		ID: 9381, Name: "openai-chat-retry-delay", Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                      "test",
+			"base_url":                     "https://api.example.test",
+			"pool_mode":                    true,
+			"pool_mode_retry_count":        float64(1),
+			"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
+		},
+		Extra: map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions)},
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settings := newEnabledCaptureSettingService(t, cfg)
+	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	terminals := make(chan string, 4)
+	capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(make(chan *service.CaptureRecord, 1), terminals)
+	t.Cleanup(capturePool.Stop)
+	upstream := &openAIChatRetryDelayCaptureUpstream{calls: make(chan struct{}, 2)}
+	gateway := service.NewOpenAIGatewayService(
+		&openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, settings, nil, capturePool,
+	)
+	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, capturePool)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`)).WithContext(requestCtx)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9382, GroupID: &groupID, User: &service.User{ID: 9383, Status: service.StatusActive},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 9383})
+
+	done := make(chan struct{})
+	go func() {
+		h.ChatCompletions(c)
+		close(done)
+	}()
+	select {
+	case <-upstream.calls:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("first upstream call did not start")
+	}
+	select {
+	case terminal := <-terminals:
+		require.Equal(t, "abort", terminal)
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("failed typed attempt remained open during the same-account retry delay")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not stop after request cancellation")
+	}
+	require.Empty(t, terminals, "request defer must not emit a duplicate terminal")
+}
+
+func TestOpenAIChatCompletionsCommitsPreCommitDisconnectExactlyOnce(t *testing.T) {
+	providerSSE := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_disconnect","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"observed"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_disconnect","object":"response","model":"gpt-5.4","status":"completed","output":[{"type":"message","id":"msg_disconnect","role":"assistant","status":"completed","content":[{"type":"output_text","text":"observed"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &rawCCHandlerFailoverUpstream{firstBody: providerSSE}
+	got := runRawCCHandlerScenario(t, "native_chat", upstream, func(w gin.ResponseWriter) gin.ResponseWriter {
+		return &rawCCFailFirstWriteResponseWriter{ResponseWriter: w}
+	})
+
+	require.Equal(t, []int64{9201}, upstream.calls(), "a client disconnect must not replay the provider request")
+	require.Len(t, got.captures, 1)
+	require.Equal(t, providerSSE, string(got.captures[0].RawResponse))
+	require.Equal(t, "pre_commit_disconnect", got.captures[0].StopReason)
+	require.True(t, got.captures[0].Truncated, "a pre-commit disconnect is necessarily incomplete")
+}
+
+func TestOpenAIChatCompletionsCommitsFinalHTTPErrorExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(9390)
+	account := service.Account{
+		ID: 9391, Name: "openai-chat-final-error", Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test", "base_url": "https://api.example.test"},
+		Extra:       map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions)},
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settings := newEnabledCaptureSettingService(t, cfg)
+	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	records := make(chan *service.CaptureRecord, 1)
+	terminals := make(chan string, 2)
+	capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(records, terminals)
+	t.Cleanup(capturePool.Stop)
+	providerBody := `{"error":{"message":"final request error"}}`
+	upstream := &openAIChatFinalHTTPErrorCaptureUpstream{body: providerBody}
+	gateway := service.NewOpenAIGatewayService(
+		&openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, settings, nil, capturePool,
+	)
+	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, capturePool)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9392, GroupID: &groupID, User: &service.User{ID: 9393, Status: service.StatusActive},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 9393})
+
+	h.ChatCompletions(c)
+
+	terminal := <-terminals
+	require.Equal(t, "commit", terminal)
+	select {
+	case terminal := <-terminals:
+		t.Fatalf("final HTTP error published duplicate terminal event %q", terminal)
+	default:
+	}
+	select {
+	case record := <-records:
+		require.Equal(t, http.StatusUnprocessableEntity, record.HTTPStatus)
+		require.Equal(t, providerBody, string(record.RawResponse))
+		require.False(t, record.Truncated, "a fully read final provider HTTP error is complete")
+	default:
+		t.Fatal("final HTTP error did not publish its typed capture")
+	}
+}
+
+func TestOpenAIChatCompletionsAbortsLocalErrorExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(9395)
+	account := service.Account{
+		ID: 9396, Name: "openai-chat-local-error", Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test", "base_url": "https://api.example.test"},
+		Extra:       map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions)},
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+	settings := newEnabledCaptureSettingService(t, cfg)
+	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	records := make(chan *service.CaptureRecord, 1)
+	terminals := make(chan string, 2)
+	capturePool := service.NewConversationCapturePoolWithTerminalEventsForUnitTest(records, terminals)
+	t.Cleanup(capturePool.Stop)
+	gateway := service.NewOpenAIGatewayService(
+		&openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, billing, &openAIChatLocalErrorCaptureUpstream{}, &service.DeferredService{}, nil, nil, nil, nil, nil, settings, nil, capturePool,
+	)
+	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, capturePool)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 9397, GroupID: &groupID, User: &service.User{ID: 9398, Status: service.StatusActive},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 9398})
+
+	h.ChatCompletions(c)
+
+	require.Equal(t, "abort", <-terminals)
+	select {
+	case terminal := <-terminals:
+		t.Fatalf("local error published duplicate terminal event %q", terminal)
+	default:
+	}
+	select {
+	case record := <-records:
+		t.Fatalf("local error unexpectedly committed capture: %+v", record)
+	default:
+	}
+	require.Equal(t, http.StatusBadGateway, recorder.Code)
 }
 
 func (u *rawCCHandlerFailoverUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
@@ -96,7 +343,11 @@ func (u *rawCCHandlerFailoverUpstream) Do(req *http.Request, _ string, accountID
 			_ = writer.Close()
 		}()
 	}
-	return &http.Response{StatusCode: http.StatusOK, ContentLength: contentLength, Header: http.Header{
+	status := u.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{StatusCode: status, ContentLength: contentLength, Header: http.Header{
 		"Content-Type": {contentType},
 		"X-Request-Id": {requestID},
 	}, Body: responseBody, Request: req}, nil
@@ -1336,7 +1587,23 @@ func TestOpenAIRawCCBufferedHandlersRejectMalformedChoiceSiblingsBeforeCommit(t 
 	}
 }
 
-func TestOpenAIRawCCTerminalCaptureDrainsPastSmallerFunctionalReadLimit(t *testing.T) {
+func TestOpenAITypedNativeAndPassthroughBoundedHTTPErrorCommitsIncomplete(t *testing.T) {
+	const functionalErrorLimit = 512 << 10
+	providerBody := `{"error":{"type":"invalid_request_error","message":"` + strings.Repeat("x", functionalErrorLimit) + `"}}`
+	for _, endpoint := range []string{"native_responses", "passthrough_responses"} {
+		t.Run(endpoint, func(t *testing.T) {
+			upstream := &rawCCHandlerFailoverUpstream{firstBody: providerBody, status: http.StatusUnprocessableEntity}
+			got := runRawCCHandlerScenario(t, endpoint, upstream, nil, false)
+			require.Equal(t, []int64{9201}, upstream.calls())
+			require.Len(t, got.captures, 1, "a real non-failover provider HTTP error must commit its typed attempt")
+			require.Equal(t, []byte(providerBody[:functionalErrorLimit]), got.captures[0].RawResponse)
+			require.True(t, got.captures[0].Truncated, "a bounded provider-error prefix cannot be finalized complete")
+			require.Equal(t, http.StatusUnprocessableEntity, got.captures[0].HTTPStatus)
+		})
+	}
+}
+
+func TestOpenAIRawCCTerminalCaptureKeepsOnlyNaturallyReadBytes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const providerBody = "toolong"
 	groupID := int64(9350)
@@ -1391,8 +1658,8 @@ func TestOpenAIRawCCTerminalCaptureDrainsPastSmallerFunctionalReadLimit(t *testi
 
 	select {
 	case capture := <-captureRecords:
-		require.Equal(t, []byte(providerBody), capture.RawResponse)
-		require.False(t, capture.Truncated, "capture limit, not the smaller functional parser limit, owns truncation")
+		require.Equal(t, []byte(providerBody[:4]), capture.RawResponse, "capture must not drain bytes beyond the functional limit+1 read")
+		require.True(t, capture.Truncated, "the provider response was not consumed to completion")
 		require.Equal(t, http.StatusOK, capture.HTTPStatus)
 		require.Equal(t, "request-account-9351", capture.RequestID)
 	default:

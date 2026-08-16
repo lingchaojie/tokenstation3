@@ -208,9 +208,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
-			respBody, _ := s.readUpstreamErrorBody(resp)
+			respBody, readErr := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 			logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
@@ -233,22 +233,23 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				}(),
 			})
 			return nil, &UpstreamFailoverError{
-				StatusCode:              resp.StatusCode,
-				ResponseBody:            respBody,
-				RequestHeaders:          captureRequestHeadersFromResponse(resp),
-				ResponseHeaders:         resp.Header.Clone(),
-				UpstreamEndpoint:        captureEndpointFromResponse(resp),
-				HasUpstreamHTTPResponse: true,
-				RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				StatusCode:                resp.StatusCode,
+				ResponseBody:              respBody,
+				RequestHeaders:            captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:           resp.Header.Clone(),
+				UpstreamEndpoint:          captureEndpointFromResponse(resp),
+				HasUpstreamHTTPResponse:   true,
+				RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
 
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
-		respBody, _ := s.readUpstreamErrorBody(resp)
+		respBody, readErr := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 		logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
@@ -271,13 +272,14 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			}(),
 		})
 		return nil, &UpstreamFailoverError{
-			StatusCode:              resp.StatusCode,
-			ResponseBody:            respBody,
-			RequestHeaders:          captureRequestHeadersFromResponse(resp),
-			ResponseHeaders:         resp.Header.Clone(),
-			UpstreamEndpoint:        captureEndpointFromResponse(resp),
-			HasUpstreamHTTPResponse: true,
-			RetryableOnSameAccount:  account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			StatusCode:                resp.StatusCode,
+			ResponseBody:              respBody,
+			RequestHeaders:            captureRequestHeadersFromResponse(resp),
+			ResponseHeaders:           resp.Header.Clone(),
+			UpstreamEndpoint:          captureEndpointFromResponse(resp),
+			HasUpstreamHTTPResponse:   true,
+			RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 		}
 	}
 

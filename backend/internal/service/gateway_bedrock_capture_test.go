@@ -192,8 +192,11 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.Error(t, err)
-	require.Nil(t, result)
-	require.True(t, CommitTerminalErrorCaptureAttempt(c, PlatformAnthropic, upstream.resp.StatusCode))
+	require.NotNil(t, result, "typed owner hands the final provider error to the handler terminal sink")
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
 	pool.Stop()
 
 	require.Len(t, writer.records, 1)
@@ -206,4 +209,34 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 	require.NotContains(t, string(record.RequestHeaders), "bedrock-provider-secret")
 	require.Contains(t, string(record.ResponseHeaders), "X-Amzn-Requestid")
 	require.NotContains(t, string(record.ResponseHeaders), "X-Request-Id")
+}
+
+func TestBedrockBoundedFailoverPreservesIncompleteTypedResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	cfg := captureEnabledConfigForTest(1 << 20)
+	svc := &GatewayService{cfg: cfg, capturePool: pool, rateLimitService: NewRateLimitService(nil, nil, cfg, nil, nil)}
+	account := &Account{ID: 813, Platform: PlatformAnthropic, Type: AccountTypeBedrock}
+	req := httptest.NewRequest(http.MethodPost, "https://bedrock-runtime.test/model/invoke", nil)
+	svc.captureOutboundRequest(c, account, req, []byte(`{"model":"bedrock"}`))
+	providerBody := bytes.Repeat([]byte("x"), int(gatewayUpstreamErrorBodyReadLimit)+1)
+	resp := &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+		Request:    req,
+	}
+	beginCaptureResponse(c, resp, true, cfg.Gateway.Capture.MaxBodyBytes)
+
+	result, err := svc.handleBedrockUpstreamErrors(context.Background(), resp, c, account)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	require.True(t, failure.CaptureResponseIncomplete)
+	require.Equal(t, providerBody[:gatewayUpstreamErrorBodyReadLimit], transport.Attempts()[0].ResponseBytes())
+	AbortCaptureAttempt(c)
 }

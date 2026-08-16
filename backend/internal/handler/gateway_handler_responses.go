@@ -20,6 +20,7 @@ import (
 // This converts Responses API requests to Anthropic format, forwards to Anthropic
 // upstream, and converts responses back to Responses format.
 func (h *GatewayHandler) Responses(c *gin.Context) {
+	defer service.AbortCaptureAttempt(c)
 	streamStarted := false
 
 	requestStart := time.Now()
@@ -304,7 +305,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 		submitForwardUsage := func(result *service.ForwardResult) {
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-			h.submitGatewayResultCapture(result, account, forwardBody, upstreamEndpoint)
+			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 			if result.UpstreamFailed {
 				return
 			}
@@ -343,7 +344,11 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 					h.handleResponsesFailoverExhausted(c, failoverErr, true)
 					return
 				}
-				action := fs.HandleFailoverError(requestCtx, h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
+				retryLimit := account.GetPoolModeRetryCount()
+				if failoverErr.RetryableOnSameAccount && fs.SameAccountRetryCount[account.ID] < retryLimit {
+					service.AbortCaptureAttempt(c)
+				}
+				action := fs.HandleFailoverError(requestCtx, h.gatewayService, account.ID, account.Platform, retryLimit, failoverErr)
 				switch action {
 				case FailoverContinue:
 					continue
@@ -408,10 +413,14 @@ func responsesAccountSelectionContext(ctx context.Context, kiroCompactionLocked 
 // handleResponsesFailoverExhausted writes a failover-exhausted error in Responses format.
 func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
 	if lastErr != nil {
-		if h.capturePool != nil {
+		if h.capturePool != nil && service.CaptureUsesStreamingAttempt(c) && lastErr.HasUpstreamHTTPResponse {
+			service.CommitTerminalErrorCaptureAttemptWithCompleteness(c, lastErr.Platform, lastErr.HTTPStatusForCapture(), !lastErr.CaptureResponseIncomplete)
+		} else if h.capturePool != nil && !service.CaptureUsesStreamingAttempt(c) {
 			if record := service.BuildTerminalErrorCaptureRecord(c, lastErr.Platform, lastErr, h.captureLimit()); record != nil {
 				h.capturePool.Submit(record)
 			}
+		} else {
+			service.AbortCaptureAttempt(c)
 		}
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
 	}

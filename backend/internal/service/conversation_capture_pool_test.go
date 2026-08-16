@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -524,6 +527,50 @@ func TestRuntimeMasterOffDoesNotBeginButLeavesTransportOpen(t *testing.T) {
 	require.Nil(t, attempt)
 	require.Zero(t, transport.Begins())
 	require.False(t, transport.Closed())
+}
+
+func TestProductionConversationCapturePoolStaticDisabledIsInert(t *testing.T) {
+	repo := &capturePolicyRepoStub{}
+	settings := NewSettingService(repo, &config.Config{})
+
+	pool := NewConversationCapturePool(&config.Config{}, nil, settings)
+	require.Nil(t, pool)
+	gets, sets := repo.calls()
+	require.Zero(t, gets)
+	require.Zero(t, sets)
+}
+
+func TestProductionConversationCapturePoolResamplesActualRuntimeMasterBeforeBegin(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.Sidecar.Socket = "/tmp/capture-runtime-master-test.sock"
+	settings := NewSettingService(&capturePolicyRepoStub{}, cfg)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	_, err := settings.UpdateCaptureRuntimePolicy(context.Background(), policy)
+	require.NoError(t, err)
+
+	requestScope, _ := gin.CreateTestContext(httptest.NewRecorder())
+	setCompiledCaptureScopeForTest(requestScope, settings.GetCompiledCaptureRuntimePolicyHot(), 99, nil)
+	require.True(t, CaptureMayApplyFor(requestScope, PlatformAnthropic), "request scope must retain its admitted on snapshot")
+
+	pool := NewConversationCapturePool(cfg, nil, settings)
+	require.NotNil(t, pool)
+	productionTransport := pool.transport
+	transport := &recordingCaptureTransport{}
+	pool.transport = transport
+	require.NoError(t, productionTransport.Close())
+	t.Cleanup(pool.Stop)
+
+	policy.Enabled = false
+	_, err = settings.UpdateCaptureRuntimePolicy(context.Background(), policy)
+	require.NoError(t, err)
+
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.False(t, ok)
+	require.Nil(t, attempt)
+	require.Zero(t, transport.Begins(), "master-off must veto admission immediately before transport Begin")
+	require.False(t, transport.Closed(), "runtime master-off must leave the sidecar transport open")
 }
 
 func TestCaptureAttemptDoesNotRetryAfterIPCWriteFailure(t *testing.T) {

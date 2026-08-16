@@ -363,6 +363,7 @@ func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, lim
 		if attempt == nil || resp == nil || resp.Body == nil {
 			return func() {}
 		}
+		setCaptureAttemptResponseHTTPStatus(c, attempt, resp.StatusCode)
 		attempt.WriteResponseHeaders(captureHeaderBytes(resp.Header, attempt.headerLimit))
 		resp.Body = newCaptureResponseReader(resp.Body, attempt)
 		return func() {}
@@ -653,6 +654,7 @@ func ResetCaptureExchange(c *gin.Context) {
 // SetCaptureOutboundRequest snapshots the actual post-mapping request sent to
 // the provider. Callers must guard this with CaptureMayApplyFor.
 func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, limit int) {
+	markCaptureLegacyOwner(c)
 	token := startCaptureAttempt(c)
 	if token.slot == nil {
 		return
@@ -677,6 +679,7 @@ func SetCaptureOutboundRequest(c *gin.Context, req *http.Request, body []byte, l
 }
 
 func setCapturePlatform(c *gin.Context, platform string) {
+	markCaptureLegacyOwner(c)
 	slot := captureSlot(c)
 	if slot == nil {
 		return
@@ -1704,6 +1707,21 @@ func failedForwardResultForError(c *gin.Context, resp *http.Response, model, ups
 		return nil
 	}
 	return failedForwardResultWithCapture(c, resp, model, upstreamModel, stream, startedAt)
+}
+
+// terminalHTTPErrorForwardResult hands a fully consumed provider error response
+// to the handler-owned typed terminal sink. Legacy owners keep their existing
+// synchronous record construction and therefore receive nil here.
+func terminalHTTPErrorForwardResult(c *gin.Context, resp *http.Response, model, upstreamModel string, stream bool, startedAt time.Time, responseComplete bool) *ForwardResult {
+	if !captureStreamingAttemptPath(c) {
+		return nil
+	}
+	result := failedForwardResultWithCapture(c, resp, model, upstreamModel, stream, startedAt)
+	result.CaptureResponseComplete = responseComplete
+	if resp != nil {
+		result.CaptureHTTPStatus = resp.StatusCode
+	}
+	return result
 }
 
 // streamErrorForwardResult preserves billing and capture for an upstream
