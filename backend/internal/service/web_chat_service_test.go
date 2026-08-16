@@ -439,20 +439,9 @@ func TestWebChatDispatch_OpenAICommittedPartialRecordsUsageAndReturnsCapturedBod
 	require.Equal(t, 1, countWebChatEvent(svc.events, "usage_lookup"))
 }
 
-type webChatArchiveRecordWriter struct {
+type webChatCaptureRecords struct {
 	records chan *CaptureRecord
 }
-
-func (w *webChatArchiveRecordWriter) Write(_ context.Context, item *archiveWriteItem) error {
-	if item == nil {
-		return nil
-	}
-	w.records <- item.record
-	item.completeSuccess()
-	return nil
-}
-
-func (*webChatArchiveRecordWriter) Stop() {}
 
 type webChatRealGatewayHarness struct {
 	*GatewayService
@@ -486,8 +475,8 @@ func TestWebChatDispatch_OpenAIArchivesProviderRequestAndResponseExactlyOnce(t *
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid-openai-webchat"}},
 		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	defer pool.Stop()
 	cfg := captureEnabledConfigForTest(1 << 20)
 	cfg.Security.URLAllowlist.Enabled = false
@@ -549,8 +538,8 @@ func TestWebChatDispatch_OpenAIFinalHTTPErrorArchivesConfiguredBodyExactlyOnce(t
 				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid-openai-webchat-error"}},
 				Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 			}}
-			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePoolForRecords(writer.records)
 			cfg := captureEnabledConfigForTest(captureHardMaxBodyBytes)
 			cfg.Security.URLAllowlist.Enabled = false
 			openAI := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: pool}
@@ -612,8 +601,8 @@ func TestWebChatDispatch_AnthropicArchivesRecorderFinalRequestExactlyOnce(t *tes
 		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"rid-webchat-real"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	defer pool.Stop()
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,

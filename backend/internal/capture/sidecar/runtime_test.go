@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRuntimeDrainsRecoveredReadyRecordsAndReplaysExactUnackedBatch(t *testing.T) {
+func TestSidecarRestartDrainsRecoveredReadyRecordsAndReplaysExactUnackedBatch(t *testing.T) {
 	root := t.TempDir()
 	store := openRuntimeStore(t, root)
 	seedRuntimeRecord(t, store, "first secret body")
@@ -78,6 +78,33 @@ func TestRuntimeProductionUploaderRoutesClickHouseThroughEmbeddedTailnet(t *test
 	}
 	require.Eventually(t, func() bool { return store.Snapshot().ReadyRecords == 0 }, time.Second, time.Millisecond)
 	require.Equal(t, "clickhouse.tailnet:8123", node.lastAddress())
+	require.NoError(t, runtime.Shutdown(context.Background()))
+	require.Equal(t, 1, node.closeCount())
+}
+
+func TestClickHouseOutageThroughTSNetRetainsReadyDataAndOnlyIncrementsRetry(t *testing.T) {
+	root := t.TempDir()
+	store := openRuntimeStore(t, root)
+	seedRuntimeRecord(t, store, "keep through tailnet outage")
+	node := &outageTSNetNode{}
+	cfg := testConfig(root)
+	cfg.TSNet.Factory = func(upload.TSNetServerConfig) (upload.TSNetServer, error) {
+		return node, nil
+	}
+	runtime, err := New(cfg, Dependencies{
+		Store: store, Receiver: &blockingReceiver{}, Clock: newManualClock(time.Now()), StatusInterval: time.Hour,
+	})
+	require.NoError(t, err)
+	startRuntime(t, runtime)
+	require.Eventually(t, func() bool {
+		return node.dialCount() > 0 && runtime.Status().UploadRetries == 1
+	}, time.Second, time.Millisecond)
+
+	status := runtime.Status()
+	require.EqualValues(t, 1, status.ReadyRecords)
+	require.Zero(t, status.DroppedRecords)
+	require.False(t, status.DeliveryReady)
+	require.Len(t, store.PendingBatches(), 1)
 	require.NoError(t, runtime.Shutdown(context.Background()))
 	require.Equal(t, 1, node.closeCount())
 }
@@ -269,7 +296,7 @@ func TestShutdownDuringRecoveryIsACleanStop(t *testing.T) {
 	require.NoError(t, runtime.Shutdown(context.Background()))
 }
 
-func TestHardShutdownTimeoutLeavesAckedBatchRecoverable(t *testing.T) {
+func TestSidecarRestartHardShutdownTimeoutLeavesAckedBatchRecoverable(t *testing.T) {
 	root := t.TempDir()
 	base := openRuntimeStore(t, root)
 	seedRuntimeRecord(t, base, "recover after hard timeout")
@@ -1123,6 +1150,38 @@ type routingTSNetNode struct {
 	target  string
 	address string
 	closed  int
+}
+
+type outageTSNetNode struct {
+	mu     sync.Mutex
+	dials  int
+	closed int
+}
+
+func (n *outageTSNetNode) Dial(context.Context, string, string) (net.Conn, error) {
+	n.mu.Lock()
+	n.dials++
+	n.mu.Unlock()
+	return nil, errors.New("tailnet unavailable")
+}
+
+func (n *outageTSNetNode) Close() error {
+	n.mu.Lock()
+	n.closed++
+	n.mu.Unlock()
+	return nil
+}
+
+func (n *outageTSNetNode) dialCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.dials
+}
+
+func (n *outageTSNetNode) closeCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.closed
 }
 
 func (n *routingTSNetNode) Dial(ctx context.Context, network, address string) (net.Conn, error) {

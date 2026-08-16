@@ -528,7 +528,7 @@ func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("open ready directory for ack cleanup: %w", err)
 	}
-	defer readyDirectory.Close()
+	defer func() { _ = readyDirectory.Close() }()
 	readyNames, err := readExactDirectoryNames(readyDirectory)
 	if err != nil {
 		return fmt.Errorf("read ready directory for ack cleanup: %w", err)
@@ -596,7 +596,7 @@ func readReadyManifestAt(readyDirectory *os.File, recordName string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	defer recordDirectory.Close()
+	defer func() { _ = recordDirectory.Close() }()
 	return readBoundedFileAt(recordDirectory, manifestName, maxManifestBytes)
 }
 
@@ -714,7 +714,7 @@ func (s *Store) readBoundedFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if s.config.beforeBatchOpen != nil {
 		s.config.beforeBatchOpen(directoryPath, name)
 	}
@@ -730,12 +730,12 @@ func (s *Store) readReadyManifest(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer readyDirectory.Close()
+	defer func() { _ = readyDirectory.Close() }()
 	recordDirectory, err := openBatchDirectoryAt(readyDirectory, recordName)
 	if err != nil {
 		return nil, err
 	}
-	defer recordDirectory.Close()
+	defer func() { _ = recordDirectory.Close() }()
 	if s.config.beforeBatchOpen != nil {
 		s.config.beforeBatchOpen(path, manifestName)
 	}

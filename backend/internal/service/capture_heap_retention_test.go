@@ -104,8 +104,6 @@ func TestFiveHundredLargeCapturesDoNotAccumulateInGatewayHeap(t *testing.T) {
 		runCaptureFixture(t, pool, requestPayload, responsePayload)
 		runtime.KeepAlive(requestPayload)
 		runtime.KeepAlive(responsePayload)
-		requestPayload = nil
-		responsePayload = nil
 		if i%16 == 15 {
 			runtime.GC()
 		}

@@ -24,94 +24,34 @@ const (
 	captureAborted   captureTerminalState = "aborted"
 )
 
-// These compatibility doubles are also consumed by capture_admin_service_test
-// while the admin view is migrated from the retired native writer to sidecar
-// status in a later task.
-type mutableArchiveWriterStatus struct {
-	mu        sync.RWMutex
-	ready     bool
-	initError string
-}
+const recordSinkBodyLimit = 32 << 20
+const recordSinkHeaderLimit = 1 << 20
 
-func (s *mutableArchiveWriterStatus) Ready() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.ready
-}
-
-func (s *mutableArchiveWriterStatus) InitializationError() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.initError
-}
-
-func (s *mutableArchiveWriterStatus) set(ready bool, initError string) {
-	s.mu.Lock()
-	s.ready = ready
-	s.initError = initError
-	s.mu.Unlock()
-}
-
-type fakeWriter struct{ n int32 }
-
-func (f *fakeWriter) Write(_ context.Context, item *archiveWriteItem) error {
-	atomic.AddInt32(&f.n, 1)
-	item.completeSuccess()
-	return nil
-}
-
-func (*fakeWriter) Stop() {}
-
-type conversationCapturePoolOptions struct {
-	WorkerCount     int
-	QueueSize       int
-	OverflowPolicy  string
-	SamplePercent   int
-	MaxQueueBytes   int64
-	WriterQueueSize int
-}
-
-type archiveWriterStatus interface {
-	Ready() bool
-	InitializationError() string
-}
-
-type staticArchiveWriterStatus struct {
-	ready     bool
-	initError string
-}
-
-func (s staticArchiveWriterStatus) Ready() bool                 { return s.ready }
-func (s staticArchiveWriterStatus) InitializationError() string { return s.initError }
-
-const archiveWriterReconstructingBodyLimit = 32 << 20
-const archiveWriterReconstructingHeaderLimit = 1 << 20
-
-type archiveWriterReconstructingTransport struct {
+type recordSinkTransport struct {
 	submit func(*CaptureRecord)
 }
 
-func (t *archiveWriterReconstructingTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
+func (t *recordSinkTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
 	if begin.CaptureID == uuid.Nil {
 		return nil, errors.New("capture ID is required")
 	}
-	return &archiveWriterReconstructingAttempt{
+	return &recordSinkAttempt{
 		begin:           begin,
 		submit:          t.submit,
-		request:         boundedCaptureWriter{limit: archiveWriterReconstructingBodyLimit},
-		response:        boundedCaptureWriter{limit: archiveWriterReconstructingBodyLimit},
-		requestHeaders:  boundedCaptureWriter{limit: archiveWriterReconstructingHeaderLimit},
-		responseHeaders: boundedCaptureWriter{limit: archiveWriterReconstructingHeaderLimit},
+		request:         boundedCaptureWriter{limit: recordSinkBodyLimit},
+		response:        boundedCaptureWriter{limit: recordSinkBodyLimit},
+		requestHeaders:  boundedCaptureWriter{limit: recordSinkHeaderLimit},
+		responseHeaders: boundedCaptureWriter{limit: recordSinkHeaderLimit},
 	}, nil
 }
 
-func (*archiveWriterReconstructingTransport) Status(context.Context) (model.Status, error) {
+func (*recordSinkTransport) Status(context.Context) (model.Status, error) {
 	return model.Status{SpoolReady: true, DeliveryReady: true}, nil
 }
 
-func (*archiveWriterReconstructingTransport) Close() error { return nil }
+func (*recordSinkTransport) Close() error { return nil }
 
-type archiveWriterReconstructingAttempt struct {
+type recordSinkAttempt struct {
 	mu sync.Mutex
 
 	begin  model.Begin
@@ -126,25 +66,25 @@ type archiveWriterReconstructingAttempt struct {
 	terminal        bool
 }
 
-func (a *archiveWriterReconstructingAttempt) ID() uuid.UUID { return a.begin.CaptureID }
+func (a *recordSinkAttempt) ID() uuid.UUID { return a.begin.CaptureID }
 
-func (a *archiveWriterReconstructingAttempt) WriteRequest(p []byte) bool {
+func (a *recordSinkAttempt) WriteRequest(p []byte) bool {
 	return a.write(&a.request, p)
 }
 
-func (a *archiveWriterReconstructingAttempt) WriteResponse(p []byte) bool {
+func (a *recordSinkAttempt) WriteResponse(p []byte) bool {
 	return a.write(&a.response, p)
 }
 
-func (a *archiveWriterReconstructingAttempt) WriteRequestHeaders(p []byte) bool {
+func (a *recordSinkAttempt) WriteRequestHeaders(p []byte) bool {
 	return a.write(&a.requestHeaders, p)
 }
 
-func (a *archiveWriterReconstructingAttempt) WriteResponseHeaders(p []byte) bool {
+func (a *recordSinkAttempt) WriteResponseHeaders(p []byte) bool {
 	return a.write(&a.responseHeaders, p)
 }
 
-func (a *archiveWriterReconstructingAttempt) write(writer *boundedCaptureWriter, p []byte) bool {
+func (a *recordSinkAttempt) write(writer *boundedCaptureWriter, p []byte) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.terminal {
@@ -154,7 +94,7 @@ func (a *archiveWriterReconstructingAttempt) write(writer *boundedCaptureWriter,
 	return true
 }
 
-func (a *archiveWriterReconstructingAttempt) Finalize(final model.Final) bool {
+func (a *recordSinkAttempt) Finalize(final model.Final) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.terminal {
@@ -165,7 +105,7 @@ func (a *archiveWriterReconstructingAttempt) Finalize(final model.Final) bool {
 	return true
 }
 
-func (a *archiveWriterReconstructingAttempt) Commit() bool {
+func (a *recordSinkAttempt) Commit() bool {
 	a.mu.Lock()
 	if a.terminal || !a.finalized {
 		a.mu.Unlock()
@@ -181,13 +121,13 @@ func (a *archiveWriterReconstructingAttempt) Commit() bool {
 	return true
 }
 
-func (a *archiveWriterReconstructingAttempt) Abort() {
+func (a *recordSinkAttempt) Abort() {
 	a.mu.Lock()
 	a.terminal = true
 	a.mu.Unlock()
 }
 
-func (a *archiveWriterReconstructingAttempt) recordLocked() *CaptureRecord {
+func (a *recordSinkAttempt) recordLocked() *CaptureRecord {
 	content := CaptureContentPolicy{
 		RawRequest:      a.begin.Policy.StoreRequestBody,
 		RawResponse:     a.begin.Policy.StoreResponseBody,
@@ -224,87 +164,12 @@ func (a *archiveWriterReconstructingAttempt) recordLocked() *CaptureRecord {
 	return record
 }
 
-// newConversationCapturePool is a synchronous test-only compatibility shim for
-// archive-writer fixtures that predate the sidecar transport.
-func newConversationCapturePool(opts conversationCapturePoolOptions, writer ArchiveWriter) *ConversationCapturePool {
-	tracker := newCaptureHealthTracker("test", time.Now)
-	tracker.setCapacities(int64(opts.QueueSize), int64(opts.WriterQueueSize), opts.MaxQueueBytes)
-	submit := func(record *CaptureRecord) {
-		if record == nil || writer == nil {
-			return
+func newConversationCapturePoolForRecords(records chan<- *CaptureRecord) *ConversationCapturePool {
+	return newConversationCapturePoolForTransport(&recordSinkTransport{submit: func(record *CaptureRecord) {
+		if record != nil && records != nil {
+			records <- record
 		}
-		tracker.recordSubmitted()
-		tracker.recordAccepted()
-		size := recordBytes(record)
-		tracker.inFlightBytes.add(size)
-		item := newArchiveWriteItem(record, size, func(result archiveWriteResult) {
-			tracker.inFlightBytes.add(-size)
-			if result.success {
-				tracker.recordWritten(1)
-			} else {
-				tracker.recordDrop(result.reason, 1, size, result.err)
-			}
-		})
-		extractCaptureColumns(record)
-		if record.ContentPolicy != nil {
-			ApplyCaptureContentPolicy(record, *record.ContentPolicy)
-		}
-		if err := writer.Write(context.Background(), item); err != nil {
-			reason := CaptureDropWriterUnavailable
-			if errors.Is(err, errArchiveQueueFull) {
-				reason = CaptureDropWriterQueueFull
-			}
-			item.completeDrop(reason, err)
-		}
-	}
-	pool := newConversationCapturePoolForTransport(&archiveWriterReconstructingTransport{submit: submit}, func() bool { return true })
-	pool.testHealth = tracker.snapshot
-	pool.testReady = func() bool { return true }
-	pool.testStop = func() {
-		if writer != nil {
-			writer.Stop()
-		}
-	}
-	pool.testSubmit = submit
-	return pool
-}
-
-func newConversationCapturePoolWithStatus(
-	opts conversationCapturePoolOptions,
-	writer ArchiveWriter,
-	status archiveWriterStatus,
-	tracker *captureHealthTracker,
-	reporter *captureHealthReporter,
-) *ConversationCapturePool {
-	pool := newConversationCapturePool(opts, writer)
-	if tracker != nil {
-		pool.testHealth = tracker.snapshot
-	}
-	if status != nil {
-		pool.testReady = status.Ready
-		pool.testInitializationError = status.InitializationError
-	}
-	if reporter != nil {
-		previousStop := pool.testStop
-		pool.testStop = func() {
-			previousStop()
-			reporter.Stop()
-		}
-	}
-	return pool
-}
-
-func newConversationCapturePoolWithState(
-	opts conversationCapturePoolOptions,
-	writer ArchiveWriter,
-	tracker *captureHealthTracker,
-	reporter *captureHealthReporter,
-	ready bool,
-	initError string,
-) *ConversationCapturePool {
-	return newConversationCapturePoolWithStatus(opts, writer, staticArchiveWriterStatus{
-		ready: ready, initError: sanitizeCaptureHealthError(errors.New(initError)),
-	}, tracker, reporter)
+	}}, func() bool { return true })
 }
 
 type recordingCaptureTransport struct {

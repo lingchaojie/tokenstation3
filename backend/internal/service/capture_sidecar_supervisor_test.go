@@ -360,7 +360,6 @@ func (p *captureSupervisorProcess) Kill() error {
 	return nil
 }
 func (p *captureSupervisorProcess) exit(err error) { p.waitCh <- err }
-func (p *captureSupervisorProcess) killed() bool   { p.mu.Lock(); defer p.mu.Unlock(); return p.kill }
 func (p *captureSupervisorProcess) waitCalls() int { p.mu.Lock(); defer p.mu.Unlock(); return p.waits }
 
 type captureSupervisorRunner struct {

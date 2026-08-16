@@ -937,7 +937,7 @@ func readStatusCheckpoint(path string) (statusCheckpoint, bool, error) {
 	if err != nil {
 		return statusCheckpoint{}, false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > maxStatusCheckpointBytes {
 		return statusCheckpoint{}, false, errors.New("invalid capture status checkpoint")

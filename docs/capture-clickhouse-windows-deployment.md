@@ -8,9 +8,10 @@
 
 本文是一份可独立交给另一名 agent 执行的 runbook。它不要求阅读原聊天记录。
 
-> 部署门槛：当前仓库在本文编写时仍是旧的内存队列/native TCP writer。必须先确认
-> 目标 `sub2api` 版本已经实现 `sub2api capture-sidecar`、磁盘 spool 和本文表结构。
-> 如果 `sub2api capture-sidecar --help` 不存在，停止接入，不要把旧 writer 指向此节点。
+> 实现状态：仓库已实现 `sub2api capture-sidecar`、磁盘 spool 和本文表结构，并已用
+> `clickhouse/clickhouse-server:26.3.17.110` 完成本地真实 HTTP RowBinary/zstd 集成验证。
+> Windows/Tailnet 和正式服尚未因此自动完成部署；若目标 binary 的
+> `sub2api capture-sidecar --help` 不存在，停止接入。
 
 > 正式服纪律：Windows 节点可以独立准备；任何正式服安装、配置修改、更新、重启或
 > 真实 provider 验证，执行前必须再次获得用户确认。真实请求必须走现有服务链路并复用
@@ -412,6 +413,7 @@ gateway:
       socket: /app/data/capture/capture.sock
       frame_bytes: 65536
       memory_limit_bytes: 268435456
+      max_active_attempts: 32
     tailscale:
       state_dir: /app/data/capture/tsnet
       hostname: sub2api-capture-writer
@@ -424,12 +426,22 @@ gateway:
       password: "<CLICKHOUSE_INGEST_PASSWORD>"
       compression: zstd
       batch_max_rows: 100
+      batch_max_bytes: 134217728
       batch_max_interval_ms: 2000
       dial_timeout_ms: 5000
       write_timeout_ms: 60000
 ```
 
 此处仍保留 `enabled: false`。生产接入必须拆成独立审批步骤：
+
+- spool cap 固定为 12 GiB，文件系统 free reserve 固定为 8 GiB；sidecar 另保留
+  16 MiB 仅供 bounded sending manifest/ack 元数据，以便满载时仍可排空旧 ready 数据；
+- `ready/` 与未 ack 的固定 batch 会跨 sidecar、网关和容器重启续传，未 ack batch
+  保持相同 batch ID 和相同 record 集合；
+- 两项 secret 只使用环境变量 `GATEWAY_CAPTURE_TAILSCALE_AUTH_KEY` 和
+  `GATEWAY_CAPTURE_CLICKHOUSE_PASSWORD` 注入，禁止把值写进文档、argv、日志或状态 API；
+- `gateway.capture.enabled=false` 是默认值；静态关闭时不启动 sidecar/tsnet，也不创建
+  socket 或 spool。运行时关闭只停止新 capture，已有 backlog 继续排空。
 
 1. 更新正式服并重启，静态关闭，验证普通转发；
 2. 经用户确认后放入 endpoint/secret，把静态开关改为 true 并重启；

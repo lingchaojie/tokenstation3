@@ -45,7 +45,7 @@ func TestAttemptSplitsPayloadsAndSendsTerminalSequence(t *testing.T) {
 	}
 	received := make(chan []receivedFrame, 1)
 	go func() {
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		frames := make([]receivedFrame, 0, 10)
 		h, payload, err := readFrame(serverConn)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestAttemptDoesNotRetryOrBlockWhenSocketBackpressures(t *testing.T) {
 	})
 	beginRead := make(chan struct{})
 	go func() {
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		_, _, _ = readFrame(serverConn)
 		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil)
 		beginHeader, _, _ := readFrame(serverConn)
@@ -175,7 +175,7 @@ func TestBeginRequiresMatchingCaptureIDForTypedBackpressure(t *testing.T) {
 		WriteTimeout: 100 * time.Millisecond, ReadTimeout: 100 * time.Millisecond,
 	})
 	go func() {
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		_, _, _ = readFrame(serverConn)
 		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil)
 		_, _, _ = readFrame(serverConn)
@@ -261,7 +261,7 @@ func TestClientStatusRoundTrip(t *testing.T) {
 		},
 	}
 	go func() {
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		_, _, _ = readFrame(serverConn)
 		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil)
 		h, _, _ := readFrame(serverConn)

@@ -28,6 +28,37 @@ func TestCapacityRejectsBeforeFreeReserveIsCrossed(t *testing.T) {
 	require.ErrorIs(t, err, ErrFreeReserve)
 }
 
+func TestSidecarRestartPreservesOldReadyDataAtCapAndFreeReserve(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		usage     usage
+		wantError error
+	}{
+		{name: "12 GiB physical cap", usage: usage{Allocated: 12 << 30, Free: 1 << 40}, wantError: ErrSpoolCap},
+		{name: "8 GiB free reserve", usage: usage{Allocated: 1 << 20, Free: 8 << 30}, wantError: ErrFreeReserve},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "spool")
+			store := openTestStoreAt(t, root, nil)
+			ready := beginAttempt(t, store, policyAll())
+			require.NoError(t, ready.WriteRequest([]byte("preserve old ready data")))
+			require.NoError(t, ready.Commit())
+
+			store.capacity.usageFn = func() (usage, error) { return test.usage, nil }
+			newer := beginAttemptWithoutFailure(t, store, policyAll())
+			require.ErrorIs(t, newer.err, test.wantError)
+			require.Nil(t, newer.attempt)
+			require.DirExists(t, readyPath(store, ready.ID(), "."))
+
+			reopened := openTestStoreAt(t, root, nil)
+			recoverStore(t, reopened)
+			refs := reopened.Ready()
+			require.Len(t, refs, 1)
+			require.Equal(t, ready.ID(), refs[0].CaptureID)
+		})
+	}
+}
+
 func TestConcurrentReservationsCannotCollectivelyOversubscribe(t *testing.T) {
 	c := newTestCapacity(t, CapacityConfig{MaxBytes: 64 << 10}, usage{Free: 1 << 30})
 	start := make(chan struct{})

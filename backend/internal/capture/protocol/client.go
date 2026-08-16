@@ -133,7 +133,7 @@ func (c *Client) Status(ctx context.Context) (model.Status, error) {
 	if err != nil {
 		return model.Status{}, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := writeFrameWithAbsoluteDeadline(conn, deadline, Header{
 		Version: ProtocolVersion,
 		Kind:    KindStatusRequest,

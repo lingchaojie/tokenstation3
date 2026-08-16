@@ -1,13 +1,15 @@
 # Capture 磁盘 Spool 与独立 Sidecar 设计
 
 - 日期：2026-08-16
-- 状态：用户已确认设计，等待书面规范复核
+- 状态：已实现并通过本地单元、竞态、故障恢复，以及固定镜像
+  `clickhouse/clickhouse-server:26.3.17.110` 的真实 HTTP RowBinary/zstd 集成验证；
+  Windows/Tailnet 与正式服部署仍需另行审批和验收
 - 适用分支：`dev`
 - 关联文档：`docs/capture-clickhouse-windows-deployment.md`
 
 ## 1. 背景与问题判断
 
-现有 capture 在 `sub2api` 主进程中完成以下工作：
+历史 capture 在 `sub2api` 主进程中完成以下工作：
 
 1. 最终上游调用的 request/response 被复制成 `CaptureRecord`；
 2. record 进入 Pond worker 队列；
@@ -210,6 +212,9 @@ headers 各自上限 1 MiB。内容开关关闭的列在最终 record 中为空�
 | IPC frame | 约 64 KiB |
 | request/response 单方向保存上限 | 32 MiB |
 | 单组 headers 保存上限 | 1 MiB |
+| 同时接收的 attempt 上限 | 32 |
+| 单批上传最大字节数 | 128 MiB（`134217728` bytes） |
+| sending 元数据保留空间 | 16 MiB（`16777216` bytes） |
 
 占用统计覆盖 `partial + ready + sending manifest/marker`，以实际文件分配和 sidecar 的
 并发预留账本为准，启动时全量扫描校准。每次写下一帧前都同时检查 12 GiB cap 和
@@ -348,6 +353,7 @@ gateway:
       socket: /app/data/capture/capture.sock
       frame_bytes: 65536
       memory_limit_bytes: 268435456
+      max_active_attempts: 32
     tailscale:
       state_dir: /app/data/capture/tsnet
       hostname: sub2api-capture-writer
@@ -360,6 +366,7 @@ gateway:
       password: ""
       compression: zstd
       batch_max_rows: 100
+      batch_max_bytes: 134217728
       batch_max_interval_ms: 2000
       dial_timeout_ms: 5000
       write_timeout_ms: 60000
@@ -368,6 +375,12 @@ gateway:
 校验规则：静态 false 时不要求任何 secret/endpoint；静态 true 时所有目录必须位于
 `/app/data/capture`，spool cap、free reserve、frame 和内容上限必须为正，ClickHouse
 URL 必须是 HTTP(S) 且不能包含 userinfo，秘密不得通过 URL query 配置。
+
+部署时只通过环境变量 `GATEWAY_CAPTURE_TAILSCALE_AUTH_KEY` 与
+`GATEWAY_CAPTURE_CLICKHOUSE_PASSWORD` 注入两项 secret；文档、状态、日志和 argv
+均不得包含其值。`gateway.capture.enabled=false` 是默认值，静态关闭时不创建 sidecar、
+tsnet、socket 或 spool。`ready/` 记录和未 ack 的固定 batch 会在 sidecar、网关或容器
+重启后使用原 batch ID 和原 record 集合自动续传。
 
 ## 12. 资源控制
 

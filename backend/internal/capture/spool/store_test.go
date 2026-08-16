@@ -201,7 +201,7 @@ func TestOpenFileFailureReleasesAdmissionAndAttemptSlot(t *testing.T) {
 	replacement.Abort(errors.New("test cleanup"))
 }
 
-func TestRecoverCrashPoints(t *testing.T) {
+func TestCrashBeforeCommitAndCrashAfterReadyRenameRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		layout      string
@@ -1062,7 +1062,7 @@ func rewriteContentFile(t *testing.T, s *Store, id uuid.UUID, name string, decod
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
 	require.NoError(t, err)
 	compressed := encoder.EncodeAll(decoded, nil)
-	encoder.Close()
+	require.NoError(t, encoder.Close())
 	require.NoError(t, os.WriteFile(readyPath(s, id, name), compressed, 0o600))
 	manifest := readManifest(t, s, id)
 	for index := range manifest.Files {

@@ -258,7 +258,7 @@ func TestQuarantineRecursiveDeleteDoesNotFollowNestedSymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(external, filepath.Join(entryPath, "external-link")))
 	directory, err := openBatchDirectory(quarantinePath)
 	require.NoError(t, err)
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 
 	require.NoError(t, removeDirectoryEntryNoFollow(directory, entryName))
 	require.NoFileExists(t, entryPath)
@@ -278,7 +278,7 @@ func TestQuarantineRecursiveDeleteFailsClosedAtEntryBound(t *testing.T) {
 	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
 	directory, err := openBatchDirectory(quarantinePath)
 	require.NoError(t, err)
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	remaining := 2
 
 	err = removeDirectoryEntryNoFollowBounded(directory, entryName, 0, &remaining)
@@ -304,7 +304,7 @@ func TestQuarantineRecursiveDeletePreflightsWholeSubtreeBeforeUnlink(t *testing.
 	require.NoError(t, os.WriteFile(deepFile, []byte("payload"), 0o600))
 	directory, err := openBatchDirectory(quarantinePath)
 	require.NoError(t, err)
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	remaining := 4
 
 	err = removeDirectoryEntryNoFollowBounded(directory, entryName, 0, &remaining)

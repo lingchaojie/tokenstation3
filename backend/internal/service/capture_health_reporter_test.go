@@ -131,65 +131,6 @@ func (r *captureHealthRepoFake) DeleteBefore(_ context.Context, cutoff time.Time
 	return 0, nil
 }
 
-func TestCaptureHealthReporterRetriesWithoutDoubleCounting(t *testing.T) {
-	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
-	tracker := newCaptureHealthTracker("host-a", func() time.Time { return now })
-	repo := &captureHealthRepoFake{failUpserts: 1}
-	reporter := newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{now: func() time.Time { return now }})
-	tracker.recordDrop(CaptureDropWriterQueueFull, 2, 300, nil)
-
-	now = now.Add(time.Minute)
-	require.Error(t, reporter.flushOnce(context.Background(), false))
-	require.NoError(t, reporter.flushOnce(context.Background(), false))
-	require.NoError(t, reporter.flushOnce(context.Background(), false))
-
-	repo.mu.Lock()
-	defer repo.mu.Unlock()
-	require.Len(t, repo.upserts, 2, "third flush has no completed or pending buckets")
-	require.Equal(t, int64(2), repo.upserts[0][0].DroppedRecords)
-	require.Equal(t, int64(2), repo.upserts[1][0].DroppedRecords)
-}
-
-func TestCaptureHealthReporterCleanupUsesThirtyDayCutoff(t *testing.T) {
-	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
-	repo := &captureHealthRepoFake{}
-	reporter := newCaptureHealthReporter(newCaptureHealthTracker("host-a", func() time.Time { return now }), repo, captureHealthReporterOptions{
-		now:       func() time.Time { return now },
-		retention: 30 * 24 * time.Hour,
-	})
-
-	require.NoError(t, reporter.cleanupOnce(context.Background()))
-	require.Equal(t, []time.Time{now.Add(-30 * 24 * time.Hour)}, repo.cutoffs)
-}
-
-func TestCaptureHealthReporterBoundsPendingRetryStateAndBatchSize(t *testing.T) {
-	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
-	tracker := newCaptureHealthTracker("host-a", func() time.Time { return now })
-	repo := &captureHealthRepoFake{failUpserts: 10}
-	reporter := newCaptureHealthReporter(tracker, repo, captureHealthReporterOptions{
-		now:             func() time.Time { return now },
-		pendingCapacity: 2,
-		maxBatchSize:    1,
-	})
-
-	for i := 0; i < 3; i++ {
-		tracker.recordDrop(CaptureDropWriterQueueFull, 1, int64(i+1), nil)
-		now = now.Add(time.Minute)
-		require.Error(t, reporter.flushOnce(context.Background(), false))
-	}
-
-	reporter.mu.Lock()
-	require.Len(t, reporter.pending, 2)
-	reporter.mu.Unlock()
-	require.Equal(t, uint64(1), tracker.snapshot().HistoryDroppedBuckets)
-
-	repo.mu.Lock()
-	for _, batch := range repo.upserts {
-		require.LessOrEqual(t, len(batch), 1)
-	}
-	repo.mu.Unlock()
-}
-
 func TestBuildCaptureStatusEventsUsesSidecarIdentityAndCumulativeValues(t *testing.T) {
 	minute := time.Date(2026, 8, 17, 1, 2, 0, 0, time.UTC)
 	sourceID := uuid.New()

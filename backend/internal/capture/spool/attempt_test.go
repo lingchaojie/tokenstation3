@@ -83,7 +83,8 @@ func TestDisabledRawStorageStillExtractsWithoutCreatingContentFile(t *testing.T)
 		Policy:    model.ContentPolicy{StoreResponseBody: false},
 	})
 	require.NoError(t, err)
-	a := sink.(*Attempt)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
 
 	require.NoError(t, a.WriteResponse([]byte("data: {\"usage\":{\"output_tokens\":9}}\n\n")))
 	require.NoError(t, a.Commit())
@@ -101,7 +102,8 @@ func TestMalformedExtractionDoesNotPreventCommitOrLeakPayloadInWarning(t *testin
 		Policy:    model.ContentPolicy{StoreResponseBody: true},
 	})
 	require.NoError(t, err)
-	a := sink.(*Attempt)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
 	var logs bytes.Buffer
 	a.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	body := []byte("{\"secret\":\"do-not-log\"")
@@ -131,7 +133,8 @@ func TestNonUTF8RawContentRemainsCommitableWhenExtractionFails(t *testing.T) {
 		Policy:    model.ContentPolicy{StoreResponseBody: true},
 	})
 	require.NoError(t, err)
-	a := sink.(*Attempt)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
 	body := []byte{0xff, 0x00, 0xfe, 0x7f}
 
 	require.NoError(t, a.WriteResponse(body))
@@ -148,7 +151,8 @@ func TestExtractionWarningIsLoggedOnlyOnceAfterRepeatedFailures(t *testing.T) {
 		Policy:    model.ContentPolicy{StoreResponseBody: false},
 	})
 	require.NoError(t, err)
-	a := sink.(*Attempt)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
 	var logs bytes.Buffer
 	a.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	secret := []byte("do-not-log-repeated-secret")
@@ -270,7 +274,7 @@ func readZstdFile(t *testing.T, path string) []byte {
 	t.Helper()
 	f, err := os.Open(path)
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
 	require.NoError(t, err)
 	defer decoder.Close()

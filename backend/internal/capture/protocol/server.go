@@ -145,7 +145,7 @@ func (s *Server) Serve(ctx context.Context) error {
 // frames, and peers that do not finish Begin are closed without classifying a
 // dropped capture. No session slot or spool factory is involved.
 func (s *Server) rejectOverloadedConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	deadline := time.Now().Add(overloadOperationTimeout)
 	if err := conn.SetDeadline(deadline); err != nil {
 		return

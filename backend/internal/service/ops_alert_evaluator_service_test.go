@@ -69,15 +69,9 @@ func (r *opsCaptureHealthRepoStub) DeleteBefore(context.Context, time.Time) (int
 	return 0, nil
 }
 
-func newOpsCaptureMetricPool(t *testing.T, status archiveWriterStatus) *ConversationCapturePool {
+func newOpsCaptureMetricPool(t *testing.T, status model.Status) *ConversationCapturePool {
 	t.Helper()
-	pool := newConversationCapturePoolWithStatus(
-		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
-		noopArchiveWriter{},
-		status,
-		newCaptureHealthTracker("ops-test", time.Now),
-		nil,
-	)
+	pool := newConversationCapturePoolForTransport(&recordingCaptureTransport{status: status}, func() bool { return true })
 	t.Cleanup(pool.Stop)
 	return pool
 }
@@ -563,7 +557,7 @@ func TestNewOpsAlertEvaluatorServiceProvidesCaptureMetrics(t *testing.T) {
 		Reason:         string(CaptureDropSpoolCap),
 		DroppedRecords: 4,
 	}}}
-	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
 	svc := NewOpsAlertEvaluatorService(nil, &stubOpsRepo{}, nil, nil, nil, nil, pool, nil, repo)
 
 	ready, readyOK := svc.computeRuleMetric(
@@ -614,7 +608,7 @@ func TestOpsAlertEvaluatorSendsRecoveryEmailAfterResolution(t *testing.T) {
 			EmailSent: true,
 		},
 	}
-	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
 	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil, nil)
 
 	var sentKind opsAlertEmailKind
@@ -654,7 +648,7 @@ func TestOpsAlertEvaluatorDoesNotSendRecoveryEmailWhenResolutionFails(t *testing
 		resolveErr:  errors.New("database unavailable"),
 		activeEvent: &OpsAlertEvent{ID: 502, RuleID: rule.ID, Status: OpsAlertStatusFiring},
 	}
-	pool := newOpsCaptureMetricPool(t, staticArchiveWriterStatus{ready: true})
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
 	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil, nil)
 	svc.sendAlertEmail = func(context.Context, *OpsAlertRuntimeSettings, *OpsAlertRule, *OpsAlertEvent, opsAlertEmailKind) bool {
 		t.Fatal("recovery email must not be sent before resolution is persisted")

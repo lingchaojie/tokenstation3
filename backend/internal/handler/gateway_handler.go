@@ -198,46 +198,6 @@ func (h *GatewayHandler) submitGatewayResultCaptureForRequest(
 	})
 }
 
-// submitGatewayResultCapture keeps Task 10 provider-native callers on their
-// existing bridge until their attempt ownership is migrated separately.
-func (h *GatewayHandler) submitGatewayResultCapture(
-	result *service.ForwardResult,
-	account *service.Account,
-	fallbackRequest []byte,
-	upstreamEndpoint string,
-) {
-	if h == nil || h.capturePool == nil || result == nil || account == nil ||
-		result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
-		return
-	}
-	rawRequest, requestTruncated := service.SnapshotForCaptureWithFlag(result.UpstreamRequest, h.captureLimit())
-	thinkingEffort := ""
-	if result.ReasoningEffort != nil {
-		thinkingEffort = *result.ReasoningEffort
-	}
-	h.capturePool.Submit(&service.CaptureRecord{
-		CapturedAt:          time.Now().UTC(),
-		Platform:            string(account.Platform),
-		RequestID:           service.CaptureRequestID(result.RequestID),
-		RequestedModel:      result.Model,
-		UpstreamModel:       result.UpstreamModelForCapture(),
-		UpstreamEndpoint:    firstNonEmptyString(result.CaptureUpstreamEndpoint, upstreamEndpoint),
-		Stream:              result.StreamForCapture(),
-		HTTPStatus:          result.HTTPStatusForCapture(),
-		InputTokens:         result.Usage.InputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		ThinkingEffort:      thinkingEffort,
-		RawRequest:          rawRequest,
-		RawResponse:         result.CaptureResponse,
-		RequestHeaders:      result.CaptureRequestHeaders,
-		ResponseHeaders:     result.CaptureResponseHeaders,
-		Truncated:           result.CaptureTruncated || requestTruncated,
-		ContentPolicy:       result.CaptureContentPolicy,
-	})
-}
-
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {

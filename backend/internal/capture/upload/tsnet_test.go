@@ -28,10 +28,12 @@ func TestTSNetDialerUsesPersistentTaggedNodeWithoutStartingIt(t *testing.T) {
 	require.Equal(t, "sub2api-capture-writer", factory.config.Hostname)
 	require.Equal(t, "tskey-auth-test", factory.config.AuthKey)
 	require.NotEmpty(t, factory.config.Dir)
-	require.Zero(t, factory.node.(*fakeTSNetNode).dialCalls)
+	node, ok := factory.node.(*fakeTSNetNode)
+	require.True(t, ok)
+	require.Zero(t, node.dialCalls)
 	require.NoError(t, dialer.Close())
 	require.NoError(t, dialer.Close())
-	require.Zero(t, factory.node.(*fakeTSNetNode).closeCalls)
+	require.Zero(t, node.closeCalls)
 }
 
 func TestTSNetDialerCloseWaitsForLazyStartAndRejectsLaterDials(t *testing.T) {

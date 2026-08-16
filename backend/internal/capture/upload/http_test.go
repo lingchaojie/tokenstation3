@@ -47,7 +47,8 @@ func TestHTTPUploaderBoundsInjectedDialContext(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	transport := uploader.client.Transport.(*http.Transport)
+	transport, ok := uploader.client.Transport.(*http.Transport)
+	require.True(t, ok)
 	before := time.Now()
 	_, err = transport.DialContext(context.Background(), "tcp", "clickhouse.internal:8123")
 	require.Error(t, err)
@@ -454,7 +455,7 @@ func TestEncodeCompressedReportsOriginalErrorBeforeFlushingBackpressuredPipe(t *
 	_ = reader.Close()
 }
 
-func TestUploadLargeEarlyHTTPFailureIsRemoteRetryableNotLocalCorruption(t *testing.T) {
+func TestClickHouseOutageLargeEarlyHTTPFailureIsRemoteRetryableNotLocalCorruption(t *testing.T) {
 	payload := make([]byte, 4<<20)
 	for i := range payload {
 		payload[i] = byte(rand.Uint32())

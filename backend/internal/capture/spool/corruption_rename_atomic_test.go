@@ -28,10 +28,10 @@ func TestCorruptionRenameNeverReplacesExistingDestination(t *testing.T) {
 
 	source, err := openBatchDirectory(sourceDirectory)
 	require.NoError(t, err)
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	destination, err := openBatchDirectory(destinationDirectory)
 	require.NoError(t, err)
-	defer destination.Close()
+	defer func() { _ = destination.Close() }()
 	err = renameDirectoryEntryNoReplace(source, sourceName, destination, string(corruptionID))
 	require.Error(t, err)
 	require.FileExists(t, filepath.Join(sourcePath, "source"))

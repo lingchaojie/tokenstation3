@@ -139,7 +139,7 @@ func TestServerRejectsVersionMismatchBeforeBegin(t *testing.T) {
 	factory := &recordingFactory{}
 	_, socketPath := startTestServer(t, ServerConfig{MaxSessions: 2}, factory)
 	conn := dialTestSocket(t, socketPath)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	require.NoError(t, writeFrame(conn, Header{Version: 99, Kind: KindHandshake}, nil))
 	h, _, err := readFrame(conn)
@@ -169,7 +169,7 @@ func TestServerBoundsAcceptedSessionsBeforeSpawningHandlers(t *testing.T) {
 	require.Eventually(t, func() bool { return server.ActiveHandlers() == 2 }, time.Second, time.Millisecond)
 
 	extra := dialTestSocket(t, socketPath)
-	defer extra.Close()
+	defer func() { _ = extra.Close() }()
 	require.NoError(t, writeFrame(extra, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
 	require.NoError(t, extra.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
 	started := time.Now()
@@ -244,7 +244,7 @@ func TestServerClampsConfiguredMaxSessionsToHardLimit(t *testing.T) {
 	require.Eventually(t, func() bool { return server.ActiveHandlers() == 32 }, time.Second, time.Millisecond)
 
 	extra := dialTestSocket(t, socketPath)
-	defer extra.Close()
+	defer func() { _ = extra.Close() }()
 	require.NoError(t, writeFrame(extra, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
 	require.NoError(t, extra.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
 	header, _, err := readFrame(extra)
@@ -259,7 +259,7 @@ func TestServerRejectsIllegalOrderAndAbortsOpenedSession(t *testing.T) {
 	factory := &recordingFactory{}
 	_, socketPath := startTestServer(t, ServerConfig{MaxSessions: 2}, factory)
 	conn := dialTestSocket(t, socketPath)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	handshake(t, conn, ProtocolVersion)
 	id := uuid.New()
 	beginPayload, err := json.Marshal(model.Begin{CaptureID: id})

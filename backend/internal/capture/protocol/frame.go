@@ -12,10 +12,11 @@ import (
 	"github.com/google/uuid"
 )
 
+const ProtocolVersion uint16 = 2
+
 const (
-	ProtocolVersion uint16 = 2
-	HeaderSize             = 28
-	MaxPayloadBytes        = 65536
+	HeaderSize      = 28
+	MaxPayloadBytes = 65536
 )
 
 var (

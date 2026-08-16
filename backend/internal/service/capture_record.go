@@ -1333,9 +1333,10 @@ func (s *captureJSONMetaScanner) scanArray(path captureJSONMetaPath, depth int) 
 		return err
 	}
 	childPath := captureJSONMetaIgnore
-	if path == captureJSONMetaChoices {
+	switch path {
+	case captureJSONMetaChoices:
 		childPath = captureJSONMetaChoiceItem
-	} else if path == captureJSONMetaCandidates {
+	case captureJSONMetaCandidates:
 		childPath = captureJSONMetaCandidateItem
 	}
 	for {
@@ -2386,6 +2387,15 @@ func ExtractCaptureMetadataForCompatibility(record *CaptureRecord) (model.Extrac
 			StopReason:          record.StopReason,
 		},
 	})
+}
+
+// captureUInt32 preserves the compatibility extractor's fail-closed handling
+// for invalid token counters without depending on the retired native writer.
+func captureUInt32(value int) uint32 {
+	if value < 0 || uint64(value) > uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(value)
 }
 
 // extractCaptureColumns 在 worker 内填充 rec 的抽取列，供归档写入前调用。

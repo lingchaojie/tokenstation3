@@ -173,30 +173,6 @@ func TestApplyCaptureContentPolicyKeepsMetadataAndClearsDisabledFields(t *testin
 	require.Empty(t, rec.ResponseHeaders)
 }
 
-func TestCapturePoolAppliesContentPolicyAfterMetadataExtraction(t *testing.T) {
-	writer := newDeferredLifecycleWriter()
-	pool := newConversationCapturePool(conversationCapturePoolOptions{
-		WorkerCount: 1, QueueSize: 8, OverflowPolicy: "drop", MaxQueueBytes: 1024,
-	}, writer)
-	defer pool.Stop()
-	policy := CaptureContentPolicy{}
-	rec := &CaptureRecord{
-		RawRequest:     []byte(`{"conversation_id":"conversation-a"}`),
-		RawResponse:    []byte(`{"usage":{"output_tokens":7}}`),
-		RequestHeaders: []byte(`{"X-Test":["request"]}`),
-		ContentPolicy:  &policy,
-	}
-
-	pool.Submit(rec)
-	item := writer.take(t)
-	require.Equal(t, "conversation-a", item.record.SessionID)
-	require.Equal(t, 7, item.record.OutputTokens)
-	require.Empty(t, item.record.RawRequest)
-	require.Empty(t, item.record.RawResponse)
-	require.Empty(t, item.record.RequestHeaders)
-	item.completeSuccess()
-}
-
 func TestCaptureExchangeBridgeKeepsFinalOutboundAndRawUpstreamSnapshots(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req, err := http.NewRequest(http.MethodPost, "https://api.example.test/v1/responses", bytes.NewReader(nil))

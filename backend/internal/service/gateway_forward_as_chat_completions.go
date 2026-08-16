@@ -734,11 +734,15 @@ func newIncompleteProviderStreamFailover(resp *http.Response, message string) *U
 			"message": message,
 		},
 	})
+	var responseHeaders http.Header
+	if resp != nil {
+		responseHeaders = resp.Header.Clone()
+	}
 	failure := &UpstreamFailoverError{
 		StatusCode:                http.StatusBadGateway,
 		ResponseBody:              body,
 		RequestHeaders:            captureRequestHeadersFromResponse(resp),
-		ResponseHeaders:           resp.Header.Clone(),
+		ResponseHeaders:           responseHeaders,
 		UpstreamEndpoint:          captureEndpointFromResponse(resp),
 		HasUpstreamHTTPResponse:   true,
 		CaptureResponseIncomplete: true,

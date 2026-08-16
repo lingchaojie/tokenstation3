@@ -33,7 +33,7 @@ func (r *captureHealthRepoStub) ListLatestEventsBefore(context.Context, time.Tim
 	return nil, nil
 }
 
-func TestCaptureSettingsCannotEnableWhenWriterIsNotReady(t *testing.T) {
+func TestCaptureSettingsCannotEnableWhenSidecarInfrastructureIsNotReady(t *testing.T) {
 	settings := NewSettingService(&capturePolicyRepoStub{}, nil)
 	svc := NewCaptureAdminService(&config.Config{}, settings, nil, &captureHealthRepoStub{}, nil)
 	policy := DefaultCaptureRuntimePolicy()
@@ -75,55 +75,6 @@ func TestCaptureSettingsViewDoesNotExposeClickHouseAddressOrCredentials(t *testi
 	require.Equal(t, "model_call_archive", got.Table)
 	require.NotContains(t, fmt.Sprintf("%+v", got), "super-secret")
 	require.NotContains(t, fmt.Sprintf("%+v", got), "db.example.com")
-}
-
-func TestCaptureSettingsViewDoesNotExposeInitializationErrorDetails(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Gateway.Capture.Enabled = true
-	pool := newConversationCapturePoolWithState(
-		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
-		unavailableArchiveWriter{},
-		newCaptureHealthTracker("test", time.Now),
-		nil,
-		false,
-		"dial clickhouse://archive:super-secret@db.example.com:9000 failed",
-	)
-	t.Cleanup(pool.Stop)
-	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, nil)
-
-	got, err := svc.Get(context.Background())
-	require.NoError(t, err)
-	require.True(t, got.Provisioned)
-	require.False(t, got.Ready)
-	require.Equal(t, "Capture sidecar is unavailable; check server logs", got.InitializationError)
-}
-
-func TestCaptureSettingsViewReflectsWriterRecovery(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Gateway.Capture.Enabled = true
-	status := &mutableArchiveWriterStatus{initError: "dial failed"}
-	pool := newConversationCapturePoolWithStatus(
-		conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 1, WriterQueueSize: 1},
-		&fakeWriter{},
-		status,
-		newCaptureHealthTracker("test", time.Now),
-		nil,
-	)
-	t.Cleanup(pool.Stop)
-	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, nil)
-
-	before, err := svc.Get(context.Background())
-	require.NoError(t, err)
-	require.True(t, before.Provisioned)
-	require.False(t, before.Ready)
-	require.Equal(t, "Capture sidecar is unavailable; check server logs", before.InitializationError)
-
-	status.set(true, "")
-	after, err := svc.Get(context.Background())
-	require.NoError(t, err)
-	require.True(t, after.Provisioned)
-	require.True(t, after.Ready)
-	require.Empty(t, after.InitializationError)
 }
 
 func TestCaptureSettingsHistoryValidatesRangeAndSortsNewestFirst(t *testing.T) {

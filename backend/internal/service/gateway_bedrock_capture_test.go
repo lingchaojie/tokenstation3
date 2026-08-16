@@ -171,8 +171,8 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	t.Cleanup(pool.Stop)
 	svc := &GatewayService{
 		cfg:              cfg,

@@ -70,8 +70,8 @@ func TestWebChatGeminiFinalHTTPErrorArchivesProviderAttemptExactlyOnce(t *testin
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-gemini-final-error"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -114,8 +114,8 @@ func TestWebChatGeminiRetryArchivesOnlyFinalProviderHTTPError(t *testing.T) {
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(intermediateBody))},
 		{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}, "X-Goog-Request-Id": {"rid-gemini-final-after-retry"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 3)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 3)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	gateway := &GatewayService{cfg: cfg, capturePool: pool}
 	gemini := &GeminiMessagesCompatService{httpUpstream: recorder, cfg: cfg}
@@ -152,8 +152,8 @@ func TestWebChatGeminiSuccessArchivesProviderNativeResponseBytes(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Goog-Request-Id": {"rid-gemini-success"}},
 		Body:       io.NopCloser(bytes.NewReader(providerBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -228,8 +228,8 @@ func TestGeminiChatCompletionsCompatCarriesFinalProviderRequest(t *testing.T) {
 
 func TestWebChatCaptureDoesNotArchiveConvertedFallbackWithoutRawProviderResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 4)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 4)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}
 	gateway := &GatewayService{cfg: cfg, capturePool: pool}
 	openAI := &OpenAIGatewayService{cfg: cfg, capturePool: pool}
@@ -289,8 +289,8 @@ func TestWebChatSingleAccountFinalFailoverableHTTPErrorArchivesExactlyOnce(t *te
 			Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-anthropic-final-503"}},
 			Body:       io.NopCloser(bytes.NewReader(errorBody)),
 		}}
-		writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-		pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+		writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+		pool := newConversationCapturePoolForRecords(writer.records)
 		cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 		gateway := &GatewayService{cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{}, capturePool: pool}
 		account := &Account{ID: 711, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{
@@ -324,8 +324,8 @@ func TestWebChatSingleAccountFinalFailoverableHTTPErrorArchivesExactlyOnce(t *te
 			Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-responses-final-429"}},
 			Body:       io.NopCloser(bytes.NewReader(errorBody)),
 		}}
-		writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-		pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+		writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+		pool := newConversationCapturePoolForRecords(writer.records)
 		cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 		gateway := &GatewayService{cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{}, capturePool: pool}
 		account := &Account{ID: 712, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{
@@ -360,8 +360,8 @@ func TestWebChatSingleAccountFinalFailoverableHTTPErrorArchivesExactlyOnce(t *te
 			Header:     http.Header{"Content-Type": {"application/json"}, "X-Goog-Request-Id": {"rid-gemini-final-503"}},
 			Body:       io.NopCloser(bytes.NewReader(errorBody)),
 		}}
-		writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-		pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+		writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+		pool := newConversationCapturePoolForRecords(writer.records)
 		cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 		gateway := &GatewayService{cfg: cfg, capturePool: pool}
 		gemini := &GeminiMessagesCompatService{httpUpstream: recorder, cfg: cfg, rateLimitService: &RateLimitService{}}
@@ -400,8 +400,8 @@ func TestWebChatSingleAccountFinalFailoverableHTTPErrorArchivesExactlyOnce(t *te
 			responses[i] = &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(errorBody))}
 		}
 		recorder := &webChatGeminiSequenceRecorder{responses: responses}
-		writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-		pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+		writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+		pool := newConversationCapturePoolForRecords(writer.records)
 		cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 		gateway := &GatewayService{cfg: cfg, httpUpstream: recorder, tlsFPProfileService: &TLSFingerprintProfileService{}, kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: pool}
 		account := &Account{ID: 714, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
@@ -451,8 +451,8 @@ func TestWebChatFinalHTTPErrorCaptureUsesConfiguredCeiling(t *testing.T) {
 				Header:     http.Header{"Content-Type": {"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader(body)),
 			}}
-			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePoolForRecords(writer.records)
 			cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 			gateway := &GatewayService{cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{}, capturePool: pool}
 			account := &Account{ID: 715, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{
@@ -535,8 +535,8 @@ func TestWebChatGeminiFinalHTTPErrorRetainsBodyAboveSafeLoggingLimit(t *testing.
 		Header:     http.Header{"Content-Type": {"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	gateway := &GatewayService{cfg: cfg, capturePool: pool}
 	gemini := &GeminiMessagesCompatService{httpUpstream: recorder, cfg: cfg}
@@ -571,8 +571,8 @@ func TestNormalGatewayFailoverableHTTPErrorDoesNotUseWebChatTerminalSink(t *test
 		Header:     http.Header{"Content-Type": {"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	svc := &GatewayService{cfg: cfg, httpUpstream: upstream, tlsFPProfileService: &TLSFingerprintProfileService{}, capturePool: pool}
 	account := &Account{ID: 718, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{
@@ -611,8 +611,8 @@ func TestWebChatKiroOnlyWebSearchArchivesFinalAWSRequestAndResponsePair(t *testi
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}, "X-Amzn-Requestid": {"rid-kiro-websearch"}}, Body: io.NopCloser(bytes.NewReader(rawProviderBody))},
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	gateway := &GatewayService{cfg: cfg, httpUpstream: recorder, tlsFPProfileService: &TLSFingerprintProfileService{}, kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: pool}
 	account := &Account{ID: 716, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
@@ -659,8 +659,8 @@ func TestWebChatKiroOnlyWebSearchFinalHTTPErrorArchivesNativeTerminalAttempt(t *
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(intermediateBody))},
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-websearch-final-503"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 3)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 3)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	gateway := &GatewayService{cfg: cfg, httpUpstream: recorder, tlsFPProfileService: &TLSFingerprintProfileService{}, kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: pool}
 	account := &Account{ID: 719, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
@@ -715,8 +715,8 @@ func TestWebChatKiroOnlyWebSearchFinal429RetainsNativeBodyAboveSafeLogLimit(t *t
 				{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
 				{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-websearch-final-429"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
 			}}
-			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePoolForRecords(writer.records)
 			cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 			gateway := &GatewayService{cfg: cfg, httpUpstream: recorder, tlsFPProfileService: &TLSFingerprintProfileService{}, kiroCooldownStore: &stubKiroCooldownStore{}, capturePool: pool}
 			account := &Account{ID: 720, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
@@ -757,8 +757,8 @@ func TestWebChatAnthropicChatFinalHTTPErrorArchivesProviderAttemptExactlyOnce(t 
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-anthropic-final-error"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -810,8 +810,8 @@ func TestWebChatAnthropicResponsesFinalHTTPErrorArchivesProviderAttemptExactlyOn
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-responses-final-error"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -859,8 +859,8 @@ func TestWebChatKiroFinalHTTPErrorArchivesFinalProviderPayloadExactlyOnce(t *tes
 		Header:     http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-final-error"}},
 		Body:       io.NopCloser(bytes.NewReader(errorBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -932,8 +932,8 @@ func TestWebChatKiroPaymentRequiredArchivesFinalProviderPayloadExactlyOnce(t *te
 				Header:     http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-payment-required"}},
 				Body:       &streamReadCloser{payload: errorBody, err: readErr},
 			}}
-			writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-			pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+			writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+			pool := newConversationCapturePoolForRecords(writer.records)
 			cfg := &config.Config{Gateway: config.GatewayConfig{
 				MaxLineSize: defaultMaxLineSize,
 				Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
@@ -988,8 +988,8 @@ func TestWebChatKiroPaymentRequiredArchivesFinalProviderPayloadExactlyOnce(t *te
 
 func TestWebChatTerminalCaptureKeepsRedirectedFinalEmptyGET(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 1)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 2}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 1)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20}}}, capturePool: pool}
 	account := &Account{ID: 710, Platform: PlatformAnthropic}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -1011,7 +1011,6 @@ func TestWebChatTerminalCaptureKeepsRedirectedFinalEmptyGET(t *testing.T) {
 
 	require.Len(t, writer.records, 1)
 	record := <-writer.records
-	require.NotNil(t, record.RawRequest)
 	require.Empty(t, record.RawRequest)
 	require.Equal(t, http.StatusBadRequest, record.HTTPStatus)
 	require.Equal(t, responseBody, record.RawResponse)
@@ -1062,8 +1061,8 @@ func TestWebChatKiroRetryArchivesOnlyFinalProviderHTTPError(t *testing.T) {
 		{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(intermediateBody))},
 		{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {"rid-kiro-final-after-retry"}}, Body: io.NopCloser(bytes.NewReader(finalBody))},
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 3)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 3)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
 	svc := &GatewayService{
 		cfg: cfg, httpUpstream: recorder, tlsFPProfileService: &TLSFingerprintProfileService{},
@@ -1116,8 +1115,8 @@ func TestWebChatKiroSuccessArchivesProviderNativeEventStreamBytes(t *testing.T) 
 		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}, "X-Amzn-Requestid": {"rid-kiro-success"}},
 		Body:       io.NopCloser(bytes.NewReader(rawProviderBody)),
 	}}
-	writer := &webChatArchiveRecordWriter{records: make(chan *CaptureRecord, 2)}
-	pool := newConversationCapturePool(conversationCapturePoolOptions{WorkerCount: 1, QueueSize: 4}, writer)
+	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 2)}
+	pool := newConversationCapturePoolForRecords(writer.records)
 	cfg := &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize: defaultMaxLineSize,
 		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},

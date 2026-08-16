@@ -359,7 +359,7 @@ func TestNextBatchMetadataCreateFailurePreservesReadyAndReleasesReservation(t *t
 	require.NotNil(t, b)
 }
 
-func TestRecoveryUsesSameBatchAfterRemoteCommitBeforeLocalAck(t *testing.T) {
+func TestCrashAfterRemoteCommitReplaysExactBatchBeforeLocalAck(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)
 	first := uuid.MustParse("00000000-0000-0000-0000-000000000040")
@@ -407,7 +407,7 @@ func TestRecoveryAfterManifestTempFsyncDiscardsUnpublishedTempAndReselects(t *te
 	require.Equal(t, []uuid.UUID{id}, batchCaptureIDs(got))
 }
 
-func TestRecoveryAfterManifestRenameReplaysExactManifest(t *testing.T) {
+func TestGatewayRestartReplaysExactUnackedManifest(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000051")
@@ -549,7 +549,7 @@ func TestRecoveryAfterAckTempFsyncReplaysUnackedManifest(t *testing.T) {
 	require.Equal(t, b.Records, got.Records)
 }
 
-func TestRecoveryAfterAckRenameCleansWithoutReupload(t *testing.T) {
+func TestCrashAfterAckCleansWithoutReupload(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "spool")
 	s := openTestStoreAt(t, root, nil)
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000062")
@@ -967,7 +967,8 @@ func commitSizedRecord(t *testing.T, s *Store, id uuid.UUID, size int, readyAt t
 		},
 	})
 	require.NoError(t, err)
-	a := sink.(*Attempt)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
 	payload := bytes.Repeat([]byte(" "), size)
 	if size == 1 {
 		payload[0] = '0'

@@ -19,18 +19,6 @@ var (
 	ErrInvalidCapturePolicy          = errors.New("invalid capture policy")
 )
 
-type CaptureCapacitySettings struct {
-	MaxBodyBytes          int    `json:"max_body_bytes"`
-	MaxQueueBytes         int64  `json:"max_queue_bytes"`
-	QueueSize             int    `json:"queue_size"`
-	WorkerCount           int    `json:"worker_count"`
-	WriterQueueSize       int    `json:"writer_queue_size"`
-	OverflowPolicy        string `json:"overflow_policy"`
-	OverflowSamplePercent int    `json:"overflow_sample_percent"`
-	BatchMaxSize          int    `json:"batch_max_size"`
-	BatchMaxIntervalMs    int    `json:"batch_max_interval_ms"`
-}
-
 type CaptureSettingsView struct {
 	Policy                CaptureRuntimePolicy `json:"policy"`
 	Provisioned           bool                 `json:"provisioned"`

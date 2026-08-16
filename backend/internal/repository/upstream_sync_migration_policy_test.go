@@ -53,6 +53,7 @@ var upstreamSyncMigrationFilenames = []string{
 	"224_channel_monitor_v2_privacy_defaults.sql",
 	"225_group_video_model_prices.sql",
 	"228_clear_non_grok_video_generation_config.sql",
+	"229_capture_spool_alert_rules.sql",
 }
 
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {

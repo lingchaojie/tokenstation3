@@ -23,14 +23,6 @@ type ConversationCapturePool struct {
 	healthReporter *captureStatusReporter
 	supervisor     *CaptureSidecarSupervisor
 	losses         *captureOperationalLossObserver
-
-	// Tests in this package can install synchronous compatibility hooks for
-	// legacy archive-writer fixtures. Production/Wire construction never does.
-	testSubmit              func(*CaptureRecord)
-	testStop                func()
-	testHealth              func() CaptureHealthSnapshot
-	testReady               func() bool
-	testInitializationError func() string
 }
 
 // CaptureAttempt is the gateway-owned façade for one synchronous sidecar
@@ -235,16 +227,11 @@ func (a *CaptureAttempt) Abort() {
 	a.attempt.Abort()
 }
 
-// Submit synchronously translates remaining compatibility CaptureRecord
-// producers into the sidecar protocol. It has no queue or body copy; Task 9
-// gateway paths use Begin directly, while provider-native migrations follow in
-// their own task.
+// Submit synchronously translates the few remaining compatibility
+// CaptureRecord producers into the sidecar protocol. It has no queue or body
+// copy; provider-native wire paths use Begin directly.
 func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
 	if p == nil || record == nil {
-		return
-	}
-	if p.testSubmit != nil {
-		p.testSubmit(record)
 		return
 	}
 	policy := model.ContentPolicy{
@@ -293,13 +280,6 @@ func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
 		return
 	}
 	attempt.Commit()
-}
-
-func (p *ConversationCapturePool) Health() CaptureHealthSnapshot {
-	if p != nil && p.testHealth != nil {
-		return p.testHealth()
-	}
-	return CaptureHealthSnapshot{DroppedByReason: map[string]CaptureReasonStats{}, RecentIncidents: []CaptureLossIncident{}}
 }
 
 // Status performs the bounded sidecar protocol status exchange. Callers may
@@ -376,17 +356,7 @@ func (p *ConversationCapturePool) Ready() bool {
 	if p == nil {
 		return false
 	}
-	if p.testReady != nil {
-		return p.testReady()
-	}
 	return p.transport != nil
-}
-
-func (p *ConversationCapturePool) InitializationError() string {
-	if p == nil || p.testInitializationError == nil {
-		return ""
-	}
-	return p.testInitializationError()
 }
 
 func (p *ConversationCapturePool) Stop() {
@@ -399,9 +369,6 @@ func (p *ConversationCapturePool) Stop() {
 		}
 		if p.transport != nil {
 			_ = p.transport.Close()
-		}
-		if p.testStop != nil {
-			p.testStop()
 		}
 	})
 }

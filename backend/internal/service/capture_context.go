@@ -249,10 +249,6 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	}
 }
 
-func abortCaptureAttemptForRequest(c *gin.Context) {
-	transitionCaptureAttemptOwner(c, captureAttemptOwnerNone)
-}
-
 func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	slot := captureAttemptSlotForRequest(c, false)
 	if slot == nil {
