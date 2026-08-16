@@ -470,6 +470,48 @@ func TestWebChatFinalHTTPErrorCaptureUsesConfiguredCeiling(t *testing.T) {
 	}
 }
 
+func TestWebChatLegacyCaptureDrainShortReadMarksResponseIncomplete(t *testing.T) {
+	const captureLimit = 1 << 20
+	functionalPrefix := bytes.Repeat([]byte("p"), int(gatewayUpstreamErrorBodyReadLimit))
+	shortTail := []byte("naturally-read-before-short-error")
+	providerBytes := append(snapshotBytes(functionalPrefix), shortTail...)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/chat/conversations/7/messages", nil)
+	enableCaptureForTest(t, c)
+	markWebChatCaptureOwner(c)
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1/messages", bytes.NewReader([]byte(`{"model":"claude"}`)))
+	SetCaptureOutboundRequest(c, request, []byte(`{"model":"claude"}`), captureLimit)
+
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: captureLimit},
+	}}}
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       &errTailReader{data: providerBytes, err: io.ErrUnexpectedEOF},
+		Request:    request,
+	}
+	finish := beginCaptureResponse(c, resp, true, captureLimit)
+	ownerCtx := withWebChatFinalGatewayErrorCaptureSubmitter(
+		withWebChatStreamCapture(c.Request.Context(), newWebChatStreamCapture(captureLimit)),
+		svc,
+	)
+
+	functionalBody, expanded, responseComplete, readErr := svc.readWebChatUpstreamErrorBody(ownerCtx, resp)
+	require.NoError(t, readErr, "the functional prefix completed before the archive-only drain")
+	require.False(t, expanded)
+	require.Equal(t, functionalPrefix, functionalBody)
+	require.False(t, responseComplete, "a short archive drain cannot prove a complete provider response")
+	finish()
+
+	bridge, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, providerBytes, bridge.Response, "capture must retain exactly the bytes naturally read before the I/O error")
+	require.True(t, bridge.ResponseTruncated)
+	require.True(t, bridge.Truncated)
+}
+
 func TestWebChatGeminiFinalHTTPErrorRetainsBodyAboveSafeLoggingLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prefix := `{"error":{"code":400,"message":"reject"},"padding":"`

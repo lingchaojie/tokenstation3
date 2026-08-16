@@ -267,16 +267,17 @@ func ginRequestContext(c *gin.Context) context.Context {
 	return context.Background()
 }
 
-func drainCaptureResponseRemainder(reader io.Reader) {
+func drainCaptureResponseRemainder(reader io.Reader) error {
 	lifecycle, ok := reader.(captureResponseDrainLifecycle)
 	if !ok {
-		return
+		return nil
 	}
 	remaining := lifecycle.captureResponseDrainRemaining()
 	if remaining <= 0 {
-		return
+		return nil
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(reader, remaining))
+	_, err := io.Copy(io.Discard, io.LimitReader(reader, remaining))
+	return err
 }
 
 // drainCaptureResponseRemainderBounded gives a capture wrapper a short,
@@ -296,21 +297,26 @@ func drainCaptureResponseRemainderBounded(ctx context.Context, reader io.Reader,
 		timeout = captureOverflowDrainTimeout
 	}
 	activeReader, activity := providerBodyReaderWithActivity(reader)
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
-		drainCaptureResponseRemainder(activeReader)
+		done <- drainCaptureResponseRemainder(activeReader)
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				markCaptureResponseTruncated(reader)
+			}
 			return
 		default:
 		}
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				markCaptureResponseTruncated(reader)
+			}
 			return
 		case <-ctx.Done():
 			markCaptureResponseTruncated(reader)

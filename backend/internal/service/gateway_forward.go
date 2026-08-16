@@ -675,6 +675,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				})
 				logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d, retry %d/%d after %v (elapsed=%v/%v)",
 					account.ID, resp.StatusCode, attempt, maxRetryAttempts, delay, elapsed, maxRetryElapsed)
+				AbortCaptureAttempt(c)
 				if err := sleepWithContext(ctx, delay); err != nil {
 					return nil, err
 				}
