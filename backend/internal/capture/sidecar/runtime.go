@@ -114,7 +114,7 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		return nil, errors.New("capture sidecar socket path is required")
 	}
 	if config.StatusPath == "" {
-		config.StatusPath = filepath.Join(filepath.Dir(config.Spool.RootDir), "status.json")
+		config.StatusPath = StatusCheckpointPath(config.Spool.RootDir)
 	}
 	if config.MaxSessions <= 0 {
 		return nil, errors.New("capture sidecar session limit must be positive")
@@ -151,6 +151,12 @@ func New(config Config, deps Dependencies) (*Runtime, error) {
 		done:   make(chan struct{}),
 		ready:  make(chan struct{}),
 	}, nil
+}
+
+// StatusCheckpointPath returns the single default mapping shared by the
+// sidecar runtime and the main process's read-only health fallback.
+func StatusCheckpointPath(spoolDir string) string {
+	return filepath.Join(filepath.Dir(spoolDir), "status.json")
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -609,8 +615,7 @@ func openStatusManager(path string, store SpoolStore, clock Clock, logger *slog.
 		return nil, err
 	}
 	if found {
-		if checkpoint.Status.HealthSourceID == uuid.Nil || len(checkpoint.Status.HealthBuckets) > 2 ||
-			(checkpoint.AppliedCorruptionID != nil && !validStatusCorruptionID(*checkpoint.AppliedCorruptionID)) {
+		if !validStatusCheckpoint(checkpoint) {
 			return nil, errors.New("invalid capture status checkpoint")
 		}
 		manager.status = cloneStatus(checkpoint.Status)
@@ -859,7 +864,8 @@ func (m *statusManager) refreshLocked() {
 	if m.status.DroppedByReason == nil {
 		m.status.DroppedByReason = make(map[string]uint64)
 	}
-	for reason, count := range spoolStatus.DroppedByReason {
+	dropped := cloneCounts(spoolStatus.DroppedByReason)
+	for reason, count := range dropped {
 		observed := m.observedDrops[reason]
 		if count > observed {
 			m.status.DroppedByReason[reason] += count - observed
@@ -955,6 +961,56 @@ func readStatusCheckpoint(path string) (statusCheckpoint, bool, error) {
 	return checkpoint, true, nil
 }
 
+// ReadStatusCheckpoint reads the bounded, no-follow checkpoint and returns
+// only its non-sensitive operational status. The private checkpoint envelope,
+// raw JSON, and path are never returned.
+func ReadStatusCheckpoint(path string) (model.Status, bool, error) {
+	checkpoint, found, err := readStatusCheckpoint(path)
+	if err != nil {
+		return model.Status{}, false, errors.New("capture status checkpoint is unavailable")
+	}
+	if !found {
+		return model.Status{}, false, nil
+	}
+	if !validStatusCheckpoint(checkpoint) {
+		return model.Status{}, false, errors.New("invalid capture status checkpoint")
+	}
+	return cloneStatus(checkpoint.Status), true, nil
+}
+
+func validStatusCheckpoint(checkpoint statusCheckpoint) bool {
+	if checkpoint.Status.HealthSourceID == uuid.Nil || len(checkpoint.Status.HealthBuckets) > 2 ||
+		(checkpoint.AppliedCorruptionID != nil && !validStatusCorruptionID(*checkpoint.AppliedCorruptionID)) {
+		return false
+	}
+	if checkpoint.Status.CurrentBatchID != "" {
+		parsed, err := uuid.Parse(checkpoint.Status.CurrentBatchID)
+		if err != nil || parsed.String() != checkpoint.Status.CurrentBatchID {
+			return false
+		}
+	}
+	if !validStatusReasons(checkpoint.Status.DroppedByReason) {
+		return false
+	}
+	for _, bucket := range checkpoint.Status.HealthBuckets {
+		if bucket.Minute.IsZero() || !validStatusReasons(bucket.DroppedRecords) || !validStatusReasons(bucket.DroppedBytes) {
+			return false
+		}
+	}
+	return true
+}
+
+func validStatusReasons(counts map[string]uint64) bool {
+	for reason := range counts {
+		switch reason {
+		case "ipc_unavailable", "ipc_backpressure", "sidecar_down", "spool_cap", "spool_free_reserve", "spool_corrupt", "pre_commit_disconnect":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func writeStatusCheckpoint(path string, encoded []byte) error {
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, ".capture-status-*.tmp")
@@ -1016,9 +1072,11 @@ func cumulativeBucket(minute time.Time, status model.Status) model.HealthBucket 
 func cloneStatus(status model.Status) model.Status {
 	clone := status
 	clone.DroppedByReason = cloneCounts(status.DroppedByReason)
-	clone.HealthBuckets = make([]model.HealthBucket, len(status.HealthBuckets))
-	for index := range status.HealthBuckets {
-		clone.HealthBuckets[index] = cloneBucket(status.HealthBuckets[index])
+	if status.HealthBuckets != nil {
+		clone.HealthBuckets = make([]model.HealthBucket, len(status.HealthBuckets))
+		for index := range status.HealthBuckets {
+			clone.HealthBuckets[index] = cloneBucket(status.HealthBuckets[index])
+		}
 	}
 	if status.LastUploadAt != nil {
 		lastUpload := *status.LastUploadAt

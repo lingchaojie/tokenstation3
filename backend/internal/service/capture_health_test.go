@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,42 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCaptureHealthTrackerAcceptsOnlyOperationalLossReasons(t *testing.T) {
+	tracker := newCaptureHealthTracker("sidecar-health-source", time.Now)
+	reasons := []CaptureDropReason{
+		CaptureDropIPCUnavailable,
+		CaptureDropIPCBackpressure,
+		CaptureDropSidecarDown,
+		CaptureDropSpoolCap,
+		CaptureDropSpoolFreeReserve,
+		CaptureDropSpoolCorrupt,
+		CaptureDropPreCommitDisconnect,
+	}
+	for _, reason := range reasons {
+		tracker.recordDrop(reason, 1, 64, errors.New("Authorization: Bearer secret raw-body=private"))
+	}
+
+	snapshot := tracker.snapshot()
+	require.EqualValues(t, len(reasons), snapshot.DroppedRecords)
+	for _, reason := range reasons {
+		require.EqualValues(t, 1, snapshot.DroppedByReason[string(reason)].Records)
+	}
+	encoded := fmt.Sprintf("%+v", snapshot)
+	require.NotContains(t, encoded, "secret")
+	require.NotContains(t, encoded, "private")
+}
+
+func TestCaptureHealthTrackerUploadRetryIsNotDroppedCapture(t *testing.T) {
+	tracker := newCaptureHealthTracker("sidecar-health-source", time.Now)
+
+	tracker.recordUploadRetry(io.ErrUnexpectedEOF)
+
+	snapshot := tracker.snapshot()
+	require.EqualValues(t, 1, snapshot.UploadRetries)
+	require.Zero(t, snapshot.DroppedRecords)
+	require.Empty(t, snapshot.RecentIncidents)
+}
 
 func TestCaptureHealthTrackerCountsLossByReasonAndCapsIncidents(t *testing.T) {
 	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)

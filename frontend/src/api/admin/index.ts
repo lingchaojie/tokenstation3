@@ -124,7 +124,6 @@ export type { ContentModerationConfig, ContentModerationLog, ModerationMode } fr
 export type {
   CaptureRuntimePolicy,
   CaptureSettings,
-  CaptureHealthSnapshot,
   CaptureHealthHistory,
   CaptureHealthEvent,
   CaptureHistoryRange,

@@ -14,13 +14,13 @@ export const useCaptureHealthStore = defineStore('captureHealth', () => {
   let pollConsumers = 0
   let activeRefresh: Promise<CaptureSettings> | null = null
 
-  function acknowledgementKey(startedAt: string): string {
-    return `${ACK_PREFIX}${startedAt || 'unknown'}`
+  function acknowledgementKey(healthSourceID: string): string {
+    return `${ACK_PREFIX}${healthSourceID || 'unknown'}`
   }
 
-  function readAcknowledgedCount(startedAt: string): number {
+  function readAcknowledgedCount(healthSourceID: string): number {
     try {
-      const value = Number(localStorage.getItem(acknowledgementKey(startedAt)))
+      const value = Number(localStorage.getItem(acknowledgementKey(healthSourceID)))
       return Number.isFinite(value) && value >= 0 ? value : 0
     } catch {
       return 0
@@ -29,8 +29,8 @@ export const useCaptureHealthStore = defineStore('captureHealth', () => {
 
   function applySettings(next: CaptureSettings): void {
     settings.value = next
-    const dropped = Math.max(0, Number(next.health.dropped_records) || 0)
-    hasUnacknowledgedLoss.value = dropped > readAcknowledgedCount(next.health.started_at)
+    const dropped = Math.max(0, Number(next.dropped_records) || 0)
+    hasUnacknowledgedLoss.value = dropped > readAcknowledgedCount(next.health_source_id)
   }
 
   function refresh(): Promise<CaptureSettings> {
@@ -92,8 +92,8 @@ export const useCaptureHealthStore = defineStore('captureHealth', () => {
     if (!current) return
     try {
       localStorage.setItem(
-        acknowledgementKey(current.health.started_at),
-        String(Math.max(0, Number(current.health.dropped_records) || 0)),
+        acknowledgementKey(current.health_source_id),
+        String(Math.max(0, Number(current.dropped_records) || 0)),
       )
     } catch {
       // The live badge can still be cleared for this page lifetime.

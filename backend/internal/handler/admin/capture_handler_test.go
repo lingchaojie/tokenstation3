@@ -59,13 +59,20 @@ func (*captureAdminHealthRepo) UpsertEvents(context.Context, []service.CaptureHe
 func (*captureAdminHealthRepo) ListEvents(context.Context, time.Time, time.Time) ([]service.CaptureHealthEvent, error) {
 	return []service.CaptureHealthEvent{}, nil
 }
+func (*captureAdminHealthRepo) ListLatestEventsBefore(context.Context, time.Time, []string, []string) ([]service.CaptureHealthEvent, error) {
+	return nil, nil
+}
 func (*captureAdminHealthRepo) DeleteBefore(context.Context, time.Time) (int64, error) { return 0, nil }
 
 func TestCaptureSettingsResponseDoesNotLeakCredentials(t *testing.T) {
 	h := newCaptureHandlerForTest(&config.GatewayCaptureConfig{
 		Enabled: true,
+		Spool: config.CaptureSpoolConfig{
+			Dir: "/app/data/capture/private-spool", MaxBytes: 12 << 30, MinFreeBytes: 8 << 30,
+		},
+		Tailscale: config.CaptureTailscaleConfig{AuthKey: "tskey-auth-super-secret"},
 		ClickHouse: config.CaptureClickHouseConfig{
-			Addr:     []string{"clickhouse://archive-user:super-secret@db.example.com:9440/llm?token=hidden"},
+			URL:      "http://clickhouse.private.tailnet:18000?token=hidden",
 			Database: "llm_archive", Table: "model_call_archive", Username: "archive-user", Password: "super-secret",
 		},
 	})
@@ -77,8 +84,12 @@ func TestCaptureSettingsResponseDoesNotLeakCredentials(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.NotContains(t, recorder.Body.String(), "super-secret")
+	require.NotContains(t, recorder.Body.String(), "tskey-auth")
+	require.NotContains(t, recorder.Body.String(), "clickhouse.private.tailnet")
+	require.NotContains(t, recorder.Body.String(), "/app/data/capture/private-spool")
 	require.NotContains(t, recorder.Body.String(), `"password"`)
-	require.Contains(t, recorder.Body.String(), "clickhouse://db.example.com:9440")
+	require.NotContains(t, recorder.Body.String(), `"addresses"`)
+	require.Contains(t, recorder.Body.String(), "llm_archive")
 }
 
 func TestCaptureSettingsPUTRejectsEnableWhenUnready(t *testing.T) {
@@ -135,6 +146,6 @@ func newCaptureHandlerForTest(captureConfig *config.GatewayCaptureConfig) *Captu
 		cfg.Gateway.Capture = *captureConfig
 	}
 	settings := service.NewSettingService(&captureAdminSettingRepo{values: map[string]string{}}, nil)
-	adminService := service.NewCaptureAdminService(cfg, settings, nil, &captureAdminHealthRepo{})
+	adminService := service.NewCaptureAdminService(cfg, settings, nil, &captureAdminHealthRepo{}, nil)
 	return NewCaptureHandler(adminService)
 }

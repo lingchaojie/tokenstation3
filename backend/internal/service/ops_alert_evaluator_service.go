@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/sidecar"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
@@ -22,6 +25,7 @@ const (
 	opsAlertEvaluatorLeaderLockKey   = "ops:alert:evaluator:leader"
 	opsAlertEvaluatorLeaderLockTTL   = 90 * time.Second
 	opsAlertEvaluatorSkipLogInterval = 1 * time.Minute
+	captureHealthBaselineSourceLimit = 256
 )
 
 var opsAlertEvaluatorReleaseScript = redis.NewScript(`
@@ -39,12 +43,14 @@ const (
 )
 
 type OpsAlertEvaluatorService struct {
-	opsService        *OpsService
-	opsRepo           OpsRepository
-	emailService      *EmailService
-	proxyRepo         ProxyRepository
-	capturePool       *ConversationCapturePool
-	captureHealthRepo CaptureHealthRepository
+	opsService                  *OpsService
+	opsRepo                     OpsRepository
+	emailService                *EmailService
+	proxyRepo                   ProxyRepository
+	capturePool                 *ConversationCapturePool
+	captureSupervisor           *CaptureSidecarSupervisor
+	captureHealthRepo           CaptureHealthRepository
+	readCaptureStatusCheckpoint func(string) (model.Status, bool, error)
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -74,13 +80,6 @@ type opsAlertRuleState struct {
 	ConsecutiveBreaches int
 }
 
-var captureWriterFailureReasons = map[string]struct{}{
-	string(CaptureDropWriterUnavailable):       {},
-	string(CaptureDropClickHousePrepareFailed): {},
-	string(CaptureDropClickHouseAppendFailed):  {},
-	string(CaptureDropClickHouseSendFailed):    {},
-}
-
 func NewOpsAlertEvaluatorService(
 	opsService *OpsService,
 	opsRepo OpsRepository,
@@ -89,20 +88,23 @@ func NewOpsAlertEvaluatorService(
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
 	capturePool *ConversationCapturePool,
+	captureSupervisor *CaptureSidecarSupervisor,
 	captureHealthRepo CaptureHealthRepository,
 ) *OpsAlertEvaluatorService {
 	return &OpsAlertEvaluatorService{
-		opsService:        opsService,
-		opsRepo:           opsRepo,
-		emailService:      emailService,
-		proxyRepo:         proxyRepo,
-		capturePool:       capturePool,
-		captureHealthRepo: captureHealthRepo,
-		redisClient:       redisClient,
-		cfg:               cfg,
-		instanceID:        uuid.NewString(),
-		ruleStates:        map[int64]*opsAlertRuleState{},
-		emailLimiter:      newSlidingWindowLimiter(0, time.Hour),
+		opsService:                  opsService,
+		opsRepo:                     opsRepo,
+		emailService:                emailService,
+		proxyRepo:                   proxyRepo,
+		capturePool:                 capturePool,
+		captureSupervisor:           captureSupervisor,
+		captureHealthRepo:           captureHealthRepo,
+		readCaptureStatusCheckpoint: sidecar.ReadStatusCheckpoint,
+		redisClient:                 redisClient,
+		cfg:                         cfg,
+		instanceID:                  uuid.NewString(),
+		ruleStates:                  map[int64]*opsAlertRuleState{},
+		emailLimiter:                newSlidingWindowLimiter(0, time.Hour),
 	}
 }
 
@@ -478,10 +480,31 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		if s == nil || s.capturePool == nil {
 			return 0, false
 		}
-		if s.capturePool.Ready() {
+		status, found, supervisor := s.captureOperationalStatus(ctx)
+		if found && supervisor.Running && status.SpoolReady {
 			return 1, true
 		}
 		return 0, true
+	case "capture_delivery_ready":
+		if s == nil || s.capturePool == nil {
+			return 0, false
+		}
+		status, found, supervisor := s.captureOperationalStatus(ctx)
+		if found && supervisor.Running && status.DeliveryReady {
+			return 1, true
+		}
+		return 0, true
+	case "capture_spool_usage_percent":
+		status, found, _ := s.captureOperationalStatus(ctx)
+		if !found {
+			return 0, false
+		}
+		if status.SpoolMaxBytes <= 0 {
+			return 0, false
+		}
+		used := nonnegativeInt64(status.SpoolUsedBytes)
+		maximum := nonnegativeInt64(status.SpoolMaxBytes)
+		return (float64(used) / float64(maximum)) * 100, true
 	case "capture_dropped_records":
 		if s == nil || s.captureHealthRepo == nil {
 			return 0, false
@@ -490,16 +513,31 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		if err != nil {
 			return 0, false
 		}
-		return float64(sumCaptureDroppedRecords(events, nil)), true
-	case "capture_writer_failures":
-		if s == nil || s.captureHealthRepo == nil {
+		sourceSet := make(map[string]struct{})
+		for _, event := range events {
+			if event.InstanceID != "" && isCaptureOperationalDropReason(event.Reason) {
+				sourceSet[event.InstanceID] = struct{}{}
+			}
+		}
+		if len(sourceSet) == 0 {
+			return 0, true
+		}
+		if len(sourceSet) > captureHealthBaselineSourceLimit {
 			return 0, false
 		}
-		events, err := s.captureHealthRepo.ListEvents(ctx, start, end)
+		sources := make([]string, 0, len(sourceSet))
+		for source := range sourceSet {
+			sources = append(sources, source)
+		}
+		sort.Strings(sources)
+		baselines, err := s.captureHealthRepo.ListLatestEventsBefore(ctx, start, sources, captureOperationalDropReasonNames)
 		if err != nil {
 			return 0, false
 		}
-		return float64(sumCaptureDroppedRecords(events, captureWriterFailureReasons)), true
+		combined := make([]CaptureHealthEvent, 0, len(baselines)+len(events))
+		combined = append(combined, baselines...)
+		combined = append(combined, events...)
+		return float64(sumCaptureDroppedRecords(combined, start, nil)), true
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
 			return *systemMetrics.CPUUsagePercent, true
@@ -673,15 +711,80 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	}
 }
 
-func sumCaptureDroppedRecords(events []CaptureHealthEvent, reasons map[string]struct{}) int64 {
+func (s *OpsAlertEvaluatorService) captureOperationalStatus(ctx context.Context) (model.Status, bool, CaptureSidecarSupervisorStatus) {
+	if s == nil {
+		return model.Status{}, false, CaptureSidecarSupervisorStatus{}
+	}
+	supervisor := CaptureSidecarSupervisorStatus{}
+	if s.captureSupervisor != nil {
+		supervisor = s.captureSupervisor.Status()
+	} else if s.capturePool != nil {
+		supervisor.Running = s.capturePool.Ready()
+	}
+	if s.capturePool != nil && (s.captureSupervisor == nil || supervisor.Running) {
+		if status, err := s.capturePool.Status(ctx); err == nil {
+			return status, true, supervisor
+		}
+	}
+	if s.cfg != nil && s.cfg.Gateway.Capture.Enabled && s.readCaptureStatusCheckpoint != nil {
+		path := sidecar.StatusCheckpointPath(s.cfg.Gateway.Capture.Spool.Dir)
+		if status, found, err := s.readCaptureStatusCheckpoint(path); err == nil && found {
+			if s.capturePool != nil {
+				status = s.capturePool.withObservedLosses(status)
+			}
+			return status, true, supervisor
+		}
+	}
+	return model.Status{}, false, supervisor
+}
+
+func sumCaptureDroppedRecords(events []CaptureHealthEvent, start time.Time, reasons map[string]struct{}) int64 {
+	type counterKey struct {
+		instance string
+		reason   string
+	}
+	ordered := append([]CaptureHealthEvent(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].MinuteBucket.Before(ordered[j].MinuteBucket)
+	})
+	last := make(map[counterKey]int64)
 	var total int64
-	for _, event := range events {
+	for _, event := range ordered {
+		if !isCaptureOperationalDropReason(event.Reason) {
+			continue
+		}
 		if reasons != nil {
 			if _, ok := reasons[event.Reason]; !ok {
 				continue
 			}
 		}
-		total += event.DroppedRecords
+		key := counterKey{instance: event.InstanceID, reason: event.Reason}
+		current := event.DroppedRecords
+		if current < 0 {
+			current = 0
+		}
+		previous, seen := last[key]
+		if event.MinuteBucket.Before(start) {
+			if !seen || current > previous {
+				last[key] = current
+			}
+			continue
+		}
+		delta := current
+		if seen {
+			delta = current - previous
+			if delta < 0 {
+				delta = 0
+			}
+		}
+		if delta > math.MaxInt64-total {
+			total = math.MaxInt64
+		} else {
+			total += delta
+		}
+		if !seen || current > previous {
+			last[key] = current
+		}
 	}
 	return total
 }

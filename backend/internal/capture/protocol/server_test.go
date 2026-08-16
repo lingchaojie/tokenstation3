@@ -88,6 +88,25 @@ func TestServerDoesNotAcknowledgeFailedStatusResponse(t *testing.T) {
 	require.Equal(t, 2, conn.writes)
 }
 
+func TestServerAbortsOpenedSessionWhenBeginAcknowledgementFails(t *testing.T) {
+	id := uuid.New()
+	beginPayload, err := json.Marshal(model.Begin{CaptureID: id})
+	require.NoError(t, err)
+	var input bytes.Buffer
+	require.NoError(t, writeFrame(&input, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
+	require.NoError(t, writeFrame(&input, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: id}, beginPayload))
+	conn := &failSecondWriteConn{Reader: &input}
+	factory := &recordingFactory{}
+	server := NewServer(ServerConfig{}, factory)
+
+	server.handleConnection(conn)
+
+	require.Equal(t, 2, conn.writes)
+	require.Len(t, factory.beginsSnapshot(), 1)
+	require.Len(t, factory.firstSink().abortErrors(), 1)
+	require.False(t, factory.firstSink().committed())
+}
+
 func TestServerAppendsConsecutiveMultipartHeaders(t *testing.T) {
 	factory := &recordingFactory{}
 	_, socketPath := startTestServer(t, ServerConfig{MaxSessions: 1}, factory)
@@ -153,9 +172,55 @@ func TestServerBoundsAcceptedSessionsBeforeSpawningHandlers(t *testing.T) {
 	defer extra.Close()
 	require.NoError(t, writeFrame(extra, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
 	require.NoError(t, extra.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
-	_, _, err := readFrame(extra)
+	started := time.Now()
+	header, _, err := readFrame(extra)
+	require.NoError(t, err)
+	require.Equal(t, KindHandshake, header.Kind)
+	_, _, err = readFrame(extra)
 	require.Error(t, err)
+	require.Less(t, time.Since(started), 100*time.Millisecond, "an incomplete overload probe is bounded by one operation deadline")
 	require.Equal(t, 2, server.ActiveHandlers())
+}
+
+func TestServerOverloadReturnsTypedRejectionOnlyForValidBegin(t *testing.T) {
+	factory := &recordingFactory{}
+	server, socketPath := startTestServer(t, ServerConfig{MaxSessions: 1}, factory)
+	client := NewClient(ClientConfig{
+		SocketPath: socketPath, DialTimeout: 100 * time.Millisecond,
+		WriteTimeout: 100 * time.Millisecond, ReadTimeout: 100 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+
+	first, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return server.ActiveHandlers() == 1 }, time.Second, time.Millisecond)
+
+	_, err = client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.ErrorIs(t, err, ErrIPCBackpressure)
+
+	_, err = client.Status(context.Background())
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrIPCBackpressure, "status probes are not dropped captures")
+
+	invalidBegin := dialTestSocket(t, socketPath)
+	handshake(t, invalidBegin, ProtocolVersion)
+	invalidID := uuid.New()
+	require.NoError(t, writeFrame(invalidBegin, Header{
+		Version: ProtocolVersion, Kind: KindBegin, CaptureID: invalidID,
+	}, []byte(`{"capture_id":"not-a-uuid"}`)))
+	require.NoError(t, invalidBegin.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, _, err = readFrame(invalidBegin)
+	require.Error(t, err, "malformed Begin must close without a typed capture rejection")
+	_ = invalidBegin.Close()
+
+	malformed := dialTestSocket(t, socketPath)
+	require.NoError(t, malformed.SetDeadline(time.Now().Add(100*time.Millisecond)))
+	_, err = malformed.Write([]byte("not a capture frame"))
+	require.NoError(t, err)
+	_ = malformed.Close()
+
+	require.Len(t, factory.beginsSnapshot(), 1, "overload rejection must not call factory.Open")
+	first.Abort()
 }
 
 func TestServerClampsConfiguredMaxSessionsToHardLimit(t *testing.T) {
@@ -182,7 +247,10 @@ func TestServerClampsConfiguredMaxSessionsToHardLimit(t *testing.T) {
 	defer extra.Close()
 	require.NoError(t, writeFrame(extra, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil))
 	require.NoError(t, extra.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
-	_, _, err := readFrame(extra)
+	header, _, err := readFrame(extra)
+	require.NoError(t, err)
+	require.Equal(t, KindHandshake, header.Kind)
+	_, _, err = readFrame(extra)
 	require.Error(t, err)
 	require.Equal(t, 32, server.ActiveHandlers())
 }
@@ -197,6 +265,7 @@ func TestServerRejectsIllegalOrderAndAbortsOpenedSession(t *testing.T) {
 	beginPayload, err := json.Marshal(model.Begin{CaptureID: id})
 	require.NoError(t, err)
 	require.NoError(t, writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: id}, beginPayload))
+	readBeginAck(t, conn, id)
 	require.NoError(t, writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindCommit, CaptureID: id}, nil))
 
 	h, _, err := readFrame(conn)
@@ -508,6 +577,16 @@ func writeBegin(t *testing.T, conn net.Conn, id uuid.UUID) {
 	payload, err := json.Marshal(model.Begin{CaptureID: id})
 	require.NoError(t, err)
 	require.NoError(t, writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: id}, payload))
+	readBeginAck(t, conn, id)
+}
+
+func readBeginAck(t *testing.T, conn net.Conn, id uuid.UUID) {
+	t.Helper()
+	header, payload, err := readFrame(conn)
+	require.NoError(t, err)
+	require.Equal(t, KindBegin, header.Kind)
+	require.Equal(t, id, header.CaptureID)
+	require.Empty(t, payload)
 }
 
 func fmtUint16(value uint16) string {

@@ -63,6 +63,11 @@ func TestAttemptSplitsPayloadsAndSendsTerminalSequence(t *testing.T) {
 				break
 			}
 			frames = append(frames, receivedFrame{header: h, payload: payload})
+			if h.Kind == KindBegin {
+				if err := writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: h.CaptureID}, nil); err != nil {
+					break
+				}
+			}
 		}
 		received <- frames
 	}()
@@ -127,7 +132,8 @@ func TestAttemptDoesNotRetryOrBlockWhenSocketBackpressures(t *testing.T) {
 		defer serverConn.Close()
 		_, _, _ = readFrame(serverConn)
 		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil)
-		_, _, _ = readFrame(serverConn)
+		beginHeader, _, _ := readFrame(serverConn)
+		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: beginHeader.CaptureID}, nil)
 		close(beginRead)
 		<-time.After(100 * time.Millisecond)
 	}()
@@ -160,6 +166,27 @@ func TestBeginUsesOneAbsoluteDeadlineForHandshakeAndBeginFrame(t *testing.T) {
 	require.Less(t, time.Since(started), 40*time.Millisecond)
 	require.Equal(t, 1, dialer.Calls(), "Begin must not retry the logical IPC operation")
 	require.Equal(t, 3, conn.Writes(), "handshake header and Begin header/payload must share one budget")
+}
+
+func TestBeginRequiresMatchingCaptureIDForTypedBackpressure(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := NewClient(ClientConfig{
+		Dial:         func(context.Context, string, string) (net.Conn, error) { return clientConn, nil },
+		WriteTimeout: 100 * time.Millisecond, ReadTimeout: 100 * time.Millisecond,
+	})
+	go func() {
+		defer serverConn.Close()
+		_, _, _ = readFrame(serverConn)
+		_ = writeFrame(serverConn, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil)
+		_, _, _ = readFrame(serverConn)
+		_ = writeFrame(serverConn, Header{
+			Version: ProtocolVersion, Kind: KindProtocolError, CaptureID: uuid.New(),
+		}, []byte(ipcBackpressureRejection))
+	}()
+
+	_, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrIPCBackpressure)
 }
 
 func TestAttemptMultiFrameWriteUsesOneAbsoluteDeadlineWithoutRetry(t *testing.T) {
@@ -256,12 +283,21 @@ type scriptedConn struct {
 	writes            int
 	closed            atomic.Bool
 	readBuffer        []byte
+	readFrames        int
+	captureID         uuid.UUID
 }
 
 func (c *scriptedConn) Read(p []byte) (int, error) {
 	if len(c.readBuffer) == 0 {
-		h := Header{Version: ProtocolVersion, Kind: KindHandshake}.MarshalBinary()
+		kind := KindHandshake
+		captureID := uuid.Nil
+		if c.readFrames > 0 {
+			kind = KindBegin
+			captureID = c.captureID
+		}
+		h := Header{Version: ProtocolVersion, Kind: kind, CaptureID: captureID}.MarshalBinary()
 		c.readBuffer = append(c.readBuffer, h...)
+		c.readFrames++
 	}
 	n := copy(p, c.readBuffer)
 	c.readBuffer = c.readBuffer[n:]
@@ -270,6 +306,11 @@ func (c *scriptedConn) Read(p []byte) (int, error) {
 
 func (c *scriptedConn) Write(p []byte) (int, error) {
 	c.writes++
+	if len(p) == HeaderSize {
+		if header, err := ParseHeader(p); err == nil && header.Kind == KindBegin {
+			c.captureID = header.CaptureID
+		}
+	}
 	if c.writes > c.writesBeforeShort {
 		return len(p) - 1, nil
 	}
@@ -295,6 +336,8 @@ type deadlineAwareSlowConn struct {
 	writes        int
 	closed        atomic.Bool
 	readBuffer    []byte
+	readFrames    int
+	captureID     uuid.UUID
 	firstDeadline time.Time
 	expireOnWrite int
 }
@@ -307,7 +350,14 @@ func (c *deadlineAwareSlowConn) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.readBuffer) == 0 {
-		c.readBuffer = Header{Version: ProtocolVersion, Kind: KindHandshake}.MarshalBinary()
+		kind := KindHandshake
+		captureID := uuid.Nil
+		if c.readFrames > 0 {
+			kind = KindBegin
+			captureID = c.captureID
+		}
+		c.readBuffer = Header{Version: ProtocolVersion, Kind: kind, CaptureID: captureID}.MarshalBinary()
+		c.readFrames++
 	}
 	n := copy(p, c.readBuffer)
 	c.readBuffer = c.readBuffer[n:]
@@ -316,6 +366,11 @@ func (c *deadlineAwareSlowConn) Read(p []byte) (int, error) {
 
 func (c *deadlineAwareSlowConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
+	if len(p) == HeaderSize {
+		if header, err := ParseHeader(p); err == nil && header.Kind == KindBegin {
+			c.captureID = header.CaptureID
+		}
+	}
 	delay := c.writeDelay
 	deadline := c.writeDeadline
 	c.writes++

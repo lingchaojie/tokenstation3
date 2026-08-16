@@ -19,12 +19,15 @@ const (
 )
 
 var (
-	frameMagic       = [4]byte{'C', 'S', 'P', '2'}
-	ErrInvalidHeader = errors.New("invalid capture protocol header")
-	ErrInvalidMagic  = errors.New("invalid capture protocol magic")
-	ErrUnknownKind   = errors.New("unknown capture protocol message kind")
-	ErrFrameTooLarge = errors.New("capture protocol frame too large")
+	frameMagic         = [4]byte{'C', 'S', 'P', '2'}
+	ErrInvalidHeader   = errors.New("invalid capture protocol header")
+	ErrInvalidMagic    = errors.New("invalid capture protocol magic")
+	ErrUnknownKind     = errors.New("unknown capture protocol message kind")
+	ErrFrameTooLarge   = errors.New("capture protocol frame too large")
+	ErrIPCBackpressure = errors.New("capture IPC backpressure")
 )
+
+const ipcBackpressureRejection = "ipc_backpressure"
 
 type Kind uint8
 

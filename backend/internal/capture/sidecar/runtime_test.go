@@ -3,6 +3,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -344,6 +345,64 @@ func TestStatusCheckpointIsPrivateSecretFreeAndStableAcrossRestart(t *testing.T)
 	require.NoError(t, second.Shutdown(context.Background()))
 }
 
+func TestReadStatusCheckpointReturnsOnlyValidatedStatus(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "status.json")
+
+	status, found, err := ReadStatusCheckpoint(path)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Equal(t, model.Status{}, status)
+
+	want := model.Status{
+		HealthSourceID:        uuid.New(),
+		SpoolReady:            true,
+		DeliveryReady:         false,
+		SpoolUsedBytes:        9 << 30,
+		SpoolMaxBytes:         12 << 30,
+		FilesystemFreeBytes:   10 << 30,
+		ReadyRecords:          42,
+		OldestReadyAgeSeconds: 90,
+		CurrentBatchID:        uuid.NewString(),
+		UploadRetries:         7,
+		DroppedRecords:        2,
+		DroppedByReason:       map[string]uint64{"spool_cap": 2},
+	}
+	encoded, err := json.Marshal(statusCheckpoint{Version: statusCheckpointVersion, Status: want})
+	require.NoError(t, err)
+	require.NoError(t, writeStatusCheckpoint(path, encoded))
+
+	got, found, err := ReadStatusCheckpoint(path)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, want, got)
+
+	require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"status":{"health_source_id":"not-a-uuid"}}`), 0o600))
+	got, found, err = ReadStatusCheckpoint(path)
+	require.Error(t, err)
+	require.False(t, found)
+	require.Equal(t, model.Status{}, got)
+	require.NotContains(t, err.Error(), path)
+	require.NotContains(t, err.Error(), "not-a-uuid")
+
+	require.NoError(t, os.WriteFile(path, []byte(`{"version":999,"status":{}}`), 0o600))
+	got, found, err = ReadStatusCheckpoint(path)
+	require.Error(t, err)
+	require.False(t, found)
+	require.Equal(t, model.Status{}, got)
+	require.NotContains(t, err.Error(), path)
+}
+
+func TestStatusCheckpointPathIsTheRuntimeDefault(t *testing.T) {
+	root := t.TempDir()
+	cfg := testConfig(root)
+	cfg.StatusPath = ""
+	runtime, err := New(cfg, Dependencies{Uploader: &recordingUploader{}})
+	require.NoError(t, err)
+	require.Equal(t, StatusCheckpointPath(cfg.Spool.RootDir), runtime.config.StatusPath)
+	require.Equal(t, filepath.Join(root, "status.json"), runtime.config.StatusPath)
+}
+
 func TestRuntimeSanitizesUploaderErrorsContainingClickHousePassword(t *testing.T) {
 	const password = "clickhouse-password-never-log"
 	root := t.TempDir()
@@ -429,9 +488,15 @@ func TestPreviousHealthBucketRotatesOnlyAfterSuccessfulStatusResponse(t *testing
 	delivered, err := client.Status(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, second.HealthSourceID, delivered.HealthSourceID)
+	require.Eventually(t, func() bool {
+		checkpoint, found, readErr := readStatusCheckpoint(cfg.StatusPath)
+		return readErr == nil && found && checkpoint.PreviousAcknowledged
+	}, time.Second, time.Millisecond)
 	clock.Advance(time.Minute)
-	third := runtime.Status()
-	require.Equal(t, second.HealthBuckets[1].Minute, third.HealthBuckets[0].Minute)
+	require.Eventually(t, func() bool {
+		third := runtime.Status()
+		return len(third.HealthBuckets) == 2 && second.HealthBuckets[1].Minute.Equal(third.HealthBuckets[0].Minute)
+	}, time.Second, time.Millisecond)
 	require.NoError(t, runtime.Shutdown(context.Background()))
 }
 

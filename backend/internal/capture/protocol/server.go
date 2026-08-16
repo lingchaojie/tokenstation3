@@ -16,7 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const hardMaxSessions = 32
+const (
+	hardMaxSessions          = 32
+	overloadOperationTimeout = 10 * time.Millisecond
+)
 
 type SessionFactory interface {
 	Open(model.Begin) (SessionSink, error)
@@ -132,9 +135,39 @@ func (s *Server) Serve(ctx context.Context) error {
 			s.wait.Add(1)
 			go s.serveConnection(conn)
 		default:
-			_ = conn.Close()
+			s.rejectOverloadedConnection(conn)
 		}
 	}
+}
+
+// rejectOverloadedConnection identifies only a complete valid Begin within
+// the gateway's fixed operation budget. Probes, status requests, malformed
+// frames, and peers that do not finish Begin are closed without classifying a
+// dropped capture. No session slot or spool factory is involved.
+func (s *Server) rejectOverloadedConnection(conn net.Conn) {
+	defer conn.Close()
+	deadline := time.Now().Add(overloadOperationTimeout)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return
+	}
+	header, payload, err := readFrame(conn)
+	if err != nil || header.Version != ProtocolVersion || header.Kind != KindHandshake || header.CaptureID != uuid.Nil || len(payload) != 0 {
+		return
+	}
+	if err := writeFrameWithAbsoluteDeadline(conn, deadline, Header{Version: ProtocolVersion, Kind: KindHandshake}, nil); err != nil {
+		return
+	}
+	header, payload, err = readFrame(conn)
+	if err != nil || header.Version != ProtocolVersion || header.Kind != KindBegin || header.CaptureID == uuid.Nil {
+		return
+	}
+	var begin model.Begin
+	if json.Unmarshal(payload, &begin) != nil || begin.CaptureID != header.CaptureID {
+		return
+	}
+	_ = writeFrameWithAbsoluteDeadline(conn, deadline, Header{
+		Version: ProtocolVersion, Kind: KindProtocolError, CaptureID: begin.CaptureID,
+	}, []byte(ipcBackpressureRejection))
 }
 
 func (s *Server) Close() error {
@@ -243,6 +276,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	sink, err = s.factory.Open(begin)
 	if err != nil {
 		s.protocolError(conn, "open session")
+		return
+	}
+	if err := s.writeFrame(conn, Header{Version: ProtocolVersion, Kind: KindBegin, CaptureID: captureID}, nil); err != nil {
+		abortCause = errors.New("capture begin acknowledgement failed")
 		return
 	}
 	abortCause = errors.New("capture session ended before commit")

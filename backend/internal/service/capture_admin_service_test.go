@@ -3,10 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,10 +29,13 @@ func (r *captureHealthRepoStub) ListEvents(_ context.Context, start, end time.Ti
 	r.start, r.end = start, end
 	return append([]CaptureHealthEvent(nil), r.events...), r.err
 }
+func (r *captureHealthRepoStub) ListLatestEventsBefore(context.Context, time.Time, []string, []string) ([]CaptureHealthEvent, error) {
+	return nil, nil
+}
 
 func TestCaptureSettingsCannotEnableWhenWriterIsNotReady(t *testing.T) {
 	settings := NewSettingService(&capturePolicyRepoStub{}, nil)
-	svc := NewCaptureAdminService(&config.Config{}, settings, nil, &captureHealthRepoStub{})
+	svc := NewCaptureAdminService(&config.Config{}, settings, nil, &captureHealthRepoStub{}, nil)
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
 
@@ -38,7 +45,7 @@ func TestCaptureSettingsCannotEnableWhenWriterIsNotReady(t *testing.T) {
 
 func TestCaptureSettingsAllowsDisabledPolicyWithoutProvisioning(t *testing.T) {
 	settings := NewSettingService(&capturePolicyRepoStub{}, nil)
-	svc := NewCaptureAdminService(&config.Config{}, settings, nil, &captureHealthRepoStub{})
+	svc := NewCaptureAdminService(&config.Config{}, settings, nil, &captureHealthRepoStub{}, nil)
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Platforms.OpenAI = true
 
@@ -50,7 +57,7 @@ func TestCaptureSettingsAllowsDisabledPolicyWithoutProvisioning(t *testing.T) {
 	require.False(t, got.Ready)
 }
 
-func TestCaptureSettingsViewRedactsClickHouseCredentials(t *testing.T) {
+func TestCaptureSettingsViewDoesNotExposeClickHouseAddressOrCredentials(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.Capture.Enabled = true
 	cfg.Gateway.Capture.ClickHouse.Addr = []string{
@@ -60,13 +67,14 @@ func TestCaptureSettingsViewRedactsClickHouseCredentials(t *testing.T) {
 	cfg.Gateway.Capture.ClickHouse.Database = "llm_archive"
 	cfg.Gateway.Capture.ClickHouse.Table = "model_call_archive"
 	settings := NewSettingService(&capturePolicyRepoStub{}, nil)
-	svc := NewCaptureAdminService(cfg, settings, nil, &captureHealthRepoStub{})
+	svc := NewCaptureAdminService(cfg, settings, nil, &captureHealthRepoStub{}, nil)
 
 	got, err := svc.Get(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"clickhouse://db.example.com:9440", "10.0.0.8:9000"}, got.Addresses)
 	require.Equal(t, "llm_archive", got.Database)
 	require.Equal(t, "model_call_archive", got.Table)
+	require.NotContains(t, fmt.Sprintf("%+v", got), "super-secret")
+	require.NotContains(t, fmt.Sprintf("%+v", got), "db.example.com")
 }
 
 func TestCaptureSettingsViewDoesNotExposeInitializationErrorDetails(t *testing.T) {
@@ -81,13 +89,13 @@ func TestCaptureSettingsViewDoesNotExposeInitializationErrorDetails(t *testing.T
 		"dial clickhouse://archive:super-secret@db.example.com:9000 failed",
 	)
 	t.Cleanup(pool.Stop)
-	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{})
+	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, nil)
 
 	got, err := svc.Get(context.Background())
 	require.NoError(t, err)
 	require.True(t, got.Provisioned)
 	require.False(t, got.Ready)
-	require.Equal(t, "ClickHouse initialization failed; check server logs", got.InitializationError)
+	require.Equal(t, "Capture sidecar is unavailable; check server logs", got.InitializationError)
 }
 
 func TestCaptureSettingsViewReflectsWriterRecovery(t *testing.T) {
@@ -102,13 +110,13 @@ func TestCaptureSettingsViewReflectsWriterRecovery(t *testing.T) {
 		nil,
 	)
 	t.Cleanup(pool.Stop)
-	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{})
+	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, nil)
 
 	before, err := svc.Get(context.Background())
 	require.NoError(t, err)
 	require.True(t, before.Provisioned)
 	require.False(t, before.Ready)
-	require.Equal(t, "ClickHouse initialization failed; check server logs", before.InitializationError)
+	require.Equal(t, "Capture sidecar is unavailable; check server logs", before.InitializationError)
 
 	status.set(true, "")
 	after, err := svc.Get(context.Background())
@@ -124,7 +132,7 @@ func TestCaptureSettingsHistoryValidatesRangeAndSortsNewestFirst(t *testing.T) {
 		{MinuteBucket: now.Add(-2 * time.Hour), Reason: "older"},
 		{MinuteBucket: now.Add(-time.Hour), Reason: "newer"},
 	}}
-	svc := NewCaptureAdminService(&config.Config{}, NewSettingService(&capturePolicyRepoStub{}, nil), nil, repo)
+	svc := NewCaptureAdminService(&config.Config{}, NewSettingService(&capturePolicyRepoStub{}, nil), nil, repo, nil)
 	svc.now = func() time.Time { return now }
 
 	got, err := svc.History(context.Background(), "24h")
@@ -146,7 +154,7 @@ func TestCaptureSettingsHistoryReclassifiesStoredErrorBeforeReturningIt(t *testi
 		Reason:       string(CaptureDropClickHouseSendFailed),
 		LastError:    "dial clickhouse://archive:super-secret@db.internal:9000 failed",
 	}}}
-	svc := NewCaptureAdminService(&config.Config{}, NewSettingService(&capturePolicyRepoStub{}, nil), nil, repo)
+	svc := NewCaptureAdminService(&config.Config{}, NewSettingService(&capturePolicyRepoStub{}, nil), nil, repo, nil)
 	svc.now = func() time.Time { return now }
 
 	got, err := svc.History(context.Background(), "24h")
@@ -155,4 +163,139 @@ func TestCaptureSettingsHistoryReclassifiesStoredErrorBeforeReturningIt(t *testi
 	require.Equal(t, "ClickHouse batch send failed", got.Events[0].LastError)
 	require.NotContains(t, got.Events[0].LastError, "super-secret")
 	require.NotContains(t, got.Events[0].LastError, "db.internal")
+}
+
+type captureAdminStatusTransport struct {
+	status model.Status
+	err    error
+	calls  int
+}
+
+func (*captureAdminStatusTransport) Begin(context.Context, model.Begin) (protocol.Attempt, error) {
+	return nil, errors.New("unused")
+}
+func (t *captureAdminStatusTransport) Status(context.Context) (model.Status, error) {
+	t.calls++
+	return t.status, t.err
+}
+func (*captureAdminStatusTransport) Close() error { return nil }
+
+func TestCaptureSettingsViewUsesLiveStatusBeforeCheckpointAndSeparatesDelivery(t *testing.T) {
+	sourceID := uuid.New()
+	live := model.Status{
+		HealthSourceID: sourceID, SpoolReady: true, DeliveryReady: false,
+		SpoolUsedBytes: 9 << 30, SpoolMaxBytes: 12 << 30, FilesystemFreeBytes: 10 << 30,
+		ReadyRecords: 42, OldestReadyAgeSeconds: 90, CurrentBatchID: uuid.NewString(), UploadRetries: 7,
+		DroppedRecords: 3, DroppedByReason: map[string]uint64{"spool_cap": 3},
+	}
+	transport := &captureAdminStatusTransport{status: live}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	supervisor := &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: true, RestartCount: 2}}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.Spool.Dir = "/app/data/capture/spool"
+	cfg.Gateway.Capture.Spool.MinFreeBytes = 8 << 30
+	settings := NewSettingService(&capturePolicyRepoStub{}, nil)
+	svc := NewCaptureAdminService(cfg, settings, pool, &captureHealthRepoStub{}, supervisor)
+	svc.readStatusCheckpoint = func(string) (model.Status, bool, error) {
+		return model.Status{SpoolReady: false, SpoolUsedBytes: 1}, true, nil
+	}
+
+	got, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, transport.calls)
+	require.True(t, got.Ready, "local acceptance does not depend on remote delivery")
+	require.True(t, got.SidecarRunning)
+	require.True(t, got.SpoolReady)
+	require.False(t, got.DeliveryReady)
+	require.EqualValues(t, 9<<30, got.SpoolUsedBytes)
+	require.EqualValues(t, 12<<30, got.SpoolMaxBytes)
+	require.EqualValues(t, 10<<30, got.FilesystemFreeBytes)
+	require.EqualValues(t, 8<<30, got.SpoolMinFreeBytes)
+	require.EqualValues(t, 42, got.ReadyRecords)
+	require.EqualValues(t, 90, got.OldestReadyAgeSeconds)
+	require.Equal(t, live.CurrentBatchID, got.CurrentBatchID)
+	require.EqualValues(t, 2, got.SidecarRestartCount)
+	require.EqualValues(t, 7, got.UploadRetries)
+	require.EqualValues(t, 3, got.DroppedRecords)
+	require.Equal(t, sourceID.String(), got.HealthSourceID)
+}
+
+func TestCaptureSettingsViewFallsBackToCheckpointWhenSupervisorIsDown(t *testing.T) {
+	checkpoint := model.Status{
+		HealthSourceID: uuid.New(), SpoolReady: true, DeliveryReady: true,
+		SpoolUsedBytes: 1234, SpoolMaxBytes: 5678, ReadyRecords: 9, UploadRetries: 4,
+	}
+	transport := &captureAdminStatusTransport{status: model.Status{
+		HealthSourceID: uuid.New(), SpoolReady: false, SpoolUsedBytes: 9999,
+	}}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	supervisor := &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: false, RestartCount: 5, LastErrorClass: "exit_failed"}}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.Spool.Dir = "/app/data/capture/spool"
+	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, supervisor)
+	var checkpointPath string
+	svc.readStatusCheckpoint = func(path string) (model.Status, bool, error) {
+		checkpointPath = path
+		return checkpoint, true, nil
+	}
+
+	got, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.False(t, got.SidecarRunning)
+	require.False(t, got.Ready)
+	require.True(t, got.SpoolReady, "checkpoint gauges remain visible while the sidecar is down")
+	require.EqualValues(t, 1234, got.SpoolUsedBytes)
+	require.Zero(t, transport.calls, "a supervisor-down process cannot be a trusted live status source")
+	require.EqualValues(t, 5, got.SidecarRestartCount)
+	require.Equal(t, "/app/data/capture/status.json", checkpointPath)
+	require.NotContains(t, got.InitializationError, "secret")
+}
+
+func TestCaptureSettingsViewUsesCheckpointReadinessWhenLiveStatusFailsButSupervisorRuns(t *testing.T) {
+	checkpoint := model.Status{
+		HealthSourceID: uuid.New(), SpoolReady: true, DeliveryReady: true,
+		SpoolUsedBytes: 1234, SpoolMaxBytes: 5678,
+	}
+	transport := &captureAdminStatusTransport{err: errors.New("temporary status timeout")}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	supervisor := &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: true}}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.Spool.Dir = "/app/data/capture/spool"
+	svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), pool, &captureHealthRepoStub{}, supervisor)
+	svc.readStatusCheckpoint = func(string) (model.Status, bool, error) { return checkpoint, true, nil }
+
+	got, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.True(t, got.SidecarRunning)
+	require.True(t, got.SpoolReady)
+	require.True(t, got.DeliveryReady)
+	require.True(t, got.Ready)
+	require.EqualValues(t, 1234, got.SpoolUsedBytes)
+	require.Equal(t, 1, transport.calls)
+}
+
+func TestCaptureSettingsViewUsesZeroStatusForMissingOrCorruptCheckpoint(t *testing.T) {
+	for name, read := range map[string]func(string) (model.Status, bool, error){
+		"missing": func(string) (model.Status, bool, error) { return model.Status{}, false, nil },
+		"corrupt": func(string) (model.Status, bool, error) {
+			return model.Status{}, false, errors.New("invalid checkpoint raw-body=private")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.Capture.Enabled = true
+			cfg.Gateway.Capture.Spool.Dir = "/app/data/capture/spool"
+			svc := NewCaptureAdminService(cfg, NewSettingService(&capturePolicyRepoStub{}, nil), nil, &captureHealthRepoStub{}, &CaptureSidecarSupervisor{})
+			svc.readStatusCheckpoint = read
+			got, err := svc.Get(context.Background())
+			require.NoError(t, err)
+			require.False(t, got.Ready)
+			require.False(t, got.SpoolReady)
+			require.Zero(t, got.SpoolUsedBytes)
+			require.NotContains(t, got.InitializationError, "private")
+		})
+	}
 }

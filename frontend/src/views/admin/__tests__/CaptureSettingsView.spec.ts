@@ -3,6 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import CaptureSettingsView from '../CaptureSettingsView.vue'
+import enCaptureSettings from '@/i18n/locales/en/admin/captureSettings'
+import zhCaptureSettings from '@/i18n/locales/zh/admin/captureSettings'
 
 const { updateCaptureSettings, getCaptureHealthHistory, getGroups, showSuccess, showError } = vi.hoisted(() => ({
   updateCaptureSettings: vi.fn(),
@@ -27,50 +29,27 @@ const captureSettings = reactive({
     group_ids: [] as number[],
     user_ids: [] as number[],
   },
-  provisioned: false,
-  ready: false,
+  provisioned: true,
+  ready: true,
+  sidecar_running: true,
+  spool_ready: true,
+  delivery_ready: false,
   initialization_error: '',
-  addresses: [] as string[],
   database: 'llm_archive',
   table: 'model_call_archive',
-  capacity: {
-    max_body_bytes: 8_388_608,
-    max_queue_bytes: 134_217_728,
-    queue_size: 512,
-    worker_count: 2,
-    writer_queue_size: 1024,
-    overflow_policy: 'drop',
-    overflow_sample_percent: 0,
-    batch_max_size: 100,
-    batch_max_interval_ms: 2000,
-  },
-  health: {
-    started_at: '2026-08-11T00:00:00Z',
-    submitted_records: 12,
-    accepted_records: 11,
-    written_records: 10,
-    dropped_records: 2,
-    dropped_bytes: 2048,
-    dropped_by_reason: {},
-    worker_queue: { current: 1, peak: 4, capacity: 512 },
-    writer_queue: { current: 2, peak: 8, capacity: 1024 },
-    in_flight_bytes: { current: 4096, peak: 8192, capacity: 134_217_728 },
-    last_success_at: '2026-08-11T00:02:00Z',
-    last_drop_at: '2026-08-11T00:03:00Z',
-    last_drop_reason: 'worker_queue_full',
-    last_error: 'capture worker queue is full',
-    history_dropped_buckets: 1,
-    recent_incidents: [{
-      occurred_at: '2026-08-11T00:03:00Z',
-      reason: 'worker_queue_full',
-      records: 2,
-      bytes: 2048,
-      worker_queue: 512,
-      writer_queue: 12,
-      in_flight_bytes: 4096,
-      error: 'capture worker queue is full',
-    }],
-  },
+  spool_used_bytes: 9 * 2 ** 30,
+  spool_max_bytes: 12 * 2 ** 30,
+  spool_min_free_bytes: 8 * 2 ** 30,
+  filesystem_free_bytes: 10 * 2 ** 30,
+  ready_records: 42,
+  oldest_ready_age_seconds: 90,
+  current_batch_id: '19b5c4f7-b8f7-45f1-b45f-dc17fdbb2d9d',
+  sidecar_restart_count: 2,
+  upload_retries: 7,
+  last_upload_at: '2026-08-11T00:02:00Z',
+  health_source_id: 'ebd8f2e7-aac1-479d-a1de-2b4642f12156',
+  dropped_records: 2,
+  dropped_by_reason: { spool_cap: 2 },
 })
 
 const captureStore = {
@@ -97,7 +76,22 @@ vi.mock('@/stores', () => ({
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
-  return { ...actual, useI18n: () => ({ t: (key: string) => key }) }
+  const translations: Record<string, string> = {
+    'admin.captureSettings.infrastructure.staticOff': 'Sidecar 未启动',
+    'admin.captureSettings.infrastructure.sidecarDown': 'Sidecar 进程异常',
+    'admin.captureSettings.infrastructure.ready': '本地 Spool 正常',
+    'admin.captureSettings.runtime.draining': '不再接收新转存，现有积压仍在续传',
+    'admin.captureSettings.health.deliveryDown': 'ClickHouse 传输异常',
+    'admin.captureSettings.health.deliveryDownHint': '本地 Spool 正常，数据将自动续传',
+    'admin.captureSettings.health.spoolCap': 'Spool 已达到硬容量上限，只丢弃新转存，正常转发不受影响',
+    'admin.captureSettings.health.freeReserve': '文件系统已触发保留空间保护，只丢弃新转存，正常转发不受影响',
+    'admin.captureSettings.health.spoolUsage': 'Spool 使用量',
+    'admin.captureSettings.health.readyRecords': '待传记录',
+    'admin.captureSettings.health.backlogAge': '最旧积压时间',
+    'admin.captureSettings.health.sidecarRestarts': 'Sidecar 重启次数',
+    'admin.captureSettings.health.uploadRetries': '上传重试次数',
+  }
+  return { ...actual, useI18n: () => ({ t: (key: string) => translations[key] ?? key }) }
 })
 
 const ToggleStub = {
@@ -110,8 +104,15 @@ describe('CaptureSettingsView', () => {
   beforeEach(() => {
     captureSettings.policy.enabled = false
     captureSettings.policy.platforms.openai = false
-    captureSettings.provisioned = false
-    captureSettings.ready = false
+    captureSettings.provisioned = true
+    captureSettings.ready = true
+    captureSettings.sidecar_running = true
+    captureSettings.spool_ready = true
+    captureSettings.delivery_ready = false
+    captureSettings.spool_used_bytes = 9 * 2 ** 30
+    captureSettings.spool_max_bytes = 12 * 2 ** 30
+    captureSettings.spool_min_free_bytes = 8 * 2 ** 30
+    captureSettings.filesystem_free_bytes = 10 * 2 ** 30
     updateCaptureSettings.mockReset()
     getCaptureHealthHistory.mockReset()
     getGroups.mockReset()
@@ -128,20 +129,22 @@ describe('CaptureSettingsView', () => {
       end: '2026-08-11T00:00:00Z',
       events: [{
         minute_bucket: '2026-08-10T23:00:00Z',
-        instance_id: 'app-1',
-        reason: 'worker_queue_full',
+        instance_id: 'sidecar-source',
+        reason: 'spool_cap',
         dropped_records: 2,
         dropped_bytes: 2048,
-        worker_queue_peak: 512,
-        writer_queue_peak: 12,
-        in_flight_bytes_peak: 4096,
-        last_error: 'capture worker queue is full',
+        spool_used_bytes_peak: 12 * 2 ** 30,
+        ready_records_peak: 42,
+        oldest_ready_age_seconds_peak: 90,
+        upload_retries: 7,
+        sidecar_restarts: 2,
+        last_error: 'capture spool reached physical cap',
       }],
     })
     updateCaptureSettings.mockResolvedValue(captureSettings)
   })
 
-  it('renders defaults, readiness protection, health, and loss history', async () => {
+  it('distinguishes local acceptance from remote delivery and renders spool operations', async () => {
     const wrapper = mount(CaptureSettingsView, {
       global: {
         stubs: {
@@ -156,25 +159,81 @@ describe('CaptureSettingsView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="capture-openai"] [role="switch"]').attributes('aria-checked')).toBe('false')
-    expect(wrapper.get('[data-test="capture-master"] [role="switch"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="capture-master"] [role="switch"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).toContain('admin.captureSettings.content.warning')
-    expect(wrapper.text()).toContain('12')
-    expect(wrapper.text()).toContain('worker_queue_full')
+    expect(wrapper.text()).toContain('ClickHouse 传输异常')
+    expect(wrapper.text()).toContain('本地 Spool 正常，数据将自动续传')
+    expect(wrapper.text()).toContain('9 GiB / 12 GiB')
+    expect(wrapper.text()).toContain('42')
+    expect(wrapper.text()).toContain('spool_cap')
     expect(wrapper.text()).toContain('2 KB')
-    expect(wrapper.get('[data-test="health-started-at"]').text()).not.toContain('—')
-    expect(wrapper.get('[data-test="health-last-success-at"]').text()).not.toContain('—')
-    expect(wrapper.get('[data-test="health-last-drop-at"]').text()).not.toContain('—')
-    expect(wrapper.get('[data-test="health-last-drop-reason"]').text()).toContain('worker_queue_full')
-    expect(wrapper.get('[data-test="capture-incident-queues"]').text()).toContain('512')
-    expect(wrapper.get('[data-test="capture-incident-queues"]').text()).toContain('12')
-    expect(wrapper.get('[data-test="capture-history-queues"]').text()).toContain('512')
-    expect(wrapper.get('[data-test="capture-history-error"]').text()).toContain('capture worker queue is full')
+    expect(wrapper.text()).toContain('上传重试次数')
+    expect(wrapper.text()).toContain('Sidecar 重启次数')
+    expect(wrapper.text()).not.toContain('Writer queue')
+    expect(wrapper.text()).not.toContain('worker_queue')
+    expect(wrapper.get('[data-test="capture-history-spool"]').text()).toContain('12 GiB')
+    expect(wrapper.get('[data-test="capture-history-error"]').text()).toContain('capture spool reached physical cap')
     expect(captureStore.acknowledgeLoss).toHaveBeenCalled()
   })
 
-  it('saves a complete version-one policy and reloads selected history ranges', async () => {
+  it('renders static-off, runtime drain, sidecar-down, cap, and free-reserve states', async () => {
+    const wrapper = mount(CaptureSettingsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' }, Toggle: ToggleStub,
+          GroupSelector: true, OpenAIFastPolicyUserSelector: true, Icon: true,
+        },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('不再接收新转存，现有积压仍在续传')
+
+    captureSettings.provisioned = false
+    captureSettings.spool_used_bytes = 0
+    captureSettings.filesystem_free_bytes = 0
+    await flushPromises()
+    expect(wrapper.text()).toContain('Sidecar 未启动')
+    expect(wrapper.text()).not.toContain('ClickHouse 传输异常')
+    expect(wrapper.text()).not.toContain('Spool 已达到硬容量上限')
+    expect(wrapper.text()).not.toContain('文件系统已触发保留空间保护')
+
     captureSettings.provisioned = true
+    captureSettings.sidecar_running = false
+    captureSettings.ready = false
+    await flushPromises()
+    expect(wrapper.text()).toContain('Sidecar 进程异常')
+
+    captureSettings.sidecar_running = true
     captureSettings.ready = true
+    captureSettings.spool_used_bytes = captureSettings.spool_max_bytes
+    await flushPromises()
+    expect(wrapper.text()).toContain('Spool 已达到硬容量上限')
+
+    captureSettings.spool_used_bytes = 1
+    captureSettings.filesystem_free_bytes = captureSettings.spool_min_free_bytes
+    await flushPromises()
+    expect(wrapper.text()).toContain('文件系统已触发保留空间保护')
+  })
+
+  it('keeps complete spool-operation copy in both locale dictionaries', () => {
+    for (const locale of [enCaptureSettings.captureSettings, zhCaptureSettings.captureSettings]) {
+      expect(locale.infrastructure.staticOff).toBeTruthy()
+      expect(locale.infrastructure.sidecarDown).toBeTruthy()
+      expect(locale.runtime.draining).toBeTruthy()
+      expect(locale.health.deliveryDown).toBeTruthy()
+      expect(locale.health.deliveryDownHint).toBeTruthy()
+      expect(locale.health.spoolCap).toBeTruthy()
+      expect(locale.health.freeReserve).toBeTruthy()
+      expect(locale.health.backlogAge).toBeTruthy()
+      expect(locale.health.sidecarRestarts).toBeTruthy()
+      expect(locale.health.uploadRetries).toBeTruthy()
+      for (const reason of ['ipcUnavailable', 'ipcBackpressure', 'sidecarDown', 'spoolCap', 'spoolFreeReserve', 'spoolCorrupt', 'preCommitDisconnect']) {
+        expect(locale.lossReasons[reason as keyof typeof locale.lossReasons]).toBeTruthy()
+      }
+    }
+  })
+
+  it('saves a complete version-one policy and reloads selected history ranges', async () => {
     const wrapper = mount(CaptureSettingsView, {
       global: {
         stubs: {

@@ -310,6 +310,7 @@ func newConversationCapturePoolWithState(
 type recordingCaptureTransport struct {
 	mu       sync.Mutex
 	beginErr error
+	status   model.Status
 	begins   int
 	closed   bool
 	attempts []*recordingCaptureAttempt
@@ -327,8 +328,8 @@ func (t *recordingCaptureTransport) Begin(_ context.Context, begin model.Begin) 
 	return attempt, nil
 }
 
-func (*recordingCaptureTransport) Status(context.Context) (model.Status, error) {
-	return model.Status{}, nil
+func (t *recordingCaptureTransport) Status(context.Context) (model.Status, error) {
+	return t.status, nil
 }
 
 func (t *recordingCaptureTransport) Close() error {
@@ -371,6 +372,7 @@ type recordingCaptureAttempt struct {
 	terminals       []captureTerminalState
 
 	failNextWrite bool
+	failCommit    bool
 	writeCalls    int
 }
 
@@ -418,7 +420,7 @@ func (a *recordingCaptureAttempt) Commit() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.terminals = append(a.terminals, captureCommitted)
-	return true
+	return !a.failCommit
 }
 
 func (a *recordingCaptureAttempt) Abort() {
@@ -430,6 +432,12 @@ func (a *recordingCaptureAttempt) Abort() {
 func (a *recordingCaptureAttempt) setFailNextWrite() {
 	a.mu.Lock()
 	a.failNextWrite = true
+	a.mu.Unlock()
+}
+
+func (a *recordingCaptureAttempt) setFailCommit() {
+	a.mu.Lock()
+	a.failCommit = true
 	a.mu.Unlock()
 }
 
@@ -517,6 +525,44 @@ func TestConversationCapturePoolBeginFailureIsAttemptedOnceWithoutRetry(t *testi
 	require.Equal(t, 1, transport.Begins())
 }
 
+func TestConversationCapturePoolClassifiesFailedAdmissionFromLiveSupervisor(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		supervisorRunning bool
+		beginErr          error
+		reason            string
+	}{
+		{name: "sidecar down", supervisorRunning: false, beginErr: errors.New("transport unavailable"), reason: "sidecar_down"},
+		{name: "IPC unavailable", supervisorRunning: true, beginErr: errors.New("transport unavailable"), reason: "ipc_unavailable"},
+		{name: "typed IPC backpressure", supervisorRunning: true, beginErr: protocol.ErrIPCBackpressure, reason: "ipc_backpressure"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			minute := time.Date(2026, 8, 17, 2, 3, 0, 0, time.UTC)
+			transport := &recordingCaptureTransport{
+				beginErr: test.beginErr,
+				status: model.Status{
+					HealthSourceID: uuid.New(),
+					HealthBuckets:  []model.HealthBucket{{Minute: minute}},
+				},
+			}
+			pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+			pool.supervisor = &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: test.supervisorRunning}}
+
+			attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+			require.False(t, ok)
+			require.Nil(t, attempt)
+			status, err := pool.Status(context.Background())
+			require.NoError(t, err)
+			require.EqualValues(t, 1, status.DroppedByReason[test.reason])
+			require.EqualValues(t, 1, status.DroppedRecords)
+			require.EqualValues(t, 1, status.HealthBuckets[0].DroppedRecords[test.reason])
+			if test.reason == "ipc_backpressure" {
+				require.Zero(t, status.DroppedByReason["ipc_unavailable"], "typed rejection has one owner")
+			}
+		})
+	}
+}
+
 func TestRuntimeMasterOffDoesNotBeginButLeavesTransportOpen(t *testing.T) {
 	transport := &recordingCaptureTransport{}
 	var enabled atomic.Bool
@@ -533,7 +579,7 @@ func TestProductionConversationCapturePoolStaticDisabledIsInert(t *testing.T) {
 	repo := &capturePolicyRepoStub{}
 	settings := NewSettingService(repo, &config.Config{})
 
-	pool := NewConversationCapturePool(&config.Config{}, nil, settings)
+	pool := NewConversationCapturePool(&config.Config{}, nil, settings, nil)
 	require.Nil(t, pool)
 	gets, sets := repo.calls()
 	require.Zero(t, gets)
@@ -554,7 +600,7 @@ func TestProductionConversationCapturePoolResamplesActualRuntimeMasterBeforeBegi
 	setCompiledCaptureScopeForTest(requestScope, settings.GetCompiledCaptureRuntimePolicyHot(), 99, nil)
 	require.True(t, CaptureMayApplyFor(requestScope, PlatformAnthropic), "request scope must retain its admitted on snapshot")
 
-	pool := NewConversationCapturePool(cfg, nil, settings)
+	pool := NewConversationCapturePool(cfg, nil, settings, nil)
 	require.NotNil(t, pool)
 	productionTransport := pool.transport
 	transport := &recordingCaptureTransport{}
@@ -587,6 +633,54 @@ func TestCaptureAttemptDoesNotRetryAfterIPCWriteFailure(t *testing.T) {
 	require.False(t, attempt.Commit())
 	require.Equal(t, 1, recording.WriteCalls(), "a failed IPC handle must become a no-op")
 	require.Empty(t, recording.TerminalStates())
+}
+
+func TestCaptureAttemptCountsPreCommitDisconnectExactlyOnce(t *testing.T) {
+	minute := time.Date(2026, 8, 17, 2, 3, 0, 0, time.UTC)
+	transport := &recordingCaptureTransport{status: model.Status{
+		HealthSourceID: uuid.New(),
+		HealthBuckets:  []model.HealthBucket{{Minute: minute}},
+	}}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	attempt, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	transport.Attempts()[0].setFailNextWrite()
+
+	require.False(t, attempt.WriteResponse([]byte("first")))
+	require.False(t, attempt.WriteResponse([]byte("second")))
+	require.False(t, attempt.Finalize(model.Final{HTTPStatus: 200}))
+	require.False(t, attempt.Commit())
+	attempt.Abort()
+	status, err := pool.Status(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, status.DroppedByReason["pre_commit_disconnect"])
+	require.EqualValues(t, 1, status.DroppedRecords)
+}
+
+func TestCaptureAttemptCountsFailedCommitButNotExplicitAbort(t *testing.T) {
+	minute := time.Date(2026, 8, 17, 2, 3, 0, 0, time.UTC)
+	transport := &recordingCaptureTransport{status: model.Status{
+		HealthSourceID: uuid.New(),
+		HealthBuckets:  []model.HealthBucket{{Minute: minute}},
+	}}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	failed, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	transport.Attempts()[0].setFailCommit()
+	require.False(t, failed.Commit())
+	require.False(t, failed.Commit())
+	failed.Abort()
+
+	aborted, ok := pool.Begin(context.Background(), testCaptureBegin())
+	require.True(t, ok)
+	aborted.Abort()
+	aborted.Abort()
+
+	status, err := pool.Status(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, status.DroppedByReason["pre_commit_disconnect"])
+	require.EqualValues(t, 1, status.DroppedRecords)
 }
 
 func TestCaptureAttemptContentPolicySkipsDisabledPayloads(t *testing.T) {

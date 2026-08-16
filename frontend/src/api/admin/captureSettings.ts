@@ -27,69 +27,29 @@ export interface CaptureRuntimePolicy {
   user_ids: number[]
 }
 
-export interface CaptureGaugeSnapshot {
-  current: number
-  peak: number
-  capacity: number
-}
-
-export interface CaptureReasonStats {
-  records: number
-  bytes: number
-}
-
-export interface CaptureLossIncident {
-  occurred_at: string
-  reason: string
-  records: number
-  bytes: number
-  worker_queue: number
-  writer_queue: number
-  in_flight_bytes: number
-  error: string
-}
-
-export interface CaptureHealthSnapshot {
-  started_at: string
-  submitted_records: number
-  accepted_records: number
-  written_records: number
-  dropped_records: number
-  dropped_bytes: number
-  dropped_by_reason: Record<string, CaptureReasonStats>
-  worker_queue: CaptureGaugeSnapshot
-  writer_queue: CaptureGaugeSnapshot
-  in_flight_bytes: CaptureGaugeSnapshot
-  last_success_at?: string
-  last_drop_at?: string
-  last_drop_reason: string
-  last_error: string
-  history_dropped_buckets: number
-  recent_incidents: CaptureLossIncident[]
-}
-
-export interface CaptureCapacitySettings {
-  max_body_bytes: number
-  max_queue_bytes: number
-  queue_size: number
-  worker_count: number
-  writer_queue_size: number
-  overflow_policy: string
-  overflow_sample_percent: number
-  batch_max_size: number
-  batch_max_interval_ms: number
-}
-
 export interface CaptureSettings {
   policy: CaptureRuntimePolicy
   provisioned: boolean
   ready: boolean
+  sidecar_running: boolean
+  spool_ready: boolean
+  delivery_ready: boolean
+  spool_used_bytes: number
+  spool_max_bytes: number
+  spool_min_free_bytes: number
+  filesystem_free_bytes: number
+  ready_records: number
+  oldest_ready_age_seconds: number
+  current_batch_id: string
+  sidecar_restart_count: number
+  upload_retries: number
+  last_upload_at: string | null
+  health_source_id: string
+  dropped_records: number
+  dropped_by_reason: Record<string, number>
   initialization_error?: string
-  addresses: string[]
   database: string
   table: string
-  capacity: CaptureCapacitySettings
-  health: CaptureHealthSnapshot
 }
 
 export interface CaptureHealthEvent {
@@ -98,9 +58,11 @@ export interface CaptureHealthEvent {
   reason: string
   dropped_records: number
   dropped_bytes: number
-  worker_queue_peak: number
-  writer_queue_peak: number
-  in_flight_bytes_peak: number
+  spool_used_bytes_peak: number
+  ready_records_peak: number
+  oldest_ready_age_seconds_peak: number
+  upload_retries: number
+  sidecar_restarts: number
   last_error: string
 }
 

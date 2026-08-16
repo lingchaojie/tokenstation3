@@ -181,18 +181,27 @@ const metricDefinitions = computed(() => {
       recommendedThreshold: 1
     },
     {
+      type: 'capture_delivery_ready',
+      group: 'capture',
+      label: t('admin.ops.alertRules.metrics.captureDeliveryReady'),
+      description: t('admin.ops.alertRules.metricDescriptions.captureDeliveryReady'),
+      recommendedOperator: '<',
+      recommendedThreshold: 1
+    },
+    {
+      type: 'capture_spool_usage_percent',
+      group: 'capture',
+      label: t('admin.ops.alertRules.metrics.captureSpoolUsage'),
+      description: t('admin.ops.alertRules.metricDescriptions.captureSpoolUsage'),
+      recommendedOperator: '>=',
+      recommendedThreshold: 70,
+      unit: '%'
+    },
+    {
       type: 'capture_dropped_records',
       group: 'capture',
       label: t('admin.ops.alertRules.metrics.captureDroppedRecords'),
       description: t('admin.ops.alertRules.metricDescriptions.captureDroppedRecords'),
-      recommendedOperator: '>',
-      recommendedThreshold: 0
-    },
-    {
-      type: 'capture_writer_failures',
-      group: 'capture',
-      label: t('admin.ops.alertRules.metrics.captureWriterFailures'),
-      description: t('admin.ops.alertRules.metricDescriptions.captureWriterFailures'),
       recommendedOperator: '>',
       recommendedThreshold: 0
     },

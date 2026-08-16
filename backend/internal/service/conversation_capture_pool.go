@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	"github.com/Wei-Shaw/sub2api/internal/capture/sidecar"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 )
@@ -18,6 +20,9 @@ type ConversationCapturePool struct {
 	transport      protocol.Transport
 	runtimeEnabled func() bool
 	stopOnce       sync.Once
+	healthReporter *captureStatusReporter
+	supervisor     *CaptureSidecarSupervisor
+	losses         *captureOperationalLossObserver
 
 	// Tests in this package can install synchronous compatibility hooks for
 	// legacy archive-writer fixtures. Production/Wire construction never does.
@@ -38,6 +43,8 @@ type CaptureAttempt struct {
 	headerLimit int
 	failed      bool
 	terminal    bool
+	lossOnce    sync.Once
+	losses      *captureOperationalLossObserver
 }
 
 func newConversationCapturePoolForTransport(transport protocol.Transport, runtimeEnabled func() bool) *ConversationCapturePool {
@@ -47,7 +54,9 @@ func newConversationCapturePoolForTransport(transport protocol.Transport, runtim
 	if runtimeEnabled == nil {
 		runtimeEnabled = func() bool { return true }
 	}
-	return &ConversationCapturePool{transport: transport, runtimeEnabled: runtimeEnabled}
+	return &ConversationCapturePool{
+		transport: transport, runtimeEnabled: runtimeEnabled, losses: newCaptureOperationalLossObserver(),
+	}
 }
 
 // NewConversationCapturePool is the Wire-facing constructor. Static capture
@@ -55,7 +64,12 @@ func newConversationCapturePoolForTransport(transport protocol.Transport, runtim
 // attempt. Runtime master-off is re-sampled from the atomically published
 // setting immediately before Begin and leaves this transport open so sidecar
 // spool upload can continue draining.
-func NewConversationCapturePool(cfg *config.Config, _ CaptureHealthRepository, settings *SettingService) *ConversationCapturePool {
+func NewConversationCapturePool(
+	cfg *config.Config,
+	healthRepo CaptureHealthRepository,
+	settings *SettingService,
+	supervisor *CaptureSidecarSupervisor,
+) *ConversationCapturePool {
 	if cfg == nil || !cfg.Gateway.Capture.Enabled {
 		return nil
 	}
@@ -65,21 +79,50 @@ func NewConversationCapturePool(cfg *config.Config, _ CaptureHealthRepository, s
 		WriteTimeout: 10 * time.Millisecond,
 		ReadTimeout:  10 * time.Millisecond,
 	})
-	return newConversationCapturePoolForTransport(transport, settings.CaptureRuntimeMasterEnabledHot)
+	pool := newConversationCapturePoolForTransport(transport, settings.CaptureRuntimeMasterEnabledHot)
+	pool.supervisor = supervisor
+	pool.healthReporter = newCaptureStatusReporter(
+		pool,
+		supervisor,
+		healthRepo,
+		sidecar.StatusCheckpointPath(cfg.Gateway.Capture.Spool.Dir),
+		sidecar.ReadStatusCheckpoint,
+	)
+	pool.healthReporter.Start()
+	return pool
 }
 
 // Begin performs the one allowed transport admission synchronously. Capture
 // unavailability is reported only to the caller as a missing attempt; callers
 // continue proxying unchanged.
 func (p *ConversationCapturePool) Begin(ctx context.Context, begin model.Begin) (*CaptureAttempt, bool) {
-	if p == nil || p.transport == nil || (p.runtimeEnabled != nil && !p.runtimeEnabled()) {
+	if p == nil || (p.runtimeEnabled != nil && !p.runtimeEnabled()) {
+		return nil, false
+	}
+	sidecarRunning := p.supervisor == nil || p.supervisor.Status().Running
+	if p.transport == nil {
+		p.recordAdmissionLoss(sidecarRunning, errors.New("capture transport unavailable"))
 		return nil, false
 	}
 	attempt, err := p.transport.Begin(ctx, begin)
 	if err != nil || attempt == nil {
+		p.recordAdmissionLoss(sidecarRunning, err)
 		return nil, false
 	}
-	return &CaptureAttempt{attempt: attempt, policy: begin.Policy}, true
+	return &CaptureAttempt{attempt: attempt, policy: begin.Policy, losses: p.losses}, true
+}
+
+func (p *ConversationCapturePool) recordAdmissionLoss(sidecarRunning bool, beginErr error) {
+	if p == nil || p.losses == nil {
+		return
+	}
+	reason := CaptureDropIPCUnavailable
+	if errors.Is(beginErr, protocol.ErrIPCBackpressure) {
+		reason = CaptureDropIPCBackpressure
+	} else if !sidecarRunning {
+		reason = CaptureDropSidecarDown
+	}
+	p.losses.record(reason)
 }
 
 func (a *CaptureAttempt) ID() uuid.UUID {
@@ -127,6 +170,7 @@ func (a *CaptureAttempt) write(enabled bool, write func(protocol.Attempt) bool) 
 	}
 	if !write(a.attempt) {
 		a.failed = true
+		a.recordPreCommitDisconnect()
 		return false
 	}
 	return true
@@ -143,6 +187,7 @@ func (a *CaptureAttempt) Finalize(final model.Final) bool {
 	}
 	if !a.attempt.Finalize(final) {
 		a.failed = true
+		a.recordPreCommitDisconnect()
 		return false
 	}
 	return true
@@ -160,9 +205,21 @@ func (a *CaptureAttempt) Commit() bool {
 	a.terminal = true
 	if !a.attempt.Commit() {
 		a.failed = true
+		a.recordPreCommitDisconnect()
 		return false
 	}
 	return true
+}
+
+func (a *CaptureAttempt) recordPreCommitDisconnect() {
+	if a == nil {
+		return
+	}
+	a.lossOnce.Do(func() {
+		if a.losses != nil {
+			a.losses.record(CaptureDropPreCommitDisconnect)
+		}
+	})
 }
 
 func (a *CaptureAttempt) Abort() {
@@ -245,6 +302,76 @@ func (p *ConversationCapturePool) Health() CaptureHealthSnapshot {
 	return CaptureHealthSnapshot{DroppedByReason: map[string]CaptureReasonStats{}, RecentIncidents: []CaptureLossIncident{}}
 }
 
+// Status performs the bounded sidecar protocol status exchange. Callers may
+// fall back to the validated disk checkpoint when this live request fails.
+func (p *ConversationCapturePool) Status(ctx context.Context) (model.Status, error) {
+	status, err := p.rawStatus(ctx)
+	if err == nil && p.healthReporter != nil {
+		p.healthReporter.observe(status)
+	}
+	if err == nil {
+		status = p.withObservedLosses(status)
+	}
+	return status, err
+}
+
+func (p *ConversationCapturePool) rawStatus(ctx context.Context) (model.Status, error) {
+	if p == nil || p.transport == nil {
+		return model.Status{}, errors.New("capture status source is unavailable")
+	}
+	return p.transport.Status(ctx)
+}
+
+func (p *ConversationCapturePool) withObservedLosses(status model.Status) model.Status {
+	if p == nil || p.losses == nil {
+		return status
+	}
+	if status.HealthSourceID == uuid.Nil {
+		return status
+	}
+	counts := p.losses.cumulativeSnapshot(status.HealthSourceID)
+	if len(counts) == 0 {
+		return status
+	}
+	status.DroppedByReason = cloneUint64Counts(status.DroppedByReason)
+	if status.HealthBuckets != nil {
+		buckets := make([]model.HealthBucket, len(status.HealthBuckets))
+		copy(buckets, status.HealthBuckets)
+		for i := range buckets {
+			buckets[i].DroppedRecords = cloneUint64Counts(buckets[i].DroppedRecords)
+			buckets[i].DroppedBytes = cloneUint64Counts(buckets[i].DroppedBytes)
+		}
+		status.HealthBuckets = buckets
+	}
+	for reason, count := range counts {
+		status.DroppedByReason[reason] = saturatingUint64Add(status.DroppedByReason[reason], count)
+		if len(status.HealthBuckets) != 0 {
+			current := &status.HealthBuckets[len(status.HealthBuckets)-1]
+			current.DroppedRecords[reason] = saturatingUint64Add(current.DroppedRecords[reason], count)
+		}
+	}
+	status.DroppedRecords = 0
+	for _, count := range status.DroppedByReason {
+		status.DroppedRecords = saturatingUint64Add(status.DroppedRecords, count)
+	}
+	return status
+}
+
+func cloneUint64Counts(source map[string]uint64) map[string]uint64 {
+	cloned := make(map[string]uint64, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func saturatingUint64Add(left, right uint64) uint64 {
+	if right > ^uint64(0)-left {
+		return ^uint64(0)
+	}
+	return left + right
+}
+
 func (p *ConversationCapturePool) Ready() bool {
 	if p == nil {
 		return false
@@ -267,6 +394,9 @@ func (p *ConversationCapturePool) Stop() {
 		return
 	}
 	p.stopOnce.Do(func() {
+		if p.healthReporter != nil {
+			p.healthReporter.Stop()
+		}
 		if p.transport != nil {
 			_ = p.transport.Close()
 		}

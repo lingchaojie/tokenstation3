@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/sidecar"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/google/uuid"
 )
 
 var (
@@ -31,15 +32,28 @@ type CaptureCapacitySettings struct {
 }
 
 type CaptureSettingsView struct {
-	Policy              CaptureRuntimePolicy    `json:"policy"`
-	Provisioned         bool                    `json:"provisioned"`
-	Ready               bool                    `json:"ready"`
-	InitializationError string                  `json:"initialization_error,omitempty"`
-	Addresses           []string                `json:"addresses"`
-	Database            string                  `json:"database"`
-	Table               string                  `json:"table"`
-	Capacity            CaptureCapacitySettings `json:"capacity"`
-	Health              CaptureHealthSnapshot   `json:"health"`
+	Policy                CaptureRuntimePolicy `json:"policy"`
+	Provisioned           bool                 `json:"provisioned"`
+	Ready                 bool                 `json:"ready"`
+	SidecarRunning        bool                 `json:"sidecar_running"`
+	SpoolReady            bool                 `json:"spool_ready"`
+	DeliveryReady         bool                 `json:"delivery_ready"`
+	SpoolUsedBytes        int64                `json:"spool_used_bytes"`
+	SpoolMaxBytes         int64                `json:"spool_max_bytes"`
+	SpoolMinFreeBytes     int64                `json:"spool_min_free_bytes"`
+	FilesystemFreeBytes   int64                `json:"filesystem_free_bytes"`
+	ReadyRecords          int64                `json:"ready_records"`
+	OldestReadyAgeSeconds int64                `json:"oldest_ready_age_seconds"`
+	CurrentBatchID        string               `json:"current_batch_id"`
+	SidecarRestartCount   uint64               `json:"sidecar_restart_count"`
+	UploadRetries         uint64               `json:"upload_retries"`
+	LastUploadAt          *time.Time           `json:"last_upload_at"`
+	HealthSourceID        string               `json:"health_source_id"`
+	DroppedRecords        uint64               `json:"dropped_records"`
+	DroppedByReason       map[string]uint64    `json:"dropped_by_reason"`
+	InitializationError   string               `json:"initialization_error,omitempty"`
+	Database              string               `json:"database"`
+	Table                 string               `json:"table"`
 }
 
 type CaptureHealthHistory struct {
@@ -50,11 +64,13 @@ type CaptureHealthHistory struct {
 }
 
 type CaptureAdminService struct {
-	cfg            *config.Config
-	settingService *SettingService
-	capturePool    *ConversationCapturePool
-	healthRepo     CaptureHealthRepository
-	now            func() time.Time
+	cfg                  *config.Config
+	settingService       *SettingService
+	capturePool          *ConversationCapturePool
+	healthRepo           CaptureHealthRepository
+	supervisor           *CaptureSidecarSupervisor
+	readStatusCheckpoint func(string) (model.Status, bool, error)
+	now                  func() time.Time
 }
 
 func NewCaptureAdminService(
@@ -62,9 +78,11 @@ func NewCaptureAdminService(
 	settingService *SettingService,
 	capturePool *ConversationCapturePool,
 	healthRepo CaptureHealthRepository,
+	supervisor *CaptureSidecarSupervisor,
 ) *CaptureAdminService {
 	return &CaptureAdminService{
-		cfg: cfg, settingService: settingService, capturePool: capturePool, healthRepo: healthRepo, now: time.Now,
+		cfg: cfg, settingService: settingService, capturePool: capturePool, healthRepo: healthRepo,
+		supervisor: supervisor, readStatusCheckpoint: sidecar.ReadStatusCheckpoint, now: time.Now,
 	}
 }
 
@@ -76,7 +94,7 @@ func (s *CaptureAdminService) Get(ctx context.Context) (*CaptureSettingsView, er
 	if err != nil {
 		return nil, err
 	}
-	return s.buildView(policy), nil
+	return s.buildView(ctx, policy), nil
 }
 
 func (s *CaptureAdminService) Update(ctx context.Context, policy CaptureRuntimePolicy) (*CaptureSettingsView, error) {
@@ -87,14 +105,14 @@ func (s *CaptureAdminService) Update(ctx context.Context, policy CaptureRuntimeP
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCapturePolicy, err)
 	}
-	if normalized.Enabled && !s.infrastructureReady() {
+	if normalized.Enabled && !s.infrastructureReady(ctx) {
 		return nil, ErrCaptureInfrastructureNotReady
 	}
 	updated, err := s.settingService.UpdateCaptureRuntimePolicy(ctx, normalized)
 	if err != nil {
 		return nil, err
 	}
-	return s.buildView(updated), nil
+	return s.buildView(ctx, updated), nil
 }
 
 func (s *CaptureAdminService) History(ctx context.Context, selectedRange string) (*CaptureHealthHistory, error) {
@@ -146,26 +164,22 @@ func captureHistoryDuration(selectedRange string) (time.Duration, bool) {
 	}
 }
 
-func (s *CaptureAdminService) infrastructureReady() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && s.capturePool != nil && s.capturePool.Ready()
+func (s *CaptureAdminService) infrastructureReady(ctx context.Context) bool {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled {
+		return false
+	}
+	status, found := s.captureStatus(ctx)
+	return found && s.supervisorRunning() && status.SpoolReady
 }
 
-func (s *CaptureAdminService) buildView(policy CaptureRuntimePolicy) *CaptureSettingsView {
+func (s *CaptureAdminService) buildView(ctx context.Context, policy CaptureRuntimePolicy) *CaptureSettingsView {
 	view := &CaptureSettingsView{
-		Policy:      policy,
-		Addresses:   []string{},
-		Health:      CaptureHealthSnapshot{DroppedByReason: map[string]CaptureReasonStats{}, RecentIncidents: []CaptureLossIncident{}},
-		Provisioned: s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && s.capturePool != nil,
-		Ready:       s.infrastructureReady(),
+		Policy:          policy,
+		DroppedByReason: map[string]uint64{},
+		Provisioned:     s != nil && s.cfg != nil && s.cfg.Gateway.Capture.Enabled,
 	}
 	if s == nil {
 		return view
-	}
-	if s.capturePool != nil {
-		if s.capturePool.InitializationError() != "" {
-			view.InitializationError = "ClickHouse initialization failed; check server logs"
-		}
-		view.Health = s.capturePool.Health()
 	}
 	if s.cfg == nil {
 		return view
@@ -173,38 +187,70 @@ func (s *CaptureAdminService) buildView(policy CaptureRuntimePolicy) *CaptureSet
 	cc := s.cfg.Gateway.Capture
 	view.Database = cc.ClickHouse.Database
 	view.Table = cc.ClickHouse.Table
-	view.Addresses = redactCaptureAddresses(cc.ClickHouse.Addr)
-	view.Capacity = CaptureCapacitySettings{
-		MaxBodyBytes: cc.MaxBodyBytes, MaxQueueBytes: cc.MaxQueueBytes, QueueSize: cc.QueueSize,
-		WorkerCount: cc.WorkerCount, WriterQueueSize: cc.WriterQueueSize,
-		OverflowPolicy: cc.OverflowPolicy, OverflowSamplePercent: cc.OverflowSamplePercent,
-		BatchMaxSize: cc.BatchMaxSize, BatchMaxIntervalMs: cc.BatchMaxIntervalMs,
+	view.SpoolMinFreeBytes = nonnegativeInt64(cc.Spool.MinFreeBytes)
+	status, found := s.captureStatus(ctx)
+	view.SidecarRunning = s.supervisorRunning()
+	view.SpoolReady = status.SpoolReady
+	view.DeliveryReady = found && view.SidecarRunning && status.DeliveryReady
+	view.SpoolUsedBytes = nonnegativeInt64(status.SpoolUsedBytes)
+	view.SpoolMaxBytes = nonnegativeInt64(status.SpoolMaxBytes)
+	view.FilesystemFreeBytes = nonnegativeInt64(status.FilesystemFreeBytes)
+	view.ReadyRecords = nonnegativeInt64(status.ReadyRecords)
+	view.OldestReadyAgeSeconds = nonnegativeInt64(status.OldestReadyAgeSeconds)
+	view.CurrentBatchID = status.CurrentBatchID
+	view.SidecarRestartCount = s.supervisorStatus().RestartCount
+	view.UploadRetries = status.UploadRetries
+	view.LastUploadAt = status.LastUploadAt
+	if status.HealthSourceID != uuid.Nil {
+		view.HealthSourceID = status.HealthSourceID.String()
+	}
+	view.DroppedRecords = status.DroppedRecords
+	for reason, count := range status.DroppedByReason {
+		if isCaptureOperationalDropReason(reason) {
+			view.DroppedByReason[reason] = count
+		}
+	}
+	view.Ready = found && view.SidecarRunning && view.SpoolReady
+	if view.Provisioned && (!view.SidecarRunning || !found) {
+		view.InitializationError = "Capture sidecar is unavailable; check server logs"
 	}
 	return view
 }
 
-func redactCaptureAddresses(addresses []string) []string {
-	redacted := make([]string, 0, len(addresses))
-	for _, raw := range addresses {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		withScheme := strings.Contains(raw, "://")
-		candidate := raw
-		if !withScheme {
-			candidate = "//" + raw
-		}
-		parsed, err := url.Parse(candidate)
-		if err != nil || parsed.Host == "" {
-			redacted = append(redacted, "<redacted>")
-			continue
-		}
-		if withScheme {
-			redacted = append(redacted, parsed.Scheme+"://"+parsed.Host)
-		} else {
-			redacted = append(redacted, parsed.Host)
+func (s *CaptureAdminService) captureStatus(ctx context.Context) (model.Status, bool) {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled {
+		return model.Status{}, false
+	}
+	if s.capturePool != nil && (s.supervisor == nil || s.supervisor.Status().Running) {
+		if status, err := s.capturePool.Status(ctx); err == nil {
+			return status, true
 		}
 	}
-	return redacted
+	if s.readStatusCheckpoint != nil {
+		path := sidecar.StatusCheckpointPath(s.cfg.Gateway.Capture.Spool.Dir)
+		if status, found, err := s.readStatusCheckpoint(path); err == nil && found {
+			if s.capturePool != nil {
+				status = s.capturePool.withObservedLosses(status)
+			}
+			return status, true
+		}
+	}
+	return model.Status{}, false
+}
+
+func (s *CaptureAdminService) supervisorStatus() CaptureSidecarSupervisorStatus {
+	if s == nil || s.supervisor == nil {
+		return CaptureSidecarSupervisorStatus{}
+	}
+	return s.supervisor.Status()
+}
+
+func (s *CaptureAdminService) supervisorRunning() bool {
+	if s == nil {
+		return false
+	}
+	if s.supervisor != nil {
+		return s.supervisor.Status().Running
+	}
+	return s.capturePool != nil && s.capturePool.Ready()
 }

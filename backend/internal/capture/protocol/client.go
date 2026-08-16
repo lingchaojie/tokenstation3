@@ -92,6 +92,30 @@ func (c *Client) Begin(ctx context.Context, begin model.Begin) (Attempt, error) 
 	if !attempt.writeFrameLocked(deadline, KindBegin, payload) {
 		return nil, errors.New("send capture begin")
 	}
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		attempt.failLocked()
+		return nil, err
+	}
+	header, response, err := readFrame(conn)
+	if err != nil {
+		attempt.failLocked()
+		return nil, err
+	}
+	if header.Version != ProtocolVersion {
+		attempt.failLocked()
+		return nil, ErrInvalidHeader
+	}
+	if header.Kind == KindProtocolError {
+		attempt.failLocked()
+		if header.CaptureID == begin.CaptureID && string(response) == ipcBackpressureRejection {
+			return nil, ErrIPCBackpressure
+		}
+		return nil, errors.New("capture begin rejected")
+	}
+	if header.Kind != KindBegin || header.CaptureID != begin.CaptureID || len(response) != 0 {
+		attempt.failLocked()
+		return nil, ErrInvalidHeader
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

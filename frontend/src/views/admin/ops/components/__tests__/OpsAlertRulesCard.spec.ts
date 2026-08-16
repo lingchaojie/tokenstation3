@@ -107,8 +107,9 @@ describe('OpsAlertRulesCard capture metrics', () => {
     ])
     expect(options.filter((option) => String(option.value).startsWith('capture_')).map((option) => option.value)).toEqual([
       'capture_ready',
+      'capture_delivery_ready',
+      'capture_spool_usage_percent',
       'capture_dropped_records',
-      'capture_writer_failures'
     ])
 
     await metricSelect!.vm.$emit('update:modelValue', 'capture_ready')
@@ -121,11 +122,13 @@ describe('OpsAlertRulesCard capture metrics', () => {
   it.each([
     'admin.ops.alertRules.metricGroups.capture',
     'admin.ops.alertRules.metrics.captureReady',
+    'admin.ops.alertRules.metrics.captureDeliveryReady',
+    'admin.ops.alertRules.metrics.captureSpoolUsage',
     'admin.ops.alertRules.metrics.captureDroppedRecords',
-    'admin.ops.alertRules.metrics.captureWriterFailures',
     'admin.ops.alertRules.metricDescriptions.captureReady',
+    'admin.ops.alertRules.metricDescriptions.captureDeliveryReady',
+    'admin.ops.alertRules.metricDescriptions.captureSpoolUsage',
     'admin.ops.alertRules.metricDescriptions.captureDroppedRecords',
-    'admin.ops.alertRules.metricDescriptions.captureWriterFailures'
   ])('defines %s in both locales', (key) => {
     expect(localeValue(en, key)).toEqual(expect.any(String))
     expect(localeValue(zh, key)).toEqual(expect.any(String))

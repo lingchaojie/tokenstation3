@@ -21,7 +21,7 @@ func NewCaptureHandler(captureService *service.CaptureAdminService) *CaptureHand
 	return &CaptureHandler{service: captureService}
 }
 
-// Get returns the runtime policy, static provisioning summary, and live loss health.
+// Get returns the runtime policy and non-sensitive spool/delivery operations.
 // GET /api/v1/admin/capture-settings
 func (h *CaptureHandler) Get(c *gin.Context) {
 	if h == nil || h.service == nil {
@@ -59,7 +59,7 @@ func (h *CaptureHandler) Update(c *gin.Context) {
 	}
 	view, err := h.service.Update(c.Request.Context(), policy)
 	if errors.Is(err, service.ErrCaptureInfrastructureNotReady) {
-		response.Error(c, http.StatusConflict, "Capture infrastructure is not ready; enable gateway.capture and verify ClickHouse, then restart the service")
+		response.Error(c, http.StatusConflict, "Capture infrastructure is not ready; enable gateway.capture and verify the local sidecar spool")
 		return
 	}
 	if errors.Is(err, service.ErrInvalidCapturePolicy) {

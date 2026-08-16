@@ -494,6 +494,7 @@ func ProvideOpsAlertEvaluatorService(
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
 	capturePool *ConversationCapturePool,
+	captureSupervisor *CaptureSidecarSupervisor,
 	captureHealthRepo CaptureHealthRepository,
 ) *OpsAlertEvaluatorService {
 	svc := NewOpsAlertEvaluatorService(
@@ -504,6 +505,7 @@ func ProvideOpsAlertEvaluatorService(
 		cfg,
 		proxyRepo,
 		capturePool,
+		captureSupervisor,
 		captureHealthRepo,
 	)
 	svc.Start()
