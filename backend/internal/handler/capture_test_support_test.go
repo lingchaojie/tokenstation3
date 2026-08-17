@@ -42,6 +42,10 @@ func newEnabledCaptureSettingService(t *testing.T, cfg *config.Config) *service.
 	policy := service.DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
 	policy.Platforms.OpenAI = true
+	// Handler integration tests exercise capture mechanics across model
+	// families; production defaults continue to limit Anthropic and Kiro.
+	policy.ModelAllowlists.Anthropic = []string{}
+	policy.ModelAllowlists.Kiro = []string{}
 	_, err := settings.UpdateCaptureRuntimePolicy(context.Background(), policy)
 	require.NoError(t, err)
 	return settings
