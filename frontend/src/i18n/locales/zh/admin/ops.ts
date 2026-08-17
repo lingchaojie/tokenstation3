@@ -72,6 +72,7 @@ export default {
         runtimeConfigResetFailed: '重置日志配置失败',
         cleanupConfirm: '确定要清理匹配当前筛选条件的系统日志吗？此操作不可撤销。',
         cleanupSuccess: '清理完成，已删除 {count} 条日志。',
+        cleanupFilterRequired: '清理需要至少一个筛选条件（起止时间或其他字段）',
         cleanupFailed: '清理系统日志失败'
       },
       requestsTotal: '请求（总计）',
@@ -381,8 +382,6 @@ export default {
         suggestPlatform: '🚨 平台错误，建议立即排查修复',
         suggestGeneric: '查看详情了解更多信息',
         apiKeyPrefix: 'Key 前缀',
-        attemptedKeyPrefix: '尝试的 Key 前缀',
-        deletedKeyOwner: '已删除 Key 所有者',
         keyDeletedBadge: 'Key 已删除'
       },
       requestDetails: {
@@ -479,6 +478,7 @@ export default {
         manage: '预警规则',
         metricGroups: {
           system: '系统指标',
+          capture: '转存指标',
           group: '分组级别指标（需 group_id）',
           account: '账号级别指标'
         },
@@ -491,6 +491,10 @@ export default {
           cpu: 'CPU 使用率 (%)',
           memory: '内存使用率 (%)',
           queueDepth: '并发排队深度',
+          captureReady: '转存本地接收就绪 (0/1)',
+          captureDeliveryReady: '转存传输就绪 (0/1)',
+          captureSpoolUsage: '转存 Spool 使用率 (%)',
+          captureDroppedRecords: '转存丢失记录数',
           groupAvailableAccounts: '分组可用账号数',
           groupAvailableRatio: '分组可用比例 (%)',
           groupRateLimitRatio: '分组限流比例 (%)',
@@ -509,6 +513,10 @@ export default {
           cpu: '当前实例 CPU 使用率（0~100）。',
           memory: '当前实例内存使用率（0~100）。',
           queueDepth: '统计窗口内并发队列排队深度（等待中的请求数）。',
+          captureReady: '本地 Sidecar 与 Spool 是否可接收转存：1 表示就绪，0 表示不可用。',
+          captureDeliveryReady: '转存 Sidecar 当前是否可传输到 ClickHouse：1 表示就绪，0 表示正在重试。',
+          captureSpoolUsage: '当前已使用的本地 Spool 配置容量占比（0~100）。',
+          captureDroppedRecords: '所选统计窗口内所有实例丢失的转存记录总数。',
           groupAvailableAccounts: '指定分组中当前可用账号数量（需要 group_id 过滤）。',
           groupAvailableRatio: '指定分组中可用账号占比（0~100，需要 group_id 过滤）。',
           groupRateLimitRatio: '指定分组中账号被限流的比例（0~100，需要 group_id 过滤）。',
@@ -713,8 +721,6 @@ export default {
           '启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志。',
         ignoreNoAvailableAccounts: '忽略无可用账号错误',
         ignoreNoAvailableAccountsHint: '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
-        ignoreInvalidApiKeyErrors: '忽略无效 API Key 错误',
-        ignoreInvalidApiKeyErrorsHint: '启用后，无效或缺失 API Key 的错误（INVALID_API_KEY、API_KEY_REQUIRED）将不会写入错误日志。',
         ignoreInsufficientBalanceErrors: '忽略余额不足错误',
         ignoreInsufficientBalanceErrorsHint: '启用后，账号余额不足（Insufficient balance）的错误将不会写入错误日志。',
         autoRefresh: '自动刷新',

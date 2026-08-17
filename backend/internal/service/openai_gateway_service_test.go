@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -24,11 +23,536 @@ import (
 
 // 编译期接口断言
 var _ AccountRepository = (*stubOpenAIAccountRepo)(nil)
+
+func TestValidateOpenAIResponsesSSEPayloadRejectsMalformedKnownIntermediateFields(t *testing.T) {
+	t.Parallel()
+	for name, payload := range map[string]string{
+		"nonstring content part type":   `{"type":"response.content_part.added","part":{"type":123}}`,
+		"nonstring error message":       `{"type":"error","code":"server_error","message":123}`,
+		"nonstring output index":        `{"type":"response.output_text.delta","output_index":"bad","content_index":0,"delta":"x"}`,
+		"negative content index":        `{"type":"response.output_text.delta","output_index":0,"content_index":-1,"delta":"x"}`,
+		"fractional sequence number":    `{"type":"response.output_text.delta","sequence_number":1.5,"delta":"x"}`,
+		"nonstring item id":             `{"type":"response.output_text.delta","item_id":123,"delta":"x"}`,
+		"malformed root usage":          `{"type":"response.output_text.delta","delta":"x","usage":"bad"}`,
+		"malformed response usage":      `{"type":"response.created","response":{"id":"r","status":"in_progress","usage":{"input_tokens":-1}}}`,
+		"malformed response output":     `{"type":"response.created","response":{"id":"r","status":"in_progress","output":[{}]}}`,
+		"nonstring response status":     `{"type":"response.created","response":{"id":"r","status":123}}`,
+		"malformed hosted image usage":  `{"type":"response.completed","response":{"id":"r","status":"completed","output":[],"tool_usage":{"image_gen":{"output_tokens_details":{"image_tokens":"bad"}}}}}`,
+		"nonstring image result":        `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"image_generation_call","result":{}}]}}`,
+		"nonstring image format":        `{"type":"response.output_item.added","output_index":0,"item":{"id":"ig","type":"image_generation_call","output_format":false}}`,
+		"nonstring output item id":      `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"id":123,"type":"image_generation_call","result":"image"}]}}`,
+		"nonstring reasoning encrypted": `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"reasoning","encrypted_content":{},"summary":[{"type":"summary_text","text":"ok"}]}]}}`,
+		"malformed failed output":       `{"type":"response.failed","response":{"id":"r","status":"failed","output":[{}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsMismatchedItemReference(t *testing.T) {
+	var state openAIResponsesSSEAttemptState
+	added := []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`)
+	require.NoError(t, state.observe(added, "response.output_item.added"))
+
+	delta := []byte(`{"type":"response.function_call_arguments.delta","output_index":1,"item_id":"item-b","delta":"{}"}`)
+	require.Error(t, state.observe(delta, "response.function_call_arguments.delta"))
+}
+
+func TestValidateOpenAIResponsesRejectsDuplicateKnownJSONKeys(t *testing.T) {
+	for name, payload := range map[string]string{
+		"event type": `{"type":"response.output_text.delta","type":"response.output_item.done","delta":"safe","item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`,
+		"tool name":  `{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"safe","name":"danger","arguments":""}}`,
+		"web action": `{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","action":{"type":"search","type":"open_page","query":"safe"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.output_text.delta","delta":"safe","opaque":{"type":"future-a","type":"future-b"}}`), "")
+	require.NoError(t, err, "duplicate fields inside an unknown extension remain forward-compatible")
+
+	for name, payload := range map[string]string{
+		"usage alias": `{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"prompt_tokens":1,"prompt_tokens":999}}}`,
+		"tool usage":  `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"input_tokens":1},"image_gen":{"input_tokens":999}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	require.False(t, validOpenAIResponsesJSON([]byte(`{"id":"resp-a","status":"completed","status":"failed","output":[]}`)))
+}
+
+func TestOpenAIResponsesRejectsWrongTypedKnownResponseMetadata(t *testing.T) {
+	for name, field := range map[string]string{
+		"model":               `"model":123`,
+		"object":              `"object":false`,
+		"created_at":          `"created_at":"now"`,
+		"parallel_tool_calls": `"parallel_tool_calls":"yes"`,
+		"temperature":         `"temperature":"hot"`,
+		"top_p":               `"top_p":{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],` + field + `}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsMalformedAndChangedWebSearchAction(t *testing.T) {
+	for name, action := range map[string]string{
+		"non object":           `"bad"`,
+		"missing type":         `{"query":"safe"}`,
+		"search missing query": `{"type":"search"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":` + action + `}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+
+	var state openAIResponsesSSEAttemptState
+	done := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":{"type":"search","query":"safe"}}}`)
+	require.NoError(t, state.observe(done, "response.output_item.done"))
+	terminal := []byte(`{"type":"response.completed","response":{"status":"completed","output":[{"id":"web-a","type":"web_search_call","status":"completed","action":{"type":"search","query":"danger"}}]}}`)
+	require.ErrorContains(t, state.observe(terminal, "response.completed"), "action.query")
+
+	for name, action := range map[string]string{
+		"open page url type":   `{"type":"open_page","url":123}`,
+		"find missing pattern": `{"type":"find_in_page","url":"https://example.test"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":` + action + `}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+
+	var navigationState openAIResponsesSSEAttemptState
+	navigationDone := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-b","type":"web_search_call","status":"completed","action":{"type":"find_in_page","url":"https://safe.test","pattern":"safe"}}}`)
+	require.NoError(t, navigationState.observe(navigationDone, "response.output_item.done"))
+	navigationTerminal := []byte(`{"type":"response.completed","response":{"status":"completed","output":[{"id":"web-b","type":"web_search_call","status":"completed","action":{"type":"find_in_page","url":"https://danger.test","pattern":"danger"}}]}}`)
+	require.ErrorContains(t, navigationState.observe(navigationTerminal, "response.completed"), "action.")
+}
+
+func TestOpenAIResponsesRejectsWrongTypedKnownContentPartMetadata(t *testing.T) {
+	for name, payload := range map[string]string{
+		"content id":         `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":123,"type":"output_text","text":""}}`,
+		"annotations object": `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"","annotations":{}}}`,
+		"logprobs string":    `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"","logprobs":"bad"}}`,
+		"reasoning part id":  `{"type":"response.reasoning_summary_part.added","output_index":0,"summary_index":0,"item_id":"reason-a","part":{"id":false,"type":"summary_text","text":""}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsWrongOrChangedFunctionEventMetadata(t *testing.T) {
+	for name, field := range map[string]string{
+		"call id": `"call_id":123`,
+		"name":    `"name":false`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"",` + field + `}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+
+	for name, field := range map[string]string{
+		"changed call id": `"call_id":"call-danger"`,
+		"changed name":    `"name":"danger"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var state openAIResponsesSSEAttemptState
+			require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-safe","name":"safe","arguments":""}}`), "response.output_item.added"))
+			payload := []byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"",` + field + `}`)
+			require.Error(t, state.observe(payload, "response.function_call_arguments.done"))
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsWrongTypedErrorAndIncompleteMetadata(t *testing.T) {
+	for name, fields := range map[string]string{
+		"error scalar":           `"error":"bad"`,
+		"error code type":        `"error":{"code":123}`,
+		"error message type":     `"error":{"message":false}`,
+		"incomplete scalar":      `"incomplete_details":"bad"`,
+		"incomplete reason type": `"incomplete_details":{"reason":123}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],` + fields + `}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsContradictoryCompletedMetadata(t *testing.T) {
+	for name, payload := range map[string]string{
+		"response error":      `{"type":"response.completed","response":{"status":"completed","output":[],"error":{"code":"bad","message":"failed"}}}`,
+		"response incomplete": `{"type":"response.completed","response":{"status":"completed","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}`,
+		"root error":          `{"type":"response.completed","error":{"code":"bad","message":"failed"},"response":{"status":"completed","output":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+
+	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.completed","error":null,"response":{"status":"completed","output":[],"error":null,"incomplete_details":null}}`), "")
+	require.NoError(t, err)
+}
+
+func TestOpenAIResponsesRejectsWrongOrDuplicateHostedImageCount(t *testing.T) {
+	for name, payload := range map[string]string{
+		"wrong type": `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"images":"many"}}}}`,
+		"duplicate":  `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"images":1,"images":999}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsConflictingRootAndNestedUsage(t *testing.T) {
+	for name, payload := range map[string]string{
+		"base usage": `{"type":"response.completed","usage":{"prompt_tokens":1,"completion_tokens":2},"response":{"status":"completed","output":[],"usage":{"input_tokens":999,"output_tokens":2}}}`,
+		"tool usage": `{"type":"response.completed","usage":{"input_tokens":1,"output_tokens":1},"tool_usage":{"image_gen":{"input_tokens":1,"images":1}},"response":{"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1},"tool_usage":{"image_gen":{"input_tokens":4,"images":1}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+
+	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.completed","usage":{"prompt_tokens":3,"completion_tokens":2},"response":{"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}`), "")
+	require.NoError(t, err, "equivalent usage aliases should normalize to the same counters")
+}
+
+func TestOpenAIResponsesUsageMergesComplementaryHostedToolUsageSource(t *testing.T) {
+	for name, payload := range map[string]string{
+		"root usage nested tool usage": `{"type":"response.completed","usage":{"input_tokens":3,"output_tokens":2},"response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"image_tokens":2},"output_tokens_details":{"image_tokens":1}}}}}`,
+		"nested usage root tool usage": `{"type":"response.completed","tool_usage":{"image_gen":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"image_tokens":2},"output_tokens_details":{"image_tokens":1}}},"response":{"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			usage, ok := extractOpenAIUsageFromJSONBytes([]byte(payload))
+			require.True(t, ok)
+			require.Equal(t, 3, usage.InputTokens)
+			require.Equal(t, 2, usage.OutputTokens)
+			require.Equal(t, 2, usage.ImageInputTokens)
+			require.Equal(t, 1, usage.ImageOutputTokens)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsConflictingUsageAliasesAndTotal(t *testing.T) {
+	for name, usage := range map[string]string{
+		"input alias":  `{"input_tokens":1,"prompt_tokens":999,"output_tokens":2}`,
+		"output alias": `{"input_tokens":1,"output_tokens":2,"completion_tokens":999}`,
+		"total":        `{"input_tokens":1,"output_tokens":2,"total_tokens":999}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],"usage":` + usage + `}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesRejectsMalformedFailureMetadata(t *testing.T) {
+	for name, payload := range map[string]string{
+		"failed error scalar":         `{"type":"response.failed","response":{"status":"failed","error":"bad"}}`,
+		"failed error code":           `{"type":"response.failed","response":{"status":"failed","error":{"code":123}}}`,
+		"failed model":                `{"type":"response.failed","response":{"status":"failed","model":123,"error":{"message":"failed"}}}`,
+		"incomplete details":          `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":"bad"}}`,
+		"incomplete reason":           `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":123}}}`,
+		"failed completed status":     `{"type":"response.failed","response":{"status":"completed","output":[]}}`,
+		"incomplete completed status": `{"type":"response.incomplete","response":{"status":"completed","output":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesAllowsCompletedEnvelopeWithFailureStatus(t *testing.T) {
+	for _, eventType := range []string{"response.completed", "response.done"} {
+		t.Run(eventType, func(t *testing.T) {
+			payload := []byte(`{"type":"` + eventType + `","response":{"status":"failed","output":[],"error":{"code":"bad","message":"failed"}}}`)
+			_, err := validateOpenAIResponsesSSEPayload(payload, "")
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsChangedResponseIdentity(t *testing.T) {
+	var state openAIResponsesSSEAttemptState
+	require.NoError(t, state.observe([]byte(`{"type":"response.created","response":{"id":"resp-a","object":"response","model":"gpt-a","created_at":1}}`), "response.created"))
+	err := state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-b","object":"response","model":"gpt-b","created_at":2,"status":"completed","output":[]}}`), "response.completed")
+	require.ErrorContains(t, err, "response identity changed")
+}
+
+func TestExtractOpenAIResponseIDPrefersNestedEnvelopeIdentity(t *testing.T) {
+	require.Equal(t, "authoritative", extractOpenAIResponseIDFromJSONBytes([]byte(`{"type":"response.completed","id":"spoofed","response":{"id":"authoritative"}}`)))
+	require.Equal(t, "direct", extractOpenAIResponseIDFromJSONBytes([]byte(`{"id":"direct","object":"response"}`)))
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsPartialCorrelationAndInvalidLifecycle(t *testing.T) {
+	t.Run("partial item correlation", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		err := state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}`), "response.output_item.added")
+		require.Error(t, err)
+	})
+
+	t.Run("unknown explicit reference without tracked item", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		err := state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"item-a","delta":"x"}`), "response.output_text.delta")
+		require.Error(t, err)
+	})
+
+	t.Run("content part index mismatch", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
+		err := state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":1,"item_id":"item-a","delta":"x"}`), "response.output_text.delta")
+		require.Error(t, err)
+	})
+
+	t.Run("delta after item done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"item-a","arguments":"{}"}`), "response.function_call_arguments.done"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{}"}}`), "response.output_item.done"))
+		err := state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item-a","delta":"{}"}`), "response.function_call_arguments.delta")
+		require.Error(t, err)
+	})
+
+	t.Run("terminal with active item", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		err := state.observe([]byte(`{"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}`), "response.completed")
+		require.Error(t, err)
+	})
+
+	t.Run("function item done before arguments done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
+		err := state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{}"}}`), "response.output_item.done")
+		require.Error(t, err)
+	})
+
+	t.Run("reasoning summary index mismatch", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
+		err := state.observe([]byte(`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason-a","summary_index":1,"delta":"x"}`), "response.reasoning_summary_text.delta")
+		require.Error(t, err)
+	})
+
+	t.Run("reasoning summary delta after done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"reason-a","summary_index":0,"text":"x"}`), "response.reasoning_summary_text.done"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":"x"}}`), "response.reasoning_summary_part.done"))
+		err := state.observe([]byte(`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason-a","summary_index":0,"delta":"late"}`), "response.reasoning_summary_text.delta")
+		require.Error(t, err)
+	})
+
+	t.Run("reasoning summary done changed part type", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"reason-a","summary_index":0,"text":"x"}`), "response.reasoning_summary_text.done"))
+		err := state.observe([]byte(`{"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"future_summary","text":"x"}}`), "response.reasoning_summary_part.done")
+		require.Error(t, err)
+	})
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsAggregateMismatch(t *testing.T) {
+	t.Run("function delta and done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"tool-a","delta":"{\"safe\":true}"}`), "response.function_call_arguments.delta"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"{\"danger\":true}"}`), "response.function_call_arguments.done"), "did not match accumulated deltas")
+	})
+
+	t.Run("text delta and done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg-a","delta":"safe"}`), "response.output_text.delta"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"danger"}`), "response.output_text.done"), "did not match accumulated deltas")
+	})
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsAddedMetadataMismatch(t *testing.T) {
+	t.Run("tool identity", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-safe","name":"safe","arguments":""}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":""}`), "response.function_call_arguments.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-danger","name":"danger","arguments":""}}`), "response.output_item.done"), "changed tool call_id/name")
+	})
+
+	t.Run("content part id", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":"part-safe","type":"output_text","text":""}}`), "response.content_part.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"safe"}`), "response.output_text.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":"part-danger","type":"output_text","text":"safe"}}`), "response.content_part.done"), "changed part id")
+	})
+}
+
+func TestOpenAIResponsesSSEAttemptStateRejectsIntermediateAndTerminalAggregateMismatch(t *testing.T) {
+	newTextState := func(t *testing.T) openAIResponsesSSEAttemptState {
+		t.Helper()
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg-a","delta":"safe"}`), "response.output_text.delta"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"safe"}`), "response.output_text.done"))
+		return state
+	}
+
+	t.Run("content part done", func(t *testing.T) {
+		state := newTextState(t)
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"danger"}}`), "response.content_part.done"), "changed after its done event")
+	})
+
+	t.Run("output item done", func(t *testing.T) {
+		state := newTextState(t)
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"danger"}]}}`), "response.output_item.done"), "changed after its done event")
+	})
+
+	t.Run("tool output item done", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"tool-a","delta":"{\"safe\":true}"}`), "response.function_call_arguments.delta"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"{\"safe\":true}"}`), "response.function_call_arguments.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{\"danger\":true}","status":"completed"}}`), "response.output_item.done"), "changed after its done event")
+	})
+
+	t.Run("terminal output", func(t *testing.T) {
+		state := newTextState(t)
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}}`), "response.output_item.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"danger"}]}]}}`), "response.completed"), "differed from output_item.done")
+	})
+
+	t.Run("matching terminal output", func(t *testing.T) {
+		state := newTextState(t)
+		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}}`), "response.output_item.done"))
+		require.NoError(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}]}}`), "response.completed"))
+	})
+
+	t.Run("image metadata", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"img-a","type":"image_generation_call","status":"completed","result":"image","revised_prompt":"safe","output_format":"png","size":"1024x1024","quality":"high","background":"opaque"}}`), "response.output_item.done"))
+		require.ErrorContains(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"img-a","type":"image_generation_call","status":"completed","result":"image","revised_prompt":"danger","output_format":"jpeg","size":"512x512","quality":"low","background":"transparent"}]}}`), "response.completed"), "after output_item.done")
+	})
+}
+
+func TestOpenAIResponsesSSEAttemptStateBoundsTrackedCorrelationState(t *testing.T) {
+	t.Run("output items", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		for i := 0; i < maxOpenAIResponsesTrackedStateEntries; i++ {
+			payload := []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":%d,"item":{"id":"item-%d","type":"message","role":"assistant","content":[]}}`, i, i))
+			require.NoError(t, state.observe(payload, "response.output_item.added"))
+		}
+		payload := []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":%d,"item":{"id":"item-overflow","type":"message","role":"assistant","content":[]}}`, maxOpenAIResponsesTrackedStateEntries))
+		require.ErrorContains(t, state.observe(payload, "response.output_item.added"), "state limit")
+	})
+
+	t.Run("content parts share the attempt budget", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		for i := 0; i < maxOpenAIResponsesTrackedStateEntries-1; i++ {
+			payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":%d,"item_id":"item-a","part":{"id":"part-%d","type":"output_text","text":""}}`, i, i))
+			require.NoError(t, state.observe(payload, "response.content_part.added"))
+		}
+		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":%d,"item_id":"item-a","part":{"id":"part-overflow","type":"output_text","text":""}}`, maxOpenAIResponsesTrackedStateEntries))
+		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "state limit")
+	})
+
+	t.Run("reasoning indexes share the attempt budget", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
+		for i := 0; i < maxOpenAIResponsesTrackedStateEntries-1; i++ {
+			payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_text.delta","output_index":0,"content_index":%d,"item_id":"reason-a","delta":"x"}`, i))
+			require.NoError(t, state.observe(payload, "response.reasoning_text.delta"))
+		}
+		payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_text.delta","output_index":0,"content_index":%d,"item_id":"reason-a","delta":"x"}`, maxOpenAIResponsesTrackedStateEntries))
+		require.ErrorContains(t, state.observe(payload, "response.reasoning_text.delta"), "state limit")
+	})
+}
+
+func TestOpenAIResponsesSSEAttemptStateBoundsRetainedProviderStrings(t *testing.T) {
+	tooLong := strings.Repeat("x", maxOpenAIResponsesRetainedStringBytes+1)
+
+	tests := map[string][]byte{
+		"item id":   []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":0,"item":{"id":%q,"type":"message","role":"assistant","content":[]}}`, tooLong)),
+		"item type": []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":%q}}`, tooLong)),
+	}
+	for name, payload := range tests {
+		t.Run(name, func(t *testing.T) {
+			var state openAIResponsesSSEAttemptState
+			require.ErrorContains(t, state.observe(payload, "response.output_item.added"), "retained string limit")
+		})
+	}
+
+	t.Run("content part id", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"id":%q,"type":"output_text","text":""}}`, tooLong))
+		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "retained string limit")
+	})
+
+	t.Run("content part type", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
+		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"type":%q}}`, tooLong))
+		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "retained string limit")
+	})
+
+	t.Run("reasoning summary type", func(t *testing.T) {
+		var state openAIResponsesSSEAttemptState
+		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
+		payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":%q}}`, tooLong))
+		require.ErrorContains(t, state.observe(payload, "response.reasoning_summary_part.added"), "retained string limit")
+	})
+}
+
 var _ GatewayCache = (*stubGatewayCache)(nil)
 
 type stubOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
+}
+
+type tempUnschedulableOpenAIAccountRepo struct {
+	stubOpenAIAccountRepo
+	modelRateLimitAccountID int64
+	modelRateLimitKey       string
+}
+
+func (r *tempUnschedulableOpenAIAccountRepo) SetModelRateLimit(_ context.Context, accountID int64, modelKey string, _ time.Time, _ ...string) error {
+	r.modelRateLimitAccountID = accountID
+	r.modelRateLimitKey = modelKey
+	return nil
 }
 
 type snapshotUpdateAccountRepo struct {
@@ -54,6 +578,29 @@ func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account,
 		}
 	}
 	return nil, errors.New("account not found")
+}
+
+func (r stubOpenAIAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*Account, error) {
+	if len(ids) == 0 {
+		return []*Account{}, nil
+	}
+	index := make(map[int64]*Account, len(r.accounts))
+	for i := range r.accounts {
+		account := &r.accounts[i]
+		index[account.ID] = account
+	}
+	out := make([]*Account, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if account, ok := index[id]; ok {
+			out = append(out, account)
+		}
+	}
+	return out, nil
 }
 
 func (r stubOpenAIAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) {
@@ -100,6 +647,113 @@ func (r stubOpenAIAccountRepo) ListSchedulableByPlatforms(ctx context.Context, p
 
 func (r stubOpenAIAccountRepo) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
 	return r.ListSchedulableByPlatforms(ctx, platforms)
+}
+
+func TestOpenAIGatewayService_ForwardAsAnthropic_TempUnschedulableReturnsFailoverWithoutCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := []byte(`{"error":{"message":"Our servers are currently overloaded. Please try again later."}}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"response.output_text.delta","delta":"ok"}`,
+				"",
+				`data: {"type":"response.completed","response":{"id":"resp_second","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"",
+			}, "\n"))),
+		},
+	}}
+	repo := &tempUnschedulableOpenAIAccountRepo{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream:     upstream,
+		rateLimitService: rateLimitService,
+	}
+	account := &Account{
+		ID: 5099, Name: "temporary-unschedulable", Platform: PlatformOpenAI,
+		Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                    "sk-test",
+			"base_url":                   "http://upstream.example",
+			"model_provider":             "env-openai",
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{map[string]any{
+				"error_code":       float64(http.StatusBadRequest),
+				"keywords":         []any{"our servers are currently overloaded", "please try again later"},
+				"duration_minutes": float64(1),
+			}},
+		},
+	}
+
+	_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.Equal(t, account.ID, repo.modelRateLimitAccountID, "temporary unschedulability should exclude this account from reselection")
+	require.Equal(t, "gpt-5.4", repo.modelRateLimitKey)
+	require.False(t, IsResponseCommitted(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, rec.Body.String())
+
+	secondRec := httptest.NewRecorder()
+	secondContext, _ := gin.CreateTestContext(secondRec)
+	secondContext.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	secondContext.Request.Header.Set("Content-Type", "application/json")
+	secondAccount := *account
+	secondAccount.ID = 5100
+	secondAccount.Name = "healthy-failover-account"
+	result, secondErr := svc.ForwardAsAnthropic(context.Background(), secondContext, &secondAccount, body, "", "")
+	require.NoError(t, secondErr)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_second", result.ResponseID)
+	require.NotEmpty(t, secondRec.Body.String())
+}
+
+func TestFailoverOpenAIUpstreamHTTPError_NilContextSkipsTempUnschedulablePolicy(t *testing.T) {
+	repo := &tempUnschedulableOpenAIAccountRepo{}
+	svc := &OpenAIGatewayService{
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+	account := &Account{
+		ID: 5099, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{map[string]any{
+				"error_code":       float64(http.StatusBadRequest),
+				"keywords":         []any{"servers are currently overloaded"},
+				"duration_minutes": float64(1),
+			}},
+		},
+	}
+	body := []byte(`{"error":{"message":"Our servers are currently overloaded."}}`)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}
+
+	got := svc.failoverOpenAIUpstreamHTTPError(
+		context.Background(), nil, account, resp, body,
+		"Our servers are currently overloaded.", "gpt-5.4",
+	)
+
+	require.Nil(t, got)
+	require.Zero(t, repo.modelRateLimitAccountID)
+	require.Empty(t, repo.modelRateLimitKey)
 }
 
 type groupAwareStubOpenAIAccountRepo struct {
@@ -178,6 +832,20 @@ type errReadCloser struct {
 
 func (r errReadCloser) Read([]byte) (int, error) { return 0, r.err }
 func (r errReadCloser) Close() error             { return nil }
+
+type openAIStreamReadThenErrorCloser struct {
+	reader *strings.Reader
+	err    error
+}
+
+func (r *openAIStreamReadThenErrorCloser) Read(p []byte) (int, error) {
+	if r.reader != nil && r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	return 0, r.err
+}
+
+func (r *openAIStreamReadThenErrorCloser) Close() error { return nil }
 
 type failingGinWriter struct {
 	gin.ResponseWriter
@@ -276,6 +944,61 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 	}
 }
 
+func TestOpenAIGatewayService_ClientSessionHeaderPriority(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Set("api_key", &APIKey{ID: 901, Group: &Group{Platform: PlatformGrok}})
+
+	headers := []struct {
+		name  string
+		value string
+	}{
+		{name: "session_id", value: "generic-session"},
+		{name: "conversation_id", value: "generic-conversation"},
+		{name: openCodeSessionAffinityHeader, value: "opencode-affinity"},
+		{name: openCodeSessionIDHeader, value: "opencode-session-id"},
+		{name: openCodeNativeSessionHeader, value: "opencode-native-session"},
+		{name: codeBuddyConversationHeader, value: "codebuddy-conversation"},
+		{name: grokConversationIDHeader, value: "grok-conversation"},
+	}
+	for _, header := range headers {
+		c.Request.Header.Set(header.name, header.value)
+	}
+
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"prompt_cache_key":"body-session"}`)
+	for _, header := range headers {
+		require.Equal(t, header.value, svc.ExtractSessionID(c, body), header.name)
+		require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String(header.value)), svc.GenerateExplicitSessionHash(c, body), header.name)
+		if header.name != grokConversationIDHeader {
+			require.Equal(t, header.value, explicitOpenAISessionID(c, body), header.name)
+		}
+		c.Request.Header.Del(header.name)
+	}
+	require.Equal(t, "body-session", svc.ExtractSessionID(c, body))
+}
+
+func TestOpenAIGatewayService_ClientSessionHeadersIgnorePerRequestIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	for name, value := range map[string]string{
+		"X-Conversation-Request-ID": "request-rotates-every-turn",
+		"X-Conversation-Message-ID": "message-rotates-every-turn",
+		"X-Request-ID":              "generic-request-id",
+	} {
+		c.Request.Header.Set(name, value)
+	}
+
+	svc := &OpenAIGatewayService{}
+	require.Empty(t, explicitOpenAIHeaderSessionID(c))
+	require.Empty(t, svc.ExtractSessionID(c, nil))
+	require.Empty(t, svc.GenerateExplicitSessionHash(c, nil))
+}
+
 func TestOpenAIGatewayService_GenerateSessionHash_UsesXXHash64(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -311,6 +1034,31 @@ func TestExtractOpenAIResponseIDFromJSONBytes(t *testing.T) {
 	require.Equal(t, "resp_sse", extractOpenAIResponseIDFromJSONBytes([]byte(`{"type":"response.completed","response":{"id":"resp_sse"}}`)))
 	require.Empty(t, extractOpenAIResponseIDFromJSONBytes([]byte(`{"response":{}}`)))
 	require.Empty(t, extractOpenAIResponseIDFromJSONBytes([]byte(`not-json`)))
+}
+
+// 复现 #4386：gpt-image-2 /v1/images/edits 的 usage 携带 input_tokens_details.image_tokens，
+// 提取器须将图片输入 token 单独填入 ImageInputTokens（此前被丢弃并入 InputTokens 按文本价计费）。
+func TestExtractOpenAIUsage_CapturesImageInputTokens(t *testing.T) {
+	body := []byte(`{"usage":{"input_tokens":371,"input_tokens_details":{"image_tokens":352,"text_tokens":19},"output_tokens":439,"output_tokens_details":{"image_tokens":439,"text_tokens":0},"total_tokens":810}}`)
+	usage, ok := extractOpenAIUsageFromJSONBytes(body)
+	require.True(t, ok)
+	require.Equal(t, 371, usage.InputTokens)
+	require.Equal(t, 352, usage.ImageInputTokens)
+	require.Equal(t, 439, usage.OutputTokens)
+	require.Equal(t, 439, usage.ImageOutputTokens)
+
+	// prompt_tokens_details 回退路径（部分上游用 prompt_tokens 口径）。
+	promptStyle := []byte(`{"usage":{"prompt_tokens":100,"prompt_tokens_details":{"image_tokens":80}}}`)
+	pu, ok := extractOpenAIUsageFromJSONBytes(promptStyle)
+	require.True(t, ok)
+	require.Equal(t, 100, pu.InputTokens)
+	require.Equal(t, 80, pu.ImageInputTokens)
+
+	// 纯文本请求：无 image_tokens 时 ImageInputTokens 为 0，行为不变。
+	textOnly := []byte(`{"usage":{"input_tokens":50,"output_tokens":10}}`)
+	tu, ok := extractOpenAIUsageFromJSONBytes(textOnly)
+	require.True(t, ok)
+	require.Zero(t, tu.ImageInputTokens)
 }
 
 func TestOpenAIGatewayService_BindHTTPResponseAccount(t *testing.T) {
@@ -479,6 +1227,20 @@ func (c *stubGatewayCache) DeleteSessionAccountID(ctx context.Context, groupID i
 	}
 	c.deletedSessions[sessionHash]++
 	delete(c.sessionBindings, sessionHash)
+	return nil
+}
+
+func (c *stubGatewayCache) SetGrokVideoPendingBilling(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return nil
+}
+func (c *stubGatewayCache) GetGrokVideoPendingBilling(_ context.Context, _ string) ([]byte, error) {
+	return nil, nil
+}
+func (c *stubGatewayCache) ClaimGrokVideoBilled(_ context.Context, _ string, _ time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *stubGatewayCache) ReleaseGrokVideoBilled(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -1303,6 +2065,109 @@ func TestOpenAIStreamingReadErrorBeforeOutputReturnsFailover(t *testing.T) {
 	require.Empty(t, rec.Body.String())
 }
 
+func TestOpenAIStreamingPostOutputDisconnectQuarantinesSharedProxyWithoutSameStreamFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	proxyID := int64(4698)
+	account := &Account{
+		ID:       469801,
+		Name:     "oauth-on-shared-proxy",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		ProxyID:  &proxyID,
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: defaultMaxLineSize,
+	}}}
+	// collapseInterval 0: the two loop iterations below record within the
+	// production collapse window and must count as distinct failure events here.
+	svc.openaiProxyStreamCircuit = newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
+		failureThreshold: 2,
+		failureWindow:    time.Minute,
+		quarantineTTL:    10 * time.Minute,
+		maxEntries:       16,
+	})
+
+	for _, readErr := range []error{
+		io.ErrUnexpectedEOF,
+		errors.New("http2: client connection lost"),
+	} {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &openAIStreamReadThenErrorCloser{
+				reader: strings.NewReader(strings.Join([]string{
+					"event: response.output_text.delta",
+					`data: {"type":"response.output_text.delta","delta":"partial"}`,
+					"",
+				}, "\n")),
+				err: readErr,
+			},
+			Header: http.Header{"X-Request-Id": []string{"rid-proxy-disconnect"}},
+		}
+
+		_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "gpt-5.6-sol", "gpt-5.6-sol")
+		require.Error(t, err)
+		var failoverErr *UpstreamFailoverError
+		require.False(t, errors.As(err, &failoverErr), "post-output disconnect must not fail over inside the same stream")
+		require.Contains(t, rec.Body.String(), "partial")
+	}
+
+	scheduler := &defaultOpenAIAccountScheduler{service: svc}
+	compatible, reason := scheduler.isAccountRequestCompatibleReason(context.Background(), account, OpenAIAccountScheduleRequest{})
+	require.False(t, compatible, "the next request must exclude accounts sharing the quarantined proxy")
+	require.Equal(t, "proxy_stream_quarantined", reason)
+}
+
+func TestOpenAIStreamingTerminalAndClientCancellationDoNotQuarantineProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	proxyID := int64(4699)
+	account := &Account{ID: 469901, Name: "oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, ProxyID: &proxyID}
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	terminalRecorder := httptest.NewRecorder()
+	terminalCtx, _ := gin.CreateTestContext(terminalRecorder)
+	terminalCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	terminalResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: &openAIStreamReadThenErrorCloser{
+			reader: strings.NewReader(strings.Join([]string{
+				"event: response.completed",
+				`data: {"type":"response.completed","response":{"status":"completed","output":[]}}`,
+				"",
+			}, "\n")),
+			err: io.ErrUnexpectedEOF,
+		},
+		Header: http.Header{},
+	}
+	_, err := svc.handleStreamingResponse(terminalCtx.Request.Context(), terminalResp, terminalCtx, account, time.Now(), "model", "model")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+
+	for range 2 {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &openAIStreamReadThenErrorCloser{
+				reader: strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"),
+				err:    context.Canceled,
+			},
+			Header: http.Header{},
+		}
+		_, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+		require.Error(t, err)
+	}
+
+	scheduler := &defaultOpenAIAccountScheduler{service: svc}
+	compatible, reason := scheduler.isAccountRequestCompatibleReason(context.Background(), account, OpenAIAccountScheduleRequest{})
+	require.True(t, compatible)
+	require.Empty(t, reason)
+}
+
 func TestOpenAIStreamingResponseFailedBeforeOutputReturnsFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
@@ -1339,6 +2204,7 @@ func TestOpenAIStreamingResponseFailedBeforeOutputReturnsFailover(t *testing.T) 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
 	require.Contains(t, string(failoverErr.ResponseBody), "An error occurred while processing your request")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -1375,11 +2241,21 @@ func TestOpenAIStreamingResponseFailedBeforeOutputCapacityErrorReturnsFailover(t
 		Header: http.Header{"X-Request-Id": []string{"rid-capacity-failed"}},
 	}
 
-	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Name:     "pool-account",
+		Credentials: map[string]any{
+			"pool_mode": true,
+		},
+	}
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -1419,8 +2295,123 @@ func TestOpenAIStreamingResponseFailedBeforeOutputServerOverloadedCodeReturnsFai
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "Please retry later")
+	// 容量降载是请求级信号：非池模式账号也要先在同账号重试，且不得据此临时封禁账号。
+	// 否则单个被降载的请求会把整池账号逐个消耗掉，而降载因素在每个账号上都相同。
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RequestScopedTransient)
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
+}
+
+func TestOpenAIStreamingResponseFailedBeforeOutputRateLimitUsesPoolRetryPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			"event: response.created",
+			`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for account, please retry later"}}}`,
+			"",
+		}, "\n"))),
+		Header: http.Header{
+			"X-Request-Id": []string{"rid-rate-limit-failed"},
+			"Retry-After":  []string{"1"},
+		},
+	}
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Name:     "pool-account",
+		Credentials: map[string]any{
+			"pool_mode":                    true,
+			"pool_mode_retry_count":        float64(1),
+			"pool_mode_retry_status_codes": []any{float64(http.StatusTooManyRequests)},
+		},
+	}
+
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, "1", failoverErr.ResponseHeaders.Get("Retry-After"))
+	require.Equal(t, "rate_limit_error", gjson.GetBytes(failoverErr.ResponseBody, "error.type").String())
+	require.Contains(t, string(failoverErr.ResponseBody), "Concurrency limit exceeded")
+	require.False(t, c.Writer.Written())
+	require.Empty(t, rec.Body.String())
+
+	opsVal, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	opsEvents, ok := opsVal.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.NotEmpty(t, opsEvents)
+	require.Equal(t, http.StatusTooManyRequests, opsEvents[len(opsEvents)-1].UpstreamStatusCode)
+}
+
+// 流内 rate limit 只产生 failover 错误，不写账号级限流/封禁状态：
+// HTTP 200 流的 x-codex-* 头是正常配额快照，不能按 429 头驱动账号冷却。
+func TestOpenAIStreamingResponseFailedRateLimitDoesNotBlockAccountScheduling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			"event: response.created",
+			`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for account, please retry later"}}}`,
+			"",
+		}, "\n"))),
+		Header: http.Header{
+			"X-Codex-Primary-Used-Percent":        []string{"12"},
+			"X-Codex-Primary-Reset-After-Seconds": []string{"604800"},
+			"Retry-After":                         []string{"1"},
+		},
+	}
+	account := &Account{
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Name:     "oauth-account",
+	}
+
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
 func TestOpenAIStreamingResponseFailedAfterOutputSanitizesVerboseResponseForClient(t *testing.T) {
@@ -1606,8 +2597,10 @@ func TestOpenAIStreamingPreambleKeepaliveUsesDownstreamIdle(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
 			StreamDataIntervalTimeout: 0,
-			StreamKeepaliveInterval:   1,
-			MaxLineSize:               defaultMaxLineSize,
+			// Keepalive is based on *downstream* idle time (last flush to client),
+			// not upstream event cadence. Interval is seconds (config unit).
+			StreamKeepaliveInterval: 1,
+			MaxLineSize:             defaultMaxLineSize,
 		},
 	}
 	svc := &OpenAIGatewayService{cfg: cfg}
@@ -1625,12 +2618,15 @@ func TestOpenAIStreamingPreambleKeepaliveUsesDownstreamIdle(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
+		// Emit preamble/progress quickly so clientOutputStarted is true, then
+		// leave a real downstream idle gap longer than keepaliveInterval so the
+		// ticker can write ":\n\n". Frequent upstream ticks used to refresh
+		// lastDownstreamWriteAt and flake on loaded CI runners.
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
-		for i := 0; i < 6; i++ {
-			time.Sleep(250 * time.Millisecond)
-			_, _ = pw.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
-		}
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n"))
+		time.Sleep(50 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+		time.Sleep(1300 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n"))
 	}()
 
 	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
@@ -1783,7 +2779,7 @@ func TestOpenAIStreamingClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n"))
 	}()
 
 	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
@@ -1831,9 +2827,9 @@ func TestOpenAIStreamingMissingTerminalEventReturnsIncompleteError(t *testing.T)
 
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
 	_ = pr.Close()
-	if err == nil || !strings.Contains(err.Error(), "missing terminal event") {
-		t.Fatalf("expected missing terminal event error, got %v", err)
-	}
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestOpenAIStreamingPassthroughMissingTerminalEventReturnsIncompleteError(t *testing.T) {
@@ -1863,9 +2859,46 @@ func TestOpenAIStreamingPassthroughMissingTerminalEventReturnsIncompleteError(t 
 
 	_, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "", "")
 	_ = pr.Close()
-	if err == nil || !strings.Contains(err.Error(), "missing terminal event") {
-		t.Fatalf("expected missing terminal event error, got %v", err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestOpenAIStreamingPassthroughPostOutputDisconnectQuarantinesSharedProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	proxyID := int64(4698)
+	account := &Account{ID: 469804, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, ProxyID: &proxyID}
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	// collapseInterval 0: the loop below records within the production collapse
+	// window and must count as distinct failure events here.
+	svc.openaiProxyStreamCircuit = newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
+		failureThreshold: 2,
+		failureWindow:    time.Minute,
+		quarantineTTL:    10 * time.Minute,
+		maxEntries:       16,
+	})
+
+	for _, readErr := range []error{io.ErrUnexpectedEOF, errors.New("http2: client connection lost")} {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &openAIStreamReadThenErrorCloser{
+				reader: strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"),
+				err:    readErr,
+			},
+			Header: http.Header{"X-Request-Id": []string{"rid-passthrough-proxy-disconnect"}},
+		}
+
+		_, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+		require.Error(t, err)
+		var failoverErr *UpstreamFailoverError
+		require.False(t, errors.As(err, &failoverErr), "post-output disconnect must not fail over inside the same stream")
+		require.Contains(t, rec.Body.String(), "partial")
 	}
+
+	require.True(t, svc.isOpenAIProxyStreamQuarantined(context.Background(), account))
 }
 
 func TestOpenAIStreamingPassthroughResponseFailedBeforeOutputReturnsFailover(t *testing.T) {
@@ -2062,7 +3095,7 @@ func TestOpenAIStreamingPassthroughResponseDoneWithoutDoneMarkerStillSucceeds(t 
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.done\",\"response\":{\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_done\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n"))
 	}()
 
 	result, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "", "")
@@ -2075,7 +3108,7 @@ func TestOpenAIStreamingPassthroughResponseDoneWithoutDoneMarkerStillSucceeds(t 
 	require.Equal(t, 1, result.usage.CacheReadInputTokens)
 }
 
-func TestOpenAIStreamingPassthroughResponseIncompleteWithoutDoneMarkerStillSucceeds(t *testing.T) {
+func TestOpenAIStreamingPassthroughResponseIncompleteBeforeOutputFailsOver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
@@ -2102,12 +3135,12 @@ func TestOpenAIStreamingPassthroughResponseIncompleteWithoutDoneMarkerStillSucce
 
 	result, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "", "")
 	_ = pr.Close()
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, result.usage)
-	require.Equal(t, 2, result.usage.InputTokens)
-	require.Equal(t, 3, result.usage.OutputTokens)
-	require.Equal(t, 1, result.usage.CacheReadInputTokens)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.HasUpstreamHTTPResponse)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestOpenAIStreamingTooLong(t *testing.T) {
@@ -2142,12 +3175,9 @@ func TestOpenAIStreamingTooLong(t *testing.T) {
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 2}, time.Now(), "model", "model")
 	_ = pr.Close()
 
-	if !errors.Is(err, bufio.ErrTooLong) {
-		t.Fatalf("expected ErrTooLong, got %v", err)
-	}
-	if !strings.Contains(rec.Body.String(), "\"type\":\"error\"") || !strings.Contains(rec.Body.String(), "response_too_large") {
-		t.Fatalf("expected OpenAI-compatible error SSE event, got %q", rec.Body.String())
-	}
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestOpenAINonStreamingContentTypePassThrough(t *testing.T) {
@@ -2163,7 +3193,7 @@ func TestOpenAINonStreamingContentTypePassThrough(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
 
-	body := []byte(`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`)
+	body := []byte(`{"id":"resp_content_type","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewReader(body)),
@@ -2193,7 +3223,7 @@ func TestOpenAINonStreamingContentTypeDefault(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
 
-	body := []byte(`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`)
+	body := []byte(`{"id":"resp_content_type","output":[],"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewReader(body)),
@@ -2241,7 +3271,7 @@ func TestOpenAIStreamingHeadersOverride(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_headers\",\"status\":\"completed\",\"output\":[]}}\n\n"))
 	}()
 
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
@@ -2285,7 +3315,7 @@ func TestOpenAIStreamingReuseScannerBufferAndStillWorks(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":3}}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reuse\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":3}}}}\n\n"))
 	}()
 
 	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
@@ -2293,7 +3323,7 @@ func TestOpenAIStreamingReuseScannerBufferAndStillWorks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.usage)
-	require.Equal(t, 1, result.usage.InputTokens)
+	require.Equal(t, 4, result.usage.InputTokens)
 	require.Equal(t, 2, result.usage.OutputTokens)
 	require.Equal(t, 3, result.usage.CacheReadInputTokens)
 }
@@ -2463,6 +3493,7 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 }
@@ -2479,8 +3510,27 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughCompactVersionClampsOldUserA
 
 	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token")
 	require.NoError(t, err)
-	require.Equal(t, "codex_cli_rs/0.141.0 (Ubuntu 22.4.0; x86_64) xterm-256color", req.Header.Get("User-Agent"))
+	require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+}
+
+func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesExplicitAPIKeyBetaHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+	c.Request.Header.Set("OpenAI-Beta", "api-key-specific-beta")
+
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Security: config.SecurityConfig{
+			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+		},
+	}}
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token")
+	require.NoError(t, err)
+	require.Equal(t, "api-key-specific-beta", req.Header.Get("OpenAI-Beta"), "OAuth-only backport must not alter API-key passthrough headers")
 }
 
 func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T) {
@@ -2500,6 +3550,7 @@ func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T)
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 }
@@ -2520,7 +3571,7 @@ func TestOpenAIBuildUpstreamRequestCompactVersionClampsOldCustomUserAgent(t *tes
 
 	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", true)
 	require.NoError(t, err)
-	require.Equal(t, customUA, req.Header.Get("User-Agent"))
+	require.Equal(t, openai.SetCodexUserAgentVersion(customUA, codexCLIVersion), req.Header.Get("User-Agent"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
 }
 
@@ -2569,28 +3620,55 @@ func TestOpenAIBuildUpstreamRequestPreservesCompactPathForAPIKeyBaseURL(t *testi
 	require.Equal(t, "https://example.com/v1/responses/compact", req.URL.String())
 }
 
+func TestOpenAIBuildUpstreamRequestPreservesCodexIdentityHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+	c.Request.Header.Set("X-Codex-Window-ID", "window-http")
+	c.Request.Header.Set("X-Codex-Installation-ID", "installation-http")
+	c.Request.Header.Set("X-Test", "blocked")
+
+	body := []byte(`{"model":"gpt-5","input":"hello"}`)
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Security: config.SecurityConfig{
+			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+		},
+	}}
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, body, "token", false, "", true)
+	require.NoError(t, err)
+	require.Equal(t, "window-http", req.Header.Get("X-Codex-Window-ID"))
+	require.Equal(t, "installation-http", req.Header.Get("X-Codex-Installation-ID"))
+	require.Empty(t, req.Header.Get("X-Test"))
+	require.True(t, openai.EvaluateEngineFingerprint(req.Header, body, openai.DefaultEngineFingerprintSignals))
+}
+
 func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 上游要求 originator 与最终 User-Agent 首段配套（issue #3901）：
-	// originator 一律由最终 UA 推导；推导不出官方身份时整体回退默认 Codex CLI 身份。
+	// 强制统一出口：客户端自报的 originator / User-Agent 都不参与上游身份构造，
+	// 一律改写为网关规范身份，天然满足 originator 与 UA 首段配套的上游校验（issue #3901）。
 	tests := []struct {
-		name           string
-		userAgent      string
-		originator     string
-		wantOriginator string
-		wantUA         string
+		name       string
+		userAgent  string
+		originator string
 	}{
-		{name: "official ua pairs originator", userAgent: "Codex Desktop/1.2.3", wantOriginator: "Codex Desktop", wantUA: "Codex Desktop/1.2.3"},
+		{name: "official desktop ua", userAgent: "Codex Desktop/1.2.3"},
 		{
-			name:           "mismatched originator repaired from ua",
-			userAgent:      "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
-			originator:     "codex_cli_rs",
-			wantOriginator: "codex-tui",
-			wantUA:         "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			name:       "mismatched originator",
+			userAgent:  "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
+			originator: "codex_cli_rs",
 		},
-		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: "codex_cli_rs", wantUA: codexCLIUserAgent},
-		{name: "third-party ua masked to default identity", userAgent: "luna/1.2.0", wantOriginator: "codex_cli_rs", wantUA: codexCLIUserAgent},
+		{
+			name:       "tui identity",
+			userAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			originator: "codex-tui",
+		},
+		{name: "official originator without ua", originator: "codex_vscode"},
+		{name: "third-party ua", userAgent: "luna/1.2.0"},
 	}
 
 	for _, tt := range tests {
@@ -2614,8 +3692,9 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
 			req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", isCodexCLI)
 			require.NoError(t, err)
-			require.Equal(t, tt.wantOriginator, req.Header.Get("originator"))
-			require.Equal(t, tt.wantUA, req.Header.Get("User-Agent"))
+			require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("originator"))
+			require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
+			require.Equal(t, codexCLIVersion, req.Header.Get("version"))
 		})
 	}
 }
@@ -2950,7 +4029,7 @@ func TestExtractCodexFinalResponse_SampleReplay(t *testing.T) {
 	body := strings.Join([]string{
 		`event: message`,
 		`data: {"type":"response.in_progress","response":{"id":"resp_1"}}`,
-		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-4o","usage":{"input_tokens":11,"output_tokens":22,"input_tokens_details":{"cached_tokens":3}}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":22,"input_tokens_details":{"cached_tokens":3}}}}`,
 		`data: [DONE]`,
 	}, "\n")
 
@@ -2973,7 +4052,7 @@ func TestHandleSSEToJSON_CompletedEventReturnsJSON(t *testing.T) {
 	}
 	body := []byte(strings.Join([]string{
 		`data: {"type":"response.in_progress","response":{"id":"resp_2"}}`,
-		`data: {"type":"response.completed","response":{"id":"resp_2","model":"gpt-4o","usage":{"input_tokens":7,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_2","model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}}`,
 		`data: [DONE]`,
 	}, "\n"))
 
@@ -3030,7 +4109,7 @@ func TestHandleNonStreamingResponse_OAuthJSONBodyWithDataEventTextKeepsJSONUsage
 	// This must NOT be misdetected as SSE framing: it has a top-level usage
 	// object and no upstream text/event-stream Content-Type.
 	jsonBody := `{"id":"resp_oauth_compact","object":"response","model":"gpt-5.4","status":"completed",` +
-		`"output":[{"type":"message","content":[{"type":"output_text",` +
+		`"output":[{"type":"message","role":"assistant","content":[{"type":"output_text",` +
 		`"text":"processing data: 1,2,3 then event: click finished"}]}],` +
 		`"usage":{"input_tokens":11,"output_tokens":22,"total_tokens":33}}`
 	resp := &http.Response{
@@ -3053,6 +4132,32 @@ func TestHandleNonStreamingResponse_OAuthJSONBodyWithDataEventTextKeepsJSONUsage
 	require.Contains(t, rec.Body.String(), "processing data: 1,2,3 then event: click finished")
 }
 
+func TestHandleNonStreamingResponse_ObservesUpstreamModelBeforeClientRewrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"resp_model_audit","object":"response","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`,
+		)),
+	}
+	account := &Account{ID: 1, Type: AccountTypeAPIKey}
+
+	result, err := svc.handleNonStreamingResponse(context.Background(), resp, c, account, "gpt-5.6-sol", "gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// 客户端仍看到自己请求的模型名，审计观察器则保留改写前的上游声明。
+	require.Equal(t, "gpt-5.6-sol", gjson.Get(rec.Body.String(), "model").String())
+	require.Equal(t, "gpt-5.5", observedUpstreamResponseModel(c))
+	require.False(t, observedUpstreamResponseModelConflict(c))
+}
+
 func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -3065,7 +4170,7 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
 	body := []byte(strings.Join([]string{
-		`data: {"type":"response.output_item.done","item":{"id":"ig_123","type":"image_generation_call","status":"generating","result":"aGVsbG8=","revised_prompt":"draw a cat","output_format":"png"}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ig_123","type":"image_generation_call","status":"generating","result":"aGVsbG8=","revised_prompt":"draw a cat","output_format":"png"}}`,
 		`data: {"type":"response.completed","response":{"id":"resp_img","model":"gpt-5.4","output":[],"usage":{"input_tokens":7,"output_tokens":9,"output_tokens_details":{"image_tokens":4}}}}`,
 		`data: [DONE]`,
 	}, "\n"))
@@ -3098,11 +4203,11 @@ func TestHandleSSEToJSON_NoFinalResponseKeepsSSEBody(t *testing.T) {
 	}, "\n"))
 
 	usage, err := svc.handleSSEToJSON(resp, c, body, "gpt-4o", "gpt-4o")
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.Equal(t, 0, usage.InputTokens)
-	require.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
-	require.Contains(t, rec.Body.String(), `data: {"type":"response.in_progress"`)
+	require.Error(t, err)
+	require.Nil(t, usage)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, rec.Body.String(), "missing terminal response must remain replayable")
 }
 
 func TestHandleSSEToJSON_ResponseFailedReturnsProtocolError(t *testing.T) {
@@ -3132,27 +4237,52 @@ func TestHandleSSEToJSON_ResponseFailedReturnsProtocolError(t *testing.T) {
 func TestOpenAICompatSSEFrameParserResetsEventTypeAtFrameBoundary(t *testing.T) {
 	var parser openAICompatSSEFrameParser
 
-	frame, ok := parser.AddLine("event: response.created")
+	frame, ok, err := parser.AddLine("event: response.created")
+	require.NoError(t, err)
 	require.False(t, ok)
 	require.Empty(t, frame)
 
-	frame, ok = parser.AddLine(`data: {"response":{"id":"resp_1"}}`)
+	frame, ok, err = parser.AddLine(`data: {"response":{"id":"resp_1"}}`)
+	require.NoError(t, err)
 	require.False(t, ok)
 	require.Empty(t, frame)
 
-	frame, ok = parser.AddLine("")
+	frame, ok, err = parser.AddLine("")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "response.created", frame.EventType)
 	require.JSONEq(t, `{"response":{"id":"resp_1"}}`, frame.Data)
 
-	frame, ok = parser.AddLine(`data: {"delta":"ok"}`)
+	frame, ok, err = parser.AddLine(`data: {"delta":"ok"}`)
+	require.NoError(t, err)
 	require.False(t, ok)
 	require.Empty(t, frame.EventType)
 
-	frame, ok = parser.AddLine("")
+	frame, ok, err = parser.AddLine("")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Empty(t, frame.EventType)
 	require.JSONEq(t, `{"delta":"ok"}`, frame.Data)
+}
+
+func TestOpenAICompatSSEFrameParserRejectsManySmallLinesBeyondEventLimit(t *testing.T) {
+	parser := openAICompatSSEFrameParser{maxEventBytes: 16}
+
+	_, ok, err := parser.AddLine("data: 12345678")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	_, ok, err = parser.AddLine("data: 12345678")
+	require.ErrorIs(t, err, ErrUpstreamResponseBodyTooLarge)
+	require.False(t, ok)
+}
+
+func TestOpenAICompatStreamingEventLimitDoesNotUseBufferedResponseLimit(t *testing.T) {
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize:                  4 << 20,
+		UpstreamResponseReadMaxBytes: 1024,
+	}}
+	require.EqualValues(t, 4<<20, resolveUpstreamSSEEventLimit(cfg))
 }
 
 func TestStreamingPassthroughCyberPolicyMarksAndPassesThrough(t *testing.T) {

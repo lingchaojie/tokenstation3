@@ -71,14 +71,15 @@ const account = {
     client_id: 'old-client-id',
     token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
     issuer_url: 'https://login.microsoftonline.com/tenant-id/v2.0',
+    region: 'ap-south-1',
     api_region: 'eu-central-1'
   },
   proxy_id: null
 } as Account
 
-function mountModal() {
+function mountModal(accountOverride: Account = account) {
   return mount(ReAuthAccountModal, {
-    props: { show: false, account },
+    props: { show: false, account: accountOverride },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
@@ -158,7 +159,11 @@ describe('ReAuthAccountModal Kiro import', () => {
 
   it('preserves existing credentials and the independently configured API region', async () => {
     const wrapper = await openImportMode()
-    expect((wrapper.get('select').element as HTMLSelectElement).value).toBe('eu-central-1')
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-reauth"]')
+      .get<HTMLSelectElement>('select')
+    expect(apiRegionSelect.element.value).toBe('eu-central-1')
+	await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('textarea').setValue(JSON.stringify({
       accessToken: 'new-access-token',
       refreshToken: 'new-refresh-token',
@@ -179,8 +184,34 @@ describe('ReAuthAccountModal Kiro import', () => {
         provider: 'ExternalIdp',
         client_id: 'new-client-id',
         token_endpoint: 'https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token',
-        api_region: 'eu-central-1'
+        region: 'ap-south-1',
+        api_region: 'eu-west-1'
       })
     })
+  })
+
+  it('offers all AWS regions for IDC and keeps apiRegion separate from the IDC region', async () => {
+    const legacyAccount = {
+      ...account,
+      credentials: {
+        ...account.credentials,
+        auth_method: 'idc',
+        region: 'legacy-idc-1',
+        api_region: undefined,
+        apiRegion: 'ap-southeast-7'
+      }
+    } as Account
+    const wrapper = mountModal(legacyAccount)
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const idcRegionSelect = wrapper.get<HTMLSelectElement>('[data-testid="kiro-idc-region-select-reauth"]')
+    const apiRegionSelect = wrapper
+      .get('[data-testid="kiro-api-region-select-reauth"]')
+      .get<HTMLSelectElement>('select')
+
+    expect(idcRegionSelect.element.value).toBe('legacy-idc-1')
+    expect(idcRegionSelect.findAll('option')).toHaveLength(35)
+    expect(apiRegionSelect.element.value).toBe('ap-southeast-7')
   })
 })

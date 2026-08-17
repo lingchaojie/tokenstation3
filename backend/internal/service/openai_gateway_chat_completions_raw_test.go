@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +21,62 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type rawChatBlockingAfterPrefixReadCloser struct {
+	reader *bytes.Reader
+	closed chan struct{}
+	once   sync.Once
+}
+
+type rawChatDelayedFiniteTailReadCloser struct {
+	first     []byte
+	tail      []byte
+	read      int
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (r *rawChatDelayedFiniteTailReadCloser) Read(p []byte) (int, error) {
+	switch r.read {
+	case 0:
+		r.read++
+		return copy(p, r.first), nil
+	case 1:
+		r.read++
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return copy(p, r.tail), nil
+		case <-r.closed:
+			return 0, io.EOF
+		}
+	default:
+		return 0, io.EOF
+	}
+}
+
+func (r *rawChatDelayedFiniteTailReadCloser) Close() error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return nil
+}
+
+func newRawChatBlockingAfterPrefixReadCloser(prefix string) *rawChatBlockingAfterPrefixReadCloser {
+	return &rawChatBlockingAfterPrefixReadCloser{reader: bytes.NewReader([]byte(prefix)), closed: make(chan struct{})}
+}
+
+func (r *rawChatBlockingAfterPrefixReadCloser) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *rawChatBlockingAfterPrefixReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
 
 func TestBuildOpenAIChatCompletionsURL(t *testing.T) {
 	t.Parallel()
@@ -49,6 +108,40 @@ func TestBuildOpenAIChatCompletionsURL(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRawChatMalformedFrameDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	beginCaptureAttempt(c)
+	request := httptest.NewRequest(http.MethodPost, "https://provider.test/v1/chat/completions", nil)
+	setCaptureUpstreamRequest(c, request, 1<<20)
+	first := []byte("data: {bad}\n\n")
+	tail := []byte("data: {\"choices\":[]}\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       &rawChatDelayedFiniteTailReadCloser{first: first, tail: tail, closed: make(chan struct{})},
+		Request:    request,
+	}
+	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+
+	result, err := svc.streamRawChatCompletions(
+		context.Background(), c, resp,
+		&Account{ID: 1, Name: "raw", Platform: PlatformOpenAI},
+		"gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", nil, nil, time.Now(), 0,
+	)
+	finishCapture()
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	capture, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
+	require.False(t, capture.ResponseTruncated)
 }
 
 // TestBuildOpenAIResponsesURL_ProbeURL 锁定 probe/测试端点使用的 URL 构建逻辑，
@@ -90,6 +183,8 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
+		"",
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 		"",
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13,"prompt_tokens_details":{"cached_tokens":3}}}`,
 		"",
@@ -135,6 +230,60 @@ func TestExtractCCStreamUsagePrefersExplicitCCFields(t *testing.T) {
 	require.Zero(t, usage.CacheCreationInputTokens)
 	require.Zero(t, usage.ImageOutputTokens)
 	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
+
+	providerPayload := `{"choices":[],"usage":{"prompt_tokens":0,"input_tokens":12,"completion_tokens":0,"output_tokens":3,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":6},"completion_tokens_details":{"image_tokens":0},"output_tokens_details":{"image_tokens":5},"_sub2api_kiro_credits":0.17}}`
+	provider, err := classifyOpenAIChatStreamPayload(providerPayload)
+	require.NoError(t, err)
+	require.False(t, provider, "usage-only chunks are valid non-semantic provider preambles")
+}
+
+func TestOpenAIChatRejectsDuplicateKnownJSONKeys(t *testing.T) {
+	for name, payload := range map[string]string{
+		"root choices":  `{"choices":[{"index":0,"delta":{"content":"safe"}}],"choices":[]}`,
+		"finish reason": `{"choices":[{"index":0,"delta":{},"finish_reason":"stop","finish_reason":null}]}`,
+		"root usage":    `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0},"usage":{"prompt_tokens":999,"completion_tokens":0}}`,
+		"usage counter": `{"choices":[],"usage":{"prompt_tokens":1,"prompt_tokens":999,"completion_tokens":0}}`,
+		"filter offset": `{"choices":[{"index":0,"delta":{"content":"ok"},"content_filter_offsets":{"check_offset":0,"check_offset":-1}}]}`,
+		"audio data":    `{"choices":[{"index":0,"delta":{"audio":{"id":"a","data":"safe","data":"","transcript":"t","expires_at":1}}}]}`,
+		"reasoning":     `{"choices":[{"index":0,"delta":{"reasoning":"safe","reasoning":""}}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := classifyOpenAIChatStreamPayload(payload)
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	provider, err := classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{"content":"ok"}}],"opaque":{"future":1,"future":2}}`)
+	require.NoError(t, err)
+	require.True(t, provider, "unknown extension duplicates remain forward-compatible")
+}
+
+func TestOpenAIChatRejectsWrongTypedKnownMetadataPromptSiblingsAndErrors(t *testing.T) {
+	for name, payload := range map[string]string{
+		"id":                 `{"id":123,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"object":             `{"object":false,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"created":            `{"created":"bad","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"model":              `{"model":[],"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"system fingerprint": `{"system_fingerprint":{},"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"service tier":       `{"service_tier":[],"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"logprobs":           `{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","logprobs":"bad"}]}`,
+		"prompt annotations": `{"prompt_annotations":{"prompt_index":0},"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"prompt index":       `{"prompt_filter_results":[{"prompt_index":-1}],"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"provider error":     `{"error":{"message":"failed"},"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := classifyOpenAIChatStreamPayload(payload)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestOpenAIChatChoiceStateRejectsChangedStreamIdentity(t *testing.T) {
+	var state openAIChatChoiceStreamState
+	_, err := state.observe(`{"id":"chat-a","object":"chat.completion.chunk","model":"model-a","created":1,"choices":[]}`)
+	require.NoError(t, err)
+	_, err = state.observe(`{"id":"chat-b","object":"chat.completion.chunk","model":"model-b","created":2,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`)
+	require.ErrorContains(t, err, "identity changed")
 }
 
 func TestExtractCCStreamUsageFallsBackToResponsesFields(t *testing.T) {
@@ -167,6 +316,10 @@ func TestExtractCCStreamUsageSkipsMalformedCanonicalFields(t *testing.T) {
 		usage := OpenAIUsage{}
 		require.True(t, mergeCCStreamUsage(&usage, payload), payload)
 		require.Equal(t, 12, usage.InputTokens, payload)
+		providerPayload := `{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":` + gjson.Get(payload, "usage").Raw + `}`
+		provider, err := classifyOpenAIChatStreamPayload(providerPayload)
+		require.NoError(t, err, payload)
+		require.True(t, provider, payload)
 	}
 	require.False(t, mergeCCStreamUsage(&OpenAIUsage{}, `{"usage":{}}`))
 }
@@ -336,6 +489,8 @@ func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentStreaming(
 		"",
 		`data: {"id":"chatcmpl_reasoning","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"final answer"},"finish_reason":null}]}`,
 		"",
+		`data: {"id":"chatcmpl_reasoning","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"",
 		`data: {"id":"chatcmpl_reasoning","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8}}`,
 		"",
 		"data: [DONE]",
@@ -449,10 +604,34 @@ func TestForwardAsRawChatCompletions_SilentRefusalTriggersFailover(t *testing.T)
 	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
 	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError
-	require.True(t, errors.As(err, &failoverErr))
+	require.True(t, errors.As(err, &failoverErr), "unexpected error: %T %v", err, err)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.True(t, IsOpenAISilentRefusalErrorBody(failoverErr.ResponseBody))
+	require.True(t, IsOpenAISilentRefusalErrorBody(failoverErr.ResponseBody), "unexpected failover body: %s", failoverErr.ResponseBody)
 	require.False(t, c.Writer.Written(), "silent refusal must not commit a 200 response before failover")
+	require.Empty(t, rec.Body.String())
+}
+
+func TestForwardAsRawChatCompletions_EmptySemanticFieldsRemainReplaySafe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := largeRawChatCompletionsBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := `data: {"id":"chatcmpl_empty","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"","tool_calls":[{"function":{"name":"","arguments":""}}],"function_call":{"name":"","arguments":""},"audio":{}}}]}` + "\n\n"
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_empty_semantic"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
 }
 
@@ -505,7 +684,7 @@ func TestHandleChatStreamingResponse_SilentRefusalReasoningSummaryExempt(t *test
 		"",
 		`data: {"type":"response.reasoning_summary_text.delta","delta":"thinking only"}`,
 		"",
-		`data: {"type":"response.completed","response":{"id":"resp_reasoning","model":"gpt-5.5","status":"completed"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_reasoning","model":"gpt-5.5","status":"completed","output":null}}`,
 		"",
 	}, "\n")
 	resp := &http.Response{
@@ -582,6 +761,8 @@ func TestForwardAsRawChatCompletions_ClientDisconnectDrainsUsage(t *testing.T) {
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
 		"",
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"",
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"prompt_tokens":17,"completion_tokens":8,"total_tokens":25,"prompt_tokens_details":{"cached_tokens":6}}}`,
 		"",
 		"data: [DONE]",
@@ -608,7 +789,84 @@ func TestForwardAsRawChatCompletions_ClientDisconnectDrainsUsage(t *testing.T) {
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream_options.include_usage").Bool())
 }
 
-func TestForwardAsRawChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.T) {
+func TestForwardAsRawChatCompletions_HonorsProviderIdleTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	providerBody := newRawChatBlockingAfterPrefixReadCloser(
+		`data: {"id":"chatcmpl_idle","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"partial"}}]}` + "\n\n",
+	)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       providerBody,
+	}}
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway.StreamDataIntervalTimeout = 1
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+
+	type outcome struct {
+		result *OpenAIForwardResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), requestBody, "")
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NotNil(t, got.result)
+		require.ErrorContains(t, got.err, "stream data interval timeout")
+	case <-time.After(2 * time.Second):
+		_ = providerBody.Close()
+		<-done
+		t.Fatal("raw Chat Completions provider stream ignored StreamDataIntervalTimeout")
+	}
+	require.NoError(t, providerBody.Close())
+}
+
+func TestForwardAsRawChatCompletionsTreatsPartialLineBytesAsProviderActivity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	providerBody := &providerSlowChunksReader{
+		chunks: [][]byte{
+			[]byte(`data: {"id":"chatcmpl_slow","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,`),
+			[]byte(`"delta":{"content":"slow-ok"},"finish_reason":"stop"}]}`),
+			[]byte("\n\ndata: [DONE]\n\n"),
+		},
+		interval: 400 * time.Millisecond,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       providerBody,
+	}}
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway.StreamDataIntervalTimeout = 1
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+
+	result, err := svc.forwardAsRawChatCompletions(
+		context.Background(), c, rawChatCompletionsTestAccount(), requestBody, "",
+	)
+
+	require.NoError(t, err, "provider bytes arriving inside the idle interval must keep a partial SSE line alive")
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"content":"slow-ok"`)
+	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
+func TestForwardAsRawChatCompletions_UpstreamRequestPropagatesClientCancel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -620,7 +878,7 @@ func TestForwardAsRawChatCompletions_UpstreamRequestIgnoresClientCancel(t *testi
 	cancel()
 
 	upstreamBody := strings.Join([]string{
-		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -638,10 +896,10 @@ func TestForwardAsRawChatCompletions_UpstreamRequestIgnoresClientCancel(t *testi
 	account := rawChatCompletionsTestAccount()
 
 	result, err := svc.forwardAsRawChatCompletions(reqCtx, c, account, body, "")
-	require.NoError(t, err)
+	require.NoError(t, err, "the recorder returns a synthetic response even for a canceled request")
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	require.NoError(t, upstream.lastReq.Context().Err())
+	require.ErrorIs(t, upstream.lastReq.Context().Err(), context.Canceled)
 }
 
 func TestForwardAsChatCompletions_UnknownResponsesSupportFallbackUsesVersionedChatURL(t *testing.T) {
@@ -696,6 +954,228 @@ func TestIsOpenAIChatUsageOnlyStreamChunk(t *testing.T) {
 	require.False(t, isOpenAIChatUsageOnlyStreamChunk(``))
 }
 
+func TestOpenAIChatPayloadIsValidProviderPayloadRejectsEmptyChoicesWithoutUsage(t *testing.T) {
+	t.Parallel()
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[]}`))
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0}}`))
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{}]}`))
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`))
+	require.True(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`))
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{"index":0,"text":123}]}`))
+	require.False(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{"index":0,"message":{"content":"ok","tool_calls":123}}]}`))
+	require.True(t, openAIChatPayloadIsValidProviderPayload(`{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`))
+}
+
+func TestClassifyOpenAIChatStreamPayloadKeepsPreambleAndRejectsBadChoices(t *testing.T) {
+	t.Parallel()
+
+	provider, err := classifyOpenAIChatStreamPayload(`{"choices":[{}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`)
+	require.NoError(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	require.NoError(t, err)
+	require.True(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"content_filter_results":{"hate":{"filtered":false}},"content_filter_offsets":{"check_offset":0,"start_offset":0,"end_offset":0},"finish_reason":null}]}`)
+	require.NoError(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{},"content_filter_results":{"hate":{"filtered":false}},"content_filter_offsets":{"check_offset":0,"start_offset":0,"end_offset":0},"finish_reason":null}]}`)
+	require.NoError(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"content_filter_results":[],"finish_reason":null}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"prompt_filter_results":[{"prompt_index":0,"content_filter_results":{"hate":{"filtered":false}}}],"choices":[],"usage":null}`)
+	require.NoError(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"prompt_annotations":[{"prompt_index":-1,"content_filter_results":{}}],"choices":[],"usage":null}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{"content":"ok"}}]}`)
+	require.NoError(t, err)
+	require.True(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"delta":{"role":"assistant"},"text":123,"finish_reason":"stop"}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":-1,"delta":{"content":"ok"}}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"message":{"role":"user","content":"echo"},"finish_reason":"stop"}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+
+	provider, err = classifyOpenAIChatStreamPayload(`{"choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+	require.Error(t, err)
+	require.False(t, provider)
+}
+
+func TestOpenAIChatChoiceStreamStateRequiresCompleteToolCallAtFinish(t *testing.T) {
+	var state openAIChatChoiceStreamState
+	complete, err := state.observe(`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`)
+	require.NoError(t, err)
+	require.False(t, complete)
+
+	complete, err = state.observe(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+	require.Error(t, err)
+	require.False(t, complete)
+}
+
+func TestOpenAIChatChoiceStreamStateRequiresCompleteLegacyFunctionCallAtFinish(t *testing.T) {
+	var state openAIChatChoiceStreamState
+	complete, err := state.observe(`{"choices":[{"index":0,"delta":{"role":"assistant","function_call":{"arguments":""}},"finish_reason":null}]}`)
+	require.NoError(t, err)
+	require.False(t, complete)
+
+	complete, err = state.observe(`{"choices":[{"index":0,"delta":{},"finish_reason":"function_call"}]}`)
+	require.Error(t, err)
+	require.False(t, complete)
+}
+
+func TestOpenAIChatChoiceStreamStateRequiresFinishReasonToMatchCalls(t *testing.T) {
+	t.Run("tool_calls without call", func(t *testing.T) {
+		var state openAIChatChoiceStreamState
+		_, err := state.observe(`{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":"tool_calls"}]}`)
+		require.Error(t, err)
+	})
+
+	t.Run("tool call with stop", func(t *testing.T) {
+		var state openAIChatChoiceStreamState
+		_, err := state.observe(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"stop"}]}`)
+		require.Error(t, err)
+	})
+}
+
+func TestOpenAIChatPayloadDenseChoicesStayWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const choice = `{"delta":{"role":"assistant"}},`
+	choiceCount := (targetBytes - len(`{"choices":[]}`)) / len(choice)
+	payload := `{"choices":[` + strings.Repeat(choice, choiceCount) + `{"delta":{"role":"assistant"}}]}`
+	require.GreaterOrEqual(t, len(payload), targetBytes-(2*len(choice)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	provider, err := classifyOpenAIChatStreamPayload(payload)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.ErrorContains(t, err, "too many choices")
+	require.False(t, provider)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestOpenAIChatSilentRefusalDetectorDenseChoicesStayWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const choice = `{"delta":{"role":"assistant"}},`
+	choiceCount := (targetBytes - len(`{"choices":[]}`)) / len(choice)
+	payload := []byte(`{"choices":[` + strings.Repeat(choice, choiceCount) + `{"delta":{"role":"assistant"}}]}`)
+	require.GreaterOrEqual(t, len(payload), targetBytes-(2*len(choice)))
+	detector := newOpenAIChatSilentRefusalDetector(openAISilentRefusalMinRequestBodyBytes)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	detector.ObservePayload(payload)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestOpenAIChatChoiceStreamStateBoundsTrackedChoicesAndTools(t *testing.T) {
+	t.Run("choices", func(t *testing.T) {
+		var state openAIChatChoiceStreamState
+		for index := 0; index <= 1024; index++ {
+			_, err := state.observe(fmt.Sprintf(`{"choices":[{"index":%d,"delta":{"role":"assistant"},"finish_reason":null}]}`, index))
+			if index < 1024 {
+				require.NoError(t, err)
+				continue
+			}
+			require.ErrorContains(t, err, "too many choices")
+		}
+	})
+
+	t.Run("tool calls", func(t *testing.T) {
+		var state openAIChatChoiceStreamState
+		for index := 0; index <= 1024; index++ {
+			_, err := state.observe(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"id":"call-%d","type":"function","function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`, index, index))
+			if index < 1024 {
+				require.NoError(t, err)
+				continue
+			}
+			require.ErrorContains(t, err, "too many tool calls")
+		}
+	})
+}
+
+func TestOpenAIChatRetainedToolMetadataIsBounded(t *testing.T) {
+	oversized := strings.Repeat("x", maxOpenAIChatRetainedIdentifierBytes+1)
+	for name, payload := range map[string]string{
+		"tool id":              `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"` + oversized + `","type":"function","function":{}}]}}]}`,
+		"tool function name":   `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"` + oversized + `"}}]}}]}`,
+		"legacy function name": `{"choices":[{"index":0,"delta":{"function_call":{"name":"` + oversized + `"}}}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider, err := classifyOpenAIChatStreamPayload(payload)
+			require.ErrorContains(t, err, "too long")
+			require.False(t, provider)
+		})
+	}
+
+	var state openAIChatChoiceStreamState
+	_, err := state.observe(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"` + oversized + `","type":"function","function":{}}]}}]}`)
+	require.ErrorContains(t, err, "too long")
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	state = openAIChatChoiceStreamState{}
+	identifierPadding := strings.Repeat("x", maxOpenAIChatRetainedIdentifierBytes-16)
+	for index := 0; index < maxOpenAIChatToolCallsPerChoice; index++ {
+		indexText := fmt.Sprintf("%08d", index)
+		_, err = state.observe(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":` + fmt.Sprint(index) + `,"id":"` + indexText + identifierPadding + `","type":"function","function":{}}]}}]}`)
+		require.NoError(t, err)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20))
+}
+
+func TestOpenAIChatBufferedChoicesRequireFinishReasonToMatchCalls(t *testing.T) {
+	require.False(t, openAIChatBufferedChoicesComplete([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"tool_calls"}]}`)))
+	require.False(t, openAIChatBufferedChoicesComplete([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"stop"}]}`)))
+}
+
+func TestBufferRawChatCompletionsRejectsEmptyChoicesWithoutUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[]}`))}
+
+	result, err := (&OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}).bufferRawChatCompletions(
+		c, resp, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now(),
+	)
+	require.Nil(t, result)
+	var failure *UpstreamFailoverError
+	require.ErrorAs(t, err, &failure)
+	require.True(t, failure.HasUpstreamHTTPResponse)
+	require.Empty(t, rec.Body.Bytes(), "invalid provider JSON must stay uncommitted for account failover")
+}
+
 func TestEnsureOpenAIChatStreamUsage(t *testing.T) {
 	t.Parallel()
 
@@ -725,7 +1205,8 @@ func TestBufferRawChatCompletions_RejectsOversizedResponse(t *testing.T) {
 	result, err := svc.bufferRawChatCompletions(c, resp, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
 	require.ErrorIs(t, err, ErrUpstreamResponseBodyTooLarge)
 	require.Nil(t, result)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code, "precommit parser failures are returned for handler-level failover")
+	require.False(t, rec.Result().Header.Get("Content-Type") != "")
 }
 
 func rawChatCompletionsTestConfig() *config.Config {

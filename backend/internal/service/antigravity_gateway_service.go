@@ -92,6 +92,7 @@ type AntigravityAccountSwitchError struct {
 	OriginalAccountID int64
 	RateLimitedModel  string
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
+	Failure           *UpstreamFailoverError
 }
 
 func (e *AntigravityAccountSwitchError) Error() string {
@@ -108,11 +109,29 @@ func IsAntigravityAccountSwitchError(err error) (*AntigravityAccountSwitchError,
 	return nil, false
 }
 
+func antigravitySwitchFailoverError(switchErr *AntigravityAccountSwitchError) *UpstreamFailoverError {
+	if switchErr != nil && switchErr.Failure != nil {
+		failure := *switchErr.Failure
+		failure.ForceCacheBilling = switchErr.IsStickySession
+		// Preserve the historical account-switch contract exposed to callers.
+		// The provider-native status remains in the attempt bridge and is used by
+		// terminal capture, while the failover signal itself stays a 503.
+		failure.StatusCode = http.StatusServiceUnavailable
+		return &failure
+	}
+	return &UpstreamFailoverError{
+		StatusCode:        http.StatusServiceUnavailable,
+		Platform:          PlatformAntigravity,
+		ForceCacheBilling: switchErr != nil && switchErr.IsStickySession,
+	}
+}
+
 // PromptTooLongError 表示上游明确返回 prompt too long
 type PromptTooLongError struct {
 	StatusCode int
 	RequestID  string
 	Body       []byte
+	Failure    *UpstreamFailoverError
 }
 
 func (e *PromptTooLongError) Error() string {
@@ -126,6 +145,7 @@ type AntigravityGatewayService struct {
 	rateLimitService  *RateLimitService
 	httpUpstream      HTTPUpstream
 	settingService    *SettingService
+	capturePool       *ConversationCapturePool
 	cache             GatewayCache // 用于模型级限流时清除粘性会话绑定
 	schedulerSnapshot *SchedulerSnapshotService
 	internal500Cache  Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
@@ -143,8 +163,12 @@ func (s *AntigravityGatewayService) readUpstreamErrorBody(resp *http.Response) [
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, s.upstreamErrorBodyReadLimit()))
+	body, _ := readCaptureAwareUpstreamErrorBody(resp, s.upstreamErrorBodyReadLimit())
 	return body
+}
+
+func newAntigravityHTTPFailoverError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
+	return newProviderHTTPError(account, resp, body, retryable)
 }
 
 func NewAntigravityGatewayService(
@@ -156,6 +180,7 @@ func NewAntigravityGatewayService(
 	httpUpstream HTTPUpstream,
 	settingService *SettingService,
 	internal500Cache Internal500CounterCache,
+	capturePool *ConversationCapturePool,
 ) *AntigravityGatewayService {
 	return &AntigravityGatewayService{
 		accountRepo:       accountRepo,
@@ -163,6 +188,7 @@ func NewAntigravityGatewayService(
 		rateLimitService:  rateLimitService,
 		httpUpstream:      httpUpstream,
 		settingService:    settingService,
+		capturePool:       capturePool,
 		cache:             cache,
 		schedulerSnapshot: schedulerSnapshot,
 		internal500Cache:  internal500Cache,
@@ -198,17 +224,18 @@ func (s *AntigravityGatewayService) getUpstreamErrorDetail(body []byte) string {
 }
 
 // checkErrorPolicy nil 安全的包装
-func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, account *Account, statusCode int, body []byte) ErrorPolicyResult {
+func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, account *Account, statusCode int, body []byte, requestedModel ...string) ErrorPolicyResult {
 	if s.rateLimitService == nil {
 		return ErrorPolicyNone
 	}
-	return s.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, body)
+	return s.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, body, firstRequestedModel(requestedModel))
 }
 
 // applyErrorPolicy 应用错误策略结果，返回是否应终止当前循环及应返回的状态码。
 // ErrorPolicySkipped 时 outStatus 为 500（前端约定：未命中的错误返回 500）。
 func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParams, statusCode int, headers http.Header, respBody []byte) (handled bool, outStatus int, retErr error) {
-	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody) {
+	modelKey := resolveFinalAntigravityModelKey(p.ctx, p.account, p.requestedModel)
+	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody, modelKey) {
 	case ErrorPolicySkipped:
 		if s.handleAntigravityModelRateLimitBeforePolicy(p, statusCode, headers, respBody) {
 			return true, statusCode, nil
@@ -224,7 +251,13 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 	case ErrorPolicyTempUnscheduled:
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
-		return true, statusCode, &AntigravityAccountSwitchError{OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession}
+		return true, statusCode, &AntigravityAccountSwitchError{
+			OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession,
+			Failure: &UpstreamFailoverError{
+				StatusCode: statusCode, ResponseBody: snapshotBytes(respBody), ResponseHeaders: headers.Clone(),
+				Platform: PlatformAntigravity, HasUpstreamHTTPResponse: true,
+			},
+		}
 	}
 	return false, statusCode, nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,88 @@ func (r *errTailReader) Read(p []byte) (int, error) {
 
 func (r *errTailReader) Close() error { return nil }
 
+func TestForwardAsAnthropic_ForceChatCompletionsPreservesFinalModelReasoningEffort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		model      string
+		mapped     string
+		effortJSON string
+		wantEffort string
+		maxPolicy  string
+	}{
+		{
+			name:       "policy caps converted effort",
+			model:      "gpt-5.6-luna",
+			mapped:     "gpt-5.6-luna",
+			effortJSON: `,"output_config":{"effort":"max"}`,
+			wantEffort: "medium",
+			maxPolicy:  "medium",
+		},
+		{
+			name:       "GPT56 max",
+			model:      "luna",
+			mapped:     "gpt-5.6-luna",
+			effortJSON: `,"output_config":{"effort":"max"}`,
+			wantEffort: "max",
+		},
+		{
+			name:       "old model max",
+			model:      "gpt-5.5",
+			mapped:     "gpt-5.5",
+			effortJSON: `,"output_config":{"effort":"max"}`,
+			wantEffort: "xhigh",
+		},
+		{
+			name:       "high remains high",
+			model:      "gpt-5.6-luna",
+			mapped:     "gpt-5.6-luna",
+			effortJSON: `,"output_config":{"effort":"high"}`,
+			wantEffort: "high",
+		},
+		{
+			name:       "omitted defaults medium",
+			model:      "gpt-5.6-luna",
+			mapped:     "gpt-5.6-luna",
+			wantEffort: "medium",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			body := `{"model":"` + tt.model + `","max_tokens":16,"messages":[{"role":"user","content":"hello"}]` + tt.effortJSON + `,"stream":false}`
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"chatcmpl_effort","object":"chat.completion","model":"` + tt.mapped + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+				)),
+			}}
+			account := forceChatMessagesFallbackAccount()
+			account.Credentials["model_mapping"] = map[string]any{tt.model: tt.mapped}
+
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+			ctx := context.Background()
+			if tt.maxPolicy != "" {
+				ctx = WithOpenAIReasoningEffortPolicy(ctx, tt.maxPolicy, nil)
+			}
+			result, err := svc.ForwardAsAnthropic(ctx, c, account, []byte(body), "", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tt.mapped, gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, tt.wantEffort, gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
+			require.NotNil(t, result.ReasoningEffort)
+			require.Equal(t, tt.wantEffort, *result.ReasoningEffort)
+		})
+	}
+}
+
 func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -53,18 +136,22 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	enableCaptureForTest(t, c)
 
+	upstreamBody := []byte(`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_msg_chat_json"}},
-		Body: io.NopCloser(strings.NewReader(
-			`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":"invalid","input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":5}}}`,
-		)),
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
+	svc.cfg.Gateway.Capture.Enabled = true
+	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
 	require.NoError(t, err)
@@ -84,8 +171,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 5, result.Usage.ImageOutputTokens)
+	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
+	require.Nil(t, result.UpstreamRequest, "typed capture must not republish a legacy whole-body snapshot")
+	require.Nil(t, result.CaptureResponse, "typed capture must not republish a legacy whole-body snapshot")
+	capture.commit(t, c, result, upstream.lastBody, upstreamBody, false)
 }
 
 // Covers the fully-new streaming composition: text block is still open when
@@ -99,6 +189,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingClosesOpenBlockOnDone(t
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	enableCaptureForTest(t, c)
 
 	upstreamBody := strings.Join([]string{
 		`data: {"id":"chatcmpl_s","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
@@ -119,10 +210,14 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingClosesOpenBlockOnDone(t
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_msg_chat_stream"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
+	svc.cfg.Gateway.Capture.Enabled = true
+	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
 	require.NoError(t, err)
@@ -146,6 +241,9 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingClosesOpenBlockOnDone(t
 	require.Equal(t, 4, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.True(t, result.Stream)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	capture.commit(t, c, result, upstream.lastBody, []byte(upstreamBody), false)
 	require.NotNil(t, result.FirstTokenMs)
 }
 
@@ -183,6 +281,8 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingToolCallAggregation(t *
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
 	}
+	svc.cfg.Gateway.Capture.Enabled = true
+	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
 	require.NoError(t, err)
@@ -236,9 +336,8 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingLengthMapsToMaxTokens(t
 	require.Contains(t, out, "event: message_stop")
 }
 
-// An upstream that ends immediately with [DONE] must still produce a fully
-// framed (message_start → message_delta → message_stop) Anthropic stream.
-func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamStillFramesMessage(t *testing.T) {
+// A framing-only [DONE] carries no provider result and must remain replayable.
+func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamFailsOverBeforeCommit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
@@ -258,13 +357,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamStillFramesMessage(t 
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	out := rec.Body.String()
-	require.Contains(t, out, "event: message_start")
-	require.Contains(t, out, "event: message_delta")
-	require.Contains(t, out, "event: message_stop")
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Empty(t, rec.Body.String())
 }
 
 // Non-failover 4xx responses must go through the shared compat error handler:
@@ -322,6 +419,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	enableCaptureForTest(t, c)
 
 	partial := strings.Join([]string{
 		`data: {"id":"chatcmpl_e","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
@@ -335,20 +433,251 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_msg_chat_err"}},
 		Body:       &errTailReader{data: []byte(partial), err: errors.New("simulated upstream read failure")},
 	}}
+	capture := newOpenAITypedCaptureTestHarness(t)
 	svc := &OpenAIGatewayService{
 		cfg:          rawChatCompletionsTestConfig(),
 		httpUpstream: upstream,
+		capturePool:  capture.pool,
 	}
+	svc.cfg.Gateway.Capture.Enabled = true
+	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "stream usage incomplete")
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
+	require.Nil(t, result.UpstreamRequest)
+	require.Nil(t, result.CaptureResponse)
+	capture.commit(t, c, result, upstream.lastBody, []byte(partial), true)
 
 	out := rec.Body.String()
 	require.Contains(t, out, `"text":"he"`, "delta emitted before the failure must reach the client")
 	require.NotContains(t, out, "event: message_stop", "no synthetic completion after a broken read")
+}
+
+func TestForwardMessagesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		sse       string
+		committed bool
+	}{
+		{
+			name: "empty converted delta remains retryable",
+			sse:  "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"\",\"arguments\":\"\"}}]}}]}\n\n",
+		},
+		{
+			name: "malformed before output is terminal and retryable",
+			sse:  "data: {not-json}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:      "malformed after converted text returns partial error",
+			sse:       "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
+			committed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			enableCaptureForTest(t, c)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(tt.sse))}}
+			cfg := rawChatCompletionsTestConfig()
+			cfg.Gateway.Capture.Enabled = true
+			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+			capture := newOpenAITypedCaptureTestHarness(t)
+
+			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
+			require.Error(t, err)
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, recorder.Body.String(), `"text":"hello"`)
+				require.Nil(t, result.CaptureResponse)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+			capture.abort(t, c)
+		})
+	}
+}
+
+func TestForwardMessagesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	for _, tt := range []struct {
+		name          string
+		acceptedBytes int
+		wantCommitted bool
+	}{
+		{name: "zero bytes remains failover safe", acceptedBytes: 0},
+		{name: "partial bytes prevents replay", acceptedBytes: 1024, wantCommitted: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Writer.Header().Set("X-Preexisting-Test", "kept")
+			headersBeforeAttempt := c.Writer.Header().Clone()
+			writer := &stagedConvertedFailingResponseWriter{
+				ResponseWriter: c.Writer,
+				accept:         tt.acceptedBytes,
+				err:            errors.New("forced downstream write failure"),
+			}
+			c.Writer = writer
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(rawCCSpilledCommitFailureSSE())),
+			}}
+
+			result, err := (&OpenAIGatewayService{
+				cfg:          rawChatCompletionsTestConfig(),
+				httpUpstream: upstream,
+			}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), requestBody, "", "")
+
+			require.Error(t, err)
+			require.Equal(t, tt.acceptedBytes, writer.wrote)
+			require.Equal(t, tt.acceptedBytes, recorder.Body.Len())
+			var failoverErr *UpstreamFailoverError
+			if !tt.wantCommitted {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+				require.Empty(t, recorder.Body.String(), "a zero-byte failed attempt must not pollute the replay stream")
+				require.Equal(t, headersBeforeAttempt, c.Writer.Header(), "a zero-byte failed attempt must not pollute replay response headers")
+				return
+			}
+			require.NotNil(t, result)
+			require.False(t, errors.As(err, &failoverErr), "partial downstream delivery must not be replayed")
+			require.ErrorContains(t, err, "stream usage incomplete")
+			require.Equal(t, tt.acceptedBytes, c.Writer.Size())
+			require.Equal(t, 7, result.Usage.InputTokens)
+			require.Equal(t, 3, result.Usage.OutputTokens)
+			require.NotNil(t, result.FirstTokenMs)
+			require.True(t, result.ClientDisconnect)
+		})
+	}
+}
+
+func TestForwardMessagesRawCCCancellationClosesBody(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		payload   []byte
+		committed bool
+	}{
+		{name: "before output"},
+		{name: "after text", payload: []byte("data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"), committed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requestBody := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			blocked := newBlockingAfterPayloadBody(tt.payload)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: blocked}}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultCh := make(chan *OpenAIForwardResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.ForwardAsAnthropic(ctx, c, forceChatMessagesFallbackAccount(), requestBody, "", "")
+				resultCh <- result
+				errCh <- err
+			}()
+			select {
+			case <-blocked.blocked:
+			case <-time.After(time.Second):
+				t.Fatal("upstream reader did not reach its blocking point")
+			}
+			cancel()
+			var result *OpenAIForwardResult
+			var err error
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(time.Second):
+				_ = blocked.Close()
+				result = <-resultCh
+				err = <-errCh
+				t.Fatal("raw CC messages bridge did not terminate after cancellation")
+			}
+			require.Error(t, err)
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, recorder.Body.String(), "hello")
+			} else {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+			}
+			select {
+			case <-blocked.closed:
+			default:
+				t.Fatal("raw CC messages bridge returned without closing upstream body")
+			}
+			require.Equal(t, int32(1), blocked.closes.Load(), "raw CC Messages bridge must close its upstream body exactly once")
+		})
+	}
+}
+
+func TestForwardMessagesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	firstSemantic := strings.Repeat("x", openAIFirstOutputStageMaxBytes-256)
+	firstSemanticLine := `data: {"id":"x","choices":[{"delta":{"content":"` + firstSemantic + `"}}]}`
+	require.Less(t, len(firstSemanticLine), openAIFirstOutputStageMaxBytes, "fixture must reach converted staging rather than the scanner-token guard")
+
+	for _, tt := range []struct {
+		name        string
+		upstreamSSE string
+		committed   bool
+		wantOutput  string
+	}{
+		{name: "oversized first semantic converted event", upstreamSSE: firstSemanticLine + "\n\n", committed: true, wantOutput: firstSemantic[:128]},
+		{
+			name: "oversized newline-free token after committed text",
+			upstreamSSE: "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"committed\"}}]}\n\n" +
+				"data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1),
+			committed:  true,
+			wantOutput: "committed",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(tt.upstreamSSE)),
+			}}
+			cfg := rawChatCompletionsTestConfig()
+			cfg.Gateway.Capture.Enabled = true
+			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+
+			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), requestBody, "", "")
+			require.Error(t, err)
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, recorder.Body.String(), tt.wantOutput)
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
 }
 
 // Gate regression: an API-key account whose upstream is confirmed to support
@@ -356,7 +685,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 func TestForwardAsAnthropic_ResponsesSupportedAccountStillUsesResponsesEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"high"},"stream":false}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
@@ -385,12 +714,16 @@ func TestForwardAsAnthropic_ResponsesSupportedAccountStillUsesResponsesEndpoint(
 		openai_compat.ExtraKeyResponsesSupported: true,
 	}
 
-	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	ctx := WithOpenAIReasoningEffortPolicy(context.Background(), "medium", nil)
+	result, err := svc.ForwardAsAnthropic(ctx, c, account, body, "", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, strings.HasSuffix(upstream.lastReq.URL.Path, "/responses"),
 		"responses-capable account must stay on /v1/responses, got %s", upstream.lastReq.URL.String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
+	require.Equal(t, "medium", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
+	require.NotNil(t, result.ReasoningEffort)
+	require.Equal(t, "medium", *result.ReasoningEffort)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 	require.Equal(t, "third-party-client/1.0.0", upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "opencode", upstream.lastReq.Header.Get("originator"))

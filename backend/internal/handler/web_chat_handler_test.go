@@ -209,7 +209,7 @@ func newWebChatUserRoutesTestRouter(fake *fakeWebChatService, userID int64) *gin
 			c.Set(string(servermiddleware.ContextKeyUser), servermiddleware.AuthSubject{UserID: userID})
 		}
 		c.Next()
-	}), nil)
+	}), nil, nil)
 	return router
 }
 

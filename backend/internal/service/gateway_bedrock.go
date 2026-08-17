@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // ApplyBedrockCCCompat 应用 Bedrock CC 兼容转换（渠道级模型映射后调用）
@@ -119,15 +119,10 @@ func (s *GatewayService) forwardBedrock(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 将 Bedrock 的 x-amzn-requestid 映射到 x-request-id，
-	// 使通用错误处理函数（handleErrorResponse、handleRetryExhaustedError）能正确提取 AWS request ID。
-	if awsReqID := resp.Header.Get("x-amzn-requestid"); awsReqID != "" && resp.Header.Get("x-request-id") == "" {
-		resp.Header.Set("x-request-id", awsReqID)
-	}
-
 	// 错误/failover 处理
 	if resp.StatusCode >= 400 {
-		return s.handleBedrockUpstreamErrors(ctx, resp, c, account)
+		result, handleErr := s.handleBedrockUpstreamErrors(ctx, resp, c, account)
+		return finalizeForwardResult(c, result), handleErr
 	}
 
 	// Bedrock 分支绕过通用 Forward 成功路径，这里保持上游接受回调语义一致。
@@ -142,7 +137,10 @@ func (s *GatewayService) forwardBedrock(
 	if reqStream {
 		streamResult, err := s.handleBedrockStreamingResponse(ctx, resp, c, account, startTime, reqModel)
 		if err != nil {
-			return nil, err
+			if streamResult == nil {
+				return failedForwardResultForError(c, resp, reqModel, mappedModel, true, startTime, err), err
+			}
+			return streamErrorForwardResult(c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err), err
 		}
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
@@ -150,14 +148,15 @@ func (s *GatewayService) forwardBedrock(
 	} else {
 		usage, err = s.handleBedrockNonStreamingResponse(ctx, resp, c, account)
 		if err != nil {
-			return nil, err
+			return failedForwardResultForError(c, resp, reqModel, mappedModel, false, startTime, err), err
 		}
 	}
 	if usage == nil {
 		usage = &ClaudeUsage{}
 	}
 
-	return &ForwardResult{
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:        resp.Header.Get("x-amzn-requestid"),
 		Usage:            *usage,
 		Model:            reqModel,
@@ -166,7 +165,7 @@ func (s *GatewayService) forwardBedrock(
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}), nil
 }
 
 // executeBedrockUpstream 执行 Bedrock 上游请求（含重试逻辑）
@@ -195,6 +194,7 @@ func (s *GatewayService) executeBedrockUpstream(
 		if err != nil {
 			return nil, err
 		}
+		s.captureOutboundRequest(c, account, upstreamReq, body)
 
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
 		if err != nil {
@@ -221,6 +221,15 @@ func (s *GatewayService) executeBedrockUpstream(
 			})
 			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
+		beginCaptureResponse(c, resp,
+			s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform)),
+			func() int {
+				if s.cfg == nil {
+					return 0
+				}
+				return s.cfg.Gateway.Capture.MaxBodyBytes
+			}(),
+		)
 
 		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {
@@ -283,9 +292,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 	// retry exhausted + failover
 	if s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
-			respBody, _ := s.readUpstreamErrorBody(resp)
+			respBody, readErr := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 			logger.LegacyPrintf("service.gateway", "[Bedrock] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d Body=%s",
 				account.ID, account.Name, resp.StatusCode, truncateString(string(respBody), 1000))
@@ -299,20 +308,18 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 				Kind:               "retry_exhausted_failover",
 				Message:            extractUpstreamErrorMessage(respBody),
 			})
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			failure := newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+			failure.CaptureResponseIncomplete = !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit())
+			return nil, failure
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
 
 	// non-retryable failover
 	if s.shouldFailoverUpstreamError(resp.StatusCode) {
-		respBody, _ := s.readUpstreamErrorBody(resp)
+		respBody, readErr := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
 		s.handleFailoverSideEffects(ctx, resp, account)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -323,11 +330,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 			Kind:               "failover",
 			Message:            extractUpstreamErrorMessage(respBody),
 		})
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		failure := newProviderHTTPError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+		failure.CaptureResponseIncomplete = !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit())
+		return nil, failure
 	}
 
 	// other errors
@@ -392,14 +397,20 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	c *gin.Context,
 	account *Account,
 ) (*ClaudeUsage, error) {
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(newInvalidProviderResponseFailover(resp, "failed to read Bedrock response"), err)
 	}
 
 	// 转换 Bedrock 特有的 amazon-bedrock-invocationMetrics 为标准 Anthropic usage 格式
 	// 并移除该字段避免透传给客户端
-	body = transformBedrockInvocationMetrics(body)
+	body, err = transformBedrockInvocationMetrics(body)
+	if err != nil {
+		return nil, newInvalidProviderResponseFailover(resp, sanitizeStreamError(err))
+	}
+	if !validAnthropicNonStreamingResponse(body) {
+		return nil, newInvalidProviderResponseFailover(resp, "bedrock returned an invalid terminal JSON response")
+	}
 
 	usage := parseClaudeUsageFromResponseBody(body)
 
@@ -409,4 +420,34 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	}
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil
+}
+
+func validAnthropicNonStreamingResponse(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONAnthropicMessage); err != nil {
+		return false
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() ||
+		!strings.EqualFold(strings.TrimSpace(root.Get("type").String()), "message") ||
+		!strings.EqualFold(strings.TrimSpace(root.Get("role").String()), "assistant") ||
+		!validAnthropicResponseContent(root.Get("content")) {
+		return false
+	}
+	for _, field := range []string{"id", "model"} {
+		if value := root.Get(field); value.Exists() && (value.Type != gjson.String || len(value.String()) > maxAnthropicProviderRetainedStringBytes) {
+			return false
+		}
+	}
+	stopReason := root.Get("stop_reason")
+	if stopReason.Type != gjson.String || strings.TrimSpace(stopReason.String()) == "" || len(stopReason.String()) > maxAnthropicProviderRetainedStringBytes {
+		return false
+	}
+	if value := root.Get("stop_sequence"); value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
+		return false
+	}
+	usage := root.Get("usage")
+	return !usage.Exists() || validAnthropicUsageShape(usage)
 }

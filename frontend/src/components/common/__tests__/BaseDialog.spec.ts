@@ -355,4 +355,25 @@ describe('BaseDialog focus management', () => {
     expect(close).not.toHaveBeenCalled()
     expect(document.body.classList.contains('modal-open')).toBe(false)
   })
+
+  it('resets body scroll position when reopened', async () => {
+    const wrapper = mount(BaseDialog, {
+      attachTo: document.body,
+      props: { show: false, title: 'Details' },
+      slots: { default: '<div style="height: 2000px">content</div>' }
+    })
+
+    await wrapper.setProps({ show: true })
+    await nextTick()
+    const body = document.body.querySelector<HTMLElement>('.modal-body')
+    expect(body).not.toBeNull()
+    body!.scrollTop = 480
+
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await nextTick()
+
+    expect(document.body.querySelector<HTMLElement>('.modal-body')?.scrollTop).toBe(0)
+    wrapper.unmount()
+  })
 })

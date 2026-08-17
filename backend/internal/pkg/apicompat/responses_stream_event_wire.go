@@ -35,12 +35,24 @@ func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(m)
 
+	case "response.refusal.delta", "response.refusal.done":
+		m := e.wireBase()
+		e.putItemID(m)
+		m["output_index"] = e.OutputIndex
+		m["content_index"] = e.ContentIndex
+		if e.Type == "response.refusal.done" {
+			m["refusal"] = e.Refusal
+		} else {
+			m["delta"] = e.Delta
+		}
+		return json.Marshal(m)
+
 	case "response.content_part.added", "response.content_part.done":
 		m := e.wireBase()
 		e.putItemID(m)
 		m["output_index"] = e.OutputIndex
 		m["content_index"] = e.ContentIndex
-		m["part"] = outputTextPartWire(e.Part)
+		m["part"] = responseMessagePartWire(e.Part)
 		return json.Marshal(m)
 
 	case "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
@@ -140,6 +152,13 @@ func outputTextPartWire(part *ResponsesContentPart) map[string]any {
 	}
 }
 
+func responseMessagePartWire(part *ResponsesContentPart) map[string]any {
+	if part != nil && part.Type == "refusal" {
+		return map[string]any{"type": "refusal", "refusal": part.Refusal}
+	}
+	return outputTextPartWire(part)
+}
+
 // summaryTextPartWire renders a reasoning summary part.
 func summaryTextPartWire(part *ResponsesContentPart) map[string]any {
 	text := ""
@@ -195,6 +214,9 @@ func responsesItemWire(item *ResponsesOutput) map[string]any {
 		m["call_id"] = item.CallID
 		m["name"] = item.Name
 		m["input"] = item.Input
+		if item.Namespace != "" {
+			m["namespace"] = item.Namespace
+		}
 	case "tool_search_call":
 		// tool_search 调用还原项：execution 必须为 "client"（否则 codex 忽略该
 		// 调用），arguments 在线上是 JSON 对象而非字符串。
@@ -213,6 +235,10 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		typ := p.Type
 		if typ == "" {
 			typ = "output_text"
+		}
+		if typ == "refusal" {
+			out = append(out, map[string]any{"type": typ, "refusal": p.Refusal})
+			continue
 		}
 		out = append(out, map[string]any{"type": typ, "text": p.Text})
 	}

@@ -176,7 +176,23 @@ func openAIStreamEventIsTerminal(data string) bool {
 	if trimmed == "[DONE]" {
 		return true
 	}
-	switch gjson.Get(trimmed, "type").String() {
+	return openAIStreamEventTypeIsTerminal(gjson.Get(trimmed, "type").String())
+}
+
+// openAIStreamEventIsTerminalWithType 复用已提取的 type，避免 SSE 热路径重复扫描 JSON。
+func openAIStreamEventIsTerminalWithType(data, eventType string) bool {
+	trimmed := strings.TrimSpace(data)
+	if trimmed == "" {
+		return false
+	}
+	if trimmed == "[DONE]" {
+		return true
+	}
+	return openAIStreamEventTypeIsTerminal(eventType)
+}
+
+func openAIStreamEventTypeIsTerminal(eventType string) bool {
+	switch eventType {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
@@ -431,14 +447,24 @@ var allowedHeaders = map[string]bool{
 	"x-client-request-id":                       true,
 }
 
+// ErrStickySessionNotFound is returned by GatewayCache.GetSessionAccountID
+// when no binding exists for the session. It abstracts away the underlying
+// cache implementation (e.g. redis.Nil), mirroring ErrRefreshTokenNotFound.
+var ErrStickySessionNotFound = errors.New("sticky session not found")
+
 // GatewayCache 定义网关服务的缓存操作接口。
 // 提供粘性会话（Sticky Session）的存储、查询、刷新和删除功能。
 //
 // GatewayCache defines cache operations for gateway service.
 // Provides sticky session storage, retrieval, refresh and deletion capabilities.
 type GatewayCache interface {
-	// GetSessionAccountID 获取粘性会话绑定的账号 ID
-	// Get the account ID bound to a sticky session
+	// GetSessionAccountID 获取粘性会话绑定的账号 ID；无绑定时返回
+	// ErrStickySessionNotFound，使 service 层无需依赖具体缓存实现即可
+	// 区分"未绑定"与真实读取失败。
+	// Get the account ID bound to a sticky session. Returns
+	// ErrStickySessionNotFound when no binding exists so service code can
+	// distinguish a miss from a real read failure without importing the
+	// cache driver.
 	GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error)
 	// SetSessionAccountID 设置粘性会话与账号的绑定关系
 	// Set the binding between sticky session and account
@@ -449,6 +475,17 @@ type GatewayCache interface {
 	// DeleteSessionAccountID 删除粘性会话绑定，用于账号不可用时主动清理
 	// Delete sticky session binding, used to proactively clean up when account becomes unavailable
 	DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error
+
+	// Grok async video billing snapshot (create → status success).
+	// SetGrokVideoPendingBilling stores create-time model/duration/resolution for status billing.
+	SetGrokVideoPendingBilling(ctx context.Context, key string, payload []byte, ttl time.Duration) error
+	// GetGrokVideoPendingBilling returns the create-time billing snapshot; miss → nil, nil.
+	GetGrokVideoPendingBilling(ctx context.Context, key string) ([]byte, error)
+	// ClaimGrokVideoBilled atomically marks a video request as billed (SetNX).
+	// Returns true when this caller won the claim; false when already billed or claim unavailable.
+	ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	// ReleaseGrokVideoBilled clears a claim so a failed RecordUsage can retry billing.
+	ReleaseGrokVideoBilled(ctx context.Context, key string) error
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -524,6 +561,15 @@ type AccountSelectionResult struct {
 	Acquired    bool
 	ReleaseFunc func()
 	WaitPlan    *AccountWaitPlan // nil means no wait allowed
+	// profitGate 携带本次选号真实生效的利润门（无门为 nil）。门安装在调度栈的
+	// 局部 ctx 上，handler 必须经 ContextWithSelectionProfitGate 重放后才能在
+	// 调度栈之外做抢槽后终检与准入后粘性绑定。
+	profitGate *openAIProfitControlGate
+}
+
+// ProfitGateActive 报告本次选号是否处于利润门之下。
+func (r *AccountSelectionResult) ProfitGateActive() bool {
+	return r != nil && r.profitGate != nil
 }
 
 // ClaudeUsage 表示Claude API返回的usage信息
@@ -538,19 +584,30 @@ type ClaudeUsage struct {
 	KiroCredits              float64
 }
 
-// ForwardResult 转发结果
 type ForwardResult struct {
 	RequestID string
 	Usage     ClaudeUsage
 	Model     string
+	// UpstreamRequest is an immutable snapshot of the final request body sent
+	// by the last attempted upstream call. Compatibility producers may leave it
+	// nil; new forwarding paths must not substitute the inbound client body.
+	UpstreamRequest     []byte
+	UpstreamRequestHash string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
-	UpstreamModel    string
-	Stream           bool
-	Duration         time.Duration
-	FirstTokenMs     *int // 首字时间（流式请求）
-	ClientDisconnect bool // 客户端是否在流式传输过程中断开
-	ReasoningEffort  *string
+	UpstreamModel string
+	// UpstreamResponseModel is captured from the raw successful upstream
+	// response before any client-facing rewrite or protocol conversion.
+	UpstreamResponseModel         string
+	UpstreamResponseModelConflict bool
+	Stream                        bool
+	Duration                      time.Duration
+	FirstTokenMs                  *int // 首字时间（流式请求）
+	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
+	UpstreamFailed                bool // final provider attempt was consumed but could not produce a valid response
+	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
+	CaptureResponseComplete       bool // final provider response bytes were fully consumed despite a terminal error
+	ReasoningEffort               *string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount         int    // 生成的图片数量
@@ -562,10 +619,43 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
-	CaptureResponse        []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
-	CaptureTruncated       bool   // 采集 buffer 超过 max_body_bytes 被截断
-	CaptureRequestHeaders  []byte // 上游请求头(脱敏)JSON
-	CaptureResponseHeaders []byte // 上游响应头(脱敏)JSON
+	CaptureRequest          []byte // 实际最终上游请求体
+	CaptureResponse         []byte // 流式=原始 SSE 字节流；非流式=完整响应 body
+	CaptureTruncated        bool   // 采集 buffer 超过 max_body_bytes 被截断
+	CaptureRequestHeaders   []byte // 上游请求头(脱敏)JSON
+	CaptureResponseHeaders  []byte // 上游响应头(脱敏)JSON
+	CaptureUpstreamEndpoint string
+	CaptureHTTPStatus       int
+	CaptureUpstreamModel    string
+	CaptureStream           bool
+	CaptureStreamKnown      bool
+	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+func (r *ForwardResult) UpstreamModelForCapture() string {
+	if r != nil && r.CaptureUpstreamModel != "" {
+		return r.CaptureUpstreamModel
+	}
+	if r == nil {
+		return ""
+	}
+	return r.UpstreamModel
+}
+
+func (r *ForwardResult) StreamForCapture() bool {
+	if r != nil && r.CaptureStreamKnown {
+		return r.CaptureStream
+	}
+	return r != nil && r.Stream
+}
+
+// HTTPStatusForCapture returns the actual provider status when capture has
+// one, while preserving HTTP 200 for existing successful result producers.
+func (r *ForwardResult) HTTPStatusForCapture() int {
+	if r != nil && r.CaptureHTTPStatus >= 100 && r.CaptureHTTPStatus <= 599 {
+		return r.CaptureHTTPStatus
+	}
+	return http.StatusOK
 }
 
 // GatewayFailureStage identifies which request stage failed. The zero value is
@@ -603,18 +693,37 @@ type GatewayFailureReason string
 // trigger account failover. Additive metadata keeps existing composite literals
 // source-compatible and preserves their legacy retry-next-account behavior.
 type UpstreamFailoverError struct {
-	StatusCode               int
-	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
-	Stage                    GatewayFailureStage
-	Scope                    GatewayFailureScope
-	Reason                   GatewayFailureReason
-	NextAccountAction        NextAccountAction
-	ClientStatusCode         int
-	ClientMessage            string
+	StatusCode                int
+	ResponseBody              []byte      // 上游响应体，用于错误透传规则匹配
+	RequestHeaders            http.Header // 最终上游请求头，仅供脱敏归档
+	ResponseHeaders           http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	UpstreamEndpoint          string
+	Platform                  string
+	HasUpstreamHTTPResponse   bool // true only when an actual HTTP response produced this failure
+	UpstreamHTTPStatus        int  // actual provider status when StatusCode is a synthesized client/failover status
+	CaptureResponseIncomplete bool // true when the provider response was not consumed to a valid terminal boundary
+	ForceCacheBilling         bool // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount    bool // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	RequestScopedTransient    bool // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite  bool // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                     GatewayFailureStage
+	Scope                     GatewayFailureScope
+	Reason                    GatewayFailureReason
+	NextAccountAction         NextAccountAction
+	ClientStatusCode          int
+	ClientMessage             string
+}
+
+// HTTPStatusForCapture keeps the provider's observed HTTP status separate from
+// a synthesized status used to classify or render a failover error.
+func (e *UpstreamFailoverError) HTTPStatusForCapture() int {
+	if e != nil && e.UpstreamHTTPStatus >= 100 && e.UpstreamHTTPStatus <= 599 {
+		return e.UpstreamHTTPStatus
+	}
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -642,6 +751,35 @@ func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
+func newProviderHTTPError(account *Account, resp *http.Response, body []byte, retryable bool) *UpstreamFailoverError {
+	failure := &UpstreamFailoverError{
+		ResponseBody:            snapshotBytes(body),
+		HasUpstreamHTTPResponse: resp != nil,
+		RetryableOnSameAccount:  retryable,
+	}
+	if account != nil {
+		failure.Platform = account.Platform
+	}
+	if resp == nil {
+		return failure
+	}
+	failure.StatusCode = resp.StatusCode
+	failure.ResponseHeaders = resp.Header.Clone()
+	if resp.Request != nil {
+		failure.RequestHeaders = resp.Request.Header.Clone()
+		if resp.Request.URL != nil {
+			failure.UpstreamEndpoint = redactCaptureURL(resp.Request.URL)
+		}
+	}
+	return failure
+}
+
+func newTerminalProviderHTTPError(account *Account, resp *http.Response, body []byte) *UpstreamFailoverError {
+	failure := newProviderHTTPError(account, resp, body, false)
+	failure.NextAccountAction = NextAccountStop
+	return failure
+}
+
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。
 // RawData 是该事件 data: 行的原始 JSON 字符串
 // （Anthropic 标准结构 {"type":"error","error":{"type":"...","message":"..."}}）。
@@ -657,6 +795,11 @@ func (e *sseStreamErrorEventError) Error() string { return "have error in stream
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
 	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	// 请求级瞬时故障与账号健康无关：封禁只会把与故障无关的账号一并摘掉，
+	// 而故障因素（客户端身份、模型容量）在下一个账号上完全相同。
+	if failoverErr.RequestScopedTransient {
 		return
 	}
 	// 根据状态码选择封禁策略
@@ -1010,6 +1153,62 @@ func (s *GatewayService) stickySessionTTLForGroupID(ctx context.Context, groupID
 	return stickySessionTTL
 }
 
+// bindGatewayStickySessionDuringSelection preserves the normal eager sticky
+// behavior unless a profit gate is installed. Profit-controlled requests bind
+// only after the terminal post-slot check, otherwise a rejected candidate could
+// overwrite a healthy pre-existing sticky binding.
+func (s *GatewayService) bindGatewayStickySessionDuringSelection(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if gatewayProfitControlGateActive(ctx) {
+		return nil
+	}
+	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, s.stickySessionTTLForGroupID(ctx, groupID))
+}
+
+// BindStickySessionAfterProfitAdmission records a terminally admitted
+// account. Without a profit gate it preserves the pre-existing eager binding
+// behavior at the handler bind points. With a gate it never replaces a
+// different binding that already exists: a temporarily ineligible sticky
+// account remains bound and automatically becomes eligible again if its
+// account rate recovers.
+func (s *GatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if sessionHash == "" || accountID <= 0 || s.cache == nil {
+		return nil
+	}
+	if !gatewayProfitControlGateActive(ctx) {
+		return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	}
+	existingAccountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
+		// 读失败时无法判断既有绑定，保守跳过而不是冒着覆盖健康绑定的风险写入。
+		slog.Warn("profit_control_sticky_binding_read_failed", "group_id", derefGroupID(groupID), "account_id", accountID, "error", err)
+		return nil
+	}
+	if existingAccountID > 0 && existingAccountID != accountID {
+		return nil
+	}
+	return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+}
+
+// BindStickySessionForAccountGroupAfterProfitAdmission preserves the same
+// admission/non-overwrite rules while retaining KIRO's account/group-specific
+// sticky TTL for mixed and native KIRO scheduling.
+func (s *GatewayService) BindStickySessionForAccountGroupAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, account *Account, group *Group) error {
+	if account == nil || sessionHash == "" || account.ID <= 0 || s.cache == nil {
+		return nil
+	}
+	if gatewayProfitControlGateActive(ctx) {
+		existingAccountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+		if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
+			slog.Warn("profit_control_sticky_binding_read_failed", "group_id", derefGroupID(groupID), "account_id", account.ID, "error", err)
+			return nil
+		}
+		if existingAccountID > 0 && existingAccountID != account.ID {
+			return nil
+		}
+	}
+	return s.BindStickySessionForAccountGroup(ctx, groupID, sessionHash, account, group)
+}
+
 // GetCachedSessionAccountID retrieves the account ID bound to a sticky session.
 // Returns 0 if no binding exists or on error.
 func (s *GatewayService) GetCachedSessionAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {
@@ -1339,6 +1538,15 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 		return accessToken, "oauth", nil
 	}
 
+	// Grok OAuth: prefer access_token from credentials (background refresher keeps it warm).
+	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth {
+		accessToken := account.GetGrokAccessToken()
+		if accessToken == "" {
+			return "", "", errors.New("grok access_token not found in credentials")
+		}
+		return accessToken, "oauth", nil
+	}
+
 	// 其他情况（Gemini 有自己的 TokenProvider，setup-token 类型等）直接从账号读取
 	accessToken := account.GetCredential("access_token")
 	if accessToken == "" {
@@ -1350,6 +1558,7 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 
 // GetAvailableModels returns the list of models available for a group
 // It aggregates model_mapping keys from all schedulable accounts in the group
+
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
 	if s.modelsListCache != nil {
@@ -1421,6 +1630,34 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
+}
+
+// GetSchedulablePlatforms returns the concrete platforms that currently have
+// schedulable accounts in the target group.
+func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
+	platforms := make(map[string]struct{})
+	if s == nil || s.accountRepo == nil {
+		return platforms
+	}
+
+	var accounts []Account
+	var err error
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulable(ctx)
+	}
+	if err != nil {
+		return platforms
+	}
+
+	for _, acc := range accounts {
+		platform := strings.TrimSpace(acc.Platform)
+		if platform != "" {
+			platforms[platform] = struct{}{}
+		}
+	}
+	return platforms
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {

@@ -3,14 +3,18 @@
     <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
       {{ t('payment.paymentMethod') }}
     </label>
-    <div class="grid grid-cols-2 gap-3 sm:flex">
+    <div
+      data-testid="payment-method-grid"
+      class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+    >
       <button
         v-for="method in sortedMethods"
         :key="method.type"
         type="button"
+        :title="methodLabel(method)"
         :disabled="!method.available"
         :class="[
-          'linear-method-option relative flex min-h-[72px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-linear-hairline dark:bg-linear-surface-1 dark:hover:border-linear-hairline-strong dark:hover:bg-linear-surface-2 sm:flex-1',
+          'linear-method-option relative flex min-h-[72px] min-w-0 flex-col items-center justify-center rounded-xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300 dark:border-linear-hairline dark:bg-linear-surface-1 dark:hover:border-linear-hairline-strong dark:hover:bg-linear-surface-2 sm:flex-1',
           !method.available
             ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-linear-hairline dark:bg-linear-surface-1/50'
             : selected === method.type
@@ -19,10 +23,12 @@
         ]"
         @click="method.available && emit('select', method.type)"
       >
-        <span class="flex items-center gap-2">
-          <img :src="methodIcon(method.type)" :alt="methodLabel(method)" class="h-7 w-7 object-contain" />
-          <span class="flex flex-col items-start leading-none">
-            <span class="text-base font-semibold">{{ methodLabel(method) }}</span>
+        <span class="flex w-full min-w-0 items-center justify-center gap-2">
+          <img :src="methodIcon(method.type)" :alt="methodLabel(method)" class="h-7 w-7 shrink-0 object-contain" />
+          <span class="flex min-w-0 flex-col items-start leading-none">
+            <span data-testid="payment-method-label" class="block w-full truncate text-base font-semibold">
+              {{ methodLabel(method) }}
+            </span>
             <span
               v-if="method.fee_rate > 0"
               class="text-[10px] tracking-wide text-gray-500 dark:text-dark-400"

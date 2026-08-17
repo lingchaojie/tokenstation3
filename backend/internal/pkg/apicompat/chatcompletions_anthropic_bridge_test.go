@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,10 +22,57 @@ func collectAnthropicStreamEvents(t *testing.T, chunks []string) []AnthropicStre
 	for _, payload := range chunks {
 		var chunk ChatCompletionsChunk
 		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
-		events = append(events, ChatCompletionsChunkToAnthropicEvents(&chunk, state)...)
+		converted, err := ChatCompletionsChunkToAnthropicEvents(&chunk, state)
+		require.NoError(t, err)
+		events = append(events, converted...)
 	}
 	events = append(events, FinalizeChatCompletionsAnthropicStream(state)...)
 	return events
+}
+
+func TestChatCompletionsToAnthropicPendingToolArgumentsAggregateLinearly(t *testing.T) {
+	state := NewChatCompletionsToAnthropicStreamState("gpt-test")
+	first := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID:       "call-1",
+		Function: ChatFunctionCall{Arguments: `{"value":"`},
+	}}}}}}
+	_, err := ChatCompletionsChunkToAnthropicEvents(first, state)
+	require.NoError(t, err)
+
+	fragment := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Arguments: "x"},
+	}}}}}}
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 8192 {
+		_, err = ChatCompletionsChunkToAnthropicEvents(fragment, state)
+		require.NoError(t, err)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+	closing := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Name: "lookup", Arguments: `"}`},
+	}}}}}}
+	events, err := ChatCompletionsChunkToAnthropicEvents(closing, state)
+	require.NoError(t, err)
+	tools := assembleToolUseBlocks(events)
+	require.Len(t, tools, 1)
+	require.Len(t, tools[0].Input, 8204)
+}
+
+func TestChatCompletionsToAnthropicRejectsOversizedPendingToolArguments(t *testing.T) {
+	state := NewChatCompletionsToAnthropicStreamState("gpt-test")
+	chunk := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID:       "call-1",
+		Function: ChatFunctionCall{Arguments: strings.Repeat("x", (8<<20)+1)},
+	}}}}}}
+
+	events, err := ChatCompletionsChunkToAnthropicEvents(chunk, state)
+	require.ErrorContains(t, err, "pending tool arguments exceed")
+	require.Empty(t, events)
 }
 
 // anthropicEventTypes extracts the sequence of event types for concise assertions.
@@ -314,7 +362,7 @@ func TestChatCompletionsResponseToAnthropic_TextOnly(t *testing.T) {
 	require.Len(t, out.Content, 1)
 	require.Equal(t, "text", out.Content[0].Type)
 	require.Equal(t, "hello world", out.Content[0].Text)
-	require.Equal(t, "end_turn", out.StopReason)
+	require.Equal(t, "end_turn", AnthropicStopReasonString(out.StopReason))
 	require.Equal(t, 5, out.Usage.InputTokens)
 	require.Equal(t, 2, out.Usage.OutputTokens)
 }
@@ -346,7 +394,7 @@ func TestChatCompletionsResponseToAnthropic_ToolUse(t *testing.T) {
 	require.Equal(t, "call_1", out.Content[0].ID)
 	require.Equal(t, "get_weather", out.Content[0].Name)
 	require.Equal(t, `{"city":"SF"}`, string(out.Content[0].Input))
-	require.Equal(t, "tool_use", out.StopReason)
+	require.Equal(t, "tool_use", AnthropicStopReasonString(out.StopReason))
 }
 
 func TestChatCompletionsResponseToAnthropic_ReasoningOnlyFallback(t *testing.T) {
@@ -384,7 +432,7 @@ func TestChatCompletionsResponseToAnthropic_FinishReasonLength(t *testing.T) {
 	}
 
 	out := ChatCompletionsResponseToAnthropic(resp, "claude-sonnet-4-20250514")
-	require.Equal(t, "max_tokens", out.StopReason)
+	require.Equal(t, "max_tokens", AnthropicStopReasonString(out.StopReason))
 }
 
 func TestChatCompletionsResponseToAnthropic_EmptyChoices(t *testing.T) {
@@ -398,7 +446,7 @@ func TestChatCompletionsResponseToAnthropic_EmptyChoices(t *testing.T) {
 	require.Len(t, out.Content, 1)
 	require.Equal(t, "text", out.Content[0].Type)
 	require.Equal(t, "", out.Content[0].Text)
-	require.Equal(t, "end_turn", out.StopReason, "empty choices must not produce an empty stop_reason")
+	require.Equal(t, "end_turn", AnthropicStopReasonString(out.StopReason), "empty choices must not produce an empty stop_reason")
 }
 
 func TestChatCompletionsResponseToAnthropic_CacheTokens(t *testing.T) {
@@ -433,7 +481,7 @@ func TestChatCompletionsResponseToAnthropic_NilResponse(t *testing.T) {
 	out := ChatCompletionsResponseToAnthropic(nil, "claude-sonnet-4-20250514")
 	require.Len(t, out.Content, 1)
 	require.Equal(t, "text", out.Content[0].Type)
-	require.Equal(t, "end_turn", out.StopReason, "nil response must not produce an empty stop_reason")
+	require.Equal(t, "end_turn", AnthropicStopReasonString(out.StopReason), "nil response must not produce an empty stop_reason")
 	require.NotEmpty(t, out.ID)
 }
 
@@ -678,7 +726,7 @@ func TestDirectBridge_NonStreamingMatchesDoubleConversion(t *testing.T) {
 	double := ResponsesToAnthropic(responsesResp, "claude-sonnet-4-20250514")
 
 	// Compare key fields
-	require.Equal(t, direct.StopReason, double.StopReason)
+	require.Equal(t, AnthropicStopReasonString(direct.StopReason), AnthropicStopReasonString(double.StopReason))
 	require.Equal(t, direct.Model, double.Model)
 	require.Len(t, direct.Content, len(double.Content))
 	for i := range direct.Content {
@@ -1061,8 +1109,8 @@ func TestDirectBridge_NonStreamingMatchesDoubleConversion_EmptyChoices(t *testin
 	responsesResp := ChatCompletionsResponseToResponses(resp, "claude-sonnet-4-20250514", nil, false, nil)
 	double := ResponsesToAnthropic(responsesResp, "claude-sonnet-4-20250514")
 
-	require.Equal(t, double.StopReason, direct.StopReason)
-	require.Equal(t, "end_turn", direct.StopReason)
+	require.Equal(t, AnthropicStopReasonString(double.StopReason), AnthropicStopReasonString(direct.StopReason))
+	require.Equal(t, "end_turn", AnthropicStopReasonString(direct.StopReason))
 }
 
 func TestChatCompletionsResponseToAnthropic_ContentFilterWithToolUse(t *testing.T) {
@@ -1086,5 +1134,5 @@ func TestChatCompletionsResponseToAnthropic_ContentFilterWithToolUse(t *testing.
 	}
 
 	out := ChatCompletionsResponseToAnthropic(resp, "claude-sonnet-4-20250514")
-	require.Equal(t, "tool_use", out.StopReason)
+	require.Equal(t, "tool_use", AnthropicStopReasonString(out.StopReason))
 }

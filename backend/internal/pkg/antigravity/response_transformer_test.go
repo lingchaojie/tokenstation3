@@ -3,6 +3,9 @@
 package antigravity
 
 import (
+	"encoding/json"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +13,59 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeminiFunctionCallArgsStayRawDuringProviderDecode(t *testing.T) {
+	const targetBytes = 8 << 20
+	const item = `{},`
+	count := (targetBytes - len(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"items":[]}}}]},"finishReason":"STOP"}]}`)) / len(item)
+	body := []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"items":[` + strings.Repeat(item, count) + `{}` + `]}}}]},"finishReason":"STOP"}]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(item)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	var response GeminiResponse
+	err := json.Unmarshal(body, &response)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Len(t, response.Candidates, 1)
+	require.NotNil(t, response.Candidates[0].Content)
+	require.NotNil(t, response.Candidates[0].Content.Parts[0].FunctionCall)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20))
+}
+
+func TestNonStreamingProcessorAggregatesTextAndThinkingLinearly(t *testing.T) {
+	fragment := strings.Repeat("x", 256)
+	for _, kind := range []string{"text", "thinking"} {
+		t.Run(kind, func(t *testing.T) {
+			parts := make([]GeminiPart, 1024)
+			for i := range parts {
+				parts[i] = GeminiPart{Text: fragment, Thought: kind == "thinking"}
+			}
+			response := &GeminiResponse{Candidates: []GeminiCandidate{{
+				Content:      &GeminiContent{Role: "model", Parts: parts},
+				FinishReason: "STOP",
+			}}}
+
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			converted := NewNonStreamingProcessor().Process(response, "resp-1", "gemini-test")
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(8<<20))
+			require.Len(t, converted.Content, 1)
+			if kind == "text" {
+				require.Len(t, converted.Content[0].Text, 1024*len(fragment))
+			} else {
+				require.Len(t, converted.Content[0].Thinking, 1024*len(fragment))
+			}
+		})
+	}
+}
 
 // --- Task 7: 验证 generateRandomID 和降级碰撞防护 ---
 

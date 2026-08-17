@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -92,7 +93,7 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 
-	payload := `{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`
+	payload := `{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`
 	resp := &http.Response{
 		Header: make(http.Header),
 		Body: io.NopCloser(strings.NewReader(
@@ -102,6 +103,7 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 
 	svc := &OpenAIGatewayService{}
 	result, err := svc.streamChatCompletionsAsAnthropic(
+		context.Background(),
 		c,
 		resp,
 		"claude-test",
@@ -122,4 +124,25 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 	wire := recorder.Body.String()
 	require.Contains(t, wire, `"cache_creation_input_tokens":6`)
 	require.Contains(t, wire, `"cache_read_input_tokens":4`)
+}
+
+func TestStreamChatCompletionsAsAnthropicPreambleOnlyMissingDoneKeepsWriterRetryable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{
+		Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n",
+		)),
+	}
+
+	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsAnthropic(
+		context.Background(), c, resp, "claude-test", "claude-test", "gpt-5.4", nil, nil, time.Now(),
+	)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, -1, c.Writer.Size(), "message_start must remain staged before semantic output")
+	require.Empty(t, recorder.Body.String())
 }

@@ -30,6 +30,8 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			"claude-sonnet-4",
 			sql.NullString{String: "claude-sonnet-4", Valid: true},
 			sql.NullString{String: "claude-sonnet-4-upstream", Valid: true},
+			sql.NullString{},
+			sql.NullBool{},
 			sql.NullInt64{Int64: 11, Valid: true},
 			sql.NullInt64{Int64: 66, Valid: true},
 			10,
@@ -38,6 +40,8 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			0,
 			0,
 			0,
+			0,
+			float64(0),
 			0,
 			float64(0),
 			float64(0.01),
@@ -77,6 +81,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			sql.NullString{},
 			sql.NullFloat64{},
 			sql.NullFloat64{},
+			sql.NullString{},
 			createdAt,
 		)
 

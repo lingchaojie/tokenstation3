@@ -141,7 +141,7 @@ func startKiroCooldownRedis(t *testing.T, ctx context.Context) *redis.Client {
 	require.NoError(t, err)
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%d", host, port.Int()),
+		Addr: fmt.Sprintf("%s:%d", host, port.Num()),
 		DB:   0,
 	})
 	require.NoError(t, rdb.Ping(ctx).Err())

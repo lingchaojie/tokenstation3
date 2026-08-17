@@ -112,6 +112,7 @@ func TestProvideSettingService_MigratesLegacyBrandingDefaultsOnStartup(t *testin
 	}}
 
 	_, err := ProvideSettingService(repo, nil, nil, &config.Config{})
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
 
 	require.NoError(t, err)
 	require.Equal(t, "LINX2.AI", repo.values[SettingKeySiteName])

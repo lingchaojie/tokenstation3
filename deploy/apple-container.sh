@@ -371,6 +371,24 @@ validate_port() {
         die "SERVER_PORT must be between 1025 and 65535 for Apple container port forwarding."
 }
 
+file_owner() {
+    local path=$1 value
+    if value="$(stat -f '%u' "${path}" 2>/dev/null)"; then
+        printf '%s\n' "${value}"
+        return
+    fi
+    stat -c '%u' "${path}"
+}
+
+file_mode() {
+    local path=$1 value
+    if value="$(stat -f '%Lp' "${path}" 2>/dev/null)"; then
+        printf '%s\n' "${value}"
+        return
+    fi
+    stat -c '%a' "${path}"
+}
+
 validate_ipv4_address() {
     local address=$1
     local first second third fourth extra octet
@@ -388,8 +406,8 @@ validate_env_file_security() {
     local owner mode permissions
 
     [[ -f "${ENV_FILE}" ]] || die "Environment file not found: ${ENV_FILE}. Run '$0 init' first."
-    owner="$(stat -f '%u' "${ENV_FILE}")" || die "Unable to read owner for ${ENV_FILE}."
-    mode="$(stat -f '%Lp' "${ENV_FILE}")" || die "Unable to read permissions for ${ENV_FILE}."
+    owner="$(file_owner "${ENV_FILE}")" || die "Unable to read owner for ${ENV_FILE}."
+    mode="$(file_mode "${ENV_FILE}")" || die "Unable to read permissions for ${ENV_FILE}."
     [[ "${owner}" == "${EUID}" ]] || die "Environment file must be owned by the current user: ${ENV_FILE}"
     [[ "${mode}" =~ ^[0-7]+$ ]] || die "Unable to parse permissions for ${ENV_FILE}: ${mode}"
     permissions=$((8#${mode}))
@@ -400,7 +418,7 @@ validate_env_file_security() {
 prepare_environment() {
     validate_env_file_security
 
-    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE weishaw/sub2api:latest)"
+    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE ghcr.io/lingchaojie/sub2api:latest)"
     POSTGRES_IMAGE="$(read_env_value APPLE_CONTAINER_POSTGRES_IMAGE postgres:18-alpine)"
     REDIS_IMAGE="$(read_env_value APPLE_CONTAINER_REDIS_IMAGE redis:8-alpine)"
     BIND_HOST="$(read_env_value BIND_HOST 0.0.0.0)"

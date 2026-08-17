@@ -46,6 +46,9 @@ func (s *userRepoStubForGroupUpdate) AddGroupToAllowedGroups(_ context.Context, 
 }
 
 func (s *userRepoStubForGroupUpdate) Create(context.Context, *User) error { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) CreateWithEmailAliasGuard(context.Context, *User) error {
+	panic("unexpected")
+}
 func (s *userRepoStubForGroupUpdate) GetByID(context.Context, int64) (*User, error) {
 	panic("unexpected")
 }
@@ -55,7 +58,9 @@ func (s *userRepoStubForGroupUpdate) GetByEmail(context.Context, string) (*User,
 func (s *userRepoStubForGroupUpdate) GetFirstAdmin(context.Context) (*User, error) {
 	panic("unexpected")
 }
-func (s *userRepoStubForGroupUpdate) Update(context.Context, *User) error { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) Update(context.Context, *User, UserUpdateFields) error {
+	panic("unexpected")
+}
 func (s *userRepoStubForGroupUpdate) Delete(context.Context, int64) error { panic("unexpected") }
 func (s *userRepoStubForGroupUpdate) GetUserAvatar(context.Context, int64) (*UserAvatar, error) {
 	panic("unexpected")
@@ -78,6 +83,14 @@ func (s *userRepoStubForGroupUpdate) UpdateBalance(context.Context, int64, float
 func (s *userRepoStubForGroupUpdate) DeductBalance(context.Context, int64, float64) error {
 	panic("unexpected")
 }
+
+func (s *userRepoStubForGroupUpdate) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (s *userRepoStubForGroupUpdate) SetBalance(ctx context.Context, id int64, value float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
+}
 func (s *userRepoStubForGroupUpdate) UpdateConcurrency(context.Context, int64, int) error {
 	panic("unexpected")
 }
@@ -88,7 +101,13 @@ func (s *userRepoStubForGroupUpdate) BatchSetConcurrency(context.Context, []int6
 func (s *userRepoStubForGroupUpdate) BatchAddConcurrency(context.Context, []int64, int) (int, error) {
 	return 0, nil
 }
+func (s *userRepoStubForGroupUpdate) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
 func (s *userRepoStubForGroupUpdate) ExistsByEmail(context.Context, string) (bool, error) {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) ExistsByEmailAlias(context.Context, string) (bool, error) {
 	panic("unexpected")
 }
 func (s *userRepoStubForGroupUpdate) RemoveGroupFromAllowedGroups(context.Context, int64) (int64, error) {
@@ -138,6 +157,7 @@ type apiKeyRepoStubForGroupUpdate struct {
 	getErr                         error
 	updateErr                      error
 	updated                        *APIKey // captures what was passed to Update
+	updateFields                   APIKeyUpdateFields
 	bulkMigrated                   int64
 	bulkErr                        error
 	bulkCalled                     bool
@@ -160,12 +180,13 @@ func (s *apiKeyRepoStubForGroupUpdate) GetByID(_ context.Context, _ int64) (*API
 	clone := *s.key
 	return &clone, nil
 }
-func (s *apiKeyRepoStubForGroupUpdate) Update(_ context.Context, key *APIKey) error {
+func (s *apiKeyRepoStubForGroupUpdate) Update(_ context.Context, key *APIKey, fields APIKeyUpdateFields) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
 	clone := *key
 	s.updated = &clone
+	s.updateFields = fields
 	return nil
 }
 
@@ -402,6 +423,7 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_Unbind(t *testing.T) {
 	require.Equal(t, APIKeyTypeOpenAI, repo.updated.KeyType, "unbind should leave persisted key_type unchanged")
 	require.Equal(t, APIKeyGroupBindingModeStatic, repo.updated.GroupBindingMode)
 	require.False(t, repo.updated.ClearKeyType, "unbind should not request key_type clearing")
+	require.Equal(t, APIKeyUpdateFields{GroupID: true, KeyType: true, GroupBindingMode: true}, repo.updateFields)
 	require.Equal(t, []string{"sk-test"}, cache.keys, "cache should be invalidated")
 }
 
@@ -440,6 +462,8 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_UpdatesKeyTypeFromGroupPlatform(t
 	require.Equal(t, APIKeyTypeOpenAI, got.APIKey.KeyType)
 	require.Equal(t, APIKeyTypeOpenAI, apiKeyRepo.updated.KeyType)
 	require.False(t, apiKeyRepo.updated.ClearKeyType, "mapped platforms should persist their key_type rather than clearing it")
+	require.True(t, apiKeyRepo.updateFields.KeyType)
+	require.True(t, apiKeyRepo.updateFields.GroupBindingMode)
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_ClearsKeyTypeForNonMappedGroupPlatform(t *testing.T) {
@@ -456,6 +480,8 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_ClearsKeyTypeForNonMappedGroupPla
 	require.NotNil(t, apiKeyRepo.updated)
 	require.Empty(t, apiKeyRepo.updated.KeyType)
 	require.True(t, apiKeyRepo.updated.ClearKeyType, "non-Anthropic/OpenAI group binding should explicitly clear persisted key_type")
+	require.True(t, apiKeyRepo.updateFields.KeyType)
+	require.True(t, apiKeyRepo.updateFields.GroupBindingMode)
 }
 
 func TestAdminService_AdminUpdateAPIKeyGroupID_SameGroup_Idempotent(t *testing.T) {

@@ -29,16 +29,24 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 		Model:   model,
 	}
 
-	var contentText string
-	var reasoningText string
+	var contentText strings.Builder
+	var refusalText strings.Builder
+	var reasoningText strings.Builder
 	var toolCalls []ChatToolCall
 
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
 			for _, part := range item.Content {
-				if part.Type == "output_text" && part.Text != "" {
-					contentText += part.Text
+				switch part.Type {
+				case "output_text":
+					if part.Text != "" {
+						_, _ = contentText.WriteString(part.Text)
+					}
+				case "refusal":
+					if part.Refusal != "" {
+						_, _ = refusalText.WriteString(part.Refusal)
+					}
 				}
 			}
 		case "function_call":
@@ -50,10 +58,24 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 					Arguments: item.Arguments,
 				},
 			})
+		case "custom_tool_call":
+			toolCalls = append(toolCalls, ChatToolCall{
+				ID:   item.CallID,
+				Type: "function",
+				Function: ChatFunctionCall{
+					Name:      item.Name,
+					Arguments: item.Input,
+				},
+			})
 		case "reasoning":
 			for _, s := range item.Summary {
 				if s.Type == "summary_text" && s.Text != "" {
-					reasoningText += s.Text
+					_, _ = reasoningText.WriteString(s.Text)
+				}
+			}
+			for _, part := range item.Content {
+				if part.Type == "reasoning_text" && part.Text != "" {
+					_, _ = reasoningText.WriteString(part.Text)
 				}
 			}
 		case "web_search_call":
@@ -65,12 +87,16 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
 	}
-	if contentText != "" {
-		raw, _ := json.Marshal(contentText)
+	if contentText.Len() > 0 {
+		raw, _ := json.Marshal(contentText.String())
 		msg.Content = raw
 	}
-	if reasoningText != "" {
-		msg.ReasoningContent = reasoningText
+	if refusalText.Len() > 0 {
+		refusal := refusalText.String()
+		msg.Refusal = &refusal
+	}
+	if reasoningText.Len() > 0 {
+		msg.ReasoningContent = reasoningText.String()
 	}
 
 	finishReason := responsesStatusToChatFinishReason(resp.Status, resp.IncompleteDetails, toolCalls)
@@ -124,6 +150,9 @@ type ResponsesEventToChatState struct {
 	Finalized              bool        // true after finish chunk has been emitted
 	NextToolCallIndex      int         // next sequential tool_call index to assign
 	OutputIndexToToolIndex map[int]int // Responses output_index → Chat tool_calls index
+	ToolInputHadDelta      map[int]bool
+	TextualOutputHadDelta  map[responsesTextStreamKey]bool
+	OutputIndexHadSemantic map[int]bool
 	IncludeUsage           bool
 	Usage                  *ChatUsage
 }
@@ -134,6 +163,9 @@ func NewResponsesEventToChatState() *ResponsesEventToChatState {
 		ID:                     generateChatCmplID(),
 		Created:                time.Now().Unix(),
 		OutputIndexToToolIndex: make(map[int]int),
+		ToolInputHadDelta:      make(map[int]bool),
+		TextualOutputHadDelta:  make(map[responsesTextStreamKey]bool),
+		OutputIndexHadSemantic: make(map[int]bool),
 	}
 }
 
@@ -144,21 +176,58 @@ func ResponsesEventToChatChunks(evt *ResponsesStreamEvent, state *ResponsesEvent
 	case "response.created":
 		return resToChatHandleCreated(evt, state)
 	case "response.output_text.delta":
+		state.TextualOutputHadDelta[responsesTextKey(evt)] = true
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
 		return resToChatHandleTextDelta(evt, state)
+	case "response.output_text.done":
+		if state.TextualOutputHadDelta[responsesTextKey(evt)] || evt.Text == "" {
+			return nil
+		}
+		copyEvent := *evt
+		copyEvent.Delta = evt.Text
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
+		return resToChatHandleTextDelta(&copyEvent, state)
+	case "response.refusal.delta":
+		state.TextualOutputHadDelta[responsesTextKey(evt)] = true
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
+		refusal := evt.Delta
+		if refusal == "" {
+			refusal = evt.Refusal
+		}
+		return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{Refusal: &refusal})}
+	case "response.refusal.done":
+		if state.TextualOutputHadDelta[responsesTextKey(evt)] || evt.Refusal == "" {
+			return nil
+		}
+		refusal := evt.Refusal
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
+		return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{Refusal: &refusal})}
 	case "response.output_item.added":
 		return resToChatHandleOutputItemAdded(evt, state)
+	case "response.output_item.done":
+		return resToChatHandleOutputItemDone(evt, state)
 	case "response.function_call_arguments.delta",
 		// custom/freeform 工具（如新版 apply_patch）的输入增量与 function_call 参数增量同形，
 		// 均按 OutputIndex 累加到对应工具调用。
 		"response.custom_tool_call_input.delta":
 		return resToChatHandleFuncArgsDelta(evt, state)
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
+		return resToChatHandleFuncArgsDone(evt, state)
 	case "response.reasoning_summary_text.delta",
 		// 原始推理文本增量（真实 Codex 客户端消费的 reasoning_text.delta），
 		// 与 reasoning summary 一样映射为 reasoning_content。
 		"response.reasoning_text.delta":
+		state.TextualOutputHadDelta[responsesTextKey(evt)] = true
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
 		return resToChatHandleReasoningDelta(evt, state)
-	case "response.reasoning_summary_text.done":
-		return nil
+	case "response.reasoning_summary_text.done", "response.reasoning_text.done":
+		if state.TextualOutputHadDelta[responsesTextKey(evt)] || evt.Text == "" {
+			return nil
+		}
+		copyEvent := *evt
+		copyEvent.Delta = evt.Text
+		state.OutputIndexHadSemantic[evt.OutputIndex] = true
+		return resToChatHandleReasoningDelta(&copyEvent, state)
 	// response.done 是 Realtime/WS 与项目透传路径使用的终止别名；
 	// 普通 Responses HTTP SSE 的公开终止事件仍以 response.completed 为主。
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
@@ -262,6 +331,70 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	})}
 }
 
+func resToChatHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
+	if evt.Item == nil {
+		return nil
+	}
+	switch evt.Item.Type {
+	case "function_call", "custom_tool_call":
+		var chunks []ChatCompletionsChunk
+		if _, exists := state.OutputIndexToToolIndex[evt.OutputIndex]; !exists {
+			chunks = append(chunks, resToChatHandleOutputItemAdded(evt, state)...)
+		}
+		done := *evt
+		if evt.Item.Type == "custom_tool_call" {
+			done.Type = "response.custom_tool_call_input.done"
+			done.Input = evt.Item.Input
+		} else {
+			done.Type = "response.function_call_arguments.done"
+			done.Arguments = evt.Item.Arguments
+		}
+		chunks = append(chunks, resToChatHandleFuncArgsDone(&done, state)...)
+		return chunks
+	case "message":
+		if state.OutputIndexHadSemantic[evt.OutputIndex] {
+			return nil
+		}
+		var chunks []ChatCompletionsChunk
+		for _, part := range evt.Item.Content {
+			switch part.Type {
+			case "output_text":
+				if part.Text != "" {
+					text := part.Text
+					chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{Content: &text}))
+				}
+			case "refusal":
+				if part.Refusal != "" {
+					refusal := part.Refusal
+					chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{Refusal: &refusal}))
+				}
+			}
+		}
+		state.OutputIndexHadSemantic[evt.OutputIndex] = len(chunks) > 0
+		return chunks
+	case "reasoning":
+		if state.OutputIndexHadSemantic[evt.OutputIndex] {
+			return nil
+		}
+		var chunks []ChatCompletionsChunk
+		for _, summary := range evt.Item.Summary {
+			if summary.Type == "summary_text" && summary.Text != "" {
+				value := summary.Text
+				chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{ReasoningContent: &value}))
+			}
+		}
+		for _, part := range evt.Item.Content {
+			if part.Type == "reasoning_text" && part.Text != "" {
+				value := part.Text
+				chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{ReasoningContent: &value}))
+			}
+		}
+		state.OutputIndexHadSemantic[evt.OutputIndex] = len(chunks) > 0
+		return chunks
+	}
+	return nil
+}
+
 func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
 	if evt.Delta == "" {
 		return nil
@@ -271,6 +404,8 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	if !ok {
 		return nil
 	}
+	state.ToolInputHadDelta[evt.OutputIndex] = true
+	state.OutputIndexHadSemantic[evt.OutputIndex] = true
 
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
 		ToolCalls: []ChatToolCall{{
@@ -280,6 +415,22 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 			},
 		}},
 	})}
+}
+
+func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
+	if state.ToolInputHadDelta[evt.OutputIndex] {
+		return nil
+	}
+	arguments := evt.Arguments
+	if evt.Type == "response.custom_tool_call_input.done" {
+		arguments = evt.Input
+	}
+	if arguments == "" {
+		return nil
+	}
+	copyEvent := *evt
+	copyEvent.Delta = arguments
+	return resToChatHandleFuncArgsDelta(&copyEvent, state)
 }
 
 func resToChatHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
@@ -443,62 +594,291 @@ func generateChatCmplID() string {
 // ---------------------------------------------------------------------------
 
 type bufferedFuncCall struct {
-	CallID string
-	Name   string
-	Args   strings.Builder
+	Type     string
+	CallID   string
+	Name     string
+	Args     strings.Builder
+	HadDelta bool
 }
+
+type responsesTextStreamKey struct {
+	Type         string
+	OutputIndex  int
+	ContentIndex int
+	SummaryIndex int
+}
+
+func responsesTextKey(event *ResponsesStreamEvent) responsesTextStreamKey {
+	eventType := strings.TrimSuffix(event.Type, ".delta")
+	eventType = strings.TrimSuffix(eventType, ".done")
+	return responsesTextStreamKey{
+		Type: eventType, OutputIndex: event.OutputIndex, ContentIndex: event.ContentIndex, SummaryIndex: event.SummaryIndex,
+	}
+}
+
+const (
+	maxBufferedResponsesRetainedOutputBytes = 8 << 20
+	maxBufferedResponsesFunctionCalls       = 1024
+	maxBufferedResponsesRetainedMetadata    = 1024
+)
 
 // BufferedResponseAccumulator collects content from Responses SSE delta events
 // so that non-streaming handlers can reconstruct output when the terminal event
 // (response.completed / response.done) carries an empty output array.
 type BufferedResponseAccumulator struct {
-	text                 strings.Builder
-	reasoning            strings.Builder
-	funcCalls            []bufferedFuncCall
-	outputIndexToFuncIdx map[int]int
+	text                  strings.Builder
+	refusal               strings.Builder
+	reasoning             strings.Builder
+	funcCalls             []bufferedFuncCall
+	outputIndexToFuncIdx  map[int]int
+	retainedOutputBytes   int
+	retainedItems         int
+	textualOutputHadDelta map[responsesTextStreamKey]bool
+	trackedOutputIndexes  map[int]bool
+	err                   error
 }
 
 // NewBufferedResponseAccumulator returns an initialised accumulator.
 func NewBufferedResponseAccumulator() *BufferedResponseAccumulator {
 	return &BufferedResponseAccumulator{
-		outputIndexToFuncIdx: make(map[int]int),
+		outputIndexToFuncIdx:  make(map[int]int),
+		textualOutputHadDelta: make(map[responsesTextStreamKey]bool),
+		trackedOutputIndexes:  make(map[int]bool),
 	}
 }
 
 // ProcessEvent inspects a single Responses SSE event and accumulates any
 // content it carries. Only delta events that contribute to the final output
 // are handled; all other event types are silently ignored.
-func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) {
+func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) error {
+	if a == nil || event == nil {
+		return nil
+	}
+	if a.err != nil {
+		return a.err
+	}
 	switch event.Type {
 	case "response.output_text.delta":
-		if event.Delta != "" {
-			_, _ = a.text.WriteString(event.Delta)
+		a.textualOutputHadDelta[responsesTextKey(event)] = true
+		a.appendOutput(&a.text, event.Delta)
+	case "response.output_text.done":
+		key := responsesTextKey(event)
+		if !a.textualOutputHadDelta[key] {
+			a.appendOutput(&a.text, event.Text)
+			if a.err == nil && event.Text != "" {
+				a.textualOutputHadDelta[key] = true
+			}
+		}
+	case "response.refusal.delta":
+		a.textualOutputHadDelta[responsesTextKey(event)] = true
+		fragment := event.Delta
+		if fragment == "" {
+			fragment = event.Refusal
+		}
+		a.appendOutput(&a.refusal, fragment)
+	case "response.refusal.done":
+		key := responsesTextKey(event)
+		if !a.textualOutputHadDelta[key] {
+			a.appendOutput(&a.refusal, event.Refusal)
+			if a.err == nil && event.Refusal != "" {
+				a.textualOutputHadDelta[key] = true
+			}
 		}
 	case "response.output_item.added":
-		if event.Item != nil && (event.Item.Type == "function_call" || event.Item.Type == "custom_tool_call") {
+		if event.Item != nil && isBufferedResponsesOutputItem(event.Item.Type) {
+			if !a.trackedOutputIndexes[event.OutputIndex] {
+				if err := a.retainOutput(0, 1); err != nil {
+					break
+				}
+				a.trackedOutputIndexes[event.OutputIndex] = true
+			}
+			if event.Item.Type != "function_call" && event.Item.Type != "custom_tool_call" {
+				break
+			}
+			if len(event.Item.CallID) > maxBufferedResponsesRetainedMetadata || len(event.Item.Name) > maxBufferedResponsesRetainedMetadata {
+				a.err = fmt.Errorf("responses buffered function-call metadata exceeds %d bytes", maxBufferedResponsesRetainedMetadata)
+				break
+			}
+			if _, exists := a.outputIndexToFuncIdx[event.OutputIndex]; exists {
+				a.err = fmt.Errorf("responses buffered output repeated function-call index %d", event.OutputIndex)
+				break
+			}
 			idx := len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
+				Type:   event.Item.Type,
 				CallID: event.Item.CallID,
 				Name:   event.Item.Name,
 			})
 		}
+	case "response.output_item.done":
+		a.processOutputItemDone(event)
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		if event.Delta != "" {
 			if idx, ok := a.outputIndexToFuncIdx[event.OutputIndex]; ok {
-				_, _ = a.funcCalls[idx].Args.WriteString(event.Delta)
+				a.appendOutput(&a.funcCalls[idx].Args, event.Delta)
+				a.funcCalls[idx].HadDelta = true
+			}
+		}
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
+		if idx, ok := a.outputIndexToFuncIdx[event.OutputIndex]; ok && !a.funcCalls[idx].HadDelta {
+			value := event.Arguments
+			if event.Type == "response.custom_tool_call_input.done" {
+				value = event.Input
+			}
+			a.appendOutput(&a.funcCalls[idx].Args, value)
+			if a.err == nil && value != "" {
+				a.funcCalls[idx].HadDelta = true
 			}
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		if event.Delta != "" {
-			_, _ = a.reasoning.WriteString(event.Delta)
+		a.textualOutputHadDelta[responsesTextKey(event)] = true
+		a.appendOutput(&a.reasoning, event.Delta)
+	case "response.reasoning_summary_text.done", "response.reasoning_text.done":
+		key := responsesTextKey(event)
+		if !a.textualOutputHadDelta[key] {
+			a.appendOutput(&a.reasoning, event.Text)
+			if a.err == nil && event.Text != "" {
+				a.textualOutputHadDelta[key] = true
+			}
+		}
+	}
+	return a.err
+}
+
+func isBufferedResponsesOutputItem(itemType string) bool {
+	switch itemType {
+	case "message", "reasoning", "function_call", "custom_tool_call", "image_generation_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *BufferedResponseAccumulator) processOutputItemDone(event *ResponsesStreamEvent) {
+	if event.Item == nil || !isBufferedResponsesOutputItem(event.Item.Type) {
+		return
+	}
+	if !a.trackedOutputIndexes[event.OutputIndex] {
+		if err := a.retainOutput(0, 1); err != nil {
+			return
+		}
+		a.trackedOutputIndexes[event.OutputIndex] = true
+	}
+	switch event.Item.Type {
+	case "function_call", "custom_tool_call":
+		idx, ok := a.outputIndexToFuncIdx[event.OutputIndex]
+		if !ok {
+			if len(event.Item.CallID) > maxBufferedResponsesRetainedMetadata || len(event.Item.Name) > maxBufferedResponsesRetainedMetadata {
+				a.err = fmt.Errorf("responses buffered function-call metadata exceeds %d bytes", maxBufferedResponsesRetainedMetadata)
+				return
+			}
+			idx = len(a.funcCalls)
+			a.outputIndexToFuncIdx[event.OutputIndex] = idx
+			a.funcCalls = append(a.funcCalls, bufferedFuncCall{Type: event.Item.Type, CallID: event.Item.CallID, Name: event.Item.Name})
+		}
+		if a.funcCalls[idx].HadDelta {
+			return
+		}
+		value := event.Item.Arguments
+		if event.Item.Type == "custom_tool_call" {
+			value = event.Item.Input
+		}
+		a.appendOutput(&a.funcCalls[idx].Args, value)
+		if a.err == nil && value != "" {
+			a.funcCalls[idx].HadDelta = true
+		}
+	case "message":
+		for index, part := range event.Item.Content {
+			key := responsesTextStreamKey{OutputIndex: event.OutputIndex, ContentIndex: index}
+			switch part.Type {
+			case "output_text":
+				key.Type = "response.output_text"
+				if !a.textualOutputHadDelta[key] {
+					a.appendOutput(&a.text, part.Text)
+					if a.err == nil && part.Text != "" {
+						a.textualOutputHadDelta[key] = true
+					}
+				}
+			case "refusal":
+				key.Type = "response.refusal"
+				if !a.textualOutputHadDelta[key] {
+					a.appendOutput(&a.refusal, part.Refusal)
+					if a.err == nil && part.Refusal != "" {
+						a.textualOutputHadDelta[key] = true
+					}
+				}
+			}
+		}
+	case "reasoning":
+		for index, summary := range event.Item.Summary {
+			key := responsesTextStreamKey{Type: "response.reasoning_summary_text", OutputIndex: event.OutputIndex, SummaryIndex: index}
+			if summary.Type == "summary_text" && !a.textualOutputHadDelta[key] {
+				a.appendOutput(&a.reasoning, summary.Text)
+				if a.err == nil && summary.Text != "" {
+					a.textualOutputHadDelta[key] = true
+				}
+			}
+		}
+		for index, part := range event.Item.Content {
+			key := responsesTextStreamKey{Type: "response.reasoning_text", OutputIndex: event.OutputIndex, ContentIndex: index}
+			if part.Type == "reasoning_text" && !a.textualOutputHadDelta[key] {
+				a.appendOutput(&a.reasoning, part.Text)
+				if a.err == nil && part.Text != "" {
+					a.textualOutputHadDelta[key] = true
+				}
+			}
 		}
 	}
 }
 
+func (a *BufferedResponseAccumulator) appendOutput(builder *strings.Builder, fragment string) {
+	if fragment == "" || a.err != nil {
+		return
+	}
+	if err := a.retainOutput(len(fragment), 0); err != nil {
+		return
+	}
+	_, _ = builder.WriteString(fragment)
+}
+
+func (a *BufferedResponseAccumulator) retainOutput(byteCount int, itemCount int) error {
+	if a == nil {
+		return nil
+	}
+	if a.err != nil {
+		return a.err
+	}
+	if itemCount < 0 || byteCount < 0 || a.retainedItems+itemCount > maxBufferedResponsesFunctionCalls {
+		a.err = fmt.Errorf("responses buffered output exceeds %d retained items", maxBufferedResponsesFunctionCalls)
+		return a.err
+	}
+	if a.retainedOutputBytes > 0 && byteCount > maxBufferedResponsesRetainedOutputBytes-a.retainedOutputBytes {
+		a.err = fmt.Errorf("responses buffered output exceeds %d-byte retained-state limit", maxBufferedResponsesRetainedOutputBytes)
+		return a.err
+	}
+	a.retainedOutputBytes += byteCount
+	a.retainedItems += itemCount
+	return nil
+}
+
+// RetainExternalOutput reserves the same attempt-local budget for output that
+// is reconstructed outside the typed accumulator, such as image items.
+func (a *BufferedResponseAccumulator) RetainExternalOutput(byteCount int, itemCount int) error {
+	return a.retainOutput(byteCount, itemCount)
+}
+
+// Err reports an attempt-local retention failure.
+func (a *BufferedResponseAccumulator) Err() error {
+	if a == nil {
+		return nil
+	}
+	return a.err
+}
+
 // HasContent reports whether any content has been accumulated.
 func (a *BufferedResponseAccumulator) HasContent() bool {
-	return a.text.Len() > 0 || len(a.funcCalls) > 0 || a.reasoning.Len() > 0
+	return a.text.Len() > 0 || a.refusal.Len() > 0 || len(a.funcCalls) > 0 || a.reasoning.Len() > 0
 }
 
 // BuildOutput constructs a []ResponsesOutput from the accumulated delta
@@ -517,24 +897,33 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 		})
 	}
 
-	if a.text.Len() > 0 {
+	if a.text.Len() > 0 || a.refusal.Len() > 0 {
+		content := make([]ResponsesContentPart, 0, 2)
+		if a.text.Len() > 0 {
+			content = append(content, ResponsesContentPart{Type: "output_text", Text: a.text.String()})
+		}
+		if a.refusal.Len() > 0 {
+			content = append(content, ResponsesContentPart{Type: "refusal", Refusal: a.refusal.String()})
+		}
 		out = append(out, ResponsesOutput{
-			Type: "message",
-			Role: "assistant",
-			Content: []ResponsesContentPart{{
-				Type: "output_text",
-				Text: a.text.String(),
-			}},
+			Type:    "message",
+			Role:    "assistant",
+			Content: content,
 		})
 	}
 
 	for i := range a.funcCalls {
-		out = append(out, ResponsesOutput{
-			Type:      "function_call",
-			CallID:    a.funcCalls[i].CallID,
-			Name:      a.funcCalls[i].Name,
-			Arguments: a.funcCalls[i].Args.String(),
-		})
+		item := ResponsesOutput{
+			Type:   a.funcCalls[i].Type,
+			CallID: a.funcCalls[i].CallID,
+			Name:   a.funcCalls[i].Name,
+		}
+		if item.Type == "custom_tool_call" {
+			item.Input = a.funcCalls[i].Args.String()
+		} else {
+			item.Arguments = a.funcCalls[i].Args.String()
+		}
+		out = append(out, item)
 	}
 
 	return out
@@ -544,7 +933,7 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 // when the terminal event delivered an empty output array. If resp.Output is
 // already populated, this is a no-op (preserves backward compatibility).
 func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesResponse) {
-	if resp == nil || len(resp.Output) > 0 {
+	if resp == nil || len(resp.Output) > 0 || a.Err() != nil {
 		return
 	}
 	if !a.HasContent() {

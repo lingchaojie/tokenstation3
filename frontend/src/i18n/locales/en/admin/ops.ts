@@ -72,6 +72,7 @@ export default {
         runtimeConfigResetFailed: 'Failed to reset log configuration',
         cleanupConfirm: 'Clean up system logs matching the current filters? This cannot be undone.',
         cleanupSuccess: 'Cleanup complete. Deleted {count} log entries.',
+        cleanupFilterRequired: 'Cleanup requires at least one filter condition (start/end time or another field)',
         cleanupFailed: 'Failed to clean up system logs'
       },
       requestsTotal: 'Requests (total)',
@@ -381,8 +382,6 @@ export default {
         suggestPlatform: 'Platform error: prioritize investigation and fix',
         suggestGeneric: 'See details for more context',
         apiKeyPrefix: 'Key Prefix',
-        attemptedKeyPrefix: 'Attempted Key Prefix',
-        deletedKeyOwner: 'Deleted Key Owner',
         keyDeletedBadge: 'Key Deleted'
       },
       requestDetails: {
@@ -479,6 +478,7 @@ export default {
         deleteConfirmMessage: 'This will remove the rule and its related events. Continue?',
         metricGroups: {
           system: 'System Metrics',
+          capture: 'Conversation Capture Metrics',
           group: 'Group-level Metrics (requires group_id)',
           account: 'Account-level Metrics'
         },
@@ -491,6 +491,10 @@ export default {
           cpu: 'CPU Usage (%)',
           memory: 'Memory Usage (%)',
           queueDepth: 'Concurrency Queue Depth',
+          captureReady: 'Capture Local Acceptance Ready (0/1)',
+          captureDeliveryReady: 'Capture Delivery Ready (0/1)',
+          captureSpoolUsage: 'Capture Spool Usage (%)',
+          captureDroppedRecords: 'Dropped Capture Records',
           groupAvailableAccounts: 'Group Available Accounts',
           groupAvailableRatio: 'Group Available Ratio (%)',
           groupRateLimitRatio: 'Group Rate Limit Ratio (%)',
@@ -509,6 +513,10 @@ export default {
           cpu: 'Current instance CPU usage (0-100).',
           memory: 'Current instance memory usage (0-100).',
           queueDepth: 'Concurrency queue depth within the window (queued requests).',
+          captureReady: 'Whether the local sidecar and spool can accept captures: 1 for ready, 0 for unavailable.',
+          captureDeliveryReady: 'Whether the capture sidecar can currently deliver to ClickHouse: 1 for ready, 0 for retrying.',
+          captureSpoolUsage: 'Percentage of the configured local spool capacity currently in use (0-100).',
+          captureDroppedRecords: 'Total capture records dropped across all instances in the selected window.',
           groupAvailableAccounts: 'Number of available accounts in the selected group (requires group_id).',
           groupAvailableRatio: 'Available account ratio in the selected group (0-100, requires group_id).',
           groupRateLimitRatio: 'Rate-limited account ratio in the selected group (0-100, requires group_id).',
@@ -712,8 +720,6 @@ export default {
         ignoreContextCanceledHint: 'When enabled, client disconnect (context canceled) errors will not be written to the error log.',
         ignoreNoAvailableAccounts: 'Ignore no available accounts errors',
         ignoreNoAvailableAccountsHint: 'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
-        ignoreInvalidApiKeyErrors: 'Ignore invalid API key errors',
-        ignoreInvalidApiKeyErrorsHint: 'When enabled, invalid or missing API key errors (INVALID_API_KEY, API_KEY_REQUIRED) will not be written to the error log.',
         ignoreInsufficientBalanceErrors: 'Ignore Insufficient Balance Errors',
         ignoreInsufficientBalanceErrorsHint: 'When enabled, insufficient account balance errors will not be written to the error log.',
         autoRefresh: 'Auto Refresh',

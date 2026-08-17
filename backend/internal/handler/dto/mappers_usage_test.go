@@ -172,7 +172,8 @@ func TestUsageLogFromService_NormalizesBillingForRegularUsers(t *testing.T) {
 		OutputCost:        0.20,
 		CacheCreationCost: 0.05,
 		CacheReadCost:     0.15,
-		ImageOutputCost:   0.50,
+		ImageInputCost:    0.10,
+		ImageOutputCost:   0.40,
 		TotalCost:         1.00,
 		ActualCost:        1.50,
 		RateMultiplier:    1.50,
@@ -188,23 +189,35 @@ func TestUsageLogFromService_NormalizesBillingForRegularUsers(t *testing.T) {
 	require.InDelta(t, 0.30, userDTO.OutputCost, 1e-12)
 	require.InDelta(t, 0.075, userDTO.CacheCreationCost, 1e-12)
 	require.InDelta(t, 0.225, userDTO.CacheReadCost, 1e-12)
-	require.InDelta(t, 0.75, userDTO.ImageOutputCost, 1e-12)
+	require.InDelta(t, 0.15, userDTO.ImageInputCost, 1e-12)
+	require.InDelta(t, 0.60, userDTO.ImageOutputCost, 1e-12)
+	require.InDelta(t, userDTO.TotalCost,
+		userDTO.InputCost+userDTO.OutputCost+userDTO.CacheCreationCost+
+			userDTO.CacheReadCost+userDTO.ImageInputCost+userDTO.ImageOutputCost,
+		1e-12,
+	)
 
 	require.InDelta(t, 1.00, adminDTO.TotalCost, 1e-12)
 	require.InDelta(t, 1.50, adminDTO.ActualCost, 1e-12)
 	require.InDelta(t, 1.50, adminDTO.RateMultiplier, 1e-12)
 	require.InDelta(t, 0.10, adminDTO.InputCost, 1e-12)
+	require.InDelta(t, 0.10, adminDTO.ImageInputCost, 1e-12)
+	require.InDelta(t, 0.40, adminDTO.ImageOutputCost, 1e-12)
 }
 
 func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *testing.T) {
 	t.Parallel()
 
 	upstreamModel := "claude-sonnet-4-20250514"
+	upstreamResponseModel := "claude-sonnet-4-20250513"
+	upstreamModelMismatch := true
 	log := &service.UsageLog{
-		RequestID:      "req_4",
-		Model:          upstreamModel,
-		RequestedModel: "claude-sonnet-4",
-		UpstreamModel:  &upstreamModel,
+		RequestID:             "req_4",
+		Model:                 upstreamModel,
+		RequestedModel:        "claude-sonnet-4",
+		UpstreamModel:         &upstreamModel,
+		UpstreamResponseModel: &upstreamResponseModel,
+		UpstreamModelMismatch: &upstreamModelMismatch,
 	}
 
 	userDTO := UsageLogFromService(log)
@@ -216,10 +229,14 @@ func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *test
 	userJSON, err := json.Marshal(userDTO)
 	require.NoError(t, err)
 	require.NotContains(t, string(userJSON), "upstream_model")
+	require.NotContains(t, string(userJSON), "upstream_response_model")
+	require.NotContains(t, string(userJSON), "upstream_model_mismatch")
 
 	adminJSON, err := json.Marshal(adminDTO)
 	require.NoError(t, err)
 	require.Contains(t, string(adminJSON), `"upstream_model":"claude-sonnet-4-20250514"`)
+	require.Contains(t, string(adminJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
+	require.Contains(t, string(adminJSON), `"upstream_model_mismatch":true`)
 }
 
 func TestUsageLogFromService_KeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) {

@@ -64,6 +64,18 @@ func parseTimeRange(c *gin.Context) (time.Time, time.Time) {
 	return startTime, endTime
 }
 
+func parseOptionalBoolDashboardFilter(c *gin.Context, name string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
 // GetStats handles getting dashboard statistics
 // GET /api/v1/admin/dashboard/stats
 func (h *DashboardHandler) GetStats(c *gin.Context) {
@@ -206,6 +218,7 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	var requestType *int16
 	var stream *bool
 	var billingType *int8
+	var upstreamModelMismatch *bool
 
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		if id, err := strconv.ParseInt(userIDStr, 10, 64); err == nil {
@@ -255,17 +268,23 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 			return
 		}
 	}
+	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	filters := usagestats.UsageLogFilters{
-		UserID:          userID,
-		APIKeyID:        apiKeyID,
-		AccountID:       accountID,
-		GroupID:         groupID,
-		Model:           model,
-		RequestType:     requestType,
-		Stream:          stream,
-		BillingType:     billingType,
-		ExcludedUserIDs: excludedUserIDs,
+		UserID:                userID,
+		APIKeyID:              apiKeyID,
+		AccountID:             accountID,
+		GroupID:               groupID,
+		Model:                 model,
+		RequestType:           requestType,
+		Stream:                stream,
+		BillingType:           billingType,
+		ExcludedUserIDs:       excludedUserIDs,
+		UpstreamModelMismatch: upstreamModelMismatch,
 	}
 	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, filters)
 	if err != nil {
@@ -300,6 +319,7 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 	var requestType *int16
 	var stream *bool
 	var billingType *int8
+	var upstreamModelMismatch *bool
 
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		if id, err := strconv.ParseInt(userIDStr, 10, 64); err == nil {
@@ -353,16 +373,22 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 			return
 		}
 	}
+	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	filters := usagestats.UsageLogFilters{
-		UserID:          userID,
-		APIKeyID:        apiKeyID,
-		AccountID:       accountID,
-		GroupID:         groupID,
-		RequestType:     requestType,
-		Stream:          stream,
-		BillingType:     billingType,
-		ExcludedUserIDs: excludedUserIDs,
+		UserID:                userID,
+		APIKeyID:              apiKeyID,
+		AccountID:             accountID,
+		GroupID:               groupID,
+		RequestType:           requestType,
+		Stream:                stream,
+		BillingType:           billingType,
+		ExcludedUserIDs:       excludedUserIDs,
+		UpstreamModelMismatch: upstreamModelMismatch,
 	}
 	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, filters, modelSource)
 	if err != nil {
@@ -394,6 +420,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	var requestType *int16
 	var stream *bool
 	var billingType *int8
+	var upstreamModelMismatch *bool
 
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		if id, err := strconv.ParseInt(userIDStr, 10, 64); err == nil {
@@ -440,16 +467,22 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 			return
 		}
 	}
+	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	filters := usagestats.UsageLogFilters{
-		UserID:          userID,
-		APIKeyID:        apiKeyID,
-		AccountID:       accountID,
-		GroupID:         groupID,
-		RequestType:     requestType,
-		Stream:          stream,
-		BillingType:     billingType,
-		ExcludedUserIDs: excludedUserIDs,
+		UserID:                userID,
+		APIKeyID:              apiKeyID,
+		AccountID:             accountID,
+		GroupID:               groupID,
+		RequestType:           requestType,
+		Stream:                stream,
+		BillingType:           billingType,
+		ExcludedUserIDs:       excludedUserIDs,
+		UpstreamModelMismatch: upstreamModelMismatch,
 	}
 	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, filters)
 	if err != nil {

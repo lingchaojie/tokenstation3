@@ -117,7 +117,7 @@ export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): Cr
   const normalizedOrigin = (input.origin || '').trim().replace(/\/+$/, '')
   // When forceQRCode is enabled for alipay, always tell the backend this is not a mobile
   // request so it generates a QR code instead of a mobile-redirect URL.
-  const effectiveMobile = (input.forceQRCode && visibleMethod === 'alipay')
+  const effectiveMobile = input.forceQRCode && visibleMethod === 'alipay'
     ? false
     : input.isMobile
   const payload: CreateOrderRequest = {
@@ -202,7 +202,7 @@ export function decidePaymentLaunch(
   const providerKey = (result.provider_key || '').trim().toLowerCase()
   // When forceQRCode is on for alipay, treat the device as desktop so the mobile-redirect
   // branch is bypassed and we fall through to qr_waiting.
-  const effectiveMobile = (context.forceQRCode && visibleMethod === 'alipay')
+  const effectiveMobile = context.forceQRCode && visibleMethod === 'alipay'
     ? false
     : context.isMobile
   const prefersRedirect = normalizedPaymentMode === 'redirect'

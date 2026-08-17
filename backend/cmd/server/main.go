@@ -35,6 +35,10 @@ var (
 	Commit    = "unknown"
 	Date      = "unknown"
 	BuildType = "source" // "source" for manual builds, "release" for CI builds (set by ldflags)
+
+	captureSidecarBootstrap = logger.InitBootstrap
+	captureSidecarExit      = os.Exit
+	captureSidecarSync      = logger.Sync
 )
 
 func init() {
@@ -53,8 +57,19 @@ func init() {
 // initLogger configures the default slog handler based on gin.Mode().
 // In non-release mode, Debug level logs are enabled.
 func main() {
-	logger.InitBootstrap()
-	defer logger.Sync()
+	runServerMain(os.Args)
+}
+
+func runServerMain(args []string) {
+	if handled, exitCode := dispatchCaptureSidecar(args); handled {
+		if exitCode != 0 {
+			captureSidecarSync()
+			captureSidecarExit(exitCode)
+		}
+		return
+	}
+	captureSidecarBootstrap()
+	defer captureSidecarSync()
 
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
@@ -174,7 +189,7 @@ func runMainServer() {
 	defer cancel()
 
 	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Printf("Server forced to shutdown: %v", err)
 	}
 
 	log.Println("Server exited")

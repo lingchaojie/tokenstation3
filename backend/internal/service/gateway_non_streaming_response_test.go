@@ -13,17 +13,30 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type nonJSONTempUnschedAccountRepo struct {
 	AccountRepository
-	tempUnschedCalls int
-	tempReason       string
+	tempUnschedCalls    int
+	tempReason          string
+	modelRateLimitCalls int
+	modelScope          string
+	modelReason         string
 }
 
 func (r *nonJSONTempUnschedAccountRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, reason string) error {
 	r.tempUnschedCalls++
 	r.tempReason = reason
+	return nil
+}
+
+func (r *nonJSONTempUnschedAccountRepo) SetModelRateLimit(_ context.Context, _ int64, scope string, _ time.Time, reason ...string) error {
+	r.modelRateLimitCalls++
+	r.modelScope = scope
+	if len(reason) > 0 {
+		r.modelReason = reason[0]
+	}
 	return nil
 }
 
@@ -64,7 +77,7 @@ func TestHandleNonStreamingResponse_ValidJSONUnchanged(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -90,7 +103,7 @@ func TestHandleNonStreamingResponse_CaptureDisabledLeavesNoContextResult(t *test
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -101,7 +114,7 @@ func TestHandleNonStreamingResponse_CaptureDisabledLeavesNoContextResult(t *test
 		rateLimitService: &RateLimitService{},
 	}
 
-	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
 	capturedResp, truncated := takeCaptureResult(c)
@@ -114,8 +127,9 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	setCaptureScopeForPlatformTest(t, c, true, true)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":7}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -129,13 +143,47 @@ func TestHandleNonStreamingResponse_CaptureEnabledStashesResponseBody(t *testing
 		rateLimitService: &RateLimitService{},
 	}
 
-	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
 	bridge, ok := takeCaptureResult(c)
 	require.True(t, ok)
 	require.False(t, bridge.Truncated)
 	require.JSONEq(t, string(body), string(bridge.Response))
+}
+
+func TestHandleNonStreamingResponse_RuntimePlatformOffAllocatesNoCaptureResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	setCaptureScopeForPlatformTest(t, c, true, false)
+
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7}}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.MaxBodyBytes = 1024
+	svc := &GatewayService{cfg: cfg, rateLimitService: &RateLimitService{}}
+
+	_, err := svc.handleNonStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, "claude-sonnet-4-6", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	_, ok := takeCaptureResult(c)
+	require.False(t, ok)
+}
+
+func setCaptureScopeForPlatformTest(t *testing.T, c *gin.Context, enabled, anthropic bool) {
+	t.Helper()
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = enabled
+	policy.Platforms.Anthropic = anthropic
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 1, nil)
 }
 
 func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxTriggersFailover(t *testing.T) {
@@ -168,7 +216,7 @@ func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ValidJSONUnchanged
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	body := []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":5,"output_tokens":3}}`)
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -185,7 +233,53 @@ func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ValidJSONUnchanged
 	require.JSONEq(t, string(body), rec.Body.String())
 }
 
-func TestHandleNonStreamingResponse_NonJSON2xxMatchesTempUnschedulableRule(t *testing.T) {
+func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ForceCacheBillingResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "converts input tokens for downstream billing",
+			body: `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"unchanged"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`,
+			want: `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"unchanged"}],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":5}}`,
+		},
+		{
+			name: "adds to genuine cache reads",
+			body: `{"id":"msg_2","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3,"cache_read_input_tokens":7,"cache_creation_input_tokens":11}}`,
+			want: `{"id":"msg_2","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":12,"cache_creation_input_tokens":11}}`,
+		},
+		{
+			name: "zero input leaves response unchanged",
+			body: `{"id":"msg_3","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
+			want: `{"id":"msg_3","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":3,"cache_read_input_tokens":7}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewBufferString(tt.body)),
+			}
+			svc := &GatewayService{cfg: &config.Config{}}
+
+			usage, err := svc.handleNonStreamingResponseAnthropicAPIKeyPassthrough(WithForceCacheBilling(context.Background()), resp, c, &Account{ID: 2})
+
+			require.NoError(t, err)
+			require.Equal(t, int(gjson.Get(tt.body, "usage.input_tokens").Int()), usage.InputTokens, "local accounting must retain the unclassified usage")
+			require.Equal(t, int(gjson.Get(tt.body, "usage.cache_read_input_tokens").Int()), usage.CacheReadInputTokens, "local accounting must convert exactly once in RecordUsage")
+			require.JSONEq(t, tt.want, rec.Body.String())
+		})
+	}
+}
+
+func TestHandleNonStreamingResponse_NonJSON2xxMatchesModelScopedTempUnschedulableRule(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -225,7 +319,9 @@ func TestHandleNonStreamingResponse_NonJSON2xxMatchesTempUnschedulableRule(t *te
 	require.True(t, errors.As(err, &failoverErr))
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.Equal(t, body, failoverErr.ResponseBody)
-	require.Equal(t, 1, repo.tempUnschedCalls)
-	require.Contains(t, repo.tempReason, `"status_code":502`)
-	require.Contains(t, repo.tempReason, `"matched_keyword":"upstream request failed"`)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Equal(t, 1, repo.modelRateLimitCalls)
+	require.Equal(t, "claude-sonnet-4-6", repo.modelScope)
+	require.Contains(t, repo.modelReason, `"status_code":502`)
+	require.Contains(t, repo.modelReason, `"matched_keyword":"upstream request failed"`)
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -166,6 +167,7 @@ func shouldMarkCreditsExhausted(resp *http.Response, respBody []byte, reqErr err
 type creditsOveragesRetryResult struct {
 	handled bool
 	resp    *http.Response
+	failure *UpstreamFailoverError
 }
 
 // attemptCreditsOveragesRetry 在确认免费配额耗尽后，尝试注入 AI Credits 继续请求。
@@ -192,7 +194,9 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 		return &creditsOveragesRetryResult{handled: true}
 	}
 
+	s.prepareAntigravityCaptureAttempt(p, creditsReq, creditsBody)
 	creditsResp, err := p.httpUpstream.Do(creditsReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+	s.wrapAntigravityCaptureResponse(p, creditsResp)
 	if err == nil && creditsResp != nil && creditsResp.StatusCode < 400 {
 		s.clearCreditsExhausted(p.ctx, p.account)
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d credit_overages_success model=%s account=%d",
@@ -200,8 +204,28 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 		return &creditsOveragesRetryResult{handled: true, resp: creditsResp}
 	}
 
-	s.handleCreditsRetryFailure(p.ctx, p.prefix, modelKey, p.account, creditsResp, err)
-	return &creditsOveragesRetryResult{handled: true}
+	detached := s.handleCreditsRetryFailure(p.ctx, p.prefix, modelKey, p.account, creditsResp, err)
+	var failure *UpstreamFailoverError
+	if detached != nil {
+		body, _ := io.ReadAll(detached.Body)
+		detached.Body = io.NopCloser(bytes.NewReader(body))
+		failure = newProviderHTTPError(p.account, detached, body, false)
+	} else {
+		// The credits request was the latest real provider attempt but produced no
+		// HTTP response. Drop its request-only bridge and carry a non-HTTP failure
+		// marker so later account-switch logic cannot pair the initial quota 429
+		// with this credits request.
+		if s.capturePool != nil {
+			AbortCaptureAttempt(p.c)
+		} else {
+			_, _ = takeCaptureResult(p.c)
+		}
+		failure = newProviderHTTPError(p.account, nil, nil, false)
+		if err != nil {
+			failure.ClientMessage = sanitizeUpstreamErrorMessage(err.Error())
+		}
+	}
+	return &creditsOveragesRetryResult{handled: true, failure: failure}
 }
 
 func (s *AntigravityGatewayService) handleCreditsRetryFailure(
@@ -211,14 +235,14 @@ func (s *AntigravityGatewayService) handleCreditsRetryFailure(
 	account *Account,
 	creditsResp *http.Response,
 	reqErr error,
-) {
+) *http.Response {
 	var creditsRespBody []byte
 	creditsStatusCode := 0
+	var detached *http.Response
 	if creditsResp != nil {
 		creditsStatusCode = creditsResp.StatusCode
 		if creditsResp.Body != nil {
-			creditsRespBody, _ = io.ReadAll(io.LimitReader(creditsResp.Body, 64<<10))
-			_ = creditsResp.Body.Close()
+			detached, creditsRespBody, _ = readAntigravityRetryResponse(creditsResp, 64<<10)
 		}
 	}
 
@@ -226,10 +250,11 @@ func (s *AntigravityGatewayService) handleCreditsRetryFailure(
 		s.setCreditsExhausted(ctx, account)
 		logger.LegacyPrintf("service.antigravity_gateway", "%s credit_overages_failed model=%s account=%d marked_exhausted=true status=%d body=%s",
 			prefix, modelKey, account.ID, creditsStatusCode, truncateForLog(creditsRespBody, 200))
-		return
+		return detached
 	}
 	if account != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s credit_overages_failed model=%s account=%d marked_exhausted=false status=%d err=%v body=%s",
 			prefix, modelKey, account.ID, creditsStatusCode, reqErr, truncateForLog(creditsRespBody, 200))
 	}
+	return detached
 }

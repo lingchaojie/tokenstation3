@@ -1,11 +1,15 @@
 .PHONY: build build-backend build-frontend build-datamanagementd check-generate test test-backend test-frontend test-frontend-critical test-frontend-webchat test-datamanagementd secret-scan
 
 FRONTEND_CRITICAL_VITEST := \
+	src/api/__tests__/client.spec.ts \
+	src/api/__tests__/tokenRefresh.spec.ts \
+	src/api/__tests__/channelMonitorV2.spec.ts \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
 	src/views/auth/__tests__/WechatCallbackView.spec.ts \
 	src/views/user/__tests__/PaymentView.spec.ts \
 	src/views/user/SubscriptionsView.spec.ts \
 	src/views/user/__tests__/PaymentResultView.spec.ts \
+	src/views/user/__tests__/ChannelStatusView.mode.spec.ts \
 	src/components/payment/__tests__/SubscriptionPlanCard.spec.ts \
 	src/components/user/dashboard/UserDashboardStats.spec.ts \
 	src/components/user/profile/__tests__/ProfileInfoCard.spec.ts \
@@ -26,7 +30,10 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/user/__tests__/RewardBalanceBreakdown.spec.ts \
 	src/components/layout/__tests__/AppHeaderRewardBalance.spec.ts \
 	src/views/admin/affiliates/__tests__/AdminAffiliateRebatesView.spec.ts \
-	src/router/__tests__/feature-access.spec.ts
+	src/router/__tests__/feature-access.spec.ts \
+	src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts \
+	src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts \
+	src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts
 
 FRONTEND_WEBCHAT_VITEST := \
 	src/utils/__tests__/webChatModelName.spec.ts \

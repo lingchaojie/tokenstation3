@@ -36,17 +36,28 @@ func (s *GatewayService) ForwardAsResponses(
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
 	startTime := time.Now()
+	beginCaptureAttempt(c)
+	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
 
-	// 1. Parse Responses request
+	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
+	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
+	if err != nil {
+		return nil, fmt.Errorf("adapt responses client tools: %w", err)
+	}
+
+	// 2. Parse Responses request
 	var responsesReq apicompat.ResponsesRequest
-	if err := json.Unmarshal(body, &responsesReq); err != nil {
+	if err := json.Unmarshal(adaptedBody, &responsesReq); err != nil {
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
+	isCompaction := account != nil && account.IsKiro() && apicompat.HasCompactionTrigger(&responsesReq)
 
-	// 2. Convert Responses → Anthropic
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	// 3. Convert Responses → Anthropic
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(&responsesReq, apicompat.ResponsesToAnthropicOptions{
+		EnableCompaction: account != nil && account.IsKiro(),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -76,9 +87,23 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = normalized
 		}
 	}
+	if isCompaction {
+		if compactModel, matched := account.ResolveCompactMappedModel(originalModel); matched {
+			mappedModel = compactModel
+		}
+	}
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 mapping 完成之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 	anthropicReq.Model = mappedModel
+	if isCompaction {
+		anthropicReq.ToolChoice = json.RawMessage(`{"type":"none"}`)
+		if anthropicReq.MaxTokens < compactionMinMaxTokens {
+			anthropicReq.MaxTokens = compactionMinMaxTokens
+		}
+		anthropicReq.Thinking = nil
+		anthropicReq.OutputConfig = nil
+		reasoningEffort = nil
+	}
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
 		zap.Int64("account_id", account.ID),
@@ -99,7 +124,7 @@ func (s *GatewayService) ForwardAsResponses(
 	// 否则会被 Anthropic 判为第三方应用并扣 extra usage。
 	// 见 applyClaudeCodeOAuthMimicryToBody 的 godoc。
 	isClaudeCode := false
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := shouldMimicClaudeCodeForAccount(account, isClaudeCode)
 
 	if shouldMimicClaudeCode {
 		anthropicBody = s.applyClaudeCodeOAuthMimicryToBody(ctx, c, account, anthropicBody, anthropicReq.System, mappedModel)
@@ -110,13 +135,26 @@ func (s *GatewayService) ForwardAsResponses(
 
 	kiroDirectMode := isKiroDirectModeAccount(account)
 	var resp *http.Response
+	finishCapture := func() {}
 	if kiroDirectMode {
+		if captureEnabled {
+			setCapturePlatform(c, string(account.Platform))
+			ctx = withCaptureUpstreamRequestContext(ctx, c, s.cfg.Gateway.Capture.MaxBodyBytes)
+		}
 		var group *Group
 		if parsed != nil {
 			group = parsed.Group
 		}
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, c, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group)
 		if err != nil {
+			var failoverErr *UpstreamFailoverError
+			if errors.As(err, &failoverErr) {
+				if failoverErr.Platform == "" {
+					failoverErr.Platform = account.Platform
+				}
+				s.submitWebChatTerminalCapture(ctx, c, account, failoverErr)
+				return nil, failoverErr
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -152,7 +190,9 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 
 		// 11. Send request
+		s.captureOutboundRequest(c, account, upstreamReq, anthropicBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -175,8 +215,12 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, _ := s.readUpstreamErrorBody(resp)
+		respBody, responseTruncated, responseComplete, _ := s.readWebChatUpstreamErrorBody(ctx, resp)
 		_ = resp.Body.Close()
+		finishCapture()
+		if responseTruncated || !responseComplete {
+			markCaptureResultTruncated(c)
+		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
@@ -195,27 +239,100 @@ func (s *GatewayService) ForwardAsResponses(
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
 			}
+			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
 			return nil, &UpstreamFailoverError{
-				StatusCode:   resp.StatusCode,
-				ResponseBody: respBody,
+				StatusCode:                resp.StatusCode,
+				ResponseBody:              respBody,
+				RequestHeaders:            captureRequestHeadersFromResponse(resp),
+				ResponseHeaders:           resp.Header.Clone(),
+				UpstreamEndpoint:          captureEndpointFromResponse(resp),
+				Platform:                  string(account.Platform),
+				HasUpstreamHTTPResponse:   true,
+				CaptureResponseIncomplete: !responseComplete,
 			}
 		}
 
 		// Non-failover error: return Responses-formatted error to client
+		s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
 		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
-		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
+		failure := newTerminalProviderHTTPError(account, resp, respBody)
+		failure.CaptureResponseIncomplete = !responseComplete
+		return nil, failure
 	}
 
 	// 13. Handle normal response (convert Anthropic → Responses)
 	var result *ForwardResult
 	var handleErr error
-	if clientStream {
-		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
+	if isCompaction {
+		result, handleErr = s.handleResponsesCompactionResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientStream, kiroDirectMode)
+	} else if clientStream {
+		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
 	} else {
-		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
+		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
 	}
 
-	return result, handleErr
+	finishCapture()
+	if handleErr != nil && result == nil {
+		result = failedForwardResultForError(c, resp, originalModel, mappedModel, clientStream, startTime, handleErr)
+	}
+	return finalizeForwardResult(c, result), handleErr
+}
+
+func adaptResponsesClientToolsForAnthropic(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var requestBody map[string]any
+	if err := decoder.Decode(&requestBody); err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	additionalToolsChanged, err := liftResponsesAdditionalTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+
+	mapping, changed, err := apicompat.AdaptResponsesClientTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	changed = changed || additionalToolsChanged
+	if !changed {
+		return body, mapping, nil
+	}
+	rebuilt, err := json.Marshal(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	return rebuilt, mapping, nil
+}
+
+func liftResponsesAdditionalTools(requestBody map[string]any) (bool, error) {
+	input, ok := requestBody["input"].([]any)
+	if !ok {
+		return false, nil
+	}
+
+	tools, _ := requestBody["tools"].([]any)
+	kept := make([]any, 0, len(input))
+	changed := false
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(item["type"])) != "additional_tools" {
+			kept = append(kept, raw)
+			continue
+		}
+		additional, ok := item["tools"].([]any)
+		if !ok {
+			return false, fmt.Errorf("additional_tools.tools must be an array")
+		}
+		tools = append(tools, additional...)
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	requestBody["tools"] = tools
+	requestBody["input"] = kept
+	return true, nil
 }
 
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
@@ -315,6 +432,17 @@ func kiroCreditsFromUsageGJSON(value gjson.Result) float64 {
 	return 0
 }
 
+// parseAnthropicSSEField parses an SSE field line in the form "field:value" or "field: value".
+// According to the SSE spec (https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation),
+// the space after the colon is optional. This function handles both formats.
+func parseAnthropicSSEField(line, field string) (string, bool) {
+	prefix := field + ":"
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
+}
+
 // handleResponsesBufferedStreamingResponse reads all Anthropic SSE events from
 // the upstream streaming response, assembles them into a complete Anthropic
 // response, converts to Responses API JSON format, and writes it to the client.
@@ -326,38 +454,63 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	reasoningEffort *string,
 	startTime time.Time,
 	allowKiroMarkedFinalUsage bool,
+	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
-	requestID := resp.Header.Get("x-request-id")
+	requestID := captureProviderRequestID(resp.Header)
 
-	scanner := bufio.NewScanner(resp.Body)
-	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
-	}
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
+		return newBufferedProviderSSEScanner(r, s.cfg)
+	})
+	defer lineReader.Close()
 
 	// Accumulate the final Anthropic response from streaming events
 	var finalResp *apicompat.AnthropicResponse
+	var contentAccumulator anthropicBufferedContentAccumulator
 	var usage ClaudeUsage
 	hasKiroMarkedFinalUsage := false
+	terminalObserved := false
+	providerPhase := anthropicProviderAwaitingStart
+	incompleteProviderTail := false
+	var scanErr error
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "event: ") {
-			continue
-		}
-		eventType := strings.TrimPrefix(line, "event: ")
-
-		// Read the data line
-		if !scanner.Scan() {
+	for {
+		line, ok, err := lineReader.Next()
+		if err != nil {
+			scanErr = err
 			break
 		}
-		dataLine := scanner.Text()
-		if !strings.HasPrefix(dataLine, "data: ") {
+		if !ok {
+			break
+		}
+		eventType, ok := parseAnthropicSSEField(line, "event")
+		if !ok {
+			if payload, dataLine := parseAnthropicSSEField(line, "data"); dataLine && strings.TrimSpace(payload) != "" {
+				incompleteProviderTail = true
+				break
+			}
 			continue
 		}
-		payload := dataLine[6:]
 
+		// Read the data line
+		dataLine, ok, err := lineReader.Next()
+		if err != nil {
+			scanErr = err
+			break
+		}
+		if !ok {
+			incompleteProviderTail = true
+			break
+		}
+		payload, ok := parseAnthropicSSEField(dataLine, "data")
+		if !ok {
+			incompleteProviderTail = true
+			break
+		}
+
+		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("forward_as_responses buffered: failed to parse event",
@@ -365,11 +518,15 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 				zap.String("event_type", eventType),
 			)
-			continue
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, newIncompleteProviderStreamFailover(resp, fmt.Sprintf("invalid JSON for Anthropic event %q", eventType))
+		}
+		if event.Type == "message_stop" {
+			terminalObserved = true
 		}
 
 		// message_start carries the initial response structure
-		if event.Type == "message_start" && event.Message != nil {
+		if event.Type == "message_start" && event.Message != nil && validAnthropicMessageStartPayload([]byte(payload)) {
 			finalResp = event.Message
 			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
 				hasKiroMarkedFinalUsage = true
@@ -385,45 +542,44 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			}
 			mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
-				finalResp.StopReason = event.Delta.StopReason
+				finalResp.StopReason = apicompat.AnthropicStopReasonPtr(event.Delta.StopReason)
 			}
 		}
 
 		// Accumulate content blocks
 		if event.Type == "content_block_start" && event.ContentBlock != nil && finalResp != nil {
-			finalResp.Content = append(finalResp.Content, *event.ContentBlock)
+			contentAccumulator.start(finalResp, *event.ContentBlock)
 		}
 		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
-			idx := *event.Index
-			if idx < len(finalResp.Content) {
-				switch event.Delta.Type {
-				case "text_delta":
-					finalResp.Content[idx].Text += event.Delta.Text
-				case "thinking_delta":
-					finalResp.Content[idx].Thinking += event.Delta.Thinking
-				case "input_json_delta":
-					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
-				}
-			}
+			contentAccumulator.delta(*event.Index, event.Delta)
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	if scanErr != nil {
+		if !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 			logger.L().Warn("forward_as_responses buffered: read error",
-				zap.Error(err),
+				zap.Error(scanErr),
 				zap.String("request_id", requestID),
 			)
 		}
+		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before message_stop: "+sanitizeStreamError(scanErr))
+	}
+	if incompleteProviderTail {
+		lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream ended with an incomplete Anthropic provider event")
+	}
+	if !terminalObserved {
+		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream ended before message_stop")
 	}
 
 	if finalResp == nil {
-		writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream stream ended without a response")
-		return nil, fmt.Errorf("upstream stream ended without response")
+		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream ended without a message_start response")
 	}
+	contentAccumulator.materialize(finalResp)
 
 	// Update usage from accumulated delta
-	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 {
+	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 ||
+		usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
 		finalResp.Usage = apicompat.AnthropicUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,
@@ -447,6 +603,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if respBytes, err := json.Marshal(responsesResp); err == nil {
 		respBytes = reverseToolNamesIfPresent(c, respBytes)
+		respBytes, _, err = apicompat.RestoreResponsesClientToolPayload(respBytes, clientToolMapping)
+		if err != nil {
+			return nil, fmt.Errorf("restore responses client tools: %w", err)
+		}
 		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
 	} else {
 		c.JSON(http.StatusOK, responsesResp)
@@ -473,41 +633,59 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	reasoningEffort *string,
 	startTime time.Time,
 	allowKiroMarkedFinalUsage bool,
+	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
-	requestID := resp.Header.Get("x-request-id")
-
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	requestID := captureProviderRequestID(resp.Header)
+	writeHeaders := func() {
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Writer.WriteHeader(http.StatusOK)
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
+	var staged stagedConvertedStream
+	defer func() { _ = staged.close() }()
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
+	clientToolRestorer := apicompat.NewResponsesClientToolStreamRestorer(clientToolMapping)
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	semanticOutput := false
+	terminalObserved := false
+	providerPayloadObserved := false
+	providerPhase := anthropicProviderAwaitingStart
+	incompleteProviderTail := false
+	clientDisconnected := false
+	var stagedWriteErr error
 
-	scanner := bufio.NewScanner(resp.Body)
-	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
-	}
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
+		scanner := bufio.NewScanner(r)
+		maxLineSize := defaultMaxLineSize
+		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+			maxLineSize = s.cfg.Gateway.MaxLineSize
+		}
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+		return scanner
+	})
+	defer lineReader.Close()
+	var scanErr error
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:       requestID,
-			Usage:           usage,
-			Model:           originalModel,
-			UpstreamModel:   mappedModel,
-			ReasoningEffort: reasoningEffort,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
+			RequestID:        requestID,
+			Usage:            usage,
+			Model:            originalModel,
+			UpstreamModel:    mappedModel,
+			ReasoningEffort:  reasoningEffort,
+			Stream:           true,
+			Duration:         time.Since(startTime),
+			FirstTokenMs:     firstTokenMs,
+			ClientDisconnect: clientDisconnected,
 		}
 	}
 
@@ -527,15 +705,26 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 		// Also capture usage from message_start
 		if event.Type == "message_start" && event.Message != nil {
+			providerPayloadObserved = validAnthropicMessageStartPayload([]byte(payload))
 			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
 				replaceAnthropicResponsesStateUsage(state, usage)
 			}
 		}
+		if anthropicSSEEventHasSemanticOutput(payload) {
+			semanticOutput = true
+		}
+		if event.Type == "message_stop" {
+			terminalObserved = true
+		}
 
 		// Convert to Responses events
 		events := apicompat.AnthropicEventToResponsesEvents(event, state)
+		if conversionErr := state.Err(); conversionErr != nil {
+			stagedWriteErr = conversionErr
+			return true
+		}
 		for _, evt := range events {
-			sse, err := apicompat.ResponsesEventToSSE(evt)
+			payload, err := json.Marshal(evt)
 			if err != nil {
 				logger.L().Warn("forward_as_responses stream: failed to marshal event",
 					zap.Error(err),
@@ -543,16 +732,31 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				)
 				continue
 			}
-			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
-			if _, err := fmt.Fprint(c.Writer, out); err != nil {
-				logger.L().Info("forward_as_responses stream: client disconnected",
-					zap.String("request_id", requestID),
-				)
-				return true // client disconnected
+			payload = reverseToolNamesIfPresent(c, payload)
+			payloads, _, err := clientToolRestorer.RestoreEvent(payload)
+			if err != nil {
+				stagedWriteErr = fmt.Errorf("restore responses client tools: %w", err)
+				return true
 			}
-		}
-		if len(events) > 0 {
-			c.Writer.Flush()
+			for _, restored := range payloads {
+				if clientDisconnected {
+					continue
+				}
+				eventType := gjson.GetBytes(restored, "type").String()
+				wire := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, restored)
+				if err := staged.write(c, writeHeaders, wire, semanticOutput || (terminalObserved && providerPayloadObserved)); err != nil {
+					logger.L().Info("forward_as_responses stream: client disconnected",
+						zap.String("request_id", requestID),
+					)
+					var clientWriteErr *stagedConvertedClientWriteError
+					if errors.As(err, &clientWriteErr) {
+						clientDisconnected = true
+						continue
+					}
+					stagedWriteErr = err
+					return true // client disconnected
+				}
+			}
 		}
 		return false
 	}
@@ -565,31 +769,58 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 					continue
 				}
 				out := string(reverseToolNamesIfPresent(c, []byte(sse)))
-				fmt.Fprint(c.Writer, out) //nolint:errcheck
+				if err := staged.write(c, writeHeaders, out, true); err != nil {
+					return resultWithUsage(), err
+				}
 			}
-			c.Writer.Flush()
 		}
 		return resultWithUsage(), nil
 	}
 
 	// Read Anthropic SSE events
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "event: ") {
-			continue
-		}
-		eventType := strings.TrimPrefix(line, "event: ")
-
-		// Read data line
-		if !scanner.Scan() {
+	for {
+		line, ok, err := lineReader.Next()
+		if err != nil {
+			scanErr = err
 			break
 		}
-		dataLine := scanner.Text()
-		if !strings.HasPrefix(dataLine, "data: ") {
+		if !ok {
+			break
+		}
+		eventType, ok := parseAnthropicSSEField(line, "event")
+		if !ok {
+			if payload, dataLine := parseAnthropicSSEField(line, "data"); dataLine && strings.TrimSpace(payload) != "" {
+				incompleteProviderTail = true
+				break
+			}
 			continue
 		}
-		payload := dataLine[6:]
 
+		// Read data line
+		dataLine, ok, err := lineReader.Next()
+		if err != nil {
+			scanErr = err
+			break
+		}
+		if !ok {
+			incompleteProviderTail = true
+			break
+		}
+		payload, ok := parseAnthropicSSEField(dataLine, "data")
+		if !ok {
+			incompleteProviderTail = true
+			break
+		}
+
+		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			if staged.committed || clientDisconnected {
+				result := resultWithUsage()
+				result.CaptureTerminalError = true
+				return result, err
+			}
+			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("forward_as_responses stream: failed to parse event",
@@ -597,37 +828,149 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				zap.String("request_id", requestID),
 				zap.String("event_type", eventType),
 			)
-			continue
+			invalidEventErr := fmt.Errorf("invalid JSON for Anthropic event %q: %w", eventType, err)
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			if staged.committed || clientDisconnected {
+				result := resultWithUsage()
+				result.CaptureTerminalError = true
+				return result, invalidEventErr
+			}
+			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(invalidEventErr))
 		}
 		mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 
 		if processEvent(&event, payload) {
+			if stagedWriteErr != nil {
+				if !staged.committed {
+					return nil, newIncompleteProviderStreamFailover(resp, "upstream pre-output stage failed: "+sanitizeStreamError(stagedWriteErr))
+				}
+				return resultWithUsage(), stagedWriteErr
+			}
 			return resultWithUsage(), nil
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	if scanErr != nil {
+		if !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 			logger.L().Warn("forward_as_responses stream: read error",
-				zap.Error(err),
+				zap.Error(scanErr),
 				zap.String("request_id", requestID),
 			)
 		}
+		if staged.committed || clientDisconnected {
+			result := resultWithUsage()
+			result.CaptureTerminalError = true
+			return result, scanErr
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+	}
+	if incompleteProviderTail {
+		lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+		incompleteErr := errors.New("upstream stream ended with an incomplete Anthropic provider event")
+		if staged.committed || clientDisconnected {
+			result := resultWithUsage()
+			result.CaptureTerminalError = true
+			return result, incompleteErr
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, incompleteErr.Error())
+	}
+	if !terminalObserved {
+		missingTerminalErr := fmt.Errorf("stream usage incomplete: missing terminal event")
+		if staged.committed || clientDisconnected {
+			result := resultWithUsage()
+			result.CaptureTerminalError = true
+			return result, missingTerminalErr
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, missingTerminalErr.Error())
+	}
+	if !providerPayloadObserved {
+		invalidStreamErr := fmt.Errorf("stream ended without a valid provider message_start")
+		if staged.committed || clientDisconnected {
+			result := resultWithUsage()
+			result.CaptureTerminalError = true
+			return result, invalidStreamErr
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, invalidStreamErr.Error())
 	}
 
 	return finalizeStream()
 }
 
-// appendRawJSON appends a JSON fragment string to existing raw JSON.
+type anthropicBufferedBlockAccumulator struct {
+	text     strings.Builder
+	thinking strings.Builder
+	input    json.RawMessage
+}
+
+type anthropicBufferedContentAccumulator struct {
+	blocks []*anthropicBufferedBlockAccumulator
+}
+
+func (a *anthropicBufferedContentAccumulator) start(response *apicompat.AnthropicResponse, block apicompat.AnthropicContentBlock) {
+	if a == nil || response == nil {
+		return
+	}
+	state := &anthropicBufferedBlockAccumulator{}
+	_, _ = state.text.WriteString(block.Text)
+	_, _ = state.thinking.WriteString(block.Thinking)
+	state.input = append(json.RawMessage(nil), block.Input...)
+	a.blocks = append(a.blocks, state)
+	response.Content = append(response.Content, block)
+}
+
+func (a *anthropicBufferedContentAccumulator) delta(index int, delta *apicompat.AnthropicDelta) {
+	if a == nil || delta == nil || index < 0 || index >= len(a.blocks) {
+		return
+	}
+	state := a.blocks[index]
+	switch delta.Type {
+	case "text_delta":
+		_, _ = state.text.WriteString(delta.Text)
+	case "thinking_delta":
+		_, _ = state.thinking.WriteString(delta.Thinking)
+	case "input_json_delta":
+		state.input = appendRawJSON(state.input, delta.PartialJSON)
+	}
+}
+
+func (a *anthropicBufferedContentAccumulator) materialize(response *apicompat.AnthropicResponse) {
+	if a == nil || response == nil {
+		return
+	}
+	for index, state := range a.blocks {
+		if index >= len(response.Content) || state == nil {
+			break
+		}
+		response.Content[index].Text = state.text.String()
+		response.Content[index].Thinking = state.thinking.String()
+		if len(state.input) > 0 {
+			response.Content[index].Input = append(json.RawMessage(nil), state.input...)
+		}
+	}
+}
+
 func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
-	if len(existing) == 0 {
+	if len(existing) == 0 || isEmptyJSONObject(existing) {
 		return json.RawMessage(fragment)
 	}
 	return json.RawMessage(string(existing) + fragment)
 }
 
+func isEmptyJSONObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return false
+	}
+	return len(bytes.TrimSpace(trimmed[1:len(trimmed)-1])) == 0
+}
+
 // writeResponsesError writes an error response in OpenAI Responses API format.
 func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAICompactSSEFailureMessage(c, statusCode, code, message)
+		MarkResponseCommitted(c)
+		return
+	}
 	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{

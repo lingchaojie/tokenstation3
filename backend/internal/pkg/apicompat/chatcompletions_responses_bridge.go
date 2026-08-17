@@ -1,13 +1,30 @@
 package apicompat
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
+
+const (
+	toolOutputMediaMarker      = "[Tool output media moved to the following user message]"
+	toolOutputMediaAttribution = "[Tool output media for call %s]"
+
+	// The stream bridge must retain complete tool arguments for the terminal
+	// response.output item. Bound that attempt-local state independently from
+	// the provider wire/capture limits so many small deltas cannot grow memory
+	// without limit.
+	maxChatCompletionsToResponsesToolArgumentBytes = 8 << 20
+	maxChatCompletionsToResponsesSemanticBytes     = 8 << 20
+)
+
+type toolOutputMediaByCallID map[string][]ChatContentPart
 
 // ResponsesToChatCompletionsRequest converts a Responses API request into a
 // Chat Completions request for upstreams that only implement
@@ -221,16 +238,16 @@ func responsesInputToChatMessages(instructions string, inputRaw json.RawMessage)
 		return nil, fmt.Errorf("parse responses input: %w", err)
 	}
 
-	built, err := buildChatMessagesFromItems(messages, rawItems)
+	built, mediaByCallID, err := buildChatMessagesFromItems(messages, rawItems)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeChatMessages(built), nil
+	return normalizeChatMessagesWithToolOutputMedia(built, mediaByCallID), nil
 }
 
 // buildChatMessagesFromItems walks the Responses input items and appends the
 // corresponding Chat messages.
-func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessage) ([]ChatMessage, error) {
+func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessage) ([]ChatMessage, toolOutputMediaByCallID, error) {
 	// pendingReasoning holds the reasoning text from a reasoning item until the
 	// assistant message it belongs to is emitted. DeepSeek's thinking mode
 	// requires the reasoning_content that produced a tool call to be passed back
@@ -238,6 +255,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 	// across an assistant message (so a following tool call in the same turn
 	// still receives it); any other role ends the thinking span.
 	var pendingReasoning string
+	mediaByCallID := make(toolOutputMediaByCallID)
 
 	for _, raw := range rawItems {
 		raw = bytesTrimSpace(raw)
@@ -254,7 +272,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 				pendingReasoning = ""
 				continue
 			}
-			return nil, fmt.Errorf("parse responses input item: %w", err)
+			return nil, nil, fmt.Errorf("parse responses input item: %w", err)
 		}
 
 		role := chatCompletionsBridgeRole(rawString(item["role"]))
@@ -326,15 +344,25 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			continue
 		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			outputRaw := bytesTrimSpace(item["output"])
-			outputText := rawString(outputRaw)
-			if outputText == "" && len(outputRaw) > 0 && string(outputRaw) != "null" && string(outputRaw) != `""` {
-				// 对象/数组形式的输出（如 tool_search 的结果列表）整体字符串化。
-				outputText = string(outputRaw)
+			callID := rawString(item["call_id"])
+			delete(mediaByCallID, callID)
+
+			outputText, media, rewritten := extractToolOutputMedia(outputRaw)
+			if rewritten {
+				if callID != "" {
+					mediaByCallID[callID] = media
+				}
+			} else {
+				outputText = rawString(outputRaw)
+				if outputText == "" && len(outputRaw) > 0 && string(outputRaw) != "null" && string(outputRaw) != `""` {
+					// 对象/数组形式的输出（如 tool_search 的结果列表）整体字符串化。
+					outputText = string(outputRaw)
+				}
 			}
 			content, _ := json.Marshal(outputText)
 			messages = append(messages, ChatMessage{
 				Role:       "tool",
-				ToolCallID: rawString(item["call_id"]),
+				ToolCallID: callID,
 				Content:    content,
 			})
 			pendingReasoning = ""
@@ -347,7 +375,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 		case "input_image":
 			content, err := chatContentFromSingleResponsesPart(itemType, item)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			messages = append(messages, ChatMessage{Role: "user", Content: content})
 			pendingReasoning = ""
@@ -373,7 +401,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 		}
 		chatContent, err := responsesContentToChatContent(content, role)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		messages = append(messages, ChatMessage{Role: role, Content: chatContent})
 		// Reasoning only survives across an assistant text message.
@@ -382,7 +410,141 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 		}
 	}
 
-	return messages, nil
+	return messages, mediaByCallID, nil
+}
+
+// extractToolOutputMedia rewrites only recognized image nodes. Media-free
+// outputs return rewritten=false so the caller can preserve their original
+// bytes and prompt-cache prefix.
+func extractToolOutputMedia(outputRaw json.RawMessage) (string, []ChatContentPart, bool) {
+	outputRaw = bytesTrimSpace(outputRaw)
+	if len(outputRaw) == 0 || string(outputRaw) == "null" {
+		return "", nil, false
+	}
+
+	var outputString string
+	if err := json.Unmarshal(outputRaw, &outputString); err == nil {
+		if isToolOutputImageDataURL(outputString) {
+			return toolOutputMediaMarker, []ChatContentPart{toolOutputImagePart(outputString)}, true
+		}
+
+		nested, ok := decodeToolOutputJSON([]byte(outputString))
+		if !ok {
+			return "", nil, false
+		}
+		rewritten, media, changed := rewriteToolOutputMediaValue(nested)
+		if !changed {
+			return "", nil, false
+		}
+		encoded, err := json.Marshal(rewritten)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(encoded), media, true
+	}
+
+	value, ok := decodeToolOutputJSON(outputRaw)
+	if !ok {
+		return "", nil, false
+	}
+	rewritten, media, changed := rewriteToolOutputMediaValue(value)
+	if !changed {
+		return "", nil, false
+	}
+	encoded, err := json.Marshal(rewritten)
+	if err != nil {
+		return "", nil, false
+	}
+	return string(encoded), media, true
+}
+
+func decodeToolOutputJSON(raw []byte) (any, bool) {
+	if !json.Valid(raw) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func rewriteToolOutputMediaValue(value any) (any, []ChatContentPart, bool) {
+	switch typed := value.(type) {
+	case []any:
+		var media []ChatContentPart
+		changed := false
+		for i, item := range typed {
+			rewritten, itemMedia, itemChanged := rewriteToolOutputMediaValue(item)
+			if !itemChanged {
+				continue
+			}
+			typed[i] = rewritten
+			media = append(media, itemMedia...)
+			changed = true
+		}
+		return typed, media, changed
+	case map[string]any:
+		if imageURL, ok := recognizedToolOutputImageURL(typed); ok {
+			return map[string]any{
+				"type": "input_text",
+				"text": toolOutputMediaMarker,
+			}, []ChatContentPart{toolOutputImagePart(imageURL)}, true
+		}
+
+		content, ok := typed["content"]
+		if !ok {
+			return typed, nil, false
+		}
+		rewritten, media, changed := rewriteToolOutputMediaValue(content)
+		if !changed {
+			return typed, nil, false
+		}
+		typed["content"] = rewritten
+		return typed, media, true
+	default:
+		return value, nil, false
+	}
+}
+
+func recognizedToolOutputImageURL(value map[string]any) (string, bool) {
+	partType, _ := value["type"].(string)
+	if partType != "input_image" && partType != "image_url" {
+		return "", false
+	}
+
+	switch imageURL := value["image_url"].(type) {
+	case string:
+		return imageURL, strings.TrimSpace(imageURL) != ""
+	case map[string]any:
+		url, _ := imageURL["url"].(string)
+		return url, strings.TrimSpace(url) != ""
+	default:
+		return "", false
+	}
+}
+
+func isToolOutputImageDataURL(value string) bool {
+	const prefix = "data:image/"
+	const separator = ";base64,"
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	separatorIndex := strings.Index(value[len(prefix):], separator)
+	if separatorIndex <= 0 {
+		return false
+	}
+	payloadIndex := len(prefix) + separatorIndex + len(separator)
+	return payloadIndex < len(value)
+}
+
+func toolOutputImagePart(imageURL string) ChatContentPart {
+	return ChatContentPart{
+		Type:     "image_url",
+		ImageURL: &ChatImageURL{URL: imageURL},
+	}
 }
 
 // appendAssistantToolCall merges a tool call into the chat message list.
@@ -423,6 +585,10 @@ func appendAssistantToolCall(messages []ChatMessage, toolCall ChatToolCall, pend
 // tool replies and intervening messages are emitted in their natural position
 // but never between an assistant tool_calls message and its replies.
 func normalizeChatMessages(messages []ChatMessage) []ChatMessage {
+	return normalizeChatMessagesWithToolOutputMedia(messages, nil)
+}
+
+func normalizeChatMessagesWithToolOutputMedia(messages []ChatMessage, mediaByCallID toolOutputMediaByCallID) []ChatMessage {
 	// Index every tool reply by its tool_call_id (last wins on duplicates).
 	replies := make(map[string]ChatMessage)
 	for _, m := range messages {
@@ -468,6 +634,23 @@ func normalizeChatMessages(messages []ChatMessage) []ChatMessage {
 			out = append(out, m)
 			for _, tc := range kept {
 				out = append(out, replies[tc.ID])
+			}
+
+			var mediaParts []ChatContentPart
+			for _, tc := range kept {
+				media := mediaByCallID[tc.ID]
+				if len(media) == 0 {
+					continue
+				}
+				mediaParts = append(mediaParts, ChatContentPart{
+					Type: "text",
+					Text: fmt.Sprintf(toolOutputMediaAttribution, tc.ID),
+				})
+				mediaParts = append(mediaParts, media...)
+			}
+			if len(mediaParts) > 0 {
+				content, _ := json.Marshal(mediaParts)
+				out = append(out, ChatMessage{Role: "user", Content: content})
 			}
 		default:
 			out = append(out, m)
@@ -870,18 +1053,31 @@ func extractCustomToolCallInput(arguments string) string {
 	if trimmed == "" {
 		return ""
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+	if !gjson.Valid(trimmed) {
 		return trimmed
 	}
-	if raw, ok := obj["input"]; ok {
-		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
-			return s
+	obj := gjson.Parse(trimmed)
+	if !obj.IsObject() {
+		return trimmed
+	}
+	hasField := false
+	inputSeen := false
+	var input gjson.Result
+	obj.ForEach(func(key, value gjson.Result) bool {
+		hasField = true
+		if key.String() == "input" {
+			input = value
+			inputSeen = true
+		}
+		return true
+	})
+	if inputSeen {
+		if input.Type == gjson.String {
+			return input.String()
 		}
 		return trimmed
 	}
-	if len(obj) == 0 {
+	if !hasField {
 		return ""
 	}
 	return trimmed
@@ -947,19 +1143,27 @@ func chatMessageToResponsesOutput(message ChatMessage, customTools map[string]bo
 	}
 
 	text := chatMessageContentText(message.Content)
+	refusal := ""
+	if message.Refusal != nil {
+		refusal = *message.Refusal
+	}
 	if text == "" && strings.TrimSpace(message.ReasoningContent) != "" && len(message.ToolCalls) == 0 {
 		text = message.ReasoningContent
 	}
-	if text != "" || len(message.ToolCalls) == 0 {
+	if text != "" || refusal != "" || len(message.ToolCalls) == 0 {
+		content := make([]ResponsesContentPart, 0, 2)
+		if text != "" || refusal == "" {
+			content = append(content, ResponsesContentPart{Type: "output_text", Text: text})
+		}
+		if refusal != "" {
+			content = append(content, ResponsesContentPart{Type: "refusal", Refusal: refusal})
+		}
 		outputs = append(outputs, ResponsesOutput{
-			Type: "message",
-			ID:   generateItemID(),
-			Role: "assistant",
-			Content: []ResponsesContentPart{{
-				Type: "output_text",
-				Text: text,
-			}},
-			Status: "completed",
+			Type:    "message",
+			ID:      generateItemID(),
+			Role:    "assistant",
+			Content: content,
+			Status:  "completed",
 		})
 	}
 
@@ -1133,14 +1337,24 @@ type ChatCompletionsToResponsesStreamState struct {
 	MessageItemID string
 	MessageIndex  int
 	TextPartOpen  bool
+	TextPartIndex int
+	RefusalOpen   bool
+	RefusalIndex  int
 
 	Text      strings.Builder
+	Refusal   strings.Builder
 	Reasoning strings.Builder
+	// retainedSemanticBytes bounds the full text/reasoning/refusal retained for
+	// terminal done items. Provider streaming has no finite body ceiling, so a
+	// separate attempt-local cap is required even though each delta is bounded.
+	retainedSemanticBytes int
 
 	// Tool-call lifecycle, keyed by the upstream tool_call index.
-	ToolCalls       map[int]*ChatToolCall
-	ToolItemIDs     map[int]string
-	ToolOutputIndex map[int]int
+	ToolCalls         map[int]*ChatToolCall
+	ToolItemIDs       map[int]string
+	ToolOutputIndex   map[int]int
+	toolArguments     map[int]*strings.Builder
+	toolArgumentBytes int
 
 	// CustomTools 是客户端请求中 custom/freeform 工具的名字集合（见
 	// CustomToolNames）。命中的调用按 custom_tool_call 生命周期下发，codex 才能
@@ -1184,11 +1398,67 @@ func NewChatCompletionsToResponsesStreamState(model string) *ChatCompletionsToRe
 		ToolCalls:        make(map[int]*ChatToolCall),
 		ToolItemIDs:      make(map[int]string),
 		ToolOutputIndex:  make(map[int]int),
+		toolArguments:    make(map[int]*strings.Builder),
 		toolIsCustom:     make(map[int]bool),
 		toolIsToolSearch: make(map[int]bool),
 		toolNamespace:    make(map[int]NamespacedToolName),
 		toolAnnounced:    make(map[int]bool),
 	}
+}
+
+func (state *ChatCompletionsToResponsesStreamState) appendToolArguments(idx int, fragment string) error {
+	if fragment == "" {
+		return nil
+	}
+	if len(fragment) > maxChatCompletionsToResponsesToolArgumentBytes-state.toolArgumentBytes {
+		return fmt.Errorf("chat completions tool arguments exceed %d-byte retained-state limit", maxChatCompletionsToResponsesToolArgumentBytes)
+	}
+	if state.toolArguments == nil {
+		state.toolArguments = make(map[int]*strings.Builder)
+	}
+	builder := state.toolArguments[idx]
+	if builder == nil {
+		builder = &strings.Builder{}
+		state.toolArguments[idx] = builder
+	}
+	_, _ = builder.WriteString(fragment)
+	state.toolArgumentBytes += len(fragment)
+	return nil
+}
+
+func (state *ChatCompletionsToResponsesStreamState) appendSemanticOutput(builder *strings.Builder, fragment string) error {
+	if fragment == "" {
+		return nil
+	}
+	// A single provider frame may legitimately exceed the pre-output/capture
+	// guard (large audio/image-adjacent text is bounded by the route's
+	// MaxLineSize). Admit that first complete semantic frame, but never let a
+	// provider keep growing retained terminal state through an unbounded series
+	// of smaller deltas.
+	if state.retainedSemanticBytes == 0 && len(fragment) > maxChatCompletionsToResponsesSemanticBytes {
+		_, _ = builder.WriteString(fragment)
+		state.retainedSemanticBytes = len(fragment)
+		return nil
+	}
+	if state.retainedSemanticBytes >= maxChatCompletionsToResponsesSemanticBytes {
+		return fmt.Errorf("chat completions semantic output exceeds %d-byte retained-state limit", maxChatCompletionsToResponsesSemanticBytes)
+	}
+	if len(fragment) > maxChatCompletionsToResponsesSemanticBytes-state.retainedSemanticBytes {
+		return fmt.Errorf("chat completions semantic output exceeds %d-byte retained-state limit", maxChatCompletionsToResponsesSemanticBytes)
+	}
+	_, _ = builder.WriteString(fragment)
+	state.retainedSemanticBytes += len(fragment)
+	return nil
+}
+
+func (state *ChatCompletionsToResponsesStreamState) accumulatedToolArguments(idx int, toolCall *ChatToolCall) string {
+	if builder := state.toolArguments[idx]; builder != nil {
+		return builder.String()
+	}
+	if toolCall == nil {
+		return ""
+	}
+	return toolCall.Function.Arguments
 }
 
 func (state *ChatCompletionsToResponsesStreamState) allocOutputIndex() int {
@@ -1202,9 +1472,9 @@ func (state *ChatCompletionsToResponsesStreamState) allocOutputIndex() int {
 func ChatCompletionsChunkToResponsesEvents(
 	chunk *ChatCompletionsChunk,
 	state *ChatCompletionsToResponsesStreamState,
-) []ResponsesStreamEvent {
+) ([]ResponsesStreamEvent, error) {
 	if chunk == nil || state == nil {
-		return nil
+		return nil, nil
 	}
 	if chunk.ID != "" {
 		state.ResponseID = chunk.ID
@@ -1225,8 +1495,10 @@ func ChatCompletionsChunkToResponsesEvents(
 		// delta, otherwise a strict client discards the delta. The leading
 		// empty-string reasoning delta upstreams send is filtered out.
 		if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
+			if err := state.appendSemanticOutput(&state.Reasoning, *choice.Delta.ReasoningContent); err != nil {
+				return nil, err
+			}
 			events = append(events, ensureChatReasoningItem(state)...)
-			_, _ = state.Reasoning.WriteString(*choice.Delta.ReasoningContent)
 			events = append(events, chatToResponsesEvent(state, "response.reasoning_summary_text.delta", &ResponsesStreamEvent{
 				OutputIndex:  state.ReasoningIndex,
 				SummaryIndex: 0,
@@ -1235,17 +1507,30 @@ func ChatCompletionsChunkToResponsesEvents(
 			}))
 		}
 		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
+			if err := state.appendSemanticOutput(&state.Text, *choice.Delta.Content); err != nil {
+				return nil, err
+			}
 			// First real content closes the reasoning item, then opens the
 			// message item and its output_text content part.
 			events = append(events, closeChatReasoningItem(state)...)
-			events = append(events, ensureChatToResponsesMessageItem(state)...)
+			events = append(events, ensureChatToResponsesMessageItem(state, "output_text")...)
 			events = append(events, ensureChatToResponsesTextPart(state)...)
-			_, _ = state.Text.WriteString(*choice.Delta.Content)
 			events = append(events, chatToResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 				OutputIndex:  state.MessageIndex,
 				ContentIndex: 0,
 				Delta:        *choice.Delta.Content,
 				ItemID:       state.MessageItemID,
+			}))
+		}
+		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
+			if err := state.appendSemanticOutput(&state.Refusal, *choice.Delta.Refusal); err != nil {
+				return nil, err
+			}
+			events = append(events, closeChatReasoningItem(state)...)
+			events = append(events, ensureChatToResponsesMessageItem(state, "refusal")...)
+			events = append(events, ensureChatToResponsesRefusalPart(state)...)
+			events = append(events, chatToResponsesEvent(state, "response.refusal.delta", &ResponsesStreamEvent{
+				OutputIndex: state.MessageIndex, ContentIndex: state.RefusalIndex, Delta: *choice.Delta.Refusal, ItemID: state.MessageItemID,
 			}))
 		}
 		for _, toolCall := range choice.Delta.ToolCalls {
@@ -1283,7 +1568,9 @@ func ChatCompletionsChunkToResponsesEvents(
 			}
 			events = append(events, announceChatToolItem(state, idx, stored, false)...)
 			if toolCall.Function.Arguments != "" {
-				stored.Function.Arguments += toolCall.Function.Arguments
+				if err := state.appendToolArguments(idx, toolCall.Function.Arguments); err != nil {
+					return nil, err
+				}
 				// 未宣告（名字未到）时仅累积，宣告时统一补发；custom 调用的
 				// arguments 是包裹 input 的 JSON 片段，无法增量还原为自由文本
 				// 输入，缓冲整份 arguments 收尾时一次性下发（见 closeChatToolItems）；
@@ -1304,7 +1591,7 @@ func ChatCompletionsChunkToResponsesEvents(
 		}
 	}
 
-	return events
+	return events, nil
 }
 
 // FinalizeChatCompletionsResponsesStream emits terminal Responses events.
@@ -1324,15 +1611,29 @@ func FinalizeChatCompletionsResponsesStream(state *ChatCompletionsToResponsesStr
 		if state.TextPartOpen {
 			events = append(events, chatToResponsesEvent(state, "response.output_text.done", &ResponsesStreamEvent{
 				OutputIndex:  state.MessageIndex,
-				ContentIndex: 0,
+				ContentIndex: state.TextPartIndex,
 				Text:         state.Text.String(),
 				ItemID:       state.MessageItemID,
 			}))
 			events = append(events, chatToResponsesEvent(state, "response.content_part.done", &ResponsesStreamEvent{
 				OutputIndex:  state.MessageIndex,
-				ContentIndex: 0,
+				ContentIndex: state.TextPartIndex,
 				ItemID:       state.MessageItemID,
 				Part:         &ResponsesContentPart{Type: "output_text", Text: state.Text.String()},
+			}))
+		}
+		if state.RefusalOpen {
+			events = append(events, chatToResponsesEvent(state, "response.refusal.done", &ResponsesStreamEvent{
+				OutputIndex:  state.MessageIndex,
+				ContentIndex: state.RefusalIndex,
+				Refusal:      state.Refusal.String(),
+				ItemID:       state.MessageItemID,
+			}))
+			events = append(events, chatToResponsesEvent(state, "response.content_part.done", &ResponsesStreamEvent{
+				OutputIndex:  state.MessageIndex,
+				ContentIndex: state.RefusalIndex,
+				ItemID:       state.MessageItemID,
+				Part:         &ResponsesContentPart{Type: "refusal", Refusal: state.Refusal.String()},
 			}))
 		}
 		events = append(events, chatToResponsesEvent(state, "response.output_item.done", &ResponsesStreamEvent{
@@ -1341,7 +1642,7 @@ func FinalizeChatCompletionsResponsesStream(state *ChatCompletionsToResponsesStr
 				Type:    "message",
 				ID:      state.MessageItemID,
 				Role:    "assistant",
-				Content: []ResponsesContentPart{{Type: "output_text", Text: state.Text.String()}},
+				Content: chatToResponsesMessageContent(state),
 				Status:  "completed",
 			},
 		}))
@@ -1464,7 +1765,7 @@ func synthesizeChatReasoningFallbackMessage(state *ChatCompletionsToResponsesStr
 	}
 
 	var events []ResponsesStreamEvent
-	events = append(events, ensureChatToResponsesMessageItem(state)...)
+	events = append(events, ensureChatToResponsesMessageItem(state, "output_text")...)
 	events = append(events, ensureChatToResponsesTextPart(state)...)
 	_, _ = state.Text.WriteString(text)
 	events = append(events, chatToResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
@@ -1476,9 +1777,12 @@ func synthesizeChatReasoningFallbackMessage(state *ChatCompletionsToResponsesStr
 	return events
 }
 
-func ensureChatToResponsesMessageItem(state *ChatCompletionsToResponsesStreamState) []ResponsesStreamEvent {
+func ensureChatToResponsesMessageItem(state *ChatCompletionsToResponsesStreamState, initialPartType string) []ResponsesStreamEvent {
 	if state.MessageItemID != "" {
 		return nil
+	}
+	if initialPartType == "" {
+		initialPartType = "output_text"
 	}
 	state.MessageItemID = generateItemID()
 	state.MessageIndex = state.allocOutputIndex()
@@ -1489,7 +1793,7 @@ func ensureChatToResponsesMessageItem(state *ChatCompletionsToResponsesStreamSta
 			ID:      state.MessageItemID,
 			Role:    "assistant",
 			Status:  "in_progress",
-			Content: []ResponsesContentPart{{Type: "output_text"}},
+			Content: []ResponsesContentPart{{Type: initialPartType}},
 		},
 	})}
 }
@@ -1498,12 +1802,31 @@ func ensureChatToResponsesTextPart(state *ChatCompletionsToResponsesStreamState)
 	if state.TextPartOpen {
 		return nil
 	}
+	if state.RefusalOpen {
+		state.TextPartIndex = 1
+	}
 	state.TextPartOpen = true
 	return []ResponsesStreamEvent{chatToResponsesEvent(state, "response.content_part.added", &ResponsesStreamEvent{
 		OutputIndex:  state.MessageIndex,
-		ContentIndex: 0,
+		ContentIndex: state.TextPartIndex,
 		ItemID:       state.MessageItemID,
 		Part:         &ResponsesContentPart{Type: "output_text", Text: ""},
+	})}
+}
+
+func ensureChatToResponsesRefusalPart(state *ChatCompletionsToResponsesStreamState) []ResponsesStreamEvent {
+	if state.RefusalOpen {
+		return nil
+	}
+	if state.TextPartOpen {
+		state.RefusalIndex = 1
+	}
+	state.RefusalOpen = true
+	return []ResponsesStreamEvent{chatToResponsesEvent(state, "response.content_part.added", &ResponsesStreamEvent{
+		OutputIndex:  state.MessageIndex,
+		ContentIndex: state.RefusalIndex,
+		ItemID:       state.MessageItemID,
+		Part:         &ResponsesContentPart{Type: "refusal", Refusal: ""},
 	})}
 }
 
@@ -1553,11 +1876,12 @@ func announceChatToolItem(
 		},
 	})}
 	// 迟到宣告时补发已累积的参数增量（custom/tool_search 的输入收尾统一下发，不补发）。
-	if !isCustom && !isToolSearch && stored.Function.Arguments != "" {
+	arguments := state.accumulatedToolArguments(idx, stored)
+	if !isCustom && !isToolSearch && arguments != "" {
 		events = append(events, chatToResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.ToolOutputIndex[idx],
 			ItemID:      state.ToolItemIDs[idx],
-			Delta:       stored.Function.Arguments,
+			Delta:       arguments,
 			CallID:      stored.ID,
 			Name:        stored.Function.Name,
 		}))
@@ -1585,7 +1909,7 @@ func closeChatToolItems(state *ChatCompletionsToResponsesStreamState) []Response
 		}
 		// 名字始终未到导致尚未宣告的调用，收尾前按最终名字兜底宣告。
 		events = append(events, announceChatToolItem(state, i, toolCall, true)...)
-		arguments := toolCall.Function.Arguments
+		arguments := state.accumulatedToolArguments(i, toolCall)
 		if strings.TrimSpace(arguments) == "" {
 			arguments = "{}"
 		}
@@ -1682,14 +2006,11 @@ func (state *ChatCompletionsToResponsesStreamState) chatOutput() []ResponsesOutp
 	}
 	if state.MessageItemID != "" || len(state.ToolCalls) == 0 {
 		outputs = append(outputs, ResponsesOutput{
-			Type: "message",
-			ID:   nonEmpty(state.MessageItemID, generateItemID()),
-			Role: "assistant",
-			Content: []ResponsesContentPart{{
-				Type: "output_text",
-				Text: state.Text.String(),
-			}},
-			Status: "completed",
+			Type:    "message",
+			ID:      nonEmpty(state.MessageItemID, generateItemID()),
+			Role:    "assistant",
+			Content: chatToResponsesMessageContent(state),
+			Status:  "completed",
 		})
 	}
 	for i := 0; i < len(state.ToolCalls); i++ {
@@ -1697,7 +2018,7 @@ func (state *ChatCompletionsToResponsesStreamState) chatOutput() []ResponsesOutp
 		if !ok || toolCall == nil {
 			continue
 		}
-		arguments := toolCall.Function.Arguments
+		arguments := state.accumulatedToolArguments(i, toolCall)
 		if strings.TrimSpace(arguments) == "" {
 			arguments = "{}"
 		}
@@ -1737,6 +2058,27 @@ func (state *ChatCompletionsToResponsesStreamState) chatOutput() []ResponsesOutp
 		})
 	}
 	return outputs
+}
+
+func chatToResponsesMessageContent(state *ChatCompletionsToResponsesStreamState) []ResponsesContentPart {
+	if state == nil || (!state.TextPartOpen && !state.RefusalOpen) {
+		return []ResponsesContentPart{{Type: "output_text"}}
+	}
+	count := 0
+	if state.TextPartOpen {
+		count++
+	}
+	if state.RefusalOpen {
+		count++
+	}
+	parts := make([]ResponsesContentPart, count)
+	if state.TextPartOpen {
+		parts[state.TextPartIndex] = ResponsesContentPart{Type: "output_text", Text: state.Text.String()}
+	}
+	if state.RefusalOpen {
+		parts[state.RefusalIndex] = ResponsesContentPart{Type: "refusal", Refusal: state.Refusal.String()}
+	}
+	return parts
 }
 
 func chatToResponsesEvent(

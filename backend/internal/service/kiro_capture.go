@@ -1,10 +1,41 @@
 package service
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
+
+func (s *GatewayService) beginKiroNativeCaptureAttempt(ctx context.Context, account *Account, req *http.Request, body []byte) {
+	if s == nil || s.capturePool == nil || s.cfg == nil || !s.cfg.Gateway.Capture.Enabled || account == nil || req == nil || ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	if captureCtx.c == nil {
+		return
+	}
+	beginCaptureAttemptForWireRequest(ctx, captureCtx.c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+}
+
+func (s *GatewayService) beginKiroNativeCaptureResponse(ctx context.Context, resp *http.Response) {
+	if s == nil || s.cfg == nil || resp == nil || ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	if captureCtx.c == nil || !captureStreamingAttemptPath(captureCtx.c) {
+		return
+	}
+	beginCaptureResponse(captureCtx.c, resp, true, s.cfg.Gateway.Capture.MaxBodyBytes)
+}
+
+func abortKiroNativeCaptureAttempt(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	captureCtx, _ := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
+	AbortCaptureAttempt(captureCtx.c)
+}
 
 // Kiro 走独立的 forwardKiroMessages，其流式响应经 io.Pipe 包装后返回的
 // *http.Response 只带合成头（wrappedHeaders，含网关自造的 x-request-id）。
@@ -14,8 +45,9 @@ import (
 const kiroCaptureHeadersContextKey = "gateway_kiro_capture_headers"
 
 type kiroCaptureHeaders struct {
-	RequestHeaders  []byte // 真实上游请求头(脱敏)JSON
-	ResponseHeaders []byte // 真实上游响应头(脱敏)JSON
+	RequestHeaders   []byte // 真实上游请求头(脱敏)JSON
+	ResponseHeaders  []byte // 真实上游响应头(脱敏)JSON
+	UpstreamEndpoint string
 }
 
 // buildKiroCaptureHeaders 从真实上游响应抽取脱敏后的上游请求头/响应头。
@@ -28,6 +60,9 @@ func buildKiroCaptureHeaders(resp *http.Response) kiroCaptureHeaders {
 	}
 	if resp.Request != nil {
 		h.RequestHeaders = redactHTTPHeader(resp.Request.Header)
+		if resp.Request.URL != nil {
+			h.UpstreamEndpoint = redactCaptureURL(resp.Request.URL)
+		}
 	}
 	h.ResponseHeaders = redactHTTPHeader(resp.Header)
 	return h
@@ -55,4 +90,40 @@ func takeKiroCaptureHeaders(c *gin.Context) ([]byte, []byte) {
 		return nil, nil
 	}
 	return h.RequestHeaders, h.ResponseHeaders
+}
+
+func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
+	if result == nil {
+		return nil
+	}
+	if captureStreamingAttemptPath(c) {
+		return result
+	}
+	if len(result.CaptureResponse) == 0 {
+		attachCaptureToForwardResult(c, result)
+	}
+	if len(result.CaptureResponse) > 0 {
+		requestHeaders, responseHeaders := takeKiroCaptureHeaders(c)
+		if len(requestHeaders) > 0 {
+			result.CaptureRequestHeaders = requestHeaders
+		}
+		if len(responseHeaders) > 0 {
+			result.CaptureResponseHeaders = responseHeaders
+		}
+		if v, ok := c.Get(kiroCaptureHeadersContextKey); ok {
+			if h, ok := v.(kiroCaptureHeaders); ok && h.UpstreamEndpoint != "" {
+				result.CaptureUpstreamEndpoint = h.UpstreamEndpoint
+			}
+		}
+	}
+	if result.CaptureContentPolicy == nil {
+		outcome := CaptureOutcomeSuccess
+		if result.UpstreamFailed || result.CaptureTerminalError {
+			outcome = CaptureOutcomeTerminalError
+		}
+		if content, enabled := CaptureDecisionFor(c, PlatformKiro, outcome); enabled {
+			result.CaptureContentPolicy = &content
+		}
+	}
+	return result
 }

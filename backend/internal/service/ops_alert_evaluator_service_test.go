@@ -4,11 +4,77 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+type opsCaptureHealthRepoStub struct {
+	events            []CaptureHealthEvent
+	latest            []CaptureHealthEvent
+	err               error
+	start             time.Time
+	end               time.Time
+	latestBefore      time.Time
+	latestInstanceIDs []string
+	latestReasons     []string
+	latestCalls       int
+}
+
+func (r *opsCaptureHealthRepoStub) UpsertEvents(context.Context, []CaptureHealthEvent) error {
+	return nil
+}
+
+func (r *opsCaptureHealthRepoStub) ListEvents(_ context.Context, start, end time.Time) ([]CaptureHealthEvent, error) {
+	r.start = start
+	r.end = end
+	return append([]CaptureHealthEvent(nil), r.events...), r.err
+}
+
+func (r *opsCaptureHealthRepoStub) ListLatestEventsBefore(_ context.Context, before time.Time, instanceIDs, reasons []string) ([]CaptureHealthEvent, error) {
+	r.latestCalls++
+	r.latestBefore = before
+	r.latestInstanceIDs = append([]string(nil), instanceIDs...)
+	r.latestReasons = append([]string(nil), reasons...)
+	return append([]CaptureHealthEvent(nil), r.latest...), r.err
+}
+
+func TestComputeRuleMetricCaptureDroppedRecordsBoundsBaselineSources(t *testing.T) {
+	start := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	repo := &opsCaptureHealthRepoStub{}
+	for i := 0; i <= captureHealthBaselineSourceLimit; i++ {
+		repo.events = append(repo.events, CaptureHealthEvent{
+			MinuteBucket: start, InstanceID: fmt.Sprintf("sidecar-%03d", i),
+			Reason: string(CaptureDropSpoolCap), DroppedRecords: 1,
+		})
+	}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	_, ok := svc.computeRuleMetric(
+		context.Background(), &OpsAlertRule{MetricType: "capture_dropped_records"}, nil,
+		start, start.Add(time.Minute), "", nil,
+	)
+
+	require.False(t, ok)
+	require.Zero(t, repo.latestCalls, "oversized source sets must not reach the baseline query")
+}
+
+func (r *opsCaptureHealthRepoStub) DeleteBefore(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func newOpsCaptureMetricPool(t *testing.T, status model.Status) *ConversationCapturePool {
+	t.Helper()
+	pool := newConversationCapturePoolForTransport(&recordingCaptureTransport{status: status}, func() bool { return true })
+	t.Cleanup(pool.Stop)
+	return pool
+}
 
 var _ OpsRepository = (*stubOpsRepo)(nil)
 
@@ -16,6 +82,49 @@ type stubOpsRepo struct {
 	OpsRepository
 	overview *OpsDashboardOverview
 	err      error
+}
+
+type opsAlertEvaluatorRepoStub struct {
+	OpsRepository
+	rules             []*OpsAlertRule
+	activeEvent       *OpsAlertEvent
+	resolveErr        error
+	resolutionApplied bool
+	resolvedStatus    string
+	resolvedAt        *time.Time
+	heartbeatResult   string
+}
+
+func (s *opsAlertEvaluatorRepoStub) ListAlertRules(context.Context) ([]*OpsAlertRule, error) {
+	return s.rules, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) GetLatestSystemMetrics(context.Context, int) (*OpsSystemMetricsSnapshot, error) {
+	return &OpsSystemMetricsSnapshot{}, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) GetActiveAlertEvent(context.Context, int64) (*OpsAlertEvent, error) {
+	return s.activeEvent, nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) UpdateAlertEventStatus(_ context.Context, _ int64, status string, resolvedAt *time.Time) error {
+	if s.resolveErr != nil {
+		return s.resolveErr
+	}
+	s.resolvedStatus = status
+	if resolvedAt != nil {
+		copied := *resolvedAt
+		s.resolvedAt = &copied
+		s.resolutionApplied = true
+	}
+	return nil
+}
+
+func (s *opsAlertEvaluatorRepoStub) UpsertJobHeartbeat(_ context.Context, input *OpsUpsertJobHeartbeatInput) error {
+	if input != nil && input.LastResult != nil {
+		s.heartbeatResult = *input.LastResult
+	}
+	return nil
 }
 
 func (s *stubOpsRepo) GetDashboardOverview(ctx context.Context, filter *OpsDashboardFilter) (*OpsDashboardOverview, error) {
@@ -251,4 +360,311 @@ func TestComputeRuleMetricNewIndicators(t *testing.T) {
 			require.InDelta(t, tt.wantValue, gotValue, 0.0001)
 		})
 	}
+}
+
+func TestComputeRuleMetricCaptureReady(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	rule := &OpsAlertRule{MetricType: "capture_ready"}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}}
+
+	value, ok := svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.False(t, ok)
+	require.Zero(t, value)
+
+	transport := &captureAdminStatusTransport{status: model.Status{SpoolReady: true, DeliveryReady: false}}
+	svc.capturePool = newConversationCapturePoolForTransport(transport, func() bool { return true })
+	svc.captureSupervisor = &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: false}}
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Zero(t, value)
+
+	svc.captureSupervisor.status.Running = true
+	value, ok = svc.computeRuleMetric(context.Background(), rule, nil, now.Add(-time.Minute), now, "", nil)
+	require.True(t, ok)
+	require.Equal(t, 1.0, value)
+}
+
+func TestComputeRuleMetricCaptureDeliveryAndSpoolUsage(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	transport := &captureAdminStatusTransport{status: model.Status{
+		SpoolReady: true, DeliveryReady: false, SpoolUsedBytes: 9 << 30, SpoolMaxBytes: 12 << 30,
+	}}
+	svc := &OpsAlertEvaluatorService{
+		opsRepo: &stubOpsRepo{}, capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+		captureSupervisor: &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: true}},
+	}
+
+	delivery, deliveryOK := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "capture_delivery_ready"}, nil, now.Add(-time.Minute), now, "", nil)
+	usage, usageOK := svc.computeRuleMetric(context.Background(), &OpsAlertRule{MetricType: "capture_spool_usage_percent"}, nil, now.Add(-time.Minute), now, "", nil)
+
+	require.True(t, deliveryOK)
+	require.Zero(t, delivery)
+	require.True(t, usageOK)
+	require.Equal(t, 75.0, usage)
+}
+
+func TestCaptureMetricsUseCheckpointWhenLiveStatusFailsButSupervisorRuns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	cfg := &config.Config{}
+	cfg.Gateway.Capture.Enabled = true
+	cfg.Gateway.Capture.Spool.Dir = "/app/data/capture/spool"
+	transport := &captureAdminStatusTransport{err: errors.New("temporary status timeout")}
+	svc := &OpsAlertEvaluatorService{
+		opsRepo: &stubOpsRepo{}, cfg: cfg,
+		capturePool:       newConversationCapturePoolForTransport(transport, func() bool { return true }),
+		captureSupervisor: &CaptureSidecarSupervisor{status: CaptureSidecarSupervisorStatus{Running: true}},
+		readCaptureStatusCheckpoint: func(string) (model.Status, bool, error) {
+			return model.Status{SpoolReady: true, DeliveryReady: true, SpoolUsedBytes: 9, SpoolMaxBytes: 12}, true, nil
+		},
+	}
+
+	for metric, want := range map[string]float64{
+		"capture_ready": 1, "capture_delivery_ready": 1, "capture_spool_usage_percent": 75,
+	} {
+		value, ok := svc.computeRuleMetric(
+			context.Background(), &OpsAlertRule{MetricType: metric}, nil, now.Add(-time.Minute), now, "", nil,
+		)
+		require.True(t, ok, metric)
+		require.Equal(t, want, value, metric)
+	}
+}
+
+func TestComputeRuleMetricCaptureDroppedRecords(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{MinuteBucket: start, InstanceID: "sidecar-1", Reason: string(CaptureDropIPCUnavailable), DroppedRecords: 2},
+		{MinuteBucket: start, InstanceID: "sidecar-2", Reason: string(CaptureDropSpoolCap), DroppedRecords: 3},
+		{MinuteBucket: start, InstanceID: "sidecar-2", Reason: string(CaptureDropPreCommitDisconnect), DroppedRecords: 5},
+		{MinuteBucket: start, InstanceID: "legacy-app", Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 7},
+		{MinuteBucket: start, InstanceID: "sidecar-2", Reason: captureHealthOperationsReason, UploadRetries: 11},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 10.0, value, "delivery retries and legacy writer failures are not dropped records")
+	require.Equal(t, start, repo.start)
+	require.Equal(t, end, repo.end)
+	require.Equal(t, start, repo.latestBefore)
+}
+
+func TestComputeRuleMetricCaptureDroppedRecordsUsesCumulativeDeltas(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{
+		latest: []CaptureHealthEvent{
+			{MinuteBucket: start.Add(-6 * time.Hour), InstanceID: "sidecar-1", Reason: "spool_cap", DroppedRecords: 10},
+		},
+		events: []CaptureHealthEvent{
+			{MinuteBucket: start, InstanceID: "sidecar-1", Reason: "spool_cap", DroppedRecords: 10},
+			{MinuteBucket: start.Add(time.Minute), InstanceID: "sidecar-1", Reason: "spool_cap", DroppedRecords: 12},
+			{MinuteBucket: start.Add(2 * time.Minute), InstanceID: "sidecar-1", Reason: "spool_cap", DroppedRecords: 12},
+		}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(), &OpsAlertRule{MetricType: "capture_dropped_records"}, nil, start, end, "", nil,
+	)
+
+	require.True(t, ok)
+	require.Equal(t, 2.0, value, "unchanged cumulative rows must not be counted again each minute")
+	require.Equal(t, start, repo.start)
+	require.Equal(t, start, repo.latestBefore)
+	require.Equal(t, []string{"sidecar-1"}, repo.latestInstanceIDs)
+	require.ElementsMatch(t, captureOperationalDropReasonNames, repo.latestReasons)
+}
+
+func TestComputeRuleMetricCaptureWriterFailures(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{
+		{Reason: string(CaptureDropWriterUnavailable), DroppedRecords: 2},
+		{Reason: string(CaptureDropClickHousePrepareFailed), DroppedRecords: 3},
+		{Reason: string(CaptureDropClickHouseAppendFailed), DroppedRecords: 5},
+		{Reason: string(CaptureDropClickHouseSendFailed), DroppedRecords: 7},
+		{Reason: string(CaptureDropWorkerQueueFull), DroppedRecords: 11},
+		{Reason: string(CaptureDropWriterQueueFull), DroppedRecords: 13},
+		{Reason: string(CaptureDropByteBudgetExceeded), DroppedRecords: 17},
+	}}
+	svc := &OpsAlertEvaluatorService{opsRepo: &stubOpsRepo{}, captureHealthRepo: repo}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_writer_failures"},
+		nil,
+		start,
+		end,
+		"",
+		nil,
+	)
+
+	require.False(t, ok, "the retired writer metric must not remain active in the evaluator")
+	require.Zero(t, value)
+}
+
+func TestComputeRuleMetricCaptureRepositoryErrorIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	svc := &OpsAlertEvaluatorService{
+		opsRepo:           &stubOpsRepo{},
+		captureHealthRepo: &opsCaptureHealthRepoStub{err: errors.New("postgres unavailable")},
+	}
+
+	value, ok := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-5*time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.False(t, ok)
+	require.Zero(t, value)
+}
+
+func TestNewOpsAlertEvaluatorServiceProvidesCaptureMetrics(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	repo := &opsCaptureHealthRepoStub{events: []CaptureHealthEvent{{
+		MinuteBucket:   now.Add(-30 * time.Second),
+		InstanceID:     "sidecar-source",
+		Reason:         string(CaptureDropSpoolCap),
+		DroppedRecords: 4,
+	}}}
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
+	svc := NewOpsAlertEvaluatorService(nil, &stubOpsRepo{}, nil, nil, nil, nil, pool, nil, repo)
+
+	ready, readyOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_ready"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+	dropped, droppedOK := svc.computeRuleMetric(
+		context.Background(),
+		&OpsAlertRule{MetricType: "capture_dropped_records"},
+		nil,
+		now.Add(-time.Minute),
+		now,
+		"",
+		nil,
+	)
+
+	require.True(t, readyOK)
+	require.Equal(t, 1.0, ready)
+	require.True(t, droppedOK)
+	require.Equal(t, 4.0, dropped)
+}
+
+func TestOpsAlertEvaluatorSendsRecoveryEmailAfterResolution(t *testing.T) {
+	rule := &OpsAlertRule{
+		ID:          91,
+		Name:        "Capture writer readiness",
+		Enabled:     true,
+		Severity:    "P0",
+		MetricType:  "capture_ready",
+		Operator:    "<",
+		Threshold:   1,
+		NotifyEmail: true,
+	}
+	firedAt := time.Now().UTC().Add(-5 * time.Minute)
+	repo := &opsAlertEvaluatorRepoStub{
+		rules: []*OpsAlertRule{rule},
+		activeEvent: &OpsAlertEvent{
+			ID:        501,
+			RuleID:    rule.ID,
+			Severity:  rule.Severity,
+			Status:    OpsAlertStatusFiring,
+			FiredAt:   firedAt,
+			EmailSent: true,
+		},
+	}
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
+	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil, nil)
+
+	var sentKind opsAlertEmailKind
+	var sentEvent *OpsAlertEvent
+	svc.sendAlertEmail = func(_ context.Context, _ *OpsAlertRuntimeSettings, _ *OpsAlertRule, event *OpsAlertEvent, kind opsAlertEmailKind) bool {
+		require.True(t, repo.resolutionApplied, "the resolved state must be durable before recovery email dispatch")
+		sentKind = kind
+		sentEvent = event
+		return true
+	}
+
+	svc.evaluateOnce(time.Minute)
+
+	require.Equal(t, OpsAlertStatusResolved, repo.resolvedStatus)
+	require.NotNil(t, repo.resolvedAt)
+	require.Equal(t, opsAlertEmailRecovery, sentKind)
+	require.NotNil(t, sentEvent)
+	require.Equal(t, OpsAlertStatusResolved, sentEvent.Status)
+	require.NotNil(t, sentEvent.ResolvedAt)
+	require.True(t, sentEvent.EmailSent, "a prior firing email must not suppress recovery notification")
+	require.True(t, strings.Contains(repo.heartbeatResult, "resolved=1"), repo.heartbeatResult)
+	require.True(t, strings.Contains(repo.heartbeatResult, "emails_sent=1"), repo.heartbeatResult)
+}
+
+func TestOpsAlertEvaluatorDoesNotSendRecoveryEmailWhenResolutionFails(t *testing.T) {
+	rule := &OpsAlertRule{
+		ID:         92,
+		Name:       "Capture writer readiness",
+		Enabled:    true,
+		Severity:   "P0",
+		MetricType: "capture_ready",
+		Operator:   "<",
+		Threshold:  1,
+	}
+	repo := &opsAlertEvaluatorRepoStub{
+		rules:       []*OpsAlertRule{rule},
+		resolveErr:  errors.New("database unavailable"),
+		activeEvent: &OpsAlertEvent{ID: 502, RuleID: rule.ID, Status: OpsAlertStatusFiring},
+	}
+	pool := newOpsCaptureMetricPool(t, model.Status{SpoolReady: true, DeliveryReady: true})
+	svc := NewOpsAlertEvaluatorService(nil, repo, nil, nil, nil, nil, pool, nil, nil)
+	svc.sendAlertEmail = func(context.Context, *OpsAlertRuntimeSettings, *OpsAlertRule, *OpsAlertEvent, opsAlertEmailKind) bool {
+		t.Fatal("recovery email must not be sent before resolution is persisted")
+		return false
+	}
+
+	svc.evaluateOnce(time.Minute)
+
+	require.False(t, repo.resolutionApplied)
+	require.True(t, strings.Contains(repo.heartbeatResult, "resolved=0"), repo.heartbeatResult)
+	require.True(t, strings.Contains(repo.heartbeatResult, "emails_sent=0"), repo.heartbeatResult)
+}
+
+func TestShouldSkipOpsAlertEmailTreatsEmailSentAsFiringOnly(t *testing.T) {
+	event := &OpsAlertEvent{EmailSent: true}
+
+	require.True(t, shouldSkipOpsAlertEmail(opsAlertEmailFiring, event))
+	require.False(t, shouldSkipOpsAlertEmail(opsAlertEmailRecovery, event))
 }

@@ -1,17 +1,75 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGatewayResponsesFailoverExhaustedAfterCompactHeartbeatWritesOneTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	service.MarkOpenAICompactClientStream(c)
+	stop := service.StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	time.Sleep(20 * time.Millisecond)
+
+	(&GatewayHandler{}).handleResponsesFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode: http.StatusBadGateway,
+	}, false)
+
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+}
+
+func TestGatewayResponsesLocalErrorAfterCompactHeartbeatWritesOneTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	service.MarkOpenAICompactClientStream(c)
+	stop := service.StartOpenAICompactSSEKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	time.Sleep(20 * time.Millisecond)
+
+	(&GatewayHandler{}).responsesErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+
+	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+	require.NotContains(t, rec.Body.String(), `{"error":{"code":"api_error"`)
+}
+
+func TestShouldStartResponsesCompactionKeepaliveIsKiroOnly(t *testing.T) {
+	// The selected account, not the entry group's platform, owns this decision:
+	// mixed scheduling may legally route an Anthropic group to a KIRO account.
+	require.True(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformAnthropic}, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(nil, true, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, false, true))
+	require.False(t, shouldStartResponsesCompactionKeepalive(&service.Account{Platform: service.PlatformKiro}, true, false))
+}
+
+func TestResponsesAccountSelectionContextLocksKiroAfterCompactionSelection(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkey.ForcePlatform, service.PlatformAnthropic)
+
+	require.Same(t, base, responsesAccountSelectionContext(base, false))
+	locked := responsesAccountSelectionContext(base, true)
+	require.Equal(t, service.PlatformAnthropic, locked.Value(ctxkey.ForcePlatform), "entry platform must stay mixed Anthropic")
+	require.Equal(t, service.PlatformKiro, locked.Value(ctxkey.RequiredAccountPlatform))
+}
 
 func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -51,6 +109,22 @@ func TestGatewayEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) 
 	require.Equal(t, http.StatusTeapot, w.Code)
 	assert.Contains(t, w.Body.String(), "already written")
 	assert.Contains(t, w.Body.String(), `data: {"type":"error"`)
+}
+
+func TestGatewayEnsureForwardErrorResponse_SkipsCommittedSSEError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	c.Header("Content-Type", "text/event-stream")
+	_, _ = c.Writer.WriteString("event: error\ndata: {\"type\":\"error\"}\n\n")
+	service.MarkResponseCommitted(c)
+
+	h := &GatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, true)
+
+	require.False(t, wrote)
+	require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 }
 
 // case B 回归：Anthropic-backed /responses，Writer 已被写过时

@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -14,57 +16,6 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
-
-func TestValidateRefundRequestRejectsLegacyGuessedProviderInstance(t *testing.T) {
-	ctx := context.Background()
-	client := newPaymentConfigServiceTestClient(t)
-
-	user, err := client.User.Create().
-		SetEmail("refund-legacy@example.com").
-		SetPasswordHash("hash").
-		SetUsername("refund-legacy-user").
-		Save(ctx)
-	require.NoError(t, err)
-
-	_, err = client.PaymentProviderInstance.Create().
-		SetProviderKey(payment.TypeAlipay).
-		SetName("alipay-refund-instance").
-		SetConfig("{}").
-		SetSupportedTypes("alipay").
-		SetEnabled(true).
-		SetAllowUserRefund(true).
-		SetRefundEnabled(true).
-		Save(ctx)
-	require.NoError(t, err)
-
-	order, err := client.PaymentOrder.Create().
-		SetUserID(user.ID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetAmount(88).
-		SetPayAmount(88).
-		SetFeeRate(0).
-		SetRechargeCode("REFUND-LEGACY-ORDER").
-		SetOutTradeNo("sub2_refund_legacy_order").
-		SetPaymentType(payment.TypeAlipay).
-		SetPaymentTradeNo("trade-legacy-refund").
-		SetOrderType(payment.OrderTypeBalance).
-		SetStatus(OrderStatusCompleted).
-		SetExpiresAt(time.Now().Add(time.Hour)).
-		SetPaidAt(time.Now()).
-		SetClientIP("127.0.0.1").
-		SetSrcHost("api.example.com").
-		Save(ctx)
-	require.NoError(t, err)
-
-	svc := &PaymentService{
-		entClient: client,
-	}
-
-	_, err = svc.validateRefundRequest(ctx, order.ID, user.ID)
-	require.Error(t, err)
-	require.Equal(t, "USER_REFUND_DISABLED", infraerrors.Reason(err))
-}
 
 func TestPrepareRefundRejectsLegacyGuessedProviderInstance(t *testing.T) {
 	ctx := context.Background()
@@ -83,7 +34,6 @@ func TestPrepareRefundRejectsLegacyGuessedProviderInstance(t *testing.T) {
 		SetConfig("{}").
 		SetSupportedTypes("alipay").
 		SetEnabled(true).
-		SetAllowUserRefund(true).
 		SetRefundEnabled(true).
 		Save(ctx)
 	require.NoError(t, err)
@@ -395,12 +345,130 @@ func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, tc.status == payment.ProviderStatusSuccess, result.Success)
 			require.Equal(t, tc.wantDeduct, deducted)
+			if tc.status == payment.ProviderStatusSuccess {
+				require.Equal(t, tc.wantDeduct, result.BalanceDeducted)
+				audit, err := client.PaymentAuditLog.Query().
+					Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_SUCCESS")).
+					Only(ctx)
+				require.NoError(t, err)
+				require.Contains(t, audit.Detail, fmt.Sprintf(`"balanceDeducted":%v`, tc.wantDeduct))
+			}
 
 			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantStatus, reloaded.Status)
 		})
 	}
+}
+
+func TestFinalizePendingRefundSuccessRejectsStaleCallerBeforeSecondDeduction(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "finalize-stale")
+
+	deductions := 0
+	svc := &PaymentService{
+		entClient: client,
+		userRepo: &mockUserRepo{deductBalanceFn: func(ctx context.Context, id int64, amount float64) error {
+			require.NotNil(t, dbent.TxFromContext(ctx))
+			deductions++
+			return nil
+		}},
+	}
+
+	first, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order))
+	require.NoError(t, err)
+	require.True(t, first.Success)
+
+	second, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order))
+	require.Nil(t, second)
+	require.Error(t, err)
+	require.Equal(t, "CONFLICT", infraerrors.Reason(err))
+	require.Equal(t, 1, deductions)
+
+	successAudits, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_SUCCESS")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, successAudits)
+}
+
+func TestFinalizePendingRefundSuccessClampsDeductionToCurrentBalance(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		balance     float64
+		wantDeduct  float64
+		wantBalance float64
+	}{
+		{name: "insufficient balance", balance: 40, wantDeduct: 40, wantBalance: 0},
+		{name: "existing deficit", balance: -5, wantDeduct: 0, wantBalance: -5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			order := createPendingRefundOrderForTest(t, ctx, client, "finalize-clamp-"+tc.name)
+			_, err := client.User.UpdateOneID(order.UserID).SetBalance(tc.balance).Save(ctx)
+			require.NoError(t, err)
+
+			var deducted float64
+			svc := &PaymentService{
+				entClient: client,
+				userRepo: &mockUserRepo{deductBalanceFn: func(ctx context.Context, id int64, amount float64) error {
+					tx := dbent.TxFromContext(ctx)
+					require.NotNil(t, tx)
+					deducted += amount
+					_, updateErr := tx.Client().User.UpdateOneID(id).AddBalance(-amount).Save(ctx)
+					return updateErr
+				}},
+			}
+
+			result, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order))
+			require.NoError(t, err)
+			require.True(t, result.Success)
+			require.Equal(t, tc.wantDeduct, deducted)
+			require.Equal(t, tc.wantDeduct, result.BalanceDeducted)
+
+			current, err := client.User.Get(ctx, order.UserID)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantBalance, current.Balance)
+		})
+	}
+}
+
+func TestFinalizePendingRefundSuccessRollsBackPostDeductionFailure(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "finalize-rollback")
+	_, err := client.User.UpdateOneID(order.UserID).SetBalance(100).Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient: client,
+		userRepo: &mockUserRepo{deductBalanceFn: func(ctx context.Context, id int64, amount float64) error {
+			tx := dbent.TxFromContext(ctx)
+			require.NotNil(t, tx)
+			if _, updateErr := tx.Client().User.UpdateOneID(id).AddBalance(-amount).Save(ctx); updateErr != nil {
+				return updateErr
+			}
+			return errors.New("injected failure after deduction")
+		}},
+	}
+
+	result, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order))
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "injected failure after deduction")
+
+	user, err := client.User.Get(ctx, order.UserID)
+	require.NoError(t, err)
+	require.Equal(t, 100.0, user.Balance)
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusRefundPending, reloaded.Status)
+	successAudits, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_SUCCESS")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, successAudits)
 }
 
 func TestQueryAndFinalizeRefundUnsupportedProviderReturnsClearError(t *testing.T) {
@@ -424,6 +492,7 @@ func createPendingRefundOrderForTest(t *testing.T, ctx context.Context, client *
 		SetEmail(suffix + "@example.com").
 		SetPasswordHash("hash").
 		SetUsername(suffix).
+		SetBalance(100).
 		Save(ctx)
 	require.NoError(t, err)
 

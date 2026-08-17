@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
+const { copyToClipboardMock } = vi.hoisted(() => ({
+  copyToClipboardMock: vi.fn().mockResolvedValue(true)
+}))
+
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
     t: (key: string) => key
@@ -10,7 +14,7 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/composables/useClipboard', () => ({
   useClipboard: () => ({
-    copyToClipboard: vi.fn().mockResolvedValue(true)
+    copyToClipboard: copyToClipboardMock
   })
 }))
 
@@ -211,14 +215,42 @@ describe('UseKeyModal', () => {
     )
     expect(grokTab).toBeDefined()
 
-    const grokConfig = wrapper.findAll('pre code')
-      .map((code) => code.text())
-      .find((content) => content.includes('[model."grok"]'))
-    expect(grokConfig).toBeDefined()
-    expect(grokConfig).toContain('model = "grok-4.5"')
-    expect(grokConfig).toContain('base_url = "https://example.com/v1"')
-    expect(grokConfig).toContain('api_key = "sk-grok-test"')
-    expect(grokConfig).toContain('api_backend = "responses"')
+    const allCode = wrapper.findAll('pre code').map((code) => code.text()).join('\n')
+    expect(allCode).toContain('GROK_MODELS_BASE_URL')
+    expect(allCode).toContain('XAI_API_KEY')
+    expect(allCode).toContain('[model."grok-4.5"]')
+    expect(allCode).toContain('[model."grok-build-0.1"]')
+    expect(allCode).toContain('[model."grok-4.20-multi-agent-0309"]')
+    expect(allCode).toContain('[model."grok-4.3"]')
+    expect(allCode).toContain('default = "grok-4.5"')
+    expect(allCode).toContain('models_base_url = "https://example.com/v1"')
+    expect(allCode).toContain('models_list_url = "https://example.com/v1/models"')
+    expect(allCode).toContain('xai_api_base_url = "https://example.com/v1"')
+    expect(allCode).toContain('cli_chat_proxy_base_url = "https://example.com/v1"')
+    expect(allCode).toContain('preferred_method = "api_key"')
+    expect(allCode).toContain('image_description = "grok-4.5"')
+    expect(allCode).toContain('auto_compact_threshold_percent = 80')
+    expect(allCode).toContain('image_gen = true')
+    expect(allCode).toContain('video_gen = true')
+    expect(allCode).toContain('image_gen_model_override = "grok-imagine-image-quality"')
+    expect(allCode).toContain('image_edit_model_override = "grok-imagine-edit"')
+    expect(allCode).toContain('env_key = "XAI_API_KEY"')
+    expect(allCode).toContain('Keep api_backend = "responses" on every model entry.')
+    expect(allCode).toContain('grok-imagine-image')
+    expect(allCode).toContain('grok-imagine-edit')
+    expect(allCode).toMatch(/\[model\."grok-4\.5"\][\s\S]*?context_window = 500000/)
+    expect(allCode).toMatch(/\[model\."grok-build-0\.1"\][\s\S]*?context_window = 256000/)
+    // Prefer env_key; hardcode api_key only as commented alternative
+    expect(allCode).not.toMatch(/^api_key = "sk-grok-test"$/m)
+
+    const modelBlocks = allCode
+      .split(/(?=^\[model\.)/m)
+      .filter((block) => block.startsWith('[model."'))
+    expect(modelBlocks.length).toBeGreaterThanOrEqual(4)
+    for (const block of modelBlocks) {
+      if (block.includes('# [model.')) continue
+      expect(block).toContain('api_backend = "responses"')
+    }
 
     const windowsTab = wrapper.findAll('button').find(
       (button) => button.text().trim() === 'Windows'
@@ -226,7 +258,7 @@ describe('UseKeyModal', () => {
     expect(windowsTab).toBeDefined()
     await windowsTab!.trigger('click')
     await nextTick()
-    expect(wrapper.text()).toContain('%userprofile%\\.grok/config.toml')
+    expect(wrapper.text().toLowerCase()).toContain('%userprofile%\\.grok\\config.toml')
 
     const opencodeTab = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.cliTabs.opencode')
@@ -236,18 +268,45 @@ describe('UseKeyModal', () => {
     await nextTick()
 
     const parsed = JSON.parse(wrapper.find('pre code').text())
-    expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai')
+    expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai-compatible')
+    expect(parsed.provider.grok.name).toBe('Grok via Sub2API')
     expect(parsed.provider.grok.options).toEqual({
       baseURL: 'https://example.com/v1',
       apiKey: 'sk-grok-test'
     })
     expect(parsed.provider.grok.models['grok-4.5']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-4.5'].limit.context).toBe(500000)
     expect(parsed.provider.grok.models['grok-build-0.1']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-4.20-multi-agent-0309']).toBeDefined()
     expect(parsed.provider.grok.models['grok-composer-2.5-fast']).toBeDefined()
     expect(parsed.provider.grok.models['gpt-5.6']).toBeUndefined()
   })
 
-  it('keeps legacy OpenAI Codex authentication as the default', () => {
+  it('keeps Grok setup limited to native clients while cross-client mapping defaults off', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-grok-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'grok'
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const tabLabels = wrapper
+      .findAll('nav[aria-label="Client"] button')
+      .map((button) => button.text())
+
+    expect(tabLabels).toEqual([
+      'keys.useKeyModal.cliTabs.grokCli',
+      'keys.useKeyModal.cliTabs.opencode'
+    ])
+    expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+  })
+
+
+  it('keeps legacy OpenAI Codex config as the default', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -269,6 +328,8 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('x-openai-actor-authorization')
     expect(configToml).not.toContain('env_key')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
+    expect(wrapper.text()).toContain('auth.json')
+    expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(false)
   })
 
   it('renders API Key Mode authorization in OpenAI Codex config', async () => {
@@ -292,11 +353,24 @@ describe('UseKeyModal', () => {
     expect(apiKeyMode.attributes('aria-checked')).toBe('true')
     expect(configToml).toBeDefined()
     expect(configToml).toContain('requires_openai_auth = false')
-    expect(configToml).toContain(
-      'http_headers = { "x-openai-actor-authorization" = "local-image-extension" }'
-    )
+    expect(configToml).toContain('http_headers = { "x-openai-actor-authorization" = "local-image-extension" }')
     expect(configToml).not.toContain('env_key')
+    expect(configToml).not.toContain('image_generation')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
+    expect(wrapper.text()).toContain('auth.json')
+
+    const restartNotice = wrapper.get('[data-testid="codex-api-key-restart-notice"]')
+    expect(restartNotice.text()).toContain(
+      'keys.useKeyModal.openai.authModeApiKeyRestartNotice'
+    )
+
+    await wrapper.get('[data-testid="codex-auth-mode-legacy"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(false)
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain(
+      'x-openai-actor-authorization'
+    )
   })
 
   it('resets Codex authentication mode when the modal reopens or platform changes', async () => {
@@ -370,7 +444,7 @@ describe('UseKeyModal', () => {
     expect(tabLabels).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
   })
 
-  it('keeps both unified SDK tabs, appends GPT Image 2, and wraps client tabs', () => {
+  it('keeps both unified SDK tabs, appends GPT Image 2, and scrolls client tabs safely', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -404,10 +478,10 @@ describe('UseKeyModal', () => {
       'keys.useKeyModal.cliTabs.workBuddy'
     ])
     expect(clientNav.classes()).toEqual(
-      expect.arrayContaining(['flex', 'flex-wrap', 'gap-x-6', 'gap-y-1'])
+      expect.arrayContaining(['flex', 'min-w-max', 'gap-4', 'sm:gap-6'])
     )
     expect(clientNav.classes()).not.toContain('space-x-6')
-    expect(clientNav.classes()).not.toContain('overflow-x-auto')
+    expect(clientNav.element.parentElement?.classList.contains('overflow-x-auto')).toBe(true)
   })
 
   it('renders official manual CC Switch provider fields without shell tabs', async () => {

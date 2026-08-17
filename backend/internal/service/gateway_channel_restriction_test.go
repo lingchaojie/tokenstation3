@@ -35,6 +35,12 @@ func TestBillingModelForRestriction_Empty(t *testing.T) {
 	require.Equal(t, "claude-sonnet-4-6", got, "empty source defaults to channel_mapped")
 }
 
+func TestBillingModelForRestriction_RetiredResponseModelUsesSafeDefault(t *testing.T) {
+	t.Parallel()
+	got := billingModelForRestriction("response_model", "claude-fable-5", "claude-sonnet-4")
+	require.Equal(t, "claude-sonnet-4", got)
+}
+
 // --- resolveAccountUpstreamModel ---
 
 func TestResolveAccountUpstreamModel_Antigravity(t *testing.T) {

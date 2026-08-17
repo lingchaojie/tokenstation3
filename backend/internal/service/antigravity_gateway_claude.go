@@ -1,11 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -28,6 +26,8 @@ import (
 //	          ├─ 成功 → 正常返回
 //	          └─ 失败 → 设置模型限流 + 清除粘性绑定 → 切换账号
 func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte, isStickySession bool) (*ForwardResult, error) {
+	beginCaptureAttempt(c)
+	beginUpstreamResponseModelObservation(c)
 	// 上游透传账号直接转发，不走 OAuth token 刷新
 	if account.Type == AccountTypeUpstream {
 		return s.ForwardUpstream(ctx, c, account, body)
@@ -119,10 +119,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
-				ForceCacheBilling: switchErr.IsStickySession,
-			}
+			return nil, antigravitySwitchFailoverError(switchErr)
 		}
 		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
 		if c.Request.Context().Err() != nil {
@@ -210,7 +207,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 						Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
 					})
 					logger.LegacyPrintf("service.antigravity_gateway", "Antigravity account %d: signature retry request failed (%s): %v", account.ID, stage.name, retryErr)
-					continue
+					// The retry request is the latest real provider attempt. Do not
+					// combine its request-only capture bridge with the initial 400.
+					_, _ = takeCaptureResult(c)
+					if switchErr, ok := IsAntigravityAccountSwitchError(retryErr); ok {
+						return nil, antigravitySwitchFailoverError(switchErr)
+					}
+					return nil, retryErr
 				}
 
 				retryResp := retryResult.resp
@@ -221,8 +224,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					break
 				}
 
-				retryBody, _ := io.ReadAll(io.LimitReader(retryResp.Body, 8<<10))
-				_ = retryResp.Body.Close()
+				detachedRetryResp, retryBody, retryReadErr := readAntigravityRetryResponse(retryResp, 8<<10)
+				if retryReadErr != nil {
+					return failedForwardResultWithCapture(c, detachedRetryResp, originalModel, billingModel, claudeReq.Stream, startTime), retryReadErr
+				}
+				retryResp = detachedRetryResp
 				if retryResp.StatusCode == http.StatusTooManyRequests {
 					retryBaseURL := ""
 					if retryResp.Request != nil && retryResp.Request.URL != nil {
@@ -254,21 +260,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				// If this stage fixed the signature issue, we stop; otherwise we may try the next stage.
 				if retryResp.StatusCode != http.StatusBadRequest || !isSignatureRelatedError(retryBody) {
 					respBody = retryBody
-					resp = &http.Response{
-						StatusCode: retryResp.StatusCode,
-						Header:     retryResp.Header.Clone(),
-						Body:       io.NopCloser(bytes.NewReader(retryBody)),
-					}
+					resp = retryResp
 					break
 				}
 
 				// Still signature-related; capture context and allow next stage.
 				respBody = retryBody
-				resp = &http.Response{
-					StatusCode: retryResp.StatusCode,
-					Header:     retryResp.Header.Clone(),
-					Body:       io.NopCloser(bytes.NewReader(retryBody)),
-				}
+				resp = retryResp
 			}
 		}
 
@@ -329,17 +327,20 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 								resp = retryResp
 								respBody = nil
 							} else {
-								retryBody := s.readUpstreamErrorBody(retryResp)
-								_ = retryResp.Body.Close()
-								respBody = retryBody
-								resp = &http.Response{
-									StatusCode: retryResp.StatusCode,
-									Header:     retryResp.Header.Clone(),
-									Body:       io.NopCloser(bytes.NewReader(retryBody)),
+								detachedRetryResp, retryBody, retryReadErr := readAntigravityRetryResponse(retryResp, s.upstreamErrorBodyReadLimit())
+								if retryReadErr != nil {
+									return failedForwardResultWithCapture(c, detachedRetryResp, originalModel, billingModel, claudeReq.Stream, startTime), retryReadErr
 								}
+								respBody = retryBody
+								resp = detachedRetryResp
 							}
 						} else {
 							logger.LegacyPrintf("service.antigravity_gateway", "Antigravity account %d: budget rectifier retry failed: %v", account.ID, retryErr)
+							_, _ = takeCaptureResult(c)
+							if switchErr, ok := IsAntigravityAccountSwitchError(retryErr); ok {
+								return nil, antigravitySwitchFailoverError(switchErr)
+							}
+							return nil, retryErr
 						}
 					}
 				}
@@ -371,6 +372,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					StatusCode: resp.StatusCode,
 					RequestID:  resp.Header.Get("x-request-id"),
 					Body:       respBody,
+					Failure:    newTerminalProviderHTTPError(account, resp, respBody),
 				}
 			}
 
@@ -393,7 +395,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 						Message:            upstreamMsg,
 						Detail:             upstreamDetail,
 					})
-					return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: true}
+					return nil, newAntigravityHTTPFailoverError(account, resp, respBody, true)
 				}
 			}
 
@@ -411,10 +413,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, newAntigravityHTTPFailoverError(account, resp, respBody, false)
 			}
 
-			return nil, s.writeMappedClaudeError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
+			_ = s.writeMappedClaudeError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
+			return nil, newTerminalProviderHTTPError(account, resp, respBody)
 		}
 	}
 
@@ -431,7 +434,10 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, err)
-			return nil, err
+			if streamRes == nil {
+				return failedForwardResultForError(c, resp, originalModel, billingModel, true, startTime, err), err
+			}
+			return streamErrorForwardResult(c, resp, originalModel, billingModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err), err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
@@ -441,22 +447,25 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
-			return nil, err
+			return failedForwardResultForError(c, resp, originalModel, billingModel, false, startTime, err), err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
 	}
 
-	return &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           claudeReq.Stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
-	}, nil
+	finishCaptureResponse(resp)
+	return finalizeForwardResult(c, &ForwardResult{
+		RequestID:                     requestID,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        claudeReq.Stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+	}), nil
 }
 
 func isSignatureRelatedError(respBody []byte) bool {

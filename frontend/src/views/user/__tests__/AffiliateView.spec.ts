@@ -161,4 +161,41 @@ describe('AffiliateView', () => {
     expect(wrapper.text()).toContain('好友首充满 ¥20，你获得 ¥10，好友获得 ¥5')
     expect(wrapper.text()).not.toContain('2/3')
   })
+
+  it('stacks long values and copy controls on mobile while retaining desktop rows', async () => {
+    getAffiliateDetail.mockResolvedValue(detail({
+      aff_code: 'affiliate-code-that-is-long-enough-to-overflow-a-mobile-viewport',
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const values = wrapper.findAll('code')
+    expect(values).toHaveLength(2)
+    for (const value of values) {
+      expect(value.classes()).toEqual(expect.arrayContaining([
+        'min-w-0',
+        'break-all',
+        'sm:flex-1',
+        'sm:truncate',
+      ]))
+      expect(Array.from(value.element.parentElement?.classList ?? [])).toEqual(expect.arrayContaining([
+        'flex-col',
+        'items-stretch',
+        'sm:flex-row',
+        'sm:items-center',
+      ]))
+    }
+
+    const copyButtons = wrapper.findAll('button').filter((button) =>
+      ['复制邀请码', '复制链接'].includes(button.text()),
+    )
+    expect(copyButtons).toHaveLength(2)
+    for (const button of copyButtons) {
+      expect(button.classes()).toEqual(expect.arrayContaining([
+        'w-full',
+        'sm:w-auto',
+        'sm:shrink-0',
+      ]))
+    }
+  })
 })

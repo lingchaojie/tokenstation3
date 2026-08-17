@@ -42,7 +42,6 @@ const props = withDefaults(defineProps<{
 }>(), {
   showDivider: true,
 })
-
 const appStore = useAppStore()
 const route = useRoute()
 const { t, locale } = useI18n()
@@ -87,10 +86,9 @@ function startLogin(): void {
   }
   const redirectTo = (route.query.redirect as string) || '/dashboard'
   storeOAuthAffiliateCode(resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code))
+  const mode = resolvedStart.value.mode
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
   const normalized = apiBase.replace(/\/$/, '')
-  const mode = resolvedStart.value.mode
-  const startURL = `${normalized}/auth/oauth/wechat/start?mode=${mode}&redirect=${encodeURIComponent(redirectTo)}`
-  window.location.href = startURL
+  window.location.href = `${normalized}/auth/oauth/wechat/start?mode=${mode}&redirect=${encodeURIComponent(redirectTo)}`
 }
 </script>

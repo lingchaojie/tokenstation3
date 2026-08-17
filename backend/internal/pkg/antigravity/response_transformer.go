@@ -50,8 +50,8 @@ func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *
 // NonStreamingProcessor 非流式响应处理器
 type NonStreamingProcessor struct {
 	contentBlocks     []ClaudeContentItem
-	textBuilder       string
-	thinkingBuilder   string
+	textBuilder       strings.Builder
+	thinkingBuilder   strings.Builder
 	thinkingSignature string
 	trailingSignature string
 	hasToolCall       bool
@@ -159,7 +159,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 				p.trailingSignature = ""
 			}
 
-			p.thinkingBuilder += part.Text
+			_, _ = p.thinkingBuilder.WriteString(part.Text)
 			if signature != "" {
 				p.thinkingSignature = signature
 			}
@@ -199,7 +199,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 				})
 			} else {
 				// 普通 text (无签名) - 累积到 builder
-				p.textBuilder += part.Text
+				_, _ = p.textBuilder.WriteString(part.Text)
 			}
 		}
 	}
@@ -209,7 +209,7 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 		p.flushThinking()
 		markdownImg := fmt.Sprintf("![image](data:%s;base64,%s)",
 			part.InlineData.MimeType, part.InlineData.Data)
-		p.textBuilder += markdownImg
+		_, _ = p.textBuilder.WriteString(markdownImg)
 		p.flushText()
 	}
 }
@@ -222,35 +222,35 @@ func (p *NonStreamingProcessor) processGrounding(grounding *GeminiGroundingMetad
 
 	p.flushThinking()
 	p.flushText()
-	p.textBuilder += groundingText
+	_, _ = p.textBuilder.WriteString(groundingText)
 	p.flushText()
 }
 
 // flushText 刷新 text builder
 func (p *NonStreamingProcessor) flushText() {
-	if p.textBuilder == "" {
+	if p.textBuilder.Len() == 0 {
 		return
 	}
 
 	p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 		Type: "text",
-		Text: p.textBuilder,
+		Text: p.textBuilder.String(),
 	})
-	p.textBuilder = ""
+	p.textBuilder.Reset()
 }
 
 // flushThinking 刷新 thinking builder
 func (p *NonStreamingProcessor) flushThinking() {
-	if p.thinkingBuilder == "" && p.thinkingSignature == "" {
+	if p.thinkingBuilder.Len() == 0 && p.thinkingSignature == "" {
 		return
 	}
 
 	p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 		Type:      "thinking",
-		Thinking:  p.thinkingBuilder,
+		Thinking:  p.thinkingBuilder.String(),
 		Signature: p.thinkingSignature,
 	})
-	p.thinkingBuilder = ""
+	p.thinkingBuilder.Reset()
 	p.thinkingSignature = ""
 }
 
@@ -293,7 +293,7 @@ func (p *NonStreamingProcessor) buildResponse(geminiResp *GeminiResponse, respon
 		respID = geminiResp.ResponseID
 	}
 	if respID == "" {
-		respID = "msg_" + generateRandomID()
+		respID = generateAnthropicMsgID()
 	}
 
 	return &ClaudeResponse{
@@ -371,4 +371,19 @@ func generateRandomID() string {
 		id[i] = chars[int(b)%len(chars)]
 	}
 	return string(id)
+}
+
+// generateAnthropicMsgID 生成 Anthropic 官方格式的 message ID：msg_01 + 22 位 Base62
+func generateAnthropicMsgID() string {
+	const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const idLen = 22
+	randomBytes := make([]byte, idLen)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "msg_01" + generateRandomID() + generateRandomID()[:10]
+	}
+	b := make([]byte, idLen)
+	for i := range b {
+		b[i] = charset[int(randomBytes[i])%len(charset)]
+	}
+	return "msg_01" + string(b)
 }

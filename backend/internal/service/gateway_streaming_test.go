@@ -3,12 +3,18 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -16,7 +22,75 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+type blockingAfterPayloadBody struct {
+	reader  *bytes.Reader
+	blocked chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+	closes  atomic.Int32
+}
+
+type signalWriteResponseWriter struct {
+	gin.ResponseWriter
+	wrote chan struct{}
+	once  sync.Once
+}
+
+func TestValidJSONObjectBytesDoesNotMaterializeDenseToolInput(t *testing.T) {
+	const targetBytes = 8 << 20
+	body := []byte(`{"items":[` + strings.Repeat(`"",`, (targetBytes-len(`{"items":[]}`))/3) + `""]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-8)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validJSONObjectBytes(body)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+	require.False(t, validJSONObjectBytes([]byte(`[]`)))
+	require.False(t, validJSONObjectBytes([]byte(`{"ok":true} trailing`)))
+}
+
+func (w *signalWriteResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if n > 0 {
+		w.once.Do(func() { close(w.wrote) })
+	}
+	return n, err
+}
+
+func newBlockingAfterPayloadBody(payload []byte) *blockingAfterPayloadBody {
+	return &blockingAfterPayloadBody{
+		reader:  bytes.NewReader(payload),
+		blocked: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+}
+
+func (b *blockingAfterPayloadBody) Read(p []byte) (int, error) {
+	if b.reader.Len() > 0 {
+		return b.reader.Read(p)
+	}
+	b.once.Do(func() { close(b.blocked) })
+	<-b.closed
+	return 0, context.Canceled
+}
+
+func (b *blockingAfterPayloadBody) Close() error {
+	b.closes.Add(1)
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	return nil
+}
 
 // --- parseSSEUsage 测试 ---
 
@@ -32,11 +106,248 @@ func newMinimalGatewayService() *GatewayService {
 	}
 }
 
+func anthropicTestMessageStart(inputTokens int) string {
+	return fmt.Sprintf("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":%d}}}\n\n", inputTokens)
+}
+
+func anthropicTestSemanticPrefix(inputTokens int, text string) string {
+	return anthropicTestMessageStart(inputTokens) +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", text)
+}
+
+func TestAnthropicSSEEventHasSemanticOutput(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"message start", `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9}}}`, false},
+		{"ping", `{"type":"ping"}`, false},
+		{"usage only", `{"type":"message_delta","usage":{"output_tokens":3}}`, false},
+		{"empty text", `{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`, false},
+		{"empty thinking", `{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":""}}`, false},
+		{"empty tool start", `{"type":"content_block_start","content_block":{"type":"tool_use","id":"","name":"","input":{}}}`, false},
+		{"id-only tool start", `{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_generated","name":"","input":{}}}`, false},
+		{"empty tool args", `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":""}}`, false},
+		{"unknown structured metadata", `{"type":"content_block_delta","delta":{"type":"vendor_metadata","metadata":{"trace":"noise"}}}`, false},
+		{"unknown string metadata", `{"type":"content_block_delta","delta":{"type":"vendor_metadata","payload":"noise"}}`, false},
+		{"text", `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`, true},
+		{"thinking", `{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reason"}}`, true},
+		{"tool start", `{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}}`, true},
+		{"tool args", `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\\"path\\\":"}}`, true},
+		{"done", `[DONE]`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, anthropicSSEEventHasSemanticOutput(tt.data))
+		})
+	}
+}
+
+func TestAnthropicProviderShapeAllowsOfficialAndFutureExtensions(t *testing.T) {
+	require.True(t, validAnthropicStreamContentBlockStart(gjson.Parse(`{"type":"fallback"}`)))
+	phase := anthropicProviderStarted
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		"content_block_start",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_delta",
+		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location","start_char_index":0,"end_char_index":4}}}`),
+		"content_block_delta",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_stop",
+		[]byte(`{"type":"content_block_stop","index":0}`),
+		"content_block_stop",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":1,"content_block":{"type":"fallback"}}`),
+		"content_block_start",
+	))
+	require.NoError(t, validateAnthropicProviderEvent(
+		&phase, "content_block_delta",
+		[]byte(`{"type":"content_block_delta","index":1,"delta":{"type":"future_metadata_delta","metadata":{"trace":"ok"}}}`),
+		"content_block_delta",
+	))
+	require.True(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"future_server_tool_result","content":{"ok":true}}]`)))
+
+	phase = anthropicProviderAwaitingStart
+	require.Error(t, validateAnthropicProviderEvent(
+		&phase, "", []byte(`{"type":123}`), "123",
+	))
+	phase = anthropicProviderStarted
+	require.Error(t, validateAnthropicProviderEvent(
+		&phase, "content_block_start",
+		[]byte(`{"type":"content_block_start","index":0.5,"content_block":{"type":"text","text":""}}`),
+		"content_block_start",
+	))
+}
+
+func TestAnthropicProviderValidationRejectsDuplicateKnownJSONKeys(t *testing.T) {
+	for name, payload := range map[string]string{
+		"event type":        `{"type":"message_delta","type":"message_stop","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		"delta stop reason": `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_reason":"max_tokens"},"usage":{"output_tokens":1}}`,
+		"usage output":      `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1,"output_tokens":2}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			phase := anthropicProviderStarted
+			_, err := validateAnthropicProviderJSONEvent(&phase, "message_delta", []byte(payload))
+			require.ErrorContains(t, err, "repeated known field")
+		})
+	}
+
+	phase := anthropicProviderStarted
+	_, err := validateAnthropicProviderJSONEvent(&phase, "future_event", []byte(`{"type":"future_event","opaque":{"type":"future-a","type":"future-b"}}`))
+	require.NoError(t, err, "duplicate fields inside an unknown extension remain forward-compatible")
+
+	require.False(t, validAnthropicNonStreamingResponse([]byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"safe","text":"danger"}],"stop_reason":"end_turn"}`)))
+}
+
+func TestAnthropicProviderPhaseRequiresTerminalMessageDeltaAndRejectsLaterContent(t *testing.T) {
+	start := []byte(`{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"stop_reason":null}}`)
+	terminalDelta := []byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`)
+	stop := []byte(`{"type":"message_stop"}`)
+
+	phase := anthropicProviderAwaitingStart
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "message_delta", []byte(`{"type":"message_delta","delta":{},"usage":{"output_tokens":1}}`), "message_delta"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
+
+	phase = anthropicProviderAwaitingStart
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_delta", terminalDelta, "message_delta"))
+	require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`), "content_block_start"))
+	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
+}
+
+func TestAnthropicProviderContentStateAndRetainedMetadataAreBounded(t *testing.T) {
+	t.Run("cross-frame content blocks", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		for index := 0; index < maxAnthropicProviderContentBlocks; index++ {
+			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, index))
+			stop := []byte(fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))
+			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start"))
+			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", stop, "content_block_stop"))
+		}
+		overflow := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, maxAnthropicProviderContentBlocks))
+		require.ErrorContains(t, validateAnthropicProviderEvent(&phase, "content_block_start", overflow, "content_block_start"), "state limit")
+	})
+
+	t.Run("retained block type", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		payload := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"` + strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1) + `"}}`)
+		require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", payload, "content_block_start"))
+	})
+
+	t.Run("tool identity", func(t *testing.T) {
+		oversized := strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1)
+		for name, block := range map[string]string{
+			"id":   `{"type":"tool_use","id":"` + oversized + `","name":"lookup","input":{}}`,
+			"name": `{"type":"tool_use","id":"tool-1","name":"` + oversized + `","input":{}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				require.False(t, validAnthropicStreamContentBlockStart(gjson.Parse(block)))
+			})
+		}
+	})
+
+	t.Run("duplicate tool ids", func(t *testing.T) {
+		phase := anthropicProviderStarted
+		for index := 0; index < 2; index++ {
+			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":"tool-1","name":"lookup","input":{}}}`, index))
+			err := validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start")
+			if index == 0 {
+				require.NoError(t, err)
+				require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", []byte(`{"type":"content_block_stop","index":0}`), "content_block_stop"))
+				continue
+			}
+			require.ErrorContains(t, err, "duplicated tool id")
+		}
+		require.False(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"tool_use","id":"tool-1","name":"a","input":{}},{"type":"tool_use","id":"tool-1","name":"b","input":{}}]`)))
+	})
+}
+
+func TestValidAnthropicResponseContentRejectsDenseBlocksWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const block = `{"type":"text","text":""},`
+	blockCount := (targetBytes - len(`[]`)) / len(block)
+	body := `[` + strings.Repeat(block, blockCount) + `{"type":"text","text":""}]`
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(block)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validAnthropicResponseContent(gjson.Parse(body))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestValidAnthropicMessageStartRejectsDenseContentWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const block = `{},`
+	blockCount := (targetBytes - len(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[]}}`)) / len(block)
+	payload := []byte(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[` + strings.Repeat(block, blockCount) + `{ }]}}`)
+	require.GreaterOrEqual(t, len(payload), targetBytes-16)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validAnthropicMessageStartPayload(payload)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestAnthropicUsageAndSemanticReadersIgnoreDenseUnknownSiblingWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	prefix := `{"type":"message_start","message":{"id":"msg_dense","type":"message","role":"assistant","content":[],"usage":{"input_tokens":17,"output_tokens":2}},"junk":[`
+	body := prefix + strings.Repeat(`{},`, (targetBytes-len(prefix)-len(`{}]}`))/3) + `{}]}`
+	require.GreaterOrEqual(t, len(body), targetBytes-8)
+	line := "data: " + body
+	nonstreamBody := []byte(`{"usage":{"input_tokens":17,"output_tokens":2},"junk":` + gjson.Get(body, "junk").Raw + `}`)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	phase := anthropicProviderStreamPhase{}
+	_, validateErr := validateAnthropicProviderJSONEvent(&phase, "message_start", []byte(body))
+	semantic := anthropicSSEEventHasSemanticOutput(body)
+	usage := &ClaudeUsage{}
+	newMinimalGatewayService().parseSSEUsage(body, usage)
+	(&AntigravityGatewayService{}).extractSSEUsage(line, usage)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	streamAlloc := after.TotalAlloc - before.TotalAlloc
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	nonstreamUsage := (&AntigravityGatewayService{}).extractClaudeUsage(nonstreamBody)
+	runtime.ReadMemStats(&after)
+	nonstreamAlloc := after.TotalAlloc - before.TotalAlloc
+
+	require.NoError(t, validateErr)
+	require.False(t, semantic)
+	require.Equal(t, 17, usage.InputTokens)
+	require.Equal(t, 2, usage.OutputTokens)
+	require.Equal(t, 17, nonstreamUsage.InputTokens)
+	require.Equal(t, 2, nonstreamUsage.OutputTokens)
+	require.Less(t, streamAlloc, uint64(12<<20))
+	require.Less(t, nonstreamAlloc, uint64(12<<20))
+}
+
 func TestParseSSEUsage_MessageStart(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
-	data := `{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":200}}}`
+	data := `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":200}}}`
 	svc.parseSSEUsage(data, usage)
 
 	require.Equal(t, 100, usage.InputTokens)
@@ -61,7 +372,7 @@ func TestParseSSEUsage_DeltaDoesNotOverwriteStartValues(t *testing.T) {
 	usage := &ClaudeUsage{}
 
 	// 先处理 message_start
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100}}}`, usage)
 	require.Equal(t, 100, usage.InputTokens)
 
 	// 再处理 message_delta（output_tokens > 0, input_tokens = 0）
@@ -86,7 +397,7 @@ func TestParseSSEUsage_KiroFinalUsageExplicitZerosOverwriteStart(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":30,"output_tokens":0,"cache_creation_input_tokens":30,"cache_read_input_tokens":60}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":30,"output_tokens":0,"cache_creation_input_tokens":30,"cache_read_input_tokens":60}}}`, usage)
 	svc.parseSSEUsage(`{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":120,"_sub2api_kiro_final_usage":true}}`, usage)
 
 	require.Zero(t, usage.InputTokens)
@@ -100,7 +411,7 @@ func TestParseSSEUsage_DeltaDoesNotResetCacheCreationBreakdown(t *testing.T) {
 	usage := &ClaudeUsage{}
 
 	// 先在 message_start 中写入非零 5m/1h 明细
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`, usage)
 	require.Equal(t, 30, usage.CacheCreation5mTokens)
 	require.Equal(t, 70, usage.CacheCreation1hTokens)
 
@@ -163,8 +474,8 @@ func TestHandleStreamingResponse_CacheTokens(t *testing.T) {
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30}}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":15}}\n\n"))
 		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
 	}()
 
@@ -198,8 +509,10 @@ func TestHandleStreamingResponse_EmptyStream(t *testing.T) {
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
 	_ = pr.Close()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
-	require.NotNil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestHandleStreamingResponse_SpecialCharactersInJSON(t *testing.T) {
@@ -216,9 +529,11 @@ func TestHandleStreamingResponse_SpecialCharactersInJSON(t *testing.T) {
 	go func() {
 		defer func() { _ = pw.Close() }()
 		// 包含特殊字符的 content_block_delta（引号、换行、Unicode）
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"))
 		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \\\"world\\\"\\n你好\"}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"))
 		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
 	}()
 
@@ -276,7 +591,7 @@ func TestHandleStreamingResponse_StreamReadErrorBeforeOutput_TriggersFailover(t 
 
 // 上游已经发送过事件（c.Writer 已写过字节）后再发生读错误：
 // SSE 协议无 resume，网关只能透传 stream_read_error 错误事件给客户端，不能 failover。
-func TestHandleStreamingResponse_StreamReadErrorAfterOutput_PassesThrough(t *testing.T) {
+func TestHandleStreamingResponse_StreamReadErrorAfterSemanticOutput_PassesThrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newMinimalGatewayService()
 
@@ -284,12 +599,13 @@ func TestHandleStreamingResponse_StreamReadErrorAfterOutput_PassesThrough(t *tes
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	// 第一次 Read 返回完整 SSE 事件让网关向 client 写入字节，第二次 Read 返回 EOF
+	// message_start is staged; a non-empty text delta crosses the semantic
+	// commit boundary and flushes both frames before the read error.
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: &streamReadCloser{
-			payload: []byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"),
+			payload: []byte(anthropicTestSemanticPrefix(5, "hello")),
 			err:     io.ErrUnexpectedEOF,
 		},
 	}
@@ -311,6 +627,693 @@ func TestHandleStreamingResponse_StreamReadErrorAfterOutput_PassesThrough(t *tes
 	require.Contains(t, body, `"type":"error"`, "data 必须含 type:error 顶层字段（Anthropic 标准）")
 	require.Contains(t, body, `"stream_read_error"`, "error.type 必须为 stream_read_error")
 	require.Contains(t, body, "upstream stream disconnected", "error.message 必须包含具体根因，Claude Code 等客户端才能显示有效错误文案")
+}
+
+func TestHandleStreamingResponse_StreamReadErrorAfterPreamble_DiscardsWriterAndFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &streamReadCloser{
+			payload: []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\n"),
+			err:     io.ErrUnexpectedEOF,
+		},
+	}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, -1, c.Writer.Size())
+	require.Empty(t, rec.Body.String())
+}
+
+func TestHandleStreamingResponse_CancellationUsesSemanticCommitBoundary(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{"preamble", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n", false},
+		{"text", anthropicTestSemanticPrefix(5, "hello"), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newMinimalGatewayService()
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: &streamReadCloser{payload: []byte(tt.payload), err: context.Canceled}}
+
+			result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+			var failoverErr *UpstreamFailoverError
+			if !tt.committed {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+				return
+			}
+			require.NotNil(t, result)
+			require.Error(t, err)
+			require.False(t, errors.As(err, &failoverErr))
+			require.Contains(t, rec.Body.String(), "hello")
+		})
+	}
+}
+
+func TestHandleStreamingResponse_ContextCancellationClosesBlockingBody(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{
+			name:    "before semantic output",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n",
+		},
+		{
+			name:      "after semantic output",
+			payload:   anthropicTestSemanticPrefix(5, "hello"),
+			committed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newMinimalGatewayService()
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			writeSignal := &signalWriteResponseWriter{ResponseWriter: c.Writer, wrote: make(chan struct{})}
+			c.Writer = writeSignal
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
+			ctx, cancel := context.WithCancel(context.Background())
+			resultCh := make(chan *streamingResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			select {
+			case <-body.blocked:
+			case <-time.After(time.Second):
+				t.Fatal("scanner did not reach the blocking read")
+			}
+			if tt.committed {
+				select {
+				case <-writeSignal.wrote:
+				case <-time.After(time.Second):
+					_ = body.Close()
+					t.Fatal("semantic output was not committed before cancellation")
+				}
+			}
+			cancel()
+
+			var result *streamingResult
+			var err error
+			returnedBeforeCleanup := true
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(300 * time.Millisecond):
+				returnedBeforeCleanup = false
+				_ = body.Close()
+				result = <-resultCh
+				err = <-errCh
+			}
+			require.True(t, returnedBeforeCleanup, "ctx cancellation must terminate a blocked scanner without test cleanup")
+			require.Equal(t, int32(1), body.closes.Load(), "shared Anthropic scanner must close its body exactly once")
+			select {
+			case <-body.closed:
+			default:
+				t.Fatal("ctx cancellation must close the upstream response body")
+			}
+
+			var failoverErr *UpstreamFailoverError
+			if !tt.committed {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+				return
+			}
+			require.NotNil(t, result)
+			require.Error(t, err)
+			require.False(t, errors.As(err, &failoverErr))
+			require.ErrorIs(t, err, context.Canceled)
+			require.Contains(t, rec.Body.String(), "hello")
+		})
+	}
+}
+
+func TestHandleStreamingResponse_FirstOutputBuffersUseEstablishedBound(t *testing.T) {
+	largeValue := strings.Repeat("x", openAIFirstOutputStageMaxBytes)
+	var unterminated strings.Builder
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
+	for unterminated.Len() <= openAIFirstOutputStageMaxBytes {
+		unterminated.WriteString(strings.Repeat("m", 64*1024-1))
+		unterminated.WriteByte('\n')
+	}
+
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{
+			name:    "staged protocol bytes before semantic output",
+			payload: "event: ping\ndata: {\"type\":\"ping\",\"padding\":\"" + largeValue + "\"}\n\n",
+		},
+		{
+			name:      "unterminated event after semantic output",
+			payload:   semanticPrefix + unterminated.String(),
+			committed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newMinimalGatewayService()
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
+			resultCh := make(chan *streamingResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			var result *streamingResult
+			var err error
+			returnedAtBound := true
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(time.Second):
+				returnedAtBound = false
+				_ = body.Close()
+				result = <-resultCh
+				err = <-errCh
+			}
+			require.True(t, returnedAtBound, "stream must terminate at the existing %d-byte staging bound", openAIFirstOutputStageMaxBytes)
+			require.Equal(t, int32(1), body.closes.Load(), "shared Anthropic stage overflow must close its body exactly once")
+			var failoverErr *UpstreamFailoverError
+			if !tt.committed {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+				return
+			}
+			require.NotNil(t, result)
+			require.Error(t, err)
+			require.False(t, errors.As(err, &failoverErr))
+			require.Contains(t, rec.Body.String(), "hello")
+		})
+	}
+}
+
+func TestHandleStreamingResponse_NewlineFreeTokenUsesEstablishedBound(t *testing.T) {
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
+	oversizedToken := "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{name: "before semantic output", payload: oversizedToken},
+		{name: "after semantic output", payload: semanticPrefix + oversizedToken, committed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newMinimalGatewayService()
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
+			resultCh := make(chan *streamingResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			var result *streamingResult
+			var err error
+			returnedAtBound := true
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(time.Second):
+				returnedAtBound = false
+				_ = body.Close()
+				result = <-resultCh
+				err = <-errCh
+			}
+			require.True(t, returnedAtBound, "scanner must stop while accumulating one newline-free token at the existing 8 MiB bound")
+			require.Equal(t, int32(1), body.closes.Load(), "shared Anthropic token overflow must close its body exactly once")
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, recorder.Body.String(), "hello")
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
+func TestGatewayService_Forward_SharedAnthropicStreamingOwnsBodyExactlyOnce(t *testing.T) {
+	requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+	require.NoError(t, err)
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+		cancel    bool
+	}{
+		{name: "cancel before semantic output", payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\n", cancel: true},
+		{name: "cancel after semantic output", payload: semanticPrefix, committed: true, cancel: true},
+		{name: "token overflow before semantic output", payload: "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)},
+		{name: "token overflow after semantic output", payload: semanticPrefix + "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024), committed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			writer := &signalWriteResponseWriter{ResponseWriter: c.Writer, wrote: make(chan struct{})}
+			c.Writer = writer
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       body,
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultCh := make(chan *ForwardResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, forwardErr := svc.Forward(ctx, c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+				resultCh <- result
+				errCh <- forwardErr
+			}()
+
+			if tt.cancel {
+				select {
+				case <-body.blocked:
+				case <-time.After(time.Second):
+					t.Fatal("shared Anthropic reader did not reach its blocking point")
+				}
+				if tt.committed {
+					select {
+					case <-writer.wrote:
+					case <-time.After(time.Second):
+						_ = body.Close()
+						t.Fatal("shared Anthropic semantic event was not committed before cancellation")
+					}
+				}
+				cancel()
+			}
+
+			var result *ForwardResult
+			var forwardErr error
+			returnedBeforeCleanup := true
+			select {
+			case result = <-resultCh:
+				forwardErr = <-errCh
+			case <-time.After(time.Second):
+				returnedBeforeCleanup = false
+				_ = body.Close()
+				result = <-resultCh
+				forwardErr = <-errCh
+			}
+			require.True(t, returnedBeforeCleanup)
+			require.Equal(t, int32(1), body.closes.Load(), "shared Forward route must transfer response-body ownership exactly once")
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(forwardErr, &failoverErr))
+				require.Contains(t, recorder.Body.String(), "hello")
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, forwardErr, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_NewlineFreeTokenUsesEstablishedBound(t *testing.T) {
+	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	semanticPrefix := anthropicTestSemanticPrefix(5, "hello")
+	oversizedToken := "data: " + strings.Repeat("x", openAIFirstOutputStageMaxBytes+1024)
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{name: "before semantic output", payload: oversizedToken},
+		{name: "after semantic output", payload: semanticPrefix + oversizedToken, committed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       body,
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			resultCh := make(chan *ForwardResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			var result *ForwardResult
+			var err error
+			returnedAtBound := true
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(time.Second):
+				returnedAtBound = false
+				_ = body.Close()
+				result = <-resultCh
+				err = <-errCh
+			}
+			require.True(t, returnedAtBound, "API-key route scanner must stop while accumulating one newline-free token at the existing 8 MiB bound")
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, recorder.Body.String(), "hello")
+			} else {
+				require.Nil(t, result)
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, -1, c.Writer.Size())
+				require.Empty(t, recorder.Body.String())
+			}
+			require.Equal(t, int32(1), body.closes.Load(), "the route must close the owned upstream body exactly once")
+		})
+	}
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_CancellationClosesAndJoinsScanner(t *testing.T) {
+	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{
+			name:    "before semantic output",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n",
+		},
+		{
+			name:      "after semantic output",
+			payload:   anthropicTestSemanticPrefix(9, "hello"),
+			committed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			writer := &signalWriteResponseWriter{ResponseWriter: c.Writer, wrote: make(chan struct{})}
+			c.Writer = writer
+			parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       body,
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultCh := make(chan *ForwardResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := svc.Forward(ctx, c, newAnthropicAPIKeyAccountForTest(), parsed)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			select {
+			case <-body.blocked:
+			case <-time.After(time.Second):
+				t.Fatal("API-key upstream reader did not reach its blocking point")
+			}
+			if tt.committed {
+				select {
+				case <-writer.wrote:
+				case <-time.After(time.Second):
+					_ = body.Close()
+					t.Fatal("semantic API-key event was not committed before cancellation")
+				}
+			}
+			cancel()
+
+			var result *ForwardResult
+			var err error
+			returnedBeforeCleanup := true
+			select {
+			case result = <-resultCh:
+				err = <-errCh
+			case <-time.After(time.Second):
+				returnedBeforeCleanup = false
+				_ = body.Close()
+				result = <-resultCh
+				err = <-errCh
+			}
+			require.True(t, returnedBeforeCleanup, "context cancellation must close and join the API-key scanner without test cleanup")
+			require.Equal(t, int32(1), body.closes.Load(), "the API-key route must close its upstream body exactly once")
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, tt.payload, recorder.Body.String())
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_IdleUsesSemanticCommitBoundary(t *testing.T) {
+	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	for _, tt := range []struct {
+		name      string
+		payload   string
+		committed bool
+	}{
+		{
+			name:    "before semantic output",
+			payload: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9}}}\n\n",
+		},
+		{
+			name:      "after semantic output",
+			payload:   anthropicTestSemanticPrefix(9, "hello"),
+			committed: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+			parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
+			body := newBlockingAfterPayloadBody([]byte(tt.payload))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       body,
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+
+			result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+			require.Error(t, err)
+			require.Equal(t, int32(1), body.closes.Load())
+			var failoverErr *UpstreamFailoverError
+			if tt.committed {
+				require.NotNil(t, result)
+				require.False(t, errors.As(err, &failoverErr))
+				require.Contains(t, err.Error(), "data interval timeout")
+				require.Equal(t, tt.payload, recorder.Body.String())
+				return
+			}
+			require.Nil(t, result)
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, -1, c.Writer.Size())
+			require.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_AggregatePreambleOverflowFailsOverAtEstablishedBound(t *testing.T) {
+	requestBody := []byte(`{"model":"claude-3-7-sonnet-20250219","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(requestBody), Model: "claude-3-7-sonnet-20250219", Stream: true}
+	padding := strings.Repeat("p", 64*1024-128)
+	event := "event: ping\ndata: {\"type\":\"ping\",\"padding\":\"" + padding + "\"}\n\n"
+	payload := strings.Repeat(event, openAIFirstOutputStageMaxBytes/len(event)+2)
+	body := newBlockingAfterPayloadBody([]byte(payload))
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       body,
+	}}
+	svc := newForwardPartialUsageServiceForTest(upstream)
+	resultCh := make(chan *ForwardResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	var result *ForwardResult
+	var err error
+	returnedAtBound := true
+	select {
+	case result = <-resultCh:
+		err = <-errCh
+	case <-time.After(2 * time.Second):
+		returnedAtBound = false
+		_ = body.Close()
+		result = <-resultCh
+		err = <-errCh
+	}
+	require.True(t, returnedAtBound, "aggregate API-key preamble must stop at the existing %d-byte stage bound", openAIFirstOutputStageMaxBytes)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, -1, c.Writer.Size())
+	require.Empty(t, recorder.Body.String())
+	require.Equal(t, int32(1), body.closes.Load())
+}
+
+func TestHandleStreamingResponse_ToolUseWithoutUsageCommitsBeforeMissingTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		anthropicTestMessageStart(0) + "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{}}}\n\n",
+	))}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.NotNil(t, result)
+	require.True(t, result.semanticOutput)
+	require.NotNil(t, result.usage)
+	require.Zero(t, result.usage.InputTokens)
+	require.Zero(t, result.usage.OutputTokens)
+	require.Zero(t, result.usage.CacheCreationInputTokens)
+	require.Zero(t, result.usage.CacheReadInputTokens)
+	require.Zero(t, result.usage.CacheCreation5mTokens)
+	require.Zero(t, result.usage.CacheCreation1hTokens)
+	require.Zero(t, result.usage.ImageOutputTokens)
+	require.Contains(t, rec.Body.String(), "tool_use")
+}
+
+func TestHandleStreamingResponse_SSEErrorAfterPreamble_DiscardsWriterAndFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":5}}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n",
+	))}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, -1, c.Writer.Size())
+	require.Empty(t, rec.Body.String())
+}
+
+func TestHandleStreamingResponse_IdleBeforeSemanticOutputFailsOverWithoutWriting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	reader, writer := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: reader}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	_ = writer.Close()
+	_ = reader.Close()
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, -1, c.Writer.Size())
+	require.Empty(t, rec.Body.String())
+}
+
+func TestHandleStreamingResponse_IdleAfterSemanticOutputReturnsCommittedPartial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	svc.cfg.Gateway.StreamDataIntervalTimeout = 1
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	reader, writer := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: reader}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.WriteString(writer, anthropicTestSemanticPrefix(0, "hello"))
+	}()
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	_ = writer.Close()
+	_ = reader.Close()
+	<-done
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.NotNil(t, result)
+	require.True(t, result.semanticOutput)
+	require.Contains(t, rec.Body.String(), "hello")
+	require.Contains(t, rec.Body.String(), "stream_timeout")
 }
 
 // 默认 (*net.OpError).Error() 会拼接 Source/Addr 字段，泄露内部 IP/端口与上游
@@ -407,10 +1410,9 @@ func TestHandleStreamingResponse_FailoverBodyDoesNotLeakAddresses(t *testing.T) 
 	require.Contains(t, body, "upstream stream disconnected")
 }
 
-// 上游 HTTP 200 + SSE 流体内 event:error 帧应被识别为 *sseStreamErrorEventError，
-// 且 RawData 等于上游 data: 行的原始 JSON。这是 Forward 主流程后续把 dataLine
-// 透传到 UpstreamFailoverError.ResponseBody 与 ops_error_logs 的前提。
-func TestHandleStreamingResponse_SSEErrorEvent_ReturnsTypedErrorWithRawData(t *testing.T) {
+// 上游 HTTP 200 + SSE 流体内 event:error 在尚无语义输出时保持可重放，
+// 并把原始 data 行放进 failover ResponseBody 供上层记录。
+func TestHandleStreamingResponse_SSEErrorEventBeforeOutputReturnsFailoverWithRawData(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newMinimalGatewayService()
 
@@ -434,16 +1436,12 @@ func TestHandleStreamingResponse_SSEErrorEvent_ReturnsTypedErrorWithRawData(t *t
 	require.Error(t, err)
 	require.Nil(t, result)
 
-	// typed error 必须可被 errors.As 匹配，RawData 必须保留上游 dataLine 原文
-	var sseErr *sseStreamErrorEventError
-	require.True(t, errors.As(err, &sseErr), "SSE event:error 必须包成 *sseStreamErrorEventError，期望: %v", err)
-	require.Equal(t, errorJSON, sseErr.RawData)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, errorJSON, string(failoverErr.ResponseBody))
+	require.Equal(t, -1, c.Writer.Size())
 
-	// 字符串兼容：保留与旧实现一致的 "have error in stream"，避免破坏依赖该字符串的日志检索
-	require.Equal(t, "have error in stream", err.Error())
-
-	// 在 Forward 主流程中调用方依赖 ExtractUpstreamErrorMessage 从 RawData 解析出 message
-	extracted := ExtractUpstreamErrorMessage([]byte(sseErr.RawData))
+	extracted := ExtractUpstreamErrorMessage(failoverErr.ResponseBody)
 	require.Equal(t, "Anthropic upstream is overloaded", extracted)
 }
 
@@ -469,13 +1467,13 @@ func TestHandleStreamingResponse_SSEErrorEvent_EmptyDataLine(t *testing.T) {
 	_ = pr.Close()
 
 	require.Error(t, err)
-	var sseErr *sseStreamErrorEventError
-	require.True(t, errors.As(err, &sseErr), "即使 data 行为空，也必须返回 typed error 让上层走 stream_error 分支")
-	require.Equal(t, "", sseErr.RawData)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Empty(t, failoverErr.ResponseBody)
+	require.Equal(t, -1, c.Writer.Size())
 }
 
-// 对抗用例：上游先发 message_start 再发 event:error，模拟"流已开始写客户端"+SSE error 帧。
-// 这是 ping 放大场景的服务侧近似（c.Writer 已被写后才出现 error）。
+// 对抗用例：上游先发 message_start 和真实文本再发 event:error。
 // 必须仍然返回 *sseStreamErrorEventError 且 RawData 包含真实错误体，
 // 让 Forward 调用方能正确补全 ResponseBody 与 ops 事件。
 func TestHandleStreamingResponse_SSEErrorEvent_AfterPartialStreamOutput(t *testing.T) {
@@ -493,8 +1491,10 @@ func TestHandleStreamingResponse_SSEErrorEvent_AfterPartialStreamOutput(t *testi
 
 	go func() {
 		defer func() { _ = pw.Close() }()
-		// 先发 message_start，让 handleStreamingResponse 把它转发到客户端 → c.Writer 已被写
-		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}` + "\n\n"))
+		// message_start 本身暂存；首个非空文本 delta 才跨过提交边界。
+		_, _ = pw.Write([]byte(`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":5}}}` + "\n\n"))
+		_, _ = pw.Write([]byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n"))
+		_, _ = pw.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n"))
 		// 紧接着发 event:error
 		_, _ = pw.Write([]byte("event: error\ndata: " + errorJSON + "\n\n"))
 	}()
@@ -507,10 +1507,34 @@ func TestHandleStreamingResponse_SSEErrorEvent_AfterPartialStreamOutput(t *testi
 	require.True(t, errors.As(err, &sseErr), "已发数据后再来的 SSE event:error 必须仍包成 typed error，期望: %v", err)
 	require.Equal(t, errorJSON, sseErr.RawData)
 
-	// c.Writer 必定已被写过（message_start 已转发）— 这是 handler 838 行 streamStarted 守卫触发的条件，
-	// 修复前/后均会让 handler 直接走 handleFailoverExhausted 而非切账号；不变。
-	require.Greater(t, rec.Body.Len(), 0, "message_start 应被转发到客户端")
+	require.Greater(t, rec.Body.Len(), 0)
 	require.Contains(t, rec.Body.String(), "message_start")
+	require.Contains(t, rec.Body.String(), "hello")
+}
+
+func TestHandleStreamingResponse_ClientDisconnectDoesNotHideProviderErrorEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	const errorJSON = `{"type":"error","error":{"type":"overloaded_error","message":"boom"}}`
+	body := anthropicTestSemanticPrefix(0, "hello") + "event: error\ndata: " + errorJSON + "\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Equal(t, errorJSON, sseErr.RawData)
 }
 
 // 对抗用例：上游发 event:error 但 data 行不是合法 JSON。
@@ -536,13 +1560,14 @@ func TestHandleStreamingResponse_SSEErrorEvent_NonJSONDataLine(t *testing.T) {
 	_ = pr.Close()
 
 	require.Error(t, err)
-	var sseErr *sseStreamErrorEventError
-	require.True(t, errors.As(err, &sseErr))
-	require.Equal(t, "not-a-json-payload", sseErr.RawData)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, "not-a-json-payload", string(failoverErr.ResponseBody))
+	require.Equal(t, -1, c.Writer.Size())
 
 	// gjson 对非 JSON 输入返回空字符串，不 panic — Forward 主流程靠这个 invariant 安全地走下去
 	require.NotPanics(t, func() {
-		_ = ExtractUpstreamErrorMessage([]byte(sseErr.RawData))
+		_ = ExtractUpstreamErrorMessage(failoverErr.ResponseBody)
 	})
-	require.Equal(t, "", ExtractUpstreamErrorMessage([]byte(sseErr.RawData)))
+	require.Equal(t, "", ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
 }

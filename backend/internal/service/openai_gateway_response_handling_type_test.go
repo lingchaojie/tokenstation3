@@ -1,0 +1,147 @@
+package service
+
+import (
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+func TestNormalizeOpenAIResponsesFunctionCallArgumentsUsesLinearAllocation(t *testing.T) {
+	const itemCount = 256
+	const item = `{"type":"function_call","arguments":"{\"x\":1}{\"x\":1}"}`
+	body := []byte(`{"type":"response.completed","response":{"output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}}`)
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, changed := normalizeOpenAIResponsesFunctionCallArguments(body)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, changed)
+	require.Equal(t, itemCount, strings.Count(string(got), `"arguments":"{\"x\":1}"`))
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+}
+
+func TestNormalizeOpenAIResponsesFunctionCallArgumentsDenseEightMiBStaysBounded(t *testing.T) {
+	const targetBytes = 8 << 20
+	const item = `{"type":"function_call","arguments":"{\"x\":1}{\"x\":1}"}`
+	itemCount := (targetBytes - len(`{"type":"response.completed","response":{"output":[]}}`)) / (len(item) + 1)
+	body := []byte(`{"type":"response.completed","response":{"output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(item)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, changed := normalizeOpenAIResponsesFunctionCallArguments(body)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.True(t, changed)
+	require.Equal(t, itemCount, strings.Count(string(got), `"arguments":"{\"x\":1}"`))
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+}
+
+func TestValidOpenAIResponsesObjectRejectsDenseOutputWithinBoundedAllocation(t *testing.T) {
+	const targetBytes = 8 << 20
+	const item = `{"type":"image_generation_call","status":"completed","result":"x"}`
+	itemCount := (targetBytes - len(`{"id":"r","status":"completed","output":[]}`)) / (len(item) + 1)
+	body := []byte(`{"id":"r","status":"completed","output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(item)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validOpenAIResponsesObject(gjson.ParseBytes(body))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid, "provider output beyond the protocol state cap must be rejected")
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestValidOpenAIResponsesObjectRejectsDenseKnownFieldsOnUnknownItemsBeforeTypedDecode(t *testing.T) {
+	const targetBytes = 8 << 20
+	const part = `{"type":"future_part"},`
+	partCount := (targetBytes - len(`{"id":"r","status":"completed","output":[{"type":"future_extension","content":[]}]}`)) / len(part)
+	body := []byte(`{"id":"r","status":"completed","output":[{"type":"future_extension","content":[` + strings.Repeat(part, partCount) + `{"type":"future_part"}]}]}`)
+	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(part)))
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	valid := validOpenAIResponsesObject(gjson.ParseBytes(body))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.False(t, valid, "unknown items must not bypass bounds on fields decoded by compatibility structs")
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
+}
+
+func TestOpenAIStreamEventIsTerminalWithTypeMatchesExistingSemantics(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "empty", data: "", want: false},
+		{name: "whitespace", data: " \t ", want: false},
+		{name: "done", data: " [DONE] ", want: true},
+		{name: "JSON outer whitespace", data: " \n\t {\"type\":\"response.completed\"} \r\n", want: true},
+		{name: "completed", data: `{"type":"response.completed"}`, want: true},
+		{name: "response done", data: `{"type":"response.done"}`, want: true},
+		{name: "failed", data: `{"type":"response.failed"}`, want: true},
+		{name: "incomplete", data: `{"type":"response.incomplete"}`, want: true},
+		{name: "cancelled", data: `{"type":"response.cancelled"}`, want: true},
+		{name: "canceled", data: `{"type":"response.canceled"}`, want: true},
+		{name: "delta", data: `{"type":"response.output_text.delta"}`, want: false},
+		{name: "invalid JSON", data: `{"type":`, want: false},
+		{name: "terminal with trailing garbage", data: `{"type":"response.completed"} trailing`, want: true},
+		{name: "nonterminal with trailing garbage", data: `{"type":"response.output_text.delta"} trailing`, want: false},
+		{name: "type whitespace remains nonterminal", data: `{"type":" response.completed "}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eventType := gjson.GetBytes([]byte(tt.data), "type").String()
+			got := openAIStreamEventIsTerminalWithType(tt.data, eventType)
+
+			require.Equal(t, tt.want, got)
+			require.Equal(t, openAIStreamEventIsTerminal(tt.data), got)
+		})
+	}
+}
+
+var (
+	benchmarkOpenAIResponseSSEEventTypeSink string
+	benchmarkOpenAIResponseSSETerminalSink  bool
+)
+
+func BenchmarkOpenAIResponseSSETypeExtraction(b *testing.B) {
+	data := `{"type":"response.output_text.delta","sequence_number":42,"delta":"streaming response benchmark payload"}`
+	dataBytes := []byte(data)
+
+	b.Run("legacy double parse", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(dataBytes)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			benchmarkOpenAIResponseSSETerminalSink = openAIStreamEventIsTerminal(data)
+			benchmarkOpenAIResponseSSEEventTypeSink = strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+		}
+	})
+
+	b.Run("reused single parse", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(dataBytes)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			eventTypeRaw := gjson.GetBytes(dataBytes, "type").String()
+			benchmarkOpenAIResponseSSEEventTypeSink = strings.TrimSpace(eventTypeRaw)
+			benchmarkOpenAIResponseSSETerminalSink = openAIStreamEventIsTerminalWithType(data, eventTypeRaw)
+		}
+	})
+}

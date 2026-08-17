@@ -141,7 +141,7 @@ func (s *cleanupAPIKeyRepoStub) GetWebChatKeyByUserAndGroup(ctx context.Context,
 	return nil, errors.New("not implemented")
 }
 
-func (s *cleanupAPIKeyRepoStub) Update(ctx context.Context, key *service.APIKey) error {
+func (s *cleanupAPIKeyRepoStub) Update(ctx context.Context, key *service.APIKey, _ service.APIKeyUpdateFields) error {
 	return errors.New("not implemented")
 }
 

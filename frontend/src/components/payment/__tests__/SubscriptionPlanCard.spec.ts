@@ -7,7 +7,10 @@ import SubscriptionPlanCard from "../SubscriptionPlanCard.vue";
 
 const i18nMessages = vi.hoisted(() => ({
   "payment.days": "days",
+  "payment.weeks": "weeks",
+  "payment.months": "months",
   "payment.perWeek": "week",
+  "payment.perMonth": "month",
   "payment.currentSubscription": "Current subscription",
   "payment.models": "Models",
   "payment.planCard.quota": "Quota",
@@ -110,7 +113,7 @@ describe("SubscriptionPlanCard", () => {
   it("displays weekly validity units as weeks instead of days", () => {
     const text = mountPlanCard({ validity_days: 1, validity_unit: "week" }).text();
 
-    expect(text).toContain("/ week");
+    expect(text).toContain("/ 1weeks");
     expect(text).not.toContain("/ 1days");
   });
 
@@ -342,5 +345,17 @@ describe("SubscriptionPlanCard", () => {
     await button.trigger("click");
 
     expect(wrapper.emitted("select")?.[0]).toEqual([expect.objectContaining({ id: 7 }), "renew"]);
+  });
+
+  it("renders plural admin validity units without relabeling them as days", () => {
+    expect(mountPlanCard({ validity_days: 1, validity_unit: "months" }).text()).toContain("/ month");
+    expect(mountPlanCard({ validity_days: 3, validity_unit: "months" }).text()).toContain("/ 3months");
+    expect(mountPlanCard({ validity_days: 2, validity_unit: "weeks" }).text()).toContain("/ 2weeks");
+  });
+
+  it("uses the configured currency symbol while retaining the local CNY fallback", () => {
+    expect(mountPlanCard({ name: "Custom plan", currency: "CNY", original_price: 20 }).text()).toContain("¥10CNY");
+    expect(mountPlanCard({ name: "Custom plan", currency: "USD", original_price: 20 }).text()).toContain("$10USD");
+    expect(mountPlanCard().text()).toContain("¥10");
   });
 });

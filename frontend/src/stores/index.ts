@@ -12,6 +12,7 @@ export { useAnnouncementStore } from './announcements'
 export { usePaymentStore } from './payment'
 export { useAdminComplianceStore } from './adminCompliance'
 export { useBeginnerGuideStore } from './beginnerGuide'
+export { useCaptureHealthStore } from './captureHealth'
 export type { BeginnerGuideInitialization } from './beginnerGuide'
 
 // Re-export types for convenience

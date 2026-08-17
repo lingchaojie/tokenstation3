@@ -5,6 +5,8 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,6 +28,22 @@ func TestBuildKiroWebSearchMCPRequest_UsesUnderscoredMetaKeys(t *testing.T) {
 	require.False(t, gjson.GetBytes(body, "params.arguments._meta.isValid").Exists())
 	require.False(t, gjson.GetBytes(body, "params.arguments._meta.activePath").Exists())
 	require.False(t, gjson.GetBytes(body, "params.arguments._meta.completedPaths").Exists())
+}
+
+func TestKiroMCPResponseReadsUseFunctionalCeiling(t *testing.T) {
+	short, err := readUpstreamResponseBodyLimited(strings.NewReader("short"), 5)
+	require.NoError(t, err)
+	require.Equal(t, []byte("short"), short)
+
+	oversized, err := readUpstreamResponseBodyLimited(strings.NewReader("toolong"), 5)
+	require.Nil(t, oversized)
+	require.ErrorIs(t, err, ErrUpstreamResponseBodyTooLarge)
+
+	readErr := errors.New("forced short read")
+	broken := &geminiPartialThenErrorBody{data: []byte("ok"), err: readErr}
+	body, err := readUpstreamResponseBodyLimited(broken, 5)
+	require.Nil(t, body)
+	require.ErrorIs(t, err, readErr)
 }
 
 func TestWriteAnthropicMessageStart_UsesCacheEmulationUsage(t *testing.T) {

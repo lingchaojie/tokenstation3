@@ -109,6 +109,19 @@ describe('AdminPaymentPlansView', () => {
     expect(text).not.toContain('$499.00')
   })
 
+  it('uses an explicitly configured currency without coupling plans to groups', async () => {
+    getPlans.mockResolvedValue({
+      data: [planFixture({ price: 10, original_price: 20, currency: 'USD' })],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$10.00')
+    expect(wrapper.text()).toContain('$20.00')
+    expect(wrapper.text()).not.toContain('payment.admin.groupMissing')
+  })
+
   it('shows real seat usage and virtual display range for limited plans', async () => {
     getPlans.mockResolvedValue({
       data: [

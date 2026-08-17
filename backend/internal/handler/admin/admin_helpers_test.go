@@ -209,6 +209,35 @@ func TestOpsAlertRuleValidation(t *testing.T) {
 
 	require.True(t, isPercentOrRateMetric("error_rate"))
 	require.False(t, isPercentOrRateMetric("concurrency_queue_depth"))
+
+	for _, metricType := range []string{
+		"capture_ready",
+		"capture_delivery_ready",
+		"capture_spool_usage_percent",
+		"capture_dropped_records",
+	} {
+		payload := map[string]json.RawMessage{
+			"name":        json.RawMessage(`"Capture health"`),
+			"metric_type": json.RawMessage(`"` + metricType + `"`),
+			"operator":    json.RawMessage(`">"`),
+			"threshold":   json.RawMessage(`0`),
+		}
+		_, err := validateOpsAlertRulePayload(payload)
+		require.NoError(t, err, metricType)
+		require.Equal(t, metricType == "capture_spool_usage_percent", isPercentOrRateMetric(metricType))
+
+		payload["threshold"] = json.RawMessage(`-1`)
+		_, err = validateOpsAlertRulePayload(payload)
+		require.ErrorContains(t, err, "threshold must be", metricType)
+	}
+
+	_, err = validateOpsAlertRulePayload(map[string]json.RawMessage{
+		"name":        json.RawMessage(`"Retired writer alert"`),
+		"metric_type": json.RawMessage(`"capture_writer_failures"`),
+		"operator":    json.RawMessage(`">"`),
+		"threshold":   json.RawMessage(`0`),
+	})
+	require.ErrorContains(t, err, "metric_type must be one of")
 }
 
 func TestOpsWSHelpers(t *testing.T) {

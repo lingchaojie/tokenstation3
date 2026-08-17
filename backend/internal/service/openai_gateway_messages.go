@@ -1,13 +1,14 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -16,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +33,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	beginCaptureAttempt(c)
+	beginUpstreamResponseModelObservation(c)
+
 	// 入口分流：APIKey 账号 + 上游不支持 Responses API → 走 CC 直转（与
 	// ForwardAsChatCompletions 对称）。缺少此分流时，/v1/messages 入站请求
 	// 会被无条件转为 Responses 格式发往上游 /v1/responses，导致只支持
@@ -60,6 +65,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	anthropicDigestChain := ""
 	anthropicMatchedDigestChain := ""
 	compatPromptCacheInjected := false
+	// Grok is outside the gpt-5/codex compat injector, but Claude Code still
+	// carries a stable session id. Prefer that as the Grok prompt-cache seed so
+	// multi-turn /v1/messages traffic can hit xAI's server-side cache.
+	if promptCacheKey == "" && account.Platform == PlatformGrok {
+		if sessionSeed := extractClaudeCodeSessionID(c, body); sessionSeed != "" {
+			promptCacheKey = sessionSeed
+			compatPromptCacheInjected = true
+		} else if sessionSeed := promptCacheKeyFromAnthropicMetadataSession(&anthropicReq); sessionSeed != "" {
+			promptCacheKey = sessionSeed
+			compatPromptCacheInjected = true
+		}
+	}
 	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {
@@ -110,6 +127,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	responsesReq.Model = upstreamModel
+	if responsesReq.Reasoning != nil {
+		responsesReq.Reasoning.Effort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, responsesReq.Reasoning.Effort)
+	}
 	if previousResponseID != "" {
 		responsesReq.PreviousResponseID = previousResponseID
 		trimAnthropicCompatResponsesInputToLatestTurn(responsesReq)
@@ -229,6 +249,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 	}
+	if account.Platform == PlatformOpenAI {
+		if policyBody, changed := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, responsesBody); changed {
+			responsesBody = policyBody
+			if responsesReq.Reasoning != nil {
+				responsesReq.Reasoning.Effort = gjson.GetBytes(responsesBody, "reasoning.effort").String()
+			}
+		}
+	}
 
 	// 4c. Apply OpenAI fast policy (may filter service_tier or block the request).
 	// Mirrors the Claude anthropic-beta "fast-mode-2026-02-01" filter, but keyed
@@ -277,7 +305,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
-		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, grokCacheIdentity, s.cfg)
+		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
 	} else {
 		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false)
 	}
@@ -319,15 +347,67 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	// Grok may reject encrypted reasoning replayed under a different OAuth
+	// account/cache identity. Match forwardGrokResponses: one strip+retry before
+	// treating the 400 as a hard failure / failover trigger.
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if account.Platform != PlatformGrok {
+				break
+			}
+			upstreamCtxRetry, releaseRetry := detachUpstreamContext(ctx)
+			upstreamReq, err = buildGrokResponsesRequest(upstreamCtxRetry, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
+			releaseRetry()
+			if err != nil {
+				return nil, fmt.Errorf("build grok retry request: %w", err)
+			}
+		}
+		s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, responsesBody)
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+		s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
+		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
+			break
+		}
+		respBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
+		finishOpenAIHTTPCapture(resp)
+		if resp.Body != nil {
+			closeCaptureResponseUnderlying(resp)
+		}
+		// Prefer explicit decrypt errors; also strip once on any 400 when the
+		// outbound body still carries reasoning.encrypted_content (account
+		// switch often returns opaque "Upstream error: 400").
+		shouldStrip := isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) ||
+			requestHasGrokEncryptedReasoning(responsesBody)
+		if !shouldStrip {
+			resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
+			break
+		}
+		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(responsesBody)
+		if trimErr != nil {
+			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+		}
+		if !changed {
+			resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
+			break
+		}
+		responsesBody = retryBody
+		logger.L().Info("openai messages: retrying after stripping invalid Grok encrypted_content",
+			zap.Int64("account_id", account.ID),
+			zap.Bool("cache_identity_present", strings.TrimSpace(grokCacheIdentity) != ""),
+			zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(respBody), 240)),
+		)
 	}
+	s.wrapOpenAIHTTPCaptureResponse(c, account, resp)
 	defer func() { _ = resp.Body.Close() }()
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		finishOpenAIHTTPCapture(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -348,11 +428,28 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			)
 			return s.ForwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel)
 		}
+		// Grok account-switched history often fails decrypt; strip encrypted
+		// reasoning once at the client-body level so failover accounts can accept
+		// the multi-turn tool continuation instead of cascading 400s.
+		if account.Platform == PlatformGrok &&
+			isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) &&
+			!grokEncryptedContentStripRetried(ctx) {
+			if strippedBody, ok := stripAnthropicThinkingSignatures(body); ok {
+				logger.L().Info("openai messages: stripping thinking signatures for Grok failover retry",
+					zap.Int64("account_id", account.ID),
+				)
+				return s.ForwardAsAnthropic(markGrokEncryptedContentStripRetried(ctx), c, account, strippedBody, promptCacheKey, defaultMappedModel)
+			}
+		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
 		}
 		// Non-failover error: return Anthropic-formatted error to client
-		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
+		if _, writeErr := s.handleAnthropicErrorResponse(resp, c, account, billingModel); writeErr != nil {
+			return nil, writeErr
+		}
+		MarkResponseCommitted(c)
+		return nil, newTerminalProviderHTTPError(account, resp, respBody)
 	}
 	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth && !account.IsShadow() {
 		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
@@ -363,7 +460,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
 		}
 	}
-
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
 	var result *OpenAIForwardResult
@@ -373,6 +469,28 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	finishOpenAIHTTPCapture(resp)
+	// A pre-output semantic failure is still safe to replay on another account.
+	// Do not attach a usage/capture-bearing result here: the handler uses a nil
+	// result as the failover boundary, and the next attempt will replace this
+	// bridge through the capture generation token.
+	var preOutputFailover *UpstreamFailoverError
+	if handleErr != nil && errors.As(handleErr, &preOutputFailover) && !IsResponseCommitted(c) && !c.Writer.Written() {
+		return nil, handleErr
+	}
+	if handleErr != nil {
+		captureOnlyFailure := result == nil
+		if result == nil {
+			result = &OpenAIForwardResult{
+				Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel,
+				Stream: clientStream, Duration: time.Since(startTime), ResponseHeaders: resp.Header.Clone(),
+				UpstreamHTTPStatus: resp.StatusCode,
+			}
+		}
+		result.UpstreamFailed = captureOnlyFailure
+		result.CaptureTerminalError = true
+		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 
 	// cyber_policy：标记已设、error 已按 Anthropic 格式发给客户端。丢弃 result、返回哨兵，
@@ -386,6 +504,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
+		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 		if compatContinuationEnabled && promptCacheKey != "" && result.ResponseID != "" {
 			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID)
 		}
@@ -410,7 +529,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 
-	return result, handleErr
+	return finalizeOpenAIForwardResult(c, result, responsesBody), handleErr
 }
 
 func ensureCodexOAuthInstructionsField(reqBody map[string]any) {
@@ -456,15 +575,25 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	finalResponse, usage, acc, _, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
 	if err != nil {
-		return nil, err
+		return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream read failed before a terminal event: "+sanitizeStreamError(err), resp)
 	}
 
 	if finalResponse == nil {
-		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
-		return nil, fmt.Errorf("upstream stream ended without terminal event")
+		return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream ended without a terminal response event", resp)
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.Observe(finalResponse.Model, true)
 
-	if strings.TrimSpace(finalResponse.Status) == "failed" {
+	responseStatus := strings.ToLower(strings.TrimSpace(finalResponse.Status))
+	if openAIResponsesStatusIsExplicitlyIncomplete(responseStatus) && responseStatus != "failed" {
+		payload, _ := json.Marshal(gin.H{"type": "response." + responseStatus, "response": finalResponse})
+		message := openAICompatFailedResponseMessage(finalResponse)
+		return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payload, message, resp)
+	}
+	if responseStatus == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
 		if hit, code, msg := detectOpenAICyberPolicy(payload); hit {
 			MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -484,7 +613,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
 		if openAIStreamFailedEventShouldFailover(payload, message) {
-			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+			return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payload, message, resp)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
 		// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
@@ -512,27 +641,66 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	c.Header("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusOK, anthropicResp)
 
-	return &OpenAIForwardResult{
-		RequestID:     requestID,
-		ResponseID:    finalResponse.ID,
-		Usage:         usage,
-		Model:         originalModel,
-		BillingModel:  billingModel,
-		UpstreamModel: upstreamModel,
-		Stream:        false,
-		Duration:      time.Since(startTime),
-	}, nil
+	result := &OpenAIForwardResult{
+		RequestID:                     requestID,
+		ResponseID:                    finalResponse.ID,
+		Usage:                         usage,
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
+	}
+	return result, nil
 }
 
 func isOpenAICompatResponsesTerminalEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "response.completed", "response.done", "response.incomplete", "response.failed":
+	case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
 		return true
 	default:
 		return false
 	}
+}
+
+func openAICompatResponsesFailureStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "incomplete", "cancelled", "canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func openAIResponsesStatusIsExplicitlyIncomplete(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status != "" && status != "completed"
+}
+
+// openAIResponsesTerminalFailureStatus classifies a terminal Responses event
+// from both its event name and the authoritative nested response.status. Some
+// providers emit response.completed/response.done even when the response
+// itself ended as failed, incomplete, or cancelled.
+func openAIResponsesTerminalFailureStatus(payload []byte, eventType string) (bool, string) {
+	eventStatus := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(eventType)), "response.")
+	if openAICompatResponsesFailureStatus(eventStatus) {
+		return true, eventStatus
+	}
+	status := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()))
+	if eventStatus == "completed" || eventStatus == "done" {
+		if status == "" || status == "completed" {
+			return false, status
+		}
+		// A terminal event carrying an explicitly non-terminal or unknown nested
+		// status is not a completed provider response.
+		return true, status
+	}
+	return false, eventStatus
 }
 
 func (s *OpenAIGatewayService) recordOpenAIMessagesStreamUpstreamError(c *gin.Context, account *Account, upstreamRequestID, kind, message string) {
@@ -561,6 +729,15 @@ func isOpenAICompatDoneSentinelLine(line string) bool {
 	return ok && strings.TrimSpace(payload) == "[DONE]"
 }
 
+// A positive Content-Length proves that this response has a finite wire body.
+// In that case a terminal frame does not need to trade correctness for an
+// indefinitely open SSE connection: drain the remaining bytes and reject any
+// provider data after the application terminal. Zero is treated as unknown
+// because many synthetic/compat responses omit Content-Length entirely.
+func openAICompatHasKnownFiniteBody(resp *http.Response) bool {
+	return resp != nil && resp.ContentLength > 0
+}
+
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
@@ -569,155 +746,150 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
 	imageResults := make([]openAIResponsesImageResult, 0, 1)
-	imageResultSeen := make(map[string]struct{})
+	imageResultSeen := make(map[string]int)
+	imageRetentionBudget := &openAIResponsesImageRetentionBudget{}
 	if resp == nil || resp.Body == nil {
 		return nil, usage, acc, imageResults, errors.New("upstream response body is nil")
 	}
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
+		return newBufferedProviderSSEScanner(r, s.cfg)
+	})
+	defer lineReader.Close()
 
-	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	responseLimit := resolveUpstreamResponseReadLimit(s.cfg)
+	parser := openAICompatSSEFrameParser{maxEventBytes: responseLimit}
+	var responsesState openAIResponsesSSEAttemptState
+	var terminalResponse *apicompat.ResponsesResponse
+	terminalSeen := false
+	var terminalTailDeadline time.Time
+	finishTerminal := func() (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, []openAIResponsesImageResult, error) {
+		return terminalResponse, usage, acc, imageResults, nil
 	}
-	var timeoutCh <-chan time.Time
-	var timeoutTimer *time.Timer
-	resetTimeout := func() {
-		if streamInterval <= 0 {
-			return
-		}
-		if timeoutTimer == nil {
-			timeoutTimer = time.NewTimer(streamInterval)
-			timeoutCh = timeoutTimer.C
-			return
-		}
-		if !timeoutTimer.Stop() {
-			select {
-			case <-timeoutTimer.C:
-			default:
+	processFrame := func(frame openAICompatSSEFrame) error {
+		trimmed := strings.TrimSpace(frame.Data)
+		if trimmed == "[DONE]" {
+			if !terminalSeen {
+				return errors.New("OpenAI Responses [DONE] arrived before a valid terminal event")
 			}
+			return nil
 		}
-		timeoutTimer.Reset(streamInterval)
-	}
-	stopTimeout := func() {
-		if timeoutTimer == nil {
-			return
+		if terminalSeen {
+			return errors.New("OpenAI Responses data arrived after a terminal event")
 		}
-		if !timeoutTimer.Stop() {
-			select {
-			case <-timeoutTimer.C:
-			default:
-			}
+		payloadBytes := []byte(frame.Data)
+		eventType, err := validateOpenAIResponsesSSEPayload(payloadBytes, frame.EventType)
+		if err != nil {
+			return err
 		}
-	}
-	resetTimeout()
-	defer stopTimeout()
+		if err := responsesState.observe(payloadBytes, eventType); err != nil {
+			return err
+		}
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if retainErr := collectOpenAIResponsesImageResultsFromEventPayloadRetained([]byte(payload), &imageResults, imageResultSeen, imageRetentionBudget, 0); retainErr != nil {
+			return fmt.Errorf("retain OpenAI Responses buffered image output: %w", retainErr)
+		}
 
-	type scanEvent struct {
-		line string
-		err  error
+		var event apicompat.ResponsesStreamEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			return fmt.Errorf("decode validated OpenAI Responses event: %w", err)
+		}
+		if err := acc.ProcessEvent(&event); err != nil {
+			return fmt.Errorf("retain OpenAI Responses buffered output: %w", err)
+		}
+		if !isOpenAICompatResponsesTerminalEvent(event.Type) {
+			return nil
+		}
+		if event.Response == nil {
+			return errors.New("OpenAI Responses terminal event omitted response object")
+		}
+		if event.Usage != nil {
+			usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
+			if event.Response.Usage == nil {
+				event.Response.Usage = event.Usage
+			}
+		}
+		if event.Response.Usage != nil {
+			usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+		}
+		mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
+		terminalResponse = event.Response
+		terminalSeen = true
+		return nil
 	}
-	events := make(chan scanEvent, 16)
-	done := make(chan struct{})
-	go func() {
-		defer close(events)
-		for scanner.Scan() {
-			select {
-			case events <- scanEvent{line: scanner.Text()}:
-			case <-done:
-				return
-			}
+	finishPendingFrame := func() error {
+		hadProviderTail := parser.HasPendingProviderData()
+		frame, complete, err := parser.Finish()
+		if err != nil {
+			return err
 		}
-		if err := scanner.Err(); err != nil {
-			select {
-			case events <- scanEvent{err: err}:
-			case <-done:
+		if !complete {
+			if hadProviderTail {
+				return errors.New("OpenAI Responses stream ended with an incomplete provider event")
 			}
+			return nil
 		}
-	}()
-	defer close(done)
-
-	var parser openAICompatSSEFrameParser
+		return processFrame(frame)
+	}
 	for {
-		select {
-		case ev, ok := <-events:
-			if !ok {
-				if frame, ok := parser.Finish(); ok {
-					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
-					collectOpenAIResponsesImageResultsFromEventPayload([]byte(payload), &imageResults, imageResultSeen)
-					var event apicompat.ResponsesStreamEvent
-					if err := json.Unmarshal([]byte(payload), &event); err == nil {
-						acc.ProcessEvent(&event)
-						if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
-							if event.Usage != nil {
-								usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
-								if event.Response.Usage == nil {
-									event.Response.Usage = event.Usage
-								}
-							}
-							if event.Response.Usage != nil {
-								usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
-							}
-							mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
-							return event.Response, usage, acc, imageResults, nil
+		var line string
+		var ok bool
+		var err error
+		if terminalSeen {
+			if terminalTailDeadline.IsZero() {
+				terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
+			}
+			var timedOut bool
+			line, ok, timedOut, err = lineReader.NextBefore(terminalTailDeadline)
+			if timedOut {
+				bufferedTail, closeErr := lineReader.CloseAndCollectBufferedTail()
+				if closeErr != nil {
+					return nil, usage, acc, imageResults, closeErr
+				}
+				for _, tailLine := range bufferedTail {
+					frame, complete, addErr := parser.AddLine(tailLine)
+					if addErr != nil {
+						return nil, usage, acc, imageResults, addErr
+					}
+					if complete {
+						if processErr := processFrame(frame); processErr != nil {
+							return nil, usage, acc, imageResults, processErr
 						}
 					}
 				}
-				return nil, usage, acc, imageResults, nil
-			}
-			resetTimeout()
-			if ev.err != nil {
-				if !errors.Is(ev.err, context.Canceled) && !errors.Is(ev.err, context.DeadlineExceeded) {
-					logger.L().Warn(logPrefix+": read error",
-						zap.Error(ev.err),
-						zap.String("request_id", requestID),
-					)
+				if finishErr := finishPendingFrame(); finishErr != nil {
+					return nil, usage, acc, imageResults, finishErr
 				}
-				return nil, usage, acc, imageResults, ev.err
+				return finishTerminal()
 			}
-
-			if isOpenAICompatDoneSentinelLine(ev.line) {
-				return nil, usage, acc, imageResults, nil
-			}
-			frame, ok := parser.AddLine(ev.line)
-			if !ok {
-				continue
-			}
-			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
-			collectOpenAIResponsesImageResultsFromEventPayload([]byte(payload), &imageResults, imageResultSeen)
-
-			var event apicompat.ResponsesStreamEvent
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
-				logger.L().Warn(logPrefix+": failed to parse event",
+		} else {
+			line, ok, err = lineReader.Next()
+		}
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.L().Warn(logPrefix+": read error",
 					zap.Error(err),
 					zap.String("request_id", requestID),
 				)
-				continue
 			}
-
-			acc.ProcessEvent(&event)
-
-			if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
-				if event.Usage != nil {
-					usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
-					if event.Response.Usage == nil {
-						event.Response.Usage = event.Usage
-					}
-				}
-				if event.Response.Usage != nil {
-					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
-				}
-				mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
-				return event.Response, usage, acc, imageResults, nil
+			return nil, usage, acc, imageResults, err
+		}
+		if !ok {
+			if finishErr := finishPendingFrame(); finishErr != nil {
+				return nil, usage, acc, imageResults, finishErr
 			}
+			return finishTerminal()
+		}
 
-		case <-timeoutCh:
-			_ = resp.Body.Close()
-			logger.L().Warn(logPrefix+": data interval timeout",
-				zap.String("request_id", requestID),
-				zap.Duration("interval", streamInterval),
-			)
-			return nil, usage, acc, imageResults, fmt.Errorf("stream data interval timeout")
+		frame, complete, err := parser.AddLine(line)
+		if err != nil {
+			return nil, usage, acc, imageResults, err
+		}
+		if !complete {
+			continue
+		}
+		if err := processFrame(frame); err != nil {
+			return nil, usage, acc, imageResults, err
 		}
 	}
 }
@@ -747,10 +919,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	firstChunk := true
 	clientDisconnected := false
 	clientOutputStarted := false
+	semanticOutput := false
+	staged := &stagedConvertedStream{}
+	defer func() { _ = staged.close() }()
+	var stagedWriteErr error
 	var streamFailoverErr error
 	var streamNonFailoverErr error
+	providerTerminalObserved := false
+	responsesState := openAIResponsesSSEAttemptState{}
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	readActivity := newProviderBodyReadActivity(resp.Body)
+	scanner := s.newUpstreamSSEScanner(readActivity)
 
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
@@ -765,20 +944,42 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	if intervalTicker != nil {
 		intervalCh = intervalTicker.C
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	// resultWithUsage builds the final result snapshot.
 	resultWithUsage := func() *OpenAIForwardResult {
-		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			ResponseID:       responseID,
-			Usage:            usage,
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+		out := &OpenAIForwardResult{
+			RequestID:                     requestID,
+			ResponseID:                    responseID,
+			Usage:                         usage,
+			Model:                         originalModel,
+			BillingModel:                  billingModel,
+			UpstreamModel:                 upstreamModel,
+			UpstreamResponseModel:         observedUpstreamResponseModel(c),
+			UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+			Stream:                        true,
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnected,
+		}
+		return out
+	}
+	handleStagedWriteErr := func(err error) {
+		if err == nil {
+			return
+		}
+		stagedWriteErr = err
+		var deliveryErr *stagedConvertedClientWriteError
+		if !errors.As(err, &deliveryErr) && !staged.committed {
+			streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI messages first-output staging failed: "+sanitizeStreamError(err), resp)
+			return
+		}
+		clientDisconnected = true
+		if staged.committed {
+			streamNonFailoverErr = fmt.Errorf("OpenAI messages downstream delivery failed: %w", err)
 		}
 	}
 
@@ -789,20 +990,63 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
-
+		if providerTerminalObserved {
+			message := "OpenAI Responses data arrived after a terminal event"
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
+			} else {
+				streamNonFailoverErr = errors.New(message)
+			}
+			return true
+		}
+		payloadBytes := []byte(payload)
+		validatedType, err := validateOpenAIResponsesSSEPayload(payloadBytes, "")
+		if err == nil {
+			err = responsesState.observe(payloadBytes, validatedType)
+		}
+		if err != nil {
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payloadBytes, err.Error(), resp)
+			} else {
+				streamNonFailoverErr = err
+			}
+			return true
+		}
 		var event apicompat.ResponsesStreamEvent
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		if err := json.Unmarshal(payloadBytes, &event); err != nil {
 			logger.L().Warn("openai messages stream: failed to parse event",
 				zap.Error(err),
 				zap.String("request_id", requestID),
 			)
-			return false
+			message := "OpenAI Responses returned malformed JSON data"
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
+			} else {
+				streamNonFailoverErr = fmt.Errorf("%s: %w", message, err)
+			}
+			return true
 		}
+		observer.ObserveOpenAI([]byte(payload), event.Type)
 
 		eventType := strings.TrimSpace(event.Type)
+		if openAIResponsesEventIsSemanticPayload([]byte(payload), eventType) {
+			semanticOutput = true
+		}
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
+		if (eventType == "response.completed" || eventType == "response.done") &&
+			!validOpenAIResponsesObject(gjson.GetBytes([]byte(payload), "response")) {
+			message := "OpenAI terminal event omitted a valid response object"
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
+			} else {
+				streamNonFailoverErr = errors.New(message)
+			}
+			return true
+		}
+		terminalFailed, _ := openAIResponsesTerminalFailureStatus([]byte(payload), eventType)
 		if isTerminalEvent {
+			providerTerminalObserved = true
 			if event.Response != nil {
 				if id := strings.TrimSpace(event.Response.ID); id != "" {
 					responseID = id
@@ -816,7 +1060,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			// cyber_policy 致命不可重试：标记供 handler 事后记录；以 Anthropic SSE error 事件
 			// 回写让客户端感知并停止重试（F4），丢弃后续转换输出。
-			if eventType == "response.failed" || isBareErrorEvent {
+			if terminalFailed || isBareErrorEvent {
 				payloadBytes := []byte(payload)
 				if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -844,8 +1088,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				// Once Anthropic output has started, switching accounts would splice
 				// two model streams together. Surface a proper Anthropic error event
 				// instead of returning a failover error that the handler cannot retry.
-				if !clientOutputStarted && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
-					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+				if !staged.committed && (eventType != "response.failed" || openAIStreamFailedEventShouldFailover(payloadBytes, message)) {
+					streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payloadBytes, message, resp)
 					return true
 				}
 				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
@@ -879,6 +1123,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
+		if conversionErr := state.Err(); conversionErr != nil {
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), conversionErr.Error(), resp)
+			} else {
+				streamNonFailoverErr = conversionErr
+			}
+			return true
+		}
 		if !clientDisconnected {
 			for _, evt := range events {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -889,26 +1141,36 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					)
 					continue
 				}
-				writeStreamHeaders()
-				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
-					clientDisconnected = true
+				// A known finite response can be drained to EOF before exposing its
+				// terminal conversion. This keeps a terminal-plus-tail protocol error
+				// replay-safe when no semantic output preceded it, while indefinite SSE
+				// connections still return immediately at the application terminal.
+				commit := semanticOutput || (isTerminalEvent && event.Response != nil && !terminalFailed && !openAICompatHasKnownFiniteBody(resp))
+				if err := staged.write(c, writeStreamHeaders, sse, commit); err != nil {
+					handleStagedWriteErr(err)
 					logger.L().Info("openai messages stream: client disconnected, continuing to drain upstream for billing",
 						zap.String("request_id", requestID),
 					)
 					break
 				}
-				clientOutputStarted = true
+				clientOutputStarted = staged.committed
 			}
 		}
-		if len(events) > 0 && !clientDisconnected {
+		if len(events) > 0 && !clientDisconnected && staged.committed {
 			c.Writer.Flush()
 		}
-		return isTerminalEvent
+		return isTerminalEvent || streamFailoverErr != nil || streamNonFailoverErr != nil
 	}
 
 	// finalizeStream sends any remaining Anthropic events and returns the result.
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if stagedWriteErr != nil && streamFailoverErr == nil && streamNonFailoverErr == nil {
+			handleStagedWriteErr(stagedWriteErr)
+		}
 		if streamFailoverErr != nil {
+			if !staged.committed {
+				return nil, streamFailoverErr
+			}
 			return resultWithUsage(), streamFailoverErr
 		}
 		if streamNonFailoverErr != nil {
@@ -920,15 +1182,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				if err != nil {
 					continue
 				}
-				writeStreamHeaders()
-				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
-					clientDisconnected = true
+				if err := staged.write(c, writeStreamHeaders, sse, true); err != nil {
+					handleStagedWriteErr(err)
 					logger.L().Info("openai messages stream: client disconnected during final flush",
 						zap.String("request_id", requestID),
 					)
 					break
 				}
-				clientOutputStarted = true
+				clientOutputStarted = staged.committed
 			}
 			if !clientDisconnected {
 				c.Writer.Flush()
@@ -947,18 +1208,31 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
+		if stagedWriteErr != nil || streamFailoverErr != nil || streamNonFailoverErr != nil {
+			return finalizeStream()
+		}
 		result := resultWithUsage()
 		if clientDisconnected {
 			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
 		}
 		message := "OpenAI messages stream ended before a terminal event"
-		if !clientOutputStarted {
-			return result, s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, message)
+		if !staged.committed {
+			return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, message, resp)
 		}
 		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_missing_terminal", message)
 		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
+		if strings.TrimSpace(frame.Data) != "[DONE]" {
+			if _, err := validateOpenAIResponsesSSEPayload([]byte(frame.Data), frame.EventType); err != nil {
+				if !staged.committed {
+					streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(frame.Data), err.Error(), resp)
+				} else {
+					streamNonFailoverErr = err
+				}
+				return true
+			}
+		}
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		return processDataLine(payload)
 	}
@@ -971,31 +1245,100 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// ── No keepalive: fast synchronous path (no goroutine overhead) ──
 	if streamInterval <= 0 && keepaliveInterval <= 0 {
-		var parser openAICompatSSEFrameParser
+		providerScanFinished := false
+		defer func() {
+			if !providerScanFinished && captureResponseNeedsDrain(resp.Body) {
+				drainCaptureResponseRemainderBounded(ginRequestContext(c), resp.Body, captureOverflowDrainTimeout)
+			}
+		}()
+		parser := openAICompatSSEFrameParser{maxEventBytes: resolveUpstreamSSEEventLimit(s.cfg)}
+		finishOpenTerminal := func() (*OpenAIForwardResult, error) {
+			tailLines, scanErr := closeAndCollectScannerBufferedTail(resp, scanner, readActivity, providerTerminalTailDrainGrace)
+			for _, line := range tailLines {
+				if isOpenAICompatDoneSentinelLine(line) {
+					continue
+				}
+				frame, ok, err := parser.AddLine(line)
+				if err != nil {
+					if !staged.committed {
+						return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+					}
+					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+				}
+				if ok && processFrame(frame) {
+					return finalizeStream()
+				}
+			}
+			if scanErr != nil {
+				handleScanErr(scanErr)
+				if !staged.committed {
+					return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr), resp)
+				}
+				return resultWithUsage(), newOpenAIUpstreamStreamReadError(scanErr)
+			}
+			if parser.HasPendingProviderData() {
+				err := errors.New("OpenAI Responses stream ended with an incomplete provider event")
+				if !staged.committed {
+					return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+				}
+				return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+			}
+			return finalizeStream()
+		}
 		for scanner.Scan() {
 			line := scanner.Text()
 			if isOpenAICompatDoneSentinelLine(line) {
+				if providerTerminalObserved {
+					if openAICompatHasKnownFiniteBody(resp) {
+						continue
+					}
+					return finishOpenTerminal()
+				}
 				return missingTerminalErr()
 			}
-			frame, ok := parser.AddLine(line)
+			frame, ok, err := parser.AddLine(line)
+			if err != nil {
+				if !staged.committed {
+					return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+				}
+				return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+			}
 			if !ok {
 				continue
 			}
 			if processFrame(frame) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+					continue
+				}
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+					return finishOpenTerminal()
+				}
 				return finalizeStream()
 			}
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
+			if !staged.committed {
+				return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream read failed before semantic output: "+sanitizeStreamError(err), resp)
+			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
-		if frame, ok := parser.Finish(); ok {
+		providerScanFinished = true
+		if frame, ok, err := parser.Finish(); err != nil {
+			if !staged.committed {
+				return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+			}
+			return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+		} else if ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
 				return finalizeStream()
 			}
+		}
+		if providerTerminalObserved {
+			return finalizeStream()
 		}
 		return missingTerminalErr()
 	}
@@ -1005,10 +1348,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		line string
 		err  error
 	}
-	events := make(chan scanEvent, 16)
+	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
-	var lastReadAt int64
-	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
+	scanDone := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
 		select {
 		case events <- ev:
@@ -1018,9 +1360,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 	go func() {
+		defer close(scanDone)
 		defer close(events)
 		for scanner.Scan() {
-			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
 			if !sendEvent(scanEvent{line: scanner.Text()}) {
 				return
 			}
@@ -1029,7 +1371,18 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			_ = sendEvent(scanEvent{err: err})
 		}
 	}()
-	defer close(done)
+	providerScanFinished := false
+	defer func() {
+		if !providerScanFinished {
+			drainCaptureScannerOnParserFailure(
+				ginRequestContext(c), resp, events, scanDone, &readActivity.lastRead,
+				streamInterval, nil, func() { close(done) },
+			)
+			return
+		}
+		close(done)
+		closeCaptureResponseAndJoinScanner(resp, scanDone)
+	}()
 
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {
@@ -1041,42 +1394,118 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		keepaliveCh = keepaliveTicker.C
 	}
 	lastDataAt := time.Now()
-	var parser openAICompatSSEFrameParser
+	parser := openAICompatSSEFrameParser{maxEventBytes: resolveUpstreamSSEEventLimit(s.cfg)}
+	var terminalTailTimer *time.Timer
+	var terminalTailCh <-chan time.Time
+	terminalTailClosing := false
+	armTerminalTail := func() {
+		if terminalTailClosing || terminalTailCh != nil {
+			return
+		}
+		terminalTailTimer = time.NewTimer(providerTerminalTailDrainGrace)
+		terminalTailCh = terminalTailTimer.C
+	}
+	defer func() {
+		if terminalTailTimer != nil {
+			terminalTailTimer.Stop()
+		}
+	}()
 
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				providerScanFinished = true
 				// Upstream closed
-				if frame, ok := parser.Finish(); ok {
+				hadPendingProviderData := parser.HasPendingProviderData()
+				if frame, ok, err := parser.Finish(); err != nil {
+					if !staged.committed {
+						return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+					}
+					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+				} else if ok {
 					if strings.TrimSpace(frame.Data) == "[DONE]" {
-						return missingTerminalErr()
+						hadPendingProviderData = false
+						if !providerTerminalObserved {
+							return missingTerminalErr()
+						}
+					} else {
+						hadPendingProviderData = false
+						if processFrame(frame) {
+							return finalizeStream()
+						}
 					}
-					if processFrame(frame) {
-						return finalizeStream()
+				}
+				if hadPendingProviderData && !providerTerminalObserved {
+					return missingTerminalErr()
+				}
+				if hadPendingProviderData {
+					err := errors.New("OpenAI Responses stream ended with an incomplete provider event")
+					if !staged.committed {
+						return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
 					}
+					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+				}
+				if providerTerminalObserved {
+					return finalizeStream()
 				}
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
+				if terminalTailClosing && providerScannerCloseError(ev.err) {
+					continue
+				}
 				handleScanErr(ev.err)
+				if !staged.committed {
+					return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream read failed before semantic output: "+sanitizeStreamError(ev.err), resp)
+				}
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 			}
 			lastDataAt = time.Now()
 			line := ev.line
 			if isOpenAICompatDoneSentinelLine(line) {
+				if providerTerminalObserved {
+					if openAICompatHasKnownFiniteBody(resp) {
+						continue
+					}
+					armTerminalTail()
+					continue
+				}
 				return missingTerminalErr()
 			}
-			frame, ok := parser.AddLine(line)
+			frame, ok, err := parser.AddLine(line)
+			if err != nil {
+				if !staged.committed {
+					return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, err.Error(), resp)
+				}
+				return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
+			}
 			if !ok {
 				continue
 			}
 			if processFrame(frame) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+					continue
+				}
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+					armTerminalTail()
+					continue
+				}
 				return finalizeStream()
 			}
 
+		case <-terminalTailCh:
+			remaining := providerTerminalTailDrainGrace - time.Since(readActivity.LastReadTime())
+			if remaining > 0 {
+				terminalTailTimer.Reset(remaining)
+				continue
+			}
+			terminalTailCh = nil
+			terminalTailClosing = true
+			closeCaptureResponseUnderlying(resp)
+
 		case <-intervalCh:
-			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
+			lastRead := readActivity.LastReadTime()
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
@@ -1088,6 +1517,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 			)
+			if !staged.committed {
+				return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, fmt.Sprintf("upstream stream idle for %s before semantic output", streamInterval), resp)
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
@@ -1097,18 +1529,16 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
-			// Send Anthropic-format ping event
-			writeStreamHeaders()
-			if _, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
-				// Client disconnected
-				logger.L().Info("openai messages stream: client disconnected during keepalive",
+			// Keep pre-semantic keepalives private to this attempt so they cannot
+			// make an otherwise replay-safe failure look committed.
+			if err := staged.write(c, writeStreamHeaders, "event: ping\ndata: {\"type\":\"ping\"}\n\n", staged.committed); err != nil {
+				handleStagedWriteErr(err)
+				logger.L().Info("openai messages stream: keepalive delivery or staging failed",
 					zap.String("request_id", requestID),
 				)
-				clientDisconnected = true
-				continue
+				return finalizeStream()
 			}
-			clientOutputStarted = true
-			c.Writer.Flush()
+			clientOutputStarted = staged.committed
 		}
 	}
 }

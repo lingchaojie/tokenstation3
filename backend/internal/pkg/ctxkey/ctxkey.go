@@ -8,6 +8,11 @@ const (
 	// ForcePlatform 强制平台（用于 /antigravity 路由），由 middleware.ForcePlatform 设置
 	ForcePlatform Key = "ctx_force_platform"
 
+	// RequiredAccountPlatform narrows an otherwise unchanged scheduler candidate
+	// pool to one account platform. Unlike ForcePlatform it must not change the
+	// entry platform or bypass mixed-scheduling eligibility checks.
+	RequiredAccountPlatform Key = "ctx_required_account_platform"
+
 	// IngressProvider 当前请求按入口路径（SDK 端点）推断出的 provider（anthropic/openai），
 	// 由 handler.InboundEndpointMiddleware 设置。统一（auto 绑定模式）Key 在鉴权时据此
 	// 解析对应 provider 的默认分组。
@@ -46,6 +51,12 @@ const (
 
 	// OpenAIImageGenerationIntent 标识 OpenAI 请求会触发生图能力（用于图片能力维度限流）
 	OpenAIImageGenerationIntent Key = "ctx_openai_image_generation_intent"
+
+	// OpenAIImagesEndpoint 标识请求是从 /v1/images/* 入站的。
+	// 与 OpenAIImageGenerationIntent 的区别：后者只表示"这次请求会生图"，
+	// /v1/responses 带图片模型时也会置位；本 key 只在专用生图端点置位，
+	// 用于区分"用错端点"与"端点用对了但账号没能力"。
+	OpenAIImagesEndpoint Key = "ctx_openai_images_endpoint"
 
 	// Group 认证后的分组信息，由 API Key 认证中间件设置
 	Group Key = "ctx_group"

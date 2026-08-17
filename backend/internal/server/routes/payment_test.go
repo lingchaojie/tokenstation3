@@ -27,6 +27,7 @@ func TestRegisterPaymentRoutesDoesNotExposeUserSelfServiceRefund(t *testing.T) {
 		middleware.JWTAuthMiddleware(noopAuth),
 		middleware.AdminAuthMiddleware(noopAuth),
 		nil,
+		nil,
 	)
 
 	var adminRefundRouteFound bool

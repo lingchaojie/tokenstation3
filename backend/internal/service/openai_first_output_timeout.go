@@ -24,12 +24,16 @@ const (
 	openAIFirstOutputStageMaxBytes           = 8 * 1024 * 1024
 	openAIFirstOutputScannerFramingAllowance = 64
 	openAIFirstOutputGuardQueueSize          = 1
-	openAIDefaultStreamQueueSize             = 16
+	// Provider events can be close to the configured per-token ceiling. Keep a
+	// single queued event so slow conversion/downstream writes apply backpressure
+	// instead of multiplying a large token across the attempt heap.
+	openAIDefaultStreamQueueSize = 1
 )
 
 var (
 	errOpenAIFirstOutputStageLimit   = errors.New("openai first-output staging limit exceeded")
 	errOpenAIFirstOutputScannerLimit = errors.New("openai pre-output scanner token limit exceeded")
+	errStreamScannerTokenLimit       = errors.New("stream scanner token limit exceeded")
 )
 
 type openAIFirstOutputStage struct {
@@ -69,22 +73,44 @@ func openAIFirstOutputEventQueueSize(guardFirstOutput bool) int {
 }
 
 func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool) bufio.SplitFunc {
+	bounded := boundedStreamScanLines(
+		openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance,
+		errOpenAIFirstOutputScannerLimit,
+	)
+	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		if guardActive != nil && guardActive.Load() {
+			return bounded(data, atEOF)
+		}
+		return bufio.ScanLines(data, atEOF)
+	}
+}
+
+// boundedStreamScanLines preserves bufio.ScanLines framing while failing as
+// soon as one unterminated token reaches the supplied byte budget. Scanner's
+// MaxTokenSize alone cannot do that boundedly: it keeps growing its buffer
+// toward the configured maximum before the split function sees a token.
+func boundedStreamScanLines(limit int, limitErr error) bufio.SplitFunc {
+	if limit < 1 {
+		limit = 1
+	}
+	if limitErr == nil {
+		limitErr = bufio.ErrTooLong
+	}
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		advance, token, err = bufio.ScanLines(data, atEOF)
-		if err != nil || guardActive == nil || !guardActive.Load() {
+		if err != nil {
 			return advance, token, err
 		}
-		limit := openAIFirstOutputStageMaxBytes + openAIFirstOutputScannerFramingAllowance
 		if token != nil {
 			if len(token) > limit {
-				return 0, nil, errOpenAIFirstOutputScannerLimit
+				return 0, nil, limitErr
 			}
 			return advance, token, nil
 		}
-		// At the limit with no delimiter, another byte would necessarily exceed
-		// the guarded token budget. Fail before Scanner grows toward MaxLineSize.
+		// With no delimiter at the limit, waiting for another read would already
+		// exceed the bounded token budget (and may block forever on a live body).
 		if len(data) >= limit {
-			return 0, nil, errOpenAIFirstOutputScannerLimit
+			return 0, nil, limitErr
 		}
 		return advance, token, nil
 	}
@@ -178,28 +204,66 @@ func (s *openAIFirstOutputStage) prepareWrite(incoming int) error {
 	return nil
 }
 
-func (s *openAIFirstOutputStage) CommitTo(dst io.Writer) error {
-	if s == nil || s.closed {
-		return os.ErrClosed
+type openAIFirstOutputCommitError struct {
+	deliveryErr error
+	cleanupErr  error
+}
+
+func (e *openAIFirstOutputCommitError) Error() string {
+	if err := errors.Join(e.deliveryErr, e.cleanupErr); err != nil {
+		return err.Error()
 	}
+	return "first-output commit failed"
+}
+
+func (e *openAIFirstOutputCommitError) Unwrap() []error {
+	errs := make([]error, 0, 2)
+	if e.deliveryErr != nil {
+		errs = append(errs, e.deliveryErr)
+	}
+	if e.cleanupErr != nil {
+		errs = append(errs, e.cleanupErr)
+	}
+	return errs
+}
+
+func splitOpenAIFirstOutputCommitError(err error) (deliveryErr, cleanupErr error) {
+	var commitErr *openAIFirstOutputCommitError
+	if errors.As(err, &commitErr) {
+		return commitErr.deliveryErr, commitErr.cleanupErr
+	}
+	return err, nil
+}
+
+func (s *openAIFirstOutputStage) CommitTo(dst io.Writer) (written int64, retErr error) {
+	if s == nil || s.closed {
+		return 0, os.ErrClosed
+	}
+	defer func() {
+		if cleanupErr := s.Close(); cleanupErr != nil {
+			retErr = &openAIFirstOutputCommitError{
+				deliveryErr: retErr,
+				cleanupErr:  cleanupErr,
+			}
+		}
+	}()
 	if s.tempFile == nil {
-		if _, err := io.Copy(dst, bytes.NewReader(s.memory.Bytes())); err != nil {
-			return err
+		n, err := io.Copy(dst, bytes.NewReader(s.memory.Bytes()))
+		written += n
+		if err != nil {
+			return written, err
 		}
 	} else {
 		if _, err := s.tempFile.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("seek first-output spool: %w", err)
+			return written, fmt.Errorf("seek first-output spool: %w", err)
 		}
-		if _, err := io.CopyN(dst, s.tempFile, s.size); err != nil {
-			return err
+		n, err := io.CopyN(dst, s.tempFile, s.size)
+		written += n
+		if err != nil {
+			return written, err
 		}
 	}
-	if err := s.Close(); err != nil {
-		// Delivery succeeded. Preserve cleanup failures for the handler's deferred
-		// cleanup/logging pass instead of turning committed bytes into a stream error.
-		s.cleanupErr = errors.Join(s.cleanupErr, err)
-	}
-	return nil
+	return written, nil
 }
 
 func (s *openAIFirstOutputStage) Close() error {
@@ -252,8 +316,12 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	reasoningEffort string,
 	timeout time.Duration,
 	phase string,
-	responseHeaders http.Header,
+	resp *http.Response,
 ) *UpstreamFailoverError {
+	responseHeaders := http.Header(nil)
+	if resp != nil {
+		responseHeaders = resp.Header
+	}
 	elapsed := time.Since(startTime)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
@@ -270,11 +338,17 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	if s.rateLimitService != nil {
 		s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 	}
-	return &UpstreamFailoverError{
+	failure := &UpstreamFailoverError{
 		StatusCode:      http.StatusGatewayTimeout,
 		ResponseBody:    []byte(`{"error":{"type":"first_output_timeout","message":"Upstream produced no output before the deadline"}}`),
 		ResponseHeaders: responseHeaders.Clone(), SafeToFailoverAfterWrite: true,
 	}
+	if resp != nil {
+		failure.RequestHeaders = captureRequestHeadersFromResponse(resp)
+		failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
+		failure.HasUpstreamHTTPResponse = true
+	}
+	return failure
 }
 
 type openAIFirstOutputHeaderGuard struct {

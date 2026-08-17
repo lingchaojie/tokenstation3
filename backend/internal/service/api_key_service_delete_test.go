@@ -91,7 +91,7 @@ func (s *apiKeyRepoStub) GetWebChatKeyByUserAndGroup(ctx context.Context, userID
 	panic("unexpected GetWebChatKeyByUserAndGroup call")
 }
 
-func (s *apiKeyRepoStub) Update(ctx context.Context, key *APIKey) error {
+func (s *apiKeyRepoStub) Update(ctx context.Context, key *APIKey, _ APIKeyUpdateFields) error {
 	if key != nil {
 		s.updatedKeys = append(s.updatedKeys, *key)
 	}

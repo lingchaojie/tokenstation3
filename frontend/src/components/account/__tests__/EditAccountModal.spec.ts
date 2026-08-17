@@ -518,6 +518,57 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_long_context_billing_enabled).toBe(false)
   })
 
+  it('loads and clears the OAuth-only Codex namespace flatten toggle', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.extra = {
+      openai_responses_flatten_namespaces: true
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="edit-openai-flatten-namespaces-toggle"]')
+
+    // 关闭后应从 extra 中删除该键，而不是写入 false
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty(
+      'openai_responses_flatten_namespaces'
+    )
+  })
+
+  it('submits the Codex namespace flatten toggle when switched on', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-openai-flatten-namespaces-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_flatten_namespaces).toBe(
+      true
+    )
+  })
+
+  it('hides the Codex namespace flatten toggle for non-OAuth OpenAI accounts', async () => {
+    const account = buildAccount()
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="edit-openai-flatten-namespaces-toggle"]').exists()).toBe(
+      false
+    )
+  })
+
   it('defaults legacy OpenAI accounts to long-context billing disabled', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
@@ -690,6 +741,48 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(false)
   })
 
+  it('submits the account upstream billing auto-probe setting', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="upstream-billing-auto-probe"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.upstream_billing_probe_enabled).toBeUndefined()
+  })
+
+  it('exposes the upstream billing auto-probe toggle for non-OpenAI API-key accounts', async () => {
+    // 探测已放宽到全部 API-key 平台：grok 账号同样能开启并保存。
+    const account = buildAccount()
+    account.platform = 'grok'
+    account.name = 'grok-relay'
+    account.credentials = { api_key: 'sk-grok', base_url: 'https://relay.example/v1' }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="upstream-billing-auto-probe"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.upstream_billing_probe_enabled).toBeUndefined()
+  })
+
   it('clears OpenAI APIKey Responses override when set back to auto', async () => {
     const account = buildAccount()
     account.extra = {
@@ -855,6 +948,10 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
 
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexImageTool')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexImageToolDesc')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexImageToolEnabledDesc')
+
     await wrapper.get('button[data-testid="codex-image-tool-enabled"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
@@ -892,6 +989,9 @@ describe('EditAccountModal', () => {
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
+
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexImageToolBlock')
+    expect(wrapper.text()).toContain('admin.accounts.openai.codexImageToolBlockDesc')
 
     await wrapper.get('button[data-testid="codex-image-tool-block"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
@@ -1105,18 +1205,19 @@ describe('EditAccountModal', () => {
     const wrapper = mountModal(account)
 
     const startUrlInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-start-url-input"]')
-    const regionInput = wrapper.get<HTMLInputElement>('[data-testid="kiro-idc-region-input"]')
+    const regionSelect = wrapper.get<HTMLSelectElement>('[data-testid="kiro-idc-region-select-edit"]')
     const apiRegionSelect = wrapper
       .get('[data-testid="kiro-api-region-select-edit"]')
       .get<HTMLSelectElement>('select')
 
     expect(startUrlInput.element.value).toBe('https://d-99674ac649.awsapps.com/start')
-    expect(regionInput.element.value).toBe('eu-north-1')
+    expect(regionSelect.element.value).toBe('eu-north-1')
+    expect(regionSelect.findAll('option')).toHaveLength(34)
     expect(apiRegionSelect.element.value).toBe('us-east-1')
 
     await startUrlInput.setValue('  https://d-1111111111.awsapps.com/start  ')
-    await regionInput.setValue('  eu-west-1  ')
-    await apiRegionSelect.setValue('eu-central-1')
+    await regionSelect.setValue('ap-south-1')
+    await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
@@ -1127,9 +1228,34 @@ describe('EditAccountModal', () => {
       client_secret: 'client-secret',
       client_id_hash: 'client-hash',
       start_url: 'https://d-1111111111.awsapps.com/start',
-      region: 'eu-west-1',
-      api_region: 'eu-central-1'
+      region: 'ap-south-1',
+      api_region: 'eu-west-1'
     })
+  })
+
+  it('preserves custom IDC regions and legacy Kiro API region credential aliases', async () => {
+    const organization = buildKiroOrganizationAccount()
+    organization.credentials.region = 'legacy-idc-1'
+    delete organization.credentials.api_region
+    organization.credentials.apiRegion = 'ca-west-1'
+
+    const organizationWrapper = mountModal(organization)
+    const idcRegionSelect = organizationWrapper.get<HTMLSelectElement>('[data-testid="kiro-idc-region-select-edit"]')
+    const apiRegionSelect = organizationWrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+
+    expect(idcRegionSelect.element.value).toBe('legacy-idc-1')
+    expect(idcRegionSelect.findAll('option')).toHaveLength(35)
+    expect(apiRegionSelect.element.value).toBe('ca-west-1')
+
+    const directAPIKey = buildKiroAPIKeyAccount()
+    directAPIKey.credentials.region = 'me-central-1'
+    const apiKeyWrapper = mountModal(directAPIKey)
+    const legacyAPIKeyRegion = apiKeyWrapper
+      .get('[data-testid="kiro-api-region-select-edit"]')
+      .get<HTMLSelectElement>('select')
+    expect(legacyAPIKeyRegion.element.value).toBe('me-central-1')
   })
 
   it('defaults a missing Kiro API region independently from the IDC region', () => {
@@ -1137,6 +1263,7 @@ describe('EditAccountModal', () => {
     delete account.credentials.api_region
 
     const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
     const apiRegionSelect = wrapper
       .get('[data-testid="kiro-api-region-select-edit"]')
       .get<HTMLSelectElement>('select')
@@ -1157,11 +1284,12 @@ describe('EditAccountModal', () => {
       .get('[data-testid="kiro-api-region-select-edit"]')
       .get<HTMLSelectElement>('select')
 
-    await apiRegionSelect.setValue('eu-central-1')
+    await apiRegionSelect.setValue('eu-west-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-central-1')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-west-1')
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('upstream_billing_probe_enabled')
   })
 
   it('uses the relay hint only for a Kiro API-key account with a base URL', () => {
@@ -1199,7 +1327,7 @@ describe('EditAccountModal', () => {
   })
 
   it('keeps a historical unsupported Kiro API region selected and preserves it on save', async () => {
-    const account = buildKiroAPIKeyAccount('', 'eu-north-1')
+    const account = buildKiroAPIKeyAccount('', 'legacy-1')
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
@@ -1211,15 +1339,15 @@ describe('EditAccountModal', () => {
       .get<HTMLSelectElement>('select')
     const legacyOption = apiRegionSelect
       .findAll('option')
-      .find(option => option.attributes('value') === 'eu-north-1')
+      .find(option => option.attributes('value') === 'legacy-1')
 
-    expect(apiRegionSelect.element.value).toBe('eu-north-1')
+    expect(apiRegionSelect.element.value).toBe('legacy-1')
     expect(legacyOption?.attributes('disabled')).toBeDefined()
 
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('eu-north-1')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_region).toBe('legacy-1')
   })
 
   it('preserves canonical ExternalIdp metadata, API region, and endpoint mode on edit', async () => {

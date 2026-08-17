@@ -190,11 +190,17 @@ func (s *DashboardService) GetGroupStatsWithFilters(ctx context.Context, startTi
 }
 
 func (s *DashboardService) GetGroupStatsWithUsageFilters(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters) ([]usagestats.GroupStat, error) {
-	stats, err := s.usageRepo.GetGroupStatsWithUsageFilters(ctx, startTime, endTime, filters)
-	if err != nil {
-		return nil, fmt.Errorf("get group stats with filters: %w", err)
+	type groupStatsWithFiltersRepo interface {
+		GetGroupStatsWithUsageFilters(context.Context, time.Time, time.Time, usagestats.UsageLogFilters) ([]usagestats.GroupStat, error)
 	}
-	return stats, nil
+	if repo, ok := s.usageRepo.(groupStatsWithFiltersRepo); ok {
+		stats, err := repo.GetGroupStatsWithUsageFilters(ctx, startTime, endTime, filters)
+		if err != nil {
+			return nil, fmt.Errorf("get group stats with usage filters: %w", err)
+		}
+		return stats, nil
+	}
+	return s.GetGroupStatsWithFilters(ctx, startTime, endTime, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.RequestType, filters.Stream, filters.BillingType)
 }
 
 // GetGroupUsageSummary returns today's and cumulative cost for all groups.

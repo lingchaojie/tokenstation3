@@ -29,7 +29,7 @@ func (s *getByIDAdminStub) GetUserIncludeDeleted(_ context.Context, id int64) (*
 func setupGetByIDRouter(svc service.AdminService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewUserHandler(svc, nil, nil, nil)
+	h := NewUserHandler(svc, nil, nil, nil, nil, nil, nil)
 	r.GET("/admin/users/:id", h.GetByID)
 	return r
 }
@@ -69,7 +69,7 @@ func (s *userAPIKeyRoutesAdminStub) UpdateUserAPIKeyRoutes(_ context.Context, _ 
 func setupUserAPIKeyRoutesRouter(svc service.AdminService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewUserHandler(svc, nil, nil, nil)
+	h := NewUserHandler(svc, nil, nil, nil, nil, nil, nil)
 	r.GET("/admin/users/:id/api-key-routes", h.GetUserAPIKeyRoutes)
 	r.PUT("/admin/users/:id/api-key-routes", h.UpdateUserAPIKeyRoutes)
 	return r

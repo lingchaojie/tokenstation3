@@ -19,7 +19,7 @@
       >
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
-            <h3 class="truncate text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">{{ displayName }}</h3>
+            <h3 :title="displayName" class="truncate text-lg font-semibold tracking-[-0.03em] text-gray-950 dark:text-linear-ink">{{ displayName }}</h3>
             <span v-if="monthlyDisplay?.badge" class="rounded-full border border-primary-500/25 bg-primary-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-600 dark:text-primary-300">
               {{ monthlyDisplay.badge }}
             </span>
@@ -99,6 +99,8 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
+import { planValiditySuffix } from './validity'
+import { currencySymbol } from '@/components/payment/currency'
 import {
   platformAccentBarClass,
   platformBorderClass,
@@ -208,8 +210,8 @@ function handleSelect() {
   if (isDisabled.value) return
   emit('select', props.plan, actionIntent.value)
 }
-const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? (props.plan.currency ? String(props.plan.price) : formatMonthlyPlanCny(props.plan.price)))
-const originalPriceLabel = computed(() => props.plan.currency ? String(props.plan.original_price ?? '') : `¥${props.plan.original_price ?? ''}`)
+const priceLabel = computed(() => monthlyDisplay.value?.priceLabel ?? (props.plan.currency ? `${currencySymbol(props.plan.currency)}${props.plan.price}` : formatMonthlyPlanCny(props.plan.price)))
+const originalPriceLabel = computed(() => props.plan.currency ? `${currencySymbol(props.plan.currency)}${props.plan.original_price ?? ''}` : `¥${props.plan.original_price ?? ''}`)
 const sevenDayQuotaLabel = computed(() => {
   if (monthlyDisplay.value) return monthlyDisplay.value.quotaLabel
   return props.plan.seven_day_quota_usd != null ? `${formatMonthlyPlanUsd(props.plan.seven_day_quota_usd)} / 7 ${t('payment.days')}` : ''
@@ -233,11 +235,5 @@ const discountText = computed(() => {
   return pct > 0 ? `-${pct}%` : ''
 })
 
-const validitySuffix = computed(() => {
-  const u = props.plan.validity_unit || 'day'
-  if (u === 'week' || u === 'weeks') return t('payment.perWeek')
-  if (u === 'month' || u === 'months') return t('payment.perMonth')
-  if (u === 'year' || u === 'years') return t('payment.perYear')
-  return `${props.plan.validity_days}${t('payment.days')}`
-})
+const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
 </script>
