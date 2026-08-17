@@ -42,15 +42,23 @@ type CaptureContentPolicy struct {
 	ResponseHeaders bool `json:"response_headers"`
 }
 
-type CaptureRuntimePolicy struct {
-	Version   int                   `json:"version"`
-	Enabled   bool                  `json:"enabled"`
-	Platforms CapturePlatformPolicy `json:"platforms"`
-	Outcomes  CaptureOutcomePolicy  `json:"outcomes"`
-	Content   CaptureContentPolicy  `json:"content"`
-	GroupIDs  []int64               `json:"group_ids"`
-	UserIDs   []int64               `json:"user_ids"`
+type CaptureModelAllowlistPolicy struct {
+	Anthropic []string `json:"anthropic"`
+	Kiro      []string `json:"kiro"`
 }
+
+type CaptureRuntimePolicy struct {
+	Version         int                         `json:"version"`
+	Enabled         bool                        `json:"enabled"`
+	Platforms       CapturePlatformPolicy       `json:"platforms"`
+	Outcomes        CaptureOutcomePolicy        `json:"outcomes"`
+	Content         CaptureContentPolicy        `json:"content"`
+	ModelAllowlists CaptureModelAllowlistPolicy `json:"model_allowlists"`
+	GroupIDs        []int64                     `json:"group_ids"`
+	UserIDs         []int64                     `json:"user_ids"`
+}
+
+var defaultCaptureModelAllowlist = []string{"claude-fable-5", "claude-opus-5"}
 
 func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 	return CaptureRuntimePolicy{
@@ -72,6 +80,10 @@ func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 			RawResponse:     true,
 			RequestHeaders:  true,
 			ResponseHeaders: true,
+		},
+		ModelAllowlists: CaptureModelAllowlistPolicy{
+			Anthropic: append([]string{}, defaultCaptureModelAllowlist...),
+			Kiro:      append([]string{}, defaultCaptureModelAllowlist...),
 		},
 		GroupIDs: []int64{},
 		UserIDs:  []int64{},
@@ -106,8 +118,12 @@ func ValidateAndNormalizeCaptureRuntimePolicy(policy CaptureRuntimePolicy) (Capt
 	if err != nil {
 		return CaptureRuntimePolicy{}, err
 	}
+	anthropic := normalizeCapturePolicyModels(policy.ModelAllowlists.Anthropic, defaultCaptureModelAllowlist)
+	kiro := normalizeCapturePolicyModels(policy.ModelAllowlists.Kiro, defaultCaptureModelAllowlist)
 	policy.GroupIDs = groups
 	policy.UserIDs = users
+	policy.ModelAllowlists.Anthropic = anthropic
+	policy.ModelAllowlists.Kiro = kiro
 	return policy, nil
 }
 
@@ -130,13 +146,35 @@ func normalizeCapturePolicyIDs(field string, ids []int64) ([]int64, error) {
 	return result, nil
 }
 
+func normalizeCapturePolicyModels(models []string, defaults []string) []string {
+	if models == nil {
+		return append([]string{}, defaults...)
+	}
+	if len(models) == 0 {
+		return []string{}
+	}
+	unique := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		if model = strings.ToLower(strings.TrimSpace(model)); model != "" {
+			unique[model] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(unique))
+	for model := range unique {
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	return result
+}
+
 type CompiledCapturePolicy struct {
-	enabled   bool
-	platforms CapturePlatformPolicy
-	outcomes  CaptureOutcomePolicy
-	content   CaptureContentPolicy
-	groupIDs  map[int64]struct{}
-	userIDs   map[int64]struct{}
+	enabled         bool
+	platforms       CapturePlatformPolicy
+	outcomes        CaptureOutcomePolicy
+	content         CaptureContentPolicy
+	modelAllowlists map[string]map[string]struct{}
+	groupIDs        map[int64]struct{}
+	userIDs         map[int64]struct{}
 }
 
 func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePolicy, error) {
@@ -145,13 +183,16 @@ func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePo
 		return CompiledCapturePolicy{}, err
 	}
 	compiled := CompiledCapturePolicy{
-		enabled:   normalized.Enabled,
-		platforms: normalized.Platforms,
-		outcomes:  normalized.Outcomes,
-		content:   normalized.Content,
-		groupIDs:  make(map[int64]struct{}, len(normalized.GroupIDs)),
-		userIDs:   make(map[int64]struct{}, len(normalized.UserIDs)),
+		enabled:         normalized.Enabled,
+		platforms:       normalized.Platforms,
+		outcomes:        normalized.Outcomes,
+		content:         normalized.Content,
+		modelAllowlists: make(map[string]map[string]struct{}, 2),
+		groupIDs:        make(map[int64]struct{}, len(normalized.GroupIDs)),
+		userIDs:         make(map[int64]struct{}, len(normalized.UserIDs)),
 	}
+	compiled.modelAllowlists["anthropic"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Anthropic)
+	compiled.modelAllowlists["kiro"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Kiro)
 	for _, id := range normalized.GroupIDs {
 		compiled.groupIDs[id] = struct{}{}
 	}
@@ -159,6 +200,17 @@ func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePo
 		compiled.userIDs[id] = struct{}{}
 	}
 	return compiled, nil
+}
+
+func compileCaptureModelAllowlist(models []string) map[string]struct{} {
+	if len(models) == 0 {
+		return nil
+	}
+	compiled := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		compiled[model] = struct{}{}
+	}
+	return compiled
 }
 
 func (p CompiledCapturePolicy) Enabled() bool { return p.enabled }
@@ -169,6 +221,24 @@ func (p CompiledCapturePolicy) Match(platform string, outcome CaptureOutcome, us
 }
 
 func (p CompiledCapturePolicy) Decide(platform string, outcome CaptureOutcome, userID int64, groupID *int64) (CaptureContentPolicy, bool) {
+	return p.decide(platform, outcome, userID, groupID)
+}
+
+func (p CompiledCapturePolicy) DecideForModel(platform string, requestedModel string, outcome CaptureOutcome, userID int64, groupID *int64) (CaptureContentPolicy, bool) {
+	normalizedPlatform := strings.ToLower(strings.TrimSpace(platform))
+	content, ok := p.decide(normalizedPlatform, outcome, userID, groupID)
+	if !ok {
+		return CaptureContentPolicy{}, false
+	}
+	allowlist := p.modelAllowlists[normalizedPlatform]
+	if len(allowlist) == 0 {
+		return content, true
+	}
+	_, ok = allowlist[strings.ToLower(strings.TrimSpace(requestedModel))]
+	return content, ok
+}
+
+func (p CompiledCapturePolicy) decide(platform string, outcome CaptureOutcome, userID int64, groupID *int64) (CaptureContentPolicy, bool) {
 	if !p.enabled {
 		return CaptureContentPolicy{}, false
 	}

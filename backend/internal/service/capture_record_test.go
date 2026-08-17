@@ -577,7 +577,7 @@ func TestBuildTerminalErrorCaptureRecordKeepsRequestedAndMappedModels(t *testing
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
 	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
-	SetCaptureRequestedModel(c, "client-model")
+	SetCaptureRequestedModel(c, "claude-opus-5")
 	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
 	SetCaptureOutboundRequest(c, req, []byte(`{"model":"mapped-provider-model","stream":false}`), 1024)
 
@@ -588,7 +588,7 @@ func TestBuildTerminalErrorCaptureRecordKeepsRequestedAndMappedModels(t *testing
 		HasUpstreamHTTPResponse: true,
 	}, 1024)
 	require.NotNil(t, rec)
-	require.Equal(t, "client-model", rec.RequestedModel)
+	require.Equal(t, "claude-opus-5", rec.RequestedModel)
 	require.Equal(t, "mapped-provider-model", rec.UpstreamModel)
 }
 
@@ -652,7 +652,7 @@ func TestTerminalCaptureKeepsOutboundMetaBeyondRawRequestLimit(t *testing.T) {
 	require.NoError(t, err)
 	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
 	setCapturePlatform(c, PlatformAnthropic)
-	SetCaptureRequestedModel(c, "client-model")
+	SetCaptureRequestedModel(c, "claude-opus-5")
 
 	body := []byte(`{"padding":"` + strings.Repeat("x", captureHardMaxBodyBytes) + `","model":"mapped-tail-model","stream":true}`)
 	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", bytes.NewReader(body))

@@ -37,6 +37,13 @@ export default {
       openai: 'OpenAI HTTP text APIs',
       openaiDescription: 'Only /v1/responses, /v1/chat/completions, and /v1/messages; excludes WebSocket, images, video, and embeddings.',
     },
+    models: {
+      title: 'Model allowlists',
+      description: 'Only listed requested models are captured for Anthropic and Kiro. Leave a platform list empty to capture all of its models.',
+      anthropic: 'Anthropic requested models',
+      kiro: 'Kiro requested models',
+      placeholder: 'One model per line or separated by commas',
+    },
     outcomes: {
       title: 'Call outcomes',
       success: 'Successful calls',

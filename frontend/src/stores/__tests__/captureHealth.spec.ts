@@ -15,6 +15,7 @@ function settings(healthSourceID: string, dropped: number) {
       platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
       outcomes: { success: true, terminal_error: true },
       content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
+      model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
       group_ids: [],
       user_ids: [],
     },

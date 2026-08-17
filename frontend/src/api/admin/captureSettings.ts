@@ -23,6 +23,10 @@ export interface CaptureRuntimePolicy {
     request_headers: boolean
     response_headers: boolean
   }
+  model_allowlists: {
+    anthropic: string[]
+    kiro: string[]
+  }
   group_ids: number[]
   user_ids: number[]
 }

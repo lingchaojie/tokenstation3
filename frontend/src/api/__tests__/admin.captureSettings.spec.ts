@@ -28,6 +28,10 @@ const policy: CaptureRuntimePolicy = {
     request_headers: true,
     response_headers: true,
   },
+  model_allowlists: {
+    anthropic: ['claude-fable-5', 'claude-opus-5'],
+    kiro: ['claude-fable-5', 'claude-opus-5'],
+  },
   group_ids: [],
   user_ids: [],
 }
