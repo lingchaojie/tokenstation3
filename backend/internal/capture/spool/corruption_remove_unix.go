@@ -24,8 +24,27 @@ type quarantineDeleteEntry struct {
 }
 
 func removeDirectoryEntryNoFollow(directory *os.File, name string) error {
+	_, err := removeDirectoryEntryNoFollowAllocated(directory, name)
+	return err
+}
+
+func removeDirectoryEntryNoFollowAllocated(directory *os.File, name string) (int64, error) {
 	remaining := maxQuarantineDeleteEntries
-	return removeDirectoryEntryNoFollowBounded(directory, name, 0, &remaining)
+	entry, err := preflightDirectoryEntryNoFollowBounded(directory, name, 0, &remaining)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDirectoryEntryNoFollow(directory, entry); err != nil {
+		return 0, err
+	}
+	allocated, err := quarantineEntryAllocated(entry)
+	if err != nil {
+		return 0, err
+	}
+	if err := deleteDirectoryEntryNoFollow(directory, entry); err != nil {
+		return 0, err
+	}
+	return allocated, nil
 }
 
 func removeDirectoryEntryNoFollowBounded(directory *os.File, name string, depth int, remaining *int) error {
@@ -37,6 +56,21 @@ func removeDirectoryEntryNoFollowBounded(directory *os.File, name string, depth 
 		return err
 	}
 	return deleteDirectoryEntryNoFollow(directory, entry)
+}
+
+func quarantineEntryAllocated(entry *quarantineDeleteEntry) (int64, error) {
+	if entry == nil || entry.stat.Blocks < 0 || entry.stat.Blocks > int64(^uint64(0)>>1)/512 {
+		return 0, ErrSpoolCorrupt
+	}
+	allocated := entry.stat.Blocks * 512
+	for _, child := range entry.children {
+		childAllocated, err := quarantineEntryAllocated(child)
+		if err != nil || childAllocated > int64(^uint64(0)>>1)-allocated {
+			return 0, ErrSpoolCorrupt
+		}
+		allocated += childAllocated
+	}
+	return allocated, nil
 }
 
 func preflightDirectoryEntryNoFollowBounded(directory *os.File, name string, depth int, remaining *int) (*quarantineDeleteEntry, error) {

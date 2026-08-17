@@ -469,10 +469,7 @@ func beginCaptureAttemptForWireRequest(
 		endpoint = redactCaptureURL(req.URL)
 	}
 	upstreamModel, stream, streamKnown := extractCaptureProviderRequestMeta(platform, body, endpoint)
-	format := model.PayloadJSON
-	if streamKnown && stream {
-		format = model.PayloadSSE
-	}
+	format := captureWirePayloadFormat(platform, endpoint, stream, streamKnown)
 	begin := model.Begin{
 		CaptureID:        uuid.New(),
 		CapturedAt:       time.Now().UTC(),
@@ -494,6 +491,19 @@ func beginCaptureAttemptForWireRequest(
 	attempt.WriteRequestHeaders(captureHeaderBytes(req.Header, headerLimit))
 	attempt.WriteRequest(body)
 	return attempt, true
+}
+
+func captureWirePayloadFormat(platform, endpoint string, stream, streamKnown bool) model.PayloadFormat {
+	if strings.EqualFold(strings.TrimSpace(platform), PlatformKiro) && isKiroNativeEventStreamEndpoint(endpoint) {
+		return model.PayloadAWSEventStream
+	}
+	if !streamKnown || !stream {
+		return model.PayloadJSON
+	}
+	if isBedrockStreamingCaptureEndpoint(endpoint) {
+		return model.PayloadAWSEventStream
+	}
+	return model.PayloadSSE
 }
 
 func (s *GatewayService) captureOutboundRequest(c *gin.Context, account *Account, req *http.Request, body []byte) {

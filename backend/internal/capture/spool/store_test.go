@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,12 +34,46 @@ func TestOpenCreatesPrivateSpoolDirectories(t *testing.T) {
 	}
 }
 
+func TestLargeBacklogBeginCompletesWithinAbsoluteProtocolDeadlineWithoutRescan(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	for _, name := range []string{"partial", "ready", "sending", "quarantine"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, name), 0o700))
+	}
+	for index := range 4096 {
+		name := "backlog-" + strconv.Itoa(index)
+		require.NoError(t, os.WriteFile(filepath.Join(root, "ready", name), nil, 0o600))
+	}
+	store, err := Open(Config{RootDir: root})
+	require.NoError(t, err)
+
+	socketPath := filepath.Join(t.TempDir(), "capture.sock")
+	server := protocol.NewServer(protocol.ServerConfig{SocketPath: socketPath, MaxSessions: 1}, store)
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(serverCtx) }()
+	require.Eventually(t, func() bool {
+		info, statErr := os.Lstat(socketPath)
+		return statErr == nil && info.Mode()&os.ModeSocket != 0
+	}, time.Second, time.Millisecond)
+	t.Cleanup(func() {
+		cancelServer()
+		_ = server.Close()
+		require.NoError(t, <-done)
+	})
+
+	client := protocol.NewClient(protocol.ClientConfig{SocketPath: socketPath})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	deadlineCtx, cancelDeadline := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelDeadline()
+	attempt, err := client.Begin(deadlineCtx, model.Begin{CaptureID: uuid.New()})
+	require.NoError(t, err, "the 10ms logical operation budget must not contain a recursive backlog scan")
+	attempt.Abort()
+}
+
 func TestDefaultAdmissionPreservesEightGiBOfFilesystemFreeSpace(t *testing.T) {
 	s, err := Open(Config{RootDir: filepath.Join(t.TempDir(), "spool")})
 	require.NoError(t, err)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{Free: 8<<30 + 4096}, nil
-	}
+	setCapacityUsage(s.capacity, usage{Free: 8<<30 + 4096})
 
 	_, err = s.Open(model.Begin{CaptureID: uuid.New()})
 

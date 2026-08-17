@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
+	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	"github.com/Wei-Shaw/sub2api/internal/capture/spool"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -54,6 +58,229 @@ func TestCaptureDecisionRequiresBothRequestScopeFilters(t *testing.T) {
 	setCompiledCaptureScopeForTest(otherUser, compiled, 8, &group)
 	_, ok = CaptureDecisionFor(otherUser, "openai", CaptureOutcomeSuccess)
 	require.False(t, ok)
+}
+
+func TestTypedWireCaptureDeclaresProviderRawPayloadFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		endpoint string
+		body     string
+		want     model.PayloadFormat
+		stream   bool
+	}{
+		{
+			name: "kiro raw event stream", platform: PlatformKiro,
+			endpoint: "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+			body:     `{"conversationState":{"currentMessage":{"userInputMessage":{"modelId":"claude-sonnet-4-6"}}}}`,
+			want:     model.PayloadAWSEventStream,
+			stream:   true,
+		},
+		{
+			name: "kiro KRS raw event stream", platform: PlatformKiro,
+			endpoint: "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+			body:     `{"conversationState":{"currentMessage":{"userInputMessage":{"modelId":"claude-sonnet-4-6"}}}}`,
+			want:     model.PayloadAWSEventStream,
+			stream:   true,
+		},
+		{
+			name: "kiro MCP native JSON", platform: PlatformKiro,
+			endpoint: "https://q.us-east-1.amazonaws.com/mcp",
+			body:     `{"jsonrpc":"2.0","method":"tools/list"}`,
+			want:     model.PayloadJSON,
+		},
+		{
+			name: "kiro relay streaming remains SSE", platform: PlatformKiro,
+			endpoint: "https://relay.example.com/v1/messages",
+			body:     `{"model":"claude-sonnet-4-6","stream":true}`,
+			want:     model.PayloadSSE,
+			stream:   true,
+		},
+		{
+			name: "kiro relay nonstream remains JSON", platform: PlatformKiro,
+			endpoint: "https://relay.example.com/v1/messages",
+			body:     `{"model":"claude-sonnet-4-6","stream":false}`,
+			want:     model.PayloadJSON,
+		},
+		{
+			name: "bedrock streaming raw event stream", platform: PlatformAnthropic,
+			endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-6/invoke-with-response-stream",
+			body:     `{"anthropic_version":"bedrock-2023-05-31"}`,
+			want:     model.PayloadAWSEventStream,
+			stream:   true,
+		},
+		{
+			name: "bedrock nonstream JSON", platform: PlatformAnthropic,
+			endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-6/invoke",
+			body:     `{"anthropic_version":"bedrock-2023-05-31"}`,
+			want:     model.PayloadJSON,
+		},
+		{
+			name: "ordinary anthropic stream remains SSE", platform: PlatformAnthropic,
+			endpoint: "https://api.anthropic.com/v1/messages",
+			body:     `{"model":"claude-sonnet-4-6","stream":true}`,
+			want:     model.PayloadSSE,
+			stream:   true,
+		},
+		{
+			name: "non-Bedrock provider path remains SSE", platform: PlatformAnthropic,
+			endpoint: "https://relay.example.com/model/custom/invoke-with-response-stream",
+			body:     `{"model":"claude-sonnet-4-6","stream":true}`,
+			want:     model.PayloadSSE,
+			stream:   true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &recordingCaptureTransport{}
+			pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			compiled, err := CompileCaptureRuntimePolicy(policy)
+			require.NoError(t, err)
+			setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+			req := httptest.NewRequest(http.MethodPost, test.endpoint, nil)
+
+			attempt, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, test.platform, req, []byte(test.body), 1<<20)
+
+			require.True(t, ok)
+			require.NotNil(t, attempt)
+			require.Len(t, transport.Attempts(), 1)
+			require.Equal(t, test.want, transport.Attempts()[0].begin.Format)
+			require.Equal(t, test.stream, transport.Attempts()[0].begin.Stream)
+			AbortCaptureAttempt(c)
+		})
+	}
+}
+
+func TestTypedWireCaptureFormatDrivesRealSidecarExtraction(t *testing.T) {
+	root := t.TempDir()
+	store, err := spool.Open(spool.Config{RootDir: filepath.Join(root, "spool")})
+	require.NoError(t, err)
+	_, err = store.Recover(context.Background())
+	require.NoError(t, err)
+	socketPath := filepath.Join(root, "capture.sock")
+	server := protocol.NewServer(protocol.ServerConfig{SocketPath: socketPath, MaxSessions: 3}, store)
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(serverCtx) }()
+	require.Eventually(t, func() bool {
+		info, statErr := os.Lstat(socketPath)
+		return statErr == nil && info.Mode()&os.ModeSocket != 0
+	}, time.Second, time.Millisecond)
+	t.Cleanup(func() {
+		cancelServer()
+		_ = server.Close()
+		require.NoError(t, <-done)
+	})
+	client := protocol.NewClient(protocol.ClientConfig{
+		SocketPath: socketPath, DialTimeout: time.Second, WriteTimeout: time.Second, ReadTimeout: time.Second,
+	})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	pool := newConversationCapturePoolForTransport(client, func() bool { return true })
+
+	awsResponse := append(
+		buildCaptureKiroFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{
+				"uncachedInputTokens": 17, "outputTokens": 6, "cacheReadInputTokens": 4, "cacheWriteInputTokens": 3,
+			}},
+		}),
+		buildCaptureKiroFrame(t, "messageStopEvent", map[string]any{
+			"messageStopEvent": map[string]any{"stopReason": "end_turn", "signature": "provider-signature"},
+		})...,
+	)
+	var bedrockResponse []byte
+	for _, event := range []string{
+		`{"type":"message_start","message":{"usage":{"input_tokens":17,"cache_read_input_tokens":4,"cache_creation_input_tokens":3}}}`,
+		`{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"provider-signature"}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"amazon-bedrock-invocationMetrics":{"inputTokenCount":17,"outputTokenCount":6}}`,
+	} {
+		bedrockResponse = append(bedrockResponse, buildBedrockServiceChunkFrame(t, event)...)
+	}
+	tests := []struct {
+		name          string
+		platform      string
+		endpoint      string
+		request       []byte
+		response      []byte
+		wantFormat    model.PayloadFormat
+		wantStream    bool
+		wantStop      string
+		wantSignature bool
+	}{
+		{
+			name: "kiro native event stream", platform: PlatformKiro,
+			endpoint: "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+			request:  []byte(`{"conversationState":{"currentMessage":{"userInputMessage":{"modelId":"claude-sonnet-4-6"}}}}`),
+			response: awsResponse, wantFormat: model.PayloadAWSEventStream, wantStream: true, wantStop: "end_turn", wantSignature: true,
+		},
+		{
+			name: "kiro relay streaming SSE", platform: PlatformKiro,
+			endpoint:   "https://relay.example.com/v1/messages",
+			request:    []byte(`{"model":"claude-sonnet-4-6","stream":true}`),
+			response:   []byte("event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"signature\":\"provider-signature\"}\n\n"),
+			wantFormat: model.PayloadSSE, wantStream: true, wantStop: "end_turn", wantSignature: true,
+		},
+		{
+			name: "kiro relay nonstream JSON", platform: PlatformKiro,
+			endpoint:   "https://relay.example.com/v1/messages",
+			request:    []byte(`{"model":"claude-sonnet-4-6","stream":false}`),
+			response:   []byte(`{"stop_reason":"end_turn","content":[{"type":"thinking","signature":"provider-signature"}]}`),
+			wantFormat: model.PayloadJSON, wantStream: false, wantStop: "end_turn", wantSignature: true,
+		},
+		{
+			name: "bedrock streaming event stream", platform: PlatformAnthropic,
+			endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-6/invoke-with-response-stream",
+			request:  []byte(`{"anthropic_version":"bedrock-2023-05-31"}`),
+			response: bedrockResponse, wantFormat: model.PayloadAWSEventStream, wantStream: true, wantStop: "end_turn", wantSignature: true,
+		},
+		{
+			name: "bedrock nonstream JSON", platform: PlatformAnthropic,
+			endpoint:   "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-6/invoke",
+			request:    []byte(`{"anthropic_version":"bedrock-2023-05-31"}`),
+			response:   []byte(`{"stop_reason":"max_tokens","content":[{"type":"thinking","signature":"provider-signature"}]}`),
+			wantFormat: model.PayloadJSON, wantStop: "max_tokens", wantSignature: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			compiled, compileErr := CompileCaptureRuntimePolicy(policy)
+			require.NoError(t, compileErr)
+			setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+			req := httptest.NewRequest(http.MethodPost, test.endpoint, nil)
+			attempt, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, test.platform, req, test.request, 1<<20)
+			require.True(t, ok)
+			id := attempt.ID()
+			require.True(t, attempt.WriteResponse(test.response))
+			require.True(t, attempt.Finalize(model.Final{}))
+			require.True(t, attempt.Commit())
+
+			var manifest model.Manifest
+			require.Eventually(t, func() bool {
+				for _, ref := range store.Ready() {
+					if ref.CaptureID == id {
+						manifest = ref.Manifest
+						return true
+					}
+				}
+				return false
+			}, time.Second, time.Millisecond)
+			require.Equal(t, test.wantFormat, manifest.Begin.Format)
+			require.Equal(t, test.wantStream, manifest.Begin.Stream)
+			require.Equal(t, test.wantStop, manifest.Extracted.StopReason)
+			require.Equal(t, test.wantSignature, manifest.Extracted.SignaturePresent)
+			require.EqualValues(t, len(test.response), manifest.Response.ObservedBytes)
+			require.EqualValues(t, len(test.response), manifest.Response.StoredBytes)
+			require.Len(t, manifest.Response.SHA256, 64)
+		})
+	}
 }
 
 func TestPrepareCaptureScopeFailsClosedForNilOrFailedSettingService(t *testing.T) {

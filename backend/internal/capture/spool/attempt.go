@@ -256,7 +256,21 @@ func (a *Attempt) abortLocked(_ error) {
 		}
 	}
 	if !a.published {
-		_ = os.RemoveAll(a.partialPath)
+		cleanupErr := a.store.capacity.trackAllocationDeletion([]string{a.store.partialDir}, false, func() error {
+			return os.RemoveAll(a.partialPath)
+		})
+		if cleanupErr != nil {
+			if allocated, err := allocatedBytes(a.partialPath); err == nil {
+				_ = a.overhead.Consume(allocated)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				// Keep every pessimistic reservation charged until restart rather
+				// than undercount an orphan whose exact remainder is unknowable.
+				a.overhead = Reservation{}
+				for _, stream := range a.streams() {
+					stream.reserved = nil
+				}
+			}
+		}
 	}
 	a.terminal = true
 	a.releaseResourcesLocked()
@@ -294,15 +308,6 @@ func (a *Attempt) commitLocked() error {
 		}
 		stream.file = nil
 	}
-	for _, stream := range a.streams() {
-		actual := stream.allocated
-		for _, reservation := range stream.reserved {
-			_ = reservation.Consume(actual)
-			actual = 0
-		}
-		stream.reserved = nil
-	}
-
 	a.request.complete = true
 	a.requestHeaders.complete = true
 	a.responseHeaders.complete = true
@@ -358,11 +363,22 @@ func (a *Attempt) commitLocked() error {
 	}
 
 	readyPath := filepath.Join(a.store.readyDir, a.ID().String())
-	if err := os.Rename(a.partialPath, readyPath); err != nil {
+	if err := a.store.capacity.trackAllocationMutation([]string{a.store.partialDir, a.store.readyDir}, false, func() error {
+		return os.Rename(a.partialPath, readyPath)
+	}); err != nil {
 		return fmt.Errorf("publish ready record: %w", err)
 	}
 	a.published = true
 	a.store.event("rename:partial-to-ready")
+	if err := a.overhead.Consume(allocated); err != nil {
+		return fmt.Errorf("account committed record: %w", err)
+	}
+	for _, stream := range a.streams() {
+		for _, reservation := range stream.reserved {
+			reservation.Release()
+		}
+		stream.reserved = nil
+	}
 	if err := syncDirectory(a.store.readyDir); err != nil {
 		return fmt.Errorf("fsync ready directory: %w", err)
 	}

@@ -235,9 +235,7 @@ func TestNextBatchOperationalMetadataMayUseHeadroomBelowFreeReserve(t *testing.T
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000030")
 	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
 	recoverStore(t, s)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{Free: 1 << 20, BlockSize: filesystemBlockSize}, nil
-	}
+	setCapacityUsage(s.capacity, usage{Free: 1 << 20, BlockSize: filesystemBlockSize})
 
 	b, err := s.NextBatch(100, 64<<20)
 
@@ -252,9 +250,7 @@ func TestNextBatchOperationalMetadataCannotReserveMoreThanActualFreeSpace(t *tes
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000035")
 	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
 	recoverStore(t, s)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{Free: filesystemBlockSize, BlockSize: filesystemBlockSize}, nil
-	}
+	setCapacityUsage(s.capacity, usage{Free: filesystemBlockSize, BlockSize: filesystemBlockSize})
 
 	b, err := s.NextBatch(100, 64<<20)
 
@@ -269,14 +265,12 @@ func TestNextBatchReservesManifestAndAckWithoutExceedingOperationalHeadroom(t *t
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000031")
 	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
 	recoverStore(t, s)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{
-			Allocated:            s.config.OperationalHeadroomBytes - filesystemBlockSize,
-			OperationalAllocated: s.config.OperationalHeadroomBytes - filesystemBlockSize,
-			Free:                 20 << 30,
-			BlockSize:            filesystemBlockSize,
-		}, nil
-	}
+	setCapacityUsage(s.capacity, usage{
+		Allocated:            s.config.OperationalHeadroomBytes - filesystemBlockSize,
+		OperationalAllocated: s.config.OperationalHeadroomBytes - filesystemBlockSize,
+		Free:                 20 << 30,
+		BlockSize:            filesystemBlockSize,
+	})
 
 	b, err := s.NextBatch(100, 64<<20)
 
@@ -292,14 +286,12 @@ func TestNextBatchOperationalReservationUsesMeasuredFilesystemBlockSize(t *testi
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000034")
 	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
 	recoverStore(t, s)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{
-			Allocated:            s.config.OperationalHeadroomBytes - 8192,
-			OperationalAllocated: s.config.OperationalHeadroomBytes - 8192,
-			Free:                 20 << 30,
-			BlockSize:            8192,
-		}, nil
-	}
+	setCapacityUsage(s.capacity, usage{
+		Allocated:            s.config.OperationalHeadroomBytes - 8192,
+		OperationalAllocated: s.config.OperationalHeadroomBytes - 8192,
+		Free:                 20 << 30,
+		BlockSize:            8192,
+	})
 
 	b, err := s.NextBatch(100, 64<<20)
 
@@ -314,13 +306,11 @@ func TestNextBatchNeverExceedsPhysicalCap(t *testing.T) {
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000032")
 	commitSizedRecord(t, s, id, 8, time.Unix(1_700_000_000, 0).UTC())
 	recoverStore(t, s)
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{
-			Allocated: s.config.MaxBytes - filesystemBlockSize,
-			Free:      20 << 30,
-			BlockSize: filesystemBlockSize,
-		}, nil
-	}
+	setCapacityUsage(s.capacity, usage{
+		Allocated: s.config.MaxBytes - filesystemBlockSize,
+		Free:      20 << 30,
+		BlockSize: filesystemBlockSize,
+	})
 
 	b, err := s.NextBatch(100, 64<<20)
 

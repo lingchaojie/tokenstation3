@@ -2313,10 +2313,49 @@ func extractCaptureProviderRequestMeta(platform string, rawRequest []byte, endpo
 			stream, streamKnown = false, true
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(platform), PlatformKiro) {
+	if strings.EqualFold(strings.TrimSpace(platform), PlatformKiro) && isKiroNativeEventStreamEndpoint(endpoint) {
 		stream, streamKnown = true, true
 	}
 	return model, stream, streamKnown
+}
+
+// isKiroNativeEventStreamEndpoint recognizes only the runtime endpoints built
+// by buildKiroEndpoints. KIRO API-key relays retain PlatformKiro while using a
+// caller-configured Anthropic-compatible /v1/messages endpoint, so platform
+// alone cannot identify the provider wire protocol. Native MCP is JSON rather
+// than event-stream and intentionally does not match here.
+func isKiroNativeEventStreamEndpoint(endpoint string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil {
+		return false
+	}
+	path, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil || path != "/generateAssistantResponse" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "runtime.us-east-1.kiro.dev" {
+		return true
+	}
+	return strings.HasPrefix(host, "q.") && strings.HasSuffix(host, ".amazonaws.com")
+}
+
+func isBedrockStreamingCaptureEndpoint(endpoint string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	const hostPrefix = "bedrock-runtime."
+	const hostSuffix = ".amazonaws.com"
+	if !strings.HasPrefix(host, hostPrefix) || !strings.HasSuffix(host, hostSuffix) || len(host) <= len(hostPrefix)+len(hostSuffix) {
+		return false
+	}
+	path, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(path, "/model/") && strings.HasSuffix(path, "/invoke-with-response-stream")
 }
 
 func captureHeaderValue(raw []byte, name string) string {

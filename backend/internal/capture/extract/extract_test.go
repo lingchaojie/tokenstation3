@@ -3,6 +3,7 @@ package extract
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"hash/crc32"
@@ -92,7 +93,7 @@ func TestExtractJSONInvalidLegacyMetadataUserIDFallsBack(t *testing.T) {
 	require.Equal(t, "session-fallback", got.SessionID)
 }
 
-func TestStreamFinalizeTreatsExplicitZeroFinalUsageAsAuthoritative(t *testing.T) {
+func TestStreamFinalizeTreatsExplicitZeroFinalUsageAsAuthoritativeWithoutErasingParsedStopReason(t *testing.T) {
 	stream, err := New(context.Background(), model.PayloadJSON)
 	require.NoError(t, err)
 	require.NoError(t, stream.FeedResponse([]byte(`{"stop_reason":"payload","usage":{"input_tokens":7,"output_tokens":8}}`)))
@@ -102,7 +103,7 @@ func TestStreamFinalizeTreatsExplicitZeroFinalUsageAsAuthoritative(t *testing.T)
 	require.NoError(t, err)
 	require.Zero(t, got.InputTokens)
 	require.Zero(t, got.OutputTokens)
-	require.Empty(t, got.StopReason)
+	require.Equal(t, "payload", got.StopReason)
 }
 
 func TestExtractJSONOpenAIUsageAliasPriorityDoesNotDependOnObjectOrder(t *testing.T) {
@@ -259,6 +260,50 @@ func TestExtractAWSFramesAcrossBoundariesAndValidatesCRC(t *testing.T) {
 		Response: bytes.NewReader(corrupt),
 	})
 	require.ErrorIs(t, err, ErrMalformedPayload)
+}
+
+func TestExtractAWSDecodesBedrockChunkEnvelope(t *testing.T) {
+	var response []byte
+	for _, event := range []string{
+		`{"type":"message_start","message":{"usage":{"input_tokens":17,"cache_read_input_tokens":4,"cache_creation_input_tokens":3}}}`,
+		`{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"provider-signature"}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"amazon-bedrock-invocationMetrics":{"inputTokenCount":17,"outputTokenCount":6}}`,
+	} {
+		envelope := mustJSON(t, map[string]any{"bytes": base64.StdEncoding.EncodeToString([]byte(event))})
+		response = append(response, awsEventStreamFixture(t, "chunk", envelope)...)
+	}
+
+	got, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadAWSEventStream,
+		Response: bytes.NewReader(response),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, model.Extracted{
+		InputTokens:         17,
+		OutputTokens:        6,
+		CacheReadTokens:     4,
+		CacheCreationTokens: 3,
+		StopReason:          "end_turn",
+		SignaturePresent:    true,
+	}, got)
+}
+
+func TestExtractAWSRejectsInvalidBedrockChunkEnvelope(t *testing.T) {
+	invalidBase64 := awsEventStreamFixture(t, "chunk", []byte(`{"bytes":"%%%"}`))
+	_, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadAWSEventStream,
+		Response: bytes.NewReader(invalidBase64),
+	})
+	require.ErrorIs(t, err, ErrMalformedPayload)
+
+	oversized := append([]byte(`{"bytes":"`), bytes.Repeat([]byte{'A'}, maxMetadataBytes)...)
+	oversized = append(oversized, []byte(`"}`)...)
+	_, err = FromReaders(context.Background(), Input{
+		Format:   model.PayloadAWSEventStream,
+		Response: bytes.NewReader(awsEventStreamFixture(t, "chunk", oversized)),
+	})
+	require.ErrorIs(t, err, ErrMetadataLimit)
 }
 
 func TestExtractAWSRejectsMalformedHeaderEncodingWithValidMessageCRC(t *testing.T) {

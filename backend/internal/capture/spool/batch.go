@@ -155,11 +155,10 @@ func (s *Store) NextBatch(maxRecords int, maxBytes int64) (*Batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer reservation.Release()
 
 	tempPath := filepath.Join(s.sendingDir, manifest.BatchID.String()+".manifest.tmp")
 	finalPath := filepath.Join(s.sendingDir, manifest.BatchID.String()+".manifest")
-	if err := s.writeBatchMetadata(tempPath, finalPath, encoded, "batch.tmp", "batch.manifest"); err != nil {
+	if err := s.writeBatchMetadata(tempPath, finalPath, encoded, "batch.tmp", "batch.manifest", reservation); err != nil {
 		return nil, err
 	}
 	return newBatch(manifest.BatchID, canonical, sha256Hex(encoded)), nil
@@ -218,8 +217,7 @@ func (s *Store) MarkAcked(batch *Batch) error {
 	if err != nil {
 		return err
 	}
-	defer reservation.Release()
-	return s.writeBatchMetadata(ackPath+".tmp", ackPath, encoded, "batch.acked.tmp", "batch.acked")
+	return s.writeBatchMetadata(ackPath+".tmp", ackPath, encoded, "batch.acked.tmp", "batch.acked", reservation)
 }
 
 func (s *Store) CleanupAcked(batch *Batch) error {
@@ -539,8 +537,19 @@ func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 			return err
 		}
 		for _, name := range ownedNames {
-			if err := removeDirectoryEntryNoFollow(readyDirectory, name); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("delete acked ready record %s: %w", record.CaptureID, err)
+			var removedAllocated int64
+			removeErr := s.capacity.trackAllocationDeletion([]string{s.readyDir}, false, func() error {
+				var err error
+				removedAllocated, err = removeDirectoryEntryNoFollowAllocated(readyDirectory, name)
+				return err
+			})
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return fmt.Errorf("delete acked ready record %s: %w", record.CaptureID, removeErr)
+			}
+			if removeErr == nil {
+				if err := s.capacity.releaseAllocated(removedAllocated, false); err != nil {
+					return fmt.Errorf("account deleted ready record %s: %w", record.CaptureID, err)
+				}
 			}
 			s.event("delete:ready-record")
 		}
@@ -550,14 +559,18 @@ func (s *Store) cleanupAckedBatchLocked(id uuid.UUID) error {
 		return fmt.Errorf("fsync ready directory: %w", err)
 	}
 	s.event("fsync:ready-dir")
-	if err := os.Remove(manifestPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.capacity.trackAllocationDeletion([]string{s.sendingDir, manifestPath}, true, func() error {
+		return os.Remove(manifestPath)
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete batch manifest: %w", err)
 	}
 	s.event("delete:batch.manifest")
 	if err := s.syncSendingDirectoryLocked(); err != nil {
 		return fmt.Errorf("fsync sending directory after manifest delete: %w", err)
 	}
-	if err := os.Remove(ackPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.capacity.trackAllocationDeletion([]string{s.sendingDir, ackPath}, true, func() error {
+		return os.Remove(ackPath)
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete batch ack: %w", err)
 	}
 	s.event("delete:batch.acked")
@@ -612,7 +625,9 @@ func (s *Store) removeReady(id uuid.UUID) {
 }
 
 func (s *Store) removeSendingPathLocked(path, event string, corrupt bool) error {
-	if err := os.RemoveAll(path); err != nil {
+	if err := s.capacity.trackAllocationDeletion([]string{s.sendingDir, path}, true, func() error {
+		return os.RemoveAll(path)
+	}); err != nil {
 		return fmt.Errorf("remove sending metadata %s: %w", filepath.Base(path), err)
 	}
 	s.event(event)
@@ -632,7 +647,25 @@ func (s *Store) retireOrphanAckLocked(path string) error {
 	return s.removeSendingPathLocked(path, "delete:batch.acked", false)
 }
 
-func (s *Store) writeBatchMetadata(tempPath, finalPath string, encoded []byte, tempEvent, finalEvent string) error {
+func (s *Store) writeBatchMetadata(tempPath, finalPath string, encoded []byte, tempEvent, finalEvent string, reservation Reservation) (resultErr error) {
+	accountedPaths := []string{s.sendingDir, tempPath, finalPath}
+	before, err := allocatedPaths(accountedPaths)
+	if err != nil {
+		reservation.Release()
+		return err
+	}
+	defer func() {
+		after, measureErr := allocatedPaths(accountedPaths)
+		if measureErr != nil {
+			if resultErr == nil {
+				resultErr = measureErr
+			}
+			return
+		}
+		if accountErr := reservation.consumeAllocationDelta(after - before); accountErr != nil && resultErr == nil {
+			resultErr = accountErr
+		}
+	}()
 	f, err := s.config.openFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Base(tempPath), err)

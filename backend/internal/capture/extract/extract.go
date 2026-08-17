@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -195,7 +196,9 @@ func (s *metadataStream) finalize(final model.Final, finalPresent bool) (model.E
 		extracted.OutputTokens = final.OutputTokens
 		extracted.CacheReadTokens = final.CacheReadTokens
 		extracted.CacheCreationTokens = final.CacheCreationTokens
-		extracted.StopReason = final.StopReason
+		if final.StopReason != "" {
+			extracted.StopReason = final.StopReason
+		}
 	}
 	return extracted, firstSanitizedError(requestErr, responseErr, s.ctx.Err())
 }
@@ -990,12 +993,14 @@ func responseNumberKind(path []string) int {
 		pathEqual(path, "message", "usage", "input_tokens"),
 		pathEqual(path, "response", "usage", "input_tokens"), pathEqual(path, "response", "usage", "prompt_tokens"),
 		pathEqual(path, "usageMetadata", "promptTokenCount"), pathEqual(path, "response", "usageMetadata", "promptTokenCount"),
-		pathEqual(path, "messageMetadataEvent", "tokenUsage", "uncachedInputTokens"):
+		pathEqual(path, "messageMetadataEvent", "tokenUsage", "uncachedInputTokens"),
+		pathEqual(path, "amazon-bedrock-invocationMetrics", "inputTokenCount"):
 		return 1
 	case pathEqual(path, "usage", "output_tokens"), pathEqual(path, "usage", "completion_tokens"),
 		pathEqual(path, "message", "usage", "output_tokens"),
 		pathEqual(path, "response", "usage", "output_tokens"), pathEqual(path, "response", "usage", "completion_tokens"),
-		pathEqual(path, "messageMetadataEvent", "tokenUsage", "outputTokens"):
+		pathEqual(path, "messageMetadataEvent", "tokenUsage", "outputTokens"),
+		pathEqual(path, "amazon-bedrock-invocationMetrics", "outputTokenCount"):
 		return 2
 	case pathEqual(path, "usage", "cache_read_input_tokens"), pathEqual(path, "usage", "cache_read_tokens"), pathEqual(path, "usage", "cached_tokens"),
 		pathEqual(path, "usage", "prompt_tokens_details", "cached_tokens"), pathEqual(path, "usage", "input_tokens_details", "cached_tokens"),
@@ -1028,6 +1033,8 @@ func responseNumberRank(path []string) int {
 	switch {
 	case isKiroCounterPath(path):
 		return 70
+	case len(path) > 0 && path[0] == "amazon-bedrock-invocationMetrics":
+		return 65
 	case len(path) > 0 && path[0] == "response" && len(path) > 1 && path[1] == "usageMetadata":
 		return 60
 	case len(path) > 0 && path[0] == "usageMetadata":
@@ -1423,7 +1430,7 @@ func (p *awsParser) finishFrame() {
 	if p.collectPayload && len(bytes.TrimSpace(p.payload)) > 0 {
 		trimmed := bytes.TrimSpace(p.payload)
 		if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
-			result := parseJSONBytes(trimmed, responseMode)
+			result := parseAWSFramePayload(trimmed, p.eventType)
 			mergeResponseState(&p.state, result.response)
 			p.recordError(result.err)
 		} else if awsMetadataCritical(p.eventType) {
@@ -1431,6 +1438,32 @@ func (p *awsParser) finishFrame() {
 		}
 	}
 	p.resetFrame()
+}
+
+func parseAWSFramePayload(payload []byte, eventType string) parseResult {
+	if !strings.EqualFold(strings.TrimSpace(eventType), "chunk") {
+		return parseJSONBytes(payload, responseMode)
+	}
+	var envelope struct {
+		Bytes *string `json:"bytes"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Bytes == nil || *envelope.Bytes == "" {
+		return parseResult{err: ErrMalformedPayload}
+	}
+	decodedLen := base64.StdEncoding.DecodedLen(len(*envelope.Bytes))
+	if decodedLen > maxMetadataBytes {
+		return parseResult{err: ErrMetadataLimit}
+	}
+	decoded := make([]byte, decodedLen)
+	n, err := base64.StdEncoding.Decode(decoded, []byte(*envelope.Bytes))
+	if err != nil {
+		return parseResult{err: ErrMalformedPayload}
+	}
+	decoded = bytes.TrimSpace(decoded[:n])
+	if len(decoded) == 0 || (decoded[0] != '{' && decoded[0] != '[') {
+		return parseResult{err: ErrMalformedPayload}
+	}
+	return parseJSONBytes(decoded, responseMode)
 }
 
 func (p *awsParser) resetFrame() {
@@ -1471,7 +1504,7 @@ func (p *awsParser) recordError(err error) {
 
 func awsMetadataCritical(eventType string) bool {
 	lower := strings.ToLower(eventType)
-	return strings.Contains(lower, "metadata") || strings.Contains(lower, "usage") || strings.Contains(lower, "stop")
+	return lower == "chunk" || strings.Contains(lower, "metadata") || strings.Contains(lower, "usage") || strings.Contains(lower, "stop")
 }
 
 func parseAWSHeaders(headers []byte) (string, bool) {

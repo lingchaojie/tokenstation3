@@ -235,7 +235,9 @@ func (s *Store) Open(begin model.Begin) (protocol.SessionSink, error) {
 		return nil, err
 	}
 	partialPath := filepath.Join(s.partialDir, begin.CaptureID.String())
-	if err := os.Mkdir(partialPath, 0o700); err != nil {
+	if err := s.capacity.trackAllocationMutation([]string{s.partialDir}, false, func() error {
+		return os.Mkdir(partialPath, 0o700)
+	}); err != nil {
 		overhead.Release()
 		return nil, fmt.Errorf("create partial record: %w", err)
 	}
@@ -276,8 +278,18 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		if err := os.RemoveAll(filepath.Join(s.partialDir, entry.Name())); err != nil {
+		orphanPath := filepath.Join(s.partialDir, entry.Name())
+		allocated, err := allocatedBytes(orphanPath)
+		if err != nil {
+			return report, fmt.Errorf("measure orphan partial %s: %w", entry.Name(), err)
+		}
+		if err := s.capacity.trackAllocationDeletion([]string{s.partialDir}, false, func() error {
+			return os.RemoveAll(orphanPath)
+		}); err != nil {
 			return report, fmt.Errorf("delete orphan partial %s: %w", entry.Name(), err)
+		}
+		if err := s.capacity.releaseAllocated(allocated, false); err != nil {
+			return report, fmt.Errorf("account orphan partial deletion %s: %w", entry.Name(), err)
 		}
 		report.OrphansDeleted++
 	}

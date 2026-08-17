@@ -211,9 +211,7 @@ func TestCapacityFailureAbortsNewPartialWithoutDeletingReadyRecords(t *testing.T
 	require.NoError(t, ready.WriteRequest([]byte("older")))
 	require.NoError(t, ready.Commit())
 
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{Allocated: s.config.MaxBytes, Free: 1 << 40}, nil
-	}
+	setCapacityUsage(s.capacity, usage{Allocated: s.config.MaxBytes, Free: 1 << 40})
 	newer := beginAttemptWithoutFailure(t, s, model.ContentPolicy{})
 	require.Nil(t, newer.attempt)
 	require.ErrorIs(t, newer.err, ErrSpoolCap)
@@ -229,19 +227,17 @@ func TestFrameCapacityFailureAbortsPartialReleasesSlotAndKeepsOlderReady(t *test
 
 	newer := beginAttempt(t, s, policyAll())
 	contentLimit := s.config.MaxBytes - s.config.OperationalHeadroomBytes
-	s.capacity.usageFn = func() (usage, error) {
-		return usage{
-			Allocated: contentLimit - attemptOverheadBytes - 32<<10,
-			Free:      1 << 40,
-		}, nil
-	}
+	setCapacityUsage(s.capacity, usage{
+		Allocated: contentLimit - attemptOverheadBytes - 32<<10,
+		Free:      1 << 40,
+	})
 
 	err := newer.WriteRequest(bytes.Repeat([]byte{0xff}, 64<<10))
 
 	require.ErrorIs(t, err, ErrSpoolCap)
 	require.NoDirExists(t, filepathForAttempt(s, newer.ID()))
 	require.DirExists(t, readyPath(s, older.ID(), "."))
-	s.capacity.usageFn = func() (usage, error) { return usage{Free: 1 << 40}, nil }
+	setCapacityUsage(s.capacity, usage{Free: 1 << 40})
 	replacement := beginAttempt(t, s, policyAll())
 	replacement.Abort(errors.New("test cleanup"))
 }

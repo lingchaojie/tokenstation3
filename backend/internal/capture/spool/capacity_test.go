@@ -1,14 +1,251 @@
 package spool
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCapacityScansOnceThenUsesCachedAllocationForConstantTimeAdmission(t *testing.T) {
+	var scans atomic.Int64
+	capacity, err := newCapacity(CapacityConfig{
+		RootDir:                  t.TempDir(),
+		MaxBytes:                 12 << 30,
+		MinFreeBytes:             8 << 30,
+		OperationalHeadroomBytes: 16 << 20,
+	}, func() (usage, error) {
+		scans.Add(1)
+		return usage{Allocated: 8192, Free: 20 << 30, BlockSize: filesystemBlockSize}, nil
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, scans.Load(), "the recursive inventory is a startup-only operation")
+
+	content, err := capacity.ReserveContent(uuid.New(), 8192)
+	require.NoError(t, err)
+	frame, err := capacity.ReserveFrame(uuid.New(), 4033)
+	require.NoError(t, err)
+	require.NoError(t, content.Consume(4096))
+	frame.Release()
+	got, err := capacity.snapshot()
+	require.NoError(t, err)
+
+	require.EqualValues(t, 1, scans.Load(), "Begin, frames, reconciliation, and status must not rescan the spool tree")
+	require.EqualValues(t, 8192+4096, got.Allocated)
+}
+
+func TestCapacityAdmissionDoesNotWaitForFilesystemMutationAccounting(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "deleted")
+	require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), 8192), 0o600))
+	initial, err := scanUsage(root)
+	require.NoError(t, err)
+	capacity := newTestCapacity(t, CapacityConfig{MaxBytes: 12 << 30}, initial)
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- capacity.trackAllocationDeletion([]string{root, path}, false, func() error {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			close(mutationStarted)
+			<-releaseMutation
+			return nil
+		})
+	}()
+	<-mutationStarted
+	t.Cleanup(func() {
+		select {
+		case <-releaseMutation:
+		default:
+			close(releaseMutation)
+		}
+	})
+	during, err := capacity.snapshot()
+	require.NoError(t, err)
+	diskDuring, err := scanUsage(root)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, during.Allocated, diskDuring.Allocated, "in-flight deletion must remain conservatively charged")
+
+	admitted := make(chan error, 1)
+	go func() {
+		reservation, err := capacity.ReserveContent(uuid.New(), 4096)
+		if err == nil {
+			reservation.Release()
+		}
+		admitted <- err
+	}()
+	select {
+	case err := <-admitted:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("constant-time admission waited behind a filesystem mutation")
+	}
+	close(releaseMutation)
+	require.NoError(t, <-mutationDone)
+	after, err := capacity.snapshot()
+	require.NoError(t, err)
+	diskAfter, err := scanUsage(root)
+	require.NoError(t, err)
+	require.Equal(t, diskAfter.Allocated, after.Allocated)
+}
+
+func TestCapacityAdditiveMutationGrowthIsReservedBeforeFilesystemIO(t *testing.T) {
+	root := t.TempDir()
+	ready := filepath.Join(root, "ready")
+	quarantine := filepath.Join(root, "quarantine")
+	require.NoError(t, os.Mkdir(ready, 0o700))
+	require.NoError(t, os.Mkdir(quarantine, 0o700))
+	const maxBytes = int64(1 << 20)
+	capacity := newTestCapacity(t, CapacityConfig{
+		MaxBytes:                 maxBytes,
+		OperationalHeadroomBytes: 16 << 10,
+	}, usage{Allocated: maxBytes - 2*filesystemBlockSize, Free: 20 << 30, BlockSize: filesystemBlockSize})
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- capacity.trackAllocationMutationWithOperationalGrowth([]string{ready, quarantine}, false, func() error {
+			close(mutationStarted)
+			<-releaseMutation
+			return nil
+		})
+	}()
+	<-mutationStarted
+	t.Cleanup(func() {
+		select {
+		case <-releaseMutation:
+		default:
+			close(releaseMutation)
+		}
+	})
+
+	_, err := capacity.ReserveContent(uuid.New(), 1)
+	require.ErrorIs(t, err, ErrSpoolCap, "admission must not consume the growth reserved by an in-flight quarantine rename")
+
+	close(releaseMutation)
+	require.NoError(t, <-mutationDone)
+}
+
+func TestCapacityFreeSpaceProbeRunsOutsideAdmissionLedgerLock(t *testing.T) {
+	capacity := newTestCapacity(t, CapacityConfig{MaxBytes: 12 << 30}, usage{Free: 20 << 30})
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	capacity.mu.Lock()
+	capacity.currentFree = func() (int64, error) {
+		close(probeStarted)
+		<-releaseProbe
+		return 20 << 30, nil
+	}
+	capacity.mu.Unlock()
+	reservationDone := make(chan error, 1)
+	go func() {
+		reservation, err := capacity.ReserveContent(uuid.New(), 4096)
+		if err == nil {
+			reservation.Release()
+		}
+		reservationDone <- err
+	}()
+	<-probeStarted
+	t.Cleanup(func() {
+		select {
+		case <-releaseProbe:
+		default:
+			close(releaseProbe)
+		}
+	})
+
+	ledgerResponsive := make(chan struct{})
+	go func() {
+		_ = capacity.reservedBytes()
+		close(ledgerResponsive)
+	}()
+	select {
+	case <-ledgerResponsive:
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("filesystem free-space probe held the admission ledger lock")
+	}
+	close(releaseProbe)
+	require.NoError(t, <-reservationDone)
+}
+
+func TestCapacityFailedReconciliationRetainsPessimisticReservation(t *testing.T) {
+	capacity := newTestCapacity(t, CapacityConfig{
+		MaxBytes:                 12 << 30,
+		OperationalHeadroomBytes: 16 << 20,
+	}, usage{Free: 20 << 30})
+	reservation, err := capacity.reserveOperational(4096)
+	require.NoError(t, err)
+
+	err = reservation.consumeAllocationDelta(-8192)
+
+	require.ErrorIs(t, err, ErrSpoolCorrupt)
+	require.EqualValues(t, 4096, capacity.reservedBytes(), "failed accounting must remain conservatively charged")
+	reservation.Release()
+	require.Zero(t, capacity.reservedBytes())
+}
+
+func TestCapacityCachedAccountingMatchesDiskAcrossAttemptBatchQuarantineAndRecovery(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	store := openTestStoreAt(t, root, nil)
+	requireCachedUsageMatchesScan(t, store)
+
+	aborted := beginAttempt(t, store, policyAll())
+	require.NoError(t, aborted.WriteRequest(bytes.Repeat([]byte("rollback"), 2048)))
+	aborted.Abort(errors.New("test rollback"))
+	requireCachedUsageMatchesScan(t, store)
+
+	committed := beginAttempt(t, store, policyAll())
+	require.NoError(t, committed.WriteRequest(bytes.Repeat([]byte("committed"), 2048)))
+	require.NoError(t, committed.Commit())
+	requireCachedUsageMatchesScan(t, store)
+
+	batch, err := store.NextBatch(10, 64<<20)
+	require.NoError(t, err)
+	require.NotNil(t, batch)
+	requireCachedUsageMatchesScan(t, store)
+	require.NoError(t, store.MarkAcked(batch))
+	requireCachedUsageMatchesScan(t, store)
+	require.NoError(t, store.CleanupAcked(batch))
+	requireCachedUsageMatchesScan(t, store)
+
+	quarantined := beginAttempt(t, store, policyAll())
+	require.NoError(t, quarantined.WriteResponse([]byte(`{"stop_reason":"stop"}`)))
+	require.NoError(t, quarantined.Commit())
+	batch, err = store.NextBatch(10, 64<<20)
+	require.NoError(t, err)
+	_, err = store.QuarantineCorrupt(batch, quarantined.ID())
+	require.NoError(t, err)
+	requireCachedUsageMatchesScan(t, store)
+
+	orphanPath := filepath.Join(store.partialDir, uuid.New().String())
+	require.NoError(t, os.Mkdir(orphanPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(orphanPath, "orphan"), bytes.Repeat([]byte("x"), 8192), 0o600))
+	reopened := openTestStoreAt(t, root, nil)
+	requireCachedUsageMatchesScan(t, reopened)
+	_, err = reopened.Recover(context.Background())
+	require.NoError(t, err)
+	requireCachedUsageMatchesScan(t, reopened)
+}
+
+func requireCachedUsageMatchesScan(t *testing.T, store *Store) {
+	t.Helper()
+	want, err := scanUsage(store.config.RootDir)
+	require.NoError(t, err)
+	got, err := store.capacity.snapshot()
+	require.NoError(t, err)
+	require.Equal(t, want.Allocated, got.Allocated)
+	require.Equal(t, want.OperationalAllocated, got.OperationalAllocated)
+}
 
 func TestCapacityRejectsAtPhysicalCap(t *testing.T) {
 	c := newTestCapacity(t, CapacityConfig{MaxBytes: 12 << 30, MinFreeBytes: 8 << 30},
@@ -44,7 +281,7 @@ func TestSidecarRestartPreservesOldReadyDataAtCapAndFreeReserve(t *testing.T) {
 			require.NoError(t, ready.WriteRequest([]byte("preserve old ready data")))
 			require.NoError(t, ready.Commit())
 
-			store.capacity.usageFn = func() (usage, error) { return test.usage, nil }
+			setCapacityUsage(store.capacity, test.usage)
 			newer := beginAttemptWithoutFailure(t, store, policyAll())
 			require.ErrorIs(t, newer.err, test.wantError)
 			require.Nil(t, newer.attempt)
@@ -196,7 +433,7 @@ func TestOperationalReservationIncludesExistingSendingAllocation(t *testing.T) {
 	c := newTestCapacity(t, CapacityConfig{
 		MaxBytes:                 12 << 30,
 		OperationalHeadroomBytes: 16 << 20,
-	}, usage{Free: 20 << 30, OperationalAllocated: 16<<20 - 4096})
+	}, usage{Allocated: 16<<20 - 4096, Free: 20 << 30, OperationalAllocated: 16<<20 - 4096})
 
 	_, err := c.reserveOperational(8192)
 
@@ -264,4 +501,17 @@ func newTestCapacity(t *testing.T, config CapacityConfig, current usage) *Capaci
 	c, err := newCapacity(config, func() (usage, error) { return current, nil })
 	require.NoError(t, err)
 	return c
+}
+
+func setCapacityUsage(capacity *Capacity, current usage) {
+	capacity.mu.Lock()
+	defer capacity.mu.Unlock()
+	capacity.allocated = current.Allocated
+	capacity.operationalAllocated = current.OperationalAllocated
+	capacity.free = current.Free
+	capacity.blockSize = current.BlockSize
+	if capacity.blockSize <= 0 {
+		capacity.blockSize = filesystemBlockSize
+	}
+	capacity.currentFree = nil
 }

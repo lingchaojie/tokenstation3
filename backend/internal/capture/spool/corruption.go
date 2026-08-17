@@ -173,8 +173,19 @@ func (s *Store) applyCorruptionTombstoneLocked(batchID *uuid.UUID, tombstone cor
 		if tombstone.CaptureID != uuid.Nil {
 			s.removeReady(tombstone.CaptureID)
 		}
-		if err := removeDirectoryEntryNoFollow(view.quarantine, string(tombstone.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return AppliedCorruption{}, fmt.Errorf("delete quarantined ready record: %w", err)
+		var removedAllocated int64
+		removeErr := s.capacity.trackAllocationDeletion([]string{s.quarantineDir}, false, func() error {
+			var err error
+			removedAllocated, err = removeDirectoryEntryNoFollowAllocated(view.quarantine, string(tombstone.ID))
+			return err
+		})
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return AppliedCorruption{}, fmt.Errorf("delete quarantined ready record: %w", removeErr)
+		}
+		if removeErr == nil {
+			if err := s.capacity.releaseAllocated(removedAllocated, false); err != nil {
+				return AppliedCorruption{}, fmt.Errorf("account quarantined ready record deletion: %w", err)
+			}
 		}
 		s.event("delete:quarantined-ready-record")
 		if err := s.quarantineSyncDirectory(view.quarantine); err != nil {
@@ -194,7 +205,9 @@ func (s *Store) moveCorruptReadyEntryLocked(tombstone corruptionTombstone, view 
 	sourceName := inspection.sourceName
 	destinationName := string(tombstone.ID)
 	if sourceName != "" {
-		if err := renameDirectoryEntryNoReplace(view.ready, sourceName, view.quarantine, destinationName); err != nil {
+		if err := s.capacity.trackAllocationMutationWithOperationalGrowth([]string{s.readyDir, s.quarantineDir}, false, func() error {
+			return renameDirectoryEntryNoReplace(view.ready, sourceName, view.quarantine, destinationName)
+		}); err != nil {
 			return fmt.Errorf("quarantine ready record: %w", err)
 		}
 		s.event("rename:ready-to-quarantine")
@@ -373,13 +386,15 @@ func (s *Store) writeCorruptionTombstoneLocked(tombstone corruptionTombstone) er
 	if err != nil {
 		return err
 	}
-	defer reservation.Release()
 	finalPath := corruptionPath(s, tombstone.ID)
 	tempPath := finalPath + ".tmp"
-	if err := os.Remove(tempPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.capacity.trackAllocationDeletion([]string{s.sendingDir, tempPath}, true, func() error {
+		return os.Remove(tempPath)
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		reservation.Release()
 		return fmt.Errorf("remove corruption temp: %w", err)
 	}
-	return s.writeBatchMetadata(tempPath, finalPath, encoded, "corruption.tmp", "corruption")
+	return s.writeBatchMetadata(tempPath, finalPath, encoded, "corruption.tmp", "corruption", reservation)
 }
 
 func (s *Store) readCorruptionTombstone(path string) (corruptionTombstone, error) {
