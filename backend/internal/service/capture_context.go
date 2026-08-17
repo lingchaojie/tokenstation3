@@ -138,7 +138,12 @@ func CaptureDecisionFor(c *gin.Context, platform string, outcome CaptureOutcome)
 	if scope.hasGroup {
 		groupID = &scope.groupID
 	}
-	return scope.policy.Decide(strings.ToLower(strings.TrimSpace(platform)), outcome, scope.userID, groupID)
+	normalizedPlatform := strings.ToLower(strings.TrimSpace(platform))
+	requestedModel := captureRequestedModel(c)
+	if requestedModel == "" {
+		return scope.policy.Decide(normalizedPlatform, outcome, scope.userID, groupID)
+	}
+	return scope.policy.DecideForModel(normalizedPlatform, requestedModel, outcome, scope.userID, groupID)
 }
 
 // CaptureMayApplyFor is the allocation guard used before an upstream result is

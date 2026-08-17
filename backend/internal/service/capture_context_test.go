@@ -38,6 +38,29 @@ func TestCaptureDecisionShortCircuitsOpenAIBeforeBufferAllocation(t *testing.T) 
 	require.False(t, exists)
 }
 
+func TestCaptureDecisionUsesRequestedModelAllowlist(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.ModelAllowlists = CaptureModelAllowlistPolicy{
+		Anthropic: []string{"claude-opus-5", "claude-fable-5"},
+		Kiro:      []string{"claude-opus-5", "claude-fable-5"},
+	}
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+
+	blocked, _ := gin.CreateTestContext(httptest.NewRecorder())
+	setCompiledCaptureScopeForTest(blocked, compiled, 1, nil)
+	SetCaptureRequestedModel(blocked, "claude-haiku-4-5-20251001")
+	_, ok := CaptureDecisionFor(blocked, PlatformKiro, CaptureOutcomeSuccess)
+	require.False(t, ok)
+
+	allowed, _ := gin.CreateTestContext(httptest.NewRecorder())
+	setCompiledCaptureScopeForTest(allowed, compiled, 1, nil)
+	SetCaptureRequestedModel(allowed, "claude-fable-5")
+	_, ok = CaptureDecisionFor(allowed, "anthropic", CaptureOutcomeSuccess)
+	require.True(t, ok)
+}
+
 func TestCaptureDecisionRequiresBothRequestScopeFilters(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
@@ -458,7 +481,7 @@ func TestCaptureOutboundRequestStreamsExistingWireSliceAndSanitizedHeaders(t *te
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
 	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
-	SetCaptureRequestedModel(c, "client-model")
+	SetCaptureRequestedModel(c, "claude-opus-5")
 	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Anthropic-Version", "2023-06-01")
@@ -474,7 +497,7 @@ func TestCaptureOutboundRequestStreamsExistingWireSliceAndSanitizedHeaders(t *te
 	require.Equal(t, &body[0], &recording.RequestInputs()[0][0], "capture must frame the existing wire slice without cloning it")
 	require.NotContains(t, string(recording.requestHeaders), "secret")
 	require.Contains(t, string(recording.requestHeaders), "Anthropic-Version")
-	require.Equal(t, "client-model", recording.begin.RequestedModel)
+	require.Equal(t, "claude-opus-5", recording.begin.RequestedModel)
 	require.Equal(t, "mapped-model", recording.begin.UpstreamModel)
 	require.True(t, recording.begin.Stream)
 	require.Same(t, captureAttemptForRequest(c), captureAttemptForRequest(c))

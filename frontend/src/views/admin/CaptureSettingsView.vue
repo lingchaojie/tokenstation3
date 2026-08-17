@@ -105,6 +105,35 @@
           </div>
         </section>
 
+        <section class="card overflow-hidden">
+          <CardHeader
+            :title="t('admin.captureSettings.models.title')"
+            :description="t('admin.captureSettings.models.description')"
+          />
+          <div class="grid gap-6 p-6 lg:grid-cols-2">
+            <div>
+              <label class="input-label">{{ t('admin.captureSettings.models.anthropic') }}</label>
+              <textarea
+                data-test="capture-models-anthropic"
+                class="input min-h-28 font-mono text-sm"
+                :value="form.model_allowlists.anthropic.join('\n')"
+                :placeholder="t('admin.captureSettings.models.placeholder')"
+                @input="setModelAllowlist('anthropic', $event)"
+              ></textarea>
+            </div>
+            <div>
+              <label class="input-label">{{ t('admin.captureSettings.models.kiro') }}</label>
+              <textarea
+                data-test="capture-models-kiro"
+                class="input min-h-28 font-mono text-sm"
+                :value="form.model_allowlists.kiro.join('\n')"
+                :placeholder="t('admin.captureSettings.models.placeholder')"
+                @input="setModelAllowlist('kiro', $event)"
+              ></textarea>
+            </div>
+          </div>
+        </section>
+
         <div class="grid gap-6 lg:grid-cols-2">
           <section class="card overflow-hidden">
             <CardHeader :title="t('admin.captureSettings.outcomes.title')" />
@@ -298,6 +327,7 @@ const defaultPolicy = (): CaptureRuntimePolicy => ({
   platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
   outcomes: { success: true, terminal_error: true },
   content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
+  model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
   group_ids: [],
   user_ids: [],
 })
@@ -339,6 +369,10 @@ function copyPolicy(policy: CaptureRuntimePolicy): void {
     platforms: { ...policy.platforms },
     outcomes: { ...policy.outcomes },
     content: { ...policy.content },
+    model_allowlists: {
+      anthropic: [...(policy.model_allowlists?.anthropic ?? [])],
+      kiro: [...(policy.model_allowlists?.kiro ?? [])],
+    },
     group_ids: [...policy.group_ids],
     user_ids: [...policy.user_ids],
   })
@@ -346,15 +380,25 @@ function copyPolicy(policy: CaptureRuntimePolicy): void {
 
 function normalizedPolicy(): CaptureRuntimePolicy {
   const ids = (values: number[]) => Array.from(new Set(values.filter((id) => Number.isInteger(id) && id > 0))).sort((a, b) => a - b)
+  const models = (values: string[]) => Array.from(new Set(values.map((model) => model.trim().toLowerCase()).filter(Boolean))).sort()
   return {
     version: 1,
     enabled: Boolean(form.enabled),
     platforms: { ...form.platforms },
     outcomes: { ...form.outcomes },
     content: { ...form.content },
+    model_allowlists: {
+      anthropic: models(form.model_allowlists.anthropic),
+      kiro: models(form.model_allowlists.kiro),
+    },
     group_ids: ids(form.group_ids),
     user_ids: ids(form.user_ids),
   }
+}
+
+function setModelAllowlist(platform: 'anthropic' | 'kiro', event: Event): void {
+  const value = (event.target as HTMLTextAreaElement).value
+  form.model_allowlists[platform] = value.split(/[\n,]/)
 }
 
 async function save(): Promise<void> {

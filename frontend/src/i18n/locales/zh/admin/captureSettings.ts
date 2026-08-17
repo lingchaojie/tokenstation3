@@ -37,6 +37,13 @@ export default {
       openai: 'OpenAI HTTP 文本接口',
       openaiDescription: '仅 /v1/responses、/v1/chat/completions、/v1/messages；不包含 WS、图片、视频和 Embeddings。',
     },
+    models: {
+      title: '模型白名单',
+      description: '仅转存 Anthropic 和 Kiro 中列出的请求模型；留空某个平台的列表即表示不按模型筛选。',
+      anthropic: 'Anthropic 请求模型',
+      kiro: 'Kiro 请求模型',
+      placeholder: '每行一个模型，也可用逗号分隔',
+    },
     outcomes: {
       title: '调用结果',
       success: '成功调用',

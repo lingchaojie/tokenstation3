@@ -26,6 +26,7 @@ const captureSettings = reactive({
       request_headers: true,
       response_headers: true,
     },
+    model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
     group_ids: [] as number[],
     user_ids: [] as number[],
   },
@@ -104,6 +105,8 @@ describe('CaptureSettingsView', () => {
   beforeEach(() => {
     captureSettings.policy.enabled = false
     captureSettings.policy.platforms.openai = false
+    captureSettings.policy.model_allowlists.anthropic = ['claude-fable-5', 'claude-opus-5']
+    captureSettings.policy.model_allowlists.kiro = ['claude-fable-5', 'claude-opus-5']
     captureSettings.provisioned = true
     captureSettings.ready = true
     captureSettings.sidecar_running = true
@@ -262,6 +265,7 @@ describe('CaptureSettingsView', () => {
         request_headers: true,
         response_headers: true,
       },
+      model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
       group_ids: [],
       user_ids: [],
     }))
@@ -269,5 +273,29 @@ describe('CaptureSettingsView', () => {
     await wrapper.get('[data-test="history-7d"]').trigger('click')
     await flushPromises()
     expect(getCaptureHealthHistory).toHaveBeenLastCalledWith('7d')
+  })
+
+  it('normalizes the Anthropic and Kiro model allowlists before saving', async () => {
+    const wrapper = mount(CaptureSettingsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' }, Toggle: ToggleStub,
+          GroupSelector: true, OpenAIFastPolicyUserSelector: true, Icon: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="capture-models-anthropic"]').setValue(' Claude-Opus-5, claude-fable-5\nclaude-opus-5 ')
+    await wrapper.get('[data-test="capture-models-kiro"]').setValue('claude-fable-5')
+    await wrapper.get('[data-test="capture-save"]').trigger('click')
+    await flushPromises()
+
+    expect(updateCaptureSettings).toHaveBeenCalledWith(expect.objectContaining({
+      model_allowlists: {
+        anthropic: ['claude-fable-5', 'claude-opus-5'],
+        kiro: ['claude-fable-5'],
+      },
+    }))
   })
 })
