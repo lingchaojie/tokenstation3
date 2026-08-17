@@ -97,6 +97,10 @@ func newTerminalOnlyCaptureSettingService(t *testing.T, cfg *config.Config) *ser
 	policy.Platforms.OpenAI = true
 	policy.Outcomes.Success = false
 	policy.Outcomes.TerminalError = true
+	// These integration tests exercise terminal capture mechanics across model
+	// families; production defaults continue to limit Anthropic and Kiro.
+	policy.ModelAllowlists.Anthropic = []string{}
+	policy.ModelAllowlists.Kiro = []string{}
 	_, err := settings.UpdateCaptureRuntimePolicy(context.Background(), policy)
 	require.NoError(t, err)
 	return settings
