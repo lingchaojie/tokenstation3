@@ -156,11 +156,14 @@ func snapshotObservedBytes(src []byte) []byte {
 	return snapshotBytes(src)
 }
 
-// captureWithLimit 返回最多 limit 字节的独立副本及是否被截断。limit<=0 或 src 为 nil 视为不采集。
+// captureWithLimit 返回独立副本及是否被截断。limit>0 时按 limit 截断；
+// limit==0 表示不设单条上限，负值仍视为禁用（配置校验会拒绝负值）。
 func captureWithLimit(src []byte, limit int) ([]byte, bool) {
-	limit = normalizeCaptureLimit(limit)
-	if limit <= 0 || src == nil {
+	if src == nil || limit < 0 {
 		return nil, false
+	}
+	if limit == 0 {
+		return snapshotBytes(src), false
 	}
 	if len(src) <= limit {
 		return snapshotBytes(src), false
@@ -171,11 +174,8 @@ func captureWithLimit(src []byte, limit int) ([]byte, bool) {
 }
 
 func normalizeCaptureLimit(limit int) int {
-	if limit <= 0 {
+	if limit < 0 {
 		return 0
-	}
-	if limit > captureHardMaxBodyBytes {
-		return captureHardMaxBodyBytes
 	}
 	return limit
 }
@@ -280,15 +280,19 @@ func (r *captureBodyReadCloser) Read(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.observed += int64(n)
-	remain := r.limit - len(r.buf)
-	if remain > n {
-		remain = n
-	}
-	if remain > 0 {
-		r.buf = append(r.buf, p[:remain]...)
-	}
-	if remain < n {
-		r.truncated = true
+	if r.limit <= 0 {
+		r.buf = append(r.buf, p[:n]...)
+	} else {
+		remain := r.limit - len(r.buf)
+		if remain > n {
+			remain = n
+		}
+		if remain > 0 {
+			r.buf = append(r.buf, p[:remain]...)
+		}
+		if remain < n {
+			r.truncated = true
+		}
 	}
 	return n, err
 }
@@ -324,7 +328,7 @@ func (r *captureBodyReadCloser) captureResponseNeedsDrain() bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.observed <= int64(r.limit)
+	return r.limit <= 0 || r.observed <= int64(r.limit)
 }
 func (r *captureBodyReadCloser) captureResponseDrainRemaining() int64 {
 	if r == nil {
@@ -332,6 +336,9 @@ func (r *captureBodyReadCloser) captureResponseDrainRemaining() int64 {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.limit <= 0 {
+		return -1
+	}
 	return int64(r.limit) + 1 - r.observed
 }
 func (r *captureBodyReadCloser) markCaptureResponseTruncated() {
@@ -372,7 +379,7 @@ func beginCaptureResponse(c *gin.Context, resp *http.Response, enabled bool, lim
 		return func() {}
 	}
 	limit = normalizeCaptureLimit(limit)
-	if !enabled || limit <= 0 || resp == nil || resp.Body == nil {
+	if !enabled || resp == nil || resp.Body == nil {
 		return func() {}
 	}
 	reader := &captureBodyReadCloser{ReadCloser: resp.Body, attempt: currentCaptureAttempt(c, true), resp: resp, limit: limit}
@@ -460,7 +467,7 @@ func readCaptureAwareUpstreamErrorBody(resp *http.Response, fallbackLimit int64)
 	body, err := readAllWithProviderIdle(ctx, resp.Body, captureOverflowDrainTimeout, func(reader io.Reader) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(reader, readLimit))
 	})
-	if captureLimit >= fallbackLimit && int64(len(body)) == fallbackLimit {
+	if (captureLimit == 0 || captureLimit >= fallbackLimit) && int64(len(body)) == fallbackLimit {
 		drainCaptureResponseRemainderBounded(ctx, resp.Body, captureOverflowDrainTimeout)
 	}
 	return body, err
@@ -478,7 +485,7 @@ func (t *sseTee) appendLine(line string) {
 		return
 	}
 	chunk := line + "\n" // 还原 scanner 去掉的换行；事件间空行 -> "\n\n"
-	if len(t.buf)+len(chunk) > t.limit {
+	if t.limit > 0 && len(t.buf)+len(chunk) > t.limit {
 		if remain := t.limit - len(t.buf); remain > 0 {
 			t.buf = append(t.buf, chunk[:remain]...)
 		}
@@ -703,8 +710,7 @@ func setCaptureResult(c *gin.Context, resp *http.Response, body []byte, truncate
 }
 
 func setCaptureResultForAttempt(token captureAttemptToken, resp *http.Response, body []byte, truncated bool) {
-	body, hardTruncated := captureWithLimit(body, captureHardMaxBodyBytes)
-	truncated = truncated || hardTruncated
+	body = snapshotBytes(body)
 	var finalRequest []byte
 	var finalRequestHash string
 	var finalRequestTruncated bool
@@ -780,7 +786,7 @@ func setCaptureResultForAttempt(token captureAttemptToken, resp *http.Response, 
 // nil body is an observed empty request (for example POST 302 -> GET).
 func snapshotCompletedHTTPRequestBodyForCapture(req *http.Request, limit int) ([]byte, bool, string, bool, string, bool, bool) {
 	limit = normalizeCaptureLimit(limit)
-	if req == nil || limit <= 0 {
+	if req == nil {
 		return nil, false, "", false, "", false, false
 	}
 	if req.GetBody != nil {
@@ -820,13 +826,15 @@ type boundedCaptureWriter struct {
 
 func (w *boundedCaptureWriter) Write(p []byte) (int, error) {
 	w.total += int64(len(p))
-	if remain := w.limit - len(w.buf); remain > 0 {
+	if w.limit <= 0 {
+		w.buf = append(w.buf, p...)
+	} else if remain := w.limit - len(w.buf); remain > 0 {
 		if remain > len(p) {
 			remain = len(p)
 		}
 		w.buf = append(w.buf, p[:remain]...)
 	}
-	if w.total > int64(w.limit) {
+	if w.limit > 0 && w.total > int64(w.limit) {
 		w.truncated = true
 	}
 	return len(p), nil
@@ -841,7 +849,7 @@ func (r *replayPrefixReadCloser) Close() error { return r.closer.Close() }
 
 func snapshotHTTPRequestBodyForCapture(req *http.Request, limit int) ([]byte, bool, string, string, bool, bool) {
 	limit = normalizeCaptureLimit(limit)
-	if req == nil || limit <= 0 {
+	if req == nil {
 		return nil, false, "", "", false, false
 	}
 	if req.GetBody != nil {
@@ -861,7 +869,13 @@ func snapshotHTTPRequestBodyForCapture(req *http.Request, limit int) ([]byte, bo
 		return nil, false, "", "", false, false
 	}
 	original := req.Body
-	prefix, err := io.ReadAll(io.LimitReader(original, int64(limit)+1))
+	var prefix []byte
+	var err error
+	if limit <= 0 {
+		prefix, err = io.ReadAll(original)
+	} else {
+		prefix, err = io.ReadAll(io.LimitReader(original, int64(limit)+1))
+	}
 	// A legal Reader may return data and an error in the same call. Restore any
 	// observed prefix before checking the error so capture can never consume the
 	// beginning of the real provider request.
@@ -1588,7 +1602,7 @@ func captureUpstreamRequestLimitFromContext(ctx context.Context) (int, bool) {
 		return 0, false
 	}
 	captureCtx, ok := ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
-	if !ok || captureCtx.c == nil || captureCtx.limit <= 0 {
+	if !ok || captureCtx.c == nil {
 		return 0, false
 	}
 	return captureCtx.limit, true
@@ -2017,10 +2031,14 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 		return cols
 	}
 	sc := bufio.NewScanner(bytes.NewReader(resp))
-	// A non-truncated capture may contain exactly captureHardMaxBodyBytes in a
-	// single unterminated SSE line. Scanner's max token size is exclusive at
-	// that boundary, so retain one byte of bounded probe capacity.
-	sc.Buffer(make([]byte, 0, 64*1024), captureHardMaxBodyBytes+1)
+	// The raw capture is no longer bounded by the historical 32 MiB ceiling.
+	// Scanner still needs an explicit maximum token size, so derive it from the
+	// actual snapshot rather than imposing a second capture limit.
+	maxTokenSize := len(resp) + 1
+	if maxTokenSize < 64*1024 {
+		maxTokenSize = 64 * 1024
+	}
+	sc.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if bytes.HasPrefix(line, []byte("data:")) {

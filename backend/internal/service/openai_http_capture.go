@@ -29,16 +29,20 @@ func (r *openAIHTTPCaptureReadCloser) Read(p []byte) (int, error) {
 	if n > 0 {
 		r.mu.Lock()
 		r.observed += int64(n)
-		remaining := r.limit - len(r.buf)
-		if remaining > 0 {
-			copyN := n
-			if copyN > remaining {
-				copyN = remaining
+		if r.limit <= 0 {
+			r.buf = append(r.buf, p[:n]...)
+		} else {
+			remaining := r.limit - len(r.buf)
+			if remaining > 0 {
+				copyN := n
+				if copyN > remaining {
+					copyN = remaining
+				}
+				r.buf = append(r.buf, p[:copyN]...)
 			}
-			r.buf = append(r.buf, p[:copyN]...)
-		}
-		if n > remaining {
-			r.truncated = true
+			if n > remaining {
+				r.truncated = true
+			}
 		}
 		r.mu.Unlock()
 	}
@@ -67,7 +71,7 @@ func (r *openAIHTTPCaptureReadCloser) captureResponseNeedsDrain() bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.observed <= int64(r.limit)
+	return r.limit <= 0 || r.observed <= int64(r.limit)
 }
 func (r *openAIHTTPCaptureReadCloser) captureResponseDrainRemaining() int64 {
 	if r == nil {
@@ -75,6 +79,9 @@ func (r *openAIHTTPCaptureReadCloser) captureResponseDrainRemaining() int64 {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.limit <= 0 {
+		return -1
+	}
 	return int64(r.limit) + 1 - r.observed
 }
 func (r *openAIHTTPCaptureReadCloser) markCaptureResponseTruncated() {

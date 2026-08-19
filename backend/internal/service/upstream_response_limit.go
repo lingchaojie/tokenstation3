@@ -273,8 +273,12 @@ func drainCaptureResponseRemainder(reader io.Reader) error {
 		return nil
 	}
 	remaining := lifecycle.captureResponseDrainRemaining()
-	if remaining <= 0 {
+	if remaining == 0 {
 		return nil
+	}
+	if remaining < 0 {
+		_, err := io.Copy(io.Discard, reader)
+		return err
 	}
 	_, err := io.Copy(io.Discard, io.LimitReader(reader, remaining))
 	return err
