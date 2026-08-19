@@ -442,11 +442,8 @@ func captureModelContentPolicy(policy CaptureContentPolicy) model.ContentPolicy 
 }
 
 func captureHeaderBytes(header http.Header, limit int) []byte {
-	if limit <= 0 || limit > 1<<20 {
-		limit = 1 << 20
-	}
 	encoded := redactHTTPHeader(header)
-	if len(encoded) > limit {
+	if limit > 0 && len(encoded) > limit {
 		encoded = encoded[:limit]
 	}
 	return encoded

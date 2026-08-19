@@ -134,12 +134,6 @@ func Open(config Config) (*Store, error) {
 	if config.MinFreeBytes == 0 {
 		config.MinFreeBytes = defaultMinFreeBytes
 	}
-	if config.MaxBodyBytes == 0 {
-		config.MaxBodyBytes = defaultMaxBodyBytes
-	}
-	if config.MaxHeaderBytes == 0 {
-		config.MaxHeaderBytes = defaultMaxHeaderBytes
-	}
 	if config.MaxActiveAttempts == 0 {
 		config.MaxActiveAttempts = defaultMaxActiveAttempts
 	}
@@ -588,8 +582,8 @@ func validateRecordManifestBytes(path string, validation validationOps, info os.
 	legacyLimits := false
 	switch {
 	case manifest.SpoolVersion == spoolVersion &&
-		disk.BodyLimitBytes > 0 && disk.BodyLimitBytes <= uint64(defaultMaxBodyBytes) &&
-		disk.HeaderLimitBytes > 0 && disk.HeaderLimitBytes <= uint64(defaultMaxHeaderBytes):
+		disk.BodyLimitBytes <= uint64(defaultMaxBodyBytes) &&
+		disk.HeaderLimitBytes <= uint64(defaultMaxHeaderBytes):
 	case manifest.SpoolVersion == legacySpoolVersion &&
 		disk.BodyLimitBytes == 0 && disk.HeaderLimitBytes == 0:
 		disk.BodyLimitBytes = uint64(defaultMaxBodyBytes)
@@ -859,12 +853,16 @@ func validColumnStat(stat model.BodyStat, enabled, wantComplete bool, limit uint
 	}
 	wantStored := uint64(0)
 	if enabled {
-		wantStored = min(stat.ObservedBytes, limit)
+		if limit == 0 {
+			wantStored = stat.ObservedBytes
+		} else {
+			wantStored = min(stat.ObservedBytes, limit)
+		}
 	}
 	if stat.StoredBytes != wantStored {
 		return false
 	}
-	wantTruncated := enabled && stat.ObservedBytes > limit
+	wantTruncated := enabled && limit > 0 && stat.ObservedBytes > limit
 	if stat.Truncated != wantTruncated {
 		return false
 	}
