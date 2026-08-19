@@ -123,6 +123,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, policyErr
 	}
 	upstreamBody = updatedBody
+	if account.Platform == PlatformGrok {
+		strippedBody, stripErr := stripRedundantGrokChatViewImageTool(upstreamBody)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip redundant Grok Chat view_image tool: %w", stripErr)
+		}
+		upstreamBody = strippedBody
+	}
 
 	// Grok Composer does not accept image_url parts directly, but Grok Build
 	// can describe the images first. Bridge only this exact failure mode.
@@ -210,7 +217,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				Kind:               kind,
 				Message:            upstreamMsg,
 			})
-			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.StatusCode, resp.Header, respBody)
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 				return nil, &UpstreamFailoverError{
 					StatusCode:                resp.StatusCode,
@@ -233,7 +240,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
-		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
 	}
 
 	// 8. Forward response
@@ -242,7 +249,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if clientStream {
 		result, forwardErr = s.streamRawChatCompletions(ctx, c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, len(body))
 	} else {
-		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	finishOpenAIHTTPCapture(resp)
 	var failoverErr *UpstreamFailoverError
@@ -315,7 +322,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	terminalObserved := false
 	applicationTerminalObserved := false
 	providerPayloadObserved := false
-	choiceState := openAIChatChoiceStreamState{}
 	var staged stagedConvertedStream
 	var stagedErr error
 	defer func() { _ = staged.close() }()
@@ -418,52 +424,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		idleTimer.Reset(delay)
 	}
 	resetIdleTimer := func() { resetIdleTimerAfter(streamIdleTimeout) }
-	drainCaptureBeforeParserReturn := func() {
-		if !captureResponseNeedsDrain(resp.Body) {
-			return
-		}
-		drainIdle := streamIdleTimeout
-		if drainIdle <= 0 {
-			drainIdle = captureOverflowDrainTimeout
-		}
-		timer := time.NewTimer(drainIdle)
-		defer timer.Stop()
-		requestCtx := ginRequestContext(c)
-		abortAndJoin := func() {
-			markCaptureResponseTruncated(resp.Body)
-			closeCaptureResponseUnderlying(resp)
-			for range events {
-			}
-			<-scannerDone
-		}
-		for captureResponseNeedsDrain(resp.Body) {
-			select {
-			case _, ok := <-events:
-				if !ok {
-					return
-				}
-			case <-requestCtx.Done():
-				abortAndJoin()
-				return
-			case <-timer.C:
-				remaining := drainIdle - time.Since(readActivity.LastReadTime())
-				if remaining > 0 {
-					timer.Reset(remaining)
-					continue
-				}
-				abortAndJoin()
-				return
-			}
-		}
-	}
-	providerProtocolFailure := func(protocolErr error) (*OpenAIForwardResult, error) {
-		drainCaptureBeforeParserReturn()
-		if staged.committed || clientDisconnected {
-			return result(), protocolErr
-		}
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, protocolErr.Error())
-	}
-
 	var scanErr error
 scanLoop:
 	for {
@@ -493,42 +453,20 @@ scanLoop:
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			if terminalObserved && trimmedPayload != "" {
-				protocolErr := errors.New("OpenAI chat_completions data arrived after [DONE]")
-				return providerProtocolFailure(protocolErr)
+				continue
 			}
 			if trimmedPayload == "[DONE]" {
-				if !choiceState.complete() {
-					protocolErr := errors.New("OpenAI chat_completions [DONE] arrived before all choices had a finish_reason")
-					return providerProtocolFailure(protocolErr)
-				}
 				terminalObserved = true
 				if refusalDetector.IsSilentRefusal() {
 					continue
 				}
 			} else {
-				if !gjson.Valid(payload) {
-					protocolErr := errors.New("OpenAI chat_completions returned malformed JSON data")
-					return providerProtocolFailure(protocolErr)
-				}
-				providerPayload, protocolErr := classifyOpenAIChatStreamPayload(payload)
-				if protocolErr != nil {
-					return providerProtocolFailure(protocolErr)
-				}
+				providerPayload := true
 				if providerPayload {
 					providerPayloadObserved = true
 				}
-				// Observe only after the strict per-frame shape/cap check above, but
-				// before lifecycle validation so the intentional large-request empty
-				// stop signal retains its dedicated failover classification.
 				refusalDetector.ObservePayload([]byte(payload))
-				applicationTerminalObserved, protocolErr = choiceState.observe(payload)
-				if protocolErr != nil {
-					if refusalDetector.IsSilentRefusal() && !clientDisconnected {
-						drainCaptureBeforeParserReturn()
-						return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
-					}
-					return providerProtocolFailure(protocolErr)
-				}
+				applicationTerminalObserved = false
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				if openAIChatPayloadHasSemanticOutput(payload) {
 					semanticOutput = true
@@ -1181,20 +1119,7 @@ func classifyOpenAIChatStreamPayload(payload string) (bool, error) {
 	if !gjson.Valid(payload) || !gjson.Parse(payload).IsObject() {
 		return false, errors.New("OpenAI chat_completions returned malformed JSON data")
 	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields([]byte(payload), providerJSONOpenAIChatRoot); err != nil {
-		return false, fmt.Errorf("OpenAI chat_completions returned ambiguous JSON data: %w", err)
-	}
 	root := gjson.Parse(payload)
-	for _, field := range []string{"id", "object", "model"} {
-		if value := root.Get(field); value.Exists() && (value.Type != gjson.String || len(value.String()) > maxOpenAIChatRetainedIdentifierBytes) {
-			return false, fmt.Errorf("OpenAI chat_completions %s was not a bounded string", field)
-		}
-	}
-	for _, field := range []string{"system_fingerprint", "service_tier"} {
-		if value := root.Get(field); value.Exists() && value.Type != gjson.Null && (value.Type != gjson.String || len(value.String()) > maxOpenAIChatRetainedIdentifierBytes) {
-			return false, fmt.Errorf("OpenAI chat_completions %s was not a bounded string or null", field)
-		}
-	}
 	if created := root.Get("created"); created.Exists() && !nonNegativeIntegerGJSON(created) {
 		return false, errors.New("OpenAI chat_completions created was not a non-negative integer")
 	}
@@ -1686,6 +1611,7 @@ func nonNegativeFirstValidGJSONFloat(values ...gjson.Result) (float64, bool) {
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -1704,13 +1630,18 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
-	if !gjson.ValidBytes(respBody) || !openAIChatPayloadIsValidProviderPayload(string(respBody)) || !openAIChatBufferedChoicesComplete(respBody) {
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions returned an invalid terminal JSON response")
+	if !gjson.ValidBytes(respBody) {
+		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions returned invalid JSON")
 	}
 
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractCCUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
+	}
+	responseModel := gjson.GetBytes(respBody, "model").String()
+	if requiresBillableGrokChatUsage(account, billingModel, upstreamModel, responseModel) && !hasBillableGrokChatUsage(usage) {
+		upstreamRequestID := firstNonEmpty(requestID, resp.Header.Get("xai-request-id"))
+		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
 
 	if s.responseHeaderFilter != nil {

@@ -28,7 +28,7 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
-        <div v-if="account.platform !== 'kiro' || isKiroRelay">
+        <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -41,10 +41,8 @@
                   ? 'https://generativelanguage.googleapis.com'
                   : account.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
-                    : account.platform === 'kiro'
-                      ? 'https://your-relay.example.com'
-                      : account.platform === 'grok'
-                        ? 'https://api.x.ai/v1'
+                    : account.platform === 'grok'
+                      ? 'https://api.x.ai/v1'
                       : 'https://api.anthropic.com'
             "
           />
@@ -54,6 +52,57 @@
             class="mt-2"
             @select="editBaseUrl = $event"
           />
+          <CnBaseUrlPresets
+            v-if="isCNApiKeyAccount"
+            class="mt-2"
+            :platform="cnPresetPlatform"
+            :mode="editAccountMode"
+            :protocol="editApiProtocol"
+            :current-url="editBaseUrl"
+            @select="onCnPresetSelect"
+          />
+        </div>
+        <!-- Account Mode Selection (CN providers) -->
+        <div v-if="isCNApiKeyAccount">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              v-for="opt in cnAccountModeOptions"
+              :key="opt.value"
+              type="button"
+              :class="[
+                'rounded-lg border-2 px-3 py-1.5 text-xs transition-all',
+                editAccountMode === opt.value
+                  ? 'border-primary-500 bg-primary-50 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                  : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:text-gray-300 dark:hover:border-gray-600'
+              ]"
+              @click="editAccountMode = opt.value"
+            >
+              {{ t(`admin.accounts.cnProviders.accountMode.${opt.labelKey}`) }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
+        </div>
+        <!-- API Protocol Selection (CN providers) -->
+        <div v-if="isCNApiKeyAccount">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              v-for="opt in cnProtocolOptions"
+              :key="opt.value"
+              type="button"
+              :class="[
+                'rounded-lg border-2 px-3 py-1.5 text-xs transition-all',
+                editApiProtocol === opt.value
+                  ? 'border-primary-500 bg-primary-50 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                  : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:text-gray-300 dark:hover:border-gray-600'
+              ]"
+              @click="editApiProtocol = opt.value"
+            >
+              {{ t(`admin.accounts.cnProviders.apiProtocol.${opt.labelKey}`) }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t(`admin.accounts.cnProviders.apiProtocol.${cnProtocolDescKey}Desc`) }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
@@ -70,105 +119,18 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
-                  : account.platform === 'kiro'
+                  : account.platform === 'antigravity'
                     ? 'sk-...'
-                    : account.platform === 'antigravity'
-                      ? 'sk-...'
-                      : account.platform === 'grok'
-                        ? 'xai-...'
+                    : account.platform === 'grok'
+                      ? 'xai-...'
                       : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
         </div>
 
-        <div v-if="account.platform === 'kiro'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
-          <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
-
-          <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
-            <p class="text-xs text-purple-700 dark:text-purple-400">
-              {{ t('admin.accounts.mapRequestModels') }}
-            </p>
-          </div>
-
-          <div v-if="modelMappings.length > 0" class="mb-3 space-y-2">
-            <div
-              v-for="(mapping, index) in modelMappings"
-              :key="getModelMappingKey(mapping)"
-              class="space-y-1"
-            >
-              <div class="flex items-center gap-2">
-                <input
-                  v-model="mapping.from"
-                  type="text"
-                  :class="[
-                    'input flex-1',
-                    !isValidWildcardPattern(mapping.from) ? 'border-red-500 dark:border-red-500' : ''
-                  ]"
-                  :placeholder="t('admin.accounts.requestModel')"
-                />
-                <svg class="h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                </svg>
-                <input
-                  v-model="mapping.to"
-                  type="text"
-                  :class="[
-                    'input flex-1',
-                    mapping.to.includes('*') ? 'border-red-500 dark:border-red-500' : ''
-                  ]"
-                  :placeholder="t('admin.accounts.actualModel')"
-                />
-                <button
-                  type="button"
-                  @click="removeModelMapping(index)"
-                  class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                >
-                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
-              </div>
-              <p v-if="!isValidWildcardPattern(mapping.from)" class="text-xs text-red-500">
-                {{ t('admin.accounts.wildcardOnlyAtEnd') }}
-              </p>
-              <p v-if="mapping.to.includes('*')" class="text-xs text-red-500">
-                {{ t('admin.accounts.targetNoWildcard') }}
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            @click="addModelMapping"
-            class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
-          >
-            <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-            {{ t('admin.accounts.addMapping') }}
-          </button>
-
-          <div class="flex flex-wrap gap-2">
-            <button
-              v-for="preset in presetMappings"
-              :key="preset.label"
-              type="button"
-              @click="addPresetMapping(preset.from, preset.to)"
-              :class="['rounded-lg px-3 py-1 text-xs transition-colors', preset.color]"
-            >
-              + {{ preset.label }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Model Restriction Section (不适用于 Antigravity / Kiro) -->
-        <div v-else-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <!-- Model Restriction Section (不适用于 Antigravity) -->
+        <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
           <div
@@ -578,7 +540,7 @@
         </div>
       </div>
 
-      <!-- Header Override Section (anthropic/openai apikey + grok apikey/oauth) -->
+      <!-- Header Override Section (eligible API-key platforms + grok OAuth) -->
       <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <div>
@@ -619,9 +581,9 @@
         </div>
       </div>
 
-      <!-- OpenAI / Grok / Kiro / Anthropic OAuth Model Restriction (OAuth 类型没有 apikey 容器，需要独立区域) -->
+      <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok' || account.platform === 'kiro' || account.platform === 'anthropic') && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -634,82 +596,6 @@
             {{ t('admin.accounts.openai.modelRestrictionDisabledByPassthrough') }}
           </p>
         </div>
-
-        <template v-else-if="account.platform === 'kiro'">
-          <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
-            <p class="text-xs text-purple-700 dark:text-purple-400">
-              {{ t('admin.accounts.mapRequestModels') }}
-            </p>
-          </div>
-
-          <div v-if="modelMappings.length > 0" class="mb-3 space-y-2">
-            <div
-              v-for="(mapping, index) in modelMappings"
-              :key="'oauth-' + getModelMappingKey(mapping)"
-              class="flex items-center gap-2"
-            >
-              <input
-                v-model="mapping.from"
-                type="text"
-                class="input flex-1"
-                :placeholder="t('admin.accounts.requestModel')"
-              />
-              <svg
-                class="h-4 w-4 flex-shrink-0 text-gray-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M14 5l7 7m0 0l-7 7m7-7H3"
-                />
-              </svg>
-              <input
-                v-model="mapping.to"
-                type="text"
-                class="input flex-1"
-                :placeholder="t('admin.accounts.actualModel')"
-              />
-              <button
-                type="button"
-                @click="removeModelMapping(index)"
-                class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-              >
-                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            @click="addModelMapping"
-            class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
-          >
-            + {{ t('admin.accounts.addMapping') }}
-          </button>
-
-          <div class="flex flex-wrap gap-2">
-            <button
-              v-for="preset in presetMappings"
-              :key="'oauth-' + preset.label"
-              type="button"
-              @click="addPresetMapping(preset.from, preset.to)"
-              :class="['rounded-lg px-3 py-1 text-xs transition-colors', preset.color]"
-            >
-              + {{ preset.label }}
-            </button>
-          </div>
-        </template>
 
         <template v-else>
           <!-- Mode Toggle -->
@@ -829,53 +715,6 @@
             </div>
           </div>
         </template>
-      </div>
-
-      <div
-        v-if="isKiroOrganizationAccount"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-      >
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label class="input-label">{{ t('admin.accounts.oauth.kiro.idcStartUrlLabel') }}</label>
-            <input
-              v-model="editKiroIDCStartUrl"
-              type="text"
-              class="input font-mono"
-              :placeholder="t('admin.accounts.oauth.kiro.startUrlPlaceholder')"
-              data-testid="kiro-idc-start-url-input"
-            />
-          </div>
-          <div>
-            <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-            <Select
-              v-model="editKiroIDCRegion"
-              :options="kiroIDCRegionOptions"
-              searchable
-              creatable
-              data-testid="kiro-idc-region-select-edit"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div v-if="isKiroAccount && !isKiroRelay" class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <div class="mb-4 space-y-2" data-testid="kiro-api-region-select-edit">
-          <label class="input-label">{{ t('admin.accounts.oauth.kiro.apiRegionLabel') }}</label>
-          <Select v-model="editKiroAPIRegion" :options="kiroAPIRegionOptions" />
-          <p class="input-hint">{{ t('admin.accounts.oauth.kiro.apiRegionHint') }}</p>
-        </div>
-        <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
-        <input
-          v-model.number="kiroCreditUnitPriceUsd"
-          type="number"
-          min="0"
-          step="0.001"
-          class="input"
-          placeholder="0"
-          data-testid="kiro-credit-unit-price-usd"
-        />
-        <p class="input-hint">{{ t('admin.accounts.kiroCreditUnitPriceUsdHint') }}</p>
       </div>
 
       <!-- Upstream fields (only for upstream type) -->
@@ -1687,15 +1526,43 @@
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
-		  <input
-			v-model.number="form.rate_multiplier"
-			type="number"
-			min="0"
-			step="0.001"
-			class="input"
-			data-testid="account-rate-multiplier"
-		  />
-		  <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
+          <input
+            v-model.number="form.rate_multiplier"
+            type="number"
+            min="0"
+            step="0.001"
+            class="input disabled:cursor-not-allowed disabled:opacity-60"
+            data-testid="account-rate-multiplier"
+            :disabled="upstreamBillingRateSyncEnabled"
+          />
+          <p class="input-hint">
+            {{
+              t(
+                upstreamBillingRateSyncEnabled
+                  ? 'admin.accounts.upstreamBilling.syncRateManagedHint'
+                  : 'admin.accounts.billingRateMultiplierHint'
+              )
+            }}
+          </p>
+          <div
+            v-if="account?.type === 'apikey'"
+            class="mt-3 flex items-center justify-between gap-3"
+          >
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-gray-700 dark:text-gray-200">
+                {{ t('admin.accounts.upstreamBilling.syncRate') }}
+              </p>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.upstreamBilling.syncRateHint') }}
+              </p>
+            </div>
+            <Toggle
+              :model-value="upstreamBillingRateSyncEnabled"
+              data-testid="upstream-billing-rate-sync"
+              :aria-label="t('admin.accounts.upstreamBilling.syncRate')"
+              @update:model-value="handleUpstreamBillingRateSyncChange"
+            />
+          </div>
         </div>
       </div>
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -1903,7 +1770,7 @@
       </div>
 
       <div
-        v-if="account && isUpstreamBillingProbeCapable(account.platform, account.type)"
+        v-if="account?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -2047,7 +1914,7 @@
       </div>
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="account?.platform === 'kiro' || account?.type === 'apikey' || account?.type === 'bedrock'"
+        v-else-if="account?.type === 'apikey' || account?.type === 'bedrock'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2182,6 +2049,24 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+          </div>
         </div>
       </div>
 
@@ -2367,9 +2252,9 @@
         </div>
       </div>
 
-      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等；Kiro direct: RPM) -->
+      <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
       <div
-        v-if="supportsAccountRpmControls"
+        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2380,7 +2265,7 @@
         </div>
 
         <!-- Window Cost Limit -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.windowCost.label') }}</label>
@@ -2440,7 +2325,7 @@
         </div>
 
         <!-- Session Limit -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionLimit.label') }}</label>
@@ -2589,7 +2474,7 @@
           </div>
 
           <!-- 用户消息限速模式（独立于 RPM 开关，始终可见） -->
-          <div v-if="supportsAnthropicQuotaControls" class="mt-4">
+          <div class="mt-4">
             <label class="input-label">{{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueue') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 mb-2">
               {{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueueHint') }}
@@ -2610,7 +2495,7 @@
         </div>
 
         <!-- TLS Fingerprint -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
@@ -2645,7 +2530,7 @@
         </div>
 
         <!-- Session ID Masking -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.sessionIdMasking.label') }}</label>
@@ -2672,7 +2557,7 @@
         </div>
 
         <!-- Cache TTL Override -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.cacheTTLOverride.label') }}</label>
@@ -2712,7 +2597,7 @@
         </div>
 
         <!-- Custom Base URL Relay -->
-        <div v-if="supportsAnthropicQuotaControls" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.customBaseUrl.label') }}</label>
@@ -2753,18 +2638,17 @@
           <Select v-model="form.status" :options="statusOptions" />
         </div>
 
-        <!-- Mixed Scheduling (for antigravity and kiro accounts) -->
-        <div v-if="account?.platform === 'antigravity' || account?.platform === 'kiro'" class="flex items-center gap-2">
-          <label class="flex cursor-pointer items-center gap-2">
+        <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
+        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
+          <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
             <input
               type="checkbox"
               v-model="mixedScheduling"
-              :disabled="account?.platform === 'antigravity'"
-              :class="account?.platform === 'antigravity' ? 'cursor-not-allowed opacity-60' : ''"
-              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+              disabled
+              class="h-4 w-4 cursor-not-allowed rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {{ t(account?.platform === 'kiro' ? 'admin.accounts.kiroMixedScheduling' : 'admin.accounts.mixedScheduling') }}
+              {{ t('admin.accounts.mixedScheduling') }}
             </span>
           </label>
           <div class="group relative">
@@ -2777,66 +2661,11 @@
             <div
               class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
             >
-              {{ t(account?.platform === 'kiro' ? 'admin.accounts.kiroMixedSchedulingTooltip' : 'admin.accounts.mixedSchedulingTooltip') }}
+              {{ t('admin.accounts.mixedSchedulingTooltip') }}
               <div
                 class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
               ></div>
             </div>
-          </div>
-        </div>
-        <!-- Kiro mixed-scheduling config fields -->
-        <div v-if="account?.platform === 'kiro' && mixedScheduling" class="mt-3 space-y-3 rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-700 dark:bg-blue-900/20">
-          <label class="flex items-start gap-3 text-sm text-blue-700 dark:text-blue-300">
-            <input
-              v-model="kiroAutoStickyEnabled"
-              type="checkbox"
-              class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            <span>
-              <span class="block text-xs font-medium text-blue-700 dark:text-blue-400">{{ t('admin.groups.kiroCache.stickyRouting') }}</span>
-              <span class="mt-1 block text-xs text-blue-600 dark:text-blue-300">{{ t('admin.groups.kiroCache.stickyRoutingHint') }}</span>
-            </span>
-          </label>
-          <div v-if="kiroAutoStickyEnabled">
-            <label class="input-label">{{ t('admin.groups.kiroCache.stickyTTL') }}</label>
-            <input
-              v-model.number="kiroStickyTtlSeconds"
-              type="number"
-              step="60"
-              min="60"
-              max="86400"
-              class="input"
-              placeholder="3600"
-            />
-            <p class="input-hint">{{ t('admin.groups.kiroCache.stickyTTLHint') }}</p>
-          </div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.groups.kiroCache.title') }}</label>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.groups.kiroCache.description') }}</p>
-          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input
-              v-model="kiroCacheEmulationEnabled"
-              type="checkbox"
-              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            {{ t('admin.groups.kiroCache.enabled') }}
-          </label>
-          <div v-if="kiroCacheEmulationEnabled">
-            <label class="input-label">{{ t('admin.groups.kiroCache.ratio') }}</label>
-            <input
-              v-model.number="kiroCacheEmulationRatio"
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              class="input"
-              placeholder="1"
-            />
-            <p class="input-hint">{{ t('admin.groups.kiroCache.ratioHint') }}</p>
-          </div>
-          <div>
-            <label class="input-label">{{ t('admin.groups.kiroCache.endpointMode') }}</label>
-            <Select v-model="kiroEndpointMode" :options="kiroEndpointModeOptions" />
-            <p class="input-hint">{{ t('admin.groups.kiroCache.endpointModeHint') }}</p>
           </div>
         </div>
         <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
@@ -2932,7 +2761,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -2946,7 +2775,6 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
-  KiroEndpointMode,
   OllamaCloudUsageState
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -2960,6 +2788,7 @@ import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
@@ -2971,21 +2800,17 @@ import {
   readPlanType,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
-  isUpstreamBillingProbeCapable,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
+  defaultCNBaseUrl,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
+  type CnAccountMode,
+  type CnApiProtocol,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import {
-  DEFAULT_KIRO_API_REGION,
-  buildKiroAPIRegionOptions,
-  isKiroRelayAccount,
-  resolveKiroAPIRegionFromCredentials
-} from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -2998,8 +2823,6 @@ import {
   resolveOpenAIWSModeFromExtra
 } from '@/utils/openaiWsMode'
 import {
-  fetchKiroDefaultMappings,
-  getModelsByPlatform,
   getPresetMappingsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
@@ -3037,25 +2860,12 @@ const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (props.account.platform === 'kiro') return t('admin.accounts.kiro.relayBaseUrlHint')
   if (props.account.platform === 'grok') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
-const isKiroOAuthAccount = computed(() => props.account?.platform === 'kiro' && props.account?.type === 'oauth')
-const isKiroAccount = computed(() => props.account?.platform === 'kiro')
-const isKiroRelay = computed(() => isKiroRelayAccount(props.account))
-const isKiroOrganizationAccount = computed(() => {
-  if (!isKiroOAuthAccount.value || isKiroRelay.value) return false
-  const credentials = (props.account?.credentials || {}) as Record<string, unknown>
-  return (
-    credentials.auth_method === 'idc' ||
-    typeof credentials.start_url === 'string' ||
-    typeof credentials.region === 'string'
-  )
-})
 
 // Model mapping type
 interface ModelMapping {
@@ -3074,25 +2884,78 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
-const kiroCreditUnitPriceUsd = ref(0)
-const editKiroIDCStartUrl = ref('https://view.awsapps.com/start')
-const editKiroIDCRegion = ref('us-east-1')
-const editKiroAPIRegion = ref(DEFAULT_KIRO_API_REGION)
-const localizedKiroRegionOptions = (currentValue: string) =>
-  buildKiroAPIRegionOptions(currentValue, (region, legacy) => {
-    if (legacy) {
-      return t('admin.accounts.oauth.kiro.apiRegionLegacy', { region })
+
+// ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
+// account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
+// 二者均可修正（早期创建的账号可能存错默认值），切换时重置 base_url 预置。
+const isCNApiKeyAccount = computed(
+  () =>
+    props.account?.type === 'apikey' &&
+    (props.account.platform === 'kimi' ||
+      props.account.platform === 'zhipu' ||
+      props.account.platform === 'deepseek')
+)
+// CnBaseUrlPresets 的 platform prop 是平台字面量联合类型，模板里不能写
+// `as` 断言（其中的 `|` 会被 eslint 误判为 Vue2 filter 语法），经此 computed 传递。
+const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek'>(() => {
+  const platform = props.account?.platform
+  if (platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek') {
+    return platform
+  }
+  return 'kimi'
+})
+const editApiProtocol = ref<CnApiProtocol>('chat_completions')
+const editAccountMode = ref<CnAccountMode>('payg')
+// 回填窗口标志：syncFormFromAccount 会同步改写 editAccountMode / editApiProtocol，
+// 而 watcher（pre-flush）在同步代码执行完之后才触发——若不抑制，会把刚恢复的
+// 存储版 base_url（可能是用户自定义/中转地址）覆盖为官方预设并在下次保存时持久化。
+// nextTick 后解除，此后用户主动切换模式/协议仍正常联动重置。
+const syncingForm = ref(false)
+const cnAccountModeOptions = computed<Array<{ value: CnAccountMode; labelKey: 'payg' | 'coding' }>>(
+  () => {
+    // DeepSeek 无 coding 套餐（与创建弹窗一致），仅保留按量付费。
+    if (props.account?.platform === 'deepseek') {
+      return [{ value: 'payg', labelKey: 'payg' }]
     }
-    if (region === 'us-east-1') {
-      return `${region} - ${t('admin.accounts.oauth.kiro.apiRegionUsEast')}`
-    }
-    if (region === 'eu-central-1') {
-      return `${region} - ${t('admin.accounts.oauth.kiro.apiRegionEuCentral')}`
-    }
-    return region
-  }).map(option => ({ ...option }))
-const kiroAPIRegionOptions = computed(() => localizedKiroRegionOptions(editKiroAPIRegion.value))
-const kiroIDCRegionOptions = computed(() => localizedKiroRegionOptions(editKiroIDCRegion.value))
+    return [
+      { value: 'payg', labelKey: 'payg' },
+      { value: 'coding', labelKey: 'coding' }
+    ]
+  }
+)
+const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => {
+  const opts: Array<{ value: CnApiProtocol; labelKey: string }> = [
+    { value: 'chat_completions', labelKey: 'chatCompletions' },
+    { value: 'anthropic', labelKey: 'anthropic' }
+  ]
+  if (props.account?.platform === 'deepseek') {
+    opts.push({ value: 'responses', labelKey: 'responses' })
+  }
+  return opts
+})
+watch(editApiProtocol, (protocol) => {
+  if (!isCNApiKeyAccount.value || syncingForm.value) return
+  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+})
+watch(editAccountMode, (mode) => {
+  if (!isCNApiKeyAccount.value || syncingForm.value) return
+  // deepseek 无 coding 套餐：防御性回退（UI 已隐藏该选项）。
+  const effectiveMode = props.account!.platform === 'deepseek' && mode === 'coding' ? 'payg' : mode
+  if (effectiveMode !== mode) {
+    editAccountMode.value = effectiveMode
+    return
+  }
+  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
+})
+const cnProtocolDescKey = computed(
+  () => cnProtocolOptions.value.find(o => o.value === editApiProtocol.value)?.labelKey ?? 'chatCompletions'
+)
+// 点击预设端点：回填 base url 与对应模式/协议。
+function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; url: string }) {
+  editAccountMode.value = preset.mode
+  editApiProtocol.value = preset.protocol
+  editBaseUrl.value = preset.url
+}
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3174,27 +3037,9 @@ const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const upstreamBillingAutoProbeEnabled = ref(false)
+const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
-// Kiro mixed-scheduling config refs
-const kiroEndpointMode = ref<KiroEndpointMode>('q')
-const kiroCacheEmulationEnabled = ref(false)
-const kiroCacheEmulationRatio = ref(1)
-const kiroAutoStickyEnabled = ref(true)
-const kiroStickyTtlSeconds = ref(3600)
-const kiroEndpointModeOptions = computed(() => [
-  { value: 'q', label: t('admin.groups.kiroCache.endpointModeQ') },
-  { value: 'krs', label: t('admin.groups.kiroCache.endpointModeKRS') },
-  { value: 'auto', label: t('admin.groups.kiroCache.endpointModeAuto') },
-])
-
-function normalizeKiroTtlSeconds(v: number): number {
-  const n = Math.floor(Number(v))
-  if (!Number.isFinite(n) || n <= 0) return 3600
-  if (n < 60) return 60
-  if (n > 86400) return 86400
-  return n
-}
 const antigravityProjectId = ref('')
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
@@ -3213,21 +3058,6 @@ const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMappi
 const getAntigravityModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-antigravity-model-mapping')
 const getTempUnschedRuleKey = createStableObjectKeyResolver<TempUnschedRuleForm>('edit-temp-unsched-rule')
 
-const applyKiroModelMappings = (entries: Array<[string, string]>) => {
-  modelRestrictionMode.value = 'mapping'
-  modelMappings.value = entries.map(([from, to]) => ({ from, to }))
-  allowedModels.value = []
-}
-
-const loadDefaultKiroModelMappings = () => {
-  fetchKiroDefaultMappings().then(mappings => {
-    if (!isKiroOAuthAccount.value) return
-    modelRestrictionMode.value = 'mapping'
-    modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
-    allowedModels.value = []
-  })
-}
-
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningDetails = ref<{ groupName: string; currentPlatform: string; otherPlatform: string } | null>(
   null
@@ -3236,7 +3066,7 @@ const mixedChannelWarningRawMessage = ref('')
 const mixedChannelWarningAction = ref<(() => Promise<void>) | null>(null)
 const antigravityMixedChannelConfirmed = ref(false)
 
-// Quota control state
+// Quota control state (Anthropic OAuth/SetupToken only)
 const windowCostEnabled = ref(false)
 const windowCostLimit = ref<number | null>(null)
 const windowCostStickyReserve = ref<number | null>(null)
@@ -3261,35 +3091,6 @@ const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
 const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
-const supportsAnthropicQuotaControls = computed(() =>
-  props.account?.platform === 'anthropic' &&
-  (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
-)
-const supportsAccountRpmControls = computed(() =>
-  supportsAnthropicQuotaControls.value || (props.account?.platform === 'kiro' && !isKiroRelay.value)
-)
-
-const applyAccountRPMExtra = (extra: Record<string, unknown>) => {
-  if (!supportsAccountRpmControls.value) {
-    return
-  }
-  if (rpmLimitEnabled.value) {
-    const DEFAULT_BASE_RPM = 15
-    extra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
-      ? baseRpm.value
-      : DEFAULT_BASE_RPM
-    extra.rpm_strategy = rpmStrategy.value
-    if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
-      extra.rpm_sticky_buffer = rpmStickyBuffer.value
-    } else {
-      delete extra.rpm_sticky_buffer
-    }
-  } else {
-    delete extra.base_rpm
-    delete extra.rpm_strategy
-    delete extra.rpm_sticky_buffer
-  }
-}
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
@@ -3305,6 +3106,8 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -3336,6 +3139,13 @@ const editWeeklyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editWeeklyResetDay = ref<number | null>(null)
 const editWeeklyResetHour = ref<number | null>(null)
 const editResetTimezone = ref<string | null>(null)
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
+])
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
@@ -3588,8 +3398,16 @@ const tempUnschedPresets = computed(() => [
 const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
-  if (props.account?.platform === 'kiro') return ''
   if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
+  // CN 供应商：按当前模式/协议回落到官方预设（清空输入框提交时使用），
+  // 不能落到 anthropic 默认值（会被当 CC base 拼出错误端点）。
+  if (
+    props.account?.platform === 'kimi' ||
+    props.account?.platform === 'zhipu' ||
+    props.account?.platform === 'deepseek'
+  ) {
+    return defaultCNBaseUrl(props.account.platform, editAccountMode.value, editApiProtocol.value)
+  }
   return 'https://api.anthropic.com'
 })
 
@@ -3613,8 +3431,18 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const handleUpstreamBillingRateSyncChange = (enabled: boolean) => {
+  upstreamBillingRateSyncEnabled.value = enabled
+  if (enabled) {
+    upstreamBillingAutoProbeEnabled.value = true
+  }
+}
+
 const handleUpstreamBillingAutoProbeChange = (enabled: boolean) => {
   upstreamBillingAutoProbeEnabled.value = enabled
+  if (!enabled) {
+    upstreamBillingRateSyncEnabled.value = false
+  }
 }
 
 const statusOptions = computed(() => {
@@ -3660,22 +3488,6 @@ const loadModelRestrictionFromMapping = (rawMapping?: Record<string, unknown>) =
       : 'whitelist'
 }
 
-const loadAnthropicOAuthModelRestriction = (rawMapping?: Record<string, unknown>) => {
-  const parsed = splitModelMappingObject(rawMapping)
-  if (parsed.allowedModels.length > 0 || parsed.modelMappings.length > 0) {
-    allowedModels.value = parsed.allowedModels
-    modelMappings.value = parsed.modelMappings
-    modelRestrictionMode.value = parsed.modelMappings.length > 0 && parsed.allowedModels.length === 0
-      ? 'mapping'
-      : 'whitelist'
-    return
-  }
-
-  allowedModels.value = [...getModelsByPlatform('anthropic')]
-  modelMappings.value = []
-  modelRestrictionMode.value = 'whitelist'
-}
-
 const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value)
 
@@ -3705,6 +3517,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
   }
+  // 进入回填窗口：抑制 CN 模式/协议 watcher 联动重置 base_url（见 syncingForm 注释）。
+  syncingForm.value = true
+  void nextTick(() => {
+    syncingForm.value = false
+  })
   antigravityMixedChannelConfirmed.value = false
   showMixedChannelWarning.value = false
   mixedChannelWarningDetails.value = null
@@ -3730,21 +3547,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
   editVertexLocation.value = 'us-central1'
-  editKiroIDCStartUrl.value =
-    newAccount.platform === 'kiro' &&
-    newAccount.type === 'oauth' &&
-    typeof credentials?.start_url === 'string' &&
-    credentials.start_url.trim()
-      ? credentials.start_url.trim()
-      : 'https://view.awsapps.com/start'
-  editKiroIDCRegion.value =
-    newAccount.platform === 'kiro' &&
-    newAccount.type === 'oauth' &&
-    typeof credentials?.region === 'string' &&
-    credentials.region.trim()
-      ? credentials.region.trim()
-      : 'us-east-1'
-  editKiroAPIRegion.value = resolveKiroAPIRegionFromCredentials(credentials, newAccount.type)
   antigravityProjectId.value =
     newAccount.platform === 'antigravity' &&
     newAccount.type === 'oauth' &&
@@ -3755,30 +3557,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load mixed scheduling setting (only for antigravity accounts)
   mixedScheduling.value = false
   allowOverages.value = false
-  const extra = newAccount.extra as Record<string, unknown> | undefined
-  mixedScheduling.value = extra?.mixed_scheduling === true
-  allowOverages.value = extra?.allow_overages === true
-  // Backfill kiro mixed-scheduling config
-  kiroEndpointMode.value =
-    extra?.kiro_endpoint_mode === 'krs' || extra?.kiro_endpoint_mode === 'auto'
-      ? extra.kiro_endpoint_mode
-      : 'q'
-  kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
-  kiroCacheEmulationRatio.value = typeof extra?.kiro_cache_emulation_ratio === 'number' ? extra.kiro_cache_emulation_ratio : 1
-  // auto-sticky 缺省视为开启（与后端/分组默认一致）：老账号无此字段时不应丢失粘性
-  kiroAutoStickyEnabled.value = extra?.kiro_auto_sticky_enabled !== false
-  kiroStickyTtlSeconds.value = typeof extra?.kiro_sticky_session_ttl_seconds === 'number' ? extra.kiro_sticky_session_ttl_seconds : 3600
-  const kiroCreditUnitPrice = extra?.kiro_credit_unit_price_usd
-  kiroCreditUnitPriceUsd.value = typeof kiroCreditUnitPrice === 'number'
-    ? kiroCreditUnitPrice
-    : typeof kiroCreditUnitPrice === 'string'
-      ? Number(kiroCreditUnitPrice) || 0
-      : 0
-  autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
-  autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
-  autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
-  autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
-  upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
+	const extra = newAccount.extra as Record<string, unknown> | undefined
+	mixedScheduling.value = extra?.mixed_scheduling === true
+	allowOverages.value = extra?.allow_overages === true
+	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
+	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
+	autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
+	autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
+	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
+  upstreamBillingRateSyncEnabled.value =
+    upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
@@ -3793,6 +3581,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -3844,6 +3633,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
     }
+    if (newAccount.type === 'oauth') {
+      const fpMode = extra?.codex_fingerprint_mode as string | undefined
+      // 缺省/非法值按 off 呈现，与后端 GetCodexFingerprintMode 的 opt-in 语义一致（#5610）
+      codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
+        ? fpMode as CodexFingerprintMode
+        : 'off')
+    }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
@@ -3866,8 +3662,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
   }
 
-  // Load quota limit for apikey/bedrock/Kiro accounts (bedrock quota is also loaded in its own branch above)
-  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock' || newAccount.platform === 'kiro') {
+  // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
+  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {
     const quotaVal = extra?.quota_limit as number | undefined
     editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
@@ -3928,13 +3724,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     antigravityModelMappings.value = []
   }
 
-  // Load quota control settings
+  // Load quota control settings (Anthropic OAuth/SetupToken only)
   loadQuotaControlSettings(newAccount)
 
   loadTempUnschedRules(credentials)
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
-  // Load header override state (anthropic/openai apikey + grok apikey/oauth)
+  // Load header override state for eligible account platforms/types
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
   if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
@@ -3967,36 +3763,33 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
+    // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
+    // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
+    if (newAccount.platform === 'kimi' || newAccount.platform === 'zhipu' || newAccount.platform === 'deepseek') {
+      editAccountMode.value = credentials.account_mode === 'coding' ? 'coding' : 'payg'
+      const storedProtocol = credentials.api_protocol
+      editApiProtocol.value =
+        storedProtocol === 'anthropic' || storedProtocol === 'responses' ? storedProtocol : 'chat_completions'
+      if (newAccount.platform !== 'deepseek' && editApiProtocol.value === 'responses') {
+        editApiProtocol.value = 'chat_completions'
+      }
+    }
     const platformDefaultUrl =
       newAccount.platform === 'openai'
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'kiro'
-            ? ''
-            : newAccount.platform === 'grok'
-              ? 'https://api.x.ai/v1'
-            : 'https://api.anthropic.com'
+          : newAccount.platform === 'grok'
+            ? 'https://api.x.ai/v1'
+            : newAccount.platform === 'kimi' ||
+                newAccount.platform === 'zhipu' ||
+                newAccount.platform === 'deepseek'
+              ? defaultCNBaseUrl(newAccount.platform, editAccountMode.value, editApiProtocol.value)
+              : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
     // Load model mappings and detect mode
-    if (newAccount.platform === 'kiro') {
-      const existingMappings = credentials.model_mapping as Record<string, string> | undefined
-      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
-        applyKiroModelMappings(Object.entries(existingMappings))
-      } else {
-        fetchKiroDefaultMappings().then(mappings => {
-          if (props.account?.id !== newAccount.id || props.account?.type !== 'apikey' || props.account?.platform !== 'kiro') {
-            return
-          }
-          modelRestrictionMode.value = 'mapping'
-          modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
-          allowedModels.value = []
-        })
-      }
-    } else {
-      loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
-    }
+    loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
 
     // Load pool mode
     poolModeEnabled.value = credentials.pool_mode === true
@@ -4066,21 +3859,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
-    // Load model mappings for OAuth accounts with platform-specific credential semantics.
-    if (newAccount.platform === 'kiro' && newAccount.credentials) {
-      const oauthCredentials = newAccount.credentials as Record<string, unknown>
-      const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
-      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
-        applyKiroModelMappings(Object.entries(existingMappings))
-      } else {
-        loadDefaultKiroModelMappings()
-      }
-    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
+    // Load model mappings for OpenAI/Grok OAuth accounts
+    if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
-    } else if (newAccount.platform === 'anthropic' && newAccount.credentials) {
-      const oauthCredentials = newAccount.credentials as Record<string, unknown>
-      loadAnthropicOAuthModelRestriction(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
       modelRestrictionMode.value = 'whitelist'
       modelMappings.value = []
@@ -4406,7 +4188,7 @@ function loadTempUnschedRules(credentials?: Record<string, unknown>) {
   })
 }
 
-// Load quota control settings from account
+// Load quota control settings from account (Anthropic OAuth/SetupToken only)
 function loadQuotaControlSettings(account: Account) {
   // Reset all quota control state first
   windowCostEnabled.value = false
@@ -4428,27 +4210,27 @@ function loadQuotaControlSettings(account: Account) {
   customBaseUrlEnabled.value = false
   customBaseUrl.value = ''
 
-  const isAnthropicQuotaAccount =
-    account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token')
-  const supportsRPM = isAnthropicQuotaAccount || (account.platform === 'kiro' && !isKiroRelayAccount(account))
-
-  if (!supportsRPM) {
+  // Remaining quota control settings only apply to Anthropic accounts
+  if (account.platform !== 'anthropic') {
     return
   }
 
-  if (isAnthropicQuotaAccount) {
-    // Load from extra field (via backend DTO fields)
-    if (account.window_cost_limit != null && account.window_cost_limit > 0) {
-      windowCostEnabled.value = true
-      windowCostLimit.value = account.window_cost_limit
-      windowCostStickyReserve.value = account.window_cost_sticky_reserve ?? 10
-    }
+  // Window cost / session limit only apply to Anthropic OAuth/SetupToken accounts
+  if (account.type !== 'oauth' && account.type !== 'setup-token') {
+    return
+  }
 
-    if (account.max_sessions != null && account.max_sessions > 0) {
-      sessionLimitEnabled.value = true
-      maxSessions.value = account.max_sessions
-      sessionIdleTimeout.value = account.session_idle_timeout_minutes ?? 5
-    }
+  // Load from extra field (via backend DTO fields)
+  if (account.window_cost_limit != null && account.window_cost_limit > 0) {
+    windowCostEnabled.value = true
+    windowCostLimit.value = account.window_cost_limit
+    windowCostStickyReserve.value = account.window_cost_sticky_reserve ?? 10
+  }
+
+  if (account.max_sessions != null && account.max_sessions > 0) {
+    sessionLimitEnabled.value = true
+    maxSessions.value = account.max_sessions
+    sessionIdleTimeout.value = account.session_idle_timeout_minutes ?? 5
   }
 
   // RPM limit
@@ -4457,10 +4239,6 @@ function loadQuotaControlSettings(account: Account) {
     baseRpm.value = account.base_rpm
     rpmStrategy.value = (account.rpm_strategy as 'tiered' | 'sticky_exempt') || 'tiered'
     rpmStickyBuffer.value = account.rpm_sticky_buffer ?? null
-  }
-
-  if (!isAnthropicQuotaAccount) {
-    return
   }
 
   // UMQ mode（独立于 RPM 加载，防止编辑无 RPM 账号时丢失已有配置）
@@ -4656,34 +4434,30 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-    if (isUpstreamBillingProbeCapable(props.account.platform, props.account.type)) {
+    if (props.account.type === 'apikey') {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
+      updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
+      if (upstreamBillingRateSyncEnabled.value) {
+        delete updatePayload.rate_multiplier
+      }
     }
 
     // For apikey type, handle credentials update
     if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
-      const newBaseUrl = props.account.platform === 'kiro'
-        ? editBaseUrl.value.trim()
-        : (editBaseUrl.value.trim() || defaultBaseUrl.value)
+      const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
       const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
-
-      if (!newBaseUrl && props.account.platform !== 'kiro') {
-        appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
-        return
-      }
 
       // Always update credentials for apikey type to handle model mapping changes
       const newCredentials: Record<string, unknown> = {
-        ...currentCredentials
+        ...currentCredentials,
+        base_url: newBaseUrl
       }
-      if (newBaseUrl) {
-        newCredentials.base_url = newBaseUrl
-      } else {
-        delete newCredentials.base_url
-      }
-      if (props.account.platform === 'kiro' && !isKiroRelay.value) {
-        newCredentials.api_region = editKiroAPIRegion.value
+
+      // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
+      if (isCNApiKeyAccount.value) {
+        newCredentials.account_mode = editAccountMode.value
+        newCredentials.api_protocol = editApiProtocol.value
       }
 
       // Handle API key
@@ -4702,9 +4476,7 @@ const handleSubmit = async () => {
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
       if (shouldApplyModelMapping) {
-        const modelMapping = props.account.platform === 'kiro'
-          ? buildModelMappingObject('mapping', [], modelMappings.value)
-          : buildModelRestrictionMapping()
+        const modelMapping = buildModelRestrictionMapping()
         if (modelMapping) {
           newCredentials.model_mapping = modelMapping
         } else {
@@ -4748,7 +4520,7 @@ const handleSubmit = async () => {
         delete newCredentials.custom_error_codes
       }
 
-      // Add header override if enabled (anthropic/openai/grok apikey)
+      // Add header override if enabled for this API-key platform
       if (isHeaderOverrideCapable(props.account.platform, 'apikey')) {
         if (headerOverrideEnabled.value) {
           const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
@@ -4835,8 +4607,8 @@ const handleSubmit = async () => {
         return
       }
 
-	      updatePayload.credentials = newCredentials
-	    } else if (props.account.type === 'bedrock') {
+      updatePayload.credentials = newCredentials
+    } else if (props.account.type === 'bedrock') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -4894,8 +4666,8 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-		    } else {
-	      // For oauth/setup-token types, only update intercept_warmup_requests if changed
+    } else {
+      // For oauth/setup-token types, only update intercept_warmup_requests if changed
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -4929,75 +4701,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-	// Anthropic OAuth: persist model mapping to credentials
-    if (props.account.platform === 'anthropic' && props.account.type === 'oauth') {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
-      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-
-      const modelMapping = buildModelRestrictionMapping()
-      if (modelMapping) {
-        newCredentials.model_mapping = modelMapping
-      } else {
-        delete newCredentials.model_mapping
-      }
-
-      updatePayload.credentials = newCredentials
-    }
-
-    // Kiro OAuth: persist model mapping to credentials
-    if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
-      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-      delete newCredentials.preferred_endpoint
-      newCredentials.api_region = editKiroAPIRegion.value
-
-      const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
-      if (modelMapping) {
-        newCredentials.model_mapping = modelMapping
-      } else {
-        delete newCredentials.model_mapping
-      }
-
-      if (isKiroOrganizationAccount.value) {
-        const startUrl = editKiroIDCStartUrl.value.trim()
-        if (!startUrl) {
-          appStore.showError(t('admin.accounts.oauth.kiro.startUrlRequired'))
-          return
-        }
-        newCredentials.start_url = startUrl
-        newCredentials.region = editKiroIDCRegion.value.trim() || 'us-east-1'
-      }
-
-      updatePayload.credentials = newCredentials
-    }
-
-    if (props.account.platform === 'kiro' && !isKiroRelay.value) {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
-      const newExtra: Record<string, unknown> = { ...currentExtra }
-      const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
-      newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
-      if (mixedScheduling.value) {
-        newExtra.mixed_scheduling = true
-        newExtra.kiro_endpoint_mode = kiroEndpointMode.value
-        newExtra.kiro_cache_emulation_enabled = kiroCacheEmulationEnabled.value
-        newExtra.kiro_cache_emulation_ratio = Math.min(1, Math.max(0, Number(kiroCacheEmulationRatio.value) || 0))
-        newExtra.kiro_auto_sticky_enabled = kiroAutoStickyEnabled.value
-        newExtra.kiro_sticky_session_ttl_seconds = normalizeKiroTtlSeconds(kiroStickyTtlSeconds.value)
-      } else {
-        delete newExtra.mixed_scheduling
-        delete newExtra.kiro_endpoint_mode
-        delete newExtra.kiro_cache_emulation_enabled
-        delete newExtra.kiro_cache_emulation_ratio
-        delete newExtra.kiro_auto_sticky_enabled
-        delete newExtra.kiro_sticky_session_ttl_seconds
-      }
-	  updatePayload.extra = newExtra
-	}
-
-	// Grok OAuth: 自定义上游地址 + 请求头覆写。base_url 仅改写转发端点，
+    // Grok OAuth: 自定义上游地址 + 请求头覆写。base_url 仅改写转发端点，
     // OAuth 授权与令牌刷新链路不读取该值；关闭开关即恢复默认官方网关。
     if (props.account.platform === 'grok' && props.account.type === 'oauth') {
       const currentCredentials =
@@ -5040,7 +4744,7 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-	// OpenAI: 手动覆盖订阅档位 plan_type（Plus/Pro/Free）。仅 OAuth 非影子账号：
+    // OpenAI: 手动覆盖订阅档位 plan_type（Plus/Pro/Free）。仅 OAuth 非影子账号：
     // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
     if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
@@ -5092,8 +4796,8 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    // For Anthropic OAuth/SetupToken accounts, handle Anthropic-only quota control settings in extra
-    if (supportsAnthropicQuotaControls.value) {
+    // For Anthropic OAuth/SetupToken accounts, handle quota control settings in extra
+    if (props.account.platform === 'anthropic' && (props.account.type === 'oauth' || props.account.type === 'setup-token')) {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
 
@@ -5113,6 +4817,24 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.max_sessions
         delete newExtra.session_idle_timeout_minutes
+      }
+
+      // RPM limit settings
+      if (rpmLimitEnabled.value) {
+        const DEFAULT_BASE_RPM = 15
+        newExtra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
+          ? baseRpm.value
+          : DEFAULT_BASE_RPM
+        newExtra.rpm_strategy = rpmStrategy.value
+        if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
+          newExtra.rpm_sticky_buffer = rpmStickyBuffer.value
+        } else {
+          delete newExtra.rpm_sticky_buffer
+        }
+      } else {
+        delete newExtra.base_rpm
+        delete newExtra.rpm_strategy
+        delete newExtra.rpm_sticky_buffer
       }
 
       // UMQ mode（独立于 RPM 保存）
@@ -5161,15 +4883,6 @@ const handleSubmit = async () => {
         delete newExtra.custom_base_url
       }
 
-      updatePayload.extra = newExtra
-    }
-
-    // Account-level RPM settings for Anthropic OAuth/SetupToken and Kiro direct accounts
-    if (supportsAccountRpmControls.value) {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
-      const newExtra: Record<string, unknown> = { ...currentExtra }
-      applyAccountRPMExtra(newExtra)
       updatePayload.extra = newExtra
     }
 
@@ -5293,19 +5006,30 @@ const handleSubmit = async () => {
         }
       }
 
+      // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
+      // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
+      if (props.account.type === 'oauth') {
+        if (codexFingerprintMode.value !== 'off') {
+          newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+        } else {
+          delete newExtra.codex_fingerprint_mode
+        }
+      }
+
       updatePayload.extra = newExtra
     }
 
     // For apikey/bedrock accounts, handle quota_limit in extra
-    if (props.account.type === 'apikey' || props.account.type === 'bedrock' || props.account.platform === 'kiro') {
+    if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
         (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       // 上游倍率自动探测对全部 API-key 平台开放（sub2api 上游即可应答），
       // Bedrock 凭证无静态 Key 不参与。
-	if (props.account.type === 'apikey') {
-	  delete newExtra.upstream_billing_probe_enabled
-	}
+      if (props.account.type === 'apikey') {
+        delete newExtra.upstream_billing_probe_enabled
+        delete newExtra.upstream_billing_rate_sync_enabled
+      }
       // Total quota
       if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
         newExtra.quota_limit = editQuotaLimit.value

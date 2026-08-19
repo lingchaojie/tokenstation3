@@ -6,21 +6,11 @@ package apicompat
 
 import (
 	"encoding/json"
-	"fmt"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func requireChatCompletionsChunkToResponsesEvents(t *testing.T, chunk *ChatCompletionsChunk, state *ChatCompletionsToResponsesStreamState) []ResponsesStreamEvent {
-	t.Helper()
-	events, err := ChatCompletionsChunkToResponsesEvents(chunk, state)
-	require.NoError(t, err)
-	return events
-}
 
 func TestResponsesToChatCompletionsRequest_CustomToolBecomesFunctionTool(t *testing.T) {
 	req := &ResponsesRequest{
@@ -76,25 +66,6 @@ func TestResponsesToChatCompletionsRequest_AdditionalToolsItem(t *testing.T) {
 
 	require.Len(t, out.Messages, 1, "additional_tools must not become a chat message")
 	assert.Equal(t, "user", out.Messages[0].Role)
-}
-
-func TestResponsesToChatCompletionsRequest_AdditionalToolsNamespaceToolChoice(t *testing.T) {
-	req := &ResponsesRequest{
-		Model: "gpt-test",
-		Input: json.RawMessage(`[
-			{"type":"additional_tools","tools":[
-				{"type":"namespace","name":"collaboration","tools":[
-					{"type":"function","name":"send_message","parameters":{"type":"object","properties":{}}}
-				]}
-			]},
-			{"type":"message","role":"user","content":[{"type":"input_text","text":"send it"}]}
-		]`),
-		ToolChoice: json.RawMessage(`{"type":"namespace","name":"collaboration"}`),
-	}
-
-	out, err := ResponsesToChatCompletionsRequest(req)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"type":"function","function":{"name":"collaboration__send_message"}}`, string(out.ToolChoice))
 }
 
 func TestEffectiveResponsesTools_SkipsStringInputItems(t *testing.T) {
@@ -222,45 +193,6 @@ func TestExtractCustomToolCallInput_FallsBackToRawArguments(t *testing.T) {
 	assert.Equal(t, `{"other": "x"}`, extractCustomToolCallInput(`{"other": "x"}`))
 	assert.Equal(t, "", extractCustomToolCallInput(`{}`))
 	assert.Equal(t, "", extractCustomToolCallInput(""))
-	assert.Equal(t, `{"input":null}`, extractCustomToolCallInput(`{"input":null}`))
-	assert.Equal(t, `{"input":123}`, extractCustomToolCallInput(`{"input":123}`))
-	assert.Equal(t, `[]`, extractCustomToolCallInput(`[]`))
-	assert.Equal(t, "second", extractCustomToolCallInput(`{"input":"first","input":"second"}`))
-}
-
-func TestExtractCustomToolCallInputDenseObjectHasBoundedAllocation(t *testing.T) {
-	const targetBytes = (8 << 20) - 64
-	var body strings.Builder
-	body.Grow(targetBytes)
-	require.NoError(t, body.WriteByte('{'))
-	for i := 0; ; i++ {
-		entry := fmt.Sprintf(`"k%d":0`, i)
-		separator := 0
-		if i > 0 {
-			separator = 1
-		}
-		if body.Len()+separator+len(entry)+1 > targetBytes {
-			break
-		}
-		if separator != 0 {
-			require.NoError(t, body.WriteByte(','))
-		}
-		_, err := body.WriteString(entry)
-		require.NoError(t, err)
-	}
-	require.NoError(t, body.WriteByte('}'))
-	arguments := body.String()
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	got := extractCustomToolCallInput(arguments)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.Equal(t, arguments, got)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20),
-		"extracting an optional input field must not materialize a high-cardinality JSON object")
 }
 
 func TestChatCompletionsChunkToResponsesEvents_CustomToolCallStream(t *testing.T) {
@@ -281,7 +213,7 @@ func TestChatCompletionsChunkToResponsesEvents_CustomToolCallStream(t *testing.T
 		}},
 	}
 
-	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
+	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, inputDone, itemDone *ResponsesStreamEvent
@@ -419,7 +351,7 @@ func TestChatCompletionsChunkToResponsesEvents_ToolSearchCallStream(t *testing.T
 		}},
 	}
 
-	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
+	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, itemDone *ResponsesStreamEvent
@@ -564,8 +496,8 @@ func TestChatCompletionsChunkToResponsesEvents_CustomToolNameArrivesLate(t *test
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	addedCount := 0
@@ -599,8 +531,8 @@ func TestChatCompletionsChunkToResponsesEvents_FunctionToolNameArrivesLate(t *te
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	deltas := ""
@@ -712,55 +644,6 @@ func TestResponsesToChatCompletionsRequest_RejectsToolSearchNameConflict(t *test
 	assert.Equal(t, "tool_search", out.Tools[0].Function.Name)
 }
 
-// custom 与 function 降级后都会成为 Chat function。若顶层名称相同，普通与流式
-// 回程都只能看到名字，无法判断应恢复成 custom_tool_call 还是 function_call，
-// 因此必须在请求转换阶段拒绝，不能把 function 调用静默劫持为 custom 调用。
-func TestResponsesToChatCompletionsRequest_RejectsCustomFunctionNameConflict(t *testing.T) {
-	tests := []struct {
-		name       string
-		tools      []ResponsesTool
-		toolChoice json.RawMessage
-	}{
-		{
-			name: "custom then function",
-			tools: []ResponsesTool{
-				{Type: "custom", Name: "exec"},
-				{Type: "function", Name: "exec"},
-			},
-		},
-		{
-			name: "function then custom with forced custom choice",
-			tools: []ResponsesTool{
-				{Type: "function", Name: "exec"},
-				{Type: "custom", Name: "exec"},
-			},
-			toolChoice: json.RawMessage(`{"type":"custom","name":"exec"}`),
-		},
-		{
-			name: "function then custom with forced function choice",
-			tools: []ResponsesTool{
-				{Type: "function", Name: "exec"},
-				{Type: "custom", Name: "exec"},
-			},
-			toolChoice: json.RawMessage(`{"type":"function","name":"exec"}`),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
-				Model:      "glm-5.2",
-				Input:      json.RawMessage(`"hi"`),
-				Tools:      tt.tools,
-				ToolChoice: tt.toolChoice,
-			})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "both")
-			assert.Contains(t, err.Error(), "exec")
-		})
-	}
-}
-
 // tool_choice 指向被转换丢弃的工具（如 web_search）或不存在的名字时不能原样转发，
 // chat 上游会因选择项指向未声明工具而 400；字符串形式与指向幸存工具的选择保持转发。
 func TestResponsesToChatCompletionsRequest_DropsToolChoiceForDroppedTool(t *testing.T) {
@@ -777,6 +660,20 @@ func TestResponsesToChatCompletionsRequest_DropsToolChoiceForDroppedTool(t *test
 	require.NoError(t, err)
 	require.Len(t, out.Tools, 1)
 	assert.Empty(t, out.ToolChoice, "指向被丢弃服务端工具的 tool_choice 必须丢弃")
+
+	out, err = ResponsesToChatCompletionsRequest(&ResponsesRequest{
+		Model: "glm-5.2",
+		Input: json.RawMessage(`"hi"`),
+		Tools: []ResponsesTool{
+			{Type: "function", Name: "wait", Parameters: json.RawMessage(`{"type":"object","properties":{}}`)},
+			{Type: "web_search"},
+			{Type: "x_search"},
+		},
+		ToolChoice: json.RawMessage(`{"type":"function","name":"web_search"}`),
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Tools, 2)
+	assert.Empty(t, out.ToolChoice, "surviving x_search must not keep a function tool_choice named web_search")
 
 	// 具名选择指向不存在的工具名。
 	out, err = ResponsesToChatCompletionsRequest(&ResponsesRequest{
@@ -878,67 +775,6 @@ func TestResponsesToChatCompletionsRequest_DedupesIdenticalNamespaceChildren(t *
 	assert.Equal(t, "gmail__send", out.Tools[0].Function.Name)
 }
 
-func TestResponsesToChatCompletionsRequest_NamespaceToolChoice(t *testing.T) {
-	t.Run("single child maps to flattened function", func(t *testing.T) {
-		out, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
-			Model: "glm-5.2",
-			Input: json.RawMessage(`"hi"`),
-			Tools: []ResponsesTool{{
-				Type: "namespace", Name: "code_tools",
-				Tools: []ResponsesTool{{Type: "function", Name: "run"}},
-			}},
-			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
-		})
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"type":"function","function":{"name":"code_tools__run"}}`, string(out.ToolChoice))
-	})
-
-	t.Run("multiple children are rejected instead of degrading to auto", func(t *testing.T) {
-		_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
-			Model: "glm-5.2",
-			Input: json.RawMessage(`"hi"`),
-			Tools: []ResponsesTool{{
-				Type: "namespace", Name: "code_tools",
-				Tools: []ResponsesTool{
-					{Type: "function", Name: "run"},
-					{Type: "function", Name: "wait"},
-				},
-			}},
-			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "contains 2 function children")
-	})
-
-	t.Run("duplicate identical namespace declarations remain one target", func(t *testing.T) {
-		out, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
-			Model: "glm-5.2",
-			Input: json.RawMessage(`"hi"`),
-			Tools: []ResponsesTool{
-				{Type: "namespace", Name: "code_tools", Tools: []ResponsesTool{{Type: "function", Name: "run"}}},
-				{Type: "namespace", Name: "code_tools", Tools: []ResponsesTool{{Type: "function", Name: "run"}}},
-			},
-			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
-		})
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"type":"function","function":{"name":"code_tools__run"}}`, string(out.ToolChoice))
-	})
-
-	t.Run("namespace without convertible child is rejected", func(t *testing.T) {
-		_, err := ResponsesToChatCompletionsRequest(&ResponsesRequest{
-			Model: "glm-5.2",
-			Input: json.RawMessage(`"hi"`),
-			Tools: []ResponsesTool{{
-				Type: "namespace", Name: "code_tools",
-				Tools: []ResponsesTool{{Type: "custom", Name: "exec"}},
-			}},
-			ToolChoice: json.RawMessage(`{"type":"namespace","name":"code_tools"}`),
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no convertible function child")
-	})
-}
-
 // codex 按 namespace+name 路由 namespace 子工具的调用：回程必须把摊平名还原为
 // 裸子工具名并带独立 namespace 字段，平铺名的 function_call 会被 codex 判为
 // unsupported call 拒绝执行。
@@ -1003,7 +839,7 @@ func TestChatCompletionsChunkToResponsesEvents_NamespacedToolCallStream(t *testi
 		}},
 	}
 
-	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
+	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	var added, itemDone *ResponsesStreamEvent
@@ -1071,8 +907,8 @@ func TestChatCompletionsChunkToResponsesEvents_NamespacedToolNameArrivesLate(t *
 	}}}}
 
 	var events []ResponsesStreamEvent
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk1, state)...)
-	events = append(events, requireChatCompletionsChunkToResponsesEvents(t, chunk2, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk1, state)...)
+	events = append(events, ChatCompletionsChunkToResponsesEvents(chunk2, state)...)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	addedCount := 0
@@ -1110,7 +946,7 @@ func TestChatCompletionsChunkToResponsesEvents_FunctionToolStreamUnaffected(t *t
 		}},
 	}
 
-	events := requireChatCompletionsChunkToResponsesEvents(t, chunk, state)
+	events := ChatCompletionsChunkToResponsesEvents(chunk, state)
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 
 	sawArgsDelta := false

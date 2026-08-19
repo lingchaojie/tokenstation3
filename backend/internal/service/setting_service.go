@@ -1264,6 +1264,7 @@ type ChannelMonitorRuntime struct {
 	Mode                   string
 	DefaultIntervalSeconds int
 	HideThroughput         bool
+	ShowQuota              bool
 }
 
 func (r ChannelMonitorRuntime) ActiveProbesAllowed() bool {
@@ -1282,6 +1283,7 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyChannelMonitorHideThroughput,
+		"channel_monitor_show_quota",
 	})
 	if err != nil {
 		return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV1, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
@@ -1291,6 +1293,7 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		Mode:                   normalizeChannelMonitorMode(vals[SettingKeyChannelMonitorMode]),
 		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 		HideThroughput:         !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
+		ShowQuota:              strings.EqualFold(strings.TrimSpace(vals["channel_monitor_show_quota"]), "true"),
 	}
 }
 

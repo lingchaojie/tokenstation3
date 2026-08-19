@@ -5,11 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 )
-
-const maxAnthropicToResponsesRetainedOutputBytes = 8 << 20
 
 // ---------------------------------------------------------------------------
 // Non-streaming: AnthropicResponse → ResponsesResponse
@@ -157,7 +154,7 @@ type AnthropicEventToResponsesState struct {
 	ContentIndex int
 	// TextAccum accumulates the current text part so that output_text.done and
 	// content_part.done can carry the full text (deltas carry increments only).
-	TextAccum strings.Builder
+	TextAccum string
 
 	// For function_call: track per-output info
 	CurrentCallID string
@@ -165,8 +162,8 @@ type AnthropicEventToResponsesState struct {
 
 	// Content of the currently open item, folded into Outputs when it closes.
 	CurrentContent []ResponsesContentPart // message
-	CurrentArgs    strings.Builder        // function_call
-	CurrentSummary strings.Builder        // reasoning
+	CurrentArgs    string                 // function_call
+	CurrentSummary string                 // reasoning
 
 	// Outputs accumulates every closed output item so that response.completed
 	// can carry the full output list. The OpenAI SDK's get_final_response()
@@ -182,9 +179,7 @@ type AnthropicEventToResponsesState struct {
 	CacheReadInputTokens     int
 	CacheCreationInputTokens int
 
-	StopReason          string
-	retainedOutputBytes int
-	conversionErr       error
+	StopReason string
 }
 
 // NewAnthropicEventToResponsesState returns an initialised stream state.
@@ -194,24 +189,12 @@ func NewAnthropicEventToResponsesState() *AnthropicEventToResponsesState {
 	}
 }
 
-// Err reports an attempt-local conversion failure. A caller must not finalize
-// a state that exceeded its retained-output budget.
-func (state *AnthropicEventToResponsesState) Err() error {
-	if state == nil {
-		return nil
-	}
-	return state.conversionErr
-}
-
 // AnthropicEventToResponsesEvents converts a single Anthropic SSE event into
 // zero or more Responses SSE events, updating state as it goes.
 func AnthropicEventToResponsesEvents(
 	evt *AnthropicStreamEvent,
 	state *AnthropicEventToResponsesState,
 ) []ResponsesStreamEvent {
-	if state == nil || state.conversionErr != nil {
-		return nil
-	}
 	switch evt.Type {
 	case "message_start":
 		return anthToResHandleMessageStart(evt, state)
@@ -233,7 +216,7 @@ func AnthropicEventToResponsesEvents(
 // FinalizeAnthropicResponsesStream emits synthetic termination events if the
 // stream ended without a proper message_stop.
 func FinalizeAnthropicResponsesStream(state *AnthropicEventToResponsesState) []ResponsesStreamEvent {
-	if state == nil || state.conversionErr != nil || !state.CreatedSent || state.CompletedSent {
+	if !state.CreatedSent || state.CompletedSent {
 		return nil
 	}
 
@@ -338,7 +321,7 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 			ItemID:       state.CurrentItemID,
 			Part:         &ResponsesContentPart{Type: "output_text", Text: ""},
 		}))
-		state.TextAccum.Reset()
+		state.TextAccum = ""
 
 	case "tool_use":
 		// Close previous item if any
@@ -374,9 +357,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Text == "" {
 			return nil
 		}
-		if !state.appendRetainedOutput(&state.TextAccum, evt.Delta.Text) {
-			return nil
-		}
+		state.TextAccum += evt.Delta.Text
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			ContentIndex: state.ContentIndex,
@@ -388,9 +369,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Thinking == "" {
 			return nil
 		}
-		if !state.appendRetainedOutput(&state.CurrentSummary, evt.Delta.Thinking) {
-			return nil
-		}
+		state.CurrentSummary += evt.Delta.Thinking
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.reasoning_summary_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			SummaryIndex: 0,
@@ -402,9 +381,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.PartialJSON == "" {
 			return nil
 		}
-		if !state.appendRetainedOutput(&state.CurrentArgs, evt.Delta.PartialJSON) {
-			return nil
-		}
+		state.CurrentArgs += evt.Delta.PartialJSON
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Delta:       evt.Delta.PartialJSON,
@@ -419,16 +396,6 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 	}
 
 	return nil
-}
-
-func (state *AnthropicEventToResponsesState) appendRetainedOutput(builder *strings.Builder, fragment string) bool {
-	if len(fragment) > maxAnthropicToResponsesRetainedOutputBytes-state.retainedOutputBytes {
-		state.conversionErr = fmt.Errorf("anthropic to responses retained output exceeds %d-byte limit", maxAnthropicToResponsesRetainedOutputBytes)
-		return false
-	}
-	_, _ = builder.WriteString(fragment)
-	state.retainedOutputBytes += len(fragment)
-	return true
 }
 
 func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *AnthropicEventToResponsesState) []ResponsesStreamEvent {
@@ -462,8 +429,8 @@ func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *Anthropic
 		// Text block is done: emit output_text.done then content_part.done (the
 		// order OpenAI uses), both carrying the part's full text. The message
 		// item itself stays open since more blocks may follow.
-		text := state.TextAccum.String()
-		state.TextAccum.Reset()
+		text := state.TextAccum
+		state.TextAccum = ""
 		state.CurrentContent = append(state.CurrentContent, ResponsesContentPart{Type: "output_text", Text: text})
 		return []ResponsesStreamEvent{
 			makeResponsesEvent(state, "response.output_text.done", &ResponsesStreamEvent{
@@ -547,14 +514,14 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 	case "function_call":
 		item.CallID = state.CurrentCallID
 		item.Name = state.CurrentName
-		args := state.CurrentArgs.String()
+		args := state.CurrentArgs
 		if args == "" {
 			args = "{}"
 		}
 		item.Arguments = args
 	case "reasoning":
-		if state.CurrentSummary.Len() > 0 {
-			item.Summary = []ResponsesSummary{{Type: "summary_text", Text: state.CurrentSummary.String()}}
+		if state.CurrentSummary != "" {
+			item.Summary = []ResponsesSummary{{Type: "summary_text", Text: state.CurrentSummary}}
 		}
 	}
 	state.Outputs = append(state.Outputs, item)
@@ -565,9 +532,9 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 	state.CurrentCallID = ""
 	state.CurrentName = ""
 	state.CurrentContent = nil
-	state.CurrentArgs.Reset()
-	state.CurrentSummary.Reset()
-	state.TextAccum.Reset()
+	state.CurrentArgs = ""
+	state.CurrentSummary = ""
+	state.TextAccum = ""
 	state.OutputIndex++
 	state.ContentIndex = 0
 

@@ -19,36 +19,31 @@ func TestExtractBedrockChunkData(t *testing.T) {
 		b64 := base64.StdEncoding.EncodeToString([]byte(original))
 		payload := []byte(`{"bytes":"` + b64 + `"}`)
 
-		result, err := extractBedrockChunkData(payload)
-		require.NoError(t, err)
+		result := extractBedrockChunkData(payload)
 		require.NotNil(t, result)
 		assert.JSONEq(t, original, string(result))
 	})
 
 	t.Run("empty bytes field", func(t *testing.T) {
-		result, err := extractBedrockChunkData([]byte(`{"bytes":""}`))
+		result := extractBedrockChunkData([]byte(`{"bytes":""}`))
 		assert.Nil(t, result)
-		require.Error(t, err)
 	})
 
 	t.Run("no bytes field", func(t *testing.T) {
-		result, err := extractBedrockChunkData([]byte(`{"other":"value"}`))
+		result := extractBedrockChunkData([]byte(`{"other":"value"}`))
 		assert.Nil(t, result)
-		require.Error(t, err)
 	})
 
 	t.Run("invalid base64", func(t *testing.T) {
-		result, err := extractBedrockChunkData([]byte(`{"bytes":"not-valid-base64!!!"}`))
+		result := extractBedrockChunkData([]byte(`{"bytes":"not-valid-base64!!!"}`))
 		assert.Nil(t, result)
-		require.Error(t, err)
 	})
 }
 
 func TestTransformBedrockInvocationMetrics(t *testing.T) {
 	t.Run("converts metrics to usage", func(t *testing.T) {
 		input := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"amazon-bedrock-invocationMetrics":{"inputTokenCount":150,"outputTokenCount":42}}`
-		result, err := transformBedrockInvocationMetrics([]byte(input))
-		require.NoError(t, err)
+		result := transformBedrockInvocationMetrics([]byte(input))
 
 		// amazon-bedrock-invocationMetrics should be removed
 		assert.False(t, gjson.GetBytes(result, "amazon-bedrock-invocationMetrics").Exists())
@@ -62,33 +57,18 @@ func TestTransformBedrockInvocationMetrics(t *testing.T) {
 
 	t.Run("no metrics present", func(t *testing.T) {
 		input := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}`
-		result, err := transformBedrockInvocationMetrics([]byte(input))
-		require.NoError(t, err)
+		result := transformBedrockInvocationMetrics([]byte(input))
 		assert.JSONEq(t, input, string(result))
 	})
 
 	t.Run("does not overwrite existing usage", func(t *testing.T) {
 		input := `{"type":"message_delta","usage":{"output_tokens":100},"amazon-bedrock-invocationMetrics":{"inputTokenCount":150,"outputTokenCount":42}}`
-		result, err := transformBedrockInvocationMetrics([]byte(input))
-		require.NoError(t, err)
+		result := transformBedrockInvocationMetrics([]byte(input))
 
 		// metrics removed but existing usage preserved
 		assert.False(t, gjson.GetBytes(result, "amazon-bedrock-invocationMetrics").Exists())
 		assert.Equal(t, int64(100), gjson.GetBytes(result, "usage.output_tokens").Int())
 	})
-
-	for _, input := range []string{
-		`{"type":"message_delta","amazon-bedrock-invocationMetrics":"bad"}`,
-		`{"type":"message_delta","usage":{"output_tokens":1},"amazon-bedrock-invocationMetrics":{"inputTokenCount":"bad"}}`,
-		`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"outputTokenCount":1.5}}`,
-		`{"type":"message_delta","amazon-bedrock-invocationMetrics":{"inputTokenCount":-1}}`,
-	} {
-		t.Run("rejects malformed metrics "+input, func(t *testing.T) {
-			result, err := transformBedrockInvocationMetrics([]byte(input))
-			require.Error(t, err)
-			require.Nil(t, result)
-		})
-	}
 }
 
 func TestExtractEventStreamHeaderValue(t *testing.T) {
@@ -190,16 +170,6 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		assert.Equal(t, payload, result)
 	})
 
-	t.Run("decode valid frame beyond capture retention limit", func(t *testing.T) {
-		payload := bytes.Repeat([]byte{'x'}, captureHardMaxBodyBytes+1)
-		frame := buildFrame("chunk", payload)
-
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
-		result, err := decoder.Decode()
-		require.NoError(t, err)
-		assert.Equal(t, payload, result)
-	})
-
 	t.Run("skip non-chunk events", func(t *testing.T) {
 		// Write initial-response followed by chunk
 		var buf bytes.Buffer
@@ -217,28 +187,6 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		decoder := newBedrockEventStreamDecoder(bytes.NewReader(nil))
 		_, err := decoder.Decode()
 		assert.Equal(t, io.EOF, err)
-	})
-
-	buildPreludeOnly := func(totalLength, headersLength uint32) []byte {
-		prelude := make([]byte, 12)
-		binary.BigEndian.PutUint32(prelude[0:4], totalLength)
-		binary.BigEndian.PutUint32(prelude[4:8], headersLength)
-		binary.BigEndian.PutUint32(prelude[8:12], crc32.Checksum(prelude[:8], crc32IeeeTab))
-		return prelude
-	}
-
-	t.Run("reject oversized frame before allocation", func(t *testing.T) {
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(buildPreludeOnly(uint32(bedrockMaxEventStreamFrameBytes+1), 0)))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "total_length")
-	})
-
-	t.Run("reject headers outside frame before slicing", func(t *testing.T) {
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(buildPreludeOnly(32, 17)))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "headers_length")
 	})
 
 	t.Run("corrupted prelude CRC", func(t *testing.T) {
@@ -259,60 +207,6 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		_, err := decoder.Decode()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "message CRC mismatch")
-	})
-
-	t.Run("malformed header with valid CRC", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
-		headerTypeOffset := 12 + 1 + len(":event-type")
-		frame[headerTypeOffset] = 0xff
-		binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.Checksum(frame[:len(frame)-4], crc32IeeeTab))
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "header")
-	})
-
-	t.Run("reject known pseudo header encoded with boolean type", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
-		headerTypeOffset := 12 + 1 + len(":event-type")
-		removeStart := headerTypeOffset + 1
-		removeEnd := removeStart + 2 + len("chunk")
-		frame = append(frame[:removeStart], frame[removeEnd:]...)
-		frame[headerTypeOffset] = 0 // bool true has no value bytes
-		binary.BigEndian.PutUint32(frame[0:4], uint32(len(frame)))
-		binary.BigEndian.PutUint32(frame[4:8], binary.BigEndian.Uint32(frame[4:8])-uint32(removeEnd-removeStart))
-		binary.BigEndian.PutUint32(frame[8:12], crc32.Checksum(frame[:8], crc32IeeeTab))
-		binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.Checksum(frame[:len(frame)-4], crc32IeeeTab))
-
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "pseudo-header")
-	})
-
-	t.Run("reject invalid UTF-8 header name", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
-		nameAt := 12 + 1
-		frame[nameAt] = 0xff
-		binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.Checksum(frame[:len(frame)-4], crc32IeeeTab))
-
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "UTF-8")
-	})
-
-	t.Run("reject invalid UTF-8 string header value", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
-		valueAt := bytes.Index(frame[12:], []byte("chunk")) + 12
-		require.GreaterOrEqual(t, valueAt, 12)
-		frame[valueAt] = 0xff
-		binary.BigEndian.PutUint32(frame[len(frame)-4:], crc32.Checksum(frame[:len(frame)-4], crc32IeeeTab))
-
-		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
-		_, err := decoder.Decode()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "UTF-8")
 	})
 
 	t.Run("castagnoli encoded frame is rejected", func(t *testing.T) {

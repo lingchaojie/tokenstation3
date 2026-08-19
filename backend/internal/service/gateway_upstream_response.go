@@ -893,7 +893,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	semanticOutput := false
 	sawTerminalEvent := false
 	providerPayloadObserved := false
-	providerPhase := anthropicProviderAwaitingStart
 	kiroTranslatedBody, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
 	_, legacyRawProviderCapture := resp.Body.(*captureBodyReadCloser)
 	_, streamingAttemptCapture := resp.Body.(*captureResponseReader)
@@ -1079,10 +1078,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if dataLine == "[DONE]" {
-			if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
-				return nil, dataLine, nil, false, errors.New("anthropic [DONE] arrived before a valid message_start")
-			}
-			providerPhase.state = anthropicProviderTerminated.state
 			sawTerminalEvent = true
 			block := ""
 			if eventName != "" {
@@ -1092,11 +1087,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return []string{block}, dataLine, nil, false, nil
 		}
 
-		eventType, err := validateAnthropicProviderJSONEvent(&providerPhase, eventName, []byte(dataLine))
-		if err != nil {
-			return nil, dataLine, nil, false, err
-		}
 		event := gjson.Parse(dataLine)
+		eventType := event.Get("type").String()
 		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(dataLine)
 		eventIndex := event.Get("index")
 		hasEventIndex := eventIndex.Exists() && nonNegativeIntegerGJSON(eventIndex)
@@ -1293,28 +1285,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				for _, pendingLine := range pendingEventLines {
-					if strings.TrimSpace(pendingLine) != "" && !strings.HasPrefix(strings.TrimSpace(pendingLine), ":") {
-						tailErr := errors.New("upstream stream ended with an incomplete SSE event")
-						if outputCommitted || semanticOutput {
-							return streamResult(), tailErr
-						}
-						return nil, preOutputFailover(tailErr.Error(), true)
-					}
-				}
+				pendingEventLines = nil
 				// 上游完成，返回结果
-				if !sawTerminalEvent {
-					if !semanticOutput {
-						return nil, preOutputFailover("upstream stream ended before semantic output", true)
-					}
-					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !providerPayloadObserved {
-					if semanticOutput {
-						return streamResult(), fmt.Errorf("stream usage incomplete: missing valid message_start")
-					}
-					return nil, preOutputFailover("upstream stream ended without a valid message_start", true)
-				}
 				return streamResult(), nil
 			}
 			if ev.err != nil {
@@ -2133,12 +2105,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, err, mappedModel)
+			return nil, invalidNonStreamingJSONFailoverError(ctx, s.rateLimitService, resp, account, body, err, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	if !validAnthropicNonStreamingResponse(body) {
-		return nil, newInvalidProviderResponseFailover(resp, "upstream returned an invalid terminal JSON response")
 	}
 
 	// 解析嵌套的 cache_creation 对象中的 5m/1h 明细

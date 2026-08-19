@@ -17,6 +17,8 @@ const {
   getOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getPanelRateLimitSettings,
+  updatePanelRateLimitSettings,
   getStreamTimeoutSettings,
   getRectifierSettings,
   getBetaPolicySettings,
@@ -43,6 +45,14 @@ const {
   getOverloadCooldownSettings: vi.fn(),
   getRateLimit429CooldownSettings: vi.fn(),
   updateRateLimit429CooldownSettings: vi.fn(),
+  getPanelRateLimitSettings: vi.fn().mockResolvedValue({
+    enabled: true,
+    user_rpm: 240,
+    heavy_rpm: 60,
+    exempt_admin: true,
+    public_ip_rpm: 300,
+  }),
+  updatePanelRateLimitSettings: vi.fn().mockImplementation(async (payload) => payload),
   getStreamTimeoutSettings: vi.fn(),
   getRectifierSettings: vi.fn(),
   getBetaPolicySettings: vi.fn(),
@@ -82,6 +92,8 @@ vi.mock("@/api", () => ({
       getOverloadCooldownSettings,
       getRateLimit429CooldownSettings,
       updateRateLimit429CooldownSettings,
+      getPanelRateLimitSettings,
+      updatePanelRateLimitSettings,
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
@@ -184,8 +196,6 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.paymentVisibleMethods.sourceRequiredError": "{title} 已启用，请先选择支付来源。",
     "admin.settings.payment.configGuide": "查看支付配置说明",
     "admin.settings.payment.findProvider": "查看支持的支付方式",
-    "admin.settings.payment.providerIkunpay": "IkunPay",
-    "payment.methods.ikunpay": "IkunPay",
     "admin.settings.openaiExperimentalScheduler.title": "OpenAI 实验调度策略",
     "admin.settings.openaiExperimentalScheduler.description": "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。",
     "admin.settings.openaiExperimentalScheduler.lowRatePriorityTitle": "低倍率优先",
@@ -219,6 +229,13 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.upstreamBillingProbe.intervalHint": "范围 5–1440 分钟。",
     "admin.settings.upstreamBillingProbe.saved": "上游倍率自动探测设置已保存",
     "admin.settings.upstreamBillingProbe.saveFailed": "保存上游倍率自动探测设置失败",
+    "admin.settings.openaiFastPolicy.summaryTargetModels": "目标模型",
+    "admin.settings.openaiFastPolicy.summaryAllModels": "全部模型",
+    "admin.settings.openaiFastPolicy.summaryOtherModels": "其他模型",
+    "admin.settings.openaiFastPolicy.summaryAction.filter": "过滤",
+    "admin.settings.openaiFastPolicy.summaryAction.pass": "透传",
+    "admin.settings.security.passkeyDeploymentHint":
+      "请由服务器运维在部署配置中将 webauthn.enabled 设为 true，填写 webauthn.rp_id（仅域名）与 webauthn.rp_origins（完整 HTTPS 来源），然后重启服务。",
     "admin.settings.site.uploadImage": "上传图片",
     "admin.settings.site.remove": "移除",
     "admin.settings.platformQuota.platform": "平台",
@@ -231,10 +248,6 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.defaults.platformQuotaNotice": "月限额为 30 天滚动窗口，非自然月",
     "admin.settings.authSourceDefaults.platformQuotasOverride": "平台限额覆盖",
     "admin.settings.authSourceDefaults.platformQuotasOverrideHint": "留空的字段继承「系统默认平台限额」；填 0 表示禁止该窗口使用。",
-    "admin.settings.announcementBanners.title": "顶部滚动公告",
-    "admin.settings.announcementBanners.description": "配置首页顶部滚动展示的公告条目。",
-    "admin.settings.announcementBanners.intervalSeconds": "切换间隔（秒）",
-    "admin.settings.announcementBanners.add": "添加公告",
   };
   return {
     ...actual,
@@ -360,6 +373,10 @@ const baseSettingsResponse = {
   password_reset_enabled: false,
   totp_enabled: false,
   totp_encryption_key_configured: false,
+  passkey_enabled: true,
+  passkey_configured: true,
+  passkey_rp_id: "sub3.nebula-spaces.com",
+  passkey_rp_origins: ["https://sub3.nebula-spaces.com"],
   default_balance: 0,
   default_concurrency: 1,
   default_subscriptions: [],
@@ -388,6 +405,11 @@ const baseSettingsResponse = {
   turnstile_enabled: false,
   turnstile_site_key: "",
   turnstile_secret_key_configured: false,
+  tencent_captcha_enabled: false,
+  tencent_captcha_app_id: "",
+  tencent_captcha_app_secret_key_configured: false,
+  tencent_captcha_cloud_secret_id_configured: false,
+  tencent_captcha_cloud_secret_key_configured: false,
   api_key_acl_trust_forwarded_ip: true,
   forwarded_client_ip_headers: [],
   linuxdo_connect_enabled: false,
@@ -514,9 +536,8 @@ const baseSettingsResponse = {
   // 平台限额嵌套字段（新后端契约）
   default_platform_quotas: {
     anthropic:   { daily: null, weekly: null, monthly: null },
-	    openai:      { daily: null, weekly: 12.5, monthly: null },
-	    kiro:        { daily: null, weekly: null, monthly: null },
-	    gemini:      { daily: null, weekly: null, monthly: 200 },
+    openai:      { daily: null, weekly: 12.5, monthly: null },
+    gemini:      { daily: null, weekly: null, monthly: 200 },
     antigravity: { daily: null, weekly: null, monthly: null },
   },
 };
@@ -582,25 +603,6 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
-async function openGeneralTab(wrapper: ReturnType<typeof mountView>) {
-  const generalTabButton = wrapper
-    .findAll("button")
-    .find((node) => node.text().includes("admin.settings.tabs.general"));
-
-  expect(generalTabButton).toBeDefined();
-  await generalTabButton?.trigger("click");
-  await flushPromises();
-}
-
-async function openFeaturesTab(wrapper: ReturnType<typeof mountView>) {
-  const featuresTabButton = wrapper
-    .findAll("button")
-    .find((node) => node.text().includes("admin.settings.tabs.features"));
-
-  expect(featuresTabButton).toBeDefined();
-  await featuresTabButton?.trigger("click");
-  await flushPromises();
-}
 describe("admin SettingsView email domain quota copy", () => {
   it("documents the email domain quota and empty-whitelist behavior in both locales", () => {
     expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("主流邮箱");
@@ -733,6 +735,44 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("renders panel rate limit card and saves settings", async () => {
+    getPanelRateLimitSettings.mockClear();
+    updatePanelRateLimitSettings.mockClear();
+    getPanelRateLimitSettings.mockResolvedValue({
+      enabled: true,
+      user_rpm: 240,
+      heavy_rpm: 60,
+      exempt_admin: true,
+      public_ip_rpm: 300,
+    });
+    updatePanelRateLimitSettings.mockImplementation(async (payload) => payload);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(getPanelRateLimitSettings).toHaveBeenCalled();
+    expect(wrapper.text()).toContain("admin.settings.panelRateLimit.title");
+    expect(wrapper.text()).toContain("admin.settings.panelRateLimit.proxySafeNote");
+
+    const userRpmInput = wrapper.find('[data-testid="panel-rate-limit-user-rpm"]');
+    expect(userRpmInput.exists()).toBe(true);
+    await userRpmInput.setValue("120");
+
+    const saveButton = wrapper.find('[data-testid="panel-rate-limit-save"]');
+    expect(saveButton.exists()).toBe(true);
+    await saveButton.trigger("click");
+    await flushPromises();
+
+    expect(updatePanelRateLimitSettings).toHaveBeenCalledWith({
+      enabled: true,
+      user_rpm: 120,
+      heavy_rpm: 60,
+      exempt_admin: true,
+      public_ip_rpm: 300,
+    });
+    expect(showSuccess).toHaveBeenCalled();
+  });
+
   it("does not render legacy visible payment method controls", async () => {
     const wrapper = mountView();
 
@@ -741,6 +781,199 @@ describe("admin SettingsView payment visible method controls", () => {
 
     expect(wrapper.text()).not.toContain("可见方式");
     expect(wrapper.text()).not.toContain("支付来源");
+  });
+
+  it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    const toggle = settings.get('[data-testid="passkey-toggle"]');
+    expect(toggle.attributes("disabled")).toBeUndefined();
+    expect(settings.text()).toContain("sub3.nebula-spaces.com");
+    expect(settings.text()).toContain("https://sub3.nebula-spaces.com");
+    expect(settings.text()).not.toContain("webauthn.enabled");
+
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ passkey_enabled: false }),
+    );
+  });
+
+  it("人机验证切换到腾讯天御并保存四项配置", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    await masterToggle.setValue(true);
+    // 默认选中 Turnstile
+    expect(wrapper.text()).toContain("admin.settings.turnstile.siteKey");
+
+    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
+    await flushPromises();
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
+    expect(card!.get('a[href="https://console.cloud.tencent.com/captcha"]').exists()).toBe(true);
+    expect(card!.get('a[href="https://console.cloud.tencent.com/cam/capi"]').exists()).toBe(true);
+    expect(
+      card!.get('a[href="https://cloud.tencent.com/document/product/1110/36841"]').exists(),
+    ).toBe(true);
+    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
+    await inputs[0]!.setValue("123456789");
+    await inputs[1]!.setValue("app-secret-value");
+    await inputs[2]!.setValue("cloud-secret-id-value");
+    await inputs[3]!.setValue("cloud-secret-key-value");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: true,
+        aliyun_captcha_enabled: false,
+        tencent_captcha_app_id: "123456789",
+        tencent_captcha_app_secret_key: "app-secret-value",
+        tencent_captcha_cloud_secret_id: "cloud-secret-id-value",
+        tencent_captcha_cloud_secret_key: "cloud-secret-key-value",
+        tencent_captcha_region: "cn",
+      }),
+    );
+  });
+
+  it("腾讯天御切换到国际站后保存站点并更新控制台入口", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    await wrapper.get('[data-testid="captcha-enabled-toggle"]').setValue(true);
+    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
+    await wrapper.get('[data-testid="tencent-captcha-region-intl"]').trigger("click");
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.get('a[href="https://console.tencentcloud.com/captcha/graphical"]').exists()).toBe(
+      true,
+    );
+    expect(card!.get('a[href="https://console.tencentcloud.com/cam/capi"]').exists()).toBe(true);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tencent_captcha_enabled: true,
+        tencent_captcha_region: "intl",
+      }),
+    );
+  });
+
+  it("人机验证切换到阿里云并保存配置", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    await masterToggle.setValue(true);
+
+    await wrapper.get('[data-testid="captcha-provider-aliyun"]').trigger("click");
+    await flushPromises();
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.text()).toContain("admin.settings.aliyunCaptcha.region");
+    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
+    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
+    await inputs[0]!.setValue("prefix-1");
+    await inputs[1]!.setValue("scene-1");
+    await inputs[2]!.setValue("ak-id");
+    await inputs[3]!.setValue("ak-secret-value");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: false,
+        aliyun_captcha_enabled: true,
+        aliyun_captcha_prefix: "prefix-1",
+        aliyun_captcha_scene_id: "scene-1",
+        aliyun_captcha_access_key_id: "ak-id",
+        aliyun_captcha_access_key_secret: "ak-secret-value",
+        aliyun_captcha_region: "cn",
+      }),
+    );
+  });
+
+  it("关闭人机验证总开关会同时关闭所有服务商", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      tencent_captcha_enabled: true,
+      tencent_captcha_app_id: "123456789",
+      tencent_captcha_app_secret_key_configured: true,
+      tencent_captcha_cloud_secret_id_configured: true,
+      tencent_captcha_cloud_secret_key_configured: true,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    expect((masterToggle.element as HTMLInputElement).checked).toBe(true);
+    // 加载后选中项跟随已启用的服务商
+    expect(wrapper.text()).toContain("admin.settings.tencentCaptcha.appId");
+
+    await masterToggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: false,
+        aliyun_captcha_enabled: false,
+      }),
+    );
+  });
+
+  it("disables passkey sign-in when the RP configuration is unavailable", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      passkey_enabled: false,
+      passkey_configured: false,
+      passkey_rp_id: "",
+      passkey_rp_origins: [],
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    expect(settings.get('[data-testid="passkey-toggle"]').attributes("disabled")).toBeDefined();
+    const status = settings.get('[data-testid="passkey-config-status"]');
+    expect(status.text()).toContain(
+      "admin.settings.security.passkeyNotConfigured",
+    );
+    expect(status.text()).toContain("webauthn.enabled");
+    expect(status.text()).toContain("webauthn.rp_id");
+    expect(status.text()).toContain("webauthn.rp_origins");
+    expect(status.text()).toContain("然后重启服务");
   });
 
   it("loads, edits, validates, and saves forwarded client-IP headers", async () => {
@@ -862,48 +1095,6 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
-  it("renders and submits fixed rewards alongside percentage rebate settings", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      affiliate_enabled: true,
-      affiliate_first_recharge_threshold: 0,
-      affiliate_inviter_reward: 10,
-      affiliate_invitee_reward: 5,
-      affiliate_reward_validity_days: 7,
-      affiliate_inviter_reward_limit: 0,
-      affiliate_rebate_freeze_hours: 48,
-    });
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openFeaturesTab(wrapper);
-
-    expect((wrapper.get('[data-testid="affiliate-first-recharge-threshold"]').element as HTMLInputElement).value).toBe('0');
-    expect((wrapper.get('[data-testid="affiliate-inviter-reward"]').element as HTMLInputElement).value).toBe('10');
-    expect((wrapper.get('[data-testid="affiliate-invitee-reward"]').element as HTMLInputElement).value).toBe('5');
-    expect((wrapper.get('[data-testid="affiliate-reward-validity-days"]').element as HTMLInputElement).value).toBe('7');
-    expect((wrapper.get('[data-testid="affiliate-inviter-reward-limit"]').element as HTMLInputElement).value).toBe('0');
-    expect((wrapper.get('[data-testid="affiliate-rebate-freeze-hours"]').element as HTMLInputElement).value).toBe('48');
-    expect(wrapper.text()).toContain('admin.settings.features.affiliate.immediateModeHint');
-
-    const thresholdInput = wrapper.get('[data-testid="affiliate-first-recharge-threshold"]');
-    await thresholdInput.setValue('20');
-    expect(wrapper.text()).toContain('admin.settings.features.affiliate.firstRechargeModeHint');
-    await thresholdInput.setValue('0');
-
-    await wrapper.find('form').trigger('submit.prevent');
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-      affiliate_first_recharge_threshold: 0,
-      affiliate_inviter_reward: 10,
-      affiliate_invitee_reward: 5,
-      affiliate_reward_validity_days: 7,
-      affiliate_inviter_reward_limit: 0,
-      affiliate_rebate_freeze_hours: 48,
-    }));
-  });
-
   it("submits Anthropic cache TTL injection gateway setting", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
@@ -940,117 +1131,6 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         rewrite_message_cache_control: true,
-      }),
-    );
-  });
-
-  it.each([
-    {
-      name: "non-positive user ID",
-      userIds: [0],
-      errorKey: "admin.settings.openaiFastPolicy.userIdPositiveError",
-    },
-    {
-      name: "duplicate user ID",
-      userIds: [42, 42],
-      errorKey: "admin.settings.openaiFastPolicy.userIdDuplicateError",
-    },
-  ])("blocks settings submission for $name", async ({ userIds, errorKey }) => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      openai_fast_policy_settings: {
-        rules: [
-          {
-            service_tier: "priority",
-            action: "pass",
-            scope: "all",
-            user_ids: userIds,
-          },
-        ],
-      },
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).not.toHaveBeenCalled();
-    expect(showError).toHaveBeenCalledWith(errorKey);
-  });
-
-  it("submits validated OpenAI fast policy user IDs", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      openai_fast_policy_settings: {
-        rules: [
-          {
-            service_tier: "priority",
-            action: "pass",
-            scope: "all",
-            user_ids: [42, 43],
-          },
-        ],
-      },
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        openai_fast_policy_settings: {
-          rules: [
-            expect.objectContaining({
-              user_ids: [42, 43],
-            }),
-          ],
-        },
-      }),
-    );
-  });
-
-  it("submits global provider default group settings", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      default_anthropic_group_id: 11,
-      default_openai_group_id: 21,
-    });
-    getGroups.mockResolvedValue([
-      { id: 11, name: "Anthropic Active", platform: "anthropic", status: "active", subscription_type: "standard" },
-      { id: 12, name: "Anthropic Inactive", platform: "anthropic", status: "inactive", subscription_type: "standard" },
-      { id: 21, name: "OpenAI Active", platform: "openai", status: "active", subscription_type: "standard" },
-      { id: 31, name: "Gemini Active", platform: "gemini", status: "active", subscription_type: "standard" },
-    ]);
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openGeneralTab(wrapper);
-    const providerRouteLabels = wrapper
-      .findAll("label")
-      .filter((node) =>
-        [
-          "admin.settings.defaults.providerRoutes",
-          "admin.settings.defaults.defaultAnthropicGroup",
-          "admin.settings.defaults.defaultOpenAIGroup",
-        ].some((label) => node.text().includes(label)),
-      );
-    expect(providerRouteLabels).toHaveLength(3);
-    providerRouteLabels.forEach((label) => expect(label.isVisible()).toBe(true));
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        default_anthropic_group_id: 11,
-        default_openai_group_id: 21,
       }),
     );
   });
@@ -1111,22 +1191,6 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
-  it("renders the announcement banner add control with standard button chrome", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openGeneralTab(wrapper);
-
-    const addButton = wrapper
-      .findAll("button")
-      .find((node) => node.text() === "添加公告");
-
-    expect(addButton).toBeDefined();
-    expect(addButton?.classes()).toEqual(
-      expect.arrayContaining(["btn", "btn-secondary"]),
-    );
-  });
-
   it("updates provider enablement immediately and reloads providers", async () => {
     const provider = {
       id: 7,
@@ -1137,6 +1201,7 @@ describe("admin SettingsView payment visible method controls", () => {
       enabled: false,
       payment_mode: "",
       refund_enabled: false,
+      allow_user_refund: false,
       limits: "",
       sort_order: 0,
     };
@@ -1199,6 +1264,43 @@ describe("admin SettingsView payment visible method controls", () => {
       "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
     );
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("summarizes target and other-model actions, then switches to all models", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "all",
+            action: "filter",
+            scope: "all",
+            model_whitelist: ["gpt-5.6-sol"],
+            fallback_action: "pass",
+          },
+        ],
+      },
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const summary = wrapper.get('[data-testid="openai-fast-policy-summary-0"]');
+    expect(summary.text()).toContain("目标模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).toContain("其他模型");
+    expect(summary.text()).toContain("透传");
+
+    await wrapper
+      .get(
+        '[role="group"][aria-labelledby="openai-fast-policy-models-label-0"] input[type="text"]',
+      )
+      .setValue("");
+    expect(summary.text()).toContain("全部模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).not.toContain("其他模型");
+    expect(summary.text()).not.toContain("透传");
   });
 
   it("loads and saves upstream billing probe settings from the gateway tab", async () => {
@@ -1366,56 +1468,38 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(paymentHelpImageUpload?.attributes("data-remove-label")).toBe("移除");
   });
 
-  it("exposes IkunPay in global payment types and provider key options", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      payment_enabled_types: ["ikunpay"],
-    });
+  it("normalizes null supported_types from API so provider card stays visible", async () => {
+    // Backend returns null for supported_types when the list is empty
+    // (Go nil slice → JSON null). Without normalization, ProviderCard's
+    // isSelected() throws TypeError on null.includes(), causing the card
+    // to vanish from the list.
+    const providerWithNullTypes = {
+      id: 42,
+      provider_key: "easypay",
+      name: "EasyPay",
+      config: {},
+      supported_types: null as unknown as string[],
+      enabled: true,
+      payment_mode: "",
+      refund_enabled: false,
+      allow_user_refund: false,
+      limits: "",
+      sort_order: 0,
+    };
+    getProviders.mockReset();
+    getProviders.mockResolvedValue({ data: [providerWithNullTypes] });
 
-    const PaymentProviderDialogOptionsStub = defineComponent({
+    let receivedProviders: Array<Record<string, unknown>> = [];
+    const PaymentProviderListCapture = defineComponent({
       props: {
-        allKeyOptions: {
-          type: Array,
-          default: () => [],
-        },
-        enabledKeyOptions: {
-          type: Array,
-          default: () => [],
-        },
-        allPaymentTypes: {
+        providers: {
           type: Array,
           default: () => [],
         },
       },
-      setup(props, { expose }) {
-        expose({
-          reset: vi.fn(),
-          loadProvider: vi.fn(),
-        });
-        return () =>
-          h("div", { class: "payment-provider-dialog-options-stub" }, [
-            h(
-              "div",
-              { class: "all-provider-key-options" },
-              (props.allKeyOptions as Array<Record<string, unknown>>).map((option) =>
-                h("span", { class: "provider-key-option" }, String(option.label)),
-              ),
-            ),
-            h(
-              "div",
-              { class: "enabled-provider-key-options" },
-              (props.enabledKeyOptions as Array<Record<string, unknown>>).map((option) =>
-                h("span", { class: "enabled-provider-key-option" }, String(option.label)),
-              ),
-            ),
-            h(
-              "div",
-              { class: "all-payment-type-options" },
-              (props.allPaymentTypes as Array<Record<string, unknown>>).map((option) =>
-                h("span", { class: "payment-type-option" }, String(option.label)),
-              ),
-            ),
-          ]);
+      setup(props) {
+        receivedProviders = props.providers as Array<Record<string, unknown>>;
+        return () => h("div", { class: "provider-list-capture" });
       },
     });
 
@@ -1427,8 +1511,8 @@ describe("admin SettingsView payment visible method controls", () => {
           Toggle: ToggleStub,
           Icon: true,
           ConfirmDialog: true,
-          PaymentProviderList: true,
-          PaymentProviderDialog: PaymentProviderDialogOptionsStub,
+          PaymentProviderList: PaymentProviderListCapture,
+          PaymentProviderDialog: true,
           GroupBadge: true,
           GroupOptionItem: true,
           ProxySelector: true,
@@ -1441,97 +1525,11 @@ describe("admin SettingsView payment visible method controls", () => {
     await flushPromises();
     await openPaymentTab(wrapper);
 
-    const allProviderLabels = wrapper
-      .findAll(".provider-key-option")
-      .map((node) => node.text());
-    const enabledProviderLabels = wrapper
-      .findAll(".enabled-provider-key-option")
-      .map((node) => node.text());
-    const paymentTypeLabels = wrapper
-      .findAll(".payment-type-option")
-      .map((node) => node.text());
-
-    expect(allProviderLabels).toContain("IkunPay");
-    expect(enabledProviderLabels).toContain("IkunPay");
-    expect(paymentTypeLabels).toContain("IkunPay");
-  });
-
-  it("allows IkunPay to coexist with official visible-method providers", async () => {
-    const existingAlipayProvider = {
-      id: 7,
-      provider_key: "alipay",
-      name: "Official Alipay",
-      config: {},
-      supported_types: ["alipay"],
-      enabled: true,
-      payment_mode: "",
-      refund_enabled: false,
-      limits: "",
-      sort_order: 0,
-    };
-    getProviders.mockReset();
-    getProviders.mockResolvedValue({ data: [existingAlipayProvider] });
-    createProvider.mockResolvedValue({ data: {} });
-
-    const PaymentProviderDialogSaveStub = defineComponent({
-      emits: ["save"],
-      setup(_, { emit, expose }) {
-        expose({
-          reset: vi.fn(),
-          loadProvider: vi.fn(),
-        });
-        return () =>
-          h(
-            "button",
-            {
-              class: "save-ikunpay-provider",
-              onClick: () =>
-                emit("save", {
-                  provider_key: "ikunpay",
-                  name: "IkunPay",
-                  supported_types: ["alipay", "wxpay"],
-                  enabled: true,
-                  payment_mode: "qrcode",
-                  refund_enabled: false,
-                  config: {},
-                  limits: "",
-                }),
-            },
-            "save IkunPay",
-          );
-      },
-    });
-
-    const wrapper = mount(SettingsView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          Select: SelectStub,
-          Toggle: ToggleStub,
-          Icon: true,
-          ConfirmDialog: true,
-          PaymentProviderList: true,
-          PaymentProviderDialog: PaymentProviderDialogSaveStub,
-          GroupBadge: true,
-          GroupOptionItem: true,
-          ProxySelector: true,
-          ImageUpload: ImageUploadStub,
-          BackupSettings: true,
-        },
-      },
-    });
-
-    await flushPromises();
-    await wrapper.get(".save-ikunpay-provider").trigger("click");
-    await flushPromises();
-
-    expect(createProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider_key: "ikunpay",
-        supported_types: ["alipay", "wxpay"],
-        enabled: true,
-      }),
-    );
+    // The provider should still be in the list
+    expect(receivedProviders.length).toBe(1);
+    // supported_types should be normalized to an empty array, not null
+    expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
+    expect(receivedProviders[0].supported_types).toEqual([]);
   });
 });
 
@@ -1825,7 +1823,7 @@ describe("admin SettingsView platform quota matrix", () => {
     getProviders.mockResolvedValue({ data: [] });
   });
 
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 6 平台行", async () => {
+  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 5 平台行", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1836,13 +1834,11 @@ describe("admin SettingsView platform quota matrix", () => {
     // 表格行的平台字段：font-mono 渲染纯英文 platform key
     expect(html).toContain("anthropic");
     expect(html).toContain("openai");
-    expect(html).toContain("kiro");
     expect(html).toContain("gemini");
     expect(html).toContain("antigravity");
-    expect(html).toContain("grok");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 6 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1858,7 +1854,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "kiro", "gemini", "antigravity", "grok"];
+    const platforms = ["anthropic", "openai", "gemini", "antigravity", "grok"];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1872,13 +1868,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 6 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // kiro / gemini / antigravity / grok 缺失 -> 应被归一化为全 null
+        // gemini / antigravity 缺失 → 应被归一化为全 null
       },
     });
 
@@ -1895,10 +1891,8 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["anthropic"]?.["daily"]).toBe(5);
     expect(quotas["openai"]?.["weekly"]).toBe(12.5);
     // 缺失平台应补全为 null
-    expect(quotas["kiro"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(quotas["grok"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {
@@ -1907,11 +1901,9 @@ describe("admin SettingsView platform quota matrix", () => {
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 10, weekly: null, monthly: null },
-	        openai:    { daily: null, weekly: null, monthly: null },
-	        kiro:      { daily: null, weekly: null, monthly: null },
-	        gemini:    { daily: null, weekly: null, monthly: null },
+        openai:    { daily: null, weekly: null, monthly: null },
+        gemini:    { daily: null, weekly: null, monthly: null },
         antigravity: { daily: null, weekly: null, monthly: null },
-        grok: { daily: null, weekly: null, monthly: null },
       },
     });
 

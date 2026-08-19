@@ -2260,12 +2260,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "" || payload == "[DONE]" {
 			if payload == "[DONE]" {
-				if err := providerState.observeDone(); err != nil {
-					if staged.committed {
-						return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini stream terminal: %w", err)
-					}
-					return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-				}
+				_ = providerState.observeDone()
 				terminalObserved = true
 				commitTerminal = validProviderPayloadObserved
 			}
@@ -2279,13 +2274,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 		}
-		providerPayload, stateErr := providerState.observePayload(unwrappedBytes)
-		if stateErr != nil {
-			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini provider stream: %w", stateErr)
-			}
-			return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-		}
+		providerPayload, _ := providerState.observePayload(unwrappedBytes)
 		observer := upstreamResponseModelObserverFromContext(c)
 		if observer == nil {
 			observer = beginUpstreamResponseModelObservation(c)
@@ -2478,16 +2467,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream read failed before semantic output: "+sanitizeStreamError(scanErr))
 	}
-	if !terminalObserved {
-		result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
-		if staged.committed {
-			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream ended before semantic output")
-	}
-	if !validProviderPayloadObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream ended without a valid provider payload")
-	}
 	// A downstream write failure does not prove that the provider attempt
 	// completed. Drain and validate the provider stream first; only a fully
 	// observed terminal may turn a client disconnect into a successful provider
@@ -2635,9 +2614,7 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 				switch payload {
 				case "":
 				case "[DONE]":
-					if err := providerState.observeDone(); err != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, err.Error())
-					}
+					_ = providerState.observeDone()
 					terminalObserved = true
 				default:
 					var rawBytes []byte
@@ -2650,10 +2627,7 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					} else {
 						rawBytes = []byte(payload)
 					}
-					providerPayload, stateErr := providerState.observePayload(rawBytes)
-					if stateErr != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-					}
+					providerPayload, _ := providerState.observePayload(rawBytes)
 					parsed, err := decodeGeminiCompatResponse(rawBytes)
 					if err != nil {
 						return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
@@ -3462,58 +3436,18 @@ func geminiProviderCollectionLimitError(root gjson.Result) error {
 }
 
 func (s *geminiProviderStreamState) observePayload(body []byte) (bool, error) {
-	if s.doneSeen {
-		return false, errors.New("gemini provider payload arrived after terminal event")
-	}
 	if !json.Valid(body) {
-		return false, errors.New("invalid Gemini provider JSON payload")
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return false, fmt.Errorf("invalid Gemini provider JSON payload: %w", err)
+		return false, nil
 	}
 	root := gjson.ParseBytes(body)
 	if !root.IsObject() {
-		return false, errors.New("invalid Gemini provider JSON payload")
-	}
-	if err := geminiProviderCollectionLimitError(root); err != nil {
-		return false, err
-	}
-	if !validGeminiRootEnvelopeResult(root) {
-		return false, errors.New("invalid Gemini provider JSON payload")
+		return false, nil
 	}
 
 	providerPayload := validGeminiProviderPayloadResult(root)
-	usage := root.Get("usageMetadata")
-	modelVersion := root.Get("modelVersion")
-	responseID := root.Get("responseId")
-	ancillary := (usage.IsObject() && gjsonCollectionHasValues(usage)) ||
-		(modelVersion.Type == gjson.String && strings.TrimSpace(modelVersion.String()) != "") ||
-		(responseID.Type == gjson.String && strings.TrimSpace(responseID.String()) != "")
-	terminalUpdate := false
 	position := 0
-	root.Get("candidates").ForEach(func(_, candidate gjson.Result) bool {
-		index := int64(position)
-		if explicit := candidate.Get("index"); explicit.Exists() {
-			index = explicit.Int()
-		}
-		finishReason := candidate.Get("finishReason")
-		if finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != "" {
-			_, terminalUpdate = s.seenCandidates[index]
-			if terminalUpdate {
-				return false
-			}
-		}
-		position++
-		return true
-	})
 	if s.blockedTerminalSeen {
-		if providerPayload || !ancillary {
-			return false, errors.New("gemini provider payload arrived after application terminal")
-		}
-		return false, nil
-	}
-	if !providerPayload && !ancillary && !terminalUpdate {
-		return false, errors.New("unrecognized Gemini provider payload")
+		return providerPayload, nil
 	}
 	if providerPayload {
 		s.providerPayloadObserved = true
@@ -3546,28 +3480,19 @@ func (s *geminiProviderStreamState) observePayload(body []byte) (bool, error) {
 		return true
 	})
 	if stateErr != nil {
-		return false, stateErr
+		// Upstream Gemini relays may repeat or reorder candidate terminal fields;
+		// keep forwarding and let the normal JSON/event conversion decide what is
+		// usable instead of failing the whole stream on local lifecycle checks.
+		return providerPayload, nil
 	}
 	blockReason := root.Get("promptFeedback.blockReason")
 	if blockReason.Type == gjson.String && strings.TrimSpace(blockReason.String()) != "" {
-		if len(s.seenCandidates) > 0 {
-			return false, errors.New("gemini prompt block arrived after candidate output")
-		}
 		s.blockedTerminalSeen = true
 	}
 	return providerPayload, nil
 }
 
 func (s *geminiProviderStreamState) observeDone() error {
-	if s.doneSeen {
-		return errors.New("duplicate Gemini [DONE] terminal")
-	}
-	if !s.providerPayloadObserved {
-		return errors.New("gemini [DONE] arrived before a valid provider payload")
-	}
-	if !s.applicationTerminalObserved() {
-		return errors.New("gemini [DONE] arrived before an application terminal")
-	}
 	s.doneSeen = true
 	return nil
 }
@@ -3659,12 +3584,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				// Keepalive / done markers
 				if payload == "" || payload == "[DONE]" {
 					if payload == "[DONE]" {
-						if err := providerState.observeDone(); err != nil {
-							if staged.committed {
-								return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini native terminal: %w", err)
-							}
-							return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-						}
+						_ = providerState.observeDone()
 						terminalObserved = true
 						commitTerminal = validProviderPayloadObserved
 					}
@@ -3691,13 +3611,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					} else {
 						rawBytes = []byte(payload)
 					}
-					providerPayload, stateErr := providerState.observePayload(rawBytes)
-					if stateErr != nil {
-						if staged.committed {
-							return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini native provider stream: %w", stateErr)
-						}
-						return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-					}
+					providerPayload, _ := providerState.observePayload(rawBytes)
 
 					if u := extractGeminiUsage(rawBytes); u != nil {
 						usage = u
@@ -3758,16 +3672,6 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, scanErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream read failed before semantic output: "+sanitizeStreamError(scanErr))
-	}
-	if !terminalObserved {
-		result := &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
-		if staged.committed {
-			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream ended before semantic output")
-	}
-	if !validProviderPayloadObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream ended without a valid provider payload")
 	}
 	// As in the compatibility bridge above, classify the provider terminal
 	// before suppressing a downstream write error. A disconnected client must

@@ -63,6 +63,10 @@ type Group struct {
 	// nil 表示使用默认价 defaultWebSearchPricePerCall（官方 $10/1000 次）。
 	WebSearchPricePerCall *float64
 
+	// Upstream group-level token pricing. KIRO-specific fields below remain local.
+	LongContextPricingEnabled bool
+	ModelPricing              []ChannelModelPricing
+
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
 	FallbackGroupID *int64

@@ -238,10 +238,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}
 
 	scan := s.scanCCStream(ctx, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
-		events, err := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
-		if err != nil {
-			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
-		}
+		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
 		return writeEvents(events, responsesConvertedEventsHaveSemanticOutput(events))
 	})
 

@@ -570,6 +570,13 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 	return nil, fmt.Errorf("account type %s does not support usage query", account.Type)
 }
 
+// GetUsageForAccount exposes the upstream loaded-account fast path while
+// retaining KIRO-specific usage handling in getUsageForAccount.
+func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *Account, force ...bool) (*UsageInfo, error) {
+	forceProbe := len(force) > 0 && force[0]
+	return s.getUsageForAccount(ctx, account, forceProbe)
+}
+
 // GetUsage 获取账号使用量
 // OAuth账号: 调用Anthropic API获取真实数据（需要profile scope），API响应缓存10分钟，窗口统计缓存1分钟
 // Setup Token账号: 根据session_window推算5h窗口，7d数据不可用（没有profile scope）

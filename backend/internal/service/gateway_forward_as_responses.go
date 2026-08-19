@@ -469,7 +469,6 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	var usage ClaudeUsage
 	hasKiroMarkedFinalUsage := false
 	terminalObserved := false
-	providerPhase := anthropicProviderAwaitingStart
 	incompleteProviderTail := false
 	var scanErr error
 
@@ -507,10 +506,6 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			break
 		}
 
-		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
-			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
-			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
-		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("forward_as_responses buffered: failed to parse event",
@@ -658,7 +653,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	semanticOutput := false
 	terminalObserved := false
 	providerPayloadObserved := false
-	providerPhase := anthropicProviderAwaitingStart
 	incompleteProviderTail := false
 	clientDisconnected := false
 	var stagedWriteErr error
@@ -719,10 +713,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 		// Convert to Responses events
 		events := apicompat.AnthropicEventToResponsesEvents(event, state)
-		if conversionErr := state.Err(); conversionErr != nil {
-			stagedWriteErr = conversionErr
-			return true
-		}
 		for _, evt := range events {
 			payload, err := json.Marshal(evt)
 			if err != nil {
@@ -812,15 +802,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			break
 		}
 
-		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
-			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
-			if staged.committed || clientDisconnected {
-				result := resultWithUsage()
-				result.CaptureTerminalError = true
-				return result, err
-			}
-			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
-		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("forward_as_responses stream: failed to parse event",
@@ -873,24 +854,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			return result, incompleteErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, incompleteErr.Error())
-	}
-	if !terminalObserved {
-		missingTerminalErr := fmt.Errorf("stream usage incomplete: missing terminal event")
-		if staged.committed || clientDisconnected {
-			result := resultWithUsage()
-			result.CaptureTerminalError = true
-			return result, missingTerminalErr
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, missingTerminalErr.Error())
-	}
-	if !providerPayloadObserved {
-		invalidStreamErr := fmt.Errorf("stream ended without a valid provider message_start")
-		if staged.committed || clientDisconnected {
-			result := resultWithUsage()
-			result.CaptureTerminalError = true
-			return result, invalidStreamErr
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, invalidStreamErr.Error())
 	}
 
 	return finalizeStream()
