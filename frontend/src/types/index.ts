@@ -63,6 +63,34 @@ export interface UserProfileSourceContext {
   provider_label?: string | null
 }
 
+export interface DailyRewardBalance {
+  amount: number
+  expires_at: string | null
+}
+
+export interface AffiliateRewardBalance {
+  amount: number
+  earliest_expires_at: string | null
+  credit_count: number
+}
+
+export interface RewardBalanceSummary {
+  daily_check_in: DailyRewardBalance
+  affiliate: AffiliateRewardBalance
+}
+
+export interface RewardCreditItem {
+  id: number
+  credit_type: 'affiliate_inviter' | 'affiliate_invitee'
+  role_label: 'inviter' | 'invitee'
+  original_amount: number
+  remaining_amount: number
+  granted_at: string
+  expires_at: string
+}
+
+export type RewardCreditPage = BasePaginationResponse<RewardCreditItem>
+
 export interface User {
   id: number
   username: string
@@ -87,6 +115,7 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
+  reward_balances?: RewardBalanceSummary
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
@@ -94,6 +123,7 @@ export interface User {
   balance_notify_enabled: boolean
   balance_notify_threshold: number | null
   balance_notify_extra_emails: NotifyEmailEntry[]
+  subscription_balance_fallback_enabled: boolean
   subscriptions?: UserSubscription[] // User's active subscriptions
   last_active_at?: string | null
   created_at: string
@@ -158,6 +188,14 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
+  first_recharge_threshold: number
+  inviter_reward: number
+  invitee_reward: number
+  reward_mode: 'immediate' | 'first_recharge'
+  reward_validity_days: number
+  inviter_reward_limit: number
+  inviter_reward_count: number
+  inviter_reward_limit_reached: boolean
   /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
   effective_rebate_rate_percent: number
   invitees: AffiliateInvitee[]
@@ -198,6 +236,12 @@ export interface CustomEndpoint {
   description: string
 }
 
+export interface AnnouncementBanner {
+  id: string
+  text_zh: string
+  text_en: string
+}
+
 export interface LoginAgreementDocument {
   id: string
   title: string
@@ -235,6 +279,11 @@ export interface PublicSettings {
   contact_info: string
   doc_url: string
   home_content: string
+  announcement_banners: AnnouncementBanner[]
+  announcement_banner_interval_ms: number
+  daily_check_in_enabled?: boolean
+  daily_check_in_start_at?: string
+  daily_check_in_end_at?: string
   compact_home_enabled: boolean
   hide_ccs_import_button: boolean
   payment_enabled: boolean
@@ -527,7 +576,12 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
+
+export type KiroEndpointMode = 'q' | 'krs' | 'auto'
+
+export type ApiKeyType = 'anthropic' | 'openai' | 'unified' | 'unknown'
+export type ApiKeyGroupBindingMode = 'static' | 'default_follow' | 'auto'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -602,6 +656,11 @@ export interface Group {
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
   require_privacy_set: boolean
+  kiro_auto_sticky_enabled?: boolean
+  kiro_sticky_session_ttl_seconds?: number
+  kiro_cache_emulation_enabled?: boolean
+  kiro_cache_emulation_ratio?: number
+  kiro_endpoint_mode?: KiroEndpointMode
   created_at: string
   updated_at: string
 }
@@ -706,6 +765,8 @@ export interface ApiKey {
   key: string
   name: string
   group_id: number | null
+  key_type: ApiKeyType
+  group_binding_mode?: ApiKeyGroupBindingMode
   status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
   ip_whitelist: string[]
   ip_blacklist: string[]
@@ -884,7 +945,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1167,6 +1228,12 @@ export interface Account {
   overload_until: string | null
   temp_unschedulable_until: string | null
   temp_unschedulable_reason: string | null
+  kiro_quota_state?: string | null
+  kiro_quota_reason?: string | null
+  kiro_quota_reset_at?: string | null
+  kiro_runtime_state?: string | null
+  kiro_runtime_reason?: string | null
+  kiro_runtime_reset_at?: string | null
 
   // Session window fields (5-hour window)
   session_window_start: string | null
@@ -1254,6 +1321,7 @@ export interface WindowStats {
   cost: number // Account cost (account multiplier)
   standard_cost?: number
   user_cost?: number
+  kiro_credits?: number
 }
 
 export interface UsageProgress {
@@ -1738,6 +1806,16 @@ export interface UsageCleanupTask {
   updated_at: string
 }
 
+export interface RedeemCodePlanSummary {
+  id: number
+  name: string
+  product_name: string
+  validity_days: number
+  validity_unit: string
+  seven_day_quota_usd?: number | null
+  for_sale: boolean
+}
+
 export interface RedeemCode {
   id: number
   code: string
@@ -1751,9 +1829,11 @@ export interface RedeemCode {
   updated_at?: string
   notes?: string
   group_id?: number | null // 订阅类型专用
+  plan_id?: number | null
   validity_days?: number // 订阅类型专用
   user?: User
   group?: Group // 关联的分组
+  plan?: RedeemCodePlanSummary
 }
 
 export interface GenerateRedeemCodesRequest {
@@ -1761,6 +1841,7 @@ export interface GenerateRedeemCodesRequest {
   type: RedeemCodeType
   value: number
   group_id?: number | null // 订阅类型专用
+  plan_id?: number | null
   validity_days?: number // 订阅类型专用
   expires_at?: string | null
   expires_in_days?: number
@@ -1976,21 +2057,76 @@ export interface ChangePasswordRequest {
 export interface UserSubscription {
   id: number
   user_id: number
-  group_id: number
+  group_id: number | null
+  plan_id: number | null
+  plan_name: string | null
+  scheduled_plan_id?: number | null
+  scheduled_plan_name?: string | null
+  scheduled_seven_day_limit_usd?: number | null
+  scheduled_plan_effective_at?: string | null
+  scheduled_expires_at?: string | null
+  scheduled_order_id?: number | null
+  seat_limit?: number | null
+  seat_used?: number | null
+  seat_full?: boolean
+  seat_over_limit?: boolean
   status: 'active' | 'expired' | 'revoked' | 'suspended'
   starts_at: string
+  expires_at: string | null
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  daily_limit_usd?: number | null
+  weekly_limit_usd?: number | null
+  monthly_limit_usd?: number | null
+  seven_day_limit_usd: number | null
+  seven_day_usage_usd: number
+  seven_day_remaining_usd: number | null
+  seven_day_reset_at: string | null
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
   created_at: string
   updated_at: string
   revoked_at?: string | null
-  expires_at: string | null
   user?: User
-  group?: Group
+  group?: Group | null
+}
+
+export interface SubscriptionBalanceSummary {
+  remaining: number
+  total: number
+  used: number
+  resetAt: string | null
+  planName: string | null
+  planNames?: string[]
+  activePlanCount?: number
+  displayMode?: 'none' | 'single' | 'multiple'
+  planKey?: 'basic' | 'plus' | 'pro' | 'max' | null
+  priceCny?: number | null
+}
+
+export interface SubscriptionProgressEntry {
+  limit_usd: number
+  used_usd: number
+  remaining_usd: number
+  percentage: number
+  window_start: string
+  resets_at: string
+  resets_in_seconds: number
+}
+
+export interface SubscriptionProgressResponse {
+  subscription: UserSubscription
+  progress: {
+    id: number
+    group_name: string
+    expires_at: string
+    expires_in_days: number
+    daily?: SubscriptionProgressEntry
+    weekly?: SubscriptionProgressEntry
+    monthly?: SubscriptionProgressEntry
+  }
 }
 
 export interface SubscriptionProgress {
