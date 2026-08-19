@@ -581,8 +581,10 @@ gateway:
   # ==========================================================================
   capture:
     enabled: false
-    max_body_bytes: 33554432
-    max_header_bytes: 1048576
+    # 0 = no per-record capture truncation. The spool-wide max_bytes and
+    # min_free_bytes settings remain the disk-safety boundary.
+    max_body_bytes: 0
+    max_header_bytes: 0
     spool:
       dir: /app/data/capture/spool
       max_bytes: 12884901888
