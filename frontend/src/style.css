@@ -20,6 +20,11 @@
     --linear-ink-subtle: 100 116 139;
     --linear-ink-tertiary: 148 163 184;
     @apply scroll-smooth antialiased;
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
   }
 
   .dark {

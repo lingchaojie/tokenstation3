@@ -212,10 +212,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	// 仅跳过写出，保证 finalize 阶段的 usage 汇总不受断开影响。
 	emitChunk := func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
 		// CC chunk → Anthropic events (direct, single state machine)
-		anthropicEvents, err := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
-		if err != nil {
-			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
-		}
+		anthropicEvents := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
 		semanticOutput := anthropicConvertedEventsHaveSemanticOutput(anthropicEvents)
 		var wire strings.Builder
 		for _, aEvt := range anthropicEvents {

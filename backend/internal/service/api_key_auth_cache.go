@@ -4,18 +4,16 @@ import "time"
 
 // APIKeyAuthSnapshot API Key 认证缓存快照（仅包含认证所需字段）
 type APIKeyAuthSnapshot struct {
-	Version          int                      `json:"version"`
-	APIKeyID         int64                    `json:"api_key_id"`
-	UserID           int64                    `json:"user_id"`
-	GroupID          *int64                   `json:"group_id,omitempty"`
-	KeyType          string                   `json:"key_type"`
-	GroupBindingMode string                   `json:"group_binding_mode"`
-	Name             string                   `json:"name"`
-	Status           string                   `json:"status"`
-	IPWhitelist      []string                 `json:"ip_whitelist,omitempty"`
-	IPBlacklist      []string                 `json:"ip_blacklist,omitempty"`
-	User             APIKeyAuthUserSnapshot   `json:"user"`
-	Group            *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
+	Version     int                      `json:"version"`
+	APIKeyID    int64                    `json:"api_key_id"`
+	UserID      int64                    `json:"user_id"`
+	GroupID     *int64                   `json:"group_id,omitempty"`
+	Name        string                   `json:"name"`
+	Status      string                   `json:"status"`
+	IPWhitelist []string                 `json:"ip_whitelist,omitempty"`
+	IPBlacklist []string                 `json:"ip_blacklist,omitempty"`
+	User        APIKeyAuthUserSnapshot   `json:"user"`
+	Group       *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
 
 	// Quota fields for API Key independent quota feature
 	Quota     float64 `json:"quota"`      // Quota limit in USD (0 = unlimited)
@@ -40,14 +38,13 @@ type APIKeyAuthUserSnapshot struct {
 	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
 
 	// Balance notification fields (required for CheckBalanceAfterDeduction)
-	Email                              string             `json:"email"`
-	Username                           string             `json:"username"`
-	BalanceNotifyEnabled               bool               `json:"balance_notify_enabled"`
-	SubscriptionBalanceFallbackEnabled bool               `json:"subscription_balance_fallback_enabled"`
-	BalanceNotifyThresholdType         string             `json:"balance_notify_threshold_type"`
-	BalanceNotifyThreshold             *float64           `json:"balance_notify_threshold,omitempty"`
-	BalanceNotifyExtraEmails           []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
-	TotalRecharged                     float64            `json:"total_recharged"`
+	Email                      string             `json:"email"`
+	Username                   string             `json:"username"`
+	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
+	BalanceNotifyThresholdType string             `json:"balance_notify_threshold_type"`
+	BalanceNotifyThreshold     *float64           `json:"balance_notify_threshold,omitempty"`
+	BalanceNotifyExtraEmails   []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
+	TotalRecharged             float64            `json:"total_recharged"`
 
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 兜底判断。
 	RPMLimit int `json:"rpm_limit"`
@@ -83,6 +80,8 @@ type APIKeyAuthGroupSnapshot struct {
 	VideoPrice1080P                 *float64                      `json:"video_price_1080p,omitempty"`
 	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
 	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call,omitempty"`
+	LongContextPricingEnabled       bool                          `json:"long_context_pricing_enabled"`
+	ModelPricing                    []ChannelModelPricing         `json:"model_pricing,omitempty"`
 	ClaudeCodeOnly                  bool                          `json:"claude_code_only"`
 	FallbackGroupID                 *int64                        `json:"fallback_group_id,omitempty"`
 	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request,omitempty"`
@@ -119,18 +118,10 @@ type APIKeyAuthGroupSnapshot struct {
 	PeakEnd            string  `json:"peak_end"`
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 
-	// Kiro 模拟缓存配置（仅 Kiro 分组生效）
-	KiroCacheEmulationEnabled     bool    `json:"kiro_cache_emulation_enabled"`
-	KiroAutoStickyEnabled         bool    `json:"kiro_auto_sticky_enabled"`
-	KiroStickySessionTTLSeconds   int     `json:"kiro_sticky_session_ttl_seconds"`
-	KiroCacheEmulationRatio       float64 `json:"kiro_cache_emulation_ratio"`
-	KiroEndpointMode              string  `json:"kiro_endpoint_mode"`
-	HasMixedKiroAutoStickyAccount bool    `json:"has_mixed_kiro_auto_sticky_account"`
-
 	// 分组利润控制：调度准入门在直连热路径上读的就是这份快照——门解析
 	// （resolveOpenAIProfitControlGate / resolveProfitControlGroup）优先取
 	// 认证中间件放入 ctx 的 Group，而它正是本快照物化出来的对象，生产绝大
-	// 多数流量走的都是这条路；只有 fallback/模型路由等被调度分组与认证分组
+	// 多数流量走的都是这条路；只有 composite/模型路由等被调度分组与认证分组
 	// 不一致时才回源 schedulerSnapshot。
 	// 因此这三个字段与 GetByKeyForAuth 的投影都不得删减：漏掉任何一个，
 	// 门会拿到零值 ProfitControlEnabled=false 而静默失效（有集成测试兜底）。

@@ -82,8 +82,7 @@ func TestStreamingParallelToolUseNoGhostDelta(t *testing.T) {
 	// Feed chunks through the CC→Responses bridge, then through Responses→Anthropic.
 	var allAnthropicEvents []AnthropicStreamEvent
 	for _, chunk := range []*ChatCompletionsChunk{chatChunk1, chatChunk2, chatChunk3} {
-		responsesEvents, err := ChatCompletionsChunkToResponsesEvents(chunk, ccState)
-		require.NoError(t, err)
+		responsesEvents := ChatCompletionsChunkToResponsesEvents(chunk, ccState)
 		for _, rEvent := range responsesEvents {
 			allAnthropicEvents = append(allAnthropicEvents, ResponsesEventToAnthropicEvents(&rEvent, anthropicState)...)
 		}

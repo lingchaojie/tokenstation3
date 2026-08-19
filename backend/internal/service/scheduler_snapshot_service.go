@@ -308,7 +308,7 @@ func (s *SchedulerSnapshotService) GetGroupByID(ctx context.Context, groupID int
 
 // GetGroupByIDLite 获取分组配置但不加载账号计数聚合。
 // 利润门只需要平台、倍率、利润与高峰字段，GetByID 附带的那条账号计数聚合
-// 查询纯属浪费——模型路由 / fallback 每次装门都要付一次，WS 更是
+// 查询纯属浪费——composite / 模型路由 / fallback 每次装门都要付一次，WS 更是
 // 每个 turn 一次，且发生在「是否启用利润控制」判定之前。
 func (s *SchedulerSnapshotService) GetGroupByIDLite(ctx context.Context, groupID int64) (*Group, error) {
 	if s.groupRepo == nil {
@@ -609,17 +609,13 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		accountGroupIDs := s.normalizeGroupIDs(account.GroupIDs)
 		switch account.Platform {
-		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok:
+		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
 			addPlatformGroups(account.Platform, accountGroupIDs)
 		case PlatformAntigravity:
 			// 批量更新可能刚关闭 mixed_scheduling，仍需清理两个兼容平台的旧快照。
 			addPlatformGroups(PlatformAntigravity, accountGroupIDs)
 			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
 			addPlatformGroups(PlatformGemini, accountGroupIDs)
-		case PlatformKiro:
-			// 批量更新可能刚关闭 mixed_scheduling，仍需清理 Anthropic mixed 旧快照。
-			addPlatformGroups(PlatformKiro, accountGroupIDs)
-			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
 		default:
 			return s.rebuildByGroupIDs(ctx, rebuildGroupIDs, "account_bulk_change", seen)
 		}
@@ -811,25 +807,6 @@ func markGroupLifecycleSeen(seen map[batchSeenKey]struct{}, groupID int64) {
 	}
 }
 
-// rebuildPlatformsForMixedAccount 返回混合调度账号变更时需额外重建的平台桶。
-// antigravity → anthropic+gemini；kiro → 仅 anthropic；否则 nil。
-func rebuildPlatformsForMixedAccount(account *Account) []string {
-	if account == nil {
-		return nil
-	}
-	switch account.Platform {
-	case PlatformAntigravity:
-		if account.IsMixedSchedulingEnabled() {
-			return []string{PlatformAnthropic, PlatformGemini}
-		}
-	case PlatformKiro:
-		if account.IsKiroMixedSchedulingEnabled() {
-			return []string{PlatformAnthropic}
-		}
-	}
-	return nil
-}
-
 func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account *Account, groupIDs []int64, reason string, seen map[batchSeenKey]struct{}) error {
 	if account == nil {
 		return nil
@@ -840,14 +817,15 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	}
 
 	buckets := s.bucketsForPlatform(account.Platform, groupIDs, seen)
-	for _, mixedPlatform := range rebuildPlatformsForMixedAccount(account) {
-		buckets = append(buckets, s.bucketsForPlatform(mixedPlatform, groupIDs, seen)...)
+	if account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled() {
+		buckets = append(buckets, s.bucketsForPlatform(PlatformAnthropic, groupIDs, seen)...)
+		buckets = append(buckets, s.bucketsForPlatform(PlatformGemini, groupIDs, seen)...)
 	}
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [6]string {
-	return [6]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformKiro, PlatformGrok}
+func schedulerSnapshotPlatforms() [8]string {
+	return [8]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
 }
 
 // 生命周期辅助函数有意排除 group0；full rebuild 构造 group0 canonical 集时必须显式调用 canonical helper。
@@ -859,9 +837,8 @@ func schedulerBucketsForGroup(groupID int64) []SchedulerBucket {
 }
 
 func schedulerCanonicalBuckets(groupID int64) []SchedulerBucket {
-	platforms := schedulerSnapshotPlatforms()
-	buckets := make([]SchedulerBucket, 0, len(platforms)*2+2)
-	for _, platform := range platforms {
+	buckets := make([]SchedulerBucket, 0, 18)
+	for _, platform := range schedulerSnapshotPlatforms() {
 		buckets = append(buckets,
 			SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},
 			SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeForced},
@@ -878,9 +855,8 @@ func (s *SchedulerSnapshotService) rebuildByGroupIDs(ctx context.Context, groupI
 	if len(groupIDs) == 0 {
 		return nil
 	}
-	platforms := schedulerSnapshotPlatforms()
-	buckets := make([]SchedulerBucket, 0, len(groupIDs)*(len(platforms)*2+2))
-	for _, platform := range platforms {
+	buckets := make([]SchedulerBucket, 0, len(groupIDs)*18)
+	for _, platform := range schedulerSnapshotPlatforms() {
 		buckets = append(buckets, s.bucketsForPlatform(platform, groupIDs, seen)...)
 	}
 	return s.rebuildBuckets(ctx, buckets, reason)
@@ -1488,7 +1464,7 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	}
 
 	if useMixed {
-		platforms := mixedSchedulingPlatforms(bucket.Platform)
+		platforms := []string{bucket.Platform, PlatformAntigravity}
 		var accounts []Account
 		var err error
 		if groupID > 0 {
@@ -1503,7 +1479,7 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if (acc.Platform == PlatformAntigravity || acc.Platform == PlatformKiro) && !accountEligibleForMixedPlatform(&acc, bucket.Platform) {
+			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
 				continue
 			}
 			filtered = append(filtered, acc)

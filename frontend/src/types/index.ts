@@ -63,34 +63,6 @@ export interface UserProfileSourceContext {
   provider_label?: string | null
 }
 
-export interface DailyRewardBalance {
-  amount: number
-  expires_at: string | null
-}
-
-export interface AffiliateRewardBalance {
-  amount: number
-  earliest_expires_at: string | null
-  credit_count: number
-}
-
-export interface RewardBalanceSummary {
-  daily_check_in: DailyRewardBalance
-  affiliate: AffiliateRewardBalance
-}
-
-export interface RewardCreditItem {
-  id: number
-  credit_type: 'affiliate_inviter' | 'affiliate_invitee'
-  role_label: 'inviter' | 'invitee'
-  original_amount: number
-  remaining_amount: number
-  granted_at: string
-  expires_at: string
-}
-
-export type RewardCreditPage = BasePaginationResponse<RewardCreditItem>
-
 export interface User {
   id: number
   username: string
@@ -115,7 +87,6 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
-  reward_balances?: RewardBalanceSummary // Included by the current-user profile endpoint
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
@@ -123,7 +94,6 @@ export interface User {
   balance_notify_enabled: boolean
   balance_notify_threshold: number | null
   balance_notify_extra_emails: NotifyEmailEntry[]
-  subscription_balance_fallback_enabled: boolean
   subscriptions?: UserSubscription[] // User's active subscriptions
   last_active_at?: string | null
   created_at: string
@@ -145,6 +115,19 @@ export interface LoginRequest {
   email: string
   password: string
   turnstile_token?: string
+  tencent_captcha_ticket?: string
+  tencent_captcha_randstr?: string
+}
+
+export interface TencentCaptchaRequestProof {
+  tencent_captcha_ticket: string
+  tencent_captcha_randstr: string
+}
+
+// 动作触发式验证码（OAuth 启动、passkey 等入口）的请求凭据：
+// 腾讯填 tencent_captcha_*，阿里云的 captchaVerifyParam 复用 turnstile_token 字段
+export interface ActionCaptchaRequestProof extends Partial<TencentCaptchaRequestProof> {
+  turnstile_token?: string
 }
 
 export interface RegisterRequest {
@@ -152,6 +135,8 @@ export interface RegisterRequest {
   password: string
   verify_code?: string
   turnstile_token?: string
+  tencent_captcha_ticket?: string
+  tencent_captcha_randstr?: string
   promo_code?: string
   invitation_code?: string
   aff_code?: string
@@ -173,23 +158,21 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
-  /** 0 = 注册后立即奖励；大于 0 = 首充达标阈值（订阅无条件达标）。 */
-  first_recharge_threshold: number
-  /** 满足当前奖励模式后，邀请方获得的固定奖励额。 */
-  inviter_reward: number
-  /** 满足当前奖励模式后，被邀请方获得的固定奖励额。 */
-  invitee_reward: number
-  reward_mode: 'immediate' | 'first_recharge'
-  reward_validity_days: number
-  inviter_reward_limit: number
-  inviter_reward_count: number
-  inviter_reward_limit_reached: boolean
+  /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
+  effective_rebate_rate_percent: number
   invitees: AffiliateInvitee[]
+}
+
+export interface AffiliateTransferResponse {
+  transferred_quota: number
+  balance: number
 }
 
 export interface SendVerifyCodeRequest {
   email: string
   turnstile_token?: string
+  tencent_captcha_ticket?: string
+  tencent_captcha_randstr?: string
   pending_auth_token?: string
   pending_oauth_token?: string
 }
@@ -215,12 +198,6 @@ export interface CustomEndpoint {
   description: string
 }
 
-export interface AnnouncementBanner {
-  id: string
-  text_zh: string
-  text_en: string
-}
-
 export interface LoginAgreementDocument {
   id: string
   title: string
@@ -242,7 +219,15 @@ export interface PublicSettings {
   login_agreement_revision?: string
   login_agreement_documents?: LoginAgreementDocument[]
   turnstile_enabled: boolean
+  tencent_captcha_enabled?: boolean
+  tencent_captcha_app_id?: string
+  tencent_captcha_region?: string
+  passkey_enabled?: boolean
   turnstile_site_key: string
+  aliyun_captcha_enabled?: boolean
+  aliyun_captcha_scene_id?: string
+  aliyun_captcha_prefix?: string
+  aliyun_captcha_region?: string
   site_name: string
   site_logo: string
   site_subtitle: string
@@ -250,8 +235,6 @@ export interface PublicSettings {
   contact_info: string
   doc_url: string
   home_content: string
-  announcement_banners: AnnouncementBanner[]
-  announcement_banner_interval_ms: number
   compact_home_enabled: boolean
   hide_ccs_import_button: boolean
   payment_enabled: boolean
@@ -285,14 +268,13 @@ export interface PublicSettings {
   channel_monitor_default_interval_seconds: number
   /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
   channel_monitor_hide_throughput?: boolean
+  /** When true, user monitor shows account quota/balance snapshots (default off). */
+  channel_monitor_show_quota?: boolean
   available_channels_enabled: boolean
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
-  daily_check_in_enabled?: boolean
-  daily_check_in_start_at?: string
-  daily_check_in_end_at?: string
   allow_user_view_error_requests?: boolean
 }
 
@@ -545,12 +527,8 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok'
-export type KiroEndpointMode = 'q' | 'krs' | 'auto'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
 
-// 'unified' marks a provider-agnostic key (group_binding_mode = 'auto') that the
-// backend routes to the Anthropic or OpenAI default group based on the request.
-export type ApiKeyType = 'anthropic' | 'openai' | 'unified' | 'unknown'
 export type VideoModelPrices = Record<string, Record<string, number>>
 
 export type SubscriptionType = 'standard' | 'subscription'
@@ -582,6 +560,7 @@ export interface Group {
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
   monthly_limit_usd: number | null
+  long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
   allow_batch_image_generation: boolean
@@ -601,6 +580,11 @@ export interface Group {
   video_model_prices?: VideoModelPrices
   // Codex 网页搜索单次价格（USD/次）；null 表示使用默认价 0.01
   web_search_price_per_call: number | null
+  // Grok Voice 显式定价（分组级）
+  search_price_per_1k: number | null
+  audio_realtime_price_per_min: number | null
+  audio_tts_price_per_million_chars: number | null
+  audio_stt_price_per_hour: number | null
   // 高峰时段倍率配置
   peak_rate_enabled: boolean
   peak_start: string
@@ -612,20 +596,18 @@ export interface Group {
   fallback_group_id_on_invalid_request: number | null
   // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
   allow_messages_dispatch?: boolean
+  // OpenAI Live 接口开关
+  allow_live: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
   require_privacy_set: boolean
-  kiro_auto_sticky_enabled: boolean
-  kiro_sticky_session_ttl_seconds: number
-  kiro_cache_emulation_enabled: boolean
-  kiro_cache_emulation_ratio: number
-  kiro_endpoint_mode?: KiroEndpointMode
   created_at: string
   updated_at: string
 }
 
 export interface AdminGroup extends Group {
+  model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
   // 仅管理员可见：与 rate_multiplier 相乘即可反推上游成本上限，不得下放到 Group。
   profit_control_enabled: boolean
@@ -661,7 +643,62 @@ export interface ModelsListConfig {
   models: string[]
 }
 
-export type ApiKeyGroupBindingMode = 'static' | 'default_follow' | 'auto'
+export type CompositeRouteMatchType = 'exact' | 'prefix'
+
+export type CompositeRouteEndpoint =
+  | 'any'
+  | 'messages'
+  | 'count_tokens'
+  | 'responses'
+  | 'chat_completions'
+  | 'embeddings'
+  | 'images'
+  | 'gemini'
+
+export type CompositeRouteSource = 'route' | 'detector' | string
+
+export interface CompositeModelRoute {
+  id: number
+  group_id: number
+  public_model: string
+  match_type: CompositeRouteMatchType
+  target_platform: Exclude<GroupPlatform, 'composite'>
+  upstream_model: string
+  endpoint: CompositeRouteEndpoint
+  priority: number
+  enabled: boolean
+  notes: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CompositeModelRouteInput {
+  public_model: string
+  match_type: CompositeRouteMatchType
+  target_platform: Exclude<GroupPlatform, 'composite'>
+  upstream_model?: string
+  endpoint: CompositeRouteEndpoint
+  priority?: number
+  enabled?: boolean
+  notes?: string
+}
+
+export interface CompositeRoutePreviewRequest {
+  model: string
+  endpoint: CompositeRouteEndpoint
+}
+
+export interface CompositeRouteDecision {
+  matched: boolean
+  source: CompositeRouteSource
+  group_id: number
+  public_model: string
+  target_platform: Exclude<GroupPlatform, 'composite'> | ''
+  upstream_model: string
+  endpoint: CompositeRouteEndpoint
+  route?: CompositeModelRoute
+  reason?: string
+}
 
 export interface ApiKey {
   id: number
@@ -669,8 +706,6 @@ export interface ApiKey {
   key: string
   name: string
   group_id: number | null
-  key_type: ApiKeyType
-  group_binding_mode: ApiKeyGroupBindingMode
   status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
   ip_whitelist: string[]
   ip_blacklist: string[]
@@ -699,9 +734,7 @@ export interface ApiKey {
 
 export interface CreateApiKeyRequest {
   name: string
-  // Omitted for unified keys; the backend creates a provider-agnostic key that
-  // auto-routes to the Anthropic/OpenAI default group per request.
-  key_type?: Exclude<ApiKeyType, 'unknown' | 'unified'>
+  group_id?: number | null
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]
@@ -737,6 +770,8 @@ export interface CreateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  long_context_pricing_enabled?: boolean
+  model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
@@ -753,6 +788,10 @@ export interface CreateGroupRequest {
   video_price_1080p?: number | null
   video_model_prices?: VideoModelPrices
   web_search_price_per_call?: number | null
+  search_price_per_1k?: number | null
+  audio_realtime_price_per_min?: number | null
+  audio_tts_price_per_million_chars?: number | null
+  audio_stt_price_per_hour?: number | null
   peak_rate_enabled?: boolean
   peak_start?: string
   peak_end?: string
@@ -768,6 +807,7 @@ export interface CreateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
+  allow_live?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -777,11 +817,6 @@ export interface CreateGroupRequest {
   reasoning_effort_mappings?: ReasoningEffortMapping[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
-  kiro_auto_sticky_enabled?: boolean
-  kiro_sticky_session_ttl_seconds?: number
-  kiro_cache_emulation_enabled?: boolean
-  kiro_cache_emulation_ratio?: number
-  kiro_endpoint_mode?: KiroEndpointMode
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -797,6 +832,8 @@ export interface UpdateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  long_context_pricing_enabled?: boolean
+  model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
@@ -813,6 +850,10 @@ export interface UpdateGroupRequest {
   video_price_1080p?: number | null
   video_model_prices?: VideoModelPrices
   web_search_price_per_call?: number | null
+  search_price_per_1k?: number | null
+  audio_realtime_price_per_min?: number | null
+  audio_tts_price_per_million_chars?: number | null
+  audio_stt_price_per_hour?: number | null
   peak_rate_enabled?: boolean
   peak_start?: string
   peak_end?: string
@@ -828,6 +869,7 @@ export interface UpdateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
+  allow_live?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -837,17 +879,12 @@ export interface UpdateGroupRequest {
   reasoning_effort_mappings?: ReasoningEffortMapping[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
-  kiro_auto_sticky_enabled?: boolean
-  kiro_sticky_session_ttl_seconds?: number
-  kiro_cache_emulation_enabled?: boolean
-  kiro_cache_emulation_ratio?: number
-  kiro_endpoint_mode?: KiroEndpointMode
   copy_accounts_from_group_ids?: number[]
 }
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1006,6 +1043,9 @@ export interface UpstreamBillingProbeSnapshot {
   failure_count?: number
   http_status?: number
   last_error?: string
+  // Value this probe wrote into the account rate multiplier; absent when the
+  // probe did not sync a rate.
+  synced_rate_multiplier?: number
 }
 
 export interface UpstreamBillingProbeSettings {
@@ -1086,8 +1126,8 @@ export interface Account {
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
-    kiro_credit_unit_price_usd?: number
     upstream_billing_probe_enabled?: boolean
+    upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
     codex_reset_credit_snapshot?: {
       available_count?: number
@@ -1127,12 +1167,6 @@ export interface Account {
   overload_until: string | null
   temp_unschedulable_until: string | null
   temp_unschedulable_reason: string | null
-  kiro_quota_state?: string | null
-  kiro_quota_reason?: string | null
-  kiro_quota_reset_at?: string | null
-  kiro_runtime_state?: string | null
-  kiro_runtime_reason?: string | null
-  kiro_runtime_reset_at?: string | null
 
   // Session window fields (5-hour window)
   session_window_start: string | null
@@ -1220,7 +1254,6 @@ export interface WindowStats {
   cost: number // Account cost (account multiplier)
   standard_cost?: number
   user_cost?: number
-  kiro_credits?: number
 }
 
 export interface UsageProgress {
@@ -1281,21 +1314,6 @@ export interface GrokBillingSummary {
   failed_windows?: string[]
 }
 
-export interface KiroCreditProgress {
-  current_usage: number
-  usage_limit: number
-  percentage_used: number
-  days_remaining?: number
-  expiry_date?: string | null
-}
-
-export interface KiroOverageInfo {
-  current_overages: number
-  overage_charges: number
-  currency_code?: string
-  currency_symbol?: string
-}
-
 export interface AccountUsageInfo {
   source?: 'passive' | 'active'
   updated_at: string | null
@@ -1332,19 +1350,6 @@ export interface AccountUsageInfo {
     amount?: number
     minimum_balance?: number
   }> | null
-  kiro_subscription_name?: string | null
-  kiro_subscription_type?: string | null
-  kiro_reset_at?: string | null
-  kiro_overages_enabled?: boolean
-  kiro_credit?: KiroCreditProgress | null
-  kiro_bonus?: KiroCreditProgress | null
-  kiro_overage?: KiroOverageInfo | null
-  kiro_quota_state?: string | null
-  kiro_quota_reason?: string | null
-  kiro_quota_reset_at?: string | null
-  kiro_runtime_state?: string | null
-  kiro_runtime_reason?: string | null
-  kiro_runtime_reset_at?: string | null
   // Antigravity 403 forbidden 状态
   is_forbidden?: boolean
   forbidden_reason?: string
@@ -1440,6 +1445,7 @@ export interface UpdateAccountRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   upstream_billing_probe_enabled?: boolean
+  upstream_billing_rate_sync_enabled?: boolean
   confirm_mixed_channel_risk?: boolean
 }
 
@@ -1732,16 +1738,6 @@ export interface UsageCleanupTask {
   updated_at: string
 }
 
-export interface RedeemCodePlanSummary {
-  id: number
-  name: string
-  product_name: string
-  validity_days: number
-  validity_unit: string
-  seven_day_quota_usd?: number | null
-  for_sale: boolean
-}
-
 export interface RedeemCode {
   id: number
   code: string
@@ -1754,20 +1750,17 @@ export interface RedeemCode {
   expires_at?: string | null
   updated_at?: string
   notes?: string
-  group_id?: number | null // 订阅类型专用（旧分组模式）
-  plan_id?: number | null // 订阅类型专用（套餐模式）
+  group_id?: number | null // 订阅类型专用
   validity_days?: number // 订阅类型专用
   user?: User
   group?: Group // 关联的分组
-  plan?: RedeemCodePlanSummary // 关联的套餐；套餐已删除/缺失时可能为空
 }
 
 export interface GenerateRedeemCodesRequest {
   count: number
   type: RedeemCodeType
   value: number
-  group_id?: number | null // 订阅类型专用（旧分组模式）
-  plan_id?: number | null // 订阅类型专用（套餐模式）
+  group_id?: number | null // 订阅类型专用
   validity_days?: number // 订阅类型专用
   expires_at?: string | null
   expires_in_days?: number
@@ -1778,7 +1771,6 @@ export interface BatchUpdateRedeemCodeFields {
   expires_at?: string | null
   notes?: string
   group_id?: number | null
-  plan_id?: number | null
 }
 
 export interface BatchUpdateRedeemCodesRequest {
@@ -1984,78 +1976,45 @@ export interface ChangePasswordRequest {
 export interface UserSubscription {
   id: number
   user_id: number
-  group_id: number | null
-  plan_id: number | null
-  plan_name: string | null
-  scheduled_plan_id?: number | null
-  scheduled_plan_name?: string | null
-  scheduled_seven_day_limit_usd?: number | null
-  scheduled_plan_effective_at?: string | null
-  scheduled_expires_at?: string | null
-  scheduled_order_id?: number | null
-  seat_limit?: number | null
-  seat_used?: number | null
-  seat_full?: boolean
-  seat_over_limit?: boolean
+  group_id: number
   status: 'active' | 'expired' | 'revoked' | 'suspended'
   starts_at: string
-  expires_at: string | null
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
-  daily_limit_usd?: number | null
-  weekly_limit_usd?: number | null
-  monthly_limit_usd?: number | null
-  seven_day_limit_usd: number | null
-  seven_day_usage_usd: number
-  seven_day_remaining_usd: number | null
-  seven_day_reset_at: string | null
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
   created_at: string
   updated_at: string
   revoked_at?: string | null
+  expires_at: string | null
   user?: User
-  group?: Group | null
-}
-
-export interface SubscriptionBalanceSummary {
-  remaining: number
-  total: number
-  used: number
-  resetAt: string | null
-  planName: string | null
-  planNames?: string[]
-  activePlanCount?: number
-  displayMode?: 'none' | 'single' | 'multiple'
-  planKey?: 'basic' | 'plus' | 'pro' | 'max' | null
-  priceCny?: number | null
-}
-
-export interface SubscriptionProgressEntry {
-  limit_usd: number
-  used_usd: number
-  remaining_usd: number
-  percentage: number
-  window_start: string
-  resets_at: string
-  resets_in_seconds: number
+  group?: Group
 }
 
 export interface SubscriptionProgress {
-  id: number
-  group_name: string
-  expires_at: string
-  expires_in_days: number
-  daily?: SubscriptionProgressEntry
-  weekly?: SubscriptionProgressEntry
-  monthly?: SubscriptionProgressEntry
-}
-
-export interface SubscriptionProgressResponse {
-  subscription: UserSubscription
-  progress: SubscriptionProgress
+  subscription_id: number
+  daily: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  weekly: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  monthly: {
+    used: number
+    limit: number | null
+    percentage: number
+    reset_in_seconds: number | null
+  } | null
+  expires_at: string | null
+  days_remaining: number | null
 }
 
 export interface AssignSubscriptionRequest {

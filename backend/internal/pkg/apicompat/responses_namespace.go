@@ -1,6 +1,8 @@
 package apicompat
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -11,7 +13,7 @@ import (
 type ResponsesNamespaceName = NamespacedToolName
 
 // FlattenResponsesNamespaces converts Codex private namespace declarations into
-// public Responses tools and rewrites namespace-qualified request calls.
+// public Responses function tools and rewrites namespace-qualified request calls.
 func FlattenResponsesNamespaces(req map[string]any) (map[string]ResponsesNamespaceName, bool, error) {
 	return FlattenResponsesNamespacesExcept(req, nil)
 }
@@ -52,7 +54,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || !isFlattenableNamespaceChild(child) {
+			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -89,7 +91,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || !isFlattenableNamespaceChild(child) {
+			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -125,7 +127,23 @@ func RestoreResponsesNamespaceCalls(payload []byte, names map[string]ResponsesNa
 	if len(payload) == 0 || len(names) == 0 {
 		return payload, false, nil
 	}
-	return RestoreResponsesClientToolPayload(payload, ResponsesClientToolMapping{NamespaceTools: names})
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return payload, false, err
+	}
+	changed := restoreResponsesNamespaceValue(value, names)
+	if !changed {
+		return payload, false, nil
+	}
+	var rebuilt bytes.Buffer
+	encoder := json.NewEncoder(&rebuilt)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return payload, false, err
+	}
+	return bytes.TrimSuffix(rebuilt.Bytes(), []byte("\n")), true, nil
 }
 
 func namespaceChildren(tool map[string]any) []any {
@@ -136,15 +154,6 @@ func namespaceChildren(tool map[string]any) []any {
 	return children
 }
 
-func isFlattenableNamespaceChild(child map[string]any) bool {
-	switch strings.TrimSpace(stringValue(child["type"])) {
-	case "function", "custom":
-		return true
-	default:
-		return false
-	}
-}
-
 func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespaceName) {
 	switch typed := value.(type) {
 	case []any:
@@ -152,21 +161,12 @@ func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespa
 			rewriteNamespaceQualifiedCalls(item, names)
 		}
 	case map[string]any:
-		if isNamespaceQualifiedCallType(stringValue(typed["type"])) {
+		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
 			rewriteNamespaceQualifiedCall(typed, names)
 		}
 		for _, child := range typed {
 			rewriteNamespaceQualifiedCalls(child, names)
 		}
-	}
-}
-
-func isNamespaceQualifiedCallType(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "function_call", "custom_tool_call":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -184,6 +184,28 @@ func rewriteNamespaceQualifiedCall(item map[string]any, names map[string]Respons
 	item["name"] = flat
 	delete(item, "namespace")
 	return true
+}
+
+func restoreResponsesNamespaceValue(value any, names map[string]ResponsesNamespaceName) bool {
+	changed := false
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			changed = restoreResponsesNamespaceValue(item, names) || changed
+		}
+	case map[string]any:
+		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
+			if entry, ok := names[strings.TrimSpace(stringValue(typed["name"]))]; ok {
+				typed["name"] = entry.Name
+				typed["namespace"] = entry.Namespace
+				changed = true
+			}
+		}
+		for _, child := range typed {
+			changed = restoreResponsesNamespaceValue(child, names) || changed
+		}
+	}
+	return changed
 }
 
 func stringValue(value any) string {

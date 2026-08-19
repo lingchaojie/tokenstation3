@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -204,8 +203,6 @@ func transformGrokResponsesClientToolStream(
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	documents := newOpenAISSEJSONDocumentScanner(scanner)
 	restorer := apicompat.NewResponsesClientToolStreamRestorer(mapping)
-	rawProviderState := openAIResponsesSSEAttemptState{}
-	rawProviderTerminal := false
 	buffered := bufio.NewWriterSize(destination, 4*1024)
 	pendingFields := make([]string, 0, 2)
 	pendingFieldBytes := 0
@@ -267,15 +264,6 @@ func transformGrokResponsesClientToolStream(
 		}
 		return buffered.Flush()
 	}
-	declaredEventType := func() string {
-		for index := len(pendingFields) - 1; index >= 0; index-- {
-			if eventType, ok := extractOpenAISSEEventLine(pendingFields[index]); ok {
-				return eventType
-			}
-		}
-		return ""
-	}
-
 	for documents.Scan() {
 		line := documents.Text()
 		data, isData := extractOpenAISSEDataLine(line)
@@ -283,19 +271,6 @@ func transformGrokResponsesClientToolStream(
 			payload := []byte(data)
 			payloads := [][]byte{payload}
 			if json.Valid(payload) {
-				if rawProviderTerminal {
-					fail(errors.New("Grok Responses data arrived after a terminal event")) //nolint:staticcheck // Protocol name is intentionally capitalized.
-					return
-				}
-				validatedType, validateErr := validateOpenAIResponsesSSEPayload(payload, declaredEventType())
-				if validateErr == nil {
-					validateErr = rawProviderState.observe(payload, validatedType)
-				}
-				if validateErr != nil {
-					fail(fmt.Errorf("validate raw Grok Responses event: %w", validateErr))
-					return
-				}
-				rawProviderTerminal = isOpenAICompatResponsesTerminalEvent(validatedType)
 				var err error
 				payloads, _, err = restorer.RestoreEvent(payload)
 				if err != nil {

@@ -9,17 +9,11 @@ import (
 // IsOpenAICompatiblePlatform reports whether a platform can be reached through
 // OpenAI-compatible gateway entry points.
 func IsOpenAICompatiblePlatform(platform string) bool {
-	return platform == PlatformOpenAI || platform == PlatformGrok
-}
-
-// NormalizeOpenAICompatiblePlatform returns the canonical OpenAI-compatible
-// platform value used by account/group validation.
-func NormalizeOpenAICompatiblePlatform(platform string) string {
 	switch platform {
-	case PlatformOpenAI, PlatformGrok:
-		return platform
+	case PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		return true
 	default:
-		return PlatformOpenAI
+		return false
 	}
 }
 

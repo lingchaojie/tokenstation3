@@ -404,13 +404,7 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 
 	// 转换 Bedrock 特有的 amazon-bedrock-invocationMetrics 为标准 Anthropic usage 格式
 	// 并移除该字段避免透传给客户端
-	body, err = transformBedrockInvocationMetrics(body)
-	if err != nil {
-		return nil, newInvalidProviderResponseFailover(resp, sanitizeStreamError(err))
-	}
-	if !validAnthropicNonStreamingResponse(body) {
-		return nil, newInvalidProviderResponseFailover(resp, "bedrock returned an invalid terminal JSON response")
-	}
+	body = transformBedrockInvocationMetrics(body)
 
 	usage := parseClaudeUsageFromResponseBody(body)
 

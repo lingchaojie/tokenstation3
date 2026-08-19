@@ -186,7 +186,7 @@ export default {
         step1: {
           title: 'Create an R2 Bucket',
           line1: 'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
-          line2: 'Click "Create bucket", enter a name (e.g. linx2-backups), choose a region',
+          line2: 'Click "Create bucket", enter a name (e.g. sub2api-backups), choose a region',
           line3: 'Click create to finish'
         },
         step2: {
@@ -390,38 +390,8 @@ export default {
 
     affiliates: {
       invitesDescription: 'View site-wide inviter and invitee relationships',
-      rebatesDescription: 'Audit legacy recharge rebates and new rewards for both invite roles',
+      rebatesDescription: 'View recharge orders that generated affiliate rebates',
       transfersDescription: 'View affiliate quota transfers into account balance',
-      checkIn: {
-        title: 'Check-in Settings',
-        description: 'Configure the availability window and balance reward for daily check-ins.',
-        enabled: 'Enable check-in activity',
-        enabledHint: 'The regular-user sidebar shows “Check in for Token” only while the enabled activity is active.',
-        startAt: 'Activity start time',
-        startAtHint: 'Enter the time in UTC+8.',
-        durationDays: 'Duration',
-        days: 'days',
-        rewardAmount: 'Daily balance reward',
-        rewardHint: 'USD balance with up to 8 decimal places.',
-        endAt: 'Expected end time',
-        state: 'Current state',
-        save: 'Save settings',
-        saving: 'Saving...',
-        saveSuccess: 'Daily check-in settings saved',
-        loadFailed: 'Failed to load daily check-in settings',
-        saveFailed: 'Failed to save daily check-in settings',
-        states: {
-          disabled: 'Disabled',
-          upcoming: 'Upcoming',
-          active: 'Active',
-          ended: 'Ended',
-        },
-        validation: {
-          startAt: 'Enter a valid start time before enabling the activity',
-          duration: 'Duration must be a positive integer',
-          reward: 'Reward must be greater than 0 with no more than 8 decimal places',
-        },
-      },
       errors: {
         loadFailed: 'Failed to load affiliate records'
       },
@@ -435,22 +405,10 @@ export default {
         user: 'User',
         affCode: 'Invite Code',
         order: 'Order',
-        source: 'Source',
-        rewardRole: 'Reward Role',
-        sources: {
-          legacy: 'Legacy Rebate',
-          rewardCredit: 'Reward Credit',
-        },
-        roles: {
-          inviter: 'Inviter Reward',
-          invitee: 'Invitee Reward',
-        },
         totalRebate: 'Total Rebate',
         orderAmount: 'Top-up Amount',
         payAmount: 'Paid Amount',
         rebateAmount: 'Rebate Amount',
-        remainingAmount: 'Remaining',
-        expiresAt: 'Expires At',
         paymentType: 'Payment Method',
         orderStatus: 'Order Status',
         transferAmount: 'Transfer Amount',
@@ -465,7 +423,7 @@ export default {
       overview: {
         title: 'Affiliate User Overview',
         affCode: 'Invite Code',
-        inviterReward: 'Inviter Reward Amount',
+        rebateRate: 'Rebate Rate',
         invitedCount: 'Invited Users',
         rebatedInviteeCount: 'Rebated Invitees',
         availableQuota: 'Available Quota',
@@ -475,18 +433,6 @@ export default {
 
     // Users
     users: {
-      keyRoutes: {
-        action: 'Provider Routes',
-        title: 'Provider Routes',
-        description: 'Choose per-user default groups for matching-platform API keys.',
-        anthropicLabel: 'Anthropic Default Group',
-        openaiLabel: 'OpenAI Default Group',
-        useGlobalDefault: 'Use global default',
-        hint: 'Only active groups for the matching provider are shown. Saving applies immediately to existing matching-platform API keys and future keys.',
-        loadFailed: 'Failed to load provider routes',
-        updateSuccess: 'Provider routes updated',
-        updateFailed: 'Failed to update provider routes',
-      },
       title: 'User Management',
       description: 'Manage users and their permissions',
       createUser: 'Create User',
@@ -571,7 +517,6 @@ export default {
         rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.'
       },
       columns: {
-        usageKiro: 'Usage (Kiro)',
         user: 'User',
         id: 'ID',
         email: 'Email',
@@ -633,8 +578,6 @@ export default {
       failedToLoadApiKeys: 'Failed to load user API keys',
       emailRequired: 'Please enter email',
       concurrencyMin: 'Concurrency must be at least 1',
-      soraStorageQuota: 'Sora Storage Quota',
-      soraStorageQuotaHint: 'In GB, 0 means use group or system default quota',
       amountRequired: 'Please enter a valid amount',
       insufficientBalance: 'Insufficient balance',
       adjustBalance: 'Adjust Balance',
@@ -829,23 +772,6 @@ export default {
 
     // Groups
     groups: {
-      defaultGroup: 'Default',
-      kiroCache: {
-        title: 'Kiro Cache Emulation',
-        description: 'Simulate Anthropic prompt cache usage for this Kiro group only.',
-        enabled: 'Enable cache emulation',
-        ratio: 'Cache ratio',
-        ratioHint: '0 to 1. For example, 0.5 applies half of the simulated cache tokens.',
-        endpointMode: 'Kiro inference endpoint',
-        endpointModeQ: 'AWS Q (default)',
-        endpointModeKRS: 'Kiro Runtime Service',
-        endpointModeAuto: 'Auto (Q → KRS on retryable failure)',
-        endpointModeHint: 'q = AWS Q (shared rate-limit pool with other tools); krs = Kiro native gateway (separate pool); auto = try Q first, then switch to KRS after a retryable failure.',
-        stickyRouting: 'Enable Kiro account sticky routing',
-        stickyRoutingHint: 'When enabled, multi-turn conversations are pinned to the same account when possible. X-Session-ID still takes precedence for explicit session binding.',
-        stickyTTL: 'Sticky binding TTL (seconds)',
-        stickyTTLHint: 'A session is rebalanced after being idle longer than this value. Range: 60-86400, default: 3600.',
-      },
       title: 'Group Management',
       description: 'Manage API key groups and rate multipliers',
       searchGroups: 'Search groups...',
@@ -893,6 +819,7 @@ export default {
         userStatus: 'Status'
       },
       usageToday: 'Today',
+      usageYesterday: 'Yesterday',
       usageTotal: 'Total',
       accountsAvailable: 'Avail:',
       accountsRateLimited: 'Limited:',
@@ -927,7 +854,7 @@ export default {
         rpmLimitHint: 'Max requests per minute for each user in this group; 0 = unlimited. Once set, it takes over per-user rate limiting in this group (overrides the user-level rpm_limit fallback).',
         maxReasoningEffort: 'Max reasoning effort',
         maxReasoningEffortUnlimited: 'Unlimited (follow request)',
-        maxReasoningEffortHint: 'Limits explicit OpenAI reasoning effort requests only. Higher values are capped; omitted effort stays omitted. The ceiling takes precedence over reasoning effort mappings.',
+        maxReasoningEffortHint: 'Limits explicit OpenAI reasoning effort requests only. For Composite groups, it applies only to requests resolved to OpenAI. Higher values are capped; omitted effort stays omitted. The ceiling takes precedence over reasoning effort mappings.',
         reasoningEffortMappings: 'Reasoning effort mappings',
         addReasoningEffortMapping: 'Add mapping',
         removeReasoningEffortMapping: 'Remove mapping',
@@ -1015,13 +942,16 @@ export default {
       revertChanges: 'Revert',
       userInfo: 'User Info',
       platforms: {
-        kiro: 'Kiro',
         all: 'All Platforms',
         anthropic: 'Anthropic',
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        kimi: 'Kimi',
+        zhipu: 'Zhipu GLM',
+        deepseek: 'DeepSeek',
+        composite: 'Composite',
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -1071,6 +1001,27 @@ export default {
         finalPricePreview: 'Final per-second price preview',
         notConfigured: 'Not configured'
       },
+      explicitPricing: {
+        title: 'Grok Search & Voice Pricing',
+        description: 'Optional per-group prices for web_search (per 1k calls) and Voice realtime / TTS / STT (USD). Leave empty if unused.',
+        searchPricePer1k: 'Search price per 1k calls (USD)',
+        pricePlaceholder: 'optional'
+      },
+      modelPricing: {
+        title: 'Per-model group pricing',
+        description: 'Overrides channel and built-in prices for matching models. Long-context tiers come from official presets — do not enter custom intervals. Use per-request tiers such as realtime, tts, and stt for audio.',
+        longContext: 'Enable long-context tier pricing',
+        longContextHint: 'When checked, official/preset long-context tiers apply. When unchecked, token models stay on the first-tier base rate.',
+        add: 'Add model price'
+      },
+      voicePricing: {
+        title: 'Grok Voice Pricing',
+        description: 'Optional per-group prices for Voice realtime / TTS / STT (USD). Leave empty to leave unpriced.',
+        audioRealtimePerMin: 'Realtime price per minute (USD)',
+        audioTtsPerMillionChars: 'TTS price per million chars (USD)',
+        audioSttPerHour: 'STT price per hour (USD)',
+        pricePlaceholder: 'optional'
+      },
       webSearchPricing: {
         title: 'Codex Web Search Pricing',
         pricePerCall: 'Price per search call (USD)',
@@ -1087,7 +1038,7 @@ export default {
       },
       profitControl: {
         enable: 'Enable profit control',
-        enabledHint: 'Scheduling only admits accounts whose account multiplier ≤ the request\'s effective downstream multiplier × (1 − min margin − safety buffer). Account multipliers are maintained manually; read-only upstream probes only record and display declared, resolved, and effective rates and never change account multipliers. Existing ordering, stickiness and breakers keep working among qualified accounts. Image/video scheduling is not covered yet.',
+        enabledHint: 'Scheduling only admits accounts whose account multiplier ≤ the request\'s effective downstream multiplier × (1 − min margin − safety buffer). Account multipliers may be maintained manually or synchronized from probes; existing ordering, stickiness and breakers keep working among qualified accounts. Image/video scheduling is not covered yet.',
         disabledHint: 'When disabled, scheduling does no profit filtering: accounts whose account multiplier exceeds the downstream multiplier can still be selected, which may produce loss-making requests.',
         minMargin: 'Min gross margin (%)',
         minMarginHint: 'Percent input, e.g. 30 means 30%; stored as a decimal on the backend',
@@ -1105,6 +1056,56 @@ export default {
         selectedSummary: 'Selected {selected} / {total}',
         selectAll: 'Select all',
         invertSelection: 'Invert'
+      },
+      compositeRoutes: {
+        action: 'Routes',
+        title: 'Composite Routes',
+        titleWithGroup: 'Composite Routes: {name}',
+        routes: 'Saved Routes',
+        empty: 'No composite routes configured',
+        publicModel: 'Public Model',
+        target: 'Target',
+        scope: 'Scope',
+        priority: 'Priority',
+        addRoute: 'Add Route',
+        editRoute: 'Edit Route',
+        matchType: 'Match',
+        endpoint: 'Endpoint',
+        targetPlatform: 'Target Platform',
+        upstreamModel: 'Upstream Model',
+        upstreamModelHint: 'Leave empty to pass the original requested model through: under prefix match each matched model forwards verbatim (e.g. deepseek-v4-flash and deepseek-v4-pro each forwarded as-is); set a value to forward every matched request to that fixed model.',
+        notes: 'Notes',
+        enabled: 'Enabled',
+        preview: 'Preview',
+        matched: 'Matched',
+        notMatched: 'No Match',
+        publicModelRequired: 'Public model is required',
+        routeCreated: 'Composite route created',
+        routeUpdated: 'Composite route updated',
+        routeDeleted: 'Composite route deleted',
+        failedToLoad: 'Failed to load composite routes',
+        failedToSave: 'Failed to save composite route',
+        failedToDelete: 'Failed to delete composite route',
+        failedToPreview: 'Failed to preview composite route',
+        deleteConfirm: 'Delete this composite route?',
+        endpoints: {
+          any: 'Any',
+          messages: 'Messages',
+          countTokens: 'Count Tokens',
+          responses: 'Responses',
+          chatCompletions: 'Chat Completions',
+          embeddings: 'Embeddings',
+          images: 'Images',
+          gemini: 'Gemini Native'
+        },
+        match: {
+          exact: 'Exact',
+          prefix: 'Prefix'
+        },
+        sources: {
+          route: 'Route',
+          detector: 'Detector'
+        }
       },
       claudeCode: {
         title: 'Claude Code Client Restriction',
@@ -1136,6 +1137,14 @@ export default {
         targetModel: 'Target Model',
         targetModelPlaceholder: 'e.g., gpt-5.4',
         removeExactMapping: 'Remove Exact Mapping'
+      },
+      openaiLive: {
+        title: 'OpenAI Live',
+        allow: 'Allow Live access',
+        hint: 'When enabled, API keys in this OpenAI group can create and control Live voice sessions. Disabled by default. The Sub2API server must run on Apple Silicon macOS with the official ChatGPT app installed; client platforms are unrestricted.',
+        unsupportedTitle: 'Current server does not support Live',
+        unsupportedMessage: 'This Sub2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
+        enableAnyway: 'Enable anyway'
       },
       invalidRequestFallback: {
         title: 'Invalid Request Fallback Group',

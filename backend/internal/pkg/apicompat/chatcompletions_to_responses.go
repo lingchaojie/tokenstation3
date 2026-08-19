@@ -419,15 +419,15 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 	var out []ResponsesTool
 
 	for _, t := range tools {
-		if t.Type == "image_generation" {
+		if strings.EqualFold(strings.TrimSpace(t.Type), "x_search") {
 			out = append(out, ResponsesTool{
-				Type:         "image_generation",
-				Model:        strings.TrimSpace(t.Model),
-				Size:         strings.TrimSpace(t.Size),
-				AspectRatio:  strings.TrimSpace(t.AspectRatio),
-				Quality:      strings.TrimSpace(t.Quality),
-				Background:   strings.TrimSpace(t.Background),
-				OutputFormat: strings.TrimSpace(t.OutputFormat),
+				Type:                     "x_search",
+				AllowedXHandles:          t.AllowedXHandles,
+				ExcludedXHandles:         t.ExcludedXHandles,
+				FromDate:                 t.FromDate,
+				ToDate:                   t.ToDate,
+				EnableImageUnderstanding: t.EnableImageUnderstanding,
+				EnableVideoUnderstanding: t.EnableVideoUnderstanding,
 			})
 			continue
 		}
