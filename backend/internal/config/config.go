@@ -1334,8 +1334,10 @@ type GatewayUsageRecordConfig struct {
 	AutoScaleCooldownSeconds int `mapstructure:"auto_scale_cooldown_seconds"`
 }
 
-// GatewayCaptureMaxBodyBytes is retained as the shared capture-body ceiling
-// used by existing request capture call sites. The sidecar default is 32 MiB.
+// GatewayCaptureMaxBodyBytes is retained for compatibility with callers and
+// tests that refer to the historical 32 MiB ceiling. A configured capture
+// limit of zero now means unlimited per-record storage; the spool-wide
+// capacity and free-space guards remain the safety boundary.
 const GatewayCaptureMaxBodyBytes = 32 << 20
 
 const (
@@ -1348,8 +1350,8 @@ const (
 // default so no sidecar, Tailscale node, or spool is started unless requested.
 type CaptureConfig struct {
 	Enabled        bool                    `mapstructure:"enabled"`
-	MaxBodyBytes   int                     `mapstructure:"max_body_bytes"`
-	MaxHeaderBytes int                     `mapstructure:"max_header_bytes"`
+	MaxBodyBytes   int                     `mapstructure:"max_body_bytes"`   // 0 = unlimited per-record body capture
+	MaxHeaderBytes int                     `mapstructure:"max_header_bytes"` // 0 = unlimited per-record header capture
 	Spool          CaptureSpoolConfig      `mapstructure:"spool"`
 	Sidecar        CaptureSidecarConfig    `mapstructure:"sidecar"`
 	Tailscale      CaptureTailscaleConfig  `mapstructure:"tailscale"`
@@ -1419,11 +1421,11 @@ func (c CaptureConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
-	if c.MaxBodyBytes <= 0 {
-		return fmt.Errorf("gateway.capture.max_body_bytes must be positive")
+	if c.MaxBodyBytes < 0 {
+		return fmt.Errorf("gateway.capture.max_body_bytes must be non-negative (0 means unlimited)")
 	}
-	if c.MaxHeaderBytes <= 0 {
-		return fmt.Errorf("gateway.capture.max_header_bytes must be positive")
+	if c.MaxHeaderBytes < 0 {
+		return fmt.Errorf("gateway.capture.max_header_bytes must be non-negative (0 means unlimited)")
 	}
 	if c.Spool.MaxBytes <= 0 {
 		return fmt.Errorf("gateway.capture.spool.max_bytes must be positive")
@@ -1482,7 +1484,13 @@ func (c CaptureConfig) Validate() error {
 	if c.ClickHouse.BatchMaxBytes <= 0 {
 		return fmt.Errorf("gateway.capture.clickhouse.batch_max_bytes must be positive")
 	}
-	minimumBatchBytes := int64(c.MaxBodyBytes)*2 + int64(c.MaxHeaderBytes)*2 + captureBatchRowOverheadBytes
+	minimumBatchBytes := captureBatchRowOverheadBytes
+	if c.MaxBodyBytes > 0 {
+		minimumBatchBytes += int64(c.MaxBodyBytes) * 2
+	}
+	if c.MaxHeaderBytes > 0 {
+		minimumBatchBytes += int64(c.MaxHeaderBytes) * 2
+	}
 	if c.ClickHouse.BatchMaxBytes < minimumBatchBytes {
 		return fmt.Errorf("gateway.capture.clickhouse.batch_max_bytes must be at least %d to fit one maximum capture", minimumBatchBytes)
 	}

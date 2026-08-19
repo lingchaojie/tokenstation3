@@ -407,8 +407,14 @@ func (s *GatewayService) readWebChatUpstreamErrorBody(ctx context.Context, resp 
 
 func readUpstreamBodyWithCeiling(ctx context.Context, resp *http.Response, limit int, idleTimeout time.Duration) ([]byte, bool, error) {
 	limit = normalizeCaptureLimit(limit)
-	if resp == nil || resp.Body == nil || limit <= 0 {
+	if resp == nil || resp.Body == nil || limit < 0 {
 		return nil, false, nil
+	}
+	if limit == 0 {
+		body, err := readAllWithProviderIdle(ctx, resp.Body, idleTimeout, func(reader io.Reader) ([]byte, error) {
+			return io.ReadAll(reader)
+		})
+		return body, err != nil, err
 	}
 	body, err := readAllWithProviderIdle(ctx, resp.Body, idleTimeout, func(reader io.Reader) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(reader, int64(limit)+1))

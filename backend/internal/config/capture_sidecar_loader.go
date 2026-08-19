@@ -75,8 +75,8 @@ func setLogAndCaptureDefaults(setDefault func(string, any)) {
 	setDefault("log.sampling.thereafter", 100)
 
 	setDefault("gateway.capture.enabled", false)
-	setDefault("gateway.capture.max_body_bytes", GatewayCaptureMaxBodyBytes)
-	setDefault("gateway.capture.max_header_bytes", 1<<20)
+	setDefault("gateway.capture.max_body_bytes", 0)
+	setDefault("gateway.capture.max_header_bytes", 0)
 	setDefault("gateway.capture.spool.dir", "/app/data/capture/spool")
 	setDefault("gateway.capture.spool.max_bytes", int64(12)<<30)
 	setDefault("gateway.capture.spool.min_free_bytes", int64(8)<<30)
