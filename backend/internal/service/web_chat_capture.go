@@ -45,11 +45,15 @@ func (w *WebChatResponseCapture) Snapshot() ([]byte, bool) {
 }
 
 func (w *WebChatResponseCapture) capture(p []byte) {
-	if w.maxCaptureBytes <= 0 {
+	if w.maxCaptureBytes < 0 {
 		return
 	}
-	if w.body.Len() >= w.maxCaptureBytes {
+	if w.maxCaptureBytes > 0 && w.body.Len() >= w.maxCaptureBytes {
 		w.truncated = len(p) > 0
+		return
+	}
+	if w.maxCaptureBytes == 0 {
+		_, _ = w.body.Write(p)
 		return
 	}
 	remaining := w.maxCaptureBytes - w.body.Len()
@@ -111,11 +115,15 @@ func (c *webChatStreamCapture) Capture(p []byte) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.maxCaptureBytes <= 0 {
+	if c.maxCaptureBytes < 0 {
 		return
 	}
-	if c.body.Len() >= c.maxCaptureBytes {
+	if c.maxCaptureBytes > 0 && c.body.Len() >= c.maxCaptureBytes {
 		c.truncated = true
+		return
+	}
+	if c.maxCaptureBytes == 0 {
+		_, _ = c.body.Write(p)
 		return
 	}
 	remaining := c.maxCaptureBytes - c.body.Len()
@@ -180,9 +188,6 @@ func ExtractAssistantTextFromChatCompletions(body []byte, streamed bool) string 
 		maxTokenSize := len(body) + 1
 		if maxTokenSize < 64<<10 {
 			maxTokenSize = 64 << 10
-		}
-		if maxTokenSize > captureHardMaxBodyBytes+1 {
-			maxTokenSize = captureHardMaxBodyBytes + 1
 		}
 		scanner.Buffer(make([]byte, 0, 64<<10), maxTokenSize)
 		for scanner.Scan() {
@@ -253,9 +258,6 @@ func extractAssistantProcessFromStream(body []byte) []map[string]any {
 	maxTokenSize := len(body) + 1
 	if maxTokenSize < 64<<10 {
 		maxTokenSize = 64 << 10
-	}
-	if maxTokenSize > captureHardMaxBodyBytes+1 {
-		maxTokenSize = captureHardMaxBodyBytes + 1
 	}
 	scanner.Buffer(make([]byte, 0, 64<<10), maxTokenSize)
 	for scanner.Scan() {
@@ -548,9 +550,6 @@ func (s *webChatProcessState) updateToolCallIdentity(blockIndex int, call webCha
 
 func appendWebChatProcessString(builder *strings.Builder, value string, retainedBytes *int) {
 	if builder == nil || value == "" {
-		return
-	}
-	if retainedBytes != nil && (len(value) > captureHardMaxBodyBytes-*retainedBytes) {
 		return
 	}
 	_, _ = builder.WriteString(value)

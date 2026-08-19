@@ -1260,8 +1260,8 @@ func TestCaptureTruncation(t *testing.T) {
 	if got3, tr := captureWithLimit(nil, 4); got3 != nil || tr {
 		t.Fatal("nil in -> nil, false")
 	}
-	if got4, tr := captureWithLimit([]byte("x"), 0); got4 != nil || tr {
-		t.Fatal("limit<=0 -> nil, false")
+	if got4, tr := captureWithLimit([]byte("0123456789"), 0); string(got4) != "0123456789" || tr {
+		t.Fatalf("zero limit got %q truncated=%v", got4, tr)
 	}
 }
 
