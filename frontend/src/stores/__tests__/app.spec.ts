@@ -359,6 +359,41 @@ describe('useAppStore', () => {
       expect(store.cachedPublicSettings?.site_name).toBe('After save')
     })
 
+    it('已排队的强制刷新开始后，后发 force 等待下一代请求', async () => {
+      const initialRequest = createDeferred<PublicSettings>()
+      const firstRefresh = createDeferred<PublicSettings>()
+      const laterRefresh = createDeferred<PublicSettings>()
+      vi.mocked(getPublicSettings)
+        .mockReturnValueOnce(initialRequest.promise)
+        .mockReturnValueOnce(firstRefresh.promise)
+        .mockReturnValueOnce(laterRefresh.promise)
+      const initial = createPublicSettings({ site_name: 'Initial' })
+      const stale = createPublicSettings({ site_name: 'Before later save' })
+      const fresh = createPublicSettings({ site_name: 'After later save' })
+      const store = useAppStore()
+
+      const initialLoad = store.fetchPublicSettings()
+      const firstForced = store.fetchPublicSettings(true)
+      initialRequest.resolve(initial)
+      await expect(initialLoad).resolves.toEqual(initial)
+      expect(getPublicSettings).toHaveBeenCalledTimes(2)
+
+      const laterForced = store.fetchPublicSettings(true)
+      const laterSettled = vi.fn()
+      void laterForced.then(laterSettled)
+
+      firstRefresh.resolve(stale)
+      await expect(firstForced).resolves.toEqual(stale)
+      await Promise.resolve()
+
+      expect(getPublicSettings).toHaveBeenCalledTimes(3)
+      expect(laterSettled).not.toHaveBeenCalled()
+
+      laterRefresh.resolve(fresh)
+      await expect(laterForced).resolves.toEqual(fresh)
+      expect(store.cachedPublicSettings?.site_name).toBe('After later save')
+    })
+
     it('force 在无活动请求时绕过缓存，刷新期间的普通调用等待刷新结果', async () => {
       const initial = createPublicSettings({ site_name: 'Initial Site' })
       vi.mocked(getPublicSettings).mockResolvedValueOnce(initial)
