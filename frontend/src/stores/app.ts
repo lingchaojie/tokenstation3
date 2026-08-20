@@ -56,6 +56,7 @@ export const useAppStore = defineStore('app', () => {
   const docUrl = ref<string>('')
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
+  let queuedPublicSettingsRefresh: Promise<PublicSettings | null> | null = null
 
   // Version cache state
   const versionLoaded = ref<boolean>(false)
@@ -335,9 +336,20 @@ export const useAppStore = defineStore('app', () => {
    * @param force - Force refresh from API
    */
   function fetchPublicSettings(force = false): Promise<PublicSettings | null> {
-    // An active request always wins over cache/force semantics so every caller observes
-    // the same refresh result and no older request can overwrite a newer one.
     if (publicSettingsRequest) {
+      // Ordinary callers share the active request. A forced caller must observe data
+      // fetched after that older request settles, so coalesce forced callers into one
+      // queued refresh instead of returning a potentially stale response.
+      if (force) {
+        if (!queuedPublicSettingsRefresh) {
+          queuedPublicSettingsRefresh = publicSettingsRequest
+            .then(() => fetchPublicSettings(true))
+            .finally(() => {
+              queuedPublicSettingsRefresh = null
+            })
+        }
+        return queuedPublicSettingsRefresh
+      }
       return publicSettingsRequest
     }
 

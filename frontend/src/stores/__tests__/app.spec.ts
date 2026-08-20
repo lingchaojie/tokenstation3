@@ -324,33 +324,39 @@ describe('useAppStore', () => {
   // --- 公开设置 ---
 
   describe('公开设置加载', () => {
-    it('并发调用复用并等待同一个请求，包括 force 调用', async () => {
-      const deferred = createDeferred<PublicSettings>()
-      vi.mocked(getPublicSettings).mockReturnValue(deferred.promise)
-      const settings = createPublicSettings({ payment_enabled: true })
+    it('普通并发复用活动请求，而 force 调用排队执行一次更新的请求', async () => {
+      const activeRequest = createDeferred<PublicSettings>()
+      const queuedRefresh = createDeferred<PublicSettings>()
+      vi.mocked(getPublicSettings)
+        .mockReturnValueOnce(activeRequest.promise)
+        .mockReturnValueOnce(queuedRefresh.promise)
+      const initial = createPublicSettings({ site_name: 'Before save' })
+      const refreshed = createPublicSettings({ site_name: 'After save' })
       const store = useAppStore()
 
       const first = store.fetchPublicSettings()
       const second = store.fetchPublicSettings()
       const forced = store.fetchPublicSettings(true)
+      const duplicateForced = store.fetchPublicSettings(true)
 
       expect(getPublicSettings).toHaveBeenCalledTimes(1)
 
-      const settled = vi.fn()
-      void first.then(settled)
-      void second.then(settled)
-      void forced.then(settled)
-      await Promise.resolve()
-      expect(settled).not.toHaveBeenCalled()
+      activeRequest.resolve(initial)
+      await expect(Promise.all([first, second])).resolves.toEqual([initial, initial])
+      expect(getPublicSettings).toHaveBeenCalledTimes(2)
 
-      deferred.resolve(settings)
-      await expect(Promise.all([first, second, forced])).resolves.toEqual([
-        settings,
-        settings,
-        settings,
+      const forcedSettled = vi.fn()
+      void forced.then(forcedSettled)
+      await Promise.resolve()
+      expect(forcedSettled).not.toHaveBeenCalled()
+
+      queuedRefresh.resolve(refreshed)
+      await expect(Promise.all([forced, duplicateForced])).resolves.toEqual([
+        refreshed,
+        refreshed,
       ])
       expect(store.publicSettingsLoaded).toBe(true)
-      expect(store.cachedPublicSettings?.payment_enabled).toBe(true)
+      expect(store.cachedPublicSettings?.site_name).toBe('After save')
     })
 
     it('force 在无活动请求时绕过缓存，刷新期间的普通调用等待刷新结果', async () => {

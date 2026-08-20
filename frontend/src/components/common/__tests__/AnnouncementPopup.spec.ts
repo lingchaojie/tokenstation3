@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -11,18 +11,32 @@ const appState = vi.hoisted(() => ({
 }))
 
 vi.mock('@/stores/app', () => ({ useAppStore: () => appState }))
+vi.mock('@/api', () => ({
+  announcementsAPI: {
+    list: vi.fn(),
+    markRead: vi.fn(),
+  },
+}))
 vi.mock('@/utils/format', () => ({
   formatRelativeWithDateTime: (value: string) => `formatted:${value}`,
 }))
 
 import AnnouncementPopup from '../AnnouncementPopup.vue'
 import AnnouncementBell from '../AnnouncementBell.vue'
+import { announcementsAPI } from '@/api'
 import { useAnnouncementStore } from '@/stores/announcements'
 
 const announcementMarkdownStyles = readFileSync(
   resolve(process.cwd(), 'src/styles/announcement-markdown.css'),
   'utf8',
 )
+
+const mountedWrappers: VueWrapper[] = []
+
+function track<T extends VueWrapper>(wrapper: T): T {
+  mountedWrappers.push(wrapper)
+  return wrapper
+}
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -45,15 +59,42 @@ const announcement = {
   updated_at: '2026-07-24T07:30:00Z',
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+
+  return { promise, resolve, reject }
+}
+
+function pressTab(target: Element, shiftKey = false): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    key: 'Tab',
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  })
+  target.dispatchEvent(event)
+  return event
+}
+
 describe('AnnouncementPopup', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     appState.siteName = 'LINX2.AI'
     appState.siteLogo = ''
     appState.showError.mockReset()
+    vi.mocked(announcementsAPI.list).mockReset()
+    vi.mocked(announcementsAPI.markRead).mockReset()
+      .mockResolvedValue({ message: 'ok' })
   })
 
   afterEach(() => {
+    for (const wrapper of mountedWrappers.splice(0)) wrapper.unmount()
+    vi.useRealTimers()
     document.body.innerHTML = ''
     document.body.style.overflow = ''
   })
@@ -216,6 +257,8 @@ describe('AnnouncementPopup', () => {
     store.popupTotal = 1
     const advance = vi.spyOn(store, 'advancePopup').mockImplementation(async () => {
       store.currentPopup = null
+      store.popupPosition = 0
+      store.popupTotal = 0
       return true
     })
     const snooze = vi.spyOn(store, 'snoozePopupBatch')
@@ -229,6 +272,107 @@ describe('AnnouncementPopup', () => {
     expect(snooze).not.toHaveBeenCalled()
     expect(document.body.style.overflow).toBe('')
     wrapper.unmount()
+  })
+
+  it('keeps scroll locked while the next item appears before read persistence settles', async () => {
+    vi.useFakeTimers()
+    const read = createDeferred<{ message: string }>()
+    vi.mocked(announcementsAPI.list).mockResolvedValue([
+      { ...announcement, id: 1, title: 'First announcement' },
+      { ...announcement, id: 2, title: 'Second announcement' },
+    ])
+    vi.mocked(announcementsAPI.markRead).mockReturnValue(read.promise)
+    const readSettled = vi.fn()
+    void read.promise.then(readSettled)
+    const store = useAnnouncementStore()
+    await store.fetchAnnouncements({ force: true, autoPopup: true })
+    const wrapper = track(mount(AnnouncementPopup))
+
+    document.body.querySelector<HTMLButtonElement>('[data-testid="announcement-popup-advance"]')
+      ?.click()
+    await wrapper.vm.$nextTick()
+
+    expect(store.currentPopup).toBeNull()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    await vi.advanceTimersByTimeAsync(300)
+    await wrapper.vm.$nextTick()
+
+    expect(store.currentPopup?.id).toBe(2)
+    expect(document.body.querySelector('#announcement-popup-title')?.textContent)
+      .toContain('Second announcement')
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(readSettled).not.toHaveBeenCalled()
+
+    read.resolve({ message: 'ok' })
+    await flushPromises()
+  })
+
+  it('moves focus into the popup, traps Tab, and restores the exact launcher on Escape', async () => {
+    const launcher = document.createElement('button')
+    launcher.textContent = 'Open announcements'
+    document.body.appendChild(launcher)
+    launcher.focus()
+
+    const store = useAnnouncementStore()
+    store.currentPopup = announcement
+    store.popupPosition = 1
+    store.popupTotal = 1
+    const snooze = vi.spyOn(store, 'snoozePopupBatch')
+    const advance = vi.spyOn(store, 'advancePopup')
+    const wrapper = track(mount(AnnouncementPopup))
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    const close = document.body.querySelector<HTMLElement>(
+      '[data-testid="announcement-popup-close"]',
+    )!
+    const last = document.body.querySelector<HTMLElement>(
+      '[data-testid="announcement-popup-advance"]',
+    )!
+    expect(document.activeElement).toBe(close)
+
+    last.focus()
+    const forward = pressTab(last)
+    expect(forward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(close)
+
+    const backward = pressTab(close, true)
+    expect(backward.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    }))
+    await wrapper.vm.$nextTick()
+
+    expect(snooze).toHaveBeenCalledOnce()
+    expect(advance).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(launcher)
+  })
+
+  it('emits preview close on Escape without reading or snoozing', async () => {
+    const store = useAnnouncementStore()
+    const snooze = vi.spyOn(store, 'snoozePopupBatch')
+    const advance = vi.spyOn(store, 'advancePopup')
+    const wrapper = track(mount(AnnouncementPopup, {
+      props: { announcement, preview: true },
+    }))
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(snooze).not.toHaveBeenCalled()
+    expect(advance).not.toHaveBeenCalled()
   })
 
   it('warns when read persistence fails', async () => {
