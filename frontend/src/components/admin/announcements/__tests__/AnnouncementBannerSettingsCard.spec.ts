@@ -51,6 +51,15 @@ describe('AnnouncementBannerSettingsCard', () => {
     expect(wrapper.get('[data-testid="announcement-banner-interval"]').element).toHaveProperty('value', '3')
   })
 
+  it('renders the add control with standard button chrome', async () => {
+    const wrapper = mount(AnnouncementBannerSettingsCard)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="announcement-banner-add"]').classes()).toEqual(
+      expect.arrayContaining(['btn', 'btn-secondary']),
+    )
+  })
+
   it('reorders and saves only owned fields', async () => {
     const wrapper = mount(AnnouncementBannerSettingsCard)
     await flushPromises()
