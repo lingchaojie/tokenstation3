@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-07-15"
+const PublicModelCatalogUpdatedAt = "2026-08-20"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -55,28 +55,32 @@ type PublicModelCatalogPriceLine struct {
 }
 
 const (
-	sourceAnthropic = "https://docs.anthropic.com/en/docs/about-claude/pricing"
-	sourceOpenAI    = "https://openai.com/api/pricing/"
-	sourceGemini    = "https://ai.google.dev/gemini-api/docs/pricing"
-	sourceQwen      = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
-	sourceGLM       = "https://docs.z.ai/guides/overview/pricing"
-	sourceDeepSeek  = "https://api-docs.deepseek.com/quick_start/pricing"
-	sourceMiniMax   = "https://platform.minimax.io/docs/guides/pricing-paygo"
-	sourceKimi      = "https://platform.kimi.ai/docs/pricing/chat"
+	sourceAnthropic       = "https://docs.anthropic.com/en/docs/about-claude/pricing"
+	sourceAnthropicOpus5  = "https://www.anthropic.com/news/claude-opus-5"
+	sourceAnthropicFable5 = "https://www.anthropic.com/news/claude-fable-5-mythos-5"
+	sourceOpenAI          = "https://openai.com/api/pricing/"
+	sourceGemini          = "https://ai.google.dev/gemini-api/docs/pricing"
+	sourceQwen            = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+	sourceGLM             = "https://docs.z.ai/guides/overview/pricing"
+	sourceDeepSeek        = "https://api-docs.deepseek.com/quick_start/pricing"
+	sourceMiniMax         = "https://platform.minimax.io/docs/guides/pricing-paygo"
+	sourceKimi            = "https://platform.kimi.ai/docs/pricing/chat"
 )
 
 const (
-	contextSourceAnthropic = "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
-	contextSourceOpenAI    = "https://developers.openai.com/api/docs/models"
-	contextSourceGemini    = "https://ai.google.dev/gemini-api/docs/models"
-	contextSourceQwen      = "https://www.alibabacloud.com/help/en/model-studio/models"
-	contextSourceGLM47     = "https://docs.z.ai/guides/llm/glm-4.7"
-	contextSourceGLM5      = "https://docs.z.ai/guides/llm/glm-5"
-	contextSourceGLM51     = "https://docs.z.ai/guides/llm/glm-5.1"
-	contextSourceGLM52     = "https://docs.z.ai/guides/llm/glm-5.2"
-	contextSourceDeepSeek  = "https://api-docs.deepseek.com/quick_start/pricing"
-	contextSourceMiniMax   = "https://platform.minimax.io/docs/guides/text-generation"
-	contextSourceKimi      = "https://platform.kimi.ai/docs/pricing/chat"
+	contextSourceAnthropic       = "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
+	contextSourceAnthropicOpus5  = "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html"
+	contextSourceAnthropicFable5 = "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html"
+	contextSourceOpenAI          = "https://developers.openai.com/api/docs/models"
+	contextSourceGemini          = "https://ai.google.dev/gemini-api/docs/models"
+	contextSourceQwen            = "https://www.alibabacloud.com/help/en/model-studio/models"
+	contextSourceGLM47           = "https://docs.z.ai/guides/llm/glm-4.7"
+	contextSourceGLM5            = "https://docs.z.ai/guides/llm/glm-5"
+	contextSourceGLM51           = "https://docs.z.ai/guides/llm/glm-5.1"
+	contextSourceGLM52           = "https://docs.z.ai/guides/llm/glm-5.2"
+	contextSourceDeepSeek        = "https://api-docs.deepseek.com/quick_start/pricing"
+	contextSourceMiniMax         = "https://platform.minimax.io/docs/guides/text-generation"
+	contextSourceKimi            = "https://platform.kimi.ai/docs/pricing/chat"
 )
 
 var publicModelCatalogProviderMeta = []PublicModelCatalogProvider{
@@ -121,6 +125,8 @@ type modelReleaseInfo struct {
 }
 
 var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
+	"claude-opus-5":            {ReleasedAt: "2026-07-24", ReleaseStatus: "confirmed"},
+	"claude-fable-5":           {ReleasedAt: "2026-06-09", ReleaseStatus: "confirmed"},
 	"claude-opus-4-8":          {ReleasedAt: "2026-06-21", ReleaseStatus: "unverified"},
 	"claude-opus-4-7":          {ReleasedAt: "2026-05-01", ReleaseStatus: "unverified"},
 	"claude-opus-4-6":          {ReleasedAt: "2026-04-01", ReleaseStatus: "unverified"},
@@ -184,6 +190,8 @@ func imageFeatures(extra ...string) []string {
 }
 
 var publicModelCatalogModels = []PublicModelCatalogModel{
+	catalogModel("anthropic", "Anthropic", "claude-opus-5", "Claude Opus 5", textModalities(), "Newest Opus model for long-running agents, coding, and professional work.", 1000000, contextSourceAnthropicOpus5, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropicOpus5),
+	catalogModel("anthropic", "Anthropic", "claude-fable-5", "Claude Fable 5", textModalities(), "Higher-tier Claude model for complex knowledge work, coding, and sustained autonomous tasks.", 1000000, contextSourceAnthropicFable5, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(10, 50, 1), "confirmed", sourceAnthropicFable5),
 	catalogModel("anthropic", "Anthropic", "claude-opus-4-8", "Claude Opus 4.8", textModalities(), "Highest-capability Claude model for complex reasoning, coding, and long-context work.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-opus-4-7", "Claude Opus 4.7", textModalities(), "Claude Opus model for complex reasoning, writing, and engineering workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6", textModalities(), "Claude Opus model for advanced reasoning and long-running tasks.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropic),
