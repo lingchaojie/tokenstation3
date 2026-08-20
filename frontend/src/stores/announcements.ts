@@ -30,9 +30,8 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   )
 
   // Actions
-  async function fetchAnnouncements(options: FetchAnnouncementOptions | boolean = {}) {
-    const normalized = typeof options === 'boolean' ? { force: options } : options
-    const { force = false, autoPopup = true } = normalized
+  async function fetchAnnouncements(options: FetchAnnouncementOptions = {}) {
+    const { force = false, autoPopup = true } = options
     const now = Date.now()
     if (!force && lastFetchTime.value > 0 && now - lastFetchTime.value < THROTTLE_MS) {
       return
