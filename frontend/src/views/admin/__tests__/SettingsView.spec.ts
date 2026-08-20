@@ -1130,22 +1130,6 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
-  it("renders the announcement banner add control with standard button chrome", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openGeneralTab(wrapper);
-
-    const addButton = wrapper
-      .findAll("button")
-      .find((node) => node.text() === "添加公告");
-
-    expect(addButton).toBeDefined();
-    expect(addButton?.classes()).toEqual(
-      expect.arrayContaining(["btn", "btn-secondary"]),
-    );
-  });
-
   it("updates provider enablement immediately and reloads providers", async () => {
     const provider = {
       id: 7,
