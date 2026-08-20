@@ -5,6 +5,11 @@ import type { UserAnnouncement } from '@/types'
 
 const THROTTLE_MS = 20 * 60 * 1000 // 20 minutes
 
+export interface FetchAnnouncementOptions {
+  force?: boolean
+  autoPopup?: boolean
+}
+
 export const useAnnouncementStore = defineStore('announcements', () => {
   // State
   const announcements = ref<UserAnnouncement[]>([])
@@ -12,6 +17,8 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   const lastFetchTime = ref(0)
   const popupQueue = ref<UserAnnouncement[]>([])
   const currentPopup = ref<UserAnnouncement | null>(null)
+  const popupPosition = ref(0)
+  const popupTotal = ref(0)
 
   // Session-scoped dedup set — not reactive, used as plain lookup only
   let shownPopupIds = new Set<number>()
@@ -22,7 +29,9 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   )
 
   // Actions
-  async function fetchAnnouncements(force = false) {
+  async function fetchAnnouncements(options: FetchAnnouncementOptions | boolean = {}) {
+    const normalized = typeof options === 'boolean' ? { force: options } : options
+    const { force = false, autoPopup = true } = normalized
     const now = Date.now()
     if (!force && lastFetchTime.value > 0 && now - lastFetchTime.value < THROTTLE_MS) {
       return
@@ -34,8 +43,8 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     try {
       loading.value = true
       const all = await announcementsAPI.list(false)
-      announcements.value = all.slice(0, 20)
-      enqueueNewPopups()
+      announcements.value = all.slice(0, 20).map((announcement) => ({ ...announcement }))
+      if (autoPopup) enqueueNewPopups()
     } catch (err: any) {
       // Revert throttle timestamp on failure so retry is allowed
       lastFetchTime.value = 0
@@ -49,11 +58,12 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     const newPopups = announcements.value.filter(
       (a) => a.notify_mode === 'popup' && !a.read_at && !shownPopupIds.has(a.id)
     )
-    if (newPopups.length === 0) return
 
     for (const p of newPopups) {
-      if (!popupQueue.value.some((q) => q.id === p.id)) {
+      const alreadyQueued = popupQueue.value.some((q) => q.id === p.id)
+      if (!alreadyQueued && currentPopup.value?.id !== p.id) {
         popupQueue.value.push(p)
+        popupTotal.value += 1
       }
     }
 
@@ -63,37 +73,55 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function showNextPopup() {
-    if (popupQueue.value.length === 0) {
+    const next = popupQueue.value.shift()
+    if (!next) {
       currentPopup.value = null
       return
     }
-    currentPopup.value = popupQueue.value.shift()!
-    shownPopupIds.add(currentPopup.value.id)
+    currentPopup.value = next
+    shownPopupIds.add(next.id)
+    popupPosition.value += 1
   }
 
-  async function dismissPopup() {
-    if (!currentPopup.value) return
+  async function advancePopup(): Promise<boolean> {
+    if (!currentPopup.value) return true
     const id = currentPopup.value.id
     currentPopup.value = null
 
-    // Mark as read (fire-and-forget, UI already updated)
-    markAsRead(id)
-
-    // Show next popup after a short delay
     if (popupQueue.value.length > 0) {
-      setTimeout(() => showNextPopup(), 300)
+      window.setTimeout(showNextPopup, 300)
+    } else {
+      popupPosition.value = 0
+      popupTotal.value = 0
+    }
+
+    try {
+      await markAsRead(id)
+      return true
+    } catch (error) {
+      console.error('Failed to mark announcement as read:', error)
+      return false
     }
   }
 
-  async function markAsRead(id: number) {
-    try {
-      await announcementsAPI.markRead(id)
-      const ann = announcements.value.find((a) => a.id === id)
-      if (ann) {
-        ann.read_at = new Date().toISOString()
-      }
-    } catch (err: any) {
-      console.error('Failed to mark announcement as read:', err)
+  async function dismissPopup(): Promise<boolean> {
+    return advancePopup()
+  }
+
+  function snoozePopupBatch(): void {
+    if (currentPopup.value) shownPopupIds.add(currentPopup.value.id)
+    for (const item of popupQueue.value) shownPopupIds.add(item.id)
+    currentPopup.value = null
+    popupQueue.value = []
+    popupPosition.value = 0
+    popupTotal.value = 0
+  }
+
+  async function markAsRead(id: number): Promise<void> {
+    await announcementsAPI.markRead(id)
+    const ann = announcements.value.find((a) => a.id === id)
+    if (ann) {
+      ann.read_at = new Date().toISOString()
     }
   }
 
@@ -123,6 +151,8 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     shownPopupIds = new Set()
     popupQueue.value = []
     currentPopup.value = null
+    popupPosition.value = 0
+    popupTotal.value = 0
     loading.value = false
   }
 
@@ -131,10 +161,14 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     announcements,
     loading,
     currentPopup,
+    popupPosition,
+    popupTotal,
     // Getters
     unreadCount,
     // Actions
     fetchAnnouncements,
+    advancePopup,
+    snoozePopupBatch,
     dismissPopup,
     markAsRead,
     markAllAsRead,
