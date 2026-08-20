@@ -388,8 +388,9 @@ export default {
 
     // Announcements
     announcements: {
-      title: 'Announcements',
-      description: 'Create announcements and target by conditions',
+      title: 'Announcement settings',
+      description: 'Manage login popups and top rolling announcements in one place',
+      createFirstAnnouncement: 'No announcements yet. Create your first one.',
       createAnnouncement: 'Create Announcement',
       editAnnouncement: 'Edit Announcement',
       deleteAnnouncement: 'Delete Announcement',

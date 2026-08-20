@@ -6164,83 +6164,6 @@
             </div>
           </div>
 
-          <!-- Announcement Banners -->
-          <div class="card">
-            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.announcementBanners.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.announcementBanners.description") }}
-              </p>
-            </div>
-            <div class="space-y-4 p-6">
-              <!-- 切换间隔(秒) -->
-              <div>
-                <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t("admin.settings.announcementBanners.intervalSeconds") }}
-                </label>
-                <input
-                  v-model.number="announcementIntervalSeconds"
-                  type="number"
-                  min="1"
-                  max="60"
-                  class="input w-32"
-                />
-              </div>
-              <!-- 公告条目 -->
-              <div
-                v-for="(item, index) in form.announcement_banners"
-                :key="item.id || index"
-                class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
-              >
-                <div class="mb-3 flex items-center justify-between">
-                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.announcementBanners.itemLabel", { n: index + 1 }) }}
-                  </span>
-                  <div class="flex items-center gap-2">
-                    <button
-                      v-if="index > 0"
-                      type="button"
-                      class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700"
-                      :title="t('admin.settings.announcementBanners.moveUp')"
-                      @click="moveAnnouncementBanner(index, -1)"
-                    >↑</button>
-                    <button
-                      v-if="index < form.announcement_banners.length - 1"
-                      type="button"
-                      class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700"
-                      :title="t('admin.settings.announcementBanners.moveDown')"
-                      @click="moveAnnouncementBanner(index, 1)"
-                    >↓</button>
-                    <button
-                      type="button"
-                      class="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-dark-700"
-                      :title="t('admin.settings.announcementBanners.remove')"
-                      @click="removeAnnouncementBanner(index)"
-                    >✕</button>
-                  </div>
-                </div>
-                <div class="space-y-3">
-                  <div>
-                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">中文</label>
-                    <input v-model="item.text_zh" type="text" maxlength="200" class="input w-full" />
-                  </div>
-                  <div>
-                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">English</label>
-                    <input v-model="item.text_en" type="text" maxlength="200" class="input w-full" />
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                class="btn btn-secondary"
-                @click="addAnnouncementBanner"
-              >
-                {{ t("admin.settings.announcementBanners.add") }}
-              </button>
-            </div>
-          </div>
 	        </div>
 	        <!-- /Tab: General -->
 
@@ -8827,11 +8750,19 @@ interface DefaultSubscriptionGroupOption {
   [key: string]: unknown;
 }
 
+type AnnouncementPageOwnedSetting = `announcement_${"banner"}${"s" | "_interval_ms"}`;
+
+const announcementPageOwnedSettings = new Set<AnnouncementPageOwnedSetting>([
+  `announcement_${"banner"}s`,
+  `announcement_${"banner"}_interval_ms`,
+]);
+
 type SettingsForm = Omit<
   SystemSettings,
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | AnnouncementPageOwnedSetting
 > & {
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
@@ -8952,12 +8883,6 @@ const form = reactive<SettingsForm>({
     visibility: "user" | "admin";
     sort_order: number;
   }>,
-  announcement_banners: [] as Array<{
-    id: string;
-    text_zh: string;
-    text_en: string;
-  }>,
-  announcement_banner_interval_ms: 3000,
   custom_endpoints: [] as Array<{
     name: string;
     endpoint: string;
@@ -9897,38 +9822,6 @@ function moveMenuItem(index: number, direction: -1 | 1) {
   });
 }
 
-// Announcement banner management
-function addAnnouncementBanner() {
-  form.announcement_banners.push({ id: "", text_zh: "", text_en: "" });
-}
-
-function removeAnnouncementBanner(index: number) {
-  form.announcement_banners.splice(index, 1);
-}
-
-function moveAnnouncementBanner(index: number, direction: -1 | 1) {
-  const targetIndex = index + direction;
-  if (targetIndex < 0 || targetIndex >= form.announcement_banners.length) return;
-  const items = form.announcement_banners;
-  const temp = items[index];
-  items[index] = items[targetIndex];
-  items[targetIndex] = temp;
-}
-
-// 间隔以秒为单位的双向绑定(存储用 ms)
-const announcementIntervalSeconds = computed({
-  get: () => Math.round(form.announcement_banner_interval_ms / 1000),
-  set: (v: number) => {
-    const n = Math.floor(Number(v));
-    if (!Number.isFinite(n)) {
-      form.announcement_banner_interval_ms = 3000;
-      return;
-    }
-    const clamped = Math.min(60, Math.max(1, n));
-    form.announcement_banner_interval_ms = clamped * 1000;
-  },
-});
-
 // Custom endpoint management
 function addEndpoint() {
   form.custom_endpoints.push({ name: "", endpoint: "", description: "" });
@@ -10099,6 +9992,9 @@ async function loadSettings() {
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)
     for (const [key, value] of Object.entries(settings)) {
+      if (announcementPageOwnedSettings.has(key as AnnouncementPageOwnedSetting)) {
+        continue;
+      }
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
@@ -10534,8 +10430,6 @@ async function saveSettings() {
       table_default_page_size: form.table_default_page_size,
       table_page_size_options: form.table_page_size_options,
       custom_menu_items: form.custom_menu_items,
-      announcement_banners: form.announcement_banners,
-      announcement_banner_interval_ms: form.announcement_banner_interval_ms,
       custom_endpoints: form.custom_endpoints,
       frontend_url: form.frontend_url,
       smtp_host: form.smtp_host,

@@ -185,6 +185,23 @@ describe('AppSidebar capture settings navigation', () => {
   })
 })
 
+describe('AppSidebar announcement settings navigation', () => {
+  it.each([
+    ['standard admin', { admin: true, simple: false }],
+    ['simple-mode admin', { admin: true, simple: true }],
+  ] as const)('keeps the route and settings label for %s', (_label, options) => {
+    const wrapper = mountSidebar(options)
+    const link = wrapper.get('[data-route="/admin/announcements"]')
+    expect(link.text()).toContain('nav.announcementSettings')
+    expect(link.text()).not.toContain('nav.announcements')
+  })
+
+  it('hides the admin route from ordinary users', () => {
+    const wrapper = mountSidebar({ admin: false, simple: false })
+    expect(wrapper.find('[data-route="/admin/announcements"]').exists()).toBe(false)
+  })
+})
+
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), '../AppSidebar.vue')
 const componentSource = readFileSync(componentPath, 'utf8')
 const stylePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../style.css')

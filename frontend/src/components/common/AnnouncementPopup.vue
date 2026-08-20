@@ -3,84 +3,111 @@
     <Transition name="popup-fade">
       <div
         v-if="displayedAnnouncement"
-        class="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[8vh] backdrop-blur-md"
+        data-testid="announcement-popup"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="announcement-popup-title"
+        class="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm sm:p-6"
       >
         <div
-          class="w-full max-w-[680px] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
+          ref="dialogRef"
+          tabindex="-1"
+          class="flex max-h-[calc(100vh-2rem)] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-dark-700 dark:bg-dark-800 sm:max-h-[84vh]"
           @click.stop
         >
-          <!-- Header with warm gradient -->
-          <div class="relative overflow-hidden border-b border-amber-100/80 bg-gradient-to-br from-amber-50/80 via-orange-50/50 to-yellow-50/30 px-8 py-6 dark:border-dark-700/50 dark:from-amber-900/20 dark:via-orange-900/10 dark:to-yellow-900/5">
-            <!-- Decorative background -->
-            <div class="absolute right-0 top-0 h-full w-64 bg-gradient-to-l from-orange-100/30 to-transparent dark:from-orange-900/20"></div>
-            <div class="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-gradient-to-br from-amber-400/20 to-orange-500/20 blur-3xl"></div>
-            <div class="absolute -left-4 -bottom-4 h-24 w-24 rounded-full bg-gradient-to-tr from-yellow-400/20 to-amber-500/20 blur-2xl"></div>
+          <header
+            data-testid="announcement-popup-brand"
+            class="flex shrink-0 items-center gap-3 border-b border-gray-100 bg-gradient-to-r from-primary-50 via-white to-white px-5 py-4 dark:border-dark-700 dark:from-primary-950/30 dark:via-dark-800 dark:to-dark-800 sm:px-6"
+          >
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-primary-100 bg-white shadow-sm dark:border-primary-900/60 dark:bg-dark-700">
+              <img
+                data-testid="announcement-popup-logo"
+                :src="siteLogo"
+                :alt="siteName"
+                class="h-full w-full object-contain p-1.5"
+              />
+            </div>
+            <div class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">
+                {{ siteName }}
+              </span>
+              <span class="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-primary-600 dark:text-primary-400">
+                <Icon name="bell" size="xs" />
+                {{ t('announcements.officialUpdate') }}
+              </span>
+            </div>
+            <button
+              data-testid="announcement-popup-close"
+              type="button"
+              :aria-label="t('common.close')"
+              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:text-gray-500 dark:hover:bg-dark-700 dark:hover:text-gray-200 dark:focus:ring-offset-dark-800"
+              @click="handleClose"
+            >
+              <Icon name="x" size="sm" />
+            </button>
+          </header>
 
-            <div class="relative z-10">
-              <!-- Icon and badge -->
-              <div class="mb-3 flex items-center gap-2">
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/30">
-                  <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                </div>
-                <span class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-2.5 py-1 text-xs font-medium text-white shadow-lg shadow-amber-500/30">
-                  <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-white"></span>
-                  </span>
-                  {{ t('announcements.unread') }}
+          <section class="announcement-popup-content min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-7">
+            <h2
+              id="announcement-popup-title"
+              class="text-xl font-semibold leading-tight text-gray-900 dark:text-white sm:text-2xl"
+            >
+              {{ displayedAnnouncement.title }}
+            </h2>
+            <time class="mt-2 flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+              <Icon name="clock" size="sm" />
+              {{ formatRelativeWithDateTime(displayedAnnouncement.created_at) }}
+            </time>
+            <div
+              class="markdown-body prose prose-sm mt-6 max-w-none dark:prose-invert"
+              v-html="renderedContent"
+            ></div>
+          </section>
+
+          <footer class="shrink-0 border-t border-gray-100 bg-gray-50/80 px-5 py-4 dark:border-dark-700 dark:bg-dark-900/40 sm:px-6">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+                <span data-testid="announcement-popup-progress" class="font-medium tabular-nums">
+                  {{ position }} / {{ total }}
+                </span>
+                <span class="flex items-center gap-1" aria-hidden="true">
+                  <span
+                    v-for="index in total"
+                    :key="index"
+                    class="h-1.5 rounded-full transition-all"
+                    :class="index === position
+                      ? 'w-5 bg-primary-500'
+                      : index < position
+                        ? 'w-1.5 bg-primary-300 dark:bg-primary-700'
+                        : 'w-1.5 bg-gray-300 dark:bg-dark-600'"
+                  ></span>
                 </span>
               </div>
-
-              <!-- Title -->
-              <h2 class="mb-2 text-2xl font-bold leading-tight text-gray-900 dark:text-white">
-                {{ displayedAnnouncement.title }}
-              </h2>
-
-              <!-- Time -->
-              <div class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
-                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <time>{{ formatRelativeWithDateTime(displayedAnnouncement.created_at) }}</time>
+              <div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                <button
+                  v-if="!preview"
+                  data-testid="announcement-popup-snooze"
+                  type="button"
+                  class="btn btn-secondary justify-center"
+                  @click="handleClose"
+                >
+                  {{ t('announcements.later') }}
+                </button>
+                <button
+                  data-testid="announcement-popup-advance"
+                  type="button"
+                  class="btn btn-primary justify-center"
+                  @click="handleAdvance"
+                >
+                  {{ preview
+                    ? t('common.close')
+                    : isLast
+                      ? t('announcements.acknowledge')
+                      : t('announcements.next') }}
+                </button>
               </div>
             </div>
-          </div>
-
-          <!-- Body -->
-          <div class="max-h-[50vh] overflow-y-auto bg-white px-8 py-8 dark:bg-dark-800">
-            <div class="relative">
-              <div class="absolute left-0 top-0 bottom-0 w-1 rounded-full bg-gradient-to-b from-amber-500 via-orange-500 to-yellow-500"></div>
-              <div class="pl-6">
-                <div
-                  class="markdown-body prose prose-sm max-w-none dark:prose-invert"
-                  v-html="renderedContent"
-                ></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Footer -->
-          <div class="border-t border-gray-100 bg-gray-50/50 px-8 py-5 dark:border-dark-700 dark:bg-dark-900/30">
-            <div class="flex items-center justify-end">
-              <button
-                @click="handleDismiss"
-                data-testid="announcement-popup-dismiss"
-                class="rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-6 py-2.5 text-sm font-medium text-white shadow-lg shadow-amber-500/30 transition-all hover:shadow-xl hover:scale-105"
-              >
-                <span class="flex items-center gap-2">
-                  <svg v-if="preview" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  <svg v-else class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  {{ preview ? t('common.close') : t('announcements.markRead') }}
-                </span>
-              </button>
-            </div>
-          </div>
+          </footer>
         </div>
       </div>
     </Transition>
@@ -88,12 +115,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import Icon from '@/components/icons/Icon.vue'
 import { useAnnouncementStore } from '@/stores/announcements'
+import { useAppStore } from '@/stores/app'
+import { useDialogFocus } from '@/composables/useDialogFocus'
+import { createBodyScrollLock } from '@/utils/bodyScrollLock'
 import { formatRelativeWithDateTime } from '@/utils/format'
+import { sanitizeUrl } from '@/utils/url'
 import type { Announcement, UserAnnouncement } from '@/types'
 import '@/styles/announcement-markdown.css'
 
@@ -113,9 +145,23 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const announcementStore = useAnnouncementStore()
+const appStore = useAppStore()
+const bodyScrollLock = createBodyScrollLock()
+const dialogRef = ref<HTMLElement | null>(null)
 const displayedAnnouncement = computed(() => (
   props.preview ? props.announcement : announcementStore.currentPopup
 ))
+const siteName = computed(() => appStore.siteName || 'LINX2.AI')
+const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', {
+  allowRelative: true,
+  allowDataUrl: true,
+}) || '/linx2-icon.png')
+const position = computed(() => props.preview ? 1 : announcementStore.popupPosition)
+const total = computed(() => props.preview ? 1 : announcementStore.popupTotal)
+const isLast = computed(() => position.value >= total.value)
+const ownsBodyScrollLock = computed(() => props.preview
+  ? Boolean(props.announcement)
+  : Boolean(announcementStore.currentPopup) || announcementStore.popupTotal > 0)
 
 marked.setOptions({
   breaks: true,
@@ -129,31 +175,37 @@ const renderedContent = computed(() => {
   return DOMPurify.sanitize(html)
 })
 
-function handleDismiss() {
-  if (props.preview) {
-    emit('close')
-    return
-  }
-  announcementStore.dismissPopup()
+function handleClose() {
+  if (props.preview) return emit('close')
+  announcementStore.snoozePopupBatch()
 }
 
-// Manage body overflow — only set, never unset (bell component handles restore)
+async function handleAdvance() {
+  if (props.preview) return emit('close')
+  const saved = await announcementStore.advancePopup()
+  if (!saved) appStore.showError(t('announcements.readSaveFailed'))
+}
+
+useDialogFocus({
+  dialogRef,
+  isOpen: () => Boolean(displayedAnnouncement.value),
+  onEscape: handleClose,
+})
+
 watch(
-  displayedAnnouncement,
-  (popup) => {
-    if (popup) {
-      document.body.style.overflow = 'hidden'
-    } else if (props.preview) {
-      document.body.style.overflow = ''
+  ownsBodyScrollLock,
+  (ownsLock) => {
+    if (ownsLock) {
+      bodyScrollLock.acquire()
+    } else {
+      bodyScrollLock.release()
     }
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  if (props.preview) {
-    document.body.style.overflow = ''
-  }
+  bodyScrollLock.release()
 })
 </script>
 
@@ -172,30 +224,29 @@ onBeforeUnmount(() => {
 }
 
 .popup-fade-enter-from > div {
-  transform: scale(0.94) translateY(-12px);
-  opacity: 0;
-}
-
-.popup-fade-leave-to > div {
   transform: scale(0.96) translateY(-8px);
   opacity: 0;
 }
 
-/* Scrollbar Styling */
-.overflow-y-auto::-webkit-scrollbar {
+.popup-fade-leave-to > div {
+  transform: scale(0.97) translateY(-6px);
+  opacity: 0;
+}
+
+.announcement-popup-content::-webkit-scrollbar {
   width: 8px;
 }
 
-.overflow-y-auto::-webkit-scrollbar-track {
+.announcement-popup-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.overflow-y-auto::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #cbd5e1, #94a3b8);
+.announcement-popup-content::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
   border-radius: 4px;
 }
 
-.dark .overflow-y-auto::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #4b5563, #374151);
+.dark .announcement-popup-content::-webkit-scrollbar-thumb {
+  background: #4b5563;
 }
 </style>

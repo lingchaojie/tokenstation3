@@ -319,6 +319,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAppStore } from '@/stores/app'
 import { useAnnouncementStore } from '@/stores/announcements'
+import { createBodyScrollLock } from '@/utils/bodyScrollLock'
 import { formatRelativeTime, formatRelativeWithDateTime } from '@/utils/format'
 import type { UserAnnouncement } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
@@ -327,6 +328,7 @@ import '@/styles/announcement-markdown.css'
 const { t } = useI18n()
 const appStore = useAppStore()
 const announcementStore = useAnnouncementStore()
+const bodyScrollLock = createBodyScrollLock()
 
 // Configure marked
 marked.setOptions({
@@ -410,14 +412,19 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscape)
-  document.body.style.overflow = ''
+  bodyScrollLock.release()
 })
 
 watch(
-  [isModalOpen, detailModalOpen, () => announcementStore.currentPopup],
-  ([modal, detail, popup]) => {
-    document.body.style.overflow = (modal || detail || popup) ? 'hidden' : ''
-  }
+  [isModalOpen, detailModalOpen],
+  ([modal, detail]) => {
+    if (modal || detail) {
+      bodyScrollLock.acquire()
+    } else {
+      bodyScrollLock.release()
+    }
+  },
+  { immediate: true },
 )
 </script>
 

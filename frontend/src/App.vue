@@ -19,6 +19,10 @@ const announcementStore = useAnnouncementStore()
 const adminComplianceStore = useAdminComplianceStore()
 const adminSettingsStore = useAdminSettingsStore()
 
+function announcementFetchOptions(force = false) {
+  return { force, autoPopup: !authStore.isAdmin }
+}
+
 function updateDocumentTitle() {
   const customMenuItems = [
     ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
@@ -53,7 +57,7 @@ watch(
 // Watch for authentication state and manage subscription data + announcements
 function onVisibilityChange() {
   if (document.visibilityState === 'visible' && authStore.isAuthenticated) {
-    announcementStore.fetchAnnouncements()
+    announcementStore.fetchAnnouncements(announcementFetchOptions())
   }
 }
 
@@ -81,10 +85,10 @@ watch(
       // Announcements: new login vs page refresh restore
       if (oldValue === false) {
         // New login: delay 3s then force fetch
-        setTimeout(() => announcementStore.fetchAnnouncements(true), 3000)
+        setTimeout(() => announcementStore.fetchAnnouncements(announcementFetchOptions(true)), 3000)
       } else {
         // Page refresh restore (oldValue was undefined)
-        announcementStore.fetchAnnouncements()
+        announcementStore.fetchAnnouncements(announcementFetchOptions())
       }
 
       // Register visibility change listener
@@ -103,7 +107,7 @@ watch(
 // Route change trigger (throttled by store)
 router.afterEach(() => {
   if (authStore.isAuthenticated) {
-    announcementStore.fetchAnnouncements()
+    announcementStore.fetchAnnouncements(announcementFetchOptions())
   }
 })
 

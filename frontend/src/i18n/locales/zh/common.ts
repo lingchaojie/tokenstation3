@@ -166,6 +166,7 @@ export default {
     overview: '概览',
     dailyCheckIn: '签到领Token',
     announcements: '公告',
+    announcementSettings: '公告设置',
     apiKeys: 'API 密钥',
     batchImage: '批量生图',
     usage: '使用记录',
