@@ -13,6 +13,7 @@ export default {
         textEn: 'English',
         preview: 'Banner preview',
         saved: 'Rolling announcement settings saved',
+        liveRefreshFailed: 'Rolling announcement settings were saved, but the live banner refresh failed. Try again later or reload the page.',
         loadFailed: 'Failed to load rolling announcement settings',
         saveFailed: 'Failed to save rolling announcement settings',
         validationInterval: 'The interval must be between 1 and 60 seconds',

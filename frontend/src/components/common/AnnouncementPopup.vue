@@ -10,6 +10,8 @@
         class="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm sm:p-6"
       >
         <div
+          ref="dialogRef"
+          tabindex="-1"
           class="flex max-h-[calc(100vh-2rem)] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-dark-700 dark:bg-dark-800 sm:max-h-[84vh]"
           @click.stop
         >
@@ -113,13 +115,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
 import { useAnnouncementStore } from '@/stores/announcements'
 import { useAppStore } from '@/stores/app'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import { createBodyScrollLock } from '@/utils/bodyScrollLock'
 import { formatRelativeWithDateTime } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
@@ -144,6 +147,7 @@ const { t } = useI18n()
 const announcementStore = useAnnouncementStore()
 const appStore = useAppStore()
 const bodyScrollLock = createBodyScrollLock()
+const dialogRef = ref<HTMLElement | null>(null)
 const displayedAnnouncement = computed(() => (
   props.preview ? props.announcement : announcementStore.currentPopup
 ))
@@ -155,6 +159,9 @@ const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', {
 const position = computed(() => props.preview ? 1 : announcementStore.popupPosition)
 const total = computed(() => props.preview ? 1 : announcementStore.popupTotal)
 const isLast = computed(() => position.value >= total.value)
+const ownsBodyScrollLock = computed(() => props.preview
+  ? Boolean(props.announcement)
+  : Boolean(announcementStore.currentPopup) || announcementStore.popupTotal > 0)
 
 marked.setOptions({
   breaks: true,
@@ -179,10 +186,16 @@ async function handleAdvance() {
   if (!saved) appStore.showError(t('announcements.readSaveFailed'))
 }
 
+useDialogFocus({
+  dialogRef,
+  isOpen: () => Boolean(displayedAnnouncement.value),
+  onEscape: handleClose,
+})
+
 watch(
-  displayedAnnouncement,
-  (popup) => {
-    if (popup) {
+  ownsBodyScrollLock,
+  (ownsLock) => {
+    if (ownsLock) {
       bodyScrollLock.acquire()
     } else {
       bodyScrollLock.release()

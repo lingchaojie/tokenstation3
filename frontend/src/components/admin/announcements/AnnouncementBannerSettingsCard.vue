@@ -62,6 +62,17 @@ async function load() {
   }
 }
 
+async function refreshLiveSettings(): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      if (await appStore.fetchPublicSettings(true)) return true
+    } catch {
+      // The store normally resolves null; keep the retry boundary defensive for compatible callers.
+    }
+  }
+  return false
+}
+
 async function save() {
   if (saving.value) return
 
@@ -70,15 +81,22 @@ async function save() {
 
   saving.value = true
   try {
-    const updated = await adminAPI.settings.updateSettings({
-      announcement_banners: banners.value.map((item) => ({ ...item })),
-      announcement_banner_interval_ms: Math.round(intervalSeconds.value * 1000),
-    })
-    banners.value = (updated.announcement_banners ?? banners.value).map((item) => ({ ...item }))
-    await appStore.fetchPublicSettings(true)
-    appStore.showSuccess(t('admin.settings.announcementBanners.saved'))
-  } catch {
-    appStore.showError(t('admin.settings.announcementBanners.saveFailed'))
+    try {
+      const updated = await adminAPI.settings.updateSettings({
+        announcement_banners: banners.value.map((item) => ({ ...item })),
+        announcement_banner_interval_ms: Math.round(intervalSeconds.value * 1000),
+      })
+      banners.value = (updated.announcement_banners ?? banners.value).map((item) => ({ ...item }))
+    } catch {
+      appStore.showError(t('admin.settings.announcementBanners.saveFailed'))
+      return
+    }
+
+    if (await refreshLiveSettings()) {
+      appStore.showSuccess(t('admin.settings.announcementBanners.saved'))
+    } else {
+      appStore.showWarning(t('admin.settings.announcementBanners.liveRefreshFailed'))
+    }
   } finally {
     saving.value = false
   }

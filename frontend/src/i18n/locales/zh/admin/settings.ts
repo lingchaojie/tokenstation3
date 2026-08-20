@@ -13,6 +13,7 @@ export default {
         textEn: 'English',
         preview: '滚动条预览',
         saved: '滚动公告设置已保存',
+        liveRefreshFailed: '滚动公告设置已保存，但实时公告刷新失败，请稍后重试或刷新页面',
         loadFailed: '加载滚动公告设置失败',
         saveFailed: '保存滚动公告设置失败',
         validationInterval: '切换间隔必须为 1–60 秒',
