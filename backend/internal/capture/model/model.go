@@ -36,6 +36,7 @@ type Begin struct {
 	CaptureID        uuid.UUID     `json:"capture_id"`
 	CapturedAt       time.Time     `json:"captured_at"`
 	RequestID        string        `json:"request_id"`
+	SessionID        string        `json:"session_id,omitempty"`
 	Platform         string        `json:"platform"`
 	RequestedModel   string        `json:"requested_model"`
 	UpstreamModel    string        `json:"upstream_model"`

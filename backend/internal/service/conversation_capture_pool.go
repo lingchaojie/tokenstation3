@@ -268,6 +268,7 @@ func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
 		CaptureID:        uuid.New(),
 		CapturedAt:       record.CapturedAt,
 		RequestID:        record.RequestID,
+		SessionID:        record.SessionID,
 		Platform:         record.Platform,
 		RequestedModel:   record.RequestedModel,
 		UpstreamModel:    record.UpstreamModel,

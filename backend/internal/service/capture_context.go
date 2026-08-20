@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +21,11 @@ const captureRequestedModelContextKey = "gateway_capture_requested_model"
 const captureAttemptRequestContextKey = "gateway_capture_attempt"
 
 type captureRequestScope struct {
-	policy   CompiledCapturePolicy
-	userID   int64
-	groupID  int64
-	hasGroup bool
+	policy    CompiledCapturePolicy
+	userID    int64
+	groupID   int64
+	hasGroup  bool
+	sessionID string
 }
 
 type captureAttemptRequestSlot struct {
@@ -125,6 +129,50 @@ func captureRequestedModel(c *gin.Context) string {
 	value, _ := c.Get(captureRequestedModelContextKey)
 	model, _ := value.(string)
 	return strings.TrimSpace(model)
+}
+
+func captureSessionID(c *gin.Context) string {
+	scope, ok := captureScopeFrom(c)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(scope.sessionID)
+}
+
+// SetCaptureSessionID attaches a privacy-safe, stable conversation identity to
+// subsequent wire attempts. Per-turn routing fallbacks are deliberately
+// excluded because they change as the message history grows.
+func SetCaptureSessionID(c *gin.Context, parsed *ParsedRequest, sessionHash string) {
+	scope, ok := captureScopeFrom(c)
+	if !ok {
+		return
+	}
+	scope.sessionID = ""
+	sessionHash = strings.TrimSpace(sessionHash)
+	if sessionHash == "" || !captureSessionHashIsStable(parsed) {
+		return
+	}
+	payload := "capture-session-v1\x00" + strconv.FormatInt(scope.userID, 10) + "\x00" + sessionHash
+	digest := sha256.Sum256([]byte(payload))
+	scope.sessionID = "cap_session_" + hex.EncodeToString(digest[:])
+}
+
+func captureSessionHashIsStable(parsed *ParsedRequest) bool {
+	if parsed == nil {
+		return false
+	}
+	if strings.TrimSpace(parsed.ExplicitSessionID) != "" || strings.TrimSpace(parsed.BodySessionID) != "" {
+		return true
+	}
+	if metadata := ParseMetadataUserID(parsed.MetadataUserID); metadata != nil && strings.TrimSpace(metadata.SessionID) != "" {
+		return true
+	}
+	group := parsed.Group
+	kiroAutoSticky := group != nil && (group.HasMixedKiroAutoStickyAccount || group.EffectiveKiroAutoStickyEnabled())
+	if !kiroAutoSticky {
+		return false
+	}
+	return extractTextFromSystemRaw(parsed.SystemRaw()) != "" || extractFirstUserMessageTextFromRaw(parsed.MessagesRaw()) != ""
 }
 
 // CaptureDecisionFor makes the final platform/outcome decision without any DB
@@ -476,6 +524,7 @@ func beginCaptureAttemptForWireRequest(
 		CaptureID:        uuid.New(),
 		CapturedAt:       time.Now().UTC(),
 		RequestID:        CaptureRequestID(""),
+		SessionID:        captureSessionID(c),
 		Platform:         strings.ToLower(strings.TrimSpace(platform)),
 		RequestedModel:   captureRequestedModel(c),
 		UpstreamModel:    upstreamModel,

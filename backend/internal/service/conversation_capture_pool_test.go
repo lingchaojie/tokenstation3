@@ -138,6 +138,7 @@ func (a *recordSinkAttempt) recordLocked() *CaptureRecord {
 		CapturedAt:          a.begin.CapturedAt,
 		Platform:            a.begin.Platform,
 		RequestID:           a.begin.RequestID,
+		SessionID:           a.begin.SessionID,
 		RequestedModel:      a.begin.RequestedModel,
 		UpstreamModel:       a.begin.UpstreamModel,
 		UpstreamEndpoint:    a.begin.UpstreamEndpoint,
@@ -378,6 +379,29 @@ func TestConversationCapturePoolBeginsTransportAttemptSynchronously(t *testing.T
 	require.True(t, attempt.Finalize(model.Final{HTTPStatus: 200, ResponseComplete: true}))
 	require.True(t, attempt.Commit())
 	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+}
+
+func TestConversationCapturePoolSubmitPreservesSessionID(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	pool.Submit(&CaptureRecord{SessionID: "capture-session", CapturedAt: time.Now().UTC()})
+
+	require.Equal(t, 1, transport.Begins())
+	require.Equal(t, "capture-session", transport.Attempts()[0].begin.SessionID)
+}
+
+func TestRecordSinkCompatibilityPreservesSessionID(t *testing.T) {
+	records := make(chan *CaptureRecord, 1)
+	pool := newConversationCapturePoolForRecords(records)
+	begin := testCaptureBegin()
+	begin.SessionID = "capture-session"
+	attempt, ok := pool.Begin(context.Background(), begin)
+	require.True(t, ok)
+	require.True(t, attempt.Finalize(model.Final{HTTPStatus: 200, ResponseComplete: true}))
+	require.True(t, attempt.Commit())
+
+	require.Equal(t, "capture-session", (<-records).SessionID)
 }
 
 func TestConversationCapturePoolBeginFailureIsAttemptedOnceWithoutRetry(t *testing.T) {

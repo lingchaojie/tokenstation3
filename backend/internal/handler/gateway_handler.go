@@ -340,6 +340,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 	parsedReq.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
+	service.SetCaptureSessionID(c, parsedReq, sessionHash)
 
 	// [DEBUG-STICKY] 打印会话 hash 生成结果
 	reqLog.Info("sticky.session_hash_generated",
@@ -2149,6 +2150,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 	parsedReq.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
+	service.SetCaptureSessionID(c, parsedReq, sessionHash)
 
 	// 选择支持该模型的账号
 	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)

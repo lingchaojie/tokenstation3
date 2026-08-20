@@ -503,6 +503,47 @@ func TestCaptureOutboundRequestStreamsExistingWireSliceAndSanitizedHeaders(t *te
 	require.Same(t, captureAttemptForRequest(c), captureAttemptForRequest(c))
 }
 
+func TestCaptureOutboundRequestUsesOpaqueStableSessionIdentity(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+
+	SetCaptureSessionID(c, &ParsedRequest{ExplicitSessionID: "client-visible-session"}, "routing-session")
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	svc := &GatewayService{cfg: captureEnabledConfigForTest(32 << 20), capturePool: pool}
+	svc.captureOutboundRequest(c, &Account{Platform: PlatformAnthropic}, req, []byte(`{"model":"mapped-model"}`))
+
+	require.Equal(t, 1, transport.Begins())
+	require.Equal(t, "cap_session_d16d30ff4a07509bdf3ef9511aab8d06f07f8314efe7c5da7ac8490b4084e20b", transport.Attempts()[0].begin.SessionID)
+	require.NotContains(t, transport.Attempts()[0].begin.SessionID, "client-visible-session")
+}
+
+func TestCaptureOutboundRequestDoesNotPersistUnstableAnthropicFallbackSession(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+
+	SetCaptureSessionID(c, &ParsedRequest{}, "per-turn-routing-hash")
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.test/v1/messages", nil)
+	svc := &GatewayService{cfg: captureEnabledConfigForTest(32 << 20), capturePool: pool}
+	svc.captureOutboundRequest(c, &Account{Platform: PlatformAnthropic}, req, []byte(`{"model":"mapped-model"}`))
+
+	require.Equal(t, 1, transport.Begins())
+	require.Empty(t, transport.Attempts()[0].begin.SessionID)
+}
+
 func TestCaptureOutboundRequestAbortsPriorRetryAttempt(t *testing.T) {
 	transport := &recordingCaptureTransport{}
 	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
