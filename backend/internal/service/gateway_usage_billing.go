@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -621,6 +622,9 @@ type recordUsageOpts struct {
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
 func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInput) error {
+	if input == nil {
+		return ErrUpstreamUsageMissing
+	}
 	return s.recordUsageCore(ctx, &recordUsageCoreInput{
 		Result:             input.Result,
 		APIKey:             input.APIKey,
@@ -638,7 +642,36 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
 		ChannelUsageFields: input.ChannelUsageFields,
-	}, &recordUsageOpts{})
+	}, &recordUsageOpts{}, false)
+}
+
+// ValidateUsagePricing runs the exact cost-resolution prefix used by
+// RecordUsage against an isolated result copy. It performs no billing, quota,
+// usage-log, or last-used writes.
+func (s *GatewayService) ValidateUsagePricing(ctx context.Context, input *RecordUsageInput) error {
+	if input == nil {
+		return ErrUpstreamUsageMissing
+	}
+	cloned := *input
+	cloned.Result = cloneForwardResultForPricing(input.Result)
+	return s.recordUsageCore(ctx, &recordUsageCoreInput{
+		Result:             cloned.Result,
+		APIKey:             cloned.APIKey,
+		User:               cloned.User,
+		Account:            cloned.Account,
+		Subscription:       cloned.Subscription,
+		PricingAt:          cloned.PricingAt,
+		InboundEndpoint:    cloned.InboundEndpoint,
+		UpstreamEndpoint:   cloned.UpstreamEndpoint,
+		UserAgent:          cloned.UserAgent,
+		IPAddress:          cloned.IPAddress,
+		SessionID:          cloned.SessionID,
+		RequestPayloadHash: cloned.RequestPayloadHash,
+		ForceCacheBilling:  cloned.ForceCacheBilling,
+		APIKeyService:      cloned.APIKeyService,
+		QuotaPlatform:      cloned.QuotaPlatform,
+		ChannelUsageFields: cloned.ChannelUsageFields,
+	}, &recordUsageOpts{}, true)
 }
 
 // RecordUsageLongContextInput 记录使用量的输入参数（支持长上下文双倍计费）
@@ -666,6 +699,9 @@ type RecordUsageLongContextInput struct {
 
 // RecordUsageWithLongContext 记录使用量并扣费，支持长上下文双倍计费（用于 Gemini）
 func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *RecordUsageLongContextInput) error {
+	if input == nil {
+		return ErrUpstreamUsageMissing
+	}
 	return s.recordUsageCore(ctx, &recordUsageCoreInput{
 		Result:             input.Result,
 		APIKey:             input.APIKey,
@@ -686,7 +722,53 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 	}, &recordUsageOpts{
 		LongContextThreshold:  input.LongContextThreshold,
 		LongContextMultiplier: input.LongContextMultiplier,
-	})
+	}, false)
+}
+
+// ValidateUsagePricingWithLongContext is the read-only pricing preflight for
+// the Gemini long-context billing path.
+func (s *GatewayService) ValidateUsagePricingWithLongContext(ctx context.Context, input *RecordUsageLongContextInput) error {
+	if input == nil {
+		return ErrUpstreamUsageMissing
+	}
+	cloned := *input
+	cloned.Result = cloneForwardResultForPricing(input.Result)
+	return s.recordUsageCore(ctx, &recordUsageCoreInput{
+		Result:             cloned.Result,
+		APIKey:             cloned.APIKey,
+		User:               cloned.User,
+		Account:            cloned.Account,
+		Subscription:       cloned.Subscription,
+		PricingAt:          cloned.PricingAt,
+		InboundEndpoint:    cloned.InboundEndpoint,
+		UpstreamEndpoint:   cloned.UpstreamEndpoint,
+		UserAgent:          cloned.UserAgent,
+		IPAddress:          cloned.IPAddress,
+		SessionID:          cloned.SessionID,
+		RequestPayloadHash: cloned.RequestPayloadHash,
+		ForceCacheBilling:  cloned.ForceCacheBilling,
+		APIKeyService:      cloned.APIKeyService,
+		QuotaPlatform:      cloned.QuotaPlatform,
+		ChannelUsageFields: cloned.ChannelUsageFields,
+	}, &recordUsageOpts{
+		LongContextThreshold:  cloned.LongContextThreshold,
+		LongContextMultiplier: cloned.LongContextMultiplier,
+	}, true)
+}
+
+func cloneForwardResultForPricing(result *ForwardResult) *ForwardResult {
+	if result == nil {
+		return nil
+	}
+	cloned := *result
+	cloned.ImageOutputSizes = append([]string(nil), result.ImageOutputSizes...)
+	if result.ImageSizeBreakdown != nil {
+		cloned.ImageSizeBreakdown = make(map[string]int, len(result.ImageSizeBreakdown))
+		for size, count := range result.ImageSizeBreakdown {
+			cloned.ImageSizeBreakdown[size] = count
+		}
+	}
+	return &cloned
 }
 
 // recordUsageCoreInput 是 recordUsageCore 的公共输入字段，从两种输入结构体中提取。
@@ -711,8 +793,14 @@ type recordUsageCoreInput struct {
 
 // recordUsageCore 是 RecordUsage 和 RecordUsageWithLongContext 的统一实现。
 // LongContextThreshold > 0 时 Token 计费回退走 CalculateCostWithLongContext。
-func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput, opts *recordUsageOpts) error {
+func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput, opts *recordUsageOpts, validateOnly bool) error {
+	if input == nil || input.Result == nil {
+		return ErrUpstreamUsageMissing
+	}
 	result := input.Result
+	if !result.HasBillableUsage() || isKiroRelayCreditsOnlyUsage(input.Account, result) {
+		return ErrUpstreamUsageMissing
+	}
 	apiKey := input.APIKey
 	user := input.User
 	account := input.Account
@@ -774,7 +862,13 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	opts.IsKiroAccount = account != nil && account.Platform == PlatformKiro
-	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, opts)
+	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, pricingAt, opts)
+	if cost == nil {
+		return fmt.Errorf("calculate usage cost failed for billing model %q", billingModel)
+	}
+	if validateOnly {
+		return nil
+	}
 	// 判断计费方式：订阅模式 vs 余额模式
 	isSubscriptionBilling := subscription != nil
 	billingType := BillingTypeBalance
@@ -850,22 +944,23 @@ func (s *GatewayService) calculateRecordUsageCost(
 	billingModel string,
 	multiplier float64,
 	imageMultiplier float64,
+	pricingAt time.Time,
 	opts *recordUsageOpts,
 ) *CostBreakdown {
 	// 图片生成：渠道定价为 token 计费时走 token 路径，否则走图片计费
 	if result.ImageCount > 0 {
 		if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil && resolved.Mode == BillingModeToken {
-			return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+			return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, pricingAt, opts)
 		}
 		return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
 	}
 
-	return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, pricingAt, opts)
 }
 
 // billableModelWithFallback 在选定计费模型（可能是未定价的映射名）
 // 查不到任何价格（渠道价与全局价均无）时，按序回退到实际转发的具体模型，避免静默 $0 计费。
-// 所有候选都无价时保持原值，走既有的 warn + 零成本路径。
+// 所有候选都无价时保持原值，随后由计费阶段 fail closed。
 func (s *GatewayService) billableModelWithFallback(ctx context.Context, apiKey *APIKey, billingModel string, fallbacks ...string) string {
 	if s.hasResolvableTokenPricing(ctx, billingModel, apiKey) {
 		return billingModel
@@ -888,8 +983,8 @@ func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model st
 	if strings.TrimSpace(model) == "" {
 		return false
 	}
-	if s.resolveChannelPricing(ctx, model, apiKey) != nil {
-		return true
+	if resolved := s.resolveChannelPricing(ctx, model, apiKey); resolved != nil {
+		return resolved.HasResolvablePricing()
 	}
 	if s.billingService == nil {
 		return false
@@ -927,8 +1022,8 @@ func (s *GatewayService) resolveChannelPricing(ctx context.Context, billingModel
 		return nil
 	}
 	gid := apiKey.Group.ID
-	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid})
-	if resolved.Source == PricingSourceChannel {
+	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid, Group: apiKey.Group})
+	if resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel {
 		return resolved
 	}
 	return nil
@@ -958,6 +1053,7 @@ func (s *GatewayService) calculateImageCost(
 			Ctx:            ctx,
 			Model:          billingModel,
 			GroupID:        &gid,
+			Group:          apiKey.Group,
 			Tokens:         tokens,
 			RequestCount:   result.ImageCount,
 			SizeTier:       sizeTier,
@@ -967,7 +1063,7 @@ func (s *GatewayService) calculateImageCost(
 		})
 		if err != nil {
 			logger.LegacyPrintf("service.gateway", "Calculate image token cost failed: %v", err)
-			return &CostBreakdown{ActualCost: 0}
+			return nil
 		}
 		return cost
 	}
@@ -982,6 +1078,7 @@ func (s *GatewayService) calculateTokenCost(
 	apiKey *APIKey,
 	billingModel string,
 	multiplier float64,
+	pricingAt time.Time,
 	opts *recordUsageOpts,
 ) *CostBreakdown {
 	tokens := UsageTokens{
@@ -1004,15 +1101,25 @@ func (s *GatewayService) calculateTokenCost(
 			Ctx:            ctx,
 			Model:          billingModel,
 			GroupID:        &gid,
+			Group:          apiKey.Group,
 			Tokens:         tokens,
 			RequestCount:   1,
 			RateMultiplier: multiplier,
+			PricingAt:      pricingAt,
+			ServiceTier:    optionalStringValue(result.ServiceTier),
 			Resolver:       s.resolver,
 			Resolved:       resolved,
 		})
-	} else if opts.LongContextThreshold > 0 {
+	} else if opts.LongContextThreshold > 0 && (apiKey.Group == nil || apiKey.Group.LongContextPricingEnabled) {
 		// 长上下文双倍计费（如 Gemini 200K 阈值）
 		cost, err = s.billingService.CalculateCostWithLongContext(billingModel, tokens, multiplier, opts.LongContextThreshold, opts.LongContextMultiplier)
+	} else if s.resolver != nil && apiKey.Group != nil {
+		gid := apiKey.Group.ID
+		cost, err = s.billingService.CalculateCostUnified(CostInput{
+			Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
+			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: pricingAt,
+			ServiceTier: optionalStringValue(result.ServiceTier), Resolver: s.resolver,
+		})
 	} else {
 		cost, err = s.billingService.CalculateCost(billingModel, tokens, multiplier)
 	}
@@ -1024,7 +1131,7 @@ func (s *GatewayService) calculateTokenCost(
 				return fallback
 			}
 		}
-		return &CostBreakdown{ActualCost: 0}
+		return nil
 	}
 	return cost
 }
@@ -1069,6 +1176,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
 		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
 		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ServiceTier:           result.ServiceTier,
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),

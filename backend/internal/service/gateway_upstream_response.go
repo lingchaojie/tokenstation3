@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -893,7 +892,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	semanticOutput := false
 	sawTerminalEvent := false
 	providerPayloadObserved := false
-	providerPhase := anthropicProviderAwaitingStart
 	kiroTranslatedBody, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
 	_, legacyRawProviderCapture := resp.Body.(*captureBodyReadCloser)
 	_, streamingAttemptCapture := resp.Body.(*captureResponseReader)
@@ -1079,10 +1077,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if dataLine == "[DONE]" {
-			if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
-				return nil, dataLine, nil, false, errors.New("anthropic [DONE] arrived before a valid message_start")
-			}
-			providerPhase.state = anthropicProviderTerminated.state
 			sawTerminalEvent = true
 			block := ""
 			if eventName != "" {
@@ -1092,11 +1086,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return []string{block}, dataLine, nil, false, nil
 		}
 
-		eventType, err := validateAnthropicProviderJSONEvent(&providerPhase, eventName, []byte(dataLine))
-		if err != nil {
-			return nil, dataLine, nil, false, err
-		}
 		event := gjson.Parse(dataLine)
+		eventType := event.Get("type").String()
 		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(dataLine)
 		eventIndex := event.Get("index")
 		hasEventIndex := eventIndex.Exists() && nonNegativeIntegerGJSON(eventIndex)
@@ -1293,28 +1284,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				for _, pendingLine := range pendingEventLines {
-					if strings.TrimSpace(pendingLine) != "" && !strings.HasPrefix(strings.TrimSpace(pendingLine), ":") {
-						tailErr := errors.New("upstream stream ended with an incomplete SSE event")
-						if outputCommitted || semanticOutput {
-							return streamResult(), tailErr
-						}
-						return nil, preOutputFailover(tailErr.Error(), true)
-					}
-				}
+				pendingEventLines = nil
 				// 上游完成，返回结果
-				if !sawTerminalEvent {
-					if !semanticOutput {
-						return nil, preOutputFailover("upstream stream ended before semantic output", true)
-					}
-					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !providerPayloadObserved {
-					if semanticOutput {
-						return streamResult(), fmt.Errorf("stream usage incomplete: missing valid message_start")
-					}
-					return nil, preOutputFailover("upstream stream ended without a valid message_start", true)
-				}
 				return streamResult(), nil
 			}
 			if ev.err != nil {
@@ -1373,9 +1344,25 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					}
 					var sseErr *sseStreamErrorEventError
 					if errors.As(err, &sseErr) {
-						failure := newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
-						failure.ResponseBody = []byte(sseErr.RawData)
-						return nil, failure
+						// Match upstream's commit boundary: protocol/preamble bytes that
+						// preceded event:error are already part of the downstream stream.
+						// The caller classifies overload as 529 only when nothing was sent.
+						if !outputCommitted && !clientDisconnected && stagedOutput.Buffered() > 0 {
+							_, commitErr := stagedOutput.CommitTo(w)
+							outputCommitted = true
+							deliveryErr, cleanupErr := splitOpenAIFirstOutputCommitError(commitErr)
+							if cleanupErr != nil {
+								logger.LegacyPrintf("service.gateway", "Anthropic first-output staging cleanup failed before SSE error: account=%d error=%v", account.ID, cleanupErr)
+							}
+							if deliveryErr != nil {
+								clientDisconnected = true
+								return streamResult(), errors.Join(err, deliveryErr)
+							}
+							flusher.Flush()
+							lastDataAt = time.Now()
+							resetKeepaliveTimer()
+						}
+						return nil, sseErr
 					}
 					return nil, preOutputFailover(sanitizeStreamError(err), true)
 				}
@@ -1465,76 +1452,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 }
 
-func validAnthropicMessageStartPayload(data []byte) bool {
-	if !gjson.ValidBytes(data) || strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "message_start" {
-		return false
-	}
-	message := gjson.GetBytes(data, "message")
-	content := message.Get("content")
-	if !message.IsObject() {
-		return false
-	}
-	if strings.TrimSpace(message.Get("type").String()) != "message" ||
-		strings.TrimSpace(message.Get("role").String()) != "assistant" ||
-		!content.IsArray() || gjsonCollectionHasValues(content) {
-		return false
-	}
-	for _, field := range []string{"id", "model"} {
-		value := message.Get(field)
-		if value.Exists() && (value.Type != gjson.String || len(value.String()) > maxAnthropicProviderRetainedStringBytes) {
-			return false
-		}
-	}
-	if stopReason := message.Get("stop_reason"); stopReason.Exists() && stopReason.Type != gjson.Null {
-		return false
-	}
-	if value := message.Get("stop_sequence"); value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
-		return false
-	}
-	usage := message.Get("usage")
-	return !usage.Exists() || validAnthropicUsageShape(usage)
-}
-
-func validAnthropicUsageShape(usage gjson.Result) bool {
-	if !usage.IsObject() {
-		return false
-	}
-	for _, field := range []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "cached_tokens"} {
-		value := usage.Get(field)
-		if value.Exists() && !nonNegativeIntegerGJSON(value) {
-			return false
-		}
-	}
-	cacheCreation := usage.Get("cache_creation")
-	if cacheCreation.Exists() {
-		if !cacheCreation.IsObject() {
-			return false
-		}
-		for _, field := range []string{"ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"} {
-			if value := cacheCreation.Get(field); value.Exists() && !nonNegativeIntegerGJSON(value) {
-				return false
-			}
-		}
-		fiveMinute := cacheCreation.Get("ephemeral_5m_input_tokens")
-		oneHour := cacheCreation.Get("ephemeral_1h_input_tokens")
-		breakdownTotal, ok := checkedAddNonNegativeGJSON(fiveMinute, oneHour)
-		if !ok {
-			return false
-		}
-		aggregate := usage.Get("cache_creation_input_tokens")
-		if aggregate.Exists() && breakdownTotal > aggregate.Int() {
-			return false
-		}
-	}
-	if credits := usage.Get("_sub2api_kiro_credits"); credits.Exists() && !nonNegativeFiniteGJSONNumber(credits) {
-		return false
-	}
-	if finalUsage := usage.Get(kiroFinalUsageSSEField); finalUsage.Exists() && finalUsage.Type != gjson.True && finalUsage.Type != gjson.False {
-		return false
-	}
-	return true
-}
-
 func nonNegativeIntegerGJSON(value gjson.Result) bool {
 	if value.Type != gjson.Number {
 		return false
@@ -1555,399 +1472,6 @@ func checkedAddNonNegativeGJSON(left, right gjson.Result) (int64, bool) {
 		return 0, false
 	}
 	return leftValue + rightValue, true
-}
-
-func nonNegativeFiniteGJSONNumber(value gjson.Result) bool {
-	if value.Type != gjson.Number {
-		return false
-	}
-	number, err := strconv.ParseFloat(strings.TrimSpace(value.Raw), 64)
-	return err == nil && number >= 0 && !math.IsInf(number, 0) && !math.IsNaN(number)
-}
-
-type anthropicProviderStreamPhase struct {
-	state       uint8
-	activeIndex int64
-	activeType  string
-	nextIndex   int64
-	hasActive   bool
-	finalDelta  bool
-	toolInput   strings.Builder
-	toolDelta   bool
-	seenToolIDs map[string]struct{}
-}
-
-const (
-	anthropicProviderToolInputMaxBytes      = 8 * 1024 * 1024
-	maxAnthropicProviderContentBlocks       = 1024
-	maxAnthropicProviderRetainedStringBytes = 1024
-)
-
-var (
-	anthropicProviderAwaitingStart = anthropicProviderStreamPhase{state: 0}
-	anthropicProviderStarted       = anthropicProviderStreamPhase{state: 1}
-	anthropicProviderTerminated    = anthropicProviderStreamPhase{state: 2}
-)
-
-func knownAnthropicProviderEvent(eventType string) bool {
-	switch strings.TrimSpace(eventType) {
-	case "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop", "error":
-		return true
-	default:
-		return false
-	}
-}
-
-// validateAnthropicProviderEvent enforces the provider protocol order before
-// any staged bytes become client-visible. Unknown extension events remain
-// ignorable, but declared Anthropic events must decode consistently and may
-// not deliver content or a terminal marker before a strict message_start.
-func validateAnthropicProviderEvent(phase *anthropicProviderStreamPhase, declaredType string, payload []byte, decodedType string) error {
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(payload, providerJSONAnthropicEvent); err != nil {
-		return fmt.Errorf("invalid Anthropic provider JSON payload: %w", err)
-	}
-	declaredType = strings.TrimSpace(declaredType)
-	decodedType = strings.TrimSpace(decodedType)
-	payloadType := gjson.GetBytes(payload, "type")
-	if payloadType.Exists() && payloadType.Type != gjson.String {
-		return errors.New("anthropic provider event type was not a string")
-	}
-	if knownAnthropicProviderEvent(declaredType) && declaredType != decodedType {
-		return fmt.Errorf("declared Anthropic event %q contained payload type %q", declaredType, decodedType)
-	}
-	if declaredType != "" && decodedType != "" && declaredType != decodedType {
-		return fmt.Errorf("declared Anthropic event %q contained payload type %q", declaredType, decodedType)
-	}
-	if phase == nil {
-		return errors.New("missing Anthropic provider stream phase")
-	}
-	if phase.state == anthropicProviderTerminated.state {
-		return fmt.Errorf("anthropic event %q arrived after message_stop", decodedType)
-	}
-	if phase.finalDelta && decodedType != "message_stop" {
-		return fmt.Errorf("anthropic event %q arrived after terminal message_delta", decodedType)
-	}
-	if !knownAnthropicProviderEvent(decodedType) {
-		if declaredType == "" && decodedType == "" {
-			return errors.New("anthropic provider data had no event type")
-		}
-		return nil
-	}
-	switch decodedType {
-	case "message_start":
-		if phase.state != anthropicProviderAwaitingStart.state || !validAnthropicMessageStartPayload(payload) {
-			return errors.New("invalid or out-of-order Anthropic message_start")
-		}
-		phase.state = anthropicProviderStarted.state
-	case "content_block_start", "content_block_delta", "content_block_stop", "message_delta":
-		if phase.state != anthropicProviderStarted.state {
-			return fmt.Errorf("anthropic event %q arrived before a valid message_start", decodedType)
-		}
-		event := gjson.ParseBytes(payload)
-		if err := validateAnthropicProviderEventShape(event, decodedType); err != nil {
-			return err
-		}
-		index := event.Get("index").Int()
-		switch decodedType {
-		case "content_block_start":
-			if phase.hasActive {
-				return fmt.Errorf("anthropic content_block_start index %d arrived before index %d stopped", index, phase.activeIndex)
-			}
-			if index != phase.nextIndex {
-				return fmt.Errorf("anthropic content_block_start index %d arrived while index %d was expected", index, phase.nextIndex)
-			}
-			if phase.nextIndex >= maxAnthropicProviderContentBlocks {
-				return errors.New("anthropic provider content block state limit exceeded")
-			}
-			activeType := event.Get("content_block.type").String()
-			if len(activeType) > maxAnthropicProviderRetainedStringBytes {
-				return errors.New("anthropic provider retained string limit exceeded")
-			}
-			if activeType == "tool_use" || activeType == "server_tool_use" {
-				toolID := strings.TrimSpace(event.Get("content_block.id").String())
-				if phase.seenToolIDs == nil {
-					phase.seenToolIDs = make(map[string]struct{})
-				}
-				if _, duplicate := phase.seenToolIDs[toolID]; duplicate {
-					return fmt.Errorf("anthropic provider duplicated tool id %q", toolID)
-				}
-				phase.seenToolIDs[toolID] = struct{}{}
-			}
-			phase.activeIndex, phase.activeType, phase.hasActive = index, activeType, true
-			phase.toolInput.Reset()
-			phase.toolDelta = false
-			phase.nextIndex++
-		case "content_block_delta":
-			if !phase.hasActive || phase.activeIndex != index {
-				return fmt.Errorf("anthropic content_block_delta index %d had no matching active block", index)
-			}
-			deltaType := event.Get("delta.type").String()
-			if err := validateAnthropicDeltaForBlockType(phase.activeType, deltaType); err != nil {
-				return err
-			}
-			if deltaType == "input_json_delta" {
-				fragment := event.Get("delta.partial_json").String()
-				if len(fragment) > anthropicProviderToolInputMaxBytes-phase.toolInput.Len() {
-					return errors.New("anthropic tool input exceeded bounded aggregate limit")
-				}
-				_, _ = phase.toolInput.WriteString(fragment)
-				phase.toolDelta = true
-			}
-		case "content_block_stop":
-			if !phase.hasActive || phase.activeIndex != index {
-				return fmt.Errorf("anthropic content_block_stop index %d had no matching active block", index)
-			}
-			if (phase.activeType == "tool_use" || phase.activeType == "server_tool_use") && phase.toolDelta && !validJSONObjectBytes([]byte(phase.toolInput.String())) {
-				return errors.New("anthropic tool input ended with malformed JSON object")
-			}
-			phase.hasActive = false
-			phase.activeType = ""
-			phase.toolInput.Reset()
-			phase.toolDelta = false
-		case "message_delta":
-			if phase.hasActive {
-				return fmt.Errorf("anthropic message_delta arrived before content block %d stopped", phase.activeIndex)
-			}
-			phase.finalDelta = true
-		}
-	case "message_stop":
-		if phase.state != anthropicProviderStarted.state {
-			return errors.New("anthropic message_stop arrived before a valid message_start")
-		}
-		if phase.hasActive {
-			return fmt.Errorf("anthropic message_stop arrived before content block %d stopped", phase.activeIndex)
-		}
-		if !phase.finalDelta {
-			return errors.New("anthropic message_stop arrived before terminal message_delta")
-		}
-		phase.state = anthropicProviderTerminated.state
-	case "error":
-		return errors.New("anthropic provider returned an error event")
-	}
-	return nil
-}
-
-func validateAnthropicProviderJSONEvent(phase *anthropicProviderStreamPhase, declaredType string, payload []byte) (string, error) {
-	if !gjson.ValidBytes(payload) {
-		return "", fmt.Errorf("invalid JSON for Anthropic event %q", strings.TrimSpace(declaredType))
-	}
-	decodedType := gjson.GetBytes(payload, "type").String()
-	if err := validateAnthropicProviderEvent(phase, declaredType, payload, decodedType); err != nil {
-		return decodedType, err
-	}
-	return decodedType, nil
-}
-
-func validateAnthropicDeltaForBlockType(blockType, deltaType string) error {
-	allowed := false
-	switch deltaType {
-	case "text_delta", "citations_delta":
-		allowed = blockType == "text"
-	case "thinking_delta", "signature_delta":
-		allowed = blockType == "thinking"
-	case "input_json_delta":
-		allowed = blockType == "tool_use" || blockType == "server_tool_use"
-	default:
-		// Unknown non-empty delta types remain forward-compatible for future
-		// block kinds. Known delta kinds must never cross block-type boundaries.
-		return nil
-	}
-	if !allowed {
-		return fmt.Errorf("anthropic %s was invalid for active %s content block", deltaType, blockType)
-	}
-	return nil
-}
-
-func validJSONObjectBytes(data []byte) bool {
-	return json.Valid(data) && gjson.ParseBytes(data).IsObject()
-}
-
-func validateAnthropicProviderEventShape(event gjson.Result, eventType string) error {
-	index := event.Get("index")
-	validIndex := index.Exists() && nonNegativeIntegerGJSON(index)
-	switch eventType {
-	case "content_block_start":
-		block := event.Get("content_block")
-		if !validIndex || !validAnthropicStreamContentBlockStart(block) {
-			return errors.New("invalid Anthropic content_block_start")
-		}
-	case "content_block_delta":
-		delta := event.Get("delta")
-		if !validIndex || !delta.IsObject() {
-			return errors.New("invalid Anthropic content_block_delta")
-		}
-		deltaTypeValue := delta.Get("type")
-		if deltaTypeValue.Type != gjson.String {
-			return errors.New("invalid Anthropic content_block_delta type")
-		}
-		deltaType := strings.TrimSpace(deltaTypeValue.String())
-		switch deltaType {
-		case "text_delta":
-			if delta.Get("text").Type != gjson.String {
-				return errors.New("invalid Anthropic text_delta")
-			}
-		case "thinking_delta":
-			if delta.Get("thinking").Type != gjson.String {
-				return errors.New("invalid Anthropic thinking_delta")
-			}
-		case "signature_delta":
-			if delta.Get("signature").Type != gjson.String {
-				return errors.New("invalid Anthropic signature_delta")
-			}
-		case "input_json_delta":
-			if delta.Get("partial_json").Type != gjson.String {
-				return errors.New("invalid Anthropic input_json_delta")
-			}
-		case "citations_delta":
-			if !delta.Get("citation").IsObject() {
-				return errors.New("invalid Anthropic citations_delta")
-			}
-		default:
-			if deltaType == "" {
-				return errors.New("invalid Anthropic content_block_delta type")
-			}
-		}
-	case "content_block_stop":
-		if !validIndex {
-			return errors.New("invalid Anthropic content_block_stop")
-		}
-	case "message_delta":
-		delta, usage := event.Get("delta"), event.Get("usage")
-		if delta.Exists() && !delta.IsObject() {
-			return errors.New("invalid Anthropic message_delta delta")
-		}
-		if usage.Exists() && !validAnthropicUsageShape(usage) {
-			return errors.New("invalid Anthropic message_delta usage")
-		}
-		if !delta.IsObject() && !usage.IsObject() {
-			return errors.New("invalid Anthropic message_delta")
-		}
-		stopReason := delta.Get("stop_reason")
-		if stopReason.Type != gjson.String || strings.TrimSpace(stopReason.String()) == "" || len(stopReason.String()) > maxAnthropicProviderRetainedStringBytes {
-			return errors.New("invalid Anthropic message_delta stop_reason")
-		}
-		if value := delta.Get("stop_sequence"); value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
-			return errors.New("invalid Anthropic message_delta stop_sequence")
-		}
-	}
-	return nil
-}
-
-func validAnthropicStreamContentBlockStart(block gjson.Result) bool {
-	if !block.IsObject() {
-		return false
-	}
-	blockTypeValue := block.Get("type")
-	if blockTypeValue.Type != gjson.String {
-		return false
-	}
-	blockType := strings.TrimSpace(blockTypeValue.String())
-	if len(blockType) > maxAnthropicProviderRetainedStringBytes {
-		return false
-	}
-	switch blockType {
-	case "text":
-		return block.Get("text").Type == gjson.String
-	case "thinking":
-		return block.Get("thinking").Type == gjson.String
-	case "redacted_thinking":
-		return block.Get("data").Type == gjson.String
-	case "tool_use", "server_tool_use":
-		return boundedNonEmptyGJSONString(block.Get("id"), maxAnthropicProviderRetainedStringBytes) &&
-			boundedNonEmptyGJSONString(block.Get("name"), maxAnthropicProviderRetainedStringBytes) &&
-			block.Get("input").IsObject()
-	case "web_search_tool_result":
-		return boundedNonEmptyGJSONString(block.Get("tool_use_id"), maxAnthropicProviderRetainedStringBytes) && block.Get("content").Exists()
-	default:
-		return blockType != ""
-	}
-}
-
-func validAnthropicResponseContent(content gjson.Result) bool {
-	if !content.IsArray() {
-		return false
-	}
-	count := 0
-	valid := true
-	var seenToolIDs map[string]struct{}
-	content.ForEach(func(_, block gjson.Result) bool {
-		count++
-		if count > maxAnthropicProviderContentBlocks {
-			valid = false
-			return false
-		}
-		if !block.IsObject() {
-			valid = false
-			return false
-		}
-		blockTypeValue := block.Get("type")
-		if blockTypeValue.Type != gjson.String {
-			valid = false
-			return false
-		}
-		blockType := strings.TrimSpace(blockTypeValue.String())
-		if len(blockType) > maxAnthropicProviderRetainedStringBytes {
-			valid = false
-			return false
-		}
-		switch blockType {
-		case "text":
-			if block.Get("text").Type != gjson.String {
-				valid = false
-				return false
-			}
-		case "thinking":
-			if block.Get("thinking").Type != gjson.String {
-				valid = false
-				return false
-			}
-		case "redacted_thinking":
-			if block.Get("data").Type != gjson.String {
-				valid = false
-				return false
-			}
-		case "tool_use", "server_tool_use":
-			if !boundedNonEmptyGJSONString(block.Get("id"), maxAnthropicProviderRetainedStringBytes) ||
-				!boundedNonEmptyGJSONString(block.Get("name"), maxAnthropicProviderRetainedStringBytes) ||
-				!block.Get("input").IsObject() {
-				valid = false
-				return false
-			}
-			toolID := strings.TrimSpace(block.Get("id").String())
-			if seenToolIDs == nil {
-				seenToolIDs = make(map[string]struct{})
-			}
-			if _, duplicate := seenToolIDs[toolID]; duplicate {
-				valid = false
-				return false
-			}
-			seenToolIDs[toolID] = struct{}{}
-		case "web_search_tool_result":
-			if !boundedNonEmptyGJSONString(block.Get("tool_use_id"), maxAnthropicProviderRetainedStringBytes) || !block.Get("content").Exists() {
-				valid = false
-				return false
-			}
-		default:
-			if blockType == "" {
-				valid = false
-				return false
-			}
-		}
-		return true
-	})
-	return valid
-}
-
-func nonEmptyGJSONString(value gjson.Result) bool {
-	return value.Type == gjson.String && strings.TrimSpace(value.String()) != ""
-}
-
-func boundedNonEmptyGJSONString(value gjson.Result, maxBytes int) bool {
-	if value.Type != gjson.String {
-		return false
-	}
-	text := strings.TrimSpace(value.String())
-	return text != "" && len(text) <= maxBytes
 }
 
 func (s *GatewayService) parseSSEUsage(data string, usage *ClaudeUsage) {
@@ -2133,12 +1657,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, err, mappedModel)
+			return nil, invalidNonStreamingJSONFailoverError(ctx, s.rateLimitService, resp, account, body, err, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	if !validAnthropicNonStreamingResponse(body) {
-		return nil, newInvalidProviderResponseFailover(resp, "upstream returned an invalid terminal JSON response")
 	}
 
 	// 解析嵌套的 cache_creation 对象中的 5m/1h 明细

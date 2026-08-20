@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -114,6 +115,18 @@ func antigravityCompatSuccessResponse() *http.Response {
 	}
 }
 
+func antigravityCompatMissingUsageResponse() *http.Response {
+	body := `data: {"response":{"responseId":"resp_no_usage","candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}}` + "\n\n"
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"X-Request-Id": []string{"request-no-usage"},
+		},
+		Body: io.NopCloser(strings.NewReader(body)),
+	}
+}
+
 func TestAntigravityCompatOAuthUsesNativeTokenAndRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -181,6 +194,49 @@ func TestAntigravityCompatOAuthUsesNativeTokenAndRoute(t *testing.T) {
 	}
 }
 
+func TestAntigravityCompatMissingUsageIsProviderFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name string
+		path string
+		body []byte
+		call func(*AntigravityGatewayService, context.Context, *gin.Context, *Account, []byte) (*ForwardResult, error)
+	}{
+		{
+			name: "chat completions", path: "/v1/chat/completions",
+			body: []byte(`{"model":"gemini-3.1-pro-high","messages":[{"role":"user","content":"ok"}]}`),
+			call: func(svc *AntigravityGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, nil)
+			},
+		},
+		{
+			name: "responses", path: "/v1/responses",
+			body: []byte(`{"model":"gemini-3.1-pro-high","input":"ok"}`),
+			call: func(svc *AntigravityGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return svc.ForwardAsResponses(ctx, c, account, body, nil)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{antigravityCompatMissingUsageResponse()}}
+			svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, upstream)
+			c, _ := newAntigravityCompatContext(http.MethodPost, tt.path, tt.body)
+
+			result, err := tt.call(svc, context.Background(), c, newAntigravityCompatAccount(AccountTypeOAuth), tt.body)
+
+			require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			marked, ok := GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, "upstream_usage_missing", marked.Code)
+		})
+	}
+}
+
 func TestAntigravityCompatRejectsUnsupportedAccountType(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -219,6 +275,51 @@ func TestAntigravityCompatRejectsUnsupportedAccountType(t *testing.T) {
 			require.Nil(t, result)
 			require.Equal(t, http.StatusBadRequest, recorder.Code)
 			require.Contains(t, recorder.Body.String(), "native OAuth account required for antigravity compatibility mode")
+		})
+	}
+}
+
+func TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations(t *testing.T) {
+	svc := &AntigravityGatewayService{}
+	tests := []struct {
+		name      string
+		tools     string
+		wantField bool
+	}{
+		{
+			name:      "mixed server and client tools",
+			tools:     `[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]`,
+			wantField: true,
+		},
+		{
+			name:  "client tools only",
+			tools: `[{"name":"get_weather","input_schema":{"type":"object"}}]`,
+		},
+		{
+			name:  "server tools only",
+			tools: `[{"type":"web_search_20250305","name":"web_search"}]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claudeBody := []byte(`{"messages":[{"role":"user","content":"hello"}],"tools":` + tt.tools + `}`)
+			claudeBody = bytes.ReplaceAll(claudeBody, []byte{92}, nil)
+			body, err := svc.buildAntigravityCompatGeminiBody(context.Background(), claudeBody, nil, "project-1", "gemini-2.5-flash")
+			require.NoError(t, err)
+
+			var wrapped map[string]any
+			require.NoError(t, json.Unmarshal(body, &wrapped))
+			request, ok := wrapped["request"].(map[string]any)
+			require.True(t, ok)
+			toolConfig, exists := request["toolConfig"].(map[string]any)
+			if !tt.wantField {
+				require.False(t, exists)
+				return
+			}
+			require.True(t, exists)
+			require.Equal(t, true, toolConfig["includeServerSideToolInvocations"])
+			require.NotContains(t, toolConfig, "include_server_side_tool_invocations")
 		})
 	}
 }

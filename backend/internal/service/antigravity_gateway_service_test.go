@@ -342,6 +342,89 @@ func TestAntigravityGatewayService_ForwardGemini_UsesConfiguredProjectFallback(t
 	require.Equal(t, "configured-project", wrapped["project"])
 }
 
+func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocationConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","parameters":{"type":"object","additionalProperties":false}}]},{"googleSearch":{}}],"toolConfig":{"includeServerSideToolInvocations":true}}`)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	body = bytes.ReplaceAll(body, []byte{92}, nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", bytes.NewReader(body))
+
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{}}}\n\n")),
+	}}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   upstream,
+	}
+	account := &Account{
+		ID: 103, Name: "native-gemini", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "project-103", "model_mapping": map[string]any{"gemini-2.5-flash": "gemini-2.5-flash"}},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-2.5-flash", "generateContent", false, body, false)
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.Len(t, upstream.requestBodies, 1)
+
+	var wrapped map[string]any
+	require.NoError(t, json.Unmarshal(upstream.requestBodies[0], &wrapped))
+	request, ok := wrapped["request"].(map[string]any)
+	require.True(t, ok)
+	toolConfig, ok := request["toolConfig"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, toolConfig["includeServerSideToolInvocations"])
+	require.NotContains(t, toolConfig, "include_server_side_tool_invocations")
+}
+
+func TestAntigravityGatewayService_ForwardGemini_StreamingMissingUsageIsTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	requestBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	providerBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{}}}\n\n")
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:streamGenerateContent", bytes.NewReader(requestBody))
+	enableCaptureForTest(t, c)
+
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"antigravity-missing-usage"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: defaultMaxLineSize,
+		Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+	}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   upstream,
+	}
+	account := &Account{
+		ID: 104, Name: "native-gemini-stream", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "project-104", "model_mapping": map[string]any{"gemini-2.5-flash": "gemini-2.5-flash"}},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-2.5-flash", "streamGenerateContent", true, requestBody, false)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete)
+	require.Equal(t, providerBody, result.CaptureResponse)
+	marked, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.True(t, marked.Stream)
+	_, bridgeRemains := takeCaptureResult(c)
+	require.False(t, bridgeRemains, "the public boundary must consume the capture bridge exactly once")
+}
+
 func TestAntigravityGatewayService_ForwardGemini_MissingProjectReturnsLocalError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	writer := httptest.NewRecorder()
@@ -1021,6 +1104,59 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 	require.Equal(t, upstreamBody, result.CaptureResponse)
 	require.NotEmpty(t, result.CaptureRequest)
 	require.NotNil(t, result.CaptureContentPolicy)
+}
+
+func TestAntigravityGatewayService_Forward_MissingUsageIsProviderFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"antigravity-claude-no-usage"}},
+		Body:       io.NopCloser(strings.NewReader("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n")),
+	}}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   upstream,
+	}
+	account := &Account{ID: 16, Name: "antigravity-no-usage", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "project-16", "model_mapping": map[string]any{"claude-sonnet-4-5": "gemini-3-pro-high"}}}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	marked, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "upstream_usage_missing", marked.Code)
+}
+
+func TestAntigravityForwardUpstream_MissingUsageIsProviderFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	providerBody := []byte(`{"id":"msg_no_usage","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(providerBody))}}}
+	svc := &AntigravityGatewayService{settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{}), httpUpstream: upstream}
+	account := &Account{ID: 17, Name: "compatible-no-usage", Platform: PlatformAntigravity, Type: AccountTypeUpstream, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"base_url": "https://compatible.example", "api_key": "secret"}}
+
+	result, err := svc.ForwardUpstream(context.Background(), c, account, body)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	marked, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "upstream_usage_missing", marked.Code)
 }
 
 // TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel

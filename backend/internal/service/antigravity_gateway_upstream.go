@@ -19,7 +19,10 @@ import (
 )
 
 // ForwardUpstream 使用 base_url + /v1/messages + 双 header 认证透传上游 Claude 请求
-func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *ForwardResult, err error) {
+	defer func() {
+		result, err = finalizeForwardResultWithUsage(c, result, err)
+	}()
 	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
@@ -159,9 +162,6 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 
 		// 提取 usage
 		upstreamResponseModelObserverFromContext(c).ObserveAnthropic(respBody)
-		if !validAnthropicNonStreamingResponse(respBody) {
-			return nil, newInvalidProviderResponseFailover(resp, "antigravity upstream returned an invalid terminal JSON response")
-		}
 		usage = s.extractClaudeUsage(respBody)
 
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
@@ -199,8 +199,6 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	semanticOutput := false
 	terminalObserved := false
 	providerPayloadObserved := false
-	providerPhase := anthropicProviderAwaitingStart
-	declaredEventType := ""
 
 	readActivity := newProviderBodyReadActivity(resp.Body)
 	scanner := bufio.NewScanner(readActivity)
@@ -304,18 +302,6 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				if !terminalObserved {
-					if !staged.committed && !cw.Disconnected() {
-						return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended before semantic output")
-					}
-					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: true}, fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !providerPayloadObserved {
-					if staged.committed || semanticOutput {
-						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput}, fmt.Errorf("stream usage incomplete: terminal event arrived before message_start")
-					}
-					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended without a valid message_start")
-				}
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
 			}
 			if ev.err != nil {
@@ -339,33 +325,10 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			lastDataAt = time.Now()
 
 			line := ev.line
-			if eventType, ok := parseAnthropicSSEField(line, "event"); ok {
-				declaredEventType = eventType
-			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				data = strings.TrimSpace(data)
-				if data == "[DONE]" {
-					if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
-						return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream [DONE] arrived before a valid message_start")
-					}
-					providerPhase.state = anthropicProviderTerminated.state
-				} else if gjson.Valid(data) {
-					decodedType := gjson.Get(data, "type").String()
-					if err := validateAnthropicProviderEvent(&providerPhase, declaredEventType, []byte(data), decodedType); err != nil {
-						if !staged.committed && !cw.Disconnected() {
-							return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
-						}
-						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, err
-					}
-					if decodedType == "message_start" {
-						providerPayloadObserved = true
-					}
-				} else {
-					invalidEventErr := fmt.Errorf("invalid JSON for Anthropic event %q", declaredEventType)
-					if !staged.committed && !cw.Disconnected() {
-						return nil, newIncompleteProviderStreamFailover(resp, invalidEventErr.Error())
-					}
-					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, invalidEventErr
+				if gjson.Get(data, "type").String() == "message_start" {
+					providerPayloadObserved = true
 				}
 				upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(data))
 				if anthropicStreamEventIsTerminal("", data) {
@@ -374,7 +337,6 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 				if anthropicSSEEventHasSemanticOutput(data) {
 					semanticOutput = true
 				}
-				declaredEventType = ""
 			}
 
 			// 记录首 token 时间

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,7 +53,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
 	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
 
-	chatReq, err := apicompat.ResponsesToChatCompletionsRequest(&responsesReq)
+	// Refresh any plaintext reasoning history before resolving encrypted-only
+	// reasoning items from the shared cache.
+	s.recacheReasoningItemsFromInput(responsesReq.Input)
+	chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(&responsesReq, &apicompat.ResponsesToChatOptions{
+		ReasoningContentByID: s.reasoningContentByID,
+	})
 	if err != nil {
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, fmt.Errorf("convert responses to chat completions: %w", err)
@@ -153,7 +159,11 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	if err != nil {
 		return nil, err
 	}
+	if !sawUsage {
+		return nil, fmt.Errorf("upstream Chat Completions response missing usage: %w", ErrOpenAIUpstreamUsageMissing)
+	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, toolSearch, namespaceTools)
+	s.cacheReasoningItemsFromOutput(responsesResp.Output)
 	if sawUsage {
 		responsesResp.Usage = responsesUsageFromCCUsage(parsedUsage.Usage, parsedUsage)
 	}
@@ -198,124 +208,84 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	state.ToolSearchDeclared = toolSearch
 	state.NamespaceTools = namespaceTools
 	clientDisconnected := false
-	var staged stagedConvertedStream
-	defer func() {
-		if err := staged.close(); err != nil {
-			logger.L().Warn("openai responses chat fallback: converted stage cleanup failed",
-				zap.Error(err),
-				zap.String("request_id", requestID),
-			)
-		}
-	}()
 
-	writeEvents := func(events []apicompat.ResponsesStreamEvent, commit bool) (bool, error) {
-		if len(events) == 0 {
-			return staged.committed, nil
+	writeEvents := func(events []apicompat.ResponsesStreamEvent) bool {
+		semanticOutput := responsesConvertedEventsHaveSemanticOutput(events)
+		if clientDisconnected || len(events) == 0 {
+			return semanticOutput
 		}
-		var wire strings.Builder
+		writeStreamHeaders()
 		for _, event := range events {
 			sse, err := apicompat.ResponsesEventToSSE(event)
 			if err != nil {
-				return staged.committed, fmt.Errorf("marshal responses stream event %q: %w", event.Type, err)
+				logger.L().Warn("openai responses chat fallback: failed to marshal stream event",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
 			}
-			_, _ = wire.WriteString(sse)
-		}
-		if clientDisconnected {
-			return staged.committed, nil
-		}
-		if err := staged.write(c, writeStreamHeaders, wire.String(), commit); err != nil {
-			var clientWriteErr *stagedConvertedClientWriteError
-			if !errors.As(err, &clientWriteErr) {
-				return staged.committed, err
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				logger.L().Debug("openai responses chat fallback: client disconnected, continuing to drain upstream for billing",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				return semanticOutput
 			}
-			clientDisconnected = true
-			logger.L().Debug("openai responses chat fallback: client disconnected, continuing to drain upstream for billing",
-				zap.Error(clientWriteErr),
-				zap.String("request_id", requestID),
-			)
 		}
-		return staged.committed, nil
+		c.Writer.Flush()
+		return semanticOutput
 	}
 
 	scan := s.scanCCStream(ctx, resp, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
-		events, err := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
-		if err != nil {
-			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
-		}
-		return writeEvents(events, responsesConvertedEventsHaveSemanticOutput(events))
+		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
+		s.cacheReasoningItemsFromEvents(events)
+		return writeEvents(events), nil
 	})
-
+	result := &OpenAIForwardResult{
+		RequestID:        requestID,
+		Usage:            scan.Usage,
+		Model:            originalModel,
+		BillingModel:     billingModel,
+		UpstreamModel:    upstreamModel,
+		ReasoningEffort:  reasoningEffort,
+		ServiceTier:      serviceTier,
+		Stream:           true,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     scan.FirstTokenMs,
+		ClientDisconnect: clientDisconnected,
+	}
 	if scan.Err != nil {
-		if !scan.SawOutput {
-			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream read failed before semantic output")
+		var failoverErr *UpstreamFailoverError
+		if errors.As(scan.Err, &failoverErr) {
+			return nil, scan.Err
 		}
-		return &OpenAIForwardResult{
-			RequestID:       requestID,
-			Usage:           scan.Usage,
-			Model:           originalModel,
-			BillingModel:    billingModel,
-			UpstreamModel:   upstreamModel,
-			ReasoningEffort: reasoningEffort,
-			ServiceTier:     serviceTier,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    scan.FirstTokenMs,
-		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
-	}
-	if !scan.SawDone {
-		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
-		if !scan.SawOutput {
-			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream ended before [DONE]")
-		}
-		return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, errors.New("upstream stream ended without [DONE]")
-	}
-	if !scan.SawProviderPayload {
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream contained only [DONE]")
+		return result, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
 	if scan.SawUsage {
-		// Keep response.completed aligned with the generic scanner used for
-		// billing, including compatible cache aliases and explicit nested zero
-		// precedence lost by the narrower ChatUsage structure.
 		state.Usage = responsesUsageFromCCUsage(scan.Usage, scan.UsageFields)
 	}
 
-	finalSemantic, finalErr := writeEvents(apicompat.FinalizeChatCompletionsResponsesStream(state), true)
-	if finalSemantic && !scan.SawOutput {
-		scan.SawOutput = true
-		ms := int(time.Since(startTime).Milliseconds())
-		scan.FirstTokenMs = &ms
-	}
-	if finalErr != nil {
-		if !scan.SawOutput {
-			return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
-		}
-		return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, fmt.Errorf("finalize converted response stream: %w", finalErr)
-	}
+	finalEvents := apicompat.FinalizeChatCompletionsResponsesStream(state)
+	s.cacheReasoningItemsFromEvents(finalEvents)
+	writeEvents(finalEvents)
 	if !clientDisconnected {
-		if err := staged.write(c, writeStreamHeaders, "data: [DONE]\n\n", true); err != nil {
-			var clientWriteErr *stagedConvertedClientWriteError
-			if errors.As(err, &clientWriteErr) {
-				clientDisconnected = true
-			} else if !scan.SawOutput {
-				return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
-			} else {
-				return &OpenAIForwardResult{RequestID: requestID, Usage: scan.Usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs}, fmt.Errorf("write converted response terminator: %w", err)
-			}
+		writeStreamHeaders()
+		if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+			clientDisconnected = true
+		}
+		if !clientDisconnected {
+			c.Writer.Flush()
 		}
 	}
-
-	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           scan.Usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          true,
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    scan.FirstTokenMs,
-	}, nil
+	result.ClientDisconnect = clientDisconnected
+	if !scan.SawDone {
+		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
+	}
+	if !scan.SawUsage {
+		return result, fmt.Errorf("upstream Chat Completions stream missing usage: %w", ErrOpenAIUpstreamUsageMissing)
+	}
+	return result, nil
 }
 
 func responsesConvertedEventsHaveSemanticOutput(events []apicompat.ResponsesStreamEvent) bool {
@@ -338,4 +308,111 @@ func responsesConvertedEventsHaveSemanticOutput(events []apicompat.ResponsesStre
 		}
 	}
 	return false
+}
+
+func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool {
+	if chunk == nil {
+		return false
+	}
+	for _, choice := range chunk.Choices {
+		if choice.Delta.Content != nil || choice.Delta.ReasoningContent != nil ||
+			choice.Delta.Reasoning != nil || choice.Delta.Refusal != nil || len(choice.Delta.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+const responsesReasoningCacheTTL = 7 * 24 * time.Hour
+
+type responsesReasoningCache interface {
+	SetReasoningContent(ctx context.Context, itemID string, content string, ttl time.Duration) error
+	GetReasoningContent(ctx context.Context, itemID string) (string, error)
+}
+
+func (s *OpenAIGatewayService) reasoningContentByID(itemID string) string {
+	if s == nil || s.cache == nil {
+		return ""
+	}
+	cache, ok := s.cache.(responsesReasoningCache)
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	content, err := cache.GetReasoningContent(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
+func (s *OpenAIGatewayService) recacheReasoningItemsFromInput(inputRaw json.RawMessage) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	if _, ok := s.cache.(responsesReasoningCache); !ok {
+		return
+	}
+	inputRaw = bytes.TrimSpace(inputRaw)
+	if len(inputRaw) == 0 || inputRaw[0] != '[' {
+		return
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(inputRaw, &items); err != nil {
+		return
+	}
+	for _, raw := range items {
+		id, content, ok := apicompat.ExtractResponsesReasoningItem(raw)
+		if ok && id != "" && content != "" {
+			s.setReasoningContent(id, content)
+		}
+	}
+}
+
+func (s *OpenAIGatewayService) cacheReasoningItemsFromEvents(events []apicompat.ResponsesStreamEvent) {
+	for _, event := range events {
+		if event.Type == "response.output_item.done" && event.Item != nil {
+			s.cacheReasoningItem(event.Item)
+		}
+	}
+}
+
+func (s *OpenAIGatewayService) cacheReasoningItemsFromOutput(output []apicompat.ResponsesOutput) {
+	for i := range output {
+		s.cacheReasoningItem(&output[i])
+	}
+}
+
+func (s *OpenAIGatewayService) cacheReasoningItem(item *apicompat.ResponsesOutput) {
+	if item == nil || item.Type != "reasoning" || item.ID == "" {
+		return
+	}
+	parts := make([]string, 0, len(item.Summary))
+	for _, summary := range item.Summary {
+		if content := strings.TrimSpace(summary.Text); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	if len(parts) > 0 {
+		s.setReasoningContent(item.ID, strings.Join(parts, "\n"))
+	}
+}
+
+func (s *OpenAIGatewayService) setReasoningContent(itemID, content string) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	cache, ok := s.cache.(responsesReasoningCache)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := cache.SetReasoningContent(ctx, itemID, content, responsesReasoningCacheTTL); err != nil {
+		logger.L().Warn("openai responses chat fallback: cache reasoning content failed",
+			zap.Error(err),
+			zap.String("item_id", itemID),
+		)
+	}
 }

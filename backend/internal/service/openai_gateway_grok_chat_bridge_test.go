@@ -218,9 +218,12 @@ func TestGrokChatResponsesBridgeEligibility(t *testing.T) {
 func TestGrokChatResponsesRuntimeEligibility(t *testing.T) {
 	t.Parallel()
 	require.True(t, grokChatResponsesRuntimeEligible("grok-4.5", "isolated-id"))
+	require.True(t, grokChatResponsesRuntimeEligible("grok-4.6", "isolated-id"))
+	require.True(t, grokChatResponsesRuntimeEligible("grok-4.6-latest", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.3", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5-build-free", "isolated-id"))
 	require.False(t, grokChatResponsesRuntimeEligible("grok-4.5", ""))
+	require.False(t, grokChatResponsesRuntimeEligible("grok-4.6", ""))
 }
 
 func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.T) {
@@ -288,6 +291,46 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	require.Equal(t, "cached ok", gjson.Get(recorder.Body.String(), "choices.0.message.content").String())
 	require.Equal(t, int64(9856), gjson.Get(recorder.Body.String(), "usage.prompt_tokens_details.cached_tokens").Int())
 	require.NotNil(t, repo.updates[account.ID][grokQuotaSnapshotExtraKey])
+}
+
+func TestForwardGrokChatViaResponsesNonStreamingReportsBillingErrorWithoutUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"grok","messages":[{"role":"user","content":"hi"}],"stream":false,"prompt_cache_key":"stable-session"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 7102})
+
+	account := grokChatBridgeTestAccount(72)
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","sequence_number":0,"delta":"ok"}`,
+		"",
+		`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_missing_usage","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+
+	require.NotNil(t, result, "failed result retains capture metadata")
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
+	require.True(t, c.Writer.Written(), "forwarding must not buffer the response solely to validate usage")
+	require.Contains(t, recorder.Body.String(), "ok")
 }
 
 func TestForwardGrokChatViaResponsesCodeBuddyUsesStableConversationHeader(t *testing.T) {

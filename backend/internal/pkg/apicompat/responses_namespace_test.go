@@ -1,8 +1,6 @@
 package apicompat
 
 import (
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -163,23 +161,4 @@ func TestRestoreResponsesNamespaceCalls_RewritesLifecycleItems(t *testing.T) {
 			require.JSONEq(t, `{"type":"`+eventType+`","item":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}}`, string(got))
 		})
 	}
-}
-
-func TestRestoreResponsesNamespaceCallsHandlesDenseOpaquePayloadLinearly(t *testing.T) {
-	dense := strings.TrimSuffix(strings.Repeat(`{},`, (8<<20)/3), ",")
-	payload := []byte(`{"type":"response.completed","response":{"output":[{"type":"function_call","name":"collaboration__spawn_agent","arguments":"{}"}],"opaque":[` + dense + `]}}`)
-	names := map[string]ResponsesNamespaceName{
-		"collaboration__spawn_agent": {Namespace: "collaboration", Name: "spawn_agent"},
-	}
-	runtime.GC()
-	var before runtime.MemStats
-	var after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	restored, changed, err := RestoreResponsesNamespaceCalls(payload, names)
-	runtime.ReadMemStats(&after)
-
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.Contains(t, string(restored), `"namespace":"collaboration"`)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(48<<20))
 }

@@ -48,12 +48,22 @@ var upstreamSyncMigrationFilenames = []string{
 	"219_channel_monitor_v2_refresh_5m.sql",
 	"220_channel_monitor_v2_full_table_permissions.sql",
 	"221_channel_monitor_v2_default_ignore_and_cache.sql",
+	"221_group_model_pricing.sql",
 	"222_channel_monitor_hide_throughput.sql",
+	"222_group_usage_daily_rollups.sql",
 	"223_channel_monitor_v2_reset_factory_cache_thresholds.sql",
+	"223_group_usage_rollup_timezone.sql",
 	"224_channel_monitor_v2_privacy_defaults.sql",
+	"224_user_platform_quotas_add_cn_providers.sql",
+	"225_backfill_codex_fingerprint_seed.sql",
+	"225_channel_model_time_pricing.sql",
 	"225_group_video_model_prices.sql",
+	"226_add_usage_log_effective_model_indexes_notx.sql",
+	"226_channel_monitor_quota_mode.sql",
+	"228_channel_pricing_multipliers.sql",
 	"228_clear_non_grok_video_generation_config.sql",
 	"229_capture_spool_alert_rules.sql",
+	"230_channel_image_input_price.sql",
 }
 
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {

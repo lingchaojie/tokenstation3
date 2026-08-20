@@ -324,7 +324,7 @@ func TestOpenAIStreamingPassthroughNamespaceRestoreIgnoresOpaqueNumericExtension
 		},
 	)
 
-	require.ErrorContains(t, err, "missing terminal event")
+	require.NoError(t, err)
 	require.Equal(t, writtenPrefix+overflowData+"\n", recorder.Body.String())
 	require.Equal(t, []int{len(writtenPrefix + overflowData + "\n")}, writer.flushBodyLengths)
 }

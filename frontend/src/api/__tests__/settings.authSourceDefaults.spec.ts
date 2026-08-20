@@ -9,7 +9,7 @@ import {
   type DefaultPlatformQuotasMap,
 } from "@/api/admin/settings";
 
-/** 全 null 的 6 平台 map，用于断言归一化默认值 */
+/** 全 null 的平台 map，用于断言归一化默认值 */
 const allNullQuotas: DefaultPlatformQuotasMap = {
   anthropic: { daily: null, weekly: null, monthly: null },
   openai:    { daily: null, weekly: null, monthly: null },
@@ -17,6 +17,9 @@ const allNullQuotas: DefaultPlatformQuotasMap = {
   gemini:    { daily: null, weekly: null, monthly: null },
   antigravity: { daily: null, weekly: null, monthly: null },
   grok: { daily: null, weekly: null, monthly: null },
+  kimi: { daily: null, weekly: null, monthly: null },
+  zhipu: { daily: null, weekly: null, monthly: null },
+  deepseek: { daily: null, weekly: null, monthly: null },
 }
 
 describe("admin settings auth source defaults helpers", () => {
@@ -86,6 +89,9 @@ describe("admin settings auth source defaults helpers", () => {
       auth_source_default_email_platform_quotas: {
         anthropic: { daily: 10, weekly: 50, monthly: 200 },
         openai:    { daily: null, weekly: null, monthly: null },
+        kimi:      { daily: 3, weekly: 12, monthly: 40 },
+        zhipu:     { daily: 4, weekly: 16, monthly: 50 },
+        deepseek:  { daily: 5, weekly: 20, monthly: 60 },
       } as DefaultPlatformQuotasMap,
     });
 
@@ -97,6 +103,9 @@ describe("admin settings auth source defaults helpers", () => {
     expect(state.email.platform_quotas.kiro).toEqual({ daily: null, weekly: null, monthly: null });
     expect(state.email.platform_quotas.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(state.email.platform_quotas.antigravity).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(state.email.platform_quotas.kimi).toEqual({ daily: 3, weekly: 12, monthly: 40 });
+    expect(state.email.platform_quotas.zhipu).toEqual({ daily: 4, weekly: 16, monthly: 50 });
+    expect(state.email.platform_quotas.deepseek).toEqual({ daily: 5, weekly: 20, monthly: 60 });
   });
 
   it("appends auth source defaults back onto update payload", () => {
@@ -242,9 +251,9 @@ describe("normalizePlatformQuotasMap", () => {
     expect(result.grok).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
-  it("无参数时返回全 6 平台全 null", () => {
+  it("无参数时返回全 9 平台全 null", () => {
     const result = normalizePlatformQuotasMap();
-    expect(Object.keys(result)).toHaveLength(6);
+    expect(Object.keys(result)).toHaveLength(9);
     for (const v of Object.values(result)) {
       expect(v).toEqual({ daily: null, weekly: null, monthly: null });
     }
@@ -262,10 +271,16 @@ describe("sanitizePlatformQuotasMap", () => {
   it("保留合法的正数和零值", () => {
     const result = sanitizePlatformQuotasMap({
       anthropic: { daily: 10.5, weekly: 0, monthly: null },
+      kimi: { daily: 3, weekly: 12, monthly: 40 },
+      zhipu: { daily: 4, weekly: 16, monthly: 50 },
+      deepseek: { daily: 5, weekly: 20, monthly: 60 },
     });
     expect(result.anthropic?.daily).toBe(10.5);
     expect(result.anthropic?.weekly).toBe(0);
     expect(result.anthropic?.monthly).toBe(null);
+    expect(result.kimi).toEqual({ daily: 3, weekly: 12, monthly: 40 });
+    expect(result.zhipu).toEqual({ daily: 4, weekly: 16, monthly: 50 });
+    expect(result.deepseek).toEqual({ daily: 5, weekly: 20, monthly: 60 });
   });
 
   it("空字符串（v-model.number 空输入）清洗为 null", () => {
@@ -292,7 +307,7 @@ describe("sanitizePlatformQuotasMap", () => {
 
   it("缺失平台填充为全 null", () => {
     const result = sanitizePlatformQuotasMap({});
-    expect(Object.keys(result)).toHaveLength(6);
+    expect(Object.keys(result)).toHaveLength(9);
     for (const v of Object.values(result)) {
       expect(v).toEqual({ daily: null, weekly: null, monthly: null });
     }

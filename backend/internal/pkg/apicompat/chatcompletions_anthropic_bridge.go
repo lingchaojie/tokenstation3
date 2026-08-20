@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const maxChatCompletionsToAnthropicPendingToolArgumentBytes = 8 << 20
-
 // This file implements a DIRECT bridge between Anthropic Messages and OpenAI
 // Chat Completions, skipping the Responses API intermediate representation.
 //
@@ -425,25 +423,30 @@ func ChatCompletionsResponseToAnthropic(resp *ChatCompletionsResponse, model str
 // + the reasoning→thinking mapping in ResponsesToAnthropic.
 func chatMessageToAnthropicBlocks(message ChatMessage) []AnthropicContentBlock {
 	var blocks []AnthropicContentBlock
+	reasoning := message.reasoningText()
+	refusal := ""
+	if message.Refusal != nil {
+		refusal = *message.Refusal
+	}
 
-	if message.ReasoningContent != "" {
+	if reasoning != "" {
 		blocks = append(blocks, AnthropicContentBlock{
 			Type:     "thinking",
-			Thinking: message.ReasoningContent,
+			Thinking: reasoning,
 		})
 	}
 
 	text := chatMessageContentText(message.Content)
-	if text == "" && message.Refusal != nil {
-		text = *message.Refusal
-	}
 	// DeepSeek reasoning-only fallback: when there is no text and no tool calls,
 	// surface the reasoning content as visible text so the turn isn't empty.
-	if text == "" && strings.TrimSpace(message.ReasoningContent) != "" && len(message.ToolCalls) == 0 {
-		text = message.ReasoningContent
+	if text == "" && refusal == "" && strings.TrimSpace(reasoning) != "" && len(message.ToolCalls) == 0 {
+		text = reasoning
 	}
-	if text != "" || len(message.ToolCalls) == 0 {
+	if text != "" || (refusal == "" && len(message.ToolCalls) == 0) {
 		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: text})
+	}
+	if refusal != "" {
+		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: refusal})
 	}
 
 	for _, toolCall := range message.ToolCalls {
@@ -545,12 +548,11 @@ type ChatCompletionsToAnthropicStreamState struct {
 	// and the call ID seen before the name are buffered and flushed with the
 	// announcement; tools whose name never arrives are announced with an empty
 	// name at finalize so their arguments are not lost.
-	toolBlockIndex           map[int]int
-	toolAnnounced            map[int]bool
-	toolName                 map[int]string
-	pendingToolCallID        map[int]string
-	pendingToolArgs          map[int]*strings.Builder
-	pendingToolArgumentBytes int
+	toolBlockIndex    map[int]int
+	toolAnnounced     map[int]bool
+	toolName          map[int]string
+	pendingToolCallID map[int]string
+	pendingToolArgs   map[int]string
 
 	// Reasoning (DeepSeek-style): reasoning_content streamed before content.
 	// No separate reasoning block index — it uses ContentBlockIndex like the
@@ -579,7 +581,7 @@ func NewChatCompletionsToAnthropicStreamState(model string) *ChatCompletionsToAn
 		toolAnnounced:     make(map[int]bool),
 		toolName:          make(map[int]string),
 		pendingToolCallID: make(map[int]string),
-		pendingToolArgs:   make(map[int]*strings.Builder),
+		pendingToolArgs:   make(map[int]string),
 	}
 }
 
@@ -588,9 +590,9 @@ func NewChatCompletionsToAnthropicStreamState(model string) *ChatCompletionsToAn
 func ChatCompletionsChunkToAnthropicEvents(
 	chunk *ChatCompletionsChunk,
 	state *ChatCompletionsToAnthropicStreamState,
-) ([]AnthropicStreamEvent, error) {
+) []AnthropicStreamEvent {
 	if chunk == nil || state == nil {
-		return nil, nil
+		return nil
 	}
 	if chunk.ID != "" {
 		state.ResponseID = chunk.ID
@@ -614,11 +616,12 @@ func ChatCompletionsChunkToAnthropicEvents(
 
 	for _, choice := range chunk.Choices {
 		// Reasoning content → thinking block.
-		if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
+		reasoning := choice.Delta.reasoningText()
+		if reasoning != nil && *reasoning != "" {
 			events = append(events, ensureCCAnthropicThinkingBlock(state)...)
 			events = append(events, ccAnthropicDelta(state, &AnthropicDelta{
 				Type:     "thinking_delta",
-				Thinking: *choice.Delta.ReasoningContent,
+				Thinking: *reasoning,
 			})...)
 		}
 
@@ -632,9 +635,12 @@ func ChatCompletionsChunkToAnthropicEvents(
 			})...)
 		}
 
+		// Anthropic Messages has no typed refusal block. Preserve provider
+		// refusal text as its own text block so compatibility forwarding never
+		// silently drops it or merges its lifecycle with ordinary content.
 		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
 			events = append(events, closeCCAnthropicBlockIfOpen(state, "thinking")...)
-			events = append(events, ensureCCAnthropicTextBlock(state)...)
+			events = append(events, ensureCCAnthropicRefusalBlock(state)...)
 			events = append(events, ccAnthropicDelta(state, &AnthropicDelta{
 				Type: "text_delta",
 				Text: *choice.Delta.Refusal,
@@ -644,11 +650,7 @@ func ChatCompletionsChunkToAnthropicEvents(
 		// Tool calls → tool_use blocks.
 		for _, toolCall := range choice.Delta.ToolCalls {
 			events = append(events, closeCCAnthropicBlockIfOpen(state, "thinking")...)
-			toolEvents, err := handleCCAnthropicToolCall(state, &toolCall)
-			if err != nil {
-				return nil, err
-			}
-			events = append(events, toolEvents...)
+			events = append(events, handleCCAnthropicToolCall(state, &toolCall)...)
 		}
 
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -656,7 +658,7 @@ func ChatCompletionsChunkToAnthropicEvents(
 		}
 	}
 
-	return events, nil
+	return events
 }
 
 // FinalizeChatCompletionsAnthropicStream emits terminal Anthropic events
@@ -771,12 +773,31 @@ func ensureCCAnthropicTextBlock(state *ChatCompletionsToAnthropicStreamState) []
 	return events
 }
 
+func ensureCCAnthropicRefusalBlock(state *ChatCompletionsToAnthropicStreamState) []AnthropicStreamEvent {
+	if state.ContentBlockOpen && state.CurrentBlockType == "refusal" {
+		return nil
+	}
+	events := closeCCAnthropicBlock(state)
+	idx := state.ContentBlockIndex
+	state.ContentBlockOpen = true
+	state.CurrentBlockType = "refusal"
+	events = append(events, AnthropicStreamEvent{
+		Type:  "content_block_start",
+		Index: &idx,
+		ContentBlock: &AnthropicContentBlock{
+			Type: "text",
+			Text: "",
+		},
+	})
+	return events
+}
+
 // handleCCAnthropicToolCall processes one upstream tool_call delta. The
 // content_block_start for a tool is deferred until its name has arrived (some
 // upstreams stream id/arguments before the name); argument fragments seen
 // before the announcement are buffered and flushed with it, later fragments
 // stream as input_json_delta on the tool's block.
-func handleCCAnthropicToolCall(state *ChatCompletionsToAnthropicStreamState, toolCall *ChatToolCall) ([]AnthropicStreamEvent, error) {
+func handleCCAnthropicToolCall(state *ChatCompletionsToAnthropicStreamState, toolCall *ChatToolCall) []AnthropicStreamEvent {
 	idx := 0
 	if toolCall.Index != nil {
 		idx = *toolCall.Index
@@ -826,20 +847,11 @@ func handleCCAnthropicToolCall(state *ChatCompletionsToAnthropicStreamState, too
 				},
 			})
 		} else {
-			if len(toolCall.Function.Arguments) > maxChatCompletionsToAnthropicPendingToolArgumentBytes-state.pendingToolArgumentBytes {
-				return nil, fmt.Errorf("chat completions pending tool arguments exceed %d-byte retained-state limit", maxChatCompletionsToAnthropicPendingToolArgumentBytes)
-			}
-			pending := state.pendingToolArgs[idx]
-			if pending == nil {
-				pending = &strings.Builder{}
-				state.pendingToolArgs[idx] = pending
-			}
-			_, _ = pending.WriteString(toolCall.Function.Arguments)
-			state.pendingToolArgumentBytes += len(toolCall.Function.Arguments)
+			state.pendingToolArgs[idx] += toolCall.Function.Arguments
 		}
 	}
 
-	return events, nil
+	return events
 }
 
 // announceCCAnthropicToolBlock assigns the next Anthropic block index to the
@@ -866,16 +878,15 @@ func announceCCAnthropicToolBlock(state *ChatCompletionsToAnthropicStreamState, 
 			Input: json.RawMessage("{}"),
 		},
 	}}
-	if pending := state.pendingToolArgs[idx]; pending != nil && pending.Len() > 0 {
+	if pending := state.pendingToolArgs[idx]; pending != "" {
 		delete(state.pendingToolArgs, idx)
-		state.pendingToolArgumentBytes -= pending.Len()
 		state.CurrentToolHadDelta = true
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_delta",
 			Index: &blockIdx,
 			Delta: &AnthropicDelta{
 				Type:        "input_json_delta",
-				PartialJSON: pending.String(),
+				PartialJSON: pending,
 			},
 		})
 	}

@@ -25,7 +25,10 @@ import (
 //	      └─ retryDelay <  7s → 等待后重试 1 次
 //	          ├─ 成功 → 正常返回
 //	          └─ 失败 → 设置模型限流 + 清除粘性绑定 → 切换账号
-func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte, isStickySession bool) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte, isStickySession bool) (result *ForwardResult, err error) {
+	defer func() {
+		result, err = finalizeForwardResultWithUsage(c, result, err)
+	}()
 	beginCaptureAttempt(c)
 	beginUpstreamResponseModelObservation(c)
 	// 上游透传账号直接转发，不走 OAuth token 刷新
@@ -98,7 +101,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	action := "streamGenerateContent"
 
 	// 执行带重试的请求
-	result, err := s.antigravityRetryLoop(antigravityRetryLoopParams{
+	retryResult, err := s.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:             ctx,
 		prefix:          prefix,
 		account:         account,
@@ -127,7 +130,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		}
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
 	}
-	resp := result.resp
+	resp := retryResult.resp
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {

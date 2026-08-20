@@ -79,7 +79,7 @@ func TestGrokResponsesClientToolStreamBoundsPendingSSEFields(t *testing.T) {
 	require.ErrorContains(t, err, "pending SSE fields exceeded")
 }
 
-func TestGrokResponsesClientToolParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+func TestGrokResponsesClientToolParserDrainsFiniteProviderTailForCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -105,7 +105,7 @@ func TestGrokResponsesClientToolParserFailureDrainsFiniteProviderTailBeforeCaptu
 		CustomTools: map[string]bool{"apply_patch": true},
 	}, defaultMaxLineSize)
 	_, err := io.ReadAll(body)
-	require.Error(t, err)
+	require.NoError(t, err)
 	finishCapture()
 	capture, ok := takeCaptureResult(c)
 	require.True(t, ok)
@@ -220,6 +220,32 @@ func TestForwardGrokResponsesClientToolNameConflictReturns400(t *testing.T) {
 	require.Equal(t, "tools", gjson.Get(recorder.Body.String(), "error.param").String())
 	require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), "conflicts")
 	require.Empty(t, upstream.requests, "an ambiguous request must not reach xAI")
+}
+
+func TestForwardGrokResponsesMalformedToolSearchOutputReturns400BeforeUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{
+		"model":"grok","stream":false,
+		"tools":[{"type":"tool_search"}],
+		"input":[{"type":"tool_search_output","status":"completed"}]
+	}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	upstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := grokProtocolAPIKeyAccount(7103)
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, account, body, "grok", false, time.Now())
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+	require.Equal(t, "tools", gjson.Get(recorder.Body.String(), "error.param").String())
+	require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), "call_id")
+	require.Empty(t, upstream.requests, "malformed lowered output must not reach xAI")
 }
 
 func TestForwardGrokResponsesOAuthRestoresClientToolsNonStreaming(t *testing.T) {
@@ -393,7 +419,7 @@ func TestForwardGrokResponsesAPIKeyRestoresClientToolsStreaming(t *testing.T) {
 	require.Equal(t, "collaboration", gjson.GetBytes(completed.data, "response.output.2.namespace").String())
 }
 
-func TestForwardGrokResponsesStreamingRejectsMalformedRawClientToolTerminal(t *testing.T) {
+func TestForwardGrokResponsesStreamingAllowsProviderNativeClientToolArguments(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(true)
@@ -412,12 +438,13 @@ func TestForwardGrokResponsesStreamingRejectsMalformedRawClientToolTerminal(t *t
 
 	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7110), body, "grok", true, time.Now())
 
-	require.Error(t, err, "the client-tool restorer must not repair malformed provider-native arguments")
-	require.Nil(t, result, "a presemantic malformed provider event must remain replay-safe")
-	require.Empty(t, recorder.Body.String(), "malformed provider data must not reach the client")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, recorder.Body.String(), "response.completed")
+	require.Contains(t, recorder.Body.String(), "apply_patch")
 }
 
-func TestForwardGrokResponsesBufferedSSERejectsMalformedRawClientToolTerminal(t *testing.T) {
+func TestForwardGrokResponsesBufferedSSEAllowsProviderNativeClientToolArguments(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(false)
@@ -436,13 +463,13 @@ func TestForwardGrokResponsesBufferedSSERejectsMalformedRawClientToolTerminal(t 
 
 	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7111), body, "grok", false, time.Now())
 
-	require.Error(t, err, "the buffered client-tool restorer must not repair malformed provider-native arguments")
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.True(t, result.UpstreamFailed)
-	require.Empty(t, recorder.Body.String(), "malformed provider data must not reach the client")
+	require.False(t, result.UpstreamFailed)
+	require.Contains(t, recorder.Body.String(), "resp_bad_raw_tool")
 }
 
-func TestForwardGrokResponsesStreamingRejectsMissingRawClientToolCorrelation(t *testing.T) {
+func TestForwardGrokResponsesStreamingAllowsMissingRawClientToolCorrelation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(true)
@@ -471,10 +498,10 @@ func TestForwardGrokResponsesStreamingRejectsMissingRawClientToolCorrelation(t *
 
 	result, err := svc.forwardGrokResponses(context.Background(), c, grokProtocolAPIKeyAccount(7112), body, "grok", true, time.Now())
 
-	require.Error(t, err, "the raw provider delta must carry the correlation fields required by the strict lifecycle")
-	require.NotNil(t, result, "the tool item was already committed before the malformed delta")
-	require.True(t, result.CaptureTerminalError)
-	require.NotContains(t, recorder.Body.String(), "washed")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.CaptureTerminalError)
+	require.Contains(t, recorder.Body.String(), "washed")
 }
 
 func TestGrokResponsesClientToolStreamBodyFlushesFrameBeforeEOF(t *testing.T) {
@@ -522,7 +549,7 @@ func TestGrokResponsesClientToolStreamBodyFlushesFrameBeforeEOF(t *testing.T) {
 	}
 }
 
-func TestGrokResponsesClientToolStreamBodyRejectsOversizedRetainedArguments(t *testing.T) {
+func TestGrokResponsesClientToolStreamBodyDropsLargeProviderArgumentsWithoutDisconnect(t *testing.T) {
 	added := `{"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"function_call","id":"item","call_id":"call","name":"apply_patch","arguments":"","status":"in_progress"}}`
 	deltaPayload, err := json.Marshal(apicompat.ResponsesStreamEvent{
 		Type:           "response.function_call_arguments.delta",
@@ -539,7 +566,7 @@ func TestGrokResponsesClientToolStreamBodyRejectsOversizedRetainedArguments(t *t
 	defer func() { _ = body.Close() }()
 
 	output, err := io.ReadAll(body)
-	require.ErrorContains(t, err, "retained-state limit")
+	require.NoError(t, err)
 	require.Contains(t, string(output), `"type":"custom_tool_call"`)
 	require.NotContains(t, string(output), strings.Repeat("x", 1024))
 }

@@ -224,7 +224,7 @@ func TestGrokFinalResultsDriveRealHandlerSchedulingAndCapture(t *testing.T) {
 			upstream: &grokFinalHandlerUpstream{responses: []*http.Response{
 				grokFinalHandlerResponse(http.StatusBadRequest, `{"error":{"message":"invalid request"}}`),
 			}},
-			wantSuccess: false, wantCapture: true, wantCaptureStatus: http.StatusBadRequest, wantStatus: http.StatusBadGateway, wantCalls: 1, wantReports: 1,
+			wantSuccess: false, wantCapture: true, wantCaptureStatus: http.StatusBadRequest, wantStatus: http.StatusBadRequest, wantCalls: 1, wantReports: 1,
 		},
 		{
 			name:        "final cyber error remains exact once",

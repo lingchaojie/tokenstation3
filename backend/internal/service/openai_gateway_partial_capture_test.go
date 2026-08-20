@@ -44,8 +44,9 @@ func TestOpenAIGatewayServiceNativeCommittedPartialCarriesCaptureAndFinalRequest
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, body)
-	require.ErrorContains(t, err, "missing terminal event")
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureRequest)
 	require.Nil(t, result.CaptureResponse)

@@ -1690,8 +1690,94 @@ func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *Forwar
 	return result
 }
 
+// RefreshForwardCaptureContentPolicy reevaluates the legacy buffered capture
+// decision at the final sink, after usage validation has established the real
+// request outcome. The typed streaming sink already performs this decision at
+// commit time.
+func RefreshForwardCaptureContentPolicy(c *gin.Context, platform string, result *ForwardResult) {
+	if result == nil {
+		return
+	}
+	result.CaptureContentPolicy = nil
+	outcome := CaptureOutcomeSuccess
+	if result.UpstreamFailed || result.CaptureTerminalError {
+		outcome = CaptureOutcomeTerminalError
+	}
+	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
+		result.CaptureContentPolicy = &content
+	}
+}
+
+// RefreshOpenAIForwardCaptureContentPolicy is the OpenAI result equivalent of
+// RefreshForwardCaptureContentPolicy.
+func RefreshOpenAIForwardCaptureContentPolicy(c *gin.Context, platform string, result *OpenAIForwardResult) {
+	if result == nil {
+		return
+	}
+	result.CaptureContentPolicy = nil
+	outcome := CaptureOutcomeSuccess
+	if result.UpstreamFailed || result.CaptureTerminalError {
+		outcome = CaptureOutcomeTerminalError
+	}
+	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
+		result.CaptureContentPolicy = &content
+	}
+}
+
 func finalizeForwardResult(c *gin.Context, result *ForwardResult) *ForwardResult {
 	return attachCaptureToForwardResult(c, result)
+}
+
+const (
+	upstreamUsageMissingErrorCode = "upstream_usage_missing"
+	upstreamUsageMissingMessage   = "Upstream response missing billable usage"
+)
+
+// finalizeForwardResultWithUsage is the common public-boundary finalizer for
+// successful provider responses. Missing upstream usage is a provider failure,
+// not a local pricing failure, and is recorded without rewriting committed
+// response bytes or converting the error into an account-failover signal.
+func finalizeForwardResultWithUsage(c *gin.Context, result *ForwardResult, forwardErr error) (*ForwardResult, error) {
+	forwardErr = FinalizeForwardUsage(result, forwardErr)
+	if errors.Is(forwardErr, ErrUpstreamUsageMissing) && result != nil {
+		result.CaptureResponseComplete = true
+		MarkOpsPostResponseFailure(
+			c,
+			"upstream_error",
+			upstreamUsageMissingErrorCode,
+			upstreamUsageMissingMessage,
+			http.StatusBadGateway,
+			result.Stream,
+		)
+	}
+	return finalizeForwardResult(c, result), forwardErr
+}
+
+func finalizeOpenAIForwardResultWithUsage(c *gin.Context, result *OpenAIForwardResult, forwardErr error, upstreamRequest []byte) (*OpenAIForwardResult, error) {
+	forwardErr = FinalizeOpenAIForwardUsage(result, forwardErr)
+	if errors.Is(forwardErr, ErrOpenAIUpstreamUsageMissing) && result != nil {
+		result.CaptureResponseComplete = true
+		MarkOpsPostResponseFailure(
+			c,
+			"upstream_error",
+			upstreamUsageMissingErrorCode,
+			upstreamUsageMissingMessage,
+			http.StatusBadGateway,
+			result.Stream,
+		)
+	}
+	return finalizeOpenAIForwardResult(c, result, upstreamRequest), forwardErr
+}
+
+// finalizeGeminiForwardResult applies only the billing-integrity boundary to
+// public Gemini generation calls. It deliberately does not validate event
+// order, terminal markers, or content shape beyond what the forwarding parser
+// already needs. countTokens is operational and therefore exempt.
+func finalizeGeminiForwardResult(c *gin.Context, result *ForwardResult, forwardErr error, action string) (*ForwardResult, error) {
+	if action == "countTokens" {
+		return finalizeForwardResult(c, result), forwardErr
+	}
+	return finalizeForwardResultWithUsage(c, result, forwardErr)
 }
 
 // failedForwardResultWithCapture preserves a final HTTP 2xx provider exchange

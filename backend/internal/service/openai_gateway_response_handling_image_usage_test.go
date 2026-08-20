@@ -126,17 +126,6 @@ func TestMergeHostedImageGenToolUsage_EmptyImageGen(t *testing.T) {
 	}
 }
 
-func TestValidOpenAIHostedToolUsageShapeRejectsInconsistentImageBuckets(t *testing.T) {
-	for _, raw := range []string{
-		`{"image_gen":{"input_tokens":"bad"}}`,
-		`{"image_gen":{"input_tokens":1,"input_tokens_details":{"image_tokens":2}}}`,
-		`{"image_gen":{"output_tokens":1,"output_tokens_details":{"image_tokens":2}}}`,
-	} {
-		assert.False(t, validOpenAIHostedToolUsageShape(gjson.Parse(raw)), raw)
-	}
-	assert.True(t, validOpenAIHostedToolUsageShape(gjson.Parse(`{"image_gen":{"input_tokens":10,"input_tokens_details":{"image_tokens":9},"output_tokens":3,"output_tokens_details":{"image_tokens":2},"total_tokens":13}}`)))
-}
-
 func TestParseSSEUsageBytes_ResponseCompletedWithImageGen(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	data := []byte(`{

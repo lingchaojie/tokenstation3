@@ -134,6 +134,7 @@ func TestPathGuardOpenAIResponsesRequestPathSuffixRejectsNonConformingSubpaths(t
 	for path, want := range map[string]string{
 		"/v1/responses":                        "",
 		"/v1/responses/compact":                "/compact",
+		"/v1/responses/input_tokens":           "/input_tokens",
 		"/responses/compact/":                  "/compact",
 		"/backend-api/codex/responses/compact": "/compact",
 	} {

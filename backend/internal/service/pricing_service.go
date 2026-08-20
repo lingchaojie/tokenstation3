@@ -124,8 +124,9 @@ var (
 	}
 )
 
-// LiteLLMModelPricing LiteLLM价格数据结构
-// 只保留我们需要的字段，使用指针来处理可能缺失的值
+// LiteLLMModelPricing LiteLLM价格数据结构。
+// 价格值保留为 float64；对应的 Configured 字段记录源 JSON 是否显式提供该价格，
+// 从而区分“字段缺失”和“显式配置为 0（免费）”。
 type LiteLLMModelPricing struct {
 	InputCostPerToken                   float64 `json:"input_cost_per_token"`
 	InputCostPerTokenPriority           float64 `json:"input_cost_per_token_priority"`
@@ -147,7 +148,17 @@ type LiteLLMModelPricing struct {
 	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
 	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
 
-	// TokenPricingAbsent 表示源数据中 input/output token 价格均缺失（仅有图片价）。
+	InputCostPerTokenConfigured                   bool `json:"-"`
+	InputCostPerTokenPriorityConfigured           bool `json:"-"`
+	OutputCostPerTokenConfigured                  bool `json:"-"`
+	OutputCostPerTokenPriorityConfigured          bool `json:"-"`
+	CacheCreationInputTokenCostConfigured         bool `json:"-"`
+	CacheCreationInputTokenCostPriorityConfigured bool `json:"-"`
+	CacheReadInputTokenCostConfigured             bool `json:"-"`
+	CacheReadInputTokenCostPriorityConfigured     bool `json:"-"`
+	OutputCostPerImageTokenConfigured             bool `json:"-"`
+
+	// TokenPricingAbsent 表示源数据中所有 token bucket 价格均缺失（仅有图片价）。
 	// 此类条目只可用于图片计费，token 计费必须回退到 fallback 或 fail-closed，
 	// 否则 token 流量会被按 $0 计费。零值（false）表示条目具备 token 价格。
 	TokenPricingAbsent bool `json:"-"`
@@ -461,8 +472,13 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			continue
 		}
 
+		hasTokenPricing := entry.InputCostPerToken != nil || entry.InputCostPerTokenPriority != nil ||
+			entry.OutputCostPerToken != nil || entry.OutputCostPerTokenPriority != nil ||
+			entry.CacheCreationInputTokenCost != nil || entry.CacheCreationInputTokenCostPriority != nil ||
+			entry.CacheCreationInputTokenCostAbove1hr != nil ||
+			entry.CacheReadInputTokenCost != nil || entry.CacheReadInputTokenCostPriority != nil
 		// 只保留有有效价格的条目
-		if entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil && entry.OutputCostPerImage == nil && entry.OutputCostPerImageToken == nil && entry.InputCostPerImageToken == nil {
+		if !hasTokenPricing && entry.OutputCostPerImage == nil && entry.OutputCostPerImageToken == nil && entry.InputCostPerImageToken == nil {
 			continue
 		}
 
@@ -471,7 +487,17 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			Mode:                  entry.Mode,
 			SupportsPromptCaching: entry.SupportsPromptCaching,
 			SupportsServiceTier:   entry.SupportsServiceTier,
-			TokenPricingAbsent:    entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil,
+			TokenPricingAbsent:    !hasTokenPricing,
+
+			InputCostPerTokenConfigured:                   entry.InputCostPerToken != nil,
+			InputCostPerTokenPriorityConfigured:           entry.InputCostPerTokenPriority != nil,
+			OutputCostPerTokenConfigured:                  entry.OutputCostPerToken != nil,
+			OutputCostPerTokenPriorityConfigured:          entry.OutputCostPerTokenPriority != nil,
+			CacheCreationInputTokenCostConfigured:         entry.CacheCreationInputTokenCost != nil,
+			CacheCreationInputTokenCostPriorityConfigured: entry.CacheCreationInputTokenCostPriority != nil,
+			CacheReadInputTokenCostConfigured:             entry.CacheReadInputTokenCost != nil,
+			CacheReadInputTokenCostPriorityConfigured:     entry.CacheReadInputTokenCostPriority != nil,
+			OutputCostPerImageTokenConfigured:             entry.OutputCostPerImageToken != nil,
 		}
 
 		if entry.InputCostPerToken != nil {

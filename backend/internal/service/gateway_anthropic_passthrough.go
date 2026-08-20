@@ -466,9 +466,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	var firstTokenMs *int
 	clientDisconnected := false
 	semanticOutput := false
-	sawTerminalEvent := false
 	providerPayloadObserved := false
-	providerPhase := anthropicProviderAwaitingStart
 
 	stagedOutput := newDefaultOpenAIFirstOutputStage()
 	defer func() { _ = stagedOutput.Close() }()
@@ -673,21 +671,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		}
 
 		if data != "" {
-			if data == "[DONE]" {
-				if providerPhase.state != anthropicProviderStarted.state || providerPhase.hasActive || !providerPhase.finalDelta {
-					return errors.Join(errors.New("anthropic [DONE] arrived before a valid message_start"), eventStage.Close())
-				}
-				providerPhase.state = anthropicProviderTerminated.state
-			} else if gjson.Valid(data) {
-				decodedType := gjson.Get(data, "type").String()
-				if err := validateAnthropicProviderEvent(&providerPhase, eventName, []byte(data), decodedType); err != nil {
-					return errors.Join(err, eventStage.Close())
-				}
-				if decodedType == "message_start" {
+			if data != "[DONE]" && gjson.Valid(data) {
+				if gjson.Get(data, "type").String() == "message_start" {
 					providerPayloadObserved = true
 				}
-			} else {
-				return errors.Join(fmt.Errorf("invalid JSON for Anthropic event %q", eventName), eventStage.Close())
 			}
 			observer.ObserveAnthropic([]byte(data))
 			s.parseSSEUsagePassthrough(data, usage)
@@ -716,9 +703,6 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
 			}
-		}
-		if terminal {
-			sawTerminalEvent = true
 		}
 		if eventHasSemanticOutput || (terminal && providerPayloadObserved) {
 			commitStage()
@@ -760,25 +744,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 							return handlePendingEventError(eventErr)
 						}
 					} else {
-						cleanupErr := discardPendingEvent()
-						tailErr := errors.New("upstream stream ended with an incomplete Anthropic provider event")
-						if !semanticOutput {
-							return nil, errors.Join(preOutputFailover(tailErr.Error(), true, nil), cleanupErr)
-						}
-						return streamResult(), errors.Join(tailErr, cleanupErr)
+						_ = discardPendingEvent()
 					}
-				}
-				if !sawTerminalEvent {
-					if !semanticOutput {
-						return nil, preOutputFailover("upstream stream ended before semantic output", true, nil)
-					}
-					return streamResult(), fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !providerPayloadObserved {
-					if stageCommitted || semanticOutput {
-						return streamResult(), fmt.Errorf("stream usage incomplete: terminal event arrived before message_start")
-					}
-					return nil, preOutputFailover("upstream stream ended without a valid message_start", true, nil)
 				}
 				return streamResult(), nil
 			}
@@ -1015,6 +982,53 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 	}
 }
 
+// parseSSEUsagePassthrough is the upstream package-level entry point used by
+// Bedrock and native Anthropic compatibility paths. The local method remains
+// for capture-aware callers.
+func parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
+	(&GatewayService{}).parseSSEUsagePassthrough(data, usage)
+}
+
+// invalidNonStreamingJSONFailoverError is the upstream shared helper. Keep the
+// local capture metadata on the returned error without imposing extra payload
+// validation.
+func invalidNonStreamingJSONFailoverError(
+	ctx context.Context,
+	rateLimitService *RateLimitService,
+	resp *http.Response,
+	account *Account,
+	body []byte,
+	parseErr error,
+	requestedModel ...string,
+) error {
+	const statusCode = http.StatusBadGateway
+	accountID := int64(0)
+	accountName := ""
+	retryableOnSameAccount := false
+	if account != nil {
+		accountID = account.ID
+		accountName = account.Name
+		retryableOnSameAccount = account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
+	}
+	logger.LegacyPrintf("service.gateway", "Account %d(%s): upstream returned non-JSON 2xx response, attempting failover: status=%d request_id=%s error=%v", accountID, accountName, resp.StatusCode, resp.Header.Get("x-request-id"), parseErr)
+	if rateLimitService != nil && account != nil {
+		if len(requestedModel) > 0 {
+			rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel[0])
+		} else {
+			rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
+		}
+	}
+	return &UpstreamFailoverError{
+		StatusCode:              statusCode,
+		ResponseBody:            body,
+		RequestHeaders:          captureRequestHeadersFromResponse(resp),
+		ResponseHeaders:         resp.Header.Clone(),
+		UpstreamEndpoint:        captureEndpointFromResponse(resp),
+		HasUpstreamHTTPResponse: true,
+		RetryableOnSameAccount:  retryableOnSameAccount,
+	}
+}
+
 func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 	usage := &ClaudeUsage{}
 	if len(body) == 0 {
@@ -1049,54 +1063,6 @@ func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 	return usage
 }
 
-func (s *GatewayService) invalidNonStreamingJSONFailoverError(
-	ctx context.Context,
-	resp *http.Response,
-	account *Account,
-	body []byte,
-	parseErr error,
-	requestedModel ...string,
-) error {
-	const statusCode = http.StatusBadGateway
-
-	accountID := int64(0)
-	accountName := ""
-	retryableOnSameAccount := false
-	if account != nil {
-		accountID = account.ID
-		accountName = account.Name
-		retryableOnSameAccount = account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
-	}
-
-	logger.LegacyPrintf(
-		"service.gateway",
-		"Account %d(%s): upstream returned non-JSON 2xx response, attempting failover: status=%d request_id=%s error=%v",
-		accountID,
-		accountName,
-		resp.StatusCode,
-		resp.Header.Get("x-request-id"),
-		parseErr,
-	)
-
-	if s.rateLimitService != nil && account != nil {
-		if len(requestedModel) > 0 {
-			s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel[0])
-		} else {
-			s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
-		}
-	}
-
-	return &UpstreamFailoverError{
-		StatusCode:              statusCode,
-		ResponseBody:            body,
-		RequestHeaders:          captureRequestHeadersFromResponse(resp),
-		ResponseHeaders:         resp.Header.Clone(),
-		UpstreamEndpoint:        captureEndpointFromResponse(resp),
-		HasUpstreamHTTPResponse: true,
-		RetryableOnSameAccount:  retryableOnSameAccount,
-	}
-}
-
 func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	ctx context.Context,
 	resp *http.Response,
@@ -1116,16 +1082,6 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.ObserveAnthropic(body)
-
-	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		if !validAnthropicNonStreamingResponse(body) {
-			parseErr := fmt.Errorf("invalid Anthropic message response")
-			if !gjson.ValidBytes(body) {
-				parseErr = fmt.Errorf("invalid JSON response")
-			}
-			return nil, s.invalidNonStreamingJSONFailoverError(ctx, resp, account, body, parseErr)
-		}
-	}
 
 	usage := parseClaudeUsageFromResponseBody(body)
 	if IsForceCacheBilling(ctx) && usage.InputTokens > 0 {

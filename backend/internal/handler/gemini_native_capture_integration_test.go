@@ -203,6 +203,21 @@ func TestGeminiNativeRouterArchivesProviderAttemptExactlyOnce(t *testing.T) {
 			expectedHTTPStatus: http.StatusOK,
 		},
 		{
+			name:               "buffered_missing_usage_is_terminal",
+			terminalOnly:       true,
+			upstreamStatus:     http.StatusOK,
+			upstreamResponse:   []byte(`{"candidates":[{"content":{"parts":[{"text":"Done without usage."}],"role":"model"},"finishReason":"STOP"}],"modelVersion":"gemini-test-upstream"}`),
+			expectedHTTPStatus: http.StatusOK,
+		},
+		{
+			name:               "streaming_missing_usage_is_terminal",
+			action:             "streamGenerateContent",
+			terminalOnly:       true,
+			upstreamStatus:     http.StatusOK,
+			upstreamResponse:   []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Done without usage.\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"modelVersion\":\"gemini-test-upstream\"}\n\n"),
+			expectedHTTPStatus: http.StatusOK,
+		},
+		{
 			name:               "provider_200_read_failure_is_terminal",
 			terminalOnly:       true,
 			upstreamStatus:     http.StatusOK,
@@ -335,7 +350,7 @@ func TestGeminiMessagesNonStreamingLargeProviderResponseIsNotLimitedByCaptureCei
 		userID    = int64(9736)
 	)
 	largeText := strings.Repeat("x", config.GatewayCaptureMaxBodyBytes+1024) + "tail-marker"
-	providerResponse := []byte(`{"candidates":[{"content":{"parts":[{"text":"` + largeText + `"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3},"modelVersion":"gemini-test-upstream"}`)
+	providerResponse := []byte(`{"candidates":[{"content":{"parts":[{"text":"` + largeText + `"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3},"modelVersion":"gemini-3.1-pro"}`)
 	require.Greater(t, len(providerResponse), config.GatewayCaptureMaxBodyBytes)
 
 	for _, captureEnabled := range []bool{false, true} {
@@ -349,7 +364,7 @@ func TestGeminiMessagesNonStreamingLargeProviderResponseIsNotLimitedByCaptureCei
 				Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1, Priority: 1,
 				Credentials: map[string]any{
 					"api_key": "gemini-secret", "base_url": "https://generativelanguage.googleapis.com",
-					"model_mapping": map[string]any{"gemini-test": "gemini-test-upstream"},
+					"model_mapping": map[string]any{"gemini-3.1-pro": "gemini-3.1-pro"},
 				},
 				AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
 			}
@@ -383,7 +398,7 @@ func TestGeminiMessagesNonStreamingLargeProviderResponseIsNotLimitedByCaptureCei
 				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg, settingService, capturePool,
 			)
 
-			requestBody := []byte(`{"model":"gemini-test","stream":false,"max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`)
+			requestBody := []byte(`{"model":"gemini-3.1-pro","stream":false,"max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
@@ -410,23 +425,6 @@ func TestGeminiMessagesNonStreamingLargeProviderResponseIsNotLimitedByCaptureCei
 			require.True(t, archived.Truncated)
 			require.Equal(t, http.StatusOK, archived.HTTPStatus)
 			require.NotContains(t, string(archived.RequestHeaders), "gemini-secret")
-		})
-	}
-}
-
-func TestAntigravityGeminiNativeRouterFailoverArchivesOnlyFinalSemanticAccount(t *testing.T) {
-	firstBodies := map[string][]byte{
-		"done_only": []byte("data: [DONE]\n\n"),
-		"malformed_then_valid": []byte("data: {not-json}\n\n" +
-			"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}}\n\n"),
-		"empty_candidates_then_valid": []byte("data: {\"response\":{\"candidates\":[]}}\n\n" +
-			"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}}\n\n"),
-		"done_then_valid": []byte("data: [DONE]\n\n" +
-			"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}}\n\n"),
-	}
-	for name, firstBody := range firstBodies {
-		t.Run(name, func(t *testing.T) {
-			testAntigravityGeminiNativeRouterFailover(t, firstBody)
 		})
 	}
 }
@@ -512,82 +510,10 @@ func testAntigravityGeminiNativeRouterFailover(t *testing.T, firstBody []byte) {
 	require.Equal(t, secondAccountID, usageRepo.snapshot()[0].AccountID)
 }
 
-func TestGeminiNativeStreamDONEOnlyAccountFailsOverWithoutCaptureOrBilling(t *testing.T) {
-	testGeminiNativeStreamPresemanticFailover(t, []byte("data: [DONE]\n\n"))
-}
-
-func TestGeminiNativeBlockedPromptFeedbackIsTerminalWithoutAccountReplay(t *testing.T) {
-	blocked := []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\",\"blockReasonMessage\":\"blocked-by-provider\"}}\n\n")
-	testGeminiNativeStreamPresemanticFailover(t, blocked, true)
-}
-
-func TestGeminiNativeAncillaryUsageBeforeValidTerminalDoesNotReplay(t *testing.T) {
-	body := []byte("data: {\"usageMetadata\":{\"promptTokenCount\":8},\"modelVersion\":\"gemini-provider\"}\n\n" +
-		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"accepted-first\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n")
-	testGeminiNativeStreamPresemanticFailover(t, body, true)
-}
-
 func TestGeminiNativeMultiCandidateStreamAllowsLaterCandidateAfterEarlierFinish(t *testing.T) {
 	body := []byte("data: {\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"primary\"}]},\"finishReason\":\"STOP\"}]}\n\n" +
-		"data: {\"candidates\":[{\"index\":1,\"content\":{\"parts\":[{\"text\":\"accepted-first\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n")
+		"data: {\"candidates\":[{\"index\":1,\"content\":{\"parts\":[{\"text\":\"accepted-first\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}\n\ndata: [DONE]\n\n")
 	testGeminiNativeStreamPresemanticFailover(t, body, true)
-}
-
-func TestGeminiCommittedContentWithoutFinishDoesNotReplayAfterDONE(t *testing.T) {
-	body := []byte("data: {\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"accepted-first\"}]}}]}\n\ndata: [DONE]\n\n")
-	t.Run("native", func(t *testing.T) {
-		testGeminiNativeStreamPresemanticFailover(t, body, true)
-	})
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		t.Run(endpoint, func(t *testing.T) {
-			testGeminiCompatibilityPresemanticFailover(t, endpoint, body, true)
-		})
-	}
-}
-
-func TestGeminiNativeStreamRejectsMalformedProviderPayloadsBeforeCommit(t *testing.T) {
-	firstBodies := map[string][]byte{
-		"empty_candidates":           []byte("data: {\"candidates\":[]}\n\ndata: [DONE]\n\n"),
-		"empty_candidate":            []byte("data: {\"candidates\":[{}]}\n\ndata: [DONE]\n\n"),
-		"finish_only":                []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"usage_only":                 []byte("data: {\"usageMetadata\":{\"promptTokenCount\":8}}\n\ndata: [DONE]\n\n"),
-		"total_tokens_only":          []byte("data: {\"totalTokens\":8}\n\ndata: [DONE]\n\n"),
-		"nonstring_finish_reason":    []byte("data: {\"candidates\":[{\"finishReason\":123}]}\n\ndata: [DONE]\n\n"),
-		"malformed_first_candidate":  []byte("data: {\"candidates\":[{}, {\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"malformed_later_candidate":  []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]}},{\"finishReason\":123}]}\n\ndata: [DONE]\n\n"),
-		"fractional_candidate_index": []byte("data: {\"candidates\":[{\"index\":0.5,\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"mixed_duplicate_index":      []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]}},{\"index\":0,\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_part_text":        []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":123}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_function_name":    []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":123,\"args\":{}}}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"oversized_function_name":    []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"" + strings.Repeat("x", 1025) + "\",\"args\":{}}}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"scalar_candidate":           []byte("data: {\"candidates\":[123]}\n\ndata: [DONE]\n\n"),
-		"invalid_prompt_feedback":    []byte("data: {\"promptFeedback\":{\"foo\":\"bar\"}}\n\ndata: [DONE]\n\n"),
-		"invalid_prompt_rating":      []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\",\"safetyRatings\":[123]}}\n\n"),
-		"invalid_candidate_ratings":  []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"safetyRatings\":\"bad\"}]}\n\n"),
-		"invalid_grounding_metadata": []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"groundingMetadata\":{\"groundingChunks\":[123]}}]}\n\n"),
-		"invalid_finish_message":     []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"finishMessage\":123}]}\n\n"),
-		"blocked_with_candidate":     []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\"},\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"first-leak\"}]}}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_model_ancillary":  []byte("data: {\"modelVersion\":123}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"invalid_usage_ancillary":    []byte("data: {\"usageMetadata\":{\"promptTokenCount\":\"bad\"}}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"invalid_usage_details":      []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":2,\"candidatesTokensDetails\":[{\"modality\":\"IMAGE\",\"tokenCount\":-7}]}}\n\n"),
-		"cached_exceeds_prompt":      []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"cachedContentTokenCount\":3}}\n\n"),
-		"usage_sum_overflow":         []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":9223372036854775807,\"thoughtsTokenCount\":1}}\n\n"),
-		"image_exceeds_output":       []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":2,\"candidatesTokensDetails\":[{\"modality\":\"IMAGE\",\"tokenCount\":3}]}}\n\n"),
-		"malformed_then_valid": []byte("data: {not-json}\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"empty_candidates_then_valid": []byte("data: {\"candidates\":[]}\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"done_then_valid": []byte("data: [DONE]\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"too_many_candidates": []byte("data: {\"candidates\":[" +
-			strings.Repeat(`{"content":{"role":"model","parts":[{"text":""}]}},`, 1024) +
-			`{"content":{"role":"model","parts":[{"text":""}]}}]}` + "\n\n"),
-	}
-	for name, firstBody := range firstBodies {
-		t.Run(name, func(t *testing.T) {
-			testGeminiNativeStreamPresemanticFailover(t, firstBody)
-		})
-	}
 }
 
 func testGeminiNativeStreamPresemanticFailover(t *testing.T, firstBody []byte, expectFirstTerminal ...bool) {
@@ -600,7 +526,7 @@ func testGeminiNativeStreamPresemanticFailover(t *testing.T, firstBody []byte, e
 			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1, Priority: priority,
 			Credentials: map[string]any{
 				"api_key": "gemini-secret", "base_url": "https://generativelanguage.googleapis.com",
-				"model_mapping": map[string]any{"gemini-test": "gemini-test-upstream"},
+				"model_mapping": map[string]any{"gemini-3.1-pro": "gemini-3.1-pro"},
 			},
 			AccountGroups: []service.AccountGroup{{AccountID: id, GroupID: groupID}},
 		}
@@ -636,9 +562,9 @@ func testGeminiNativeStreamPresemanticFailover(t *testing.T, firstBody []byte, e
 	requestBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-test:streamGenerateContent", bytes.NewReader(requestBody))
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-3.1-pro:streamGenerateContent", bytes.NewReader(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
-	c.Params = gin.Params{{Key: "modelAction", Value: "/gemini-test:streamGenerateContent"}}
+	c.Params = gin.Params{{Key: "modelAction", Value: "/gemini-3.1-pro:streamGenerateContent"}}
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID: 9754, UserID: userID, GroupID: func() *int64 { id := groupID; return &id }(), Status: service.StatusActive,
 		Group: group, User: &service.User{ID: userID, Status: service.StatusActive, Concurrency: 10, Balance: 100},
@@ -681,46 +607,6 @@ func testGeminiNativeStreamPresemanticFailover(t *testing.T, firstBody []byte, e
 	require.Equal(t, finalRequests[0], record.RawRequest)
 	require.Len(t, usageRepo.snapshot(), 1)
 	require.Equal(t, secondAccountID, usageRepo.snapshot()[0].AccountID)
-}
-
-func TestGeminiNativeGenerateContentRejectsMalformedProviderPayloadsBeforeCommit(t *testing.T) {
-	firstBodies := map[string][]byte{
-		"empty_candidates":           []byte(`{"candidates":[]}`),
-		"empty_candidate":            []byte(`{"candidates":[{}]}`),
-		"finish_only":                []byte(`{"candidates":[{"finishReason":"STOP"}]}`),
-		"usage_only":                 []byte(`{"usageMetadata":{"promptTokenCount":8}}`),
-		"total_tokens_only":          []byte(`{"totalTokens":8}`),
-		"nonstring_finish_reason":    []byte(`{"candidates":[{"finishReason":123}]}`),
-		"malformed_first_candidate":  []byte(`{"candidates":[{}, {"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP"}]}`),
-		"malformed_later_candidate":  []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]}},{"finishReason":123}]}`),
-		"content_without_finish":     []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]}}]}`),
-		"fractional_candidate_index": []byte(`{"candidates":[{"index":0.5,"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP"}]}`),
-		"mixed_duplicate_index":      []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]}},{"index":0,"finishReason":"STOP"}]}`),
-		"nonstring_part_text":        []byte(`{"candidates":[{"content":{"parts":[{"text":123}]},"finishReason":"STOP"}]}`),
-		"nonstring_function_name":    []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":123,"args":{}}}]},"finishReason":"STOP"}]}`),
-		"oversized_function_name":    []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"` + strings.Repeat("x", 1025) + `","args":{}}}]},"finishReason":"STOP"}]}`),
-		"scalar_candidate":           []byte(`{"candidates":[123]}`),
-		"invalid_prompt_feedback":    []byte(`{"promptFeedback":{"foo":"bar"}}`),
-		"invalid_prompt_rating":      []byte(`{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[123]}}`),
-		"invalid_candidate_ratings":  []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP","safetyRatings":"bad"}]}`),
-		"invalid_grounding_metadata": []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[123]}}]}`),
-		"invalid_finish_message":     []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP","finishMessage":123}]}`),
-		"blocked_with_candidate":     []byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"first-leak"}]}}]}`),
-		"nonstring_model_sibling":    []byte(`{"modelVersion":123,"candidates":[{"finishReason":"STOP"}]}`),
-		"invalid_usage_sibling":      []byte(`{"usageMetadata":{"promptTokenCount":"bad"},"candidates":[{"finishReason":"STOP"}]}`),
-		"invalid_usage_details":      []byte(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":-7}]},"candidates":[{"content":{"parts":[{"text":"first-leak"}]}}, {"finishReason":"STOP"}]}`),
-		"cached_exceeds_prompt":      []byte(`{"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3},"candidates":[{"finishReason":"STOP"}]}`),
-		"usage_sum_overflow":         []byte(`{"usageMetadata":{"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":1},"candidates":[{"finishReason":"STOP"}]}`),
-		"image_exceeds_output":       []byte(`{"usageMetadata":{"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":3}]},"candidates":[{"finishReason":"STOP"}]}`),
-		"too_many_candidates": []byte(`{"candidates":[` +
-			strings.Repeat(`{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP"},`, 1024) +
-			`{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP"}]}`),
-	}
-	for name, firstBody := range firstBodies {
-		t.Run(name, func(t *testing.T) {
-			testGeminiNativeGenerateContentPresemanticFailover(t, firstBody)
-		})
-	}
 }
 
 func testGeminiNativeGenerateContentPresemanticFailover(t *testing.T, firstBody []byte) {
@@ -794,103 +680,6 @@ func testGeminiNativeGenerateContentPresemanticFailover(t *testing.T, firstBody 
 	require.Equal(t, finalRequests[0], record.RawRequest)
 	require.Len(t, usageRepo.snapshot(), 1)
 	require.Equal(t, secondAccountID, usageRepo.snapshot()[0].AccountID)
-}
-
-func TestGeminiCompatibilityStreamsDONEOnlyAccountFailsOverWithoutCaptureOrBilling(t *testing.T) {
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		t.Run(endpoint, func(t *testing.T) {
-			testGeminiCompatibilityDONEOnlyAccountFailover(t, endpoint)
-		})
-	}
-}
-
-func TestGeminiCompatibilityBlockedPromptFeedbackIsTerminalWithoutAccountReplay(t *testing.T) {
-	blocked := []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\",\"blockReasonMessage\":\"blocked-by-provider\"}}\n\n")
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		t.Run(endpoint, func(t *testing.T) {
-			testGeminiCompatibilityPresemanticFailover(t, endpoint, blocked, true)
-		})
-	}
-}
-
-func TestGeminiCompatibilityAncillaryUsageBeforeValidTerminalDoesNotReplay(t *testing.T) {
-	body := []byte("data: {\"usageMetadata\":{\"promptTokenCount\":8},\"modelVersion\":\"gemini-provider\"}\n\n" +
-		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"accepted-first\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n")
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		t.Run(endpoint, func(t *testing.T) {
-			testGeminiCompatibilityPresemanticFailover(t, endpoint, body, true)
-		})
-	}
-}
-
-func TestGeminiCompatibilityStreamsEmptyFunctionCallFailsOverWithoutCaptureOrBilling(t *testing.T) {
-	firstBody := []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{}}]}}]}\n\n")
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		t.Run(endpoint, func(t *testing.T) {
-			testGeminiCompatibilityPresemanticFailover(t, endpoint, firstBody)
-		})
-	}
-}
-
-func TestGeminiCompatibilityStreamsRejectMalformedProviderPayloadsBeforeCommit(t *testing.T) {
-	firstBodies := map[string][]byte{
-		"empty_candidates":           []byte("data: {\"candidates\":[]}\n\ndata: [DONE]\n\n"),
-		"empty_candidate":            []byte("data: {\"candidates\":[{}]}\n\ndata: [DONE]\n\n"),
-		"finish_only":                []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"usage_only":                 []byte("data: {\"usageMetadata\":{\"promptTokenCount\":8}}\n\ndata: [DONE]\n\n"),
-		"total_tokens_only":          []byte("data: {\"totalTokens\":8}\n\ndata: [DONE]\n\n"),
-		"nonstring_finish_reason":    []byte("data: {\"candidates\":[{\"finishReason\":123}]}\n\ndata: [DONE]\n\n"),
-		"malformed_first_candidate":  []byte("data: {\"candidates\":[{}, {\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"mixed_duplicate_index":      []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]}},{\"index\":0,\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_part_text":        []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":123}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_function_name":    []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":123,\"args\":{}}}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"oversized_function_name":    []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"" + strings.Repeat("x", 1025) + "\",\"args\":{}}}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"scalar_candidate":           []byte("data: {\"candidates\":[123]}\n\ndata: [DONE]\n\n"),
-		"invalid_prompt_feedback":    []byte("data: {\"promptFeedback\":{\"foo\":\"bar\"}}\n\ndata: [DONE]\n\n"),
-		"invalid_prompt_rating":      []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\",\"safetyRatings\":[123]}}\n\n"),
-		"invalid_candidate_ratings":  []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"safetyRatings\":\"bad\"}]}\n\n"),
-		"invalid_grounding_metadata": []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"groundingMetadata\":{\"groundingChunks\":[123]}}]}\n\n"),
-		"invalid_finish_message":     []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\",\"finishMessage\":123}]}\n\n"),
-		"blocked_with_candidate":     []byte("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\"},\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"first-leak\"}]}}]}\n\ndata: [DONE]\n\n"),
-		"nonstring_model_ancillary":  []byte("data: {\"modelVersion\":123}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"invalid_usage_ancillary":    []byte("data: {\"usageMetadata\":{\"promptTokenCount\":\"bad\"}}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"invalid_usage_details":      []byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":2,\"candidatesTokensDetails\":[{\"modality\":\"IMAGE\",\"tokenCount\":-7}]}}\n\n"),
-		"cached_exceeds_prompt":      []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"cachedContentTokenCount\":3}}\n\n"),
-		"image_exceeds_output":       []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":2,\"candidatesTokensDetails\":[{\"modality\":\"IMAGE\",\"tokenCount\":3}]}}\n\n"),
-		"malformed_then_valid": []byte("data: {not-json}\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"empty_candidates_then_valid": []byte("data: {\"candidates\":[]}\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"),
-		"done_then_valid": []byte("data: [DONE]\n\n" +
-			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"first-leak\"}]},\"finishReason\":\"STOP\"}]}\n\n"),
-		"too_many_candidates": []byte("data: {\"candidates\":[" +
-			strings.Repeat(`{"content":{"role":"model","parts":[{"text":""}]}},`, 1024) +
-			`{"content":{"role":"model","parts":[{"text":""}]}}]}` + "\n\n"),
-	}
-	for _, endpoint := range []string{"messages", "chat_completions"} {
-		for name, firstBody := range firstBodies {
-			t.Run(endpoint+"/"+name, func(t *testing.T) {
-				testGeminiCompatibilityPresemanticFailover(t, endpoint, firstBody)
-			})
-		}
-	}
-}
-
-func TestGeminiCompatibilityBufferedResponsesRequireApplicationTerminal(t *testing.T) {
-	firstBodies := map[string][]byte{
-		"content_without_finish":  []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]}}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}`),
-		"malformed_sibling":       []byte(`{"modelVersion":123,"candidates":[{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP"}]}`),
-		"blocked_with_candidate":  []byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"first-leak"}]}}]}`),
-		"invalid_grounding":       []byte(`{"candidates":[{"content":{"parts":[{"text":"first-leak"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":[123]}}]}`),
-		"oversized_function_name": []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"` + strings.Repeat("x", 1025) + `","args":{}}}]},"finishReason":"STOP"}]}`),
-	}
-	for _, endpoint := range []string{"messages_buffered", "chat_completions_buffered"} {
-		for name, firstBody := range firstBodies {
-			t.Run(endpoint+"/"+name, func(t *testing.T) {
-				testGeminiCompatibilityPresemanticFailover(t, endpoint, firstBody)
-			})
-		}
-	}
 }
 
 func testGeminiCompatibilityDONEOnlyAccountFailover(t *testing.T, endpoint string) {

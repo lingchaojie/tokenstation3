@@ -293,8 +293,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 		submitForwardUsage := func(result *service.ForwardResult) {
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 			if result.UpstreamFailed {
+				h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 				return
 			}
 			userAgent := c.GetHeader("User-Agent")
@@ -306,15 +306,21 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			inboundEndpoint := GetInboundEndpoint(c)
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
+			usageInput := &service.RecordUsageInput{
+				Result: result, QuotaPlatform: quotaPlatform, APIKey: apiKey, User: apiKey.User,
+				Account: account, Subscription: subscription, PricingAt: pricingAt,
+				InboundEndpoint: inboundEndpoint, UpstreamEndpoint: upstreamEndpoint,
+				UserAgent: userAgent, IPAddress: clientIP, RequestPayloadHash: requestPayloadHash,
+				APIKeyService: h.apiKeyService, SessionID: sessionID,
+				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+			}
+			if !h.validateGatewayUsagePricing(c, usageInput) {
+				h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
+				return
+			}
+			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-					Result: result, QuotaPlatform: quotaPlatform, APIKey: apiKey, User: apiKey.User,
-					Account: account, Subscription: subscription, PricingAt: pricingAt,
-					InboundEndpoint: inboundEndpoint, UpstreamEndpoint: upstreamEndpoint,
-					UserAgent: userAgent, IPAddress: clientIP, RequestPayloadHash: requestPayloadHash,
-					APIKeyService: h.apiKeyService, SessionID: sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-				}); err != nil {
+				if err := h.gatewayService.RecordUsage(ctx, usageInput); err != nil {
 					reqLog.Error("gateway.cc.record_usage_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
 			})

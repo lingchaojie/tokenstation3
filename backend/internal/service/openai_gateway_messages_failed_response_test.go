@@ -125,7 +125,7 @@ func TestForwardAsAnthropic_StreamingBareErrorAfterOutputIsVisible(t *testing.T)
 	require.NotContains(t, err.Error(), "missing terminal event")
 }
 
-func TestHandleAnthropicStreamingResponseRejectsKnownFiniteTerminalTailBeforeCommit(t *testing.T) {
+func TestHandleAnthropicStreamingResponseStopsAtTerminalWithoutValidatingTail(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -145,10 +145,13 @@ func TestHandleAnthropicStreamingResponseRejectsKnownFiniteTerminalTailBeforeCom
 
 	result, err := svc.handleAnthropicStreamingResponse(resp, c, rawChatCompletionsTestAccount(), "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
 
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.False(t, c.Writer.Written())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "terminal-tail", result.ResponseID)
+	require.Equal(t, 9, result.Usage.InputTokens)
+	require.Equal(t, 1, result.Usage.OutputTokens)
+	require.True(t, c.Writer.Written())
+	require.NotContains(t, rec.Body.String(), `"delta":"tail"`)
 }
 
 func TestForwardAsAnthropic_StreamingBareErrorBeforeOutputFailsOver(t *testing.T) {

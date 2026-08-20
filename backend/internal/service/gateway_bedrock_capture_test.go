@@ -138,9 +138,7 @@ func TestBedrockStreamTimeoutJoinsDecoderBeforePublishingCapture(t *testing.T) {
 	account := &Account{ID: 1, Platform: PlatformAnthropic}
 
 	_, err := svc.handleBedrockStreamingResponse(context.Background(), resp, c, account, time.Now(), "bedrock")
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.True(t, failoverErr.HasUpstreamHTTPResponse)
+	require.ErrorContains(t, err, "stream data interval timeout")
 	bridge, ok := takeCaptureResult(c)
 	require.True(t, ok)
 	require.Equal(t, tail, bridge.Response)

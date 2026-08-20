@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -32,6 +33,7 @@ type webChatGatewayService interface {
 	SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error)
 	ForwardAsChatCompletions(ctx context.Context, c *gin.Context, account *Account, body []byte, parsed *ParsedRequest) (*ForwardResult, error)
 	ForwardAsResponses(ctx context.Context, c *gin.Context, account *Account, body []byte, parsed *ParsedRequest) (*ForwardResult, error)
+	ValidateUsagePricing(ctx context.Context, input *RecordUsageInput) error
 	RecordUsage(ctx context.Context, input *RecordUsageInput) error
 }
 
@@ -39,6 +41,7 @@ type webChatOpenAIGatewayService interface {
 	SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error)
 	Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error)
 	ForwardAsChatCompletions(ctx context.Context, c *gin.Context, account *Account, body []byte, promptCacheKey string, defaultMappedModel string) (*OpenAIForwardResult, error)
+	ValidateUsagePricing(ctx context.Context, input *OpenAIRecordUsageInput) error
 	RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error
 }
 
@@ -208,16 +211,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			artifactCandidates = append(artifactCandidates, webChatArtifactCandidatesFromOpenAIImageResults(result.imageResults)...)
 			applyWebChatOpenAIUsageReasoningEffort(result, input.Capabilities, input.Thinking)
 		}
-		attachWebChatOpenAICaptureResponse(result, upstreamCapture, downstreamCapture)
-		if CaptureUsesStreamingAttempt(c) {
-			CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
-		} else if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
-			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
-		}
-		if result.UpstreamFailed {
-			break
-		}
-		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, &OpenAIRecordUsageInput{
+		usageInput := &OpenAIRecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -229,7 +223,26 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			IPAddress:          ip.GetClientIP(c),
 			APIKeyService:      s.apiKeyService,
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		})
+		}
+		usagePricingFailed := false
+		if !result.UpstreamFailed {
+			if validateErr := s.openAIGatewayService.ValidateUsagePricing(postDispatchCtx, usageInput); validateErr != nil {
+				markWebChatOpenAIUsagePricingFailure(c, result, validateErr)
+				dispatchErr = validateErr
+				usagePricingFailed = true
+			}
+		}
+		attachWebChatOpenAICaptureResponse(result, upstreamCapture, downstreamCapture)
+		RefreshOpenAIForwardCaptureContentPolicy(c, string(account.Platform), result)
+		if CaptureUsesStreamingAttempt(c) {
+			CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.openAIGatewayService.(webChatOpenAICaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
+		}
+		if result.UpstreamFailed || usagePricingFailed {
+			break
+		}
+		recordUsageErr := s.openAIGatewayService.RecordUsage(postDispatchCtx, usageInput)
 		if recordUsageErr != nil {
 			log.Printf("[WARN] web chat: record OpenAI usage failed after upstream response: %v", recordUsageErr)
 		} else {
@@ -256,16 +269,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			return nil, ErrNoAvailableAccounts
 		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
-		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
-		if CaptureUsesStreamingAttempt(c) {
-			CommitForwardCaptureAttempt(c, string(account.Platform), result)
-		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
-			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
-		}
-		if result.UpstreamFailed {
-			break
-		}
-		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
+		usageInput := &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -278,7 +282,26 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			APIKeyService:      s.apiKeyService,
 			QuotaPlatform:      QuotaPlatform(ctx, hiddenKey),
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		})
+		}
+		usagePricingFailed := false
+		if !result.UpstreamFailed {
+			if validateErr := s.gatewayService.ValidateUsagePricing(postDispatchCtx, usageInput); validateErr != nil {
+				markWebChatGatewayUsagePricingFailure(c, result, validateErr)
+				dispatchErr = validateErr
+				usagePricingFailed = true
+			}
+		}
+		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
+		RefreshForwardCaptureContentPolicy(c, string(account.Platform), result)
+		if CaptureUsesStreamingAttempt(c) {
+			CommitForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, upstreamEndpoint)
+		}
+		if result.UpstreamFailed || usagePricingFailed {
+			break
+		}
+		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, usageInput)
 		if recordUsageErr != nil {
 			log.Printf("[WARN] web chat: record gateway usage failed after upstream response: %v", recordUsageErr)
 		} else {
@@ -294,16 +317,7 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			return nil, ErrNoAvailableAccounts
 		}
 		applyWebChatUsageReasoningEffort(result, input.Capabilities, input.Thinking)
-		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
-		if CaptureUsesStreamingAttempt(c) {
-			CommitForwardCaptureAttempt(c, string(account.Platform), result)
-		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
-			captureSubmitter.SubmitWebChatCapture(result, account, body, "/v1/chat/completions")
-		}
-		if result.UpstreamFailed {
-			break
-		}
-		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, &RecordUsageInput{
+		usageInput := &RecordUsageInput{
 			Result:             result,
 			APIKey:             hiddenKey,
 			User:               input.User,
@@ -316,7 +330,26 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 			APIKeyService:      s.apiKeyService,
 			QuotaPlatform:      QuotaPlatform(ctx, hiddenKey),
 			ChannelUsageFields: channelMapping.ToUsageFields(input.Model, result.UpstreamModel),
-		})
+		}
+		usagePricingFailed := false
+		if !result.UpstreamFailed {
+			if validateErr := s.gatewayService.ValidateUsagePricing(postDispatchCtx, usageInput); validateErr != nil {
+				markWebChatGatewayUsagePricingFailure(c, result, validateErr)
+				dispatchErr = validateErr
+				usagePricingFailed = true
+			}
+		}
+		attachWebChatGatewayCaptureResponse(result, upstreamCapture, downstreamCapture)
+		RefreshForwardCaptureContentPolicy(c, string(account.Platform), result)
+		if CaptureUsesStreamingAttempt(c) {
+			CommitForwardCaptureAttempt(c, string(account.Platform), result)
+		} else if captureSubmitter, ok := s.gatewayService.(webChatGatewayCaptureSubmitter); ok {
+			captureSubmitter.SubmitWebChatCapture(result, account, body, "/v1/chat/completions")
+		}
+		if result.UpstreamFailed || usagePricingFailed {
+			break
+		}
+		recordUsageErr := s.gatewayService.RecordUsage(postDispatchCtx, usageInput)
 		if recordUsageErr != nil {
 			log.Printf("[WARN] web chat: record Gemini usage failed after upstream response: %v", recordUsageErr)
 		} else {
@@ -341,6 +374,28 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 	}
 	artifactCandidates = append(artifactCandidates, ExtractArtifactsFromChatCompletions(responseBody, input.Stream)...)
 	return &webChatDispatchResult{ResponseBody: responseBody, UsageLogID: usageLogID, ArtifactCandidates: artifactCandidates}, dispatchErr
+}
+
+func markWebChatGatewayUsagePricingFailure(c *gin.Context, result *ForwardResult, err error) {
+	if result != nil {
+		if !result.CaptureTerminalError && !result.UpstreamFailed {
+			result.CaptureResponseComplete = true
+		}
+		result.CaptureTerminalError = true
+	}
+	MarkOpsPostResponseFailure(c, "api_error", "usage_pricing_unavailable", "Unable to price upstream usage", http.StatusBadGateway, result != nil && result.Stream)
+	log.Printf("[ERROR] web chat: gateway usage pricing preflight failed: %v", err)
+}
+
+func markWebChatOpenAIUsagePricingFailure(c *gin.Context, result *OpenAIForwardResult, err error) {
+	if result != nil {
+		if !result.CaptureTerminalError && !result.UpstreamFailed {
+			result.CaptureResponseComplete = true
+		}
+		result.CaptureTerminalError = true
+	}
+	MarkOpsPostResponseFailure(c, "api_error", "usage_pricing_unavailable", "Unable to price upstream usage", http.StatusBadGateway, result != nil && result.Stream)
+	log.Printf("[ERROR] web chat: OpenAI usage pricing preflight failed: %v", err)
 }
 
 func attachWebChatGatewayCaptureResponse(result *ForwardResult, upstream *webChatStreamCapture, downstream *WebChatResponseCapture) {

@@ -35,191 +35,6 @@ type geminiPartialThenErrorBody struct {
 	err  error
 }
 
-func TestValidGeminiProviderPayloadRejectsMalformedCandidateParts(t *testing.T) {
-	t.Parallel()
-
-	for name, body := range map[string]string{
-		"scalar candidate":                       `{"candidates":[123]}`,
-		"malformed later candidate":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]}},{"finishReason":123}]}`,
-		"nonstring text":                         `{"candidates":[{"content":{"parts":[{"text":123}]},"finishReason":"STOP"}]}`,
-		"nonstring function name":                `{"candidates":[{"content":{"parts":[{"functionCall":{"name":123,"args":{}}}]},"finishReason":"STOP"}]}`,
-		"scalar function arguments":              `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":123}}]},"finishReason":"STOP"}]}`,
-		"multiple data variants":                 `{"candidates":[{"content":{"parts":[{"text":"x","functionCall":{"name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`,
-		"nonstring model version":                `{"modelVersion":123,"candidates":[{"finishReason":"STOP"}]}`,
-		"invalid usage sibling":                  `{"usageMetadata":{"promptTokenCount":"bad"},"candidates":[{"finishReason":"STOP"}]}`,
-		"invalid candidate details":              `{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":-7}]},"candidates":[{"finishReason":"STOP"}]}`,
-		"cache exceeds prompt":                   `{"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3},"candidates":[{"finishReason":"STOP"}]}`,
-		"output token overflow":                  `{"usageMetadata":{"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":1},"candidates":[{"finishReason":"STOP"}]}`,
-		"image exceeds output":                   `{"usageMetadata":{"candidatesTokenCount":2,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":3}]},"candidates":[{"finishReason":"STOP"}]}`,
-		"invalid prompt rating":                  `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[123]}}`,
-		"invalid candidate ratings":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","safetyRatings":"bad"}]}`,
-		"invalid finish message":                 `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","finishMessage":123}]}`,
-		"scalar grounding metadata":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":123}]}`,
-		"scalar grounding queries":               `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":"bad"}}]}`,
-		"nonstring grounding query":              `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":[123]}}]}`,
-		"scalar grounding chunk":                 `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[123]}}]}`,
-		"nonstring grounding web field":          `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":123}}]}}]}`,
-		"implicit then explicit duplicate index": `{"candidates":[{"content":{"parts":[{"text":"first"}]}},{"index":0,"content":{"parts":[{"text":"second"}]},"finishReason":"STOP"}]}`,
-		"explicit then implicit duplicate index": `{"candidates":[{"index":1,"content":{"parts":[{"text":"first"}]}},{"content":{"parts":[{"text":"second"}]},"finishReason":"STOP"}]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.False(t, validGeminiProviderPayload([]byte(body)))
-		})
-	}
-
-	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`)))
-	require.False(t, validGeminiProviderPayload([]byte(`{"candidates":[{"finishReason":"STOP"}]}`)))
-	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"finishReason":"SAFETY"}]}`)))
-	require.True(t, validGeminiProviderPayload([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":""}}]},"finishReason":"STOP"}]}`)))
-}
-
-func TestGeminiProviderValidationRejectsDuplicateKnownJSONKeys(t *testing.T) {
-	for name, body := range map[string]string{
-		"root candidates":  `{"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP"}],"candidates":[{"content":{"parts":[{"text":"danger"}]},"finishReason":"STOP"}]}`,
-		"candidate finish": `{"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP","finishReason":"SAFETY"}]}`,
-		"part text":        `{"candidates":[{"content":{"parts":[{"text":"safe","text":"danger"}]},"finishReason":"STOP"}]}`,
-		"function name":    `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"safe","name":"danger","args":{}}}]},"finishReason":"STOP"}]}`,
-		"usage count":      `{"usageMetadata":{"promptTokenCount":1,"promptTokenCount":2},"candidates":[{"content":{"parts":[{"text":"safe"}]},"finishReason":"STOP"}]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.False(t, validGeminiProviderPayload([]byte(body)))
-			_, err := (&geminiProviderStreamState{}).observePayload([]byte(body))
-			require.ErrorContains(t, err, "repeated known field")
-			_, err = decodeGeminiCompatResponse([]byte(body))
-			require.ErrorContains(t, err, "repeated known field")
-		})
-	}
-
-	forwardCompatible := []byte(`{"candidates":[{"content":{"parts":[{"text":"safe","opaque":{"type":"future-a","type":"future-b"}}]},"finishReason":"STOP"}]}`)
-	require.True(t, validGeminiProviderPayload(forwardCompatible))
-	_, err := decodeGeminiCompatResponse(forwardCompatible)
-	require.NoError(t, err)
-}
-
-func TestValidGeminiRootEnvelopeRejectsOversizedRetainedMetadata(t *testing.T) {
-	metadataTooLong := strings.Repeat("m", 1025)
-	signatureTooLong := strings.Repeat("s", (64<<10)+1)
-	quote := func(value string) string {
-		encoded, err := json.Marshal(value)
-		require.NoError(t, err)
-		return string(encoded)
-	}
-
-	for name, body := range map[string]string{
-		"model version":          `{"modelVersion":` + quote(metadataTooLong) + `}`,
-		"response id":            `{"responseId":` + quote(metadataTooLong) + `}`,
-		"block reason":           `{"promptFeedback":{"blockReason":` + quote(metadataTooLong) + `}}`,
-		"block reason message":   `{"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":` + quote(metadataTooLong) + `}}`,
-		"usage modality":         `{"usageMetadata":{"promptTokenCount":1,"promptTokensDetails":[{"modality":` + quote(metadataTooLong) + `,"tokenCount":1}]}}`,
-		"safety category":        `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"category":` + quote(metadataTooLong) + `}]}}`,
-		"safety probability":     `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"probability":` + quote(metadataTooLong) + `}]}}`,
-		"safety severity":        `{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"severity":` + quote(metadataTooLong) + `}]}}`,
-		"finish reason":          `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":` + quote(metadataTooLong) + `}]}`,
-		"finish message":         `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP","finishMessage":` + quote(metadataTooLong) + `}]}`,
-		"function call name":     `{"candidates":[{"content":{"parts":[{"functionCall":{"name":` + quote(metadataTooLong) + `,"args":{}}}]},"finishReason":"STOP"}]}`,
-		"function response name": `{"candidates":[{"content":{"parts":[{"functionResponse":{"name":` + quote(metadataTooLong) + `,"response":{}}}]},"finishReason":"STOP"}]}`,
-		"thought signature":      `{"candidates":[{"content":{"parts":[{"text":"ok","thoughtSignature":` + quote(signatureTooLong) + `}]},"finishReason":"STOP"}]}`,
-		"inline mime type":       `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":` + quote(metadataTooLong) + `,"data":"AA=="}}]},"finishReason":"STOP"}]}`,
-		"file uri":               `{"candidates":[{"content":{"parts":[{"fileData":{"fileUri":` + quote(metadataTooLong) + `}}]},"finishReason":"STOP"}]}`,
-		"file mime type":         `{"candidates":[{"content":{"parts":[{"fileData":{"mimeType":` + quote(metadataTooLong) + `,"fileUri":"gs://bucket/file"}}]},"finishReason":"STOP"}]}`,
-		"code language":          `{"candidates":[{"content":{"parts":[{"executableCode":{"language":` + quote(metadataTooLong) + `,"code":""}}]},"finishReason":"STOP"}]}`,
-		"execution outcome":      `{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":` + quote(metadataTooLong) + `,"output":""}}]},"finishReason":"STOP"}]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.False(t, validGeminiRootEnvelopeShape([]byte(body)))
-		})
-	}
-
-	validLongOpaqueSignature := strings.Repeat("s", 8<<10)
-	require.True(t, validGeminiRootEnvelopeShape([]byte(
-		`{"candidates":[{"content":{"parts":[{"text":"ok","thoughtSignature":`+quote(validLongOpaqueSignature)+`}]},"finishReason":"STOP"}]}`,
-	)))
-}
-
-func TestGeminiProviderStreamStateRejectsMalformedAncillaryBeforeValidPayload(t *testing.T) {
-	t.Parallel()
-	for _, body := range []string{
-		`{"modelVersion":123}`,
-		`{"responseId":{}}`,
-		`{"usageMetadata":{"promptTokenCount":"bad"}}`,
-	} {
-		state := &geminiProviderStreamState{}
-		_, err := state.observePayload([]byte(body))
-		require.Error(t, err)
-	}
-}
-
-func TestGeminiProviderStreamStateTracksCandidateTerminalsIndependently(t *testing.T) {
-	t.Parallel()
-	state := &geminiProviderStreamState{}
-	provider, err := state.observePayload([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"}]}`))
-	require.NoError(t, err)
-	require.True(t, provider)
-	require.False(t, state.terminalObserved(), "a candidate finish is not a framing terminal while more alternatives may follow")
-
-	provider, err = state.observePayload([]byte(`{"candidates":[{"index":1,"content":{"parts":[{"text":"alternative"}]},"finishReason":"STOP"}]}`))
-	require.NoError(t, err)
-	require.True(t, provider)
-	require.True(t, state.applicationTerminalObserved())
-	require.NoError(t, state.observeDone())
-	require.True(t, state.terminalObserved())
-}
-
-func TestGeminiProviderValidationDenseArraysStayWithinBoundedAllocation(t *testing.T) {
-	const targetBytes = 8 << 20
-
-	t.Run("candidates", func(t *testing.T) {
-		const candidate = `{"content":{"role":"model","parts":[{"text":""}]}},`
-		count := (targetBytes - len(`{"candidates":[]}`)) / len(candidate)
-		body := []byte(`{"candidates":[` + strings.Repeat(candidate, count) + `{"content":{"role":"model","parts":[{"text":""}]}}]}`)
-		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(candidate)))
-
-		runtime.GC()
-		var before runtime.MemStats
-		runtime.ReadMemStats(&before)
-		_, err := (&geminiProviderStreamState{}).observePayload(body)
-		var after runtime.MemStats
-		runtime.ReadMemStats(&after)
-
-		require.ErrorContains(t, err, "too many candidates")
-		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-	})
-
-	t.Run("parts", func(t *testing.T) {
-		const part = `{"text":""},`
-		count := (targetBytes - len(`{"candidates":[{"content":{"role":"model","parts":[]}}]}`)) / len(part)
-		body := []byte(`{"candidates":[{"content":{"role":"model","parts":[` + strings.Repeat(part, count) + `{"text":""}]}}]}`)
-		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(part)))
-
-		runtime.GC()
-		var before runtime.MemStats
-		runtime.ReadMemStats(&before)
-		_, err := (&geminiProviderStreamState{}).observePayload(body)
-		var after runtime.MemStats
-		runtime.ReadMemStats(&after)
-
-		require.ErrorContains(t, err, "too many parts")
-		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-	})
-
-	t.Run("grounding chunks", func(t *testing.T) {
-		const chunk = `{},`
-		count := (targetBytes - len(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[]}}]}`)) / len(chunk)
-		body := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[` + strings.Repeat(chunk, count) + `{}` + `]}}]}`)
-		require.GreaterOrEqual(t, len(body), targetBytes-(2*len(chunk)))
-
-		runtime.GC()
-		var before runtime.MemStats
-		runtime.ReadMemStats(&before)
-		_, err := (&geminiProviderStreamState{}).observePayload(body)
-		var after runtime.MemStats
-		runtime.ReadMemStats(&after)
-
-		require.Error(t, err)
-		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-	})
-}
-
 func TestDecodeGeminiCompatResponseIgnoresDenseUnknownFieldsWithBoundedAllocation(t *testing.T) {
 	const targetBytes = 8 << 20
 	const item = `{},`
@@ -238,43 +53,6 @@ func TestDecodeGeminiCompatResponseIgnoresDenseUnknownFieldsWithBoundedAllocatio
 	require.Equal(t, "STOP", extractGeminiFinishReason(decoded))
 	require.Equal(t, "ok", extractGeminiParts(decoded)[0]["text"])
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-}
-
-func TestGeminiProviderStreamStateBoundsTrackedCandidates(t *testing.T) {
-	state := &geminiProviderStreamState{}
-	for index := 0; index <= 1024; index++ {
-		_, err := state.observePayload([]byte(fmt.Sprintf(`{"candidates":[{"index":%d,"finishReason":"SAFETY"}]}`, index)))
-		if index < 1024 {
-			require.NoError(t, err)
-			continue
-		}
-		require.ErrorContains(t, err, "too many candidates")
-	}
-}
-
-func TestGeminiProviderStreamStateDONERequiresApplicationTerminal(t *testing.T) {
-	t.Parallel()
-	state := &geminiProviderStreamState{}
-	provider, err := state.observePayload([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`))
-	require.NoError(t, err)
-	require.True(t, provider)
-	require.Error(t, state.observeDone())
-}
-
-func TestValidGeminiTerminalResponseRequiresEveryCandidateToFinish(t *testing.T) {
-	t.Parallel()
-	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`)))
-	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"partial"}]}}]}`)))
-	require.False(t, validGeminiTerminalResponse([]byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`)))
-	require.False(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"finishReason":"STOP"}]}`)))
-	require.True(t, validGeminiTerminalResponse([]byte(`{"candidates":[{"index":0,"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}]}`)))
-}
-
-func TestGeminiProviderStreamStateRejectsBlockedPromptWithCandidates(t *testing.T) {
-	t.Parallel()
-	state := &geminiProviderStreamState{}
-	_, err := state.observePayload([]byte(`{"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"index":0,"content":{"parts":[{"text":"partial"}]}}]}`))
-	require.Error(t, err)
 }
 
 func TestExtractGeminiUsageSumsAllImageDetailsCaseInsensitively(t *testing.T) {
@@ -440,6 +218,32 @@ func TestGeminiForwardAsChatCompletions_StreamsOpenAIChunksFromGeminiSSE(t *test
 	require.Contains(t, out, "data: [DONE]")
 }
 
+func TestGeminiForwardAsChatCompletions_MissingUsageIsProviderFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `data: {"candidates":[{"content":{"parts":[{"text":"hello"}]} ,"finishReason":"STOP"}]}` + "\n\n" + "data: [DONE]\n\n"
+	httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Goog-Request-Id": []string{"gemini-chat-no-usage"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{}}
+	account := &Account{ID: 102, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "gemini-api-key"}}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gemini-2.5-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	marked, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "upstream_usage_missing", marked.Code)
+}
+
 func TestGeminiForwardAsChatCompletions_SelectsFirstCandidateWithoutMergingAlternatives(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstreamBody := `data: {"candidates":[{"content":{"parts":[{"text":"primary"}]},"finishReason":"STOP"},{"content":{"parts":[{"text":"alternative-must-not-merge"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}` + "\n\n" +
@@ -529,6 +333,96 @@ func TestGeminiStreamingReadErrorAfterSemanticOutputPreservesPartialUsageAndTerm
 			require.Equal(t, 1, result.Usage.OutputTokens)
 			require.Equal(t, providerBody, result.CaptureResponse)
 			require.Contains(t, recorder.Body.String(), "partial")
+		})
+	}
+}
+
+func TestGeminiPublicForwardersMissingUsageAreTerminalWithoutEstimating(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name         string
+		path         string
+		contentType  string
+		providerBody string
+		requestBody  string
+		stream       bool
+		forward      func(*GeminiMessagesCompatService, *gin.Context, *Account, []byte) (*ForwardResult, error)
+	}{
+		{
+			name:         "messages_buffered",
+			path:         "/v1/messages",
+			contentType:  "application/json",
+			providerBody: `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`,
+			requestBody:  `{"model":"gemini-2.5-flash","stream":false,"messages":[{"role":"user","content":"hi"}]}`,
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name:         "messages_streaming",
+			path:         "/v1/messages",
+			contentType:  "text/event-stream",
+			providerBody: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+			requestBody:  `{"model":"gemini-2.5-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+			stream:       true,
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name:         "native_buffered",
+			path:         "/v1beta/models/gemini-2.5-flash:generateContent",
+			contentType:  "application/json",
+			providerBody: `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`,
+			requestBody:  `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.ForwardNative(context.Background(), c, account, "gemini-2.5-flash", "generateContent", false, body)
+			},
+		},
+		{
+			name:         "native_streaming",
+			path:         "/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+			contentType:  "text/event-stream",
+			providerBody: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+			requestBody:  `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
+			stream:       true,
+			forward: func(s *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return s.ForwardNative(context.Background(), c, account, "gemini-2.5-flash", "streamGenerateContent", true, body)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			providerBody := []byte(tt.providerBody)
+			upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {tt.contentType}, "X-Goog-Request-Id": {"gemini-missing-usage"}},
+				Body:       io.NopCloser(bytes.NewReader(providerBody)),
+			}}
+			svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{Gateway: config.GatewayConfig{
+				Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20},
+			}}}
+			account := &Account{ID: 121, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "gemini-api-key"}}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			requestBody := []byte(tt.requestBody)
+			c.Request = httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(requestBody))
+			enableCaptureForTest(t, c)
+
+			result, err := tt.forward(svc, c, account, requestBody)
+
+			require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.True(t, result.CaptureResponseComplete)
+			require.Equal(t, providerBody, result.CaptureResponse)
+			marked, ok := GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, tt.stream, marked.Stream)
+			_, bridgeRemains := takeCaptureResult(c)
+			require.False(t, bridgeRemains, "the public boundary must consume the capture bridge exactly once")
 		})
 	}
 }
@@ -1493,7 +1387,7 @@ func (w *geminiPartialClientWriteErrorWriter) Write(p []byte) (int, error) {
 	return 1, errors.New("write failed: client disconnected")
 }
 
-func TestGeminiStreamingClientDisconnectDoesNotHideMissingProviderTerminal(t *testing.T) {
+func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	providerBody := "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"
@@ -1527,7 +1421,7 @@ func TestGeminiStreamingClientDisconnectDoesNotHideMissingProviderTerminal(t *te
 
 			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
 			require.NotNil(t, result)
-			require.ErrorContains(t, err, "missing terminal event")
+			require.NoError(t, err)
 		})
 	}
 }

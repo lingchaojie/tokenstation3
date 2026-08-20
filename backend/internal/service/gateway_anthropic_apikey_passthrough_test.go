@@ -1209,7 +1209,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAf
 	require.Equal(t, 5, result.usage.OutputTokens)
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsError(t *testing.T) {
+func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventWithUsageSucceeds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -1244,8 +1244,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsEr
 	}
 
 	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-3-7-sonnet-20250219")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.semanticOutput)
 	require.Contains(t, rec.Body.String(), `"text":"hello"`)
@@ -1311,7 +1310,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CommittedPartialCarriesCaptur
 	}
 
 	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, newAnthropicAPIKeyAccountForTest(), body, "claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
-	require.ErrorContains(t, err, "missing terminal event")
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 8, result.Usage.InputTokens)
 	require.Nil(t, result.CaptureResponse)
@@ -1667,11 +1666,10 @@ func TestExtractAnthropicSSEDataLine(t *testing.T) {
 }
 
 func TestGatewayService_ParseSSEUsagePassthrough_MessageStartFallbacks(t *testing.T) {
-	svc := &GatewayService{}
 	usage := &ClaudeUsage{}
 	data := `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}}`
 
-	svc.parseSSEUsagePassthrough(data, usage)
+	parseSSEUsagePassthrough(data, usage)
 
 	require.Equal(t, 12, usage.InputTokens)
 	require.Equal(t, 9, usage.CacheReadInputTokens, "应兼容 cached_tokens 字段")
@@ -1681,7 +1679,6 @@ func TestGatewayService_ParseSSEUsagePassthrough_MessageStartFallbacks(t *testin
 }
 
 func TestGatewayService_ParseSSEUsagePassthrough_MessageDeltaSelectiveOverwrite(t *testing.T) {
-	svc := &GatewayService{}
 	usage := &ClaudeUsage{
 		InputTokens:           10,
 		CacheCreation5mTokens: 2,
@@ -1689,7 +1686,7 @@ func TestGatewayService_ParseSSEUsagePassthrough_MessageDeltaSelectiveOverwrite(
 	}
 	data := `{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":5,"cache_creation_input_tokens":8,"cache_read_input_tokens":0,"cached_tokens":11,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":0}}}`
 
-	svc.parseSSEUsagePassthrough(data, usage)
+	parseSSEUsagePassthrough(data, usage)
 
 	require.Equal(t, 10, usage.InputTokens, "message_delta 中 0 值不应覆盖已有 input_tokens")
 	require.Equal(t, 5, usage.OutputTokens)
@@ -1700,28 +1697,26 @@ func TestGatewayService_ParseSSEUsagePassthrough_MessageDeltaSelectiveOverwrite(
 }
 
 func TestGatewayService_ParseSSEUsagePassthrough_NoopCases(t *testing.T) {
-	svc := &GatewayService{}
 
 	usage := &ClaudeUsage{InputTokens: 3}
-	svc.parseSSEUsagePassthrough("", usage)
+	parseSSEUsagePassthrough("", usage)
 	require.Equal(t, 3, usage.InputTokens)
 
-	svc.parseSSEUsagePassthrough("[DONE]", usage)
+	parseSSEUsagePassthrough("[DONE]", usage)
 	require.Equal(t, 3, usage.InputTokens)
 
-	svc.parseSSEUsagePassthrough("not-json", usage)
+	parseSSEUsagePassthrough("not-json", usage)
 	require.Equal(t, 3, usage.InputTokens)
 
 	// nil usage 不应 panic
-	svc.parseSSEUsagePassthrough(`{"type":"message_start"}`, nil)
+	parseSSEUsagePassthrough(`{"type":"message_start"}`, nil)
 }
 
 func TestGatewayService_ParseSSEUsagePassthrough_FallbackFromUsageNode(t *testing.T) {
-	svc := &GatewayService{}
 	usage := &ClaudeUsage{}
 	data := `{"type":"content_block_delta","usage":{"cached_tokens":6,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}}}`
 
-	svc.parseSSEUsagePassthrough(data, usage)
+	parseSSEUsagePassthrough(data, usage)
 
 	require.Equal(t, 6, usage.CacheReadInputTokens)
 	require.Equal(t, 3, usage.CacheCreationInputTokens)

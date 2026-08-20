@@ -51,20 +51,10 @@ func TestUsageLogRepositoryGetStatsWithFiltersExcludedUsers(t *testing.T) {
 	mock.ExpectQuery(`(?s)FROM usage_logs\s+WHERE ` + predicate).
 		WithArgs(excludedUserIDsArgument{}).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_requests", "total_input_tokens", "total_output_tokens",
-			"total_cache_tokens", "total_cache_creation_tokens", "total_cache_read_tokens",
-			"total_cost", "total_actual_cost", "total_account_cost", "avg_duration_ms",
-		}).AddRow(int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), 0.0, 0.0, 0.0, 0.0))
-
-	for _, prefix := range []string{
-		`SELECT COALESCE\(NULLIF\(TRIM\(inbound_endpoint\)`,
-		`SELECT COALESCE\(NULLIF\(TRIM\(upstream_endpoint\)`,
-		`SELECT CONCAT\(`,
-	} {
-		mock.ExpectQuery(`(?s)`+prefix+`.*`+`\(user_id IS NULL OR NOT \(user_id = ANY\(\$3\)\)\)`).
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), excludedUserIDsArgument{}).
-			WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
-	}
+			"inbound_grouped", "upstream_grouped", "inbound_endpoint", "upstream_endpoint",
+			"requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+			"cost", "actual_cost", "account_cost", "avg_duration_ms",
+		}).AddRow(1, 1, nil, nil, int64(0), int64(0), int64(0), int64(0), int64(0), 0.0, 0.0, 0.0, 0.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)

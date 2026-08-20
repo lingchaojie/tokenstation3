@@ -44,13 +44,14 @@ const (
 	// ensureForwardErrorResponse 检查此 key，为 true 时跳过兜底写入，避免在已完成的 JSON 后追加 SSE。
 	ResponseCommittedKey = "response_committed"
 
-	OpsClientBusinessLimitedKey                          = "ops_client_business_limited"
-	OpsClientBusinessLimitedReasonKey                    = "ops_client_business_limited_reason"
-	OpsClientBusinessLimitedReasonIPRestriction          = "api_key_ip_restriction"
-	OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable = "api_key_group_unavailable"
-	OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned  = "api_key_group_unassigned"
-	OpsClientBusinessLimitedReasonLocalFeatureGate       = "local_feature_gate"
-	OpsClientBusinessLimitedReasonLocalPolicyDenied      = "local_policy_denied"
+	OpsClientBusinessLimitedKey                           = "ops_client_business_limited"
+	OpsClientBusinessLimitedReasonKey                     = "ops_client_business_limited_reason"
+	OpsClientBusinessLimitedReasonIPRestriction           = "api_key_ip_restriction"
+	OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable  = "api_key_group_unavailable"
+	OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned   = "api_key_group_unassigned"
+	OpsClientBusinessLimitedReasonLocalFeatureGate        = "local_feature_gate"
+	OpsClientBusinessLimitedReasonLocalPolicyDenied       = "local_policy_denied"
+	OpsClientBusinessLimitedReasonLocalModelConfiguration = "local_model_configuration"
 )
 
 func MarkResponseCommitted(c *gin.Context) { c.Set(ResponseCommittedKey, true) }
@@ -93,6 +94,18 @@ func HasOpsClientBusinessLimited(c *gin.Context) bool {
 	return marked
 }
 
+func OpsClientBusinessLimitedReason(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	v, ok := c.Get(OpsClientBusinessLimitedReasonKey)
+	if !ok {
+		return ""
+	}
+	reason, _ := v.(string)
+	return strings.TrimSpace(reason)
+}
+
 // OpsStreamError 描述网关在「响应状态已固化为 200」之后（keepalive ping 或部分数据
 // 已 flush）就地以 SSE error 帧形式返回的错误。由于 HTTP 状态码停留在 200，
 // 而 ops_error_logger 以 status>=400 为采集触发条件，这类流内失败
@@ -113,6 +126,10 @@ type OpsStreamError struct {
 	// CountTowardsSLA 表示虽然 wire 状态已固化为 200，请求在应用语义上仍然失败，
 	// Ops 应使用 IntendedStatus 计入错误率/SLA。
 	CountTowardsSLA bool
+	// Stream records the original request mode. The same durable post-response
+	// failure channel is also used when a buffered provider response cannot be
+	// billed after its HTTP status has already been committed.
+	Stream bool
 }
 
 // MarkOpsStreamError 记录一次就地 SSE 错误，供 ops 日志采集。
@@ -123,6 +140,7 @@ func MarkOpsStreamError(c *gin.Context, errType, message string, intendedStatus 
 		ErrType:        errType,
 		Message:        message,
 		IntendedStatus: intendedStatus,
+		Stream:         true,
 	})
 }
 
@@ -136,6 +154,22 @@ func MarkOpsStreamFailure(c *gin.Context, errType, code, message string, intende
 		Message:         message,
 		IntendedStatus:  intendedStatus,
 		CountTowardsSLA: true,
+		Stream:          true,
+	})
+}
+
+// MarkOpsPostResponseFailure records a durable logical failure discovered
+// after the provider response has already committed. This keeps billing
+// integrity failures visible without rewriting otherwise compatible upstream
+// response bytes.
+func MarkOpsPostResponseFailure(c *gin.Context, errType, code, message string, intendedStatus int, stream bool) {
+	markOpsStreamError(c, OpsStreamError{
+		ErrType:         errType,
+		Code:            code,
+		Message:         message,
+		IntendedStatus:  intendedStatus,
+		CountTowardsSLA: true,
+		Stream:          stream,
 	})
 }
 

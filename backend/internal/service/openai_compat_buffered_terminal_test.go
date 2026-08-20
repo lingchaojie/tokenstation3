@@ -48,23 +48,26 @@ func (r *delayedOpenAITerminalTailBody) Close() error {
 	return nil
 }
 
-func TestReadOpenAICompatBufferedTerminalRejectsInvalidFramesAndTerminalTail(t *testing.T) {
+func TestReadOpenAICompatBufferedTerminalKeepsParserErrorsButAllowsProviderTail(t *testing.T) {
 	terminal := `data: {"type":"response.completed","response":{"id":"resp_ok","status":"completed","output":[]}}` + "\n\n"
 	tests := []struct {
-		name string
-		body string
+		name    string
+		body    string
+		wantErr bool
 	}{
 		{
-			name: "malformed JSON before terminal",
-			body: "data: {not-json}\n\n" + terminal,
+			name:    "malformed JSON before terminal",
+			body:    "data: {not-json}\n\n" + terminal,
+			wantErr: true,
 		},
 		{
 			name: "provider data after terminal",
 			body: terminal + `data: {"type":"response.output_text.delta","delta":"tail"}` + "\n\n",
 		},
 		{
-			name: "incomplete event tail after terminal",
-			body: terminal + "event: response.output_text.delta\n",
+			name:    "incomplete event tail after terminal",
+			body:    terminal + "event: response.output_text.delta\n",
+			wantErr: true,
 		},
 	}
 
@@ -78,13 +81,19 @@ func TestReadOpenAICompatBufferedTerminalRejectsInvalidFramesAndTerminalTail(t *
 
 			finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
 
-			require.Error(t, err)
-			require.Nil(t, finalResponse)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Nil(t, finalResponse)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, finalResponse)
+			require.Equal(t, "resp_ok", finalResponse.ID)
 		})
 	}
 }
 
-func TestReadOpenAICompatBufferedTerminalRejectsDelayedChunkedTail(t *testing.T) {
+func TestReadOpenAICompatBufferedTerminalAllowsDelayedChunkedTail(t *testing.T) {
 	terminal := []byte(`data: {"type":"response.completed","response":{"id":"resp_ok","status":"completed","output":[]}}` + "\n\n")
 	tail := []byte(`data: {"type":"response.output_text.delta","delta":"tail"}` + "\n\n")
 	body := &delayedOpenAITerminalTailBody{
@@ -102,8 +111,9 @@ func TestReadOpenAICompatBufferedTerminalRejectsDelayedChunkedTail(t *testing.T)
 
 	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
 
-	require.Error(t, err)
-	require.Nil(t, finalResponse)
+	require.NoError(t, err)
+	require.NotNil(t, finalResponse)
+	require.Equal(t, "resp_ok", finalResponse.ID)
 }
 
 func TestReadOpenAICompatBufferedTerminalRejectsBufferedPartialTailBeforeClosingOpenBody(t *testing.T) {
@@ -150,17 +160,17 @@ func TestReadOpenAICompatBufferedTerminalReturnsAfterBoundedTailGrace(t *testing
 	require.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
-func TestBufferedResponsesSSEToJSONRejectsMalformedAndAggregateMismatch(t *testing.T) {
+func TestBufferedResponsesSSEToJSONUsesCompletedAggregateWithoutStrictIntermediateValidation(t *testing.T) {
 	terminal := `data: {"type":"response.completed","response":{"id":"resp_ok","status":"completed","output":[]}}` + "\n\n"
 	t.Run("native malformed intermediate", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)
 		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
 		result, err := (&OpenAIGatewayService{}).handleSSEToJSONWithContext(
-			context.Background(), resp, c, []byte("data: {bad}\n\n"+terminal), "gpt-5", "gpt-5",
+			context.Background(), resp, c, nil, []byte("data: {bad}\n\n"+terminal), "gpt-5", "gpt-5",
 		)
-		require.Error(t, err)
-		require.Nil(t, result)
+		require.NoError(t, err)
+		require.NotNil(t, result)
 	})
 
 	t.Run("passthrough aggregate mismatch", func(t *testing.T) {
@@ -180,7 +190,7 @@ func TestBufferedResponsesSSEToJSONRejectsMalformedAndAggregateMismatch(t *testi
 		result, err := (&OpenAIGatewayService{}).handlePassthroughSSEToJSONWithContext(
 			context.Background(), resp, c, []byte(body), "gpt-5", "gpt-5",
 		)
-		require.Error(t, err)
-		require.Nil(t, result)
+		require.NoError(t, err)
+		require.NotNil(t, result)
 	})
 }

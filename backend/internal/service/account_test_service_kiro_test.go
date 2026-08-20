@@ -903,7 +903,7 @@ func TestForwardKiroMessagesNonStreamFunctionalLimitPreservesFiniteProviderCaptu
 	require.False(t, bridge.ResponseTruncated)
 }
 
-func TestForwardKiroMessagesMalformedFirstFrameCapturesFiniteProviderTail(t *testing.T) {
+func TestForwardKiroMessagesMalformedFirstFrameCaptureLifecycle(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
@@ -947,6 +947,13 @@ func TestForwardKiroMessagesMalformedFirstFrameCapturesFiniteProviderTail(t *tes
 			require.Error(t, err)
 			require.Nil(t, result)
 			bridge, ok := takeCaptureResult(c)
+			if stream {
+				// Streaming parse failures are retryable pre-semantic attempts. The
+				// handler must archive only the final attempted account, so the
+				// intermediate bridge is deliberately discarded before failover.
+				require.False(t, ok)
+				return
+			}
 			require.True(t, ok)
 			require.Equal(t, providerBody, bridge.Response)
 			require.False(t, bridge.ResponseTruncated)

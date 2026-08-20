@@ -16,6 +16,7 @@ const (
 	openAISilentRefusalErrorCode           = "openai_silent_refusal"
 	openAISilentRefusalUpstreamMessage     = "OpenAI upstream returned an empty completion stream with finish_reason=stop and no usage"
 	openAISilentRefusalClientMessage       = "Upstream returned an empty completion without usage; no fallback account was available"
+	openAIResponsesEmptyCompletedMessage   = "OpenAI upstream returned an empty response.completed stream with no output and no usage"
 )
 
 type openAIChatSilentRefusalDetector struct {

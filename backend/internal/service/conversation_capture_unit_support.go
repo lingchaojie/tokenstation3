@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -202,6 +203,18 @@ func NewConversationCapturePoolForUnitTest(records chan<- *CaptureRecord) *Conve
 // exact attempt terminal ownership to cross-package handler tests.
 func NewConversationCapturePoolWithTerminalEventsForUnitTest(records chan<- *CaptureRecord, terminals chan<- string) *ConversationCapturePool {
 	return newConversationCapturePoolForTransport(&recordReconstructingTestTransport{records: records, terminals: terminals}, func() bool { return true })
+}
+
+// InstallCaptureRuntimePolicyForUnitTest exposes the real compiled policy
+// decision to cross-package handler tests without adding test hooks to the
+// production request path.
+func InstallCaptureRuntimePolicyForUnitTest(c *gin.Context, policy CaptureRuntimePolicy, userID int64, groupID *int64) error {
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	if err != nil {
+		return err
+	}
+	setCompiledCaptureScopeForTest(c, compiled, userID, groupID)
+	return nil
 }
 
 // InstallOpenAIAccountSchedulerForUnitTest installs a scheduler spy and a

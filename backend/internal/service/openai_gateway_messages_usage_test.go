@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,7 +127,7 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 	require.Contains(t, wire, `"cache_read_input_tokens":4`)
 }
 
-func TestStreamChatCompletionsAsAnthropicPreambleOnlyMissingDoneKeepsWriterRetryable(t *testing.T) {
+func TestStreamChatCompletionsAsAnthropicPreambleOnlyReportsMissingUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -140,9 +141,12 @@ func TestStreamChatCompletionsAsAnthropicPreambleOnlyMissingDoneKeepsWriterRetry
 	result, err := (&OpenAIGatewayService{}).streamChatCompletionsAsAnthropic(
 		context.Background(), c, resp, "claude-test", "claude-test", "gpt-5.4", nil, nil, time.Now(),
 	)
-	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
 	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, -1, c.Writer.Size(), "message_start must remain staged before semantic output")
-	require.Empty(t, recorder.Body.String())
+	require.False(t, errors.As(err, &failoverErr))
+	require.Contains(t, recorder.Body.String(), "event: message_start")
+	require.Contains(t, recorder.Body.String(), "event: message_stop")
 }

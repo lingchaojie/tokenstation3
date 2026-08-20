@@ -336,8 +336,9 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamingLengthMapsToMaxTokens(t
 	require.Contains(t, out, "event: message_stop")
 }
 
-// A framing-only [DONE] carries no provider result and must remain replayable.
-func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamFailsOverBeforeCommit(t *testing.T) {
+// A framing-only [DONE] remains protocol-compatible, but without upstream
+// usage it must be recorded as a billing failure rather than a zero-cost success.
+func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamReportsMissingUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
@@ -357,11 +358,13 @@ func TestForwardAsAnthropic_ForceChatCompletionsEmptyStreamFailsOverBeforeCommit
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
 	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Nil(t, result)
-	require.Empty(t, rec.Body.String())
+	require.False(t, errors.As(err, &failoverErr))
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.Contains(t, rec.Body.String(), "event: message_stop")
 }
 
 // Non-failover 4xx responses must go through the shared compat error handler:
@@ -456,11 +459,11 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 	require.NotContains(t, out, "event: message_stop", "no synthetic completion after a broken read")
 }
 
-func TestForwardMessagesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk(t *testing.T) {
+func TestForwardMessagesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		sse       string
-		committed bool
+		name     string
+		sse      string
+		wantText string
 	}{
 		{
 			name: "empty converted delta remains retryable",
@@ -471,9 +474,9 @@ func TestForwardMessagesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk
 			sse:  "data: {not-json}\n\ndata: [DONE]\n\n",
 		},
 		{
-			name:      "malformed after converted text returns partial error",
-			sse:       "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
-			committed: true,
+			name:     "malformed after converted text does not disconnect",
+			sse:      "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
+			wantText: `"text":"hello"`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -489,40 +492,34 @@ func TestForwardMessagesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk
 			capture := newOpenAITypedCaptureTestHarness(t)
 
 			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), body, "", "")
-			require.Error(t, err)
+			require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
 			var failoverErr *UpstreamFailoverError
-			if tt.committed {
-				require.NotNil(t, result)
-				require.False(t, errors.As(err, &failoverErr))
-				require.Contains(t, recorder.Body.String(), `"text":"hello"`)
-				require.Nil(t, result.CaptureResponse)
-				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
-				return
+			require.False(t, errors.As(err, &failoverErr))
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.True(t, result.CaptureResponseComplete)
+			if tt.wantText != "" {
+				require.Contains(t, recorder.Body.String(), tt.wantText)
 			}
-			require.Nil(t, result)
-			require.ErrorAs(t, err, &failoverErr)
-			require.Equal(t, -1, c.Writer.Size())
-			require.Empty(t, recorder.Body.String())
-			capture.abort(t, c)
+			require.Nil(t, result.CaptureResponse)
+			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
 		})
 	}
 }
 
-func TestForwardMessagesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary(t *testing.T) {
+func TestForwardMessagesRawCCClientWriteFailureStillDrainsUsage(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	for _, tt := range []struct {
 		name          string
 		acceptedBytes int
-		wantCommitted bool
 	}{
-		{name: "zero bytes remains failover safe", acceptedBytes: 0},
-		{name: "partial bytes prevents replay", acceptedBytes: 1024, wantCommitted: true},
+		{name: "zero bytes accepted", acceptedBytes: 0},
+		{name: "partial bytes accepted", acceptedBytes: 1024},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
-			c.Writer.Header().Set("X-Preexisting-Test", "kept")
-			headersBeforeAttempt := c.Writer.Header().Clone()
 			writer := &stagedConvertedFailingResponseWriter{
 				ResponseWriter: c.Writer,
 				accept:         tt.acceptedBytes,
@@ -541,22 +538,15 @@ func TestForwardMessagesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary(
 				httpUpstream: upstream,
 			}).ForwardAsAnthropic(context.Background(), c, forceChatMessagesFallbackAccount(), requestBody, "", "")
 
-			require.Error(t, err)
-			require.Equal(t, tt.acceptedBytes, writer.wrote)
-			require.Equal(t, tt.acceptedBytes, recorder.Body.Len())
-			var failoverErr *UpstreamFailoverError
-			if !tt.wantCommitted {
-				require.Nil(t, result)
-				require.ErrorAs(t, err, &failoverErr)
-				require.Equal(t, -1, c.Writer.Size())
-				require.Empty(t, recorder.Body.String(), "a zero-byte failed attempt must not pollute the replay stream")
-				require.Equal(t, headersBeforeAttempt, c.Writer.Header(), "a zero-byte failed attempt must not pollute replay response headers")
-				return
+			require.NoError(t, err)
+			if tt.acceptedBytes == 0 {
+				require.Zero(t, writer.wrote)
+			} else {
+				require.Positive(t, writer.wrote)
+				require.LessOrEqual(t, writer.wrote, tt.acceptedBytes)
 			}
+			require.Equal(t, writer.wrote, recorder.Body.Len())
 			require.NotNil(t, result)
-			require.False(t, errors.As(err, &failoverErr), "partial downstream delivery must not be replayed")
-			require.ErrorContains(t, err, "stream usage incomplete")
-			require.Equal(t, tt.acceptedBytes, c.Writer.Size())
 			require.Equal(t, 7, result.Usage.InputTokens)
 			require.Equal(t, 3, result.Usage.OutputTokens)
 			require.NotNil(t, result.FirstTokenMs)
@@ -610,14 +600,13 @@ func TestForwardMessagesRawCCCancellationClosesBody(t *testing.T) {
 			}
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
+			require.False(t, errors.As(err, &failoverErr))
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.ErrorIs(t, err, context.Canceled)
 			if tt.committed {
-				require.NotNil(t, result)
-				require.False(t, errors.As(err, &failoverErr))
 				require.Contains(t, recorder.Body.String(), "hello")
-			} else {
-				require.Nil(t, result)
-				require.ErrorAs(t, err, &failoverErr)
-				require.Equal(t, -1, c.Writer.Size())
 			}
 			select {
 			case <-blocked.closed:

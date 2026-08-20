@@ -463,7 +463,7 @@ handleSuccess:
 	}
 
 	finishCaptureResponse(resp)
-	return finalizeForwardResult(c, &ForwardResult{
+	return finalizeGeminiForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -477,7 +477,7 @@ handleSuccess:
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}), nil
+	}, nil, action)
 }
 
 // cleanGeminiRequest 清理 Gemini 请求体中的 Schema

@@ -149,8 +149,13 @@ func TestIsKiroDirectModeAccount_RelayVsDirect(t *testing.T) {
 		Platform: PlatformKiro, Type: AccountTypeAPIKey,
 		Credentials: map[string]any{"api_key": "x", "base_url": "https://relay.example.com"},
 	}))
+	require.True(t, isKiroRelayModeAccount(&Account{
+		Platform: PlatformKiro, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "x", "base_url": "https://relay.example.com"},
+	}))
 	// OAuth 始终直连
 	require.True(t, isKiroDirectModeAccount(&Account{Platform: PlatformKiro, Type: AccountTypeOAuth}))
+	require.False(t, isKiroRelayModeAccount(&Account{Platform: PlatformKiro, Type: AccountTypeOAuth}))
 	// 非 Kiro 平台不算
 	require.False(t, isKiroDirectModeAccount(&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}))
 }

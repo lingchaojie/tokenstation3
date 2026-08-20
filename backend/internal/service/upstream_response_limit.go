@@ -365,6 +365,16 @@ func markCaptureResponseTruncated(reader io.Reader) {
 }
 
 // openAITooLargeError 以 OpenAI / Gemini 格式写入超限错误。
+func anthropicTooLargeError(c *gin.Context) {
+	c.JSON(http.StatusBadGateway, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    "upstream_error",
+			"message": "Upstream response too large",
+		},
+	})
+}
+
 func openAITooLargeError(c *gin.Context) {
 	c.JSON(http.StatusBadGateway, gin.H{
 		"error": gin.H{

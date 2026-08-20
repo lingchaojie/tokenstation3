@@ -167,6 +167,7 @@ func (h *GatewayHandler) submitGatewayResultCaptureForRequest(
 		service.CommitForwardCaptureAttempt(c, string(account.Platform), result)
 		return
 	}
+	service.RefreshForwardCaptureContentPolicy(c, string(account.Platform), result)
 	if result.UpstreamRequest == nil || result.CaptureResponse == nil || result.CaptureContentPolicy == nil {
 		return
 	}
@@ -563,8 +564,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-				h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
 				if result.UpstreamFailed {
+					h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
 					return
 				}
 
@@ -589,25 +590,31 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				forceCacheBilling := fs.ForceCacheBilling
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 				sessionID := service.ExtractClientSessionID(c)
+				usageInput := &service.RecordUsageInput{
+					Result:             result,
+					QuotaPlatform:      quotaPlatform,
+					APIKey:             apiKey,
+					User:               apiKey.User,
+					Account:            account,
+					Subscription:       subscription,
+					PricingAt:          pricingAt,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					SessionID:          sessionID,
+					RequestPayloadHash: requestPayloadHash,
+					ForceCacheBilling:  forceCacheBilling,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				}
+				if !h.validateGatewayUsagePricing(c, usageInput) {
+					h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
+					return
+				}
+				h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
 				h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-						Result:             result,
-						QuotaPlatform:      quotaPlatform,
-						APIKey:             apiKey,
-						User:               apiKey.User,
-						Account:            account,
-						Subscription:       subscription,
-						PricingAt:          pricingAt,
-						InboundEndpoint:    inboundEndpoint,
-						UpstreamEndpoint:   upstreamEndpoint,
-						UserAgent:          userAgent,
-						IPAddress:          clientIP,
-						SessionID:          sessionID,
-						RequestPayloadHash: requestPayloadHash,
-						ForceCacheBilling:  forceCacheBilling,
-						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-					}); err != nil {
+					if err := h.gatewayService.RecordUsage(ctx, usageInput); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.gateway.messages"),
 							zap.Int64("user_id", subject.UserID),
@@ -968,8 +975,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 错误路径共用：后者若不入账，上游已计量的请求会完全漏记漏计费（#5148）。
 			submitForwardUsage := func(result *service.ForwardResult) {
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-				h.submitGatewayResultCaptureForRequest(c, result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 				if result.UpstreamFailed {
+					h.submitGatewayResultCaptureForRequest(c, result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 					return
 				}
 				// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
@@ -999,25 +1006,31 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				forceCacheBilling := fs.ForceCacheBilling
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
 				sessionID := service.ExtractClientSessionID(c)
+				usageInput := &service.RecordUsageInput{
+					Result:             result,
+					QuotaPlatform:      quotaPlatform,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					PricingAt:          pricingAt,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					SessionID:          sessionID,
+					RequestPayloadHash: requestPayloadHash,
+					ForceCacheBilling:  forceCacheBilling,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				}
+				if !h.validateGatewayUsagePricing(c, usageInput) {
+					h.submitGatewayResultCaptureForRequest(c, result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
+					return
+				}
+				h.submitGatewayResultCaptureForRequest(c, result, account, attemptParsedReq.Body.Bytes(), upstreamEndpoint)
 				h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-						Result:             result,
-						QuotaPlatform:      quotaPlatform,
-						APIKey:             currentAPIKey,
-						User:               currentAPIKey.User,
-						Account:            account,
-						Subscription:       currentSubscription,
-						PricingAt:          pricingAt,
-						InboundEndpoint:    inboundEndpoint,
-						UpstreamEndpoint:   upstreamEndpoint,
-						UserAgent:          userAgent,
-						IPAddress:          clientIP,
-						SessionID:          sessionID,
-						RequestPayloadHash: requestPayloadHash,
-						ForceCacheBilling:  forceCacheBilling,
-						APIKeyService:      h.apiKeyService,
-						ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-					}); err != nil {
+					if err := h.gatewayService.RecordUsage(ctx, usageInput); err != nil {
 						logger.L().With(
 							zap.String("component", "handler.gateway.messages"),
 							zap.Int64("user_id", subject.UserID),
@@ -1326,7 +1339,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 
 func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	switch strings.ToLower(strings.TrimSpace(modelID)) {
-	case "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+	case "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
 		return true
 	default:
 		return false

@@ -14,7 +14,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -32,15 +31,25 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	body []byte,
 	promptCacheKey string,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, err error) {
 	beginCaptureAttempt(c)
+	defer func() {
+		result, err = finalizeOpenAIForwardResultWithUsage(c, result, err, body)
+	}()
 	beginUpstreamResponseModelObservation(c)
 
-	// 入口分流：APIKey 账号 + 上游不支持 Responses API → 走 CC 直转（与
-	// ForwardAsChatCompletions 对称）。缺少此分流时，/v1/messages 入站请求
-	// 会被无条件转为 Responses 格式发往上游 /v1/responses，导致只支持
-	// /v1/chat/completions 的第三方 OpenAI 兼容上游全部 400。
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点时，
+	// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留
+	// thinking / tool_use / cache 语义，适配 Claude Code 等原生客户端。
+	// 必须先于 ShouldUseResponsesAPI 分流：Anthropic 协议账号经 probe 落标
+	// openai_responses_supported=false，会先命中下方的 CC 直转分支。
+	if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
+		return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
+	}
+
+	// 固定 chat_completions 的 CN 账号，以及不支持 Responses 的其他 APIKey
+	// 账号，均将 Messages 转为 CC；固定 responses 的 CN 账号不受探针旧值覆盖。
+	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -462,7 +471,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
-	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
 		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
@@ -703,27 +711,6 @@ func openAIResponsesTerminalFailureStatus(payload []byte, eventType string) (boo
 	return false, eventStatus
 }
 
-func (s *OpenAIGatewayService) recordOpenAIMessagesStreamUpstreamError(c *gin.Context, account *Account, upstreamRequestID, kind, message string) {
-	if c == nil {
-		return
-	}
-	message = sanitizeUpstreamErrorMessage(message)
-	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
-	event := OpsUpstreamErrorEvent{
-		Platform:           PlatformOpenAI,
-		UpstreamStatusCode: http.StatusBadGateway,
-		UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
-		Kind:               kind,
-		Message:            message,
-	}
-	if account != nil {
-		event.Platform = account.Platform
-		event.AccountID = account.ID
-		event.AccountName = account.Name
-	}
-	appendOpsUpstreamError(c, event)
-}
-
 func isOpenAICompatDoneSentinelLine(line string) bool {
 	payload, ok := extractOpenAISSEDataLine(line)
 	return ok && strings.TrimSpace(payload) == "[DONE]"
@@ -759,7 +746,6 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 
 	responseLimit := resolveUpstreamResponseReadLimit(s.cfg)
 	parser := openAICompatSSEFrameParser{maxEventBytes: responseLimit}
-	var responsesState openAIResponsesSSEAttemptState
 	var terminalResponse *apicompat.ResponsesResponse
 	terminalSeen := false
 	var terminalTailDeadline time.Time
@@ -769,21 +755,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	processFrame := func(frame openAICompatSSEFrame) error {
 		trimmed := strings.TrimSpace(frame.Data)
 		if trimmed == "[DONE]" {
-			if !terminalSeen {
-				return errors.New("OpenAI Responses [DONE] arrived before a valid terminal event")
-			}
 			return nil
-		}
-		if terminalSeen {
-			return errors.New("OpenAI Responses data arrived after a terminal event")
-		}
-		payloadBytes := []byte(frame.Data)
-		eventType, err := validateOpenAIResponsesSSEPayload(payloadBytes, frame.EventType)
-		if err != nil {
-			return err
-		}
-		if err := responsesState.observe(payloadBytes, eventType); err != nil {
-			return err
 		}
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if retainErr := collectOpenAIResponsesImageResultsFromEventPayloadRetained([]byte(payload), &imageResults, imageResultSeen, imageRetentionBudget, 0); retainErr != nil {
@@ -792,7 +764,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			return fmt.Errorf("decode validated OpenAI Responses event: %w", err)
+			return fmt.Errorf("decode OpenAI Responses event: %w", err)
 		}
 		if err := acc.ProcessEvent(&event); err != nil {
 			return fmt.Errorf("retain OpenAI Responses buffered output: %w", err)
@@ -801,7 +773,8 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			return nil
 		}
 		if event.Response == nil {
-			return errors.New("OpenAI Responses terminal event omitted response object")
+			terminalSeen = true
+			return nil
 		}
 		if event.Usage != nil {
 			usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
@@ -926,7 +899,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var streamFailoverErr error
 	var streamNonFailoverErr error
 	providerTerminalObserved := false
-	responsesState := openAIResponsesSSEAttemptState{}
 
 	readActivity := newProviderBodyReadActivity(resp.Body)
 	scanner := s.newUpstreamSSEScanner(readActivity)
@@ -990,28 +962,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
-		if providerTerminalObserved {
-			message := "OpenAI Responses data arrived after a terminal event"
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
-			} else {
-				streamNonFailoverErr = errors.New(message)
-			}
-			return true
-		}
 		payloadBytes := []byte(payload)
-		validatedType, err := validateOpenAIResponsesSSEPayload(payloadBytes, "")
-		if err == nil {
-			err = responsesState.observe(payloadBytes, validatedType)
-		}
-		if err != nil {
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payloadBytes, err.Error(), resp)
-			} else {
-				streamNonFailoverErr = err
-			}
-			return true
-		}
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal(payloadBytes, &event); err != nil {
 			logger.L().Warn("openai messages stream: failed to parse event",
@@ -1034,16 +985,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
-		if (eventType == "response.completed" || eventType == "response.done") &&
-			!validOpenAIResponsesObject(gjson.GetBytes([]byte(payload), "response")) {
-			message := "OpenAI terminal event omitted a valid response object"
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
-			} else {
-				streamNonFailoverErr = errors.New(message)
-			}
-			return true
-		}
 		terminalFailed, _ := openAIResponsesTerminalFailureStatus([]byte(payload), eventType)
 		if isTerminalEvent {
 			providerTerminalObserved = true
@@ -1123,14 +1064,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
-		if conversionErr := state.Err(); conversionErr != nil {
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), conversionErr.Error(), resp)
-			} else {
-				streamNonFailoverErr = conversionErr
-			}
-			return true
-		}
 		if !clientDisconnected {
 			for _, evt := range events {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -1208,31 +1141,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
-		if stagedWriteErr != nil || streamFailoverErr != nil || streamNonFailoverErr != nil {
-			return finalizeStream()
-		}
-		result := resultWithUsage()
-		if clientDisconnected {
-			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
-		}
-		message := "OpenAI messages stream ended before a terminal event"
-		if !staged.committed {
-			return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, message, resp)
-		}
-		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_missing_terminal", message)
-		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
+		return resultWithUsage(), nil
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
-		if strings.TrimSpace(frame.Data) != "[DONE]" {
-			if _, err := validateOpenAIResponsesSSEPayload([]byte(frame.Data), frame.EventType); err != nil {
-				if !staged.committed {
-					streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(frame.Data), err.Error(), resp)
-				} else {
-					streamNonFailoverErr = err
-				}
-				return true
-			}
-		}
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		return processDataLine(payload)
 	}

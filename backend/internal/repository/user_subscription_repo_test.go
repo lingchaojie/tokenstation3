@@ -212,6 +212,7 @@ func TestUserSubscriptionRepository_ApplyScheduledPlanChange(t *testing.T) {
 	newPlanName := "Basic monthly"
 	newLimit := 60.0
 	effectiveAt := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	applyAt := effectiveAt.Add(time.Minute).In(time.FixedZone("America/New_York", -4*60*60))
 	scheduledExpiresAt := effectiveAt.AddDate(0, 0, 30)
 	created, err := client.UserSubscription.Create().
 		SetUserID(user.ID).
@@ -238,7 +239,7 @@ func TestUserSubscriptionRepository_ApplyScheduledPlanChange(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	applied, changed, err := repo.ApplyScheduledPlanChange(ctx, created.ID, time.Now())
+	applied, changed, err := repo.ApplyScheduledPlanChange(ctx, created.ID, applyAt)
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.NotNil(t, applied)
@@ -267,7 +268,7 @@ func TestUserSubscriptionRepository_ApplyScheduledPlanChange(t *testing.T) {
 	require.Nil(t, applied.ScheduledExpiresAt)
 	require.Nil(t, applied.ScheduledOrderID)
 
-	applied, changed, err = repo.ApplyScheduledPlanChange(ctx, created.ID, time.Now())
+	applied, changed, err = repo.ApplyScheduledPlanChange(ctx, created.ID, applyAt)
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Nil(t, applied)

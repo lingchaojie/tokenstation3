@@ -9,11 +9,36 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type gatewayForwardErrorPolicyRepoStub struct {
+	AccountRepository
+	tempCalls           int
+	modelRateLimitCalls []gatewayForwardModelRateLimitCall
+}
+
+type gatewayForwardModelRateLimitCall struct {
+	accountID int64
+	scope     string
+}
+
+func (r *gatewayForwardErrorPolicyRepoStub) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
+	r.tempCalls++
+	return nil
+}
+
+func (r *gatewayForwardErrorPolicyRepoStub) SetModelRateLimit(_ context.Context, id int64, scope string, _ time.Time, _ ...string) error {
+	r.modelRateLimitCalls = append(r.modelRateLimitCalls, gatewayForwardModelRateLimitCall{
+		accountID: id,
+		scope:     scope,
+	})
+	return nil
+}
 
 // 本文件覆盖 issue #5148：流式转发中途出错（缺失 terminal 事件、读错误等）时，
 // 已观测到的上游 usage 不得随错误一起被丢弃，Forward 必须把部分结果与错误一同
@@ -61,7 +86,7 @@ func newAnthropicOAuthAccountForPartialUsageTest() *Account {
 	}
 }
 
-func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *testing.T) {
+func TestGatewayService_Forward_StreamMissingTerminalWithUsageSucceeds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -105,9 +130,8 @@ func TestGatewayService_Forward_StreamMissingTerminalPreservesPartialUsage(t *te
 	account := newAnthropicOAuthAccountForPartialUsageTest()
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
-	require.NotNil(t, result, "流中断但已观测到 usage 时必须返回部分结果用于计费")
+	require.NoError(t, err)
+	require.NotNil(t, result, "上游已返回 usage 时，缺少 terminal 事件不应阻断转发或计费")
 	require.True(t, result.Stream)
 	require.Equal(t, 11, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.CacheReadInputTokens)
@@ -138,8 +162,9 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 
 	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
 	require.Zero(t, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Nil(t, result.CaptureResponse)
@@ -152,7 +177,7 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	AbortCaptureAttempt(c)
 }
 
-func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalIsCleanFailover(t *testing.T) {
+func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalStillBills(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -165,11 +190,11 @@ func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalIsCleanFailover(
 	svc := newForwardPartialUsageServiceForTest(upstream)
 
 	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, -1, c.Writer.Size())
-	require.Empty(t, rec.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 9, result.Usage.InputTokens)
+	require.False(t, result.UpstreamFailed)
+	require.Empty(t, rec.Body.String(), "metadata-only preamble remains staged when the stream ends before semantic output")
 }
 
 func TestGatewayService_Forward_SSEErrorUsesSemanticCommitBoundary(t *testing.T) {
@@ -222,8 +247,9 @@ func TestGatewayService_Forward_SSEErrorUsesSemanticCommitBoundary(t *testing.T)
 			if !tt.committed {
 				require.Nil(t, result)
 				require.ErrorAs(t, err, &failoverErr)
-				require.Equal(t, -1, c.Writer.Size())
-				require.Empty(t, rec.Body.String())
+				require.Greater(t, c.Writer.Size(), -1, "latest upstream commits protocol preamble before event:error")
+				require.Contains(t, rec.Body.String(), "message_start")
+				require.False(t, failoverErr.SafeToFailoverAfterWrite, "committed preamble must not authorize replay after write")
 				return
 			}
 
@@ -273,7 +299,7 @@ func TestGatewayService_Forward_StreamReadErrorAfterOutputPreservesPartialUsage(
 	require.Equal(t, 4, result.Usage.CacheCreationInputTokens)
 }
 
-func TestGatewayService_Forward_StreamErrorWithoutUsageReturnsNilResult(t *testing.T) {
+func TestGatewayService_Forward_StreamWithoutUsageReturnsBillingErrorResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -295,10 +321,10 @@ func TestGatewayService_Forward_StreamErrorWithoutUsageReturnsNilResult(t *testi
 	account := newAnthropicOAuthAccountForPartialUsageTest()
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Nil(t, result, "无已观测 usage 时不应返回部分结果")
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result, "不可计费响应需要保留错误请求/capture 元数据")
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
 	require.Equal(t, -1, c.Writer.Size(), "纯前导帧不得污染可重试响应")
 }
 
@@ -333,7 +359,96 @@ func TestGatewayService_Forward_FailoverErrorKeepsNilResult(t *testing.T) {
 	require.Nil(t, result, "failover 错误必须保持 result=nil，防止重试成功后双重计费")
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalPreservesPartialUsage(t *testing.T) {
+func TestGatewayService_Forward_PreOutputSSEOverloadedErrorUsesSemantic529(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	const errorJSON = `{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_01"}`
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("event: error\ndata: " + errorJSON + "\n\n")),
+	}}
+	repo := &gatewayForwardErrorPolicyRepoStub{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil, nil),
+		deferredService:      &DeferredService{},
+	}
+	account := newAnthropicOAuthAccountForPartialUsageTest()
+	account.Credentials["temp_unschedulable_enabled"] = true
+	account.Credentials["temp_unschedulable_rules"] = []any{map[string]any{
+		"error_code":       float64(529),
+		"keywords":         []any{"Overloaded"},
+		"duration_minutes": float64(10),
+	}}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.Error(t, err)
+	require.Nil(t, result)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, 529, failoverErr.StatusCode)
+	require.JSONEq(t, errorJSON, string(failoverErr.ResponseBody))
+	require.Len(t, repo.modelRateLimitCalls, 1, "synthetic 529 must participate in temp-unschedulable rules")
+	require.Equal(t, account.ID, repo.modelRateLimitCalls[0].accountID)
+	require.Equal(t, parsed.Model, repo.modelRateLimitCalls[0].scope)
+	require.Empty(t, rec.Body.String(), "pre-output overload must remain eligible for account failover")
+}
+
+func TestGatewayService_Forward_PostOutputSSEOverloadedErrorKeepsExistingStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	const errorJSON = `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+	fixture := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: error\ndata: " + errorJSON + "\n\n"
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(fixture)),
+	}}
+	repo := &gatewayForwardErrorPolicyRepoStub{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil, nil),
+		deferredService:      &DeferredService{},
+	}
+
+	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	require.Error(t, err)
+	require.Nil(t, result)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusForbidden, failoverErr.StatusCode)
+	require.JSONEq(t, errorJSON, string(failoverErr.ResponseBody))
+	require.Zero(t, repo.tempCalls)
+	require.Contains(t, rec.Body.String(), "message_start")
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalWithUsageSucceeds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -372,9 +487,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	account := newAnthropicAPIKeyAccountForTest()
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
-	require.NotNil(t, result, "透传流中断但已观测到 usage 时必须返回部分结果用于计费")
+	require.NoError(t, err)
+	require.NotNil(t, result, "透传流缺少 terminal 但已观测到 usage 时应正常计费")
 	require.True(t, result.Stream)
 	require.Equal(t, 9, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.CacheReadInputTokens)
@@ -390,7 +504,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	AbortCaptureAttempt(c)
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTerminalFailsOverCleanly(t *testing.T) {
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTerminalStillBills(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -413,11 +527,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardPreambleOnlyMissingTer
 
 	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 	result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, -1, c.Writer.Size())
-	require.Empty(t, recorder.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 9, result.Usage.InputTokens)
+	require.False(t, result.UpstreamFailed)
+	require.Empty(t, recorder.Body.String(), "metadata-only preamble remains staged when the stream ends before semantic output")
 	attempts := transport.Attempts()
 	require.Len(t, attempts, 1)
 	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
@@ -554,4 +668,47 @@ func TestGatewayCompatibility_PreSemanticAndBufferedReadErrorsUseTypedAttemptAtW
 			AbortCaptureAttempt(c)
 		})
 	}
+}
+
+func TestGatewayForwardAsResponses_MissingUsageIsProviderFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"input":"hello"}`)
+	providerBody := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_no_usage","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-latest","stop_reason":null,"usage":{}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"responses-no-usage"}},
+		Body:       io.NopCloser(strings.NewReader(providerBody)),
+	}}
+	svc, _ := newForwardPartialUsageCaptureServiceForTest(upstream)
+	account := newAnthropicOAuthAccountForPartialUsageTest()
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-3-5-sonnet-latest", Stream: false}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, parsed)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	marked, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "upstream_usage_missing", marked.Code)
 }

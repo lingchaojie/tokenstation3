@@ -219,6 +219,11 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.upstreamBillingProbe.intervalHint": "范围 5–1440 分钟。",
     "admin.settings.upstreamBillingProbe.saved": "上游倍率自动探测设置已保存",
     "admin.settings.upstreamBillingProbe.saveFailed": "保存上游倍率自动探测设置失败",
+    "admin.settings.openaiFastPolicy.summaryTargetModels": "目标模型",
+    "admin.settings.openaiFastPolicy.summaryAllModels": "全部模型",
+    "admin.settings.openaiFastPolicy.summaryOtherModels": "其他模型",
+    "admin.settings.openaiFastPolicy.summaryAction.filter": "过滤",
+    "admin.settings.openaiFastPolicy.summaryAction.pass": "透传",
     "admin.settings.site.uploadImage": "上传图片",
     "admin.settings.site.remove": "移除",
     "admin.settings.platformQuota.platform": "平台",
@@ -1204,6 +1209,43 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
   });
 
+  it("summarizes target and other-model actions, then switches to all models", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "all",
+            action: "filter",
+            scope: "all",
+            model_whitelist: ["gpt-5.6-sol"],
+            fallback_action: "pass",
+          },
+        ],
+      },
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const summary = wrapper.get('[data-testid="openai-fast-policy-summary-0"]');
+    expect(summary.text()).toContain("目标模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).toContain("其他模型");
+    expect(summary.text()).toContain("透传");
+
+    await wrapper
+      .get(
+        '[role="group"][aria-labelledby="openai-fast-policy-models-label-0"] input[type="text"]',
+      )
+      .setValue("");
+    expect(summary.text()).toContain("全部模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).not.toContain("其他模型");
+    expect(summary.text()).not.toContain("透传");
+  });
+
   it("loads and saves upstream billing probe settings from the gateway tab", async () => {
     getUpstreamBillingProbeSettings.mockResolvedValueOnce({
       enabled: false,
@@ -1828,7 +1870,7 @@ describe("admin SettingsView platform quota matrix", () => {
     getProviders.mockResolvedValue({ data: [] });
   });
 
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 6 平台行", async () => {
+  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 9 平台行", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1843,9 +1885,12 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(html).toContain("gemini");
     expect(html).toContain("antigravity");
     expect(html).toContain("grok");
+    expect(html).toContain("kimi");
+    expect(html).toContain("zhipu");
+    expect(html).toContain("deepseek");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 6 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 9 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1861,7 +1906,17 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "kiro", "gemini", "antigravity", "grok"];
+    const platforms = [
+      "anthropic",
+      "openai",
+      "kiro",
+      "gemini",
+      "antigravity",
+      "grok",
+      "kimi",
+      "zhipu",
+      "deepseek",
+    ];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1875,13 +1930,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 6 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 9 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // kiro / gemini / antigravity / grok 缺失 -> 应被归一化为全 null
+        // 其余 7 个平台缺失 -> 应被归一化为全 null
       },
     });
 
@@ -1902,6 +1957,9 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["grok"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["kimi"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["zhipu"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["deepseek"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {

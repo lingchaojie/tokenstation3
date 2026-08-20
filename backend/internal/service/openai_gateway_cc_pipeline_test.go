@@ -3,10 +3,7 @@
 package service
 
 import (
-	"bytes"
 	"errors"
-	"io"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"runtime"
@@ -16,32 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
-
-func TestReadCCUpstreamJSONResponseValidatesDenseChoicesBeforeTypedDecode(t *testing.T) {
-	const targetBytes = 8 << 20
-	const choice = `{},`
-	choiceCount := (targetBytes - len(`{"id":"dense","choices":[]}`)) / len(choice)
-	body := []byte(`{"id":"dense","choices":[` + strings.Repeat(choice, choiceCount) + `{ }]}`)
-	require.GreaterOrEqual(t, len(body), targetBytes-16)
-
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	cfg := rawChatCompletionsTestConfig()
-	cfg.Gateway.UpstreamResponseReadMaxBytes = 16 << 20
-	svc := &OpenAIGatewayService{cfg: cfg}
-	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	result, _, _, err := svc.readCCUpstreamJSONResponse(c, resp, nil)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.Error(t, err)
-	require.Nil(t, result)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(48<<20))
-}
 
 type stagedConvertedFailingResponseWriter struct {
 	gin.ResponseWriter

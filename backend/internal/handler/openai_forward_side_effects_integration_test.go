@@ -63,7 +63,7 @@ func TestOpenAIRealForwardFeedsExactOnceSideEffectSinkWithoutResultCaptureBuffer
 		name, response string
 		wantSink       int
 	}{
-		{name: "pre-output failover", response: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n", wantSink: 0},
+		{name: "pre-output failed request", response: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n", wantSink: 1},
 		{name: "committed partial", response: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n", wantSink: 1},
 		{name: "success", response: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n", wantSink: 1},
 	}

@@ -446,7 +446,7 @@ func TestOpenAINativeFirstOutputEOFDispatchesTerminalEventWithoutBlankLine(t *te
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, result.firstTokenMs)
+	require.Nil(t, result.firstTokenMs, "usage-only terminal event is not visible output")
 	require.Equal(t, "resp_eof", result.responseID)
 	require.Equal(t, 3, result.usage.InputTokens)
 	require.Equal(t, 2, result.usage.OutputTokens)
@@ -563,7 +563,7 @@ func TestOpenAINativeFirstOutputScannerAllowsLargeEventAfterSemanticBoundary(t *
 	require.Equal(t, "request-large-image", rec.Result().Header.Get("X-Request-Id"))
 }
 
-func TestOpenAINativeFirstOutputTimeoutDisabledKeepsPresemanticKeepalivePrivate(t *testing.T) {
+func TestOpenAINativeFirstOutputTimeoutDisabledCommitsPreambleAtEOF(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
 		StreamKeepaliveInterval: 1,
 		MaxLineSize:             defaultMaxLineSize,
@@ -573,18 +573,21 @@ func TestOpenAINativeFirstOutputTimeoutDisabledKeepsPresemanticKeepalivePrivate(
 		defer func() { _ = pw.Close() }()
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stalled\"}}\n\n"))
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_stalled\"}}\n\n"))
-		time.Sleep(1100 * time.Millisecond)
+		time.Sleep(2100 * time.Millisecond)
 	}()
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: pr}
 
-	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "model", "model")
 
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Empty(t, rec.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, &OpenAIUsage{}, result.usage)
+	require.Contains(t, rec.Body.String(), `"type":"response.created"`)
+	require.Contains(t, rec.Body.String(), `"type":"response.in_progress"`)
+	require.Contains(t, rec.Body.String(), ":\n\n")
 }
 
 func TestOpenAINativeFirstOutputFailoverKeepsAttemptHeadersPrivateAfterKeepaliveCommit(t *testing.T) {

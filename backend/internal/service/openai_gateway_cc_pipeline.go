@@ -174,7 +174,7 @@ func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) 
 // resolveCCFallbackTarget 解析两条 CC 回退路径共用的账号凭证与上游端点
 // （回退路径仅面向 APIKey 账号，凭证恒为 openai api_key）。
 func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey string, targetURL string, err error) {
-	apiKey = account.GetOpenAIApiKey()
+	apiKey = strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
 	if apiKey == "" {
 		return "", "", fmt.Errorf("account %d missing api_key", account.ID)
 	}
@@ -447,69 +447,24 @@ func (s *OpenAIGatewayService) scanCCStream(
 	emit func(*apicompat.ChatCompletionsChunk) (bool, error),
 ) ccStreamScanState {
 	var st ccStreamScanState
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	lineReader := newProviderLineReader(resp, s.cfg, s.newUpstreamSSEScanner)
-	defer func() {
-		if st.Err != nil {
-			lineReader.DrainCaptureOnParserFailure(ctx)
-			return
-		}
-		lineReader.Close()
-	}()
-	choiceState := openAIChatChoiceStreamState{}
-	var terminalTailDeadline time.Time
-	var bufferedTail []string
-	tailCollected := false
+	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
+		return s.newUpstreamSSEScanner(r)
+	})
+	defer lineReader.Close()
 
 	for {
-		var line string
-		var ok bool
-		var err error
-		if len(bufferedTail) > 0 {
-			line, ok = bufferedTail[0], true
-			bufferedTail = bufferedTail[1:]
-		} else if tailCollected {
-			return st
-		} else if st.SawDone {
-			if terminalTailDeadline.IsZero() {
-				terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
-			}
-			var timedOut bool
-			line, ok, timedOut, err = lineReader.NextBefore(terminalTailDeadline)
-			if timedOut {
-				bufferedTail, err = lineReader.CloseAndCollectBufferedTail()
-				tailCollected = true
-				if err != nil {
-					st.Err = err
-					return st
-				}
-				continue
-			}
-		} else {
-			line, ok, err = lineReader.NextContext(ctx)
-		}
-		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		line, ok, readErr := lineReader.NextContext(ctx)
+		if readErr != nil {
+			if !errors.Is(readErr, context.Canceled) && !errors.Is(readErr, context.DeadlineExceeded) {
 				logger.L().Warn(logPrefix+": stream read error",
-					zap.Error(err),
+					zap.Error(readErr),
 					zap.String("request_id", requestID),
 				)
 			}
-			st.Err = err
+			st.Err = readErr
 			return st
 		}
 		if !ok {
-			return st
-		}
-		if st.SawDone {
-			trimmedLine := strings.TrimSpace(line)
-			if trimmedLine == "" || strings.HasPrefix(trimmedLine, ":") {
-				continue
-			}
-			st.Err = errors.New("OpenAI chat_completions data arrived after [DONE]")
 			return st
 		}
 		payload, ok := extractOpenAISSEDataLine(line)
@@ -521,31 +476,15 @@ func (s *OpenAIGatewayService) scanCCStream(
 			continue
 		}
 		if payload == "[DONE]" {
-			if !choiceState.complete() {
-				st.Err = errors.New("OpenAI chat_completions [DONE] arrived before all choices had a finish_reason")
-				return st
-			}
 			st.SawDone = true
-			terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
-			continue
-		}
-		providerPayload, protocolErr := classifyOpenAIChatStreamPayload(payload)
-		if protocolErr != nil {
-			st.Err = protocolErr
-			return st
-		}
-		if _, protocolErr = choiceState.observe(payload); protocolErr != nil {
-			st.Err = protocolErr
 			return st
 		}
 		if openAIChatPayloadContainsAudio([]byte(payload)) {
-			st.Err = errors.New("chat completions audio output is not supported by the Messages/Responses compatibility bridge")
+			st.Err = newOpenAIIncompleteChatStreamFailover(resp, "chat completions audio output is not supported by the Messages/Responses compatibility bridge")
 			return st
 		}
+
 		usageValue := gjson.Get(payload, "usage")
-		if providerPayload {
-			st.SawProviderPayload = true
-		}
 		parsedUsage, sawUsageObject := parseCCUsageFromGJSON(usageValue)
 		if sawUsageObject {
 			parsedUsage.mergeInto(&st.Usage)
@@ -553,43 +492,34 @@ func (s *OpenAIGatewayService) scanCCStream(
 			st.SawUsage = true
 		}
 
-		decodePayload := payload
-		if usageValue.Exists() {
-			withoutUsage, err := sjson.Delete(payload, "usage")
-			if err != nil {
-				st.Err = fmt.Errorf("isolate chat stream usage: %w", err)
-				return st
-			}
-			decodePayload = withoutUsage
-		}
 		var chunk apicompat.ChatCompletionsChunk
-		if err := json.Unmarshal([]byte(decodePayload), &chunk); err != nil {
-			st.Err = fmt.Errorf("parse chat stream chunk: %w", err)
-			return st
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			logger.L().Warn(logPrefix+": failed to parse chat stream chunk",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
+			continue
 		}
+		st.SawProviderPayload = true
 		if sawUsageObject {
-			// The raw parser accepts provider aliases and ignores malformed
-			// canonical fields. Feed that same normalized usage into protocol
-			// bridges after removing the original object from decodePayload.
 			chunk.Usage = parsedUsage.chatUsage()
 		}
-		chunkCommittedOutput, emitErr := emit(&chunk)
-		if emitErr != nil {
-			st.Err = fmt.Errorf("convert chat stream chunk: %w", emitErr)
+		semanticOutput := chatChunkStartsResponsesOutput(&chunk)
+		committedOutput, err := emit(&chunk)
+		if err != nil {
+			st.Err = err
 			return st
 		}
-		if chunkCommittedOutput {
+		if semanticOutput || committedOutput {
 			st.SawOutput = true
 		}
-		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && st.SawOutput {
+		if st.FirstTokenMs == nil && semanticOutput {
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
 		}
 	}
 }
 
-// responsesUsageFromCCUsage projects the CC/raw usage parser's canonical
-// result back into the Responses wire shape used by CC fallback responses and
 // finalization. The raw parser is authoritative because it understands
 // top-level cache aliases and explicit nested zero values that ChatUsage's
 // narrower integer-only structure cannot preserve.
@@ -643,12 +573,6 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if err != nil {
 		return nil, parsedCCUsage{}, false, errors.Join(newOpenAIIncompleteChatStreamFailover(resp, "failed to read upstream Chat Completions response"), err)
 	}
-	if !gjson.ValidBytes(respBody) || !openAIChatPayloadIsValidProviderPayload(string(respBody)) {
-		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained no valid choice payload")
-	}
-	if !openAIChatBufferedChoicesComplete(respBody) {
-		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained incomplete or inconsistent terminal choices")
-	}
 	if openAIChatPayloadContainsAudio(respBody) {
 		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "chat completions audio output is not supported by the Messages/Responses compatibility bridge")
 	}
@@ -665,9 +589,6 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	var ccResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(decodeBody, &ccResp); err != nil {
 		return nil, parsedCCUsage{}, false, errors.Join(newOpenAIIncompleteChatStreamFailover(resp, "invalid upstream Chat Completions JSON response"), err)
-	}
-	if len(ccResp.Choices) == 0 {
-		return nil, parsedCCUsage{}, false, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions response contained no choices")
 	}
 	if sawUsageObject {
 		ccResp.Usage = parsedUsage.chatUsage()

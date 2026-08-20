@@ -39,24 +39,6 @@ type signalWriteResponseWriter struct {
 	once  sync.Once
 }
 
-func TestValidJSONObjectBytesDoesNotMaterializeDenseToolInput(t *testing.T) {
-	const targetBytes = 8 << 20
-	body := []byte(`{"items":[` + strings.Repeat(`"",`, (targetBytes-len(`{"items":[]}`))/3) + `""]}`)
-	require.GreaterOrEqual(t, len(body), targetBytes-8)
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	valid := validJSONObjectBytes(body)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.True(t, valid)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-	require.False(t, validJSONObjectBytes([]byte(`[]`)))
-	require.False(t, validJSONObjectBytes([]byte(`{"ok":true} trailing`)))
-}
-
 func (w *signalWriteResponseWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	if n > 0 {
@@ -144,168 +126,6 @@ func TestAnthropicSSEEventHasSemanticOutput(t *testing.T) {
 	}
 }
 
-func TestAnthropicProviderShapeAllowsOfficialAndFutureExtensions(t *testing.T) {
-	require.True(t, validAnthropicStreamContentBlockStart(gjson.Parse(`{"type":"fallback"}`)))
-	phase := anthropicProviderStarted
-	require.NoError(t, validateAnthropicProviderEvent(
-		&phase, "content_block_start",
-		[]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
-		"content_block_start",
-	))
-	require.NoError(t, validateAnthropicProviderEvent(
-		&phase, "content_block_delta",
-		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location","start_char_index":0,"end_char_index":4}}}`),
-		"content_block_delta",
-	))
-	require.NoError(t, validateAnthropicProviderEvent(
-		&phase, "content_block_stop",
-		[]byte(`{"type":"content_block_stop","index":0}`),
-		"content_block_stop",
-	))
-	require.NoError(t, validateAnthropicProviderEvent(
-		&phase, "content_block_start",
-		[]byte(`{"type":"content_block_start","index":1,"content_block":{"type":"fallback"}}`),
-		"content_block_start",
-	))
-	require.NoError(t, validateAnthropicProviderEvent(
-		&phase, "content_block_delta",
-		[]byte(`{"type":"content_block_delta","index":1,"delta":{"type":"future_metadata_delta","metadata":{"trace":"ok"}}}`),
-		"content_block_delta",
-	))
-	require.True(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"future_server_tool_result","content":{"ok":true}}]`)))
-
-	phase = anthropicProviderAwaitingStart
-	require.Error(t, validateAnthropicProviderEvent(
-		&phase, "", []byte(`{"type":123}`), "123",
-	))
-	phase = anthropicProviderStarted
-	require.Error(t, validateAnthropicProviderEvent(
-		&phase, "content_block_start",
-		[]byte(`{"type":"content_block_start","index":0.5,"content_block":{"type":"text","text":""}}`),
-		"content_block_start",
-	))
-}
-
-func TestAnthropicProviderValidationRejectsDuplicateKnownJSONKeys(t *testing.T) {
-	for name, payload := range map[string]string{
-		"event type":        `{"type":"message_delta","type":"message_stop","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
-		"delta stop reason": `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_reason":"max_tokens"},"usage":{"output_tokens":1}}`,
-		"usage output":      `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1,"output_tokens":2}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			phase := anthropicProviderStarted
-			_, err := validateAnthropicProviderJSONEvent(&phase, "message_delta", []byte(payload))
-			require.ErrorContains(t, err, "repeated known field")
-		})
-	}
-
-	phase := anthropicProviderStarted
-	_, err := validateAnthropicProviderJSONEvent(&phase, "future_event", []byte(`{"type":"future_event","opaque":{"type":"future-a","type":"future-b"}}`))
-	require.NoError(t, err, "duplicate fields inside an unknown extension remain forward-compatible")
-
-	require.False(t, validAnthropicNonStreamingResponse([]byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"safe","text":"danger"}],"stop_reason":"end_turn"}`)))
-}
-
-func TestAnthropicProviderPhaseRequiresTerminalMessageDeltaAndRejectsLaterContent(t *testing.T) {
-	start := []byte(`{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"stop_reason":null}}`)
-	terminalDelta := []byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`)
-	stop := []byte(`{"type":"message_stop"}`)
-
-	phase := anthropicProviderAwaitingStart
-	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
-	require.Error(t, validateAnthropicProviderEvent(&phase, "message_delta", []byte(`{"type":"message_delta","delta":{},"usage":{"output_tokens":1}}`), "message_delta"))
-	require.Error(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
-
-	phase = anthropicProviderAwaitingStart
-	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_start", start, "message_start"))
-	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_delta", terminalDelta, "message_delta"))
-	require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`), "content_block_start"))
-	require.NoError(t, validateAnthropicProviderEvent(&phase, "message_stop", stop, "message_stop"))
-}
-
-func TestAnthropicProviderContentStateAndRetainedMetadataAreBounded(t *testing.T) {
-	t.Run("cross-frame content blocks", func(t *testing.T) {
-		phase := anthropicProviderStarted
-		for index := 0; index < maxAnthropicProviderContentBlocks; index++ {
-			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, index))
-			stop := []byte(fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))
-			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start"))
-			require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", stop, "content_block_stop"))
-		}
-		overflow := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, maxAnthropicProviderContentBlocks))
-		require.ErrorContains(t, validateAnthropicProviderEvent(&phase, "content_block_start", overflow, "content_block_start"), "state limit")
-	})
-
-	t.Run("retained block type", func(t *testing.T) {
-		phase := anthropicProviderStarted
-		payload := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"` + strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1) + `"}}`)
-		require.Error(t, validateAnthropicProviderEvent(&phase, "content_block_start", payload, "content_block_start"))
-	})
-
-	t.Run("tool identity", func(t *testing.T) {
-		oversized := strings.Repeat("x", maxAnthropicProviderRetainedStringBytes+1)
-		for name, block := range map[string]string{
-			"id":   `{"type":"tool_use","id":"` + oversized + `","name":"lookup","input":{}}`,
-			"name": `{"type":"tool_use","id":"tool-1","name":"` + oversized + `","input":{}}`,
-		} {
-			t.Run(name, func(t *testing.T) {
-				require.False(t, validAnthropicStreamContentBlockStart(gjson.Parse(block)))
-			})
-		}
-	})
-
-	t.Run("duplicate tool ids", func(t *testing.T) {
-		phase := anthropicProviderStarted
-		for index := 0; index < 2; index++ {
-			start := []byte(fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":"tool-1","name":"lookup","input":{}}}`, index))
-			err := validateAnthropicProviderEvent(&phase, "content_block_start", start, "content_block_start")
-			if index == 0 {
-				require.NoError(t, err)
-				require.NoError(t, validateAnthropicProviderEvent(&phase, "content_block_stop", []byte(`{"type":"content_block_stop","index":0}`), "content_block_stop"))
-				continue
-			}
-			require.ErrorContains(t, err, "duplicated tool id")
-		}
-		require.False(t, validAnthropicResponseContent(gjson.Parse(`[{"type":"tool_use","id":"tool-1","name":"a","input":{}},{"type":"tool_use","id":"tool-1","name":"b","input":{}}]`)))
-	})
-}
-
-func TestValidAnthropicResponseContentRejectsDenseBlocksWithinBoundedAllocation(t *testing.T) {
-	const targetBytes = 8 << 20
-	const block = `{"type":"text","text":""},`
-	blockCount := (targetBytes - len(`[]`)) / len(block)
-	body := `[` + strings.Repeat(block, blockCount) + `{"type":"text","text":""}]`
-	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(block)))
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	valid := validAnthropicResponseContent(gjson.Parse(body))
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.False(t, valid)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-}
-
-func TestValidAnthropicMessageStartRejectsDenseContentWithinBoundedAllocation(t *testing.T) {
-	const targetBytes = 8 << 20
-	const block = `{},`
-	blockCount := (targetBytes - len(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[]}}`)) / len(block)
-	payload := []byte(`{"type":"message_start","message":{"type":"message","role":"assistant","content":[` + strings.Repeat(block, blockCount) + `{ }]}}`)
-	require.GreaterOrEqual(t, len(payload), targetBytes-16)
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	valid := validAnthropicMessageStartPayload(payload)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.False(t, valid)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-}
-
 func TestAnthropicUsageAndSemanticReadersIgnoreDenseUnknownSiblingWithinBoundedAllocation(t *testing.T) {
 	const targetBytes = 8 << 20
 	prefix := `{"type":"message_start","message":{"id":"msg_dense","type":"message","role":"assistant","content":[],"usage":{"input_tokens":17,"output_tokens":2}},"junk":[`
@@ -317,8 +137,6 @@ func TestAnthropicUsageAndSemanticReadersIgnoreDenseUnknownSiblingWithinBoundedA
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	phase := anthropicProviderStreamPhase{}
-	_, validateErr := validateAnthropicProviderJSONEvent(&phase, "message_start", []byte(body))
 	semantic := anthropicSSEEventHasSemanticOutput(body)
 	usage := &ClaudeUsage{}
 	newMinimalGatewayService().parseSSEUsage(body, usage)
@@ -333,7 +151,6 @@ func TestAnthropicUsageAndSemanticReadersIgnoreDenseUnknownSiblingWithinBoundedA
 	runtime.ReadMemStats(&after)
 	nonstreamAlloc := after.TotalAlloc - before.TotalAlloc
 
-	require.NoError(t, validateErr)
 	require.False(t, semantic)
 	require.Equal(t, 17, usage.InputTokens)
 	require.Equal(t, 2, usage.OutputTokens)
@@ -490,7 +307,7 @@ func TestHandleStreamingResponse_CacheTokens(t *testing.T) {
 	require.Equal(t, 30, result.usage.CacheReadInputTokens)
 }
 
-func TestHandleStreamingResponse_EmptyStream(t *testing.T) {
+func TestHandleStreamingResponse_EmptyStreamDoesNotRequireTerminalFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newMinimalGatewayService()
 
@@ -508,10 +325,9 @@ func TestHandleStreamingResponse_EmptyStream(t *testing.T) {
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
 	_ = pr.Close()
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Nil(t, result)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.usage)
 	require.Empty(t, rec.Body.String())
 }
 
@@ -1223,7 +1039,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_AggregatePreambleOverflowFail
 	require.Equal(t, int32(1), body.closes.Load())
 }
 
-func TestHandleStreamingResponse_ToolUseWithoutUsageCommitsBeforeMissingTerminal(t *testing.T) {
+func TestHandleStreamingResponse_ToolUseWithoutUsageDoesNotRequireTerminalFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newMinimalGatewayService()
 	rec := httptest.NewRecorder()
@@ -1234,9 +1050,7 @@ func TestHandleStreamingResponse_ToolUseWithoutUsageCommitsBeforeMissingTerminal
 	))}
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.semanticOutput)
 	require.NotNil(t, result.usage)
@@ -1250,7 +1064,7 @@ func TestHandleStreamingResponse_ToolUseWithoutUsageCommitsBeforeMissingTerminal
 	require.Contains(t, rec.Body.String(), "tool_use")
 }
 
-func TestHandleStreamingResponse_SSEErrorAfterPreamble_DiscardsWriterAndFailsOver(t *testing.T) {
+func TestHandleStreamingResponse_SSEErrorAfterPreamblePreservesForwardedPreamble(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newMinimalGatewayService()
 	rec := httptest.NewRecorder()
@@ -1262,10 +1076,11 @@ func TestHandleStreamingResponse_SSEErrorAfterPreamble_DiscardsWriterAndFailsOve
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
 	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, -1, c.Writer.Size())
-	require.Empty(t, rec.Body.String())
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Contains(t, sseErr.RawData, "boom")
+	require.True(t, c.Writer.Written(), "forwarding must not buffer valid preamble solely for terminal validation")
+	require.Contains(t, rec.Body.String(), "message_start")
 }
 
 func TestHandleStreamingResponse_IdleBeforeSemanticOutputFailsOverWithoutWriting(t *testing.T) {
@@ -1436,12 +1251,12 @@ func TestHandleStreamingResponse_SSEErrorEventBeforeOutputReturnsFailoverWithRaw
 	require.Error(t, err)
 	require.Nil(t, result)
 
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, errorJSON, string(failoverErr.ResponseBody))
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Equal(t, errorJSON, sseErr.RawData)
 	require.Equal(t, -1, c.Writer.Size())
 
-	extracted := ExtractUpstreamErrorMessage(failoverErr.ResponseBody)
+	extracted := ExtractUpstreamErrorMessage([]byte(sseErr.RawData))
 	require.Equal(t, "Anthropic upstream is overloaded", extracted)
 }
 
@@ -1467,9 +1282,9 @@ func TestHandleStreamingResponse_SSEErrorEvent_EmptyDataLine(t *testing.T) {
 	_ = pr.Close()
 
 	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Empty(t, failoverErr.ResponseBody)
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Empty(t, sseErr.RawData)
 	require.Equal(t, -1, c.Writer.Size())
 }
 
@@ -1560,14 +1375,14 @@ func TestHandleStreamingResponse_SSEErrorEvent_NonJSONDataLine(t *testing.T) {
 	_ = pr.Close()
 
 	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, "not-a-json-payload", string(failoverErr.ResponseBody))
+	var sseErr *sseStreamErrorEventError
+	require.ErrorAs(t, err, &sseErr)
+	require.Equal(t, "not-a-json-payload", sseErr.RawData)
 	require.Equal(t, -1, c.Writer.Size())
 
 	// gjson 对非 JSON 输入返回空字符串，不 panic — Forward 主流程靠这个 invariant 安全地走下去
 	require.NotPanics(t, func() {
-		_ = ExtractUpstreamErrorMessage(failoverErr.ResponseBody)
+		_ = ExtractUpstreamErrorMessage([]byte(sseErr.RawData))
 	})
-	require.Equal(t, "", ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
+	require.Equal(t, "", ExtractUpstreamErrorMessage([]byte(sseErr.RawData)))
 }
