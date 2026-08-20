@@ -719,6 +719,25 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+  it("excludes announcement-page-owned settings from the generic form loader", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      announcement_banners: [
+        { id: "owned-by-announcements", text_zh: "公告", text_en: "Announcement" },
+      ],
+      announcement_banner_interval_ms: 9000,
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const settingsForm = (
+      wrapper.vm as unknown as { form: Record<string, unknown> }
+    ).form;
+    expect(settingsForm).not.toHaveProperty("announcement_banners");
+    expect(settingsForm).not.toHaveProperty("announcement_banner_interval_ms");
+  });
+
   it("submits the compact home page toggle", async () => {
     const wrapper = mountView();
     await flushPromises();
