@@ -108,7 +108,12 @@ export default {
     total: 'announcements',
     emptyDescription: 'There are no system announcements at this time',
     readStatus: 'You have read this announcement',
-    markReadHint: 'Click "Mark as read" to mark this announcement'
+    markReadHint: 'Click "Mark as read" to mark this announcement',
+    officialUpdate: 'Official update',
+    later: 'Read later',
+    next: 'Next',
+    acknowledge: 'Got it',
+    readSaveFailed: 'Could not save the read status; this announcement may appear again'
   },
 
   // User Subscriptions Page

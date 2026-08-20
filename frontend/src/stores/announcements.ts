@@ -113,10 +113,6 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     }
   }
 
-  async function dismissPopup(): Promise<boolean> {
-    return advancePopup()
-  }
-
   function snoozePopupBatch(): void {
     cancelPopupTransition()
     if (currentPopup.value) shownPopupIds.add(currentPopup.value.id)
@@ -180,7 +176,6 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     fetchAnnouncements,
     advancePopup,
     snoozePopupBatch,
-    dismissPopup,
     markAsRead,
     markAllAsRead,
     reset,
