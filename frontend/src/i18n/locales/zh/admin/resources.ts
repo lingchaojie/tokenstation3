@@ -385,8 +385,8 @@ export default {
 
     // Announcements
     announcements: {
-      title: '公告管理',
-      description: '创建公告并按条件投放',
+      title: '公告设置',
+      description: '统一管理登录弹窗与站内顶部滚动公告',
       createFirstAnnouncement: '还没有公告，创建您的第一条公告。',
       createAnnouncement: '创建公告',
       editAnnouncement: '编辑公告',
