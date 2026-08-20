@@ -56,4 +56,33 @@ describe('announcement popup batches', () => {
     await expect(store.advancePopup()).resolves.toBe(false)
     expect(store.announcements.find((item) => item.id === 2)?.read_at).toBeUndefined()
   })
+
+  it('keeps the pending transition across a forced fetch', async () => {
+    const store = useAnnouncementStore()
+    await store.fetchAnnouncements({ force: true, autoPopup: true })
+    await store.advancePopup()
+
+    await store.fetchAnnouncements({ force: true, autoPopup: true })
+    expect(store.currentPopup).toBeNull()
+    expect(store.popupPosition).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(300)
+    expect(store.currentPopup?.id).toBe(1)
+    expect(store.popupPosition).toBe(2)
+  })
+
+  it('cancels an old transition when reset starts a new lifecycle', async () => {
+    const store = useAnnouncementStore()
+    await store.fetchAnnouncements({ force: true, autoPopup: true })
+    await store.advancePopup()
+
+    store.reset()
+    await store.fetchAnnouncements({ force: true, autoPopup: true })
+    expect(store.currentPopup?.id).toBe(2)
+    expect(store.popupPosition).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(300)
+    expect(store.currentPopup?.id).toBe(2)
+    expect(store.popupPosition).toBe(1)
+  })
 })
