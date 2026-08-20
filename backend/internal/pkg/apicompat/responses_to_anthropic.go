@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const maxResponsesToAnthropicRetainedToolArgumentBytes = 8 << 20
+
 // ---------------------------------------------------------------------------
 // Non-streaming: ResponsesResponse → AnthropicResponse
 // ---------------------------------------------------------------------------
@@ -27,28 +29,37 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
-			summaryText := ""
+			var summaryText strings.Builder
 			for _, s := range item.Summary {
 				if s.Type == "summary_text" && s.Text != "" {
-					summaryText += s.Text
+					_, _ = summaryText.WriteString(s.Text)
+				}
+			}
+			for _, part := range item.Content {
+				if part.Type == "reasoning_text" && part.Text != "" {
+					_, _ = summaryText.WriteString(part.Text)
 				}
 			}
 			// Always surface encrypted_content as thinking.signature so Claude
 			// Code / multi-turn clients can send it back. Signature-only
 			// thinking blocks are valid when the model omits a visible summary.
-			if summaryText != "" || strings.TrimSpace(item.EncryptedContent) != "" {
+			if summaryText.Len() > 0 || strings.TrimSpace(item.EncryptedContent) != "" {
 				blocks = append(blocks, AnthropicContentBlock{
 					Type:      "thinking",
-					Thinking:  summaryText,
+					Thinking:  summaryText.String(),
 					Signature: item.EncryptedContent,
 				})
 			}
 		case "message":
 			for _, part := range item.Content {
-				if part.Type == "output_text" && part.Text != "" {
+				text := part.Text
+				if part.Type == "refusal" {
+					text = part.Refusal
+				}
+				if (part.Type == "output_text" || part.Type == "refusal") && text != "" {
 					blocks = append(blocks, AnthropicContentBlock{
 						Type: "text",
-						Text: part.Text,
+						Text: text,
 					})
 				}
 			}
@@ -58,6 +69,16 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 				ID:    fromResponsesCallID(item.CallID),
 				Name:  item.Name,
 				Input: sanitizeAnthropicToolUseInput(item.Name, item.Arguments),
+			})
+		case "custom_tool_call":
+			input, _ := json.Marshal(struct {
+				Input string `json:"input"`
+			}{Input: item.Input})
+			blocks = append(blocks, AnthropicContentBlock{
+				Type:  "tool_use",
+				ID:    fromResponsesCallID(item.CallID),
+				Name:  item.Name,
+				Input: input,
 			})
 		case "web_search_call":
 			toolUseID := "srvtoolu_" + item.ID
@@ -176,19 +197,30 @@ type ResponsesEventToAnthropicState struct {
 	MessageStartSent bool
 	MessageStopSent  bool
 
-	ContentBlockIndex   int
-	ContentBlockOpen    bool
-	CurrentBlockType    string // "text" | "thinking" | "tool_use"
-	CurrentToolName     string
-	CurrentToolArgs     string
-	CurrentToolHadDelta bool
+	ContentBlockIndex       int
+	ContentBlockOpen        bool
+	CurrentBlockType        string // "text" | "thinking" | "tool_use"
+	CurrentBlockHadDelta    bool
+	CurrentToolType         string
+	CurrentToolName         string
+	CurrentToolArgs         strings.Builder
+	CurrentToolHadDelta     bool
+	currentToolJSONDepth    int
+	currentToolJSONStarted  bool
+	currentToolJSONInString bool
+	currentToolJSONEscape   bool
+	currentToolJSONComplete bool
+	currentToolJSONChecked  bool
+	conversionErr           error
 	// PendingThinkingSignature is filled from reasoning.encrypted_content and
 	// emitted as signature_delta before the thinking block is closed.
 	PendingThinkingSignature string
 	HasToolCall              bool
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
-	OutputIndexToBlockIdx map[int]int
+	OutputIndexToBlockIdx  map[int]int
+	TextualOutputDelivered map[responsesTextStreamKey]bool
+	ToolInputDelivered     map[int]bool
 
 	InputTokens              int
 	OutputTokens             int
@@ -203,9 +235,20 @@ type ResponsesEventToAnthropicState struct {
 // NewResponsesEventToAnthropicState returns an initialised stream state.
 func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 	return &ResponsesEventToAnthropicState{
-		OutputIndexToBlockIdx: make(map[int]int),
-		Created:               time.Now().Unix(),
+		OutputIndexToBlockIdx:  make(map[int]int),
+		TextualOutputDelivered: make(map[responsesTextStreamKey]bool),
+		ToolInputDelivered:     make(map[int]bool),
+		Created:                time.Now().Unix(),
 	}
+}
+
+// Err reports an attempt-local conversion failure. Callers must stop consuming
+// the provider attempt rather than finalizing a partial converted response.
+func (state *ResponsesEventToAnthropicState) Err() error {
+	if state == nil {
+		return nil
+	}
+	return state.conversionErr
 }
 
 // ResponsesEventToAnthropicEvents converts a single Responses SSE event into
@@ -214,6 +257,9 @@ func ResponsesEventToAnthropicEvents(
 	evt *ResponsesStreamEvent,
 	state *ResponsesEventToAnthropicState,
 ) []AnthropicStreamEvent {
+	if state == nil || state.conversionErr != nil {
+		return nil
+	}
 	switch evt.Type {
 	case "response.created":
 		return resToAnthHandleCreated(evt, state)
@@ -221,13 +267,21 @@ func ResponsesEventToAnthropicEvents(
 		return resToAnthHandleOutputItemAdded(evt, state)
 	case "response.output_text.delta":
 		return resToAnthHandleTextDelta(evt, state)
+	case "response.refusal.delta":
+		copyEvent := *evt
+		if copyEvent.Delta == "" {
+			copyEvent.Delta = copyEvent.Refusal
+		}
+		return resToAnthHandleTextDelta(&copyEvent, state)
+	case "response.refusal.done":
+		return resToAnthHandleTextDone(evt, state, evt.Refusal, true)
 	case "response.output_text.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleTextDone(evt, state, evt.Text, true)
 	case "response.function_call_arguments.delta",
 		// custom/freeform 工具的输入增量与 function_call 参数增量同形。
 		"response.custom_tool_call_input.delta":
 		return resToAnthHandleFuncArgsDelta(evt, state)
-	case "response.function_call_arguments.done":
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
 		return resToAnthHandleFuncArgsDone(evt, state)
 	case "response.output_item.done":
 		return resToAnthHandleOutputItemDone(evt, state)
@@ -235,11 +289,11 @@ func ResponsesEventToAnthropicEvents(
 		// 原始推理文本增量，与 reasoning summary 一样映射为 thinking。
 		"response.reasoning_text.delta":
 		return resToAnthHandleReasoningDelta(evt, state)
-	case "response.reasoning_summary_text.done":
+	case "response.reasoning_summary_text.done", "response.reasoning_text.done":
 		// Keep the thinking block open until response.output_item.done.
 		// Grok/Codex attach encrypted_content on the finished reasoning item;
 		// closing early would drop signature_delta and break multi-turn cache.
-		return nil
+		return resToAnthHandleTextDone(evt, state, evt.Text, false)
 	// response.done 是 Realtime/WS 与项目透传路径使用的终止别名；
 	// 普通 Responses HTTP SSE 的公开终止事件仍以 response.completed 为主。
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
@@ -252,6 +306,9 @@ func ResponsesEventToAnthropicEvents(
 // FinalizeResponsesAnthropicStream emits synthetic termination events if the
 // stream ended without a proper completion event.
 func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state == nil || state.conversionErr != nil {
+		return nil
+	}
 	if !state.MessageStartSent || state.MessageStopSent {
 		return nil
 	}
@@ -345,8 +402,10 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "tool_use"
+		state.CurrentBlockHadDelta = false
+		state.CurrentToolType = evt.Item.Type
 		state.CurrentToolName = evt.Item.Name
-		state.CurrentToolArgs = ""
+		state.resetCurrentToolArguments()
 		state.CurrentToolHadDelta = false
 		state.HasToolCall = true
 
@@ -370,6 +429,7 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "thinking"
+		state.CurrentBlockHadDelta = false
 		state.PendingThinkingSignature = strings.TrimSpace(evt.Item.EncryptedContent)
 
 		events = append(events, AnthropicStreamEvent{
@@ -402,6 +462,7 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		idx := state.ContentBlockIndex
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "text"
+		state.CurrentBlockHadDelta = false
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
@@ -414,6 +475,8 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	idx := state.ContentBlockIndex
+	state.CurrentBlockHadDelta = true
+	state.TextualOutputDelivered[responsesTextKey(evt)] = true
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: &idx,
@@ -431,8 +494,18 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	}
 
 	if state.CurrentBlockType == "tool_use" && state.CurrentToolName == "Read" {
-		state.CurrentToolArgs += evt.Delta
-		if state.CurrentToolHadDelta || !json.Valid([]byte(state.CurrentToolArgs)) {
+		if len(evt.Delta) > maxResponsesToAnthropicRetainedToolArgumentBytes-state.CurrentToolArgs.Len() {
+			state.conversionErr = fmt.Errorf("responses Read tool arguments exceed %d-byte retained-state limit", maxResponsesToAnthropicRetainedToolArgumentBytes)
+			return nil
+		}
+		_, _ = state.CurrentToolArgs.WriteString(evt.Delta)
+		state.observeCurrentToolJSON(evt.Delta)
+		if state.CurrentToolHadDelta || !state.currentToolJSONComplete || state.currentToolJSONChecked {
+			return nil
+		}
+		state.currentToolJSONChecked = true
+		arguments := state.CurrentToolArgs.String()
+		if !json.Valid([]byte(arguments)) {
 			return nil
 		}
 
@@ -441,7 +514,7 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 			return nil
 		}
 		state.CurrentToolHadDelta = true
-		sanitized := sanitizeAnthropicToolUseInput(state.CurrentToolName, state.CurrentToolArgs)
+		sanitized := sanitizeAnthropicToolUseInput(state.CurrentToolName, arguments)
 		return []AnthropicStreamEvent{{
 			Type:  "content_block_delta",
 			Index: &blockIdx,
@@ -455,6 +528,7 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	if state.CurrentBlockType == "tool_use" {
 		state.CurrentToolHadDelta = true
 	}
+	state.ToolInputDelivered[evt.OutputIndex] = true
 
 	blockIdx, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]
 	if !ok {
@@ -480,11 +554,24 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	}
 
 	raw := evt.Arguments
+	if evt.Type == "response.custom_tool_call_input.done" {
+		raw = evt.Input
+	}
 	if raw == "" {
-		raw = state.CurrentToolArgs
+		raw = state.CurrentToolArgs.String()
 	}
 	if raw == "" || state.CurrentToolHadDelta {
 		return closeCurrentBlock(state)
+	}
+	if state.CurrentToolType == "custom_tool_call" {
+		encoded, err := json.Marshal(struct {
+			Input string `json:"input"`
+		}{Input: raw})
+		if err != nil {
+			state.conversionErr = fmt.Errorf("encode custom tool input: %w", err)
+			return nil
+		}
+		raw = string(encoded)
 	}
 	if state.CurrentToolName == "Read" {
 		sanitized := sanitizeAnthropicToolUseInput(state.CurrentToolName, raw)
@@ -513,6 +600,7 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 			PartialJSON: raw,
 		},
 	}}
+	state.ToolInputDelivered[evt.OutputIndex] = true
 	events = append(events, closeCurrentBlock(state)...)
 	return events
 }
@@ -526,6 +614,8 @@ func resToAnthHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEv
 	if !ok {
 		return nil
 	}
+	state.CurrentBlockHadDelta = true
+	state.TextualOutputDelivered[responsesTextKey(evt)] = true
 
 	return []AnthropicStreamEvent{{
 		Type:  "content_block_delta",
@@ -535,6 +625,23 @@ func resToAnthHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEv
 			Thinking: evt.Delta,
 		},
 	}}
+}
+
+func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState, fullText string, closeBlock bool) []AnthropicStreamEvent {
+	var events []AnthropicStreamEvent
+	if !state.CurrentBlockHadDelta && fullText != "" {
+		copyEvent := *evt
+		copyEvent.Delta = fullText
+		if state.CurrentBlockType == "thinking" {
+			events = append(events, resToAnthHandleReasoningDelta(&copyEvent, state)...)
+		} else {
+			events = append(events, resToAnthHandleTextDelta(&copyEvent, state)...)
+		}
+	}
+	if closeBlock {
+		events = append(events, resToAnthHandleBlockDone(state)...)
+	}
+	return events
 }
 
 func resToAnthHandleBlockDone(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -553,12 +660,71 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 	if evt.Item.Type == "web_search_call" && evt.Item.Status == "completed" {
 		return resToAnthHandleWebSearchDone(evt, state)
 	}
+	if evt.Item.Type == "function_call" || evt.Item.Type == "custom_tool_call" {
+		done := *evt
+		if evt.Item.Type == "custom_tool_call" {
+			done.Type = "response.custom_tool_call_input.done"
+			done.Input = evt.Item.Input
+		} else {
+			done.Type = "response.function_call_arguments.done"
+			done.Arguments = evt.Item.Arguments
+		}
+		return resToAnthHandleFuncArgsDone(&done, state)
+	}
+	if evt.Item.Type == "message" {
+		var events []AnthropicStreamEvent
+		for index, part := range evt.Item.Content {
+			text := part.Text
+			if part.Type == "refusal" {
+				text = part.Refusal
+			}
+			key := responsesTextStreamKey{OutputIndex: evt.OutputIndex, ContentIndex: index}
+			switch part.Type {
+			case "output_text":
+				key.Type = "response.output_text"
+			case "refusal":
+				key.Type = "response.refusal"
+			}
+			if key.Type != "" && !state.TextualOutputDelivered[key] && text != "" {
+				copyEvent := *evt
+				copyEvent.Type = key.Type + ".done"
+				copyEvent.ContentIndex = index
+				copyEvent.Delta = text
+				events = append(events, resToAnthHandleTextDelta(&copyEvent, state)...)
+			}
+		}
+		events = append(events, closeCurrentBlock(state)...)
+		return events
+	}
 
 	// Capture encrypted_content on reasoning item done (often only present here).
 	if evt.Item.Type == "reasoning" {
+		var events []AnthropicStreamEvent
+		for index, summary := range evt.Item.Summary {
+			key := responsesTextStreamKey{Type: "response.reasoning_summary_text", OutputIndex: evt.OutputIndex, SummaryIndex: index}
+			if summary.Type == "summary_text" && !state.TextualOutputDelivered[key] && summary.Text != "" {
+				copyEvent := *evt
+				copyEvent.Type = "response.reasoning_summary_text.done"
+				copyEvent.SummaryIndex = index
+				copyEvent.Delta = summary.Text
+				events = append(events, resToAnthHandleReasoningDelta(&copyEvent, state)...)
+			}
+		}
+		for index, part := range evt.Item.Content {
+			key := responsesTextStreamKey{Type: "response.reasoning_text", OutputIndex: evt.OutputIndex, ContentIndex: index}
+			if part.Type == "reasoning_text" && !state.TextualOutputDelivered[key] && part.Text != "" {
+				copyEvent := *evt
+				copyEvent.Type = "response.reasoning_text.done"
+				copyEvent.ContentIndex = index
+				copyEvent.Delta = part.Text
+				events = append(events, resToAnthHandleReasoningDelta(&copyEvent, state)...)
+			}
+		}
 		if sig := strings.TrimSpace(evt.Item.EncryptedContent); sig != "" {
 			state.PendingThinkingSignature = sig
 		}
+		events = append(events, closeCurrentBlock(state)...)
+		return events
 	}
 
 	if state.ContentBlockOpen {
@@ -700,12 +866,62 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	}
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
+	state.CurrentBlockHadDelta = false
+	state.CurrentToolType = ""
 	state.CurrentToolName = ""
-	state.CurrentToolArgs = ""
+	state.resetCurrentToolArguments()
 	state.CurrentToolHadDelta = false
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_stop",
 		Index: &idx,
 	})
 	return events
+}
+
+func (state *ResponsesEventToAnthropicState) resetCurrentToolArguments() {
+	state.CurrentToolArgs.Reset()
+	state.currentToolJSONDepth = 0
+	state.currentToolJSONStarted = false
+	state.currentToolJSONInString = false
+	state.currentToolJSONEscape = false
+	state.currentToolJSONComplete = false
+	state.currentToolJSONChecked = false
+}
+
+func (state *ResponsesEventToAnthropicState) observeCurrentToolJSON(fragment string) {
+	if state.currentToolJSONComplete {
+		return
+	}
+	for i := 0; i < len(fragment); i++ {
+		ch := fragment[i]
+		if state.currentToolJSONInString {
+			if state.currentToolJSONEscape {
+				state.currentToolJSONEscape = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				state.currentToolJSONEscape = true
+			case '"':
+				state.currentToolJSONInString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			state.currentToolJSONInString = true
+		case '{', '[':
+			state.currentToolJSONStarted = true
+			state.currentToolJSONDepth++
+		case '}', ']':
+			if !state.currentToolJSONStarted {
+				continue
+			}
+			state.currentToolJSONDepth--
+			if state.currentToolJSONDepth == 0 {
+				state.currentToolJSONComplete = true
+				return
+			}
+		}
+	}
 }

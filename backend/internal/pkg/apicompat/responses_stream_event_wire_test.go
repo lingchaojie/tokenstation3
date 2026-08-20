@@ -93,6 +93,38 @@ func TestWire_ContentPartCarriesAnnotationsLogprobs(t *testing.T) {
 	require.Contains(t, part, "logprobs")
 }
 
+func TestWire_RefusalLifecyclePreservesRequiredFields(t *testing.T) {
+	delta := marshalEvent(t, ResponsesStreamEvent{
+		Type: "response.refusal.delta", OutputIndex: 0, ContentIndex: 0, ItemID: "msg_1", Delta: "blocked",
+	})
+	require.EqualValues(t, 0, delta["output_index"])
+	require.EqualValues(t, 0, delta["content_index"])
+	require.Equal(t, "blocked", delta["delta"])
+
+	part := marshalEvent(t, ResponsesStreamEvent{
+		Type: "response.content_part.added", OutputIndex: 0, ContentIndex: 0, ItemID: "msg_1",
+		Part: &ResponsesContentPart{Type: "refusal", Refusal: ""},
+	})
+	partBody, ok := part["part"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "refusal", partBody["type"])
+	require.Contains(t, partBody, "refusal")
+
+	item := marshalEvent(t, ResponsesStreamEvent{
+		Type: "response.output_item.done", OutputIndex: 0,
+		Item: &ResponsesOutput{Type: "message", ID: "msg_1", Role: "assistant", Status: "completed", Content: []ResponsesContentPart{{Type: "refusal", Refusal: "blocked"}}},
+	})
+	itemBody, ok := item["item"].(map[string]any)
+	require.True(t, ok)
+	content, ok := itemBody["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	refusal, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "blocked", refusal["refusal"])
+	require.NotContains(t, refusal, "text")
+}
+
 // TestWire_ArgumentsDonePresentEvenEmpty guards arguments presence on done.
 func TestWire_ArgumentsDonePresentEvenEmpty(t *testing.T) {
 	m := marshalEvent(t, ResponsesStreamEvent{

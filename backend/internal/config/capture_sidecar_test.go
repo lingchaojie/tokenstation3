@@ -16,8 +16,8 @@ func TestCaptureDefaultsAreSafeAndDisabled(t *testing.T) {
 	var cfg Config
 	require.NoError(t, LoadIntoForTest(nil, &cfg))
 	require.False(t, cfg.Gateway.Capture.Enabled)
-	require.Zero(t, cfg.Gateway.Capture.MaxBodyBytes)
-	require.Zero(t, cfg.Gateway.Capture.MaxHeaderBytes)
+	require.EqualValues(t, 32<<20, cfg.Gateway.Capture.MaxBodyBytes)
+	require.EqualValues(t, 1<<20, cfg.Gateway.Capture.MaxHeaderBytes)
 	require.EqualValues(t, 12<<30, cfg.Gateway.Capture.Spool.MaxBytes)
 	require.EqualValues(t, 8<<30, cfg.Gateway.Capture.Spool.MinFreeBytes)
 	require.Equal(t, "/app/data/capture/spool", cfg.Gateway.Capture.Spool.Dir)
@@ -122,13 +122,6 @@ func validCaptureConfig() CaptureConfig {
 			WriteTimeoutMS:     60000,
 		},
 	}
-}
-
-func TestCaptureConfigAllowsUnlimitedPerRecordCapture(t *testing.T) {
-	cfg := validCaptureConfig()
-	cfg.MaxBodyBytes = 0
-	cfg.MaxHeaderBytes = 0
-	require.NoError(t, cfg.Validate())
 }
 
 func loadConfigForTest(t *testing.T) *Config {

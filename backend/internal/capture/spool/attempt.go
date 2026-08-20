@@ -164,16 +164,14 @@ func (a *Attempt) write(stream *contentStream, payload []byte, response bool) er
 	if !stream.enabled {
 		return nil
 	}
+	remaining := stream.limit - int64(stream.stored)
+	if remaining < 0 {
+		remaining = 0
+	}
 	storeBytes := int64(len(payload))
-	if stream.limit > 0 {
-		remaining := stream.limit - int64(stream.stored)
-		if remaining < 0 {
-			remaining = 0
-		}
-		if storeBytes > remaining {
-			storeBytes = remaining
-			stream.truncated = true
-		}
+	if storeBytes > remaining {
+		storeBytes = remaining
+		stream.truncated = true
 	}
 	if storeBytes == 0 {
 		return nil

@@ -1,8 +1,6 @@
 package schema
 
 import (
-	"encoding/json"
-
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 
@@ -47,7 +45,7 @@ func (Group) Fields() []ent.Field {
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
-		// 高峰时段倍率（added by migration 158）
+		// 高峰时段倍率（added by migration 178）
 		field.Bool("peak_rate_enabled").
 			Default(false).
 			Comment("是否启用高峰时段倍率"),
@@ -159,15 +157,6 @@ func (Group) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Comment("Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示使用默认价 0.01（官方 $10/1000 次）"),
-
-		field.Bool("long_context_pricing_enabled").
-			Default(true).
-			Comment("是否按上下文长度应用模型阶梯价格；默认开启以保持官方/渠道长上下文价"),
-		field.JSON("model_pricing", json.RawMessage{}).
-			Optional().
-			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
-			Comment("分组逐模型定价；优先级高于渠道和内置定价"),
-
 		// Claude Code 客户端限制 (added by migration 029)
 		field.Bool("claude_code_only").
 			Default(false).
@@ -268,8 +257,7 @@ func (Group) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("OpenAI reasoning effort 自定义精确映射；先映射再应用上限"),
 
-		// 分组利润控制（migration 192/193）：openai/anthropic/gemini/grok/antigravity
-		// 的 token 分组可启用，composite 分组不能直接启用。
+		// 分组利润控制（migration 208/209）：供支持 token 计费的平台分组启用。
 		field.Bool("profit_control_enabled").
 			Default(false).
 			Comment("是否启用利润控制：调度时仅允许账号计费倍率满足毛利率要求的账号进入候选池"),

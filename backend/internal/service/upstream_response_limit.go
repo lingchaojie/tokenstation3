@@ -273,12 +273,8 @@ func drainCaptureResponseRemainder(reader io.Reader) error {
 		return nil
 	}
 	remaining := lifecycle.captureResponseDrainRemaining()
-	if remaining == 0 {
+	if remaining <= 0 {
 		return nil
-	}
-	if remaining < 0 {
-		_, err := io.Copy(io.Discard, reader)
-		return err
 	}
 	_, err := io.Copy(io.Discard, io.LimitReader(reader, remaining))
 	return err
@@ -365,16 +361,6 @@ func markCaptureResponseTruncated(reader io.Reader) {
 }
 
 // openAITooLargeError 以 OpenAI / Gemini 格式写入超限错误。
-func anthropicTooLargeError(c *gin.Context) {
-	c.JSON(http.StatusBadGateway, gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    "upstream_error",
-			"message": "Upstream response too large",
-		},
-	})
-}
-
 func openAITooLargeError(c *gin.Context) {
 	c.JSON(http.StatusBadGateway, gin.H{
 		"error": gin.H{

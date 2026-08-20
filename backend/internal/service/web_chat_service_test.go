@@ -39,20 +39,6 @@ func TestWebChatResponseCapture_CapturesBoundedBody(t *testing.T) {
 	require.True(t, truncated)
 }
 
-func TestWebChatResponseCapture_ZeroLimitRetainsCompleteBody(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-
-	capture := NewWebChatResponseCapture(c.Writer, 0)
-	_, err := capture.Write([]byte("unbounded response"))
-
-	require.NoError(t, err)
-	require.Equal(t, []byte("unbounded response"), capture.Body())
-	_, truncated := capture.Snapshot()
-	require.False(t, truncated)
-}
-
 func TestWebChatResponseCapture_CapturesWriteStringBoundedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -2149,10 +2135,6 @@ func newTestGinContext(ctx context.Context) *gin.Context {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
 	policy.Platforms.OpenAI = true
-	// WebChat service tests cover multiple model families; production defaults
-	// keep Anthropic/Kiro capture restricted to the configured allowlist.
-	policy.ModelAllowlists.Anthropic = []string{}
-	policy.ModelAllowlists.Kiro = []string{}
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	if err != nil {
 		panic(err)

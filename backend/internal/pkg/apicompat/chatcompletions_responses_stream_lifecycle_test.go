@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,10 +16,180 @@ func collectStreamEvents(t *testing.T, chunks []string) []ResponsesStreamEvent {
 	for _, payload := range chunks {
 		var chunk ChatCompletionsChunk
 		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
-		events = append(events, ChatCompletionsChunkToResponsesEvents(&chunk, state)...)
+		converted, err := ChatCompletionsChunkToResponsesEvents(&chunk, state)
+		require.NoError(t, err)
+		events = append(events, converted...)
 	}
 	events = append(events, FinalizeChatCompletionsResponsesStream(state)...)
 	return events
+}
+
+func TestChatCompletionsToResponsesToolArgumentsAggregateLinearly(t *testing.T) {
+	state := NewChatCompletionsToResponsesStreamState("gpt-test")
+	state.CustomTools = map[string]bool{"exec": true}
+	first := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID:   "call-1",
+		Type: "function",
+		Function: ChatFunctionCall{
+			Name:      "exec",
+			Arguments: `{"input":"`,
+		},
+	}}}}}}
+	_, err := ChatCompletionsChunkToResponsesEvents(first, state)
+	require.NoError(t, err)
+
+	fragment := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Arguments: "x"},
+	}}}}}}
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 8192 {
+		_, err = ChatCompletionsChunkToResponsesEvents(fragment, state)
+		require.NoError(t, err)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+	closing := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Arguments: `"}`},
+	}}}}}}
+	_, err = ChatCompletionsChunkToResponsesEvents(closing, state)
+	require.NoError(t, err)
+	completed := FinalizeChatCompletionsResponsesStream(state)
+	require.NotEmpty(t, completed)
+	last := completed[len(completed)-1]
+	require.Equal(t, "response.completed", last.Type)
+	require.Len(t, last.Response.Output, 1)
+	require.Len(t, last.Response.Output[0].Input, 8192)
+}
+
+func TestChatCompletionsToResponsesRejectsOversizedRetainedToolArguments(t *testing.T) {
+	state := NewChatCompletionsToResponsesStreamState("gpt-test")
+	state.CustomTools = map[string]bool{"exec": true}
+	chunk := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID: "call-1",
+		Function: ChatFunctionCall{
+			Arguments: strings.Repeat("x", (8<<20)+1),
+		},
+	}}}}}}
+
+	events, err := ChatCompletionsChunkToResponsesEvents(chunk, state)
+	require.ErrorContains(t, err, "tool arguments exceed")
+	require.Empty(t, events)
+}
+
+func TestChatCompletionsToResponsesRejectsOversizedRetainedSemanticOutput(t *testing.T) {
+	for _, kind := range []string{"content", "reasoning", "refusal"} {
+		t.Run(kind, func(t *testing.T) {
+			state := NewChatCompletionsToResponsesStreamState("gpt-test")
+			prefix := "prefix"
+			value := strings.Repeat("x", (8<<20)+1)
+			firstDelta := ChatDelta{}
+			delta := ChatDelta{}
+			switch kind {
+			case "content":
+				firstDelta.Content = &prefix
+				delta.Content = &value
+			case "reasoning":
+				firstDelta.ReasoningContent = &prefix
+				delta.ReasoningContent = &value
+			case "refusal":
+				firstDelta.Refusal = &prefix
+				delta.Refusal = &value
+			}
+			_, err := ChatCompletionsChunkToResponsesEvents(&ChatCompletionsChunk{
+				Choices: []ChatChunkChoice{{Delta: firstDelta}},
+			}, state)
+			require.NoError(t, err)
+
+			events, err := ChatCompletionsChunkToResponsesEvents(&ChatCompletionsChunk{
+				Choices: []ChatChunkChoice{{Delta: delta}},
+			}, state)
+			require.ErrorContains(t, err, "semantic output exceeds")
+			require.Empty(t, events)
+		})
+	}
+}
+
+func TestChatCompletionsToResponsesAllowsSingleSemanticFrameBeyondRetainedGuard(t *testing.T) {
+	state := NewChatCompletionsToResponsesStreamState("gpt-test")
+	value := strings.Repeat("x", (8<<20)+1024)
+	events, err := ChatCompletionsChunkToResponsesEvents(&ChatCompletionsChunk{
+		Choices: []ChatChunkChoice{{Delta: ChatDelta{Content: &value}}},
+	}, state)
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	require.Equal(t, len(value), state.Text.Len())
+}
+
+func TestStream_RefusalPreservesResponsesRefusalLifecycle(t *testing.T) {
+	events := collectStreamEvents(t, []string{
+		`{"choices":[{"index":0,"delta":{"role":"assistant","refusal":"policy "}}]}`,
+		`{"choices":[{"index":0,"delta":{"refusal":"blocked"}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}`,
+	})
+
+	var sawAdded, sawDelta, sawDone, sawItemDone bool
+	for _, event := range events {
+		require.NotEqual(t, "response.output_text.delta", event.Type)
+		switch event.Type {
+		case "response.content_part.added":
+			if event.Part != nil && event.Part.Type == "refusal" {
+				sawAdded = true
+			}
+		case "response.refusal.delta":
+			sawDelta = true
+		case "response.refusal.done":
+			sawDone = true
+			require.Equal(t, "policy blocked", event.Refusal)
+		case "response.output_item.done":
+			if event.Item != nil && event.Item.Type == "message" {
+				sawItemDone = true
+				require.Equal(t, []ResponsesContentPart{{Type: "refusal", Refusal: "policy blocked"}}, event.Item.Content)
+			}
+		case "response.completed":
+			require.NotNil(t, event.Response)
+			require.Len(t, event.Response.Output, 1)
+			require.Equal(t, []ResponsesContentPart{{Type: "refusal", Refusal: "policy blocked"}}, event.Response.Output[0].Content)
+		}
+	}
+	require.True(t, sawAdded)
+	require.True(t, sawDelta)
+	require.True(t, sawDone)
+	require.True(t, sawItemDone)
+}
+
+func TestStream_MixedTextAndRefusalPreservesArrivalOrder(t *testing.T) {
+	for name, chunks := range map[string][]string{
+		"text then refusal": {
+			`{"choices":[{"index":0,"delta":{"role":"assistant","content":"visible"}}]}`,
+			`{"choices":[{"index":0,"delta":{"refusal":"blocked"}}]}`,
+		},
+		"refusal then text": {
+			`{"choices":[{"index":0,"delta":{"role":"assistant","refusal":"blocked"}}]}`,
+			`{"choices":[{"index":0,"delta":{"content":"visible"}}]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := collectStreamEvents(t, append(chunks, `{"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}`))
+			var completed *ResponsesResponse
+			for _, event := range events {
+				if event.Type == "response.completed" {
+					completed = event.Response
+				}
+			}
+			require.NotNil(t, completed)
+			require.Len(t, completed.Output, 1)
+			require.Len(t, completed.Output[0].Content, 2)
+			if name == "text then refusal" {
+				require.Equal(t, []ResponsesContentPart{{Type: "output_text", Text: "visible"}, {Type: "refusal", Refusal: "blocked"}}, completed.Output[0].Content)
+			} else {
+				require.Equal(t, []ResponsesContentPart{{Type: "refusal", Refusal: "blocked"}, {Type: "output_text", Text: "visible"}}, completed.Output[0].Content)
+			}
+		})
+	}
 }
 
 // TestStream_ReasoningOpensItemBeforeDelta guards the bug where a strict client

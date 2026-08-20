@@ -174,7 +174,7 @@ func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) 
 // resolveCCFallbackTarget 解析两条 CC 回退路径共用的账号凭证与上游端点
 // （回退路径仅面向 APIKey 账号，凭证恒为 openai api_key）。
 func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey string, targetURL string, err error) {
-	apiKey = strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
+	apiKey = account.GetOpenAIApiKey()
 	if apiKey == "" {
 		return "", "", fmt.Errorf("account %d missing api_key", account.ID)
 	}
@@ -459,6 +459,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 		}
 		lineReader.Close()
 	}()
+	choiceState := openAIChatChoiceStreamState{}
 	var terminalTailDeadline time.Time
 	var bufferedTail []string
 	tailCollected := false
@@ -508,7 +509,8 @@ func (s *OpenAIGatewayService) scanCCStream(
 			if trimmedLine == "" || strings.HasPrefix(trimmedLine, ":") {
 				continue
 			}
-			continue
+			st.Err = errors.New("OpenAI chat_completions data arrived after [DONE]")
+			return st
 		}
 		payload, ok := extractOpenAISSEDataLine(line)
 		if !ok {
@@ -519,11 +521,23 @@ func (s *OpenAIGatewayService) scanCCStream(
 			continue
 		}
 		if payload == "[DONE]" {
+			if !choiceState.complete() {
+				st.Err = errors.New("OpenAI chat_completions [DONE] arrived before all choices had a finish_reason")
+				return st
+			}
 			st.SawDone = true
 			terminalTailDeadline = time.Now().Add(providerTerminalTailDrainGrace)
 			continue
 		}
-		providerPayload := true
+		providerPayload, protocolErr := classifyOpenAIChatStreamPayload(payload)
+		if protocolErr != nil {
+			st.Err = protocolErr
+			return st
+		}
+		if _, protocolErr = choiceState.observe(payload); protocolErr != nil {
+			st.Err = protocolErr
+			return st
+		}
 		if openAIChatPayloadContainsAudio([]byte(payload)) {
 			st.Err = errors.New("chat completions audio output is not supported by the Messages/Responses compatibility bridge")
 			return st

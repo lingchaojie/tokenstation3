@@ -24,23 +24,6 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformKiro        = "kiro"
 	PlatformGrok        = "grok"
-	PlatformKimi        = "kimi"
-	PlatformZhipu       = "zhipu"
-	PlatformDeepseek    = "deepseek"
-)
-
-// Account mode constants distinguish pay-as-you-go and coding-plan accounts
-// for Chinese OpenAI-compatible providers.
-const (
-	AccountModePayG   = "payg"
-	AccountModeCoding = "coding"
-)
-
-// API protocol constants used by Chinese provider forwarding.
-const (
-	APIProtocolChatCompletions = "chat_completions"
-	APIProtocolAnthropic       = "anthropic"
-	APIProtocolResponses       = "responses"
 )
 
 // Account type constants

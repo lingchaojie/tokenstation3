@@ -5,6 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/tidwall/sjson"
+)
+
+const (
+	maxResponsesClientToolTrackedCalls          = 1024
+	maxResponsesClientToolRetainedMetadataBytes = 1024
+	maxResponsesClientToolRetainedArgumentBytes = 8 << 20
 )
 
 // ResponsesClientToolMapping records the reversible lowering applied before a
@@ -130,42 +138,6 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 	return adapter, changed, nil
 }
 
-// AdaptResponsesClientToolsWithInheritedMapping lowers client-tool history on
-// a follow-up request that omits the session-level tools declaration. An
-// explicitly present tools field, including an empty or malformed value,
-// always replaces the inherited mapping and is handled by the ordinary
-// declaration-driven adapter.
-func AdaptResponsesClientToolsWithInheritedMapping(
-	req map[string]any,
-	inherited ResponsesClientToolMapping,
-) (ResponsesClientToolMapping, bool, error) {
-	if req == nil {
-		return ResponsesClientToolMapping{}, false, nil
-	}
-	if _, toolsPresent := req["tools"]; toolsPresent {
-		return AdaptResponsesClientTools(req)
-	}
-	if len(inherited.CustomTools) == 0 && !inherited.ToolSearch && len(inherited.NamespaceTools) == 0 {
-		return ResponsesClientToolMapping{}, false, nil
-	}
-
-	changed := rewriteClientToolHistory(req["input"], &inherited)
-	if len(inherited.NamespaceTools) > 0 {
-		before := changed
-		rewriteNamespaceQualifiedCalls(req["input"], inherited.NamespaceTools)
-		// Namespace rewriting does not currently report whether it changed a
-		// value. A retained namespace mapping is only used for follow-up
-		// history, so conservatively rebuild the request when input exists.
-		if _, inputPresent := req["input"]; inputPresent && !before {
-			changed = true
-		}
-	}
-	if rewriteClientToolChoice(req, &inherited) {
-		changed = true
-	}
-	return inherited, changed, nil
-}
-
 func copyClientTool(tool map[string]any) map[string]any {
 	copy := make(map[string]any, len(tool))
 	for key, value := range tool {
@@ -191,12 +163,10 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) bo
 					typed["type"] = "function_call"
 					typed["arguments"] = customToolCallArguments(stringValue(typed["input"]))
 					delete(typed, "input")
-					dropInvalidLoweredFunctionItemID(typed)
 					changed = true
 				}
 			case "custom_tool_call_output":
 				typed["type"] = "function_call_output"
-				dropInvalidLoweredFunctionItemID(typed)
 				normalizeClientToolOutput(typed)
 				changed = true
 			case "tool_search_call":
@@ -205,13 +175,11 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) bo
 					typed["name"] = toolSearchProxyName
 					typed["arguments"] = rawObjectString(typed["arguments"])
 					delete(typed, "execution")
-					dropInvalidLoweredFunctionItemID(typed)
 					changed = true
 				}
 			case "tool_search_output":
 				if adapter.ToolSearch {
 					typed["type"] = "function_call_output"
-					dropInvalidLoweredFunctionItemID(typed)
 					normalizeClientToolOutput(typed)
 					changed = true
 				}
@@ -223,17 +191,6 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) bo
 	}
 	visit(value)
 	return changed
-}
-
-// dropInvalidLoweredFunctionItemID removes Codex client-only item IDs such as
-// ctc_*, ctco_*, tsc_*, and tso_* after their item type is lowered to the
-// function protocol. Function upstreams validate these IDs with the fc prefix;
-// call_id, which is preserved separately, is the tool call/output pairing key.
-func dropInvalidLoweredFunctionItemID(item map[string]any) {
-	id := strings.TrimSpace(stringValue(item["id"]))
-	if id != "" && !strings.HasPrefix(id, "fc") {
-		delete(item, "id")
-	}
 }
 
 func normalizeClientToolOutput(item map[string]any) {
@@ -296,75 +253,241 @@ func RestoreResponsesClientToolPayload(payload []byte, mapping ResponsesClientTo
 	if len(payload) == 0 {
 		return payload, false, nil
 	}
-	var value any
-	if err := json.Unmarshal(payload, &value); err != nil {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &root); err != nil {
 		return payload, false, err
 	}
-	changed := restoreClientToolValue(value, &mapping)
-	if !changed {
-		if len(mapping.NamespaceTools) == 0 {
-			return payload, false, nil
-		}
-		return RestoreResponsesNamespaceCalls(payload, mapping.NamespaceTools)
+	changed, err := restoreResponsesClientToolRawObject(root, &mapping)
+	if err != nil {
+		return payload, false, err
 	}
+	if !changed {
+		return payload, false, nil
+	}
+	rebuiltPayload, err := marshalResponsesClientToolRawObject(root)
+	if err != nil {
+		return payload, false, err
+	}
+	return rebuiltPayload, true, nil
+}
+
+func restoreResponsesClientToolRawObject(root map[string]json.RawMessage, adapter *ResponsesClientToolMapping) (bool, error) {
+	eventType := decodedRawJSONString(root["type"])
+	if isResponsesClientToolTerminalEvent(eventType) {
+		// Responses SSE terminal events wrap the response object exactly once.
+		// Root-level output/item fields are extensions of the event envelope and
+		// must not be interpreted as response output.
+		response, ok := root["response"]
+		if !ok || !rawJSONHasLeadingByte(response, '{') {
+			return false, nil
+		}
+		var responseObject map[string]json.RawMessage
+		if err := json.Unmarshal(response, &responseObject); err != nil {
+			return false, err
+		}
+		responseChanged, err := restoreResponsesClientToolRawFields(responseObject, adapter)
+		if err != nil {
+			return false, err
+		}
+		if responseChanged {
+			rebuilt, err := marshalResponsesClientToolRawObject(responseObject)
+			if err != nil {
+				return false, err
+			}
+			root["response"] = rebuilt
+		}
+		return responseChanged, nil
+	}
+	switch eventType {
+	case "response.output_item.added", "response.output_item.done":
+		// Item lifecycle events expose exactly one item at the root. Do not
+		// interpret an unrelated root output extension.
+		return restoreResponsesClientToolRawItemField(root, adapter)
+	case "":
+		// Direct Responses JSON may omit object:"response". Unknown SSE event
+		// types are still protected by their non-empty type discriminator.
+		return restoreResponsesClientToolRawOutputField(root, adapter)
+	}
+	return false, nil
+}
+
+func isResponsesClientToolTerminalEvent(eventType string) bool {
+	switch eventType {
+	case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func restoreResponsesClientToolRawFields(root map[string]json.RawMessage, adapter *ResponsesClientToolMapping) (bool, error) {
+	itemChanged, err := restoreResponsesClientToolRawItemField(root, adapter)
+	if err != nil {
+		return false, err
+	}
+	outputChanged, err := restoreResponsesClientToolRawOutputField(root, adapter)
+	if err != nil {
+		return false, err
+	}
+	return itemChanged || outputChanged, nil
+}
+
+func restoreResponsesClientToolRawItemField(root map[string]json.RawMessage, adapter *ResponsesClientToolMapping) (bool, error) {
+	if item, ok := root["item"]; ok && rawJSONHasLeadingByte(item, '{') {
+		restored, itemChanged, err := restoreResponsesClientToolRawItem(item, adapter)
+		if err != nil {
+			return false, err
+		}
+		if itemChanged {
+			root["item"] = restored
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func restoreResponsesClientToolRawOutputField(root map[string]json.RawMessage, adapter *ResponsesClientToolMapping) (bool, error) {
+	if output, ok := root["output"]; ok && rawJSONHasLeadingByte(output, '[') {
+		restored, outputChanged, err := restoreResponsesClientToolRawOutput(output, adapter)
+		if err != nil {
+			return false, err
+		}
+		if outputChanged {
+			root["output"] = restored
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func restoreResponsesClientToolRawOutput(raw json.RawMessage, adapter *ResponsesClientToolMapping) (json.RawMessage, bool, error) {
+	var output []json.RawMessage
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return raw, false, err
+	}
+	if len(output) > maxResponsesClientToolTrackedCalls {
+		return raw, false, fmt.Errorf("responses client-tool output exceeds %d-item limit", maxResponsesClientToolTrackedCalls)
+	}
+	changed := false
+	for index := range output {
+		rebuilt, itemChanged, err := restoreResponsesClientToolRawItem(output[index], adapter)
+		if err != nil {
+			return raw, false, err
+		}
+		if !itemChanged {
+			continue
+		}
+		output[index] = rebuilt
+		changed = true
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	rebuilt, err := marshalResponsesClientToolRawArray(output)
+	if err != nil {
+		return raw, false, err
+	}
+	return rebuilt, true, nil
+}
+
+func marshalResponsesClientToolRawArray(value []json.RawMessage) ([]byte, error) {
 	var rebuilt bytes.Buffer
 	encoder := json.NewEncoder(&rebuilt)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(value); err != nil {
-		return payload, false, err
+		return nil, err
 	}
-	rebuiltPayload := bytes.TrimSuffix(rebuilt.Bytes(), []byte("\n"))
-	if len(mapping.NamespaceTools) == 0 {
-		return rebuiltPayload, true, nil
-	}
-	restored, _, err := RestoreResponsesNamespaceCalls(rebuiltPayload, mapping.NamespaceTools)
-	if err != nil {
-		return payload, false, err
-	}
-	return restored, true, nil
+	return bytes.TrimSuffix(rebuilt.Bytes(), []byte("\n")), nil
 }
 
-func restoreClientToolValue(value any, adapter *ResponsesClientToolMapping) bool {
-	changed := false
-	switch typed := value.(type) {
-	case []any:
-		for _, item := range typed {
-			changed = restoreClientToolValue(item, adapter) || changed
-		}
-	case map[string]any:
-		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
-			name := strings.TrimSpace(stringValue(typed["name"]))
-			if adapter.CustomTools[name] {
-				typed["type"] = "custom_tool_call"
-				typed["input"] = extractCustomToolCallInput(rawObjectString(typed["arguments"]))
-				delete(typed, "arguments")
-				delete(typed, "namespace")
-				changed = true
-			} else if adapter.ToolSearch && name == toolSearchProxyName {
-				typed["type"] = "tool_search_call"
-				typed["execution"] = "client"
-				typed["arguments"] = json.RawMessage(toolSearchCallArgumentsJSON(rawObjectString(typed["arguments"])))
-				delete(typed, "name")
-				delete(typed, "namespace")
-				changed = true
-			}
-		}
-		for _, child := range typed {
-			changed = restoreClientToolValue(child, adapter) || changed
-		}
+func restoreResponsesClientToolRawItem(raw json.RawMessage, adapter *ResponsesClientToolMapping) (json.RawMessage, bool, error) {
+	if !rawJSONHasLeadingByte(raw, '{') {
+		return raw, false, nil
 	}
-	return changed
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return raw, false, err
+	}
+	if decodedRawJSONString(item["type"]) != "function_call" {
+		return raw, false, nil
+	}
+	name := strings.TrimSpace(decodedRawJSONString(item["name"]))
+	changed := false
+	switch {
+	case adapter.CustomTools[name]:
+		item["type"] = rawJSONString("custom_tool_call")
+		item["input"] = rawJSONString(extractCustomToolCallInput(rawResponsesArgumentsString(item["arguments"])))
+		delete(item, "arguments")
+		delete(item, "namespace")
+		changed = true
+	case adapter.ToolSearch && name == toolSearchProxyName:
+		item["type"] = rawJSONString("tool_search_call")
+		item["execution"] = rawJSONString("client")
+		item["arguments"] = toolSearchCallArgumentsJSON(rawResponsesArgumentsString(item["arguments"]))
+		delete(item, "name")
+		delete(item, "namespace")
+		changed = true
+	}
+	itemType := decodedRawJSONString(item["type"])
+	if namespace, ok := adapter.NamespaceTools[name]; ok && isNamespaceQualifiedCallType(itemType) {
+		item["name"] = rawJSONString(namespace.Name)
+		item["namespace"] = rawJSONString(namespace.Namespace)
+		changed = true
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	rebuilt, err := marshalResponsesClientToolRawObject(item)
+	if err != nil {
+		return raw, false, err
+	}
+	return rebuilt, true, nil
+}
+
+func rawJSONHasLeadingByte(raw json.RawMessage, want byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == want
+}
+
+func decodedRawJSONString(raw json.RawMessage) string {
+	var value string
+	_ = json.Unmarshal(raw, &value)
+	return value
+}
+
+func rawResponsesArgumentsString(raw json.RawMessage) string {
+	if value := decodedRawJSONString(raw); value != "" || len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '"' {
+		return value
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	return string(trimmed)
+}
+
+func marshalResponsesClientToolRawObject(value map[string]json.RawMessage) ([]byte, error) {
+	var rebuilt bytes.Buffer
+	encoder := json.NewEncoder(&rebuilt)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(rebuilt.Bytes(), []byte("\n")), nil
 }
 
 // ResponsesClientToolStreamRestorer restores client tool stream lifecycles.
 // It is intentionally stateful because custom tools need their function
 // arguments buffered until the upstream signals the call is complete.
 type ResponsesClientToolStreamRestorer struct {
-	adapter  ResponsesClientToolMapping
-	nextSeq  int
-	seenSeq  bool
-	calls    map[string]*responsesClientToolStreamCall
-	byOutput map[int]*responsesClientToolStreamCall
+	adapter               ResponsesClientToolMapping
+	nextSeq               int
+	seenSeq               bool
+	calls                 map[string]*responsesClientToolStreamCall
+	byOutput              map[int]*responsesClientToolStreamCall
+	trackedCalls          int
+	retainedArgumentBytes int
+	conversionErr         error
 }
 
 type responsesClientToolStreamCall struct {
@@ -387,6 +510,9 @@ func (r *ResponsesClientToolStreamRestorer) Restore(event ResponsesStreamEvent) 
 	if r == nil {
 		return []ResponsesStreamEvent{event}
 	}
+	if r.conversionErr != nil {
+		return nil
+	}
 	if !r.seenSeq {
 		r.nextSeq = event.SequenceNumber
 		r.seenSeq = true
@@ -400,7 +526,10 @@ func (r *ResponsesClientToolStreamRestorer) Restore(event ResponsesStreamEvent) 
 
 	switch event.Type {
 	case "response.output_item.added":
-		if call := r.recordItem(event); call != nil {
+		if call, err := r.recordItem(event); err != nil {
+			r.conversionErr = err
+			return nil
+		} else if call != nil {
 			if call.kind == "custom" {
 				event.Item.Type = "custom_tool_call"
 				event.Item.Input = ""
@@ -416,28 +545,36 @@ func (r *ResponsesClientToolStreamRestorer) Restore(event ResponsesStreamEvent) 
 		emit(r.restoreNamespaceEvent(event))
 	case "response.function_call_arguments.delta":
 		if call := r.callFor(event); call != nil {
-			_, _ = call.arguments.WriteString(event.Delta)
+			if err := r.appendCallArguments(call, event.Delta); err != nil {
+				r.conversionErr = err
+				return nil
+			}
 			return nil
 		}
 		emit(r.restoreNamespaceEvent(event))
 	case "response.function_call_arguments.done":
 		if call := r.callFor(event); call != nil {
 			if event.Arguments != "" {
-				call.arguments.Reset()
-				_, _ = call.arguments.WriteString(event.Arguments)
+				if err := r.setCallArguments(call, event.Arguments); err != nil {
+					r.conversionErr = err
+					return nil
+				}
 			}
 			if call.kind == "custom" {
 				input := extractCustomToolCallInput(call.arguments.String())
 				if input != "" {
 					emit(ResponsesStreamEvent{Type: "response.custom_tool_call_input.delta", OutputIndex: call.outputIdx, ItemID: call.itemID, Delta: input})
 				}
-				emit(ResponsesStreamEvent{Type: "response.custom_tool_call_input.done", OutputIndex: call.outputIdx, ItemID: call.itemID, CallID: call.callID, Name: call.name, Input: input})
+				emit(r.restoreNamespaceEvent(ResponsesStreamEvent{Type: "response.custom_tool_call_input.done", OutputIndex: call.outputIdx, ItemID: call.itemID, CallID: call.callID, Name: call.name, Input: input}))
 			}
 			return out
 		}
 		emit(r.restoreNamespaceEvent(event))
 	case "response.output_item.done":
-		if call := r.recordItem(event); call != nil {
+		if call, err := r.recordItem(event); err != nil {
+			r.conversionErr = err
+			return nil
+		} else if call != nil {
 			if call.kind == "custom" {
 				event.Item.Type = "custom_tool_call"
 				event.Item.Input = extractCustomToolCallInput(call.arguments.String())
@@ -452,9 +589,7 @@ func (r *ResponsesClientToolStreamRestorer) Restore(event ResponsesStreamEvent) 
 				}
 				event.Item.Namespace = ""
 			}
-			delete(r.calls, call.itemID)
-			delete(r.calls, call.callID)
-			delete(r.byOutput, call.outputIdx)
+			r.deleteCall(call)
 		}
 		emit(r.restoreNamespaceEvent(event))
 	default:
@@ -499,6 +634,9 @@ func (r *ResponsesClientToolStreamRestorer) RestoreEvent(payload []byte) ([][]by
 		return nil, false, err
 	}
 	events := r.Restore(event)
+	if r.conversionErr != nil {
+		return nil, false, r.conversionErr
+	}
 	if len(events) == 1 {
 		unchanged, err := json.Marshal(events[0])
 		if err == nil && bytes.Equal(bytes.TrimSpace(unchanged), bytes.TrimSpace(payload)) {
@@ -514,15 +652,6 @@ func (r *ResponsesClientToolStreamRestorer) RestoreEvent(payload []byte) ([][]by
 		result = append(result, encoded)
 	}
 	return result, true, nil
-}
-
-func isResponsesClientToolTerminalEvent(typ string) bool {
-	switch strings.TrimSpace(typ) {
-	case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
-		return true
-	default:
-		return false
-	}
 }
 
 func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byte) bool {
@@ -542,11 +671,16 @@ func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byt
 		return false
 	}
 	if raw.Item != nil {
-		if raw.Item.Type != "function_call" {
+		switch raw.Item.Type {
+		case "function_call":
+			_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
+			return r.adapter.CustomTools[raw.Item.Name] || (r.adapter.ToolSearch && raw.Item.Name == toolSearchProxyName) || namespaceTool || r.calls[raw.Item.ID] != nil || r.calls[raw.Item.CallID] != nil
+		case "custom_tool_call":
+			_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
+			return namespaceTool
+		default:
 			return false
 		}
-		_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
-		return r.adapter.CustomTools[raw.Item.Name] || (r.adapter.ToolSearch && raw.Item.Name == toolSearchProxyName) || namespaceTool || r.calls[raw.Item.ID] != nil || r.calls[raw.Item.CallID] != nil
 	}
 	if _, namespaceTool := r.adapter.NamespaceTools[raw.Name]; namespaceTool {
 		return true
@@ -559,7 +693,9 @@ func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byt
 
 func clientToolLifecycleEvent(typ string) bool {
 	switch typ {
-	case "response.output_item.added", "response.output_item.done", "response.function_call_arguments.delta", "response.function_call_arguments.done":
+	case "response.output_item.added", "response.output_item.done",
+		"response.function_call_arguments.delta", "response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
 		return true
 	default:
 		return false
@@ -575,22 +711,17 @@ func (r *ResponsesClientToolStreamRestorer) resequenceRaw(payload []byte, sequen
 		r.nextSeq++
 		return [][]byte{payload}, false, nil
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, false, err
-	}
-	raw["sequence_number"] = r.nextSeq
-	r.nextSeq++
-	encoded, err := json.Marshal(raw)
+	encoded, err := sjson.SetBytes(payload, "sequence_number", r.nextSeq)
 	if err != nil {
 		return nil, false, err
 	}
+	r.nextSeq++
 	return [][]byte{encoded}, true, nil
 }
 
-func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEvent) *responsesClientToolStreamCall {
+func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEvent) (*responsesClientToolStreamCall, error) {
 	if event.Item == nil || event.Item.Type != "function_call" {
-		return nil
+		return nil, nil
 	}
 	name := event.Item.Name
 	kind := ""
@@ -600,7 +731,12 @@ func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEven
 		kind = "tool_search"
 	}
 	if kind == "" {
-		return nil
+		return nil, nil
+	}
+	for label, value := range map[string]string{"item id": event.Item.ID, "call id": event.Item.CallID, "tool name": name} {
+		if len(value) > maxResponsesClientToolRetainedMetadataBytes {
+			return nil, fmt.Errorf("responses client-tool %s exceeds %d-byte retained-metadata limit", label, maxResponsesClientToolRetainedMetadataBytes)
+		}
 	}
 	key := event.Item.ID
 	if key == "" {
@@ -608,7 +744,11 @@ func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEven
 	}
 	call := r.calls[key]
 	if call == nil {
+		if r.trackedCalls >= maxResponsesClientToolTrackedCalls {
+			return nil, fmt.Errorf("responses client-tool stream exceeds %d tracked calls", maxResponsesClientToolTrackedCalls)
+		}
 		call = &responsesClientToolStreamCall{kind: kind, name: name, callID: event.Item.CallID, itemID: event.Item.ID, outputIdx: event.OutputIndex}
+		r.trackedCalls++
 		r.calls[key] = call
 		if call.callID != "" {
 			r.calls[call.callID] = call
@@ -616,10 +756,47 @@ func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEven
 		r.byOutput[call.outputIdx] = call
 	}
 	if event.Item.Arguments != "" {
-		call.arguments.Reset()
-		_, _ = call.arguments.WriteString(event.Item.Arguments)
+		if err := r.setCallArguments(call, event.Item.Arguments); err != nil {
+			return nil, err
+		}
 	}
-	return call
+	return call, nil
+}
+
+func (r *ResponsesClientToolStreamRestorer) appendCallArguments(call *responsesClientToolStreamCall, fragment string) error {
+	if len(fragment) > maxResponsesClientToolRetainedArgumentBytes-r.retainedArgumentBytes {
+		return fmt.Errorf("responses client-tool arguments exceed %d-byte retained-state limit", maxResponsesClientToolRetainedArgumentBytes)
+	}
+	_, _ = call.arguments.WriteString(fragment)
+	r.retainedArgumentBytes += len(fragment)
+	return nil
+}
+
+func (r *ResponsesClientToolStreamRestorer) setCallArguments(call *responsesClientToolStreamCall, value string) error {
+	retainedWithoutCall := r.retainedArgumentBytes - call.arguments.Len()
+	if len(value) > maxResponsesClientToolRetainedArgumentBytes-retainedWithoutCall {
+		return fmt.Errorf("responses client-tool arguments exceed %d-byte retained-state limit", maxResponsesClientToolRetainedArgumentBytes)
+	}
+	call.arguments.Reset()
+	_, _ = call.arguments.WriteString(value)
+	r.retainedArgumentBytes = retainedWithoutCall + len(value)
+	return nil
+}
+
+func (r *ResponsesClientToolStreamRestorer) deleteCall(call *responsesClientToolStreamCall) {
+	if call == nil {
+		return
+	}
+	r.retainedArgumentBytes -= call.arguments.Len()
+	if r.retainedArgumentBytes < 0 {
+		r.retainedArgumentBytes = 0
+	}
+	delete(r.calls, call.itemID)
+	delete(r.calls, call.callID)
+	delete(r.byOutput, call.outputIdx)
+	if r.trackedCalls > 0 {
+		r.trackedCalls--
+	}
 }
 
 func (r *ResponsesClientToolStreamRestorer) callFor(event ResponsesStreamEvent) *responsesClientToolStreamCall {
@@ -641,12 +818,14 @@ func (r *ResponsesClientToolStreamRestorer) restoreNamespaceEvent(event Response
 	if len(r.adapter.NamespaceTools) == 0 {
 		return event
 	}
-	if event.Item != nil && event.Item.Type == "function_call" {
+	if event.Item != nil && isNamespaceQualifiedCallType(event.Item.Type) {
 		if name, ok := r.adapter.NamespaceTools[event.Item.Name]; ok {
 			event.Item.Name, event.Item.Namespace = name.Name, name.Namespace
 		}
 	}
-	if event.Type == "response.function_call_arguments.delta" || event.Type == "response.function_call_arguments.done" {
+	switch event.Type {
+	case "response.function_call_arguments.delta", "response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
 		if name, ok := r.adapter.NamespaceTools[event.Name]; ok {
 			event.Name = name.Name
 		}
@@ -670,8 +849,10 @@ func restoreResponsesOutputClientTools(outputs []ResponsesOutput, adapter *Respo
 			output.Name = ""
 			output.Namespace = ""
 		}
-		if name, ok := adapter.NamespaceTools[output.Name]; ok && output.Type == "function_call" {
-			output.Name, output.Namespace = name.Name, name.Namespace
+		if isNamespaceQualifiedCallType(output.Type) {
+			if name, ok := adapter.NamespaceTools[output.Name]; ok {
+				output.Name, output.Namespace = name.Name, name.Namespace
+			}
 		}
 	}
 }

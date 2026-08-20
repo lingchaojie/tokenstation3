@@ -71,24 +71,13 @@ export async function disable(request: TotpDisableRequest): Promise<{ success: b
   return data
 }
 
-export interface TotpStepUpResponse {
-  verified: boolean
-  expires_in: number
-}
-
-export async function stepUp(code: string): Promise<TotpStepUpResponse> {
-  const { data } = await apiClient.post<TotpStepUpResponse>('/user/totp/step-up', { code })
-  return data
-}
-
 export const totpAPI = {
   getStatus,
   getVerificationMethod,
   sendVerifyCode,
   initiateSetup,
   enable,
-  disable,
-  stepUp
+  disable
 }
 
 export default totpAPI
