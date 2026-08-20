@@ -8752,6 +8752,11 @@ interface DefaultSubscriptionGroupOption {
 
 type AnnouncementPageOwnedSetting = `announcement_${"banner"}${"s" | "_interval_ms"}`;
 
+const announcementPageOwnedSettings = new Set<AnnouncementPageOwnedSetting>([
+  `announcement_${"banner"}s`,
+  `announcement_${"banner"}_interval_ms`,
+]);
+
 type SettingsForm = Omit<
   SystemSettings,
   | "wechat_connect_open_enabled"
@@ -9987,6 +9992,9 @@ async function loadSettings() {
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)
     for (const [key, value] of Object.entries(settings)) {
+      if (announcementPageOwnedSettings.has(key as AnnouncementPageOwnedSetting)) {
+        continue;
+      }
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
