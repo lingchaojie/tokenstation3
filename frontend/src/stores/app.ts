@@ -17,6 +17,11 @@ import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
 const DEFAULT_SITE_NAME = 'LINX2.AI'
 const DEFAULT_SITE_SUBTITLE = 'AI Gateway Platform · Claude / OpenAI-compatible routes'
 
+interface QueuedPublicSettingsRefresh {
+  promise: Promise<PublicSettings | null>
+  state: { started: boolean }
+}
+
 function normalizeLegacySiteName(value: string | undefined): string {
   const trimmed = value?.trim()
   if (!trimmed) return DEFAULT_SITE_NAME
@@ -56,7 +61,7 @@ export const useAppStore = defineStore('app', () => {
   const docUrl = ref<string>('')
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
-  let queuedPublicSettingsRefresh: Promise<PublicSettings | null> | null = null
+  let queuedPublicSettingsRefresh: QueuedPublicSettingsRefresh | null = null
 
   // Version cache state
   const versionLoaded = ref<boolean>(false)
@@ -341,14 +346,22 @@ export const useAppStore = defineStore('app', () => {
       // fetched after that older request settles, so coalesce forced callers into one
       // queued refresh instead of returning a potentially stale response.
       if (force) {
-        if (!queuedPublicSettingsRefresh) {
-          queuedPublicSettingsRefresh = publicSettingsRequest
-            .then(() => fetchPublicSettings(true))
-            .finally(() => {
-              queuedPublicSettingsRefresh = null
+        if (!queuedPublicSettingsRefresh || queuedPublicSettingsRefresh.state.started) {
+          const activeRequest = publicSettingsRequest
+          const state = { started: false }
+          const promise = activeRequest
+            .then(() => {
+              state.started = true
+              return fetchPublicSettings(true)
             })
+            .finally(() => {
+              if (queuedPublicSettingsRefresh?.state === state) {
+                queuedPublicSettingsRefresh = null
+              }
+            })
+          queuedPublicSettingsRefresh = { promise, state }
         }
-        return queuedPublicSettingsRefresh
+        return queuedPublicSettingsRefresh.promise
       }
       return publicSettingsRequest
     }
