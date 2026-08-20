@@ -168,6 +168,8 @@
       </template>
     </TablePageLayout>
 
+    <AnnouncementBannerSettingsCard class="mt-6" />
+
     <!-- Create/Edit Dialog -->
     <BaseDialog
       :show="showEditDialog"
@@ -277,6 +279,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
 
 import AnnouncementTargetingEditor from '@/components/admin/announcements/AnnouncementTargetingEditor.vue'
+import AnnouncementBannerSettingsCard from '@/components/admin/announcements/AnnouncementBannerSettingsCard.vue'
 import AnnouncementReadStatusDialog from '@/components/admin/announcements/AnnouncementReadStatusDialog.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
 
