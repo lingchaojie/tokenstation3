@@ -11,7 +11,7 @@ const CLAUDE_SETTINGS = `{
   }
 }`
 
-const CODEX_CONFIG = `model_provider = "OpenAI"
+const CODEX_CONFIG = `model_provider = "linx2ai"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
@@ -19,11 +19,11 @@ disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
-[model_providers.OpenAI]
-name = "OpenAI"
+[model_providers.linx2ai]
+name = "linx2ai"
 base_url = "https://gateway.example.com/v1"
 wire_api = "responses"
-requires_openai_auth = true
+requires_openai_auth = false
 
 [features]
 goals = true`
