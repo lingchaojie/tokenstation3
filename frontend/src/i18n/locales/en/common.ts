@@ -166,6 +166,7 @@ export default {
     overview: 'Overview',
     dailyCheckIn: 'Check in for Token',
     announcements: 'Announcements',
+    announcementSettings: 'Announcement settings',
     apiKeys: 'API Keys',
     batchImage: 'Batch Images',
     usage: 'Usage',
