@@ -331,12 +331,12 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, "2026-07-15", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 35)
+	require.Equal(t, "2026-08-20", resp.Data.UpdatedAt)
+	require.Len(t, resp.Data.Models, 37)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
-	require.Equal(t, 8, resp.Data.Providers[0].ModelCount)
+	require.Equal(t, 10, resp.Data.Providers[0].ModelCount)
 
 	for _, provider := range resp.Data.Providers {
 		key := strings.ToLower(provider.Key)
@@ -397,7 +397,7 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 		}
 	}
 	require.NotEmpty(t, anthropic)
-	require.Equal(t, "claude-sonnet-5", anthropic[0].ModelName)
+	require.Equal(t, "claude-opus-5", anthropic[0].ModelName)
 	for idx := 1; idx < len(anthropic); idx++ {
 		require.GreaterOrEqual(t, anthropic[idx-1].ReleasedAt, anthropic[idx].ReleasedAt)
 	}
