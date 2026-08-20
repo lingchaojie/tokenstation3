@@ -626,6 +626,10 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 
 	emitAnthropicEvent := func(evt *apicompat.AnthropicStreamEvent) bool {
 		responsesEvents := apicompat.AnthropicEventToResponsesEvents(evt, anthState)
+		if conversionErr := anthState.Err(); conversionErr != nil {
+			stagedErr = conversionErr
+			return true
+		}
 		for _, resEvt := range responsesEvents {
 			chunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
 			for _, chunk := range chunks {
@@ -720,7 +724,13 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 						}
 						rawBytes = innerBytes
 					}
-					providerPayload, _ := providerState.observePayload(rawBytes)
+					providerPayload, stateErr := providerState.observePayload(rawBytes)
+					if stateErr != nil {
+						if staged.committed || clientDisconnected {
+							return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini chat compatibility stream: %w", stateErr)
+						}
+						return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
+					}
 
 					geminiResp, decodeErr := decodeGeminiCompatResponse(rawBytes)
 					if decodeErr == nil {
@@ -851,7 +861,12 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 					}
 				}
 				if payload == "[DONE]" {
-					_ = providerState.observeDone()
+					if err := providerState.observeDone(); err != nil {
+						if staged.committed || clientDisconnected {
+							return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini chat terminal: %w", err)
+						}
+						return nil, newIncompleteProviderStreamFailover(resp, err.Error())
+					}
 					terminalObserved = true
 				}
 			}
@@ -879,6 +894,16 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("stream read error: %w", scanErr)
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini chat compatibility stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+	}
+	if !terminalObserved {
+		result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
+		if staged.committed || clientDisconnected {
+			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, "gemini chat compatibility stream ended before semantic output")
+	}
+	if !validProviderPayloadObserved {
+		return nil, newIncompleteProviderStreamFailover(resp, "gemini chat compatibility stream ended without a valid provider payload")
 	}
 
 	if closeOpenBlock() {

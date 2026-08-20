@@ -294,10 +294,9 @@ type OpenAIForwardResult struct {
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
 	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
-	WebSearchCalls               int
-	wsReplayInput                []json.RawMessage
-	wsReplayInputExists          bool
-	wsAccountFailoverReplayInput []json.RawMessage
+	WebSearchCalls      int
+	wsReplayInput       []json.RawMessage
+	wsReplayInputExists bool
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
 	// UpstreamRequest is the exact final request body sent by this attempt.
@@ -524,8 +523,6 @@ type OpenAIGatewayService struct {
 	codexModelsManifestCache            codexModelsManifestCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
-	openaiCodexTurnStateOrigins         sync.Map
-	openaiCodexTurnStateWrites          atomic.Uint64
 	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
 }
 

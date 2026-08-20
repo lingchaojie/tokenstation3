@@ -186,7 +186,7 @@ export default {
         step1: {
           title: '创建 R2 存储桶',
           line1: '登录 Cloudflare Dashboard (dash.cloudflare.com)，左侧菜单选择「R2 对象存储」',
-          line2: '点击「创建存储桶」，输入名称（如 sub2api-backups），选择区域',
+          line2: '点击「创建存储桶」，输入名称（如 linx2-backups），选择区域',
           line3: '点击创建完成'
         },
         step2: {
@@ -390,8 +390,38 @@ export default {
 
     affiliates: {
       invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
-      rebatesDescription: '查看每一笔产生返利的充值订单',
+      rebatesDescription: '统一查看旧充值返利与新的邀请双方奖励审计记录',
       transfersDescription: '查看返利额度转入账户余额的提取流水',
+      checkIn: {
+        title: '签到配置',
+        description: '配置每日签到活动的有效期与余额奖励。',
+        enabled: '开启签到活动',
+        enabledHint: '只有开启且处于活动时间内时，普通用户侧栏才会显示“签到领Token”。',
+        startAt: '活动开始时间',
+        startAtHint: '按 UTC+8 时区填写。',
+        durationDays: '持续时间',
+        days: '天',
+        rewardAmount: '每日奖励余额',
+        rewardHint: '美元余额，最多支持 8 位小数。',
+        endAt: '预计结束时间',
+        state: '当前状态',
+        save: '保存配置',
+        saving: '保存中...',
+        saveSuccess: '签到活动配置已保存',
+        loadFailed: '加载签到活动配置失败',
+        saveFailed: '保存签到活动配置失败',
+        states: {
+          disabled: '未开启',
+          upcoming: '未开始',
+          active: '进行中',
+          ended: '已结束',
+        },
+        validation: {
+          startAt: '开启活动前请填写有效的开始时间',
+          duration: '持续时间必须为正整数',
+          reward: '奖励金额必须大于 0，且最多保留 8 位小数',
+        },
+      },
       errors: {
         loadFailed: '加载邀请返利记录失败'
       },
@@ -405,10 +435,22 @@ export default {
         user: '用户',
         affCode: '邀请码',
         order: '订单',
+        source: '来源',
+        rewardRole: '奖励角色',
+        sources: {
+          legacy: '旧返利流水',
+          rewardCredit: '奖励余额',
+        },
+        roles: {
+          inviter: '邀请方奖励',
+          invitee: '受邀方奖励',
+        },
         totalRebate: '累计返利',
         orderAmount: '充值金额',
         payAmount: '支付金额',
         rebateAmount: '返利金额',
+        remainingAmount: '剩余金额',
+        expiresAt: '到期时间',
         paymentType: '支付方式',
         orderStatus: '订单状态',
         transferAmount: '提取金额',
@@ -423,7 +465,7 @@ export default {
       overview: {
         title: '用户返利概览',
         affCode: '邀请码',
-        rebateRate: '返利比例',
+        inviterReward: '邀请方奖励金额',
         invitedCount: '邀请人数',
         rebatedInviteeCount: '已产生返利人数',
         availableQuota: '可提余额',
@@ -433,6 +475,18 @@ export default {
 
     // Users Management
     users: {
+      keyRoutes: {
+        action: '平台路由',
+        title: '平台路由',
+        description: '为该用户设置 Anthropic / OpenAI API Key 的平台路由。',
+        anthropicLabel: 'Anthropic 默认分组',
+        openaiLabel: 'OpenAI 默认分组',
+        useGlobalDefault: '使用全局默认',
+        hint: '仅显示匹配平台的活跃分组。保存后会立即更新该用户已有的对应平台 API Key，后续新建 API Key 也会使用该路由。清空后将使用全局默认。',
+        loadFailed: '加载平台路由失败',
+        updateSuccess: '平台路由已更新',
+        updateFailed: '更新平台路由失败',
+      },
       title: '用户管理',
       description: '管理用户账户和权限',
       createUser: '创建用户',
@@ -497,6 +551,7 @@ export default {
       creating: '创建中...',
       updating: '更新中...',
       columns: {
+        usageKiro: '用量 (Kiro)',
         user: '用户',
         id: 'ID',
         email: '邮箱',
@@ -599,6 +654,8 @@ export default {
       failedToAdjust: '调整失败',
       emailRequired: '请输入邮箱',
       concurrencyMin: '并发数不能小于1',
+      soraStorageQuota: 'Sora 存储配额',
+      soraStorageQuotaHint: '单位 GB，0 表示使用分组或系统默认配额',
       amountRequired: '请输入有效金额',
       insufficientBalance: '余额不足',
       setAllowedGroups: '设置允许分组',
@@ -769,6 +826,23 @@ export default {
 
     // Groups Management
     groups: {
+      defaultGroup: '默认',
+      kiroCache: {
+        title: 'Kiro 模拟缓存',
+        description: '仅对当前 Kiro 分组模拟 Anthropic Prompt Cache 用量。',
+        enabled: '启用模拟缓存',
+        ratio: '缓存比例',
+        ratioHint: '范围 0 到 1，例如 0.5 表示只生效一半模拟缓存 token。',
+        endpointMode: 'Kiro 推理 endpoint',
+        endpointModeQ: 'AWS Q（默认）',
+        endpointModeKRS: 'Kiro Runtime Service',
+        endpointModeAuto: '自动（Q 遇到可重试失败后切换 KRS）',
+        endpointModeHint: 'q = AWS Q（与其它工具共用限流池）；krs = Kiro 自家网关（独立限流池）；auto = 优先尝试 Q，遇到可重试失败后切换 KRS。',
+        stickyRouting: '启用 Kiro 账号粘性路由',
+        stickyRoutingHint: '开启后，同一会话的多轮对话会尽量固定到同一账号；请求头传 X-Session-ID 时仍优先使用显式会话绑定。',
+        stickyTTL: '粘性绑定时长（秒）',
+        stickyTTLHint: '同一会话空闲超过该时长后会重新选择账号。范围 60-86400，默认 3600。',
+      },
       title: '分组管理',
       description: '管理 API 密钥分组和费率配置',
       searchGroups: '搜索分组...',
@@ -812,7 +886,6 @@ export default {
         userStatus: '状态'
       },
       usageToday: '今日',
-      usageYesterday: '昨日',
       usageTotal: '累计',
       accountsAvailable: '可用:',
       accountsRateLimited: '限流:',
@@ -836,7 +909,7 @@ export default {
         rpmLimitHint: '每用户在本分组每分钟最大请求数，0 = 不限制；一旦设置即接管该用户的限流（覆盖用户级 rpm_limit）',
         maxReasoningEffort: '推理强度上限',
         maxReasoningEffortUnlimited: '不限制（跟随请求）',
-        maxReasoningEffortHint: '仅限制客户端主动请求的 OpenAI reasoning effort；Composite 分组仅对解析到 OpenAI 的请求生效。超过上限时自动降档，不会为缺省请求主动开启推理。上限优先级高于推理强度映射。',
+        maxReasoningEffortHint: '仅限制客户端主动请求的 OpenAI reasoning effort。超过上限时自动降档，不会为缺省请求主动开启推理。上限优先级高于推理强度映射。',
         reasoningEffortMappings: '推理强度映射',
         addReasoningEffortMapping: '添加映射',
         removeReasoningEffortMapping: '删除映射',
@@ -875,16 +948,13 @@ export default {
       },
       rateMultiplierHint: '1.0 = 标准费率，0.5 = 半价，2.0 = 双倍',
       platforms: {
+        kiro: 'Kiro',
         all: '全部平台',
         anthropic: 'Anthropic',
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
-        kimi: 'Kimi',
-        zhipu: 'Zhipu GLM',
-        deepseek: 'DeepSeek',
-        composite: 'Composite',
       },
       saving: '保存中...',
       noGroups: '暂无分组',
@@ -998,27 +1068,6 @@ export default {
         finalPricePreview: '最终每秒价格预览',
         notConfigured: '未配置'
       },
-      explicitPricing: {
-        title: 'Grok 搜索与 Voice 定价',
-        description: '分组级 web_search（每千次）与 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        searchPricePer1k: '搜索每千次价格（USD）',
-        pricePlaceholder: '可选'
-      },
-      modelPricing: {
-        title: '分组逐模型定价',
-        description: '匹配模型后覆盖渠道和内置价格。长上下文阶梯沿用官方/预设价卡，无需再手填区间。音频可用按次层级配置 realtime、tts、stt。',
-        longContext: '启用长上下文阶梯定价',
-        longContextHint: '勾选后按官方/预设阶梯计费；关闭则始终按第一档基础价。',
-        add: '添加模型价格'
-      },
-      voicePricing: {
-        title: 'Grok Voice 定价',
-        description: '分组级 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        audioRealtimePerMin: 'Realtime 每分钟价格（USD）',
-        audioTtsPerMillionChars: 'TTS 每百万字符价格（USD）',
-        audioSttPerHour: 'STT 每小时价格（USD）',
-        pricePlaceholder: '可选'
-      },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',
         pricePerCall: '搜索单次价格（USD/次）',
@@ -1035,7 +1084,7 @@ export default {
       },
       profitControl: {
         enable: '启用利润控制',
-        enabledHint: '调度时仅允许"账号倍率 ≤ 请求实际下游倍率 ×（1 − 最低毛利率 − 安全缓冲）"的账号进入候选池；账号倍率可手工维护或由探测同步，既有排序、粘性与熔断在合格账号间照常工作。图片/视频调度暂不参与。',
+        enabledHint: '调度时仅允许"账号倍率 ≤ 请求实际下游倍率 ×（1 − 最低毛利率 − 安全缓冲）"的账号进入候选池。账号倍率仅手工维护；只读上游探测只记录和展示声明、解析及生效倍率，绝不修改账号倍率。既有排序、粘性与熔断在合格账号间照常工作。图片/视频调度暂不参与。',
         disabledHint: '关闭后调度不做利润过滤，账号倍率高于下游倍率的账号也会被选中，可能产生亏损请求。',
         minMargin: '最低毛利率（%）',
         minMarginHint: '百分比输入，如 30 表示 30%；后端按小数存储',
@@ -1053,56 +1102,6 @@ export default {
         selectedSummary: '已选 {selected} / {total}',
         selectAll: '全选',
         invertSelection: '反选'
-      },
-      compositeRoutes: {
-        action: '路由',
-        title: 'Composite 路由',
-        titleWithGroup: 'Composite 路由：{name}',
-        routes: '已保存路由',
-        empty: '暂无 Composite 路由',
-        publicModel: '公开模型',
-        target: '目标',
-        scope: '范围',
-        priority: '优先级',
-        addRoute: '添加路由',
-        editRoute: '编辑路由',
-        matchType: '匹配方式',
-        endpoint: '端点',
-        targetPlatform: '目标平台',
-        upstreamModel: '上游模型',
-        upstreamModelHint: '留空表示透传原始请求模型：前缀匹配下每个命中模型各自原样转发（如 deepseek-v4-flash、deepseek-v4-pro 分别转发）；填写则所有命中请求都固定转发该模型。',
-        notes: '备注',
-        enabled: '启用',
-        preview: '预览',
-        matched: '已匹配',
-        notMatched: '未匹配',
-        publicModelRequired: '请输入公开模型',
-        routeCreated: 'Composite 路由已创建',
-        routeUpdated: 'Composite 路由已更新',
-        routeDeleted: 'Composite 路由已删除',
-        failedToLoad: '加载 Composite 路由失败',
-        failedToSave: '保存 Composite 路由失败',
-        failedToDelete: '删除 Composite 路由失败',
-        failedToPreview: '预览 Composite 路由失败',
-        deleteConfirm: '确定删除此 Composite 路由？',
-        endpoints: {
-          any: '任意',
-          messages: 'Messages',
-          countTokens: 'Count Tokens',
-          responses: 'Responses',
-          chatCompletions: 'Chat Completions',
-          embeddings: 'Embeddings',
-          images: 'Images',
-          gemini: 'Gemini 原生'
-        },
-        match: {
-          exact: '精确',
-          prefix: '前缀'
-        },
-        sources: {
-          route: '路由',
-          detector: '内置识别'
-        }
       },
       claudeCode: {
         title: 'Claude Code 客户端限制',
@@ -1135,14 +1134,6 @@ export default {
         targetModel: '目标模型',
         targetModelPlaceholder: '例如: gpt-5.4',
         removeExactMapping: '删除精确映射'
-      },
-      openaiLive: {
-        title: 'OpenAI Live',
-        allow: '允许访问 Live',
-        hint: '启用后，此 OpenAI 分组的 API Key 可以创建并控制 Live 语音会话。默认关闭。运行 Sub2API 的服务端必须是 Apple Silicon Mac，并安装官方 ChatGPT App；客户端平台不受限制。',
-        unsupportedTitle: '当前服务端不支持 Live',
-        unsupportedMessage: '当前 Sub2API 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
-        enableAnyway: '仍然开启'
       },
       invalidRequestFallback: {
         title: '无效请求兜底分组',

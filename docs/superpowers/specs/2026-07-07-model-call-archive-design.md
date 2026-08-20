@@ -264,7 +264,3 @@ SETTINGS index_granularity = 8192;
 - **OpenAI WebSocket 实时路径归档**：协议不同，当前未采集（`ResponsesWebSocket`）。
 - 可选 `response_json` 组装列（离线组装固化）——当前决策为只存 raw SSE，不做。
 - body 内凭证模式剥离（当前默认不动 body）。
-
-
-
-

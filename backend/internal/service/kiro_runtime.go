@@ -1100,23 +1100,10 @@ func (s *GatewayService) readKiroUpstreamErrorBody(ctx context.Context, resp *ht
 	if ctx != nil {
 		captureCtx, _ = ctx.Value(captureUpstreamRequestContextKey{}).(captureUpstreamRequestContext)
 	}
-	captureActive := captureCtx.c != nil
+	captureActive := captureCtx.c != nil && captureCtx.limit > 0
 	readLimit := fallbackLimit
 	if captureActive && captureCtx.limit > readLimit {
 		readLimit = captureCtx.limit
-	}
-	if captureActive && captureCtx.limit == 0 {
-		readBody, err := readAllWithProviderIdle(ctx, resp.Body, resolveProviderBodyIdleTimeout(s.cfg), func(reader io.Reader) ([]byte, error) {
-			return io.ReadAll(reader)
-		})
-		setCaptureResult(captureCtx.c, resp, readBody, err != nil)
-		functionalBody := readBody
-		functionalTruncated := err != nil
-		if len(functionalBody) > fallbackLimit {
-			functionalBody = functionalBody[:fallbackLimit]
-			functionalTruncated = true
-		}
-		return functionalBody, functionalTruncated, err
 	}
 	readBody, readTruncated, err := readUpstreamBodyWithCeiling(ctx, resp, readLimit, resolveProviderBodyIdleTimeout(s.cfg))
 	if captureActive {

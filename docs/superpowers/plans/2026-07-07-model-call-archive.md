@@ -1462,13 +1462,3 @@ git commit -m "docs(capture): add gateway.capture config example"
 3. **`streamingResult` → `ForwardResult` 映射点**：`handleStreamingResponse`(:8560) 返回 `*streamingResult`；需追踪其被转成 `ForwardResult` 的位置把 capture 字段带出（Task 9 Step 4）。
 4. **wire_gen.go 手改**：本仓库该文件已手工维护 cleanup，直接改即可；若团队用 `go generate ./...` 跑 wire，务必同步 `wire.go`。
 5. **HTTP 状态/响应头精确化**：主线固定 200 + 空响应头；需要错误响应归档时做 Task 12b。
-
-
-
-
-
-
-
-
-
-

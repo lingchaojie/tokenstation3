@@ -258,6 +258,7 @@ type ResponsesInputItem struct {
 	// type=reasoning (multi-turn replay of encrypted reasoning)
 	EncryptedContent string             `json:"encrypted_content,omitempty"`
 	Summary          []ResponsesSummary `json:"summary,omitempty"`
+	Status           string             `json:"status,omitempty"`
 
 	// type=function_call
 	CallID    string `json:"call_id,omitempty"`
@@ -298,10 +299,10 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 
 // ResponsesContentPart is a typed content part in a Responses message.
 type ResponsesContentPart struct {
-	Type     string `json:"type"` // "input_text" | "output_text" | "input_image"
+	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	Refusal  string `json:"refusal,omitempty"`
-	ImageURL string `json:"image_url,omitempty"` // data URI for input_image
+	ImageURL string `json:"image_url,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	Detail   string `json:"detail,omitempty"`
@@ -309,31 +310,23 @@ type ResponsesContentPart struct {
 
 // ResponsesTool describes a tool in the Responses API.
 type ResponsesTool struct {
-	Type        string          `json:"type"` // "function" | "custom" | "web_search" | "x_search" | "local_shell" etc.
+	Type        string          `json:"type"` // "function" | "custom" | "web_search" | "local_shell" etc.
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
 
-	// type=namespace 的子工具列表（tools 与 children 二选一，语义相同）。
-	Tools    []ResponsesTool `json:"tools,omitempty"`
-	Children []ResponsesTool `json:"children,omitempty"`
-
-	// type=x_search
-	AllowedXHandles          []string `json:"allowed_x_handles,omitempty"`
-	ExcludedXHandles         []string `json:"excluded_x_handles,omitempty"`
-	FromDate                 string   `json:"from_date,omitempty"`
-	ToDate                   string   `json:"to_date,omitempty"`
-	EnableImageUnderstanding *bool    `json:"enable_image_understanding,omitempty"`
-	EnableVideoUnderstanding *bool    `json:"enable_video_understanding,omitempty"`
-
-	// image_generation tool options used by the local KIRO compatibility path.
+	// image_generation tool options.
 	Model        string `json:"model,omitempty"`
 	Size         string `json:"size,omitempty"`
 	AspectRatio  string `json:"aspect_ratio,omitempty"`
 	Quality      string `json:"quality,omitempty"`
 	Background   string `json:"background,omitempty"`
 	OutputFormat string `json:"output_format,omitempty"`
+
+	// type=namespace 的子工具列表（tools 与 children 二选一，语义相同）。
+	Tools    []ResponsesTool `json:"tools,omitempty"`
+	Children []ResponsesTool `json:"children,omitempty"`
 }
 
 // UnmarshalJSON 容忍字符串形式的工具声明：codex 会以 "name" 简写声明 custom 工具，
@@ -583,8 +576,8 @@ type ResponsesInputTokensDetails struct {
 // ResponsesOutputTokensDetails breaks down output token usage.
 type ResponsesOutputTokensDetails struct {
 	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
-	ImageTokens              int `json:"image_tokens,omitempty"`
 	AudioTokens              int `json:"audio_tokens,omitempty"`
+	ImageTokens              int `json:"image_tokens,omitempty"`
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
 }
@@ -676,7 +669,6 @@ type ChatMessage struct {
 	Role             string          `json:"role"` // "system" | "user" | "assistant" | "tool" | "function"
 	Content          json.RawMessage `json:"content,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
-	Reasoning        string          `json:"reasoning,omitempty"`
 	Refusal          *string         `json:"refusal,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	ToolCalls        []ChatToolCall  `json:"tool_calls,omitempty"`
@@ -701,16 +693,16 @@ type ChatImageURL struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function" | "x_search"
+	Type     string        `json:"type"` // "function" | "image_generation"
 	Function *ChatFunction `json:"function,omitempty"`
 
-	// type=x_search
-	AllowedXHandles          []string `json:"allowed_x_handles,omitempty"`
-	ExcludedXHandles         []string `json:"excluded_x_handles,omitempty"`
-	FromDate                 string   `json:"from_date,omitempty"`
-	ToDate                   string   `json:"to_date,omitempty"`
-	EnableImageUnderstanding *bool    `json:"enable_image_understanding,omitempty"`
-	EnableVideoUnderstanding *bool    `json:"enable_video_understanding,omitempty"`
+	// image_generation tool options for OpenAI-compatible Chat Completions clients.
+	Model        string `json:"model,omitempty"`
+	Size         string `json:"size,omitempty"`
+	AspectRatio  string `json:"aspect_ratio,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	Background   string `json:"background,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 }
 
 // ChatFunction describes a function tool definition.
@@ -770,12 +762,12 @@ type ChatUsage struct {
 //
 // Field set mirrors OpenAI's official CompletionUsage schema:
 //   - prompt_tokens_details: cached_tokens, audio_tokens
-//   - completion_tokens_details: reasoning_tokens, audio_tokens,
+//   - completion_tokens_details: reasoning_tokens, audio_tokens, image_tokens,
 //     accepted_prediction_tokens, rejected_prediction_tokens
 type ChatTokenDetails struct {
 	CachedTokens             int `json:"cached_tokens,omitempty"`
-	ImageTokens              int `json:"image_tokens,omitempty"`
 	AudioTokens              int `json:"audio_tokens,omitempty"`
+	ImageTokens              int `json:"image_tokens,omitempty"`
 	CacheCreationTokens      int `json:"cache_creation_tokens,omitempty"`
 	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
 	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
@@ -807,23 +799,8 @@ type ChatDelta struct {
 	Role             string         `json:"role,omitempty"`
 	Content          *string        `json:"content,omitempty"` // pointer: omit when not present, null vs "" matters
 	ReasoningContent *string        `json:"reasoning_content,omitempty"`
-	Reasoning        *string        `json:"reasoning,omitempty"`
 	Refusal          *string        `json:"refusal,omitempty"`
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
-}
-
-func (m ChatMessage) reasoningText() string {
-	if m.ReasoningContent != "" {
-		return m.ReasoningContent
-	}
-	return m.Reasoning
-}
-
-func (d ChatDelta) reasoningText() *string {
-	if d.ReasoningContent != nil {
-		return d.ReasoningContent
-	}
-	return d.Reasoning
 }
 
 // ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ defineProps<{
   totalResults: number
   selectingAll: boolean
   allResultsSelected: boolean
-  canProbeUpstreamBilling?: boolean
+  canProbeUpstreamBilling: boolean
 }>()
 
 defineEmits([

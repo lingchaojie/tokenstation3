@@ -159,6 +159,9 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 
 		// 提取 usage
 		upstreamResponseModelObserverFromContext(c).ObserveAnthropic(respBody)
+		if !validAnthropicNonStreamingResponse(respBody) {
+			return nil, newInvalidProviderResponseFailover(resp, "antigravity upstream returned an invalid terminal JSON response")
+		}
 		usage = s.extractClaudeUsage(respBody)
 
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
@@ -301,6 +304,18 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
+				if !terminalObserved {
+					if !staged.committed && !cw.Disconnected() {
+						return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended before semantic output")
+					}
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: true}, fmt.Errorf("stream usage incomplete: missing terminal event")
+				}
+				if !providerPayloadObserved {
+					if staged.committed || semanticOutput {
+						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput}, fmt.Errorf("stream usage incomplete: terminal event arrived before message_start")
+					}
+					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream ended without a valid message_start")
+				}
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
 			}
 			if ev.err != nil {

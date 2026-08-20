@@ -2,6 +2,8 @@ package apicompat
 
 import (
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -200,6 +202,31 @@ func TestChatCompletionsToResponses_ToolStrict(t *testing.T) {
 			assert.JSONEq(t, string(mustMarshalJSON(t, tt.want)), string(strictJSON))
 		})
 	}
+}
+
+func TestChatCompletionsToResponses_ImageGenerationTool(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model:    "gpt-image-2",
+		Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"Draw a skyline"`)}},
+		Tools: []ChatTool{{
+			Type:         "image_generation",
+			Size:         "1536x1024",
+			Quality:      "high",
+			OutputFormat: "webp",
+			Background:   "transparent",
+		}},
+		ToolChoice: json.RawMessage(`{"type":"image_generation"}`),
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "image_generation", resp.Tools[0].Type)
+	assert.Equal(t, "1536x1024", resp.Tools[0].Size)
+	assert.Equal(t, "high", resp.Tools[0].Quality)
+	assert.Equal(t, "webp", resp.Tools[0].OutputFormat)
+	assert.Equal(t, "transparent", resp.Tools[0].Background)
+	assert.JSONEq(t, `{"type":"image_generation"}`, string(resp.ToolChoice))
 }
 
 func TestChatCompletionsToResponses_LegacyFunctionDefaultsStrictFalse(t *testing.T) {
@@ -440,6 +467,30 @@ func TestChatCompletionsToResponses_EmptyContentNeverNull(t *testing.T) {
 				"content must be an empty string, not null")
 		})
 	}
+}
+
+func TestChatCompletionsResponseToResponses_PreservesMixedTextAndRefusal(t *testing.T) {
+	refusal := "blocked"
+	resp := &ChatCompletionsResponse{
+		ID:    "chatcmpl_mixed_refusal",
+		Model: "gpt-5.4",
+		Choices: []ChatChoice{{
+			Index: 0,
+			Message: ChatMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(`"visible"`),
+				Refusal: &refusal,
+			},
+			FinishReason: "content_filter",
+		}},
+	}
+
+	out := ChatCompletionsResponseToResponses(resp, "gpt-5.4", nil, false, nil)
+	require.Len(t, out.Output, 1)
+	require.Equal(t, []ResponsesContentPart{
+		{Type: "output_text", Text: "visible"},
+		{Type: "refusal", Refusal: "blocked"},
+	}, out.Output[0].Content)
 }
 
 func TestChatCompletionsResponseToResponses_DeepSeekReasoningOnlyFallsBackToMessageText(t *testing.T) {
@@ -748,6 +799,39 @@ func TestChatCompletionsToResponses_AssistantReasoningContentPreserved(t *testin
 // ResponsesToChatCompletions tests
 // ---------------------------------------------------------------------------
 
+func TestResponsesToChatCompletionsAggregatesBufferedPartsLinearly(t *testing.T) {
+	for _, kind := range []string{"content", "reasoning"} {
+		t.Run(kind, func(t *testing.T) {
+			fragment := strings.Repeat("x", 4096)
+			item := ResponsesOutput{Type: "message", Content: make([]ResponsesContentPart, 512)}
+			if kind == "content" {
+				for index := range item.Content {
+					item.Content[index] = ResponsesContentPart{Type: "output_text", Text: fragment}
+				}
+			} else {
+				item = ResponsesOutput{Type: "reasoning", Summary: make([]ResponsesSummary, 512)}
+				for index := range item.Summary {
+					item.Summary[index] = ResponsesSummary{Type: "summary_text", Text: fragment}
+				}
+			}
+			resp := &ResponsesResponse{ID: "resp", Status: "completed", Output: []ResponsesOutput{item}}
+			runtime.GC()
+			var before runtime.MemStats
+			var after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			converted := ResponsesToChatCompletions(resp, "gpt")
+			runtime.ReadMemStats(&after)
+
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(24<<20))
+			if kind == "content" {
+				require.Len(t, converted.Choices[0].Message.Content, (2<<20)+2)
+			} else {
+				require.Len(t, converted.Choices[0].Message.ReasoningContent, 2<<20)
+			}
+		})
+	}
+}
+
 func TestResponsesToChatCompletions_BasicText(t *testing.T) {
 	resp := &ResponsesResponse{
 		ID:     "resp_123",
@@ -973,6 +1057,7 @@ func TestResponsesToChatCompletions_AllTokenDetailsPassThrough(t *testing.T) {
 			OutputTokensDetails: &ResponsesOutputTokensDetails{
 				ReasoningTokens:          30,
 				AudioTokens:              2,
+				ImageTokens:              5,
 				AcceptedPredictionTokens: 10,
 				RejectedPredictionTokens: 3,
 			},
@@ -988,14 +1073,24 @@ func TestResponsesToChatCompletions_AllTokenDetailsPassThrough(t *testing.T) {
 	require.NotNil(t, chat.Usage.CompletionTokensDetails)
 	assert.Equal(t, 30, chat.Usage.CompletionTokensDetails.ReasoningTokens)
 	assert.Equal(t, 2, chat.Usage.CompletionTokensDetails.AudioTokens)
+	assert.Equal(t, 5, chat.Usage.CompletionTokensDetails.ImageTokens)
 	assert.Equal(t, 10, chat.Usage.CompletionTokensDetails.AcceptedPredictionTokens)
 	assert.Equal(t, 3, chat.Usage.CompletionTokensDetails.RejectedPredictionTokens)
+
+	roundTrip := ChatUsageToResponsesUsage(chat.Usage)
+	require.NotNil(t, roundTrip.OutputTokensDetails)
+	assert.Equal(t, 30, roundTrip.OutputTokensDetails.ReasoningTokens)
+	assert.Equal(t, 2, roundTrip.OutputTokensDetails.AudioTokens)
+	assert.Equal(t, 5, roundTrip.OutputTokensDetails.ImageTokens)
+	assert.Equal(t, 10, roundTrip.OutputTokensDetails.AcceptedPredictionTokens)
+	assert.Equal(t, 3, roundTrip.OutputTokensDetails.RejectedPredictionTokens)
 
 	raw, err := json.Marshal(chat.Usage)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"prompt_tokens_details"`)
 	assert.Contains(t, string(raw), `"completion_tokens_details"`)
 	assert.Contains(t, string(raw), `"reasoning_tokens":30`)
+	assert.Contains(t, string(raw), `"image_tokens":5`)
 	assert.Contains(t, string(raw), `"accepted_prediction_tokens":10`)
 }
 
@@ -1497,11 +1592,16 @@ func TestChatCompletionsStreamRoundTrip(t *testing.T) {
 // BufferedResponseAccumulator tests
 // ---------------------------------------------------------------------------
 
+func requireBufferedResponseEvent(t *testing.T, acc *BufferedResponseAccumulator, event *ResponsesStreamEvent) {
+	t.Helper()
+	require.NoError(t, acc.ProcessEvent(event))
+}
+
 func TestBufferedResponseAccumulator_TextOnly(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello"})
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: ", world!"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: ", world!"})
 
 	assert.True(t, acc.HasContent())
 
@@ -1518,7 +1618,7 @@ func TestBufferedResponseAccumulator_ToolCalls(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
 	// Add function call at output_index=1
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 1,
 		Item: &ResponsesOutput{
@@ -1527,12 +1627,12 @@ func TestBufferedResponseAccumulator_ToolCalls(t *testing.T) {
 			Name:   "get_weather",
 		},
 	})
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.function_call_arguments.delta",
 		OutputIndex: 1,
 		Delta:       `{"city":`,
 	})
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.function_call_arguments.delta",
 		OutputIndex: 1,
 		Delta:       `"NYC"}`,
@@ -1551,8 +1651,8 @@ func TestBufferedResponseAccumulator_ToolCalls(t *testing.T) {
 func TestBufferedResponseAccumulator_Reasoning(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "Step 1: "})
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "think about it"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "Step 1: "})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "think about it"})
 
 	assert.True(t, acc.HasContent())
 
@@ -1568,13 +1668,13 @@ func TestBufferedResponseAccumulator_Mixed(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
 	// Reasoning first
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "I thought about it."})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.reasoning_summary_text.delta", Delta: "I thought about it."})
 
 	// Then text
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "The answer is 42."})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "The answer is 42."})
 
 	// Then a tool call
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 2,
 		Item: &ResponsesOutput{
@@ -1583,7 +1683,7 @@ func TestBufferedResponseAccumulator_Mixed(t *testing.T) {
 			Name:   "verify",
 		},
 	})
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.function_call_arguments.delta",
 		OutputIndex: 2,
 		Delta:       `{}`,
@@ -1603,7 +1703,7 @@ func TestBufferedResponseAccumulator_Mixed(t *testing.T) {
 
 func TestBufferedResponseAccumulator_SupplementEmptyOutput(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello"})
 
 	resp := &ResponsesResponse{
 		ID:     "resp_1",
@@ -1623,7 +1723,7 @@ func TestBufferedResponseAccumulator_SupplementEmptyOutput(t *testing.T) {
 
 func TestBufferedResponseAccumulator_NoSupplementWhenOutputExists(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "from deltas"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "from deltas"})
 
 	resp := &ResponsesResponse{
 		ID:     "resp_2",
@@ -1649,8 +1749,8 @@ func TestBufferedResponseAccumulator_EmptyDeltas(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
 	// Process events with empty delta — should not accumulate
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: ""})
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.created"})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.output_text.delta", Delta: ""})
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{Type: "response.created"})
 
 	assert.False(t, acc.HasContent())
 
@@ -1663,7 +1763,7 @@ func TestBufferedResponseAccumulator_IgnoresNonFunctionCallItems(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 
 	// output_item.added with type "message" should be ignored
-	acc.ProcessEvent(&ResponsesStreamEvent{
+	requireBufferedResponseEvent(t, acc, &ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
 		Item:        &ResponsesOutput{Type: "message"},

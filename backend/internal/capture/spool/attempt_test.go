@@ -53,29 +53,6 @@ func TestAttemptTruncatesPersistedPrefixButObservesAndHashesEveryByte(t *testing
 	require.Equal(t, payload[:5], readZstdFile(t, readyPath(s, a.ID(), "request.zst")))
 }
 
-func TestAttemptWithZeroLimitsPersistsCompleteBodyAndHeaders(t *testing.T) {
-	s := openTestStore(t, nil)
-	s.config.MaxBodyBytes = 0
-	s.config.MaxHeaderBytes = 0
-	a := beginAttempt(t, s, policyAll())
-	body := bytes.Repeat([]byte("b"), 64)
-	header := bytes.Repeat([]byte("h"), 32)
-
-	require.NoError(t, a.WriteRequest(body))
-	require.NoError(t, a.WriteRequestHeaders(header))
-	require.NoError(t, a.Commit())
-
-	manifest := readManifest(t, s, a.ID())
-	require.EqualValues(t, len(body), manifest.Request.ObservedBytes)
-	require.EqualValues(t, len(body), manifest.Request.StoredBytes)
-	require.False(t, manifest.Request.Truncated)
-	require.EqualValues(t, len(header), manifest.RequestHeaders.ObservedBytes)
-	require.EqualValues(t, len(header), manifest.RequestHeaders.StoredBytes)
-	require.False(t, manifest.RequestHeaders.Truncated)
-	require.Equal(t, body, readZstdFile(t, readyPath(s, a.ID(), "request.zst")))
-	require.Equal(t, header, readZstdFile(t, readyPath(s, a.ID(), "request_headers.zst")))
-}
-
 func TestHeaderPoliciesAndLimitsAreIndependent(t *testing.T) {
 	s := openTestStore(t, nil)
 	s.config.MaxHeaderBytes = 3

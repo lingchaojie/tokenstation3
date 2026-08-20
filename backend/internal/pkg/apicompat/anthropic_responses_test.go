@@ -2,11 +2,69 @@ package apicompat
 
 import (
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAnthropicEventToResponsesAggregatesFragmentsLinearly(t *testing.T) {
+	for _, kind := range []string{"text", "thinking", "tool"} {
+		t.Run(kind, func(t *testing.T) {
+			state := NewAnthropicEventToResponsesState()
+			block := &AnthropicContentBlock{Type: kind}
+			if kind == "tool" {
+				block.Type = "tool_use"
+				block.ID = "tool-1"
+				block.Name = "lookup"
+			}
+			_ = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_start", Message: &AnthropicResponse{ID: "msg-1"}}, state)
+			_ = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_start", ContentBlock: block}, state)
+
+			delta := &AnthropicDelta{Type: "text_delta", Text: "x"}
+			switch kind {
+			case "thinking":
+				delta = &AnthropicDelta{Type: "thinking_delta", Thinking: "x"}
+			case "tool":
+				delta = &AnthropicDelta{Type: "input_json_delta", PartialJSON: "x"}
+			}
+			event := &AnthropicStreamEvent{Type: "content_block_delta", Delta: delta}
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			for range 8192 {
+				_ = AnthropicEventToResponsesEvents(event, state)
+			}
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(8<<20))
+			done := AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_stop"}, state)
+			switch kind {
+			case "text":
+				require.Equal(t, strings.Repeat("x", 8192), done[0].Text)
+			case "thinking":
+				require.Equal(t, strings.Repeat("x", 8192), done[len(done)-1].Item.Summary[0].Text)
+			case "tool":
+				require.Equal(t, strings.Repeat("x", 8192), done[len(done)-1].Item.Arguments)
+			}
+		})
+	}
+}
+
+func TestAnthropicEventToResponsesRejectsOversizedRetainedOutput(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+	_ = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_start", Message: &AnthropicResponse{ID: "msg-1"}}, state)
+	_ = AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "text"}}, state)
+
+	events := AnthropicEventToResponsesEvents(&AnthropicStreamEvent{
+		Type: "content_block_delta", Delta: &AnthropicDelta{Type: "text_delta", Text: strings.Repeat("x", (8<<20)+1)},
+	}, state)
+	require.Empty(t, events)
+	require.ErrorContains(t, state.Err(), "retained output exceeds")
+}
 
 // ---------------------------------------------------------------------------
 // AnthropicToResponses tests
@@ -212,6 +270,28 @@ func TestAnthropicToResponses_MaxTokensFloor(t *testing.T) {
 // ---------------------------------------------------------------------------
 // ResponsesToAnthropic (non-streaming) tests
 // ---------------------------------------------------------------------------
+
+func TestResponsesToAnthropicAggregatesReasoningSummaryLinearly(t *testing.T) {
+	fragment := strings.Repeat("x", 4096)
+	summary := make([]ResponsesSummary, 512)
+	for index := range summary {
+		summary[index] = ResponsesSummary{Type: "summary_text", Text: fragment}
+	}
+	resp := &ResponsesResponse{
+		ID: "resp", Status: "completed",
+		Output: []ResponsesOutput{{Type: "reasoning", Summary: summary}},
+	}
+	runtime.GC()
+	var before runtime.MemStats
+	var after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	converted := ResponsesToAnthropic(resp, "claude")
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20))
+	require.Len(t, converted.Content, 1)
+	require.Len(t, converted.Content[0].Thinking, 2<<20)
+}
 
 func TestResponsesToAnthropic_TextOnly(t *testing.T) {
 	resp := &ResponsesResponse{
@@ -1339,6 +1419,27 @@ func TestResponsesToAnthropicRequest_ToolChoiceLegacyFunctionName(t *testing.T) 
 	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
 	assert.Equal(t, "tool", tc["type"])
 	assert.Equal(t, "get_weather", tc["name"])
+}
+
+func TestResponsesToAnthropicRequest_ToolChoiceWebSearch(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:      "claude-sonnet-4",
+		Input:      json.RawMessage(`[{"role":"user","content":"Search latest AI news"}]`),
+		Tools:      []ResponsesTool{{Type: "web_search"}},
+		ToolChoice: json.RawMessage(`{"type":"web_search"}`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "web_search_20250305", resp.Tools[0].Type)
+	assert.Equal(t, "web_search", resp.Tools[0].Name)
+
+	var tc map[string]string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "tool", tc["type"])
+	assert.Equal(t, "web_search", tc["name"])
 }
 
 // ---------------------------------------------------------------------------

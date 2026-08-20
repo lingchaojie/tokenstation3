@@ -25,19 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const openAIStreamKeepaliveBytesKey = "openai_stream_keepalive_bytes"
-
-func recordOpenAIStreamKeepaliveBytes(c *gin.Context, written int) {
-	if c == nil || written <= 0 {
-		return
-	}
-	current := 0
-	if value, ok := c.Get(openAIStreamKeepaliveBytesKey); ok {
-		current, _ = value.(int)
-	}
-	c.Set(openAIStreamKeepaliveBytesKey, current+written)
-}
-
 func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -1436,6 +1423,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	clientDisconnected := false
 	sawFailedEvent := false
 	validProviderTerminalObserved := false
+	responsesState := openAIResponsesSSEAttemptState{}
 	failedMessage := ""
 	clientOutputStarted := false
 	pendingEventLine := ""
@@ -1581,6 +1569,40 @@ scanLoop:
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
+			if validProviderTerminalObserved && trimmedData != "[DONE]" {
+				return resultWithUsage(), errors.New("OpenAI Responses data arrived after a terminal event")
+			}
+			if trimmedData == "[DONE]" {
+				if !validProviderTerminalObserved {
+					message := "OpenAI Responses [DONE] arrived before a valid terminal event"
+					if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+						return resultWithUsage(), s.newOpenAIStreamFailoverErrorFromResponse(c, account, true, upstreamRequestID, dataBytes, message, resp)
+					}
+					return resultWithUsage(), errors.New(message)
+				}
+			} else if !gjson.ValidBytes(dataBytes) {
+				message := "OpenAI Responses returned malformed JSON data"
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+					return resultWithUsage(), s.newOpenAIStreamFailoverErrorFromResponse(c, account, true, upstreamRequestID, dataBytes, message, resp)
+				}
+				return resultWithUsage(), errors.New(message)
+			}
+			declaredEventType := ""
+			if pendingEventLine != "" {
+				declaredEventType, _ = extractOpenAISSEEventLine(strings.TrimSpace(pendingEventLine))
+			}
+			if trimmedData != "[DONE]" {
+				validatedType, err := validateOpenAIResponsesSSEPayload(dataBytes, declaredEventType)
+				if err == nil {
+					err = responsesState.observe(dataBytes, validatedType)
+				}
+				if err != nil {
+					if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+						return resultWithUsage(), s.newOpenAIStreamFailoverErrorFromResponse(c, account, true, upstreamRequestID, dataBytes, err.Error(), resp)
+					}
+					return resultWithUsage(), err
+				}
+			}
 			rawEventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace && strings.Contains(data, mappedModel) {
@@ -1612,6 +1634,19 @@ scanLoop:
 				}
 			}
 			eventType := strings.TrimSpace(gjson.Get(trimmedData, "type").String())
+			if eventType == "response.completed" || eventType == "response.done" {
+				if !validOpenAIResponsesObject(gjson.GetBytes(dataBytes, "response")) {
+					message := "OpenAI terminal event omitted a valid response object"
+					if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+						return resultWithUsage(), s.newOpenAIStreamFailoverErrorFromResponse(c, account, true, upstreamRequestID, dataBytes, message, resp)
+					}
+					dataBytes = []byte(`{"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_error","message":` + strconv.Quote(message) + `}}}`)
+					trimmedData = string(dataBytes)
+					eventType = "response.failed"
+					line = "data: " + trimmedData
+					pendingEventLine = "event: response.failed"
+				}
+			}
 			terminalFailed, terminalFailureStatus := openAIResponsesTerminalFailureStatus(dataBytes, eventType)
 			if (eventType == "response.completed" || eventType == "response.done") && !terminalFailed {
 				validProviderTerminalObserved = true
@@ -1760,7 +1795,19 @@ scanLoop:
 		}
 		return resultWithUsage(), stagedWriteErr
 	}
-	_ = validProviderTerminalObserved
+	if !clientDisconnected && !validProviderTerminalObserved && !sawFailedEvent && ctx.Err() == nil {
+		logger.FromContext(ctx).With(
+			zap.String("component", "service.openai_gateway"),
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_request_id", upstreamRequestID),
+		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
+		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+			return resultWithUsage(),
+				s.newOpenAIStreamFailoverErrorFromResponse(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event", resp)
+		}
+		s.recordOpenAIProxyStreamDisconnect(account, errors.New("stream ended before terminal event"), upstreamRequestID)
+		return resultWithUsage(), errors.New("stream usage incomplete: missing terminal event")
+	}
 	if validProviderTerminalObserved && !sawFailedEvent {
 		s.clearOpenAIProxyStreamDisconnect(account)
 	}
@@ -1861,6 +1908,10 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithWebChatCapture(ctx 
 
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSONWithContext(ctx context.Context, resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResultPassthrough, error) {
 	stop := compactStopFunc(stopBeforeWrite...)
+	if err := validateBufferedOpenAIResponsesSSEBody(body, int64(resolveUpstreamResponseReadLimit(s.cfg))); err != nil {
+		stop()
+		return nil, newOpenAIIncompleteChatStreamFailover(resp, err.Error())
+	}
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -1983,56 +2034,4 @@ func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, fil
 			dst.Add(key, v)
 		}
 	}
-}
-func openAIStreamItemHasVisibleOutput(item gjson.Result) bool {
-	if item.Get("arguments").String() != "" || item.Get("input").String() != "" || item.Get("result").String() != "" {
-		return true
-	}
-	for _, path := range []string{"content", "summary"} {
-		for _, part := range item.Get(path).Array() {
-			if part.Get("text").String() != "" || part.Get("transcript").String() != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// Structural progress may commit an attempt, but TTFT starts only when the
-// stream carries content visible to the client.
-func openAIStreamDataStartsVisibleOutput(data, eventType string) bool {
-	trimmed := strings.TrimSpace(data)
-	if trimmed == "" || trimmed == "[DONE]" || !gjson.Valid(trimmed) {
-		return false
-	}
-	eventType = strings.TrimSpace(eventType)
-	if eventType == "" {
-		eventType = strings.TrimSpace(gjson.Get(trimmed, "type").String())
-	}
-	if strings.HasSuffix(eventType, ".delta") {
-		delta := gjson.Get(trimmed, "delta")
-		return delta.Exists() && delta.String() != ""
-	}
-	switch eventType {
-	case "response.output_text.done", "response.reasoning_summary_text.done", "response.reasoning_text.done", "response.audio_transcript.done":
-		return gjson.Get(trimmed, "text").String() != ""
-	case "response.function_call_arguments.done":
-		return gjson.Get(trimmed, "arguments").String() != ""
-	case "response.custom_tool_call_input.done":
-		return gjson.Get(trimmed, "input").String() != ""
-	case "response.image_generation_call.partial_image":
-		return gjson.Get(trimmed, "partial_image_b64").String() != ""
-	case "response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
-		part := gjson.Get(trimmed, "part")
-		return part.Get("text").String() != "" || part.Get("transcript").String() != ""
-	case "response.output_item.added", "response.output_item.done":
-		return openAIStreamItemHasVisibleOutput(gjson.Get(trimmed, "item"))
-	case "response.completed", "response.done":
-		for _, item := range gjson.Get(trimmed, "response.output").Array() {
-			if openAIStreamItemHasVisibleOutput(item) {
-				return true
-			}
-		}
-	}
-	return false
 }

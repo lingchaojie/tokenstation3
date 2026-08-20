@@ -1,11 +1,57 @@
 package apicompat
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResponsesEventToAnthropicReadToolArgumentsAggregateLinearly(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.ContentBlockOpen = true
+	state.CurrentBlockType = "tool_use"
+	state.CurrentToolName = "Read"
+	state.OutputIndexToBlockIdx = map[int]int{0: 0}
+
+	_ = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: `{"file_path":"`,
+	}, state)
+	oneByte := &ResponsesStreamEvent{Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: "x"}
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 8192 {
+		_ = ResponsesEventToAnthropicEvents(oneByte, state)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(8<<20))
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: `","pages":""}`,
+	}, state)
+	require.Len(t, events, 1)
+	require.JSONEq(t, `{"file_path":"`+strings.Repeat("x", 8192)+`"}`, events[0].Delta.PartialJSON)
+}
+
+func TestResponsesEventToAnthropicRejectsOversizedRetainedReadArguments(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.ContentBlockOpen = true
+	state.CurrentBlockType = "tool_use"
+	state.CurrentToolName = "Read"
+	state.OutputIndexToBlockIdx = map[int]int{0: 0}
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: strings.Repeat("x", (8<<20)+1),
+	}, state)
+	require.Empty(t, events)
+	require.ErrorContains(t, state.Err(), "Read tool arguments exceed")
+}
 
 func TestResToAnthFuncArgsDelta_ReadToolWaitsForCompleteJSON(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
@@ -32,7 +78,7 @@ func TestResToAnthFuncArgsDelta_ReadToolWaitsForCompleteJSON(t *testing.T) {
 	assert.Equal(t, "content_block_delta", events[0].Type)
 	assert.Equal(t, "input_json_delta", events[0].Delta.Type)
 	assert.JSONEq(t, `{"file_path":"/tmp/test.go"}`, events[0].Delta.PartialJSON)
-	assert.Equal(t, `{"file_path":"/tmp/test.go","pages":""}`, state.CurrentToolArgs)
+	assert.Equal(t, `{"file_path":"/tmp/test.go","pages":""}`, state.CurrentToolArgs.String())
 	assert.True(t, state.CurrentToolHadDelta)
 
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{

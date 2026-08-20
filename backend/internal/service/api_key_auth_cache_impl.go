@@ -14,7 +14,8 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 20 // v20: group long-context and model pricing fields (force refresh of pre-fix snapshots)
+// v19: union of local peak-rate/Kiro/WebChat fields and upstream pricing/profit fields.
+const apiKeyAuthSnapshotVersion = 19
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -218,6 +219,9 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 	if err != nil {
 		return nil, false
 	}
+	if isWebChatAuthCacheEntry(entry) {
+		return entry, true
+	}
 	s.setAuthCacheL1(cacheKey, entry)
 	return entry, true
 }
@@ -281,6 +285,9 @@ func (s *APIKeyService) loadAuthCacheEntry(ctx context.Context, key, cacheKey st
 		}
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
+	if isWebChatAPIKey(apiKey) {
+		return &APIKeyAuthCacheEntry{NotFound: true}, nil
+	}
 	apiKey.Key = key
 	snapshot := s.snapshotFromAPIKey(ctx, apiKey)
 	if snapshot == nil {
@@ -328,7 +335,14 @@ func (s *APIKeyService) applyAuthCacheEntry(key string, entry *APIKeyAuthCacheEn
 	if entry.Snapshot.Version != apiKeyAuthSnapshotVersion {
 		return nil, false, nil
 	}
+	if entry.Snapshot.KeyType == APIKeyTypeWebChat {
+		return nil, true, ErrAPIKeyNotFound
+	}
 	return s.snapshotToAPIKey(key, entry.Snapshot), true, nil
+}
+
+func isWebChatAuthCacheEntry(entry *APIKeyAuthCacheEntry) bool {
+	return entry != nil && entry.Snapshot != nil && entry.Snapshot.KeyType == APIKeyTypeWebChat
 }
 
 func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) *APIKeyAuthSnapshot {
@@ -336,35 +350,38 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		return nil
 	}
 	snapshot := &APIKeyAuthSnapshot{
-		Version:     apiKeyAuthSnapshotVersion,
-		APIKeyID:    apiKey.ID,
-		UserID:      apiKey.UserID,
-		GroupID:     apiKey.GroupID,
-		Name:        apiKey.Name,
-		Status:      apiKey.Status,
-		IPWhitelist: apiKey.IPWhitelist,
-		IPBlacklist: apiKey.IPBlacklist,
-		Quota:       apiKey.Quota,
-		QuotaUsed:   apiKey.QuotaUsed,
-		ExpiresAt:   apiKey.ExpiresAt,
-		RateLimit5h: apiKey.RateLimit5h,
-		RateLimit1d: apiKey.RateLimit1d,
-		RateLimit7d: apiKey.RateLimit7d,
+		Version:          apiKeyAuthSnapshotVersion,
+		APIKeyID:         apiKey.ID,
+		UserID:           apiKey.UserID,
+		GroupID:          apiKey.GroupID,
+		KeyType:          apiKey.KeyType,
+		GroupBindingMode: apiKey.GroupBindingMode,
+		Name:             apiKey.Name,
+		Status:           apiKey.Status,
+		IPWhitelist:      apiKey.IPWhitelist,
+		IPBlacklist:      apiKey.IPBlacklist,
+		Quota:            apiKey.Quota,
+		QuotaUsed:        apiKey.QuotaUsed,
+		ExpiresAt:        apiKey.ExpiresAt,
+		RateLimit5h:      apiKey.RateLimit5h,
+		RateLimit1d:      apiKey.RateLimit1d,
+		RateLimit7d:      apiKey.RateLimit7d,
 		User: APIKeyAuthUserSnapshot{
-			ID:                         apiKey.User.ID,
-			Status:                     apiKey.User.Status,
-			Role:                       apiKey.User.Role,
-			Balance:                    apiKey.User.Balance,
-			Concurrency:                apiKey.User.Concurrency,
-			AllowedGroups:              apiKey.User.AllowedGroups,
-			Email:                      apiKey.User.Email,
-			Username:                   apiKey.User.Username,
-			BalanceNotifyEnabled:       apiKey.User.BalanceNotifyEnabled,
-			BalanceNotifyThresholdType: apiKey.User.BalanceNotifyThresholdType,
-			BalanceNotifyThreshold:     apiKey.User.BalanceNotifyThreshold,
-			BalanceNotifyExtraEmails:   apiKey.User.BalanceNotifyExtraEmails,
-			TotalRecharged:             apiKey.User.TotalRecharged,
-			RPMLimit:                   apiKey.User.RPMLimit,
+			ID:                                 apiKey.User.ID,
+			Status:                             apiKey.User.Status,
+			Role:                               apiKey.User.Role,
+			Balance:                            apiKey.User.Balance,
+			Concurrency:                        apiKey.User.Concurrency,
+			AllowedGroups:                      apiKey.User.AllowedGroups,
+			Email:                              apiKey.User.Email,
+			Username:                           apiKey.User.Username,
+			BalanceNotifyEnabled:               apiKey.User.BalanceNotifyEnabled,
+			SubscriptionBalanceFallbackEnabled: apiKey.User.SubscriptionBalanceFallbackEnabled,
+			BalanceNotifyThresholdType:         apiKey.User.BalanceNotifyThresholdType,
+			BalanceNotifyThreshold:             apiKey.User.BalanceNotifyThreshold,
+			BalanceNotifyExtraEmails:           apiKey.User.BalanceNotifyExtraEmails,
+			TotalRecharged:                     apiKey.User.TotalRecharged,
+			RPMLimit:                           apiKey.User.RPMLimit,
 		},
 	}
 
@@ -402,8 +419,6 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			VideoPrice1080P:                 apiKey.Group.VideoPrice1080P,
 			VideoModelPrices:                NormalizeVideoModelPrices(apiKey.Group.VideoModelPrices),
 			WebSearchPricePerCall:           apiKey.Group.WebSearchPricePerCall,
-			LongContextPricingEnabled:       apiKey.Group.LongContextPricingEnabled,
-			ModelPricing:                    apiKey.Group.ModelPricing,
 			ClaudeCodeOnly:                  apiKey.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 apiKey.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: apiKey.Group.FallbackGroupIDOnInvalidRequest,
@@ -423,6 +438,12 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			PeakStart:                       apiKey.Group.PeakStart,
 			PeakEnd:                         apiKey.Group.PeakEnd,
 			PeakRateMultiplier:              apiKey.Group.PeakRateMultiplier,
+			KiroCacheEmulationEnabled:       apiKey.Group.EffectiveKiroCacheEmulationEnabled(),
+			KiroAutoStickyEnabled:           apiKey.Group.EffectiveKiroAutoStickyEnabled(),
+			KiroStickySessionTTLSeconds:     apiKey.Group.EffectiveKiroStickySessionTTLSeconds(),
+			KiroCacheEmulationRatio:         apiKey.Group.EffectiveKiroCacheEmulationRatio(),
+			KiroEndpointMode:                apiKey.Group.EffectiveKiroEndpointMode(),
+			HasMixedKiroAutoStickyAccount:   s.computeHasMixedKiroAutoSticky(ctx, apiKey.Group),
 			ProfitControlEnabled:            apiKey.Group.ProfitControlEnabled,
 			ProfitMinMargin:                 apiKey.Group.ProfitMinMargin,
 			ProfitSafetyBuffer:              apiKey.Group.ProfitSafetyBuffer,
@@ -431,41 +452,58 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 	return snapshot
 }
 
+// computeHasMixedKiroAutoSticky 仅对 anthropic 分组查询（kiro 只混入 anthropic）；
+// 其它平台或查询失败返回 false（benign：退回 fallback hash）。
+func (s *APIKeyService) computeHasMixedKiroAutoSticky(ctx context.Context, group *Group) bool {
+	if group == nil || group.Platform != PlatformAnthropic || group.ID <= 0 || s.groupRepo == nil {
+		return false
+	}
+	ok, err := s.groupRepo.HasSchedulableMixedKiroStickyAccount(ctx, group.ID)
+	if err != nil {
+		slog.Warn("compute_has_mixed_kiro_auto_sticky_failed", "group_id", group.ID, "error", err)
+		return false
+	}
+	return ok
+}
+
 func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapshot) *APIKey {
 	if snapshot == nil {
 		return nil
 	}
 	apiKey := &APIKey{
-		ID:          snapshot.APIKeyID,
-		UserID:      snapshot.UserID,
-		GroupID:     snapshot.GroupID,
-		Key:         key,
-		Name:        snapshot.Name,
-		Status:      snapshot.Status,
-		IPWhitelist: snapshot.IPWhitelist,
-		IPBlacklist: snapshot.IPBlacklist,
-		Quota:       snapshot.Quota,
-		QuotaUsed:   snapshot.QuotaUsed,
-		ExpiresAt:   snapshot.ExpiresAt,
-		RateLimit5h: snapshot.RateLimit5h,
-		RateLimit1d: snapshot.RateLimit1d,
-		RateLimit7d: snapshot.RateLimit7d,
+		ID:               snapshot.APIKeyID,
+		UserID:           snapshot.UserID,
+		GroupID:          snapshot.GroupID,
+		Key:              key,
+		KeyType:          snapshot.KeyType,
+		GroupBindingMode: snapshot.GroupBindingMode,
+		Name:             snapshot.Name,
+		Status:           snapshot.Status,
+		IPWhitelist:      snapshot.IPWhitelist,
+		IPBlacklist:      snapshot.IPBlacklist,
+		Quota:            snapshot.Quota,
+		QuotaUsed:        snapshot.QuotaUsed,
+		ExpiresAt:        snapshot.ExpiresAt,
+		RateLimit5h:      snapshot.RateLimit5h,
+		RateLimit1d:      snapshot.RateLimit1d,
+		RateLimit7d:      snapshot.RateLimit7d,
 		User: &User{
-			ID:                         snapshot.User.ID,
-			Status:                     snapshot.User.Status,
-			Role:                       snapshot.User.Role,
-			Balance:                    snapshot.User.Balance,
-			Concurrency:                snapshot.User.Concurrency,
-			AllowedGroups:              snapshot.User.AllowedGroups,
-			Email:                      snapshot.User.Email,
-			Username:                   snapshot.User.Username,
-			BalanceNotifyEnabled:       snapshot.User.BalanceNotifyEnabled,
-			BalanceNotifyThresholdType: snapshot.User.BalanceNotifyThresholdType,
-			BalanceNotifyThreshold:     snapshot.User.BalanceNotifyThreshold,
-			BalanceNotifyExtraEmails:   snapshot.User.BalanceNotifyExtraEmails,
-			TotalRecharged:             snapshot.User.TotalRecharged,
-			RPMLimit:                   snapshot.User.RPMLimit,
-			UserGroupRPMOverride:       snapshot.User.UserGroupRPMOverride,
+			ID:                                 snapshot.User.ID,
+			Status:                             snapshot.User.Status,
+			Role:                               snapshot.User.Role,
+			Balance:                            snapshot.User.Balance,
+			Concurrency:                        snapshot.User.Concurrency,
+			AllowedGroups:                      snapshot.User.AllowedGroups,
+			Email:                              snapshot.User.Email,
+			Username:                           snapshot.User.Username,
+			BalanceNotifyEnabled:               snapshot.User.BalanceNotifyEnabled,
+			SubscriptionBalanceFallbackEnabled: snapshot.User.SubscriptionBalanceFallbackEnabled,
+			BalanceNotifyThresholdType:         snapshot.User.BalanceNotifyThresholdType,
+			BalanceNotifyThreshold:             snapshot.User.BalanceNotifyThreshold,
+			BalanceNotifyExtraEmails:           snapshot.User.BalanceNotifyExtraEmails,
+			TotalRecharged:                     snapshot.User.TotalRecharged,
+			RPMLimit:                           snapshot.User.RPMLimit,
+			UserGroupRPMOverride:               snapshot.User.UserGroupRPMOverride,
 		},
 	}
 	if snapshot.Group != nil {
@@ -495,8 +533,6 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			VideoPrice1080P:                 snapshot.Group.VideoPrice1080P,
 			VideoModelPrices:                NormalizeVideoModelPrices(snapshot.Group.VideoModelPrices),
 			WebSearchPricePerCall:           snapshot.Group.WebSearchPricePerCall,
-			LongContextPricingEnabled:       snapshot.Group.LongContextPricingEnabled,
-			ModelPricing:                    snapshot.Group.ModelPricing,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,
@@ -516,6 +552,12 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			PeakStart:                       snapshot.Group.PeakStart,
 			PeakEnd:                         snapshot.Group.PeakEnd,
 			PeakRateMultiplier:              snapshot.Group.PeakRateMultiplier,
+			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
+			KiroAutoStickyEnabled:           snapshot.Group.KiroAutoStickyEnabled,
+			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
+			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
+			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
+			HasMixedKiroAutoStickyAccount:   snapshot.Group.HasMixedKiroAutoStickyAccount,
 			ProfitControlEnabled:            snapshot.Group.ProfitControlEnabled,
 			ProfitMinMargin:                 snapshot.Group.ProfitMinMargin,
 			ProfitSafetyBuffer:              snapshot.Group.ProfitSafetyBuffer,

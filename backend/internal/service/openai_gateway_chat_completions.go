@@ -614,6 +614,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	defer func() { _ = staged.close() }()
 	var stagedWriteErr error
 	providerTerminalObserved := false
+	responsesState := openAIResponsesSSEAttemptState{}
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
@@ -679,7 +680,28 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
+		if providerTerminalObserved {
+			message := "OpenAI Responses data arrived after a terminal event"
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
+			} else {
+				streamNonFailoverErr = errors.New(message)
+			}
+			return true
+		}
 		payloadBytes := []byte(payload)
+		validatedType, err := validateOpenAIResponsesSSEPayload(payloadBytes, "")
+		if err == nil {
+			err = responsesState.observe(payloadBytes, validatedType)
+		}
+		if err != nil {
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payloadBytes, err.Error(), resp)
+			} else {
+				streamNonFailoverErr = err
+			}
+			return true
+		}
 		if retainErr := collectOpenAIResponsesImageResultsFromEventPayloadRetained(payloadBytes, &imageResults, imageResultSeen, imageRetentionBudget, 0); retainErr != nil {
 			message := "OpenAI Responses image output retention failed: " + retainErr.Error()
 			if !staged.committed {
@@ -713,6 +735,16 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
 		if isTerminalEvent {
 			providerTerminalObserved = true
+		}
+		if (strings.TrimSpace(event.Type) == "response.completed" || strings.TrimSpace(event.Type) == "response.done") &&
+			!validOpenAIResponsesObject(gjson.GetBytes([]byte(payload), "response")) {
+			message := "OpenAI terminal event omitted a valid response object"
+			if !staged.committed {
+				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
+			} else {
+				streamNonFailoverErr = errors.New(message)
+			}
+			return true
 		}
 		terminalFailed, _ := openAIResponsesTerminalFailureStatus([]byte(payload), event.Type)
 		if isTerminalEvent {
@@ -894,9 +926,25 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
-		return resultWithUsage(), nil
+		if stagedWriteErr != nil || streamFailoverErr != nil || streamNonFailoverErr != nil {
+			return finalizeStream()
+		}
+		if !staged.committed {
+			return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI chat_completions stream ended before a terminal event", resp)
+		}
+		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
+		if strings.TrimSpace(frame.Data) != "[DONE]" {
+			if _, err := validateOpenAIResponsesSSEPayload([]byte(frame.Data), frame.EventType); err != nil {
+				if !staged.committed {
+					streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(frame.Data), err.Error(), resp)
+				} else {
+					streamNonFailoverErr = err
+				}
+				return true
+			}
+		}
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
 			return false

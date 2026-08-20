@@ -302,6 +302,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	var usage ClaudeUsage
 	hasKiroMarkedFinalUsage := false
 	terminalObserved := false
+	providerPhase := anthropicProviderAwaitingStart
 	incompleteProviderTail := false
 	var scanErr error
 
@@ -340,6 +341,10 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			break
 		}
 
+		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
@@ -485,6 +490,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	terminalObserved := false
 	providerPayloadObserved := false
 	incompleteProviderTail := false
+	providerPhase := anthropicProviderAwaitingStart
 	var stagedWriteErr error
 
 	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
@@ -568,6 +574,10 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 		// Chain: Anthropic event → Responses events → CC chunks
 		responsesEvents := apicompat.AnthropicEventToResponsesEvents(event, anthState)
+		if conversionErr := anthState.Err(); conversionErr != nil {
+			stagedWriteErr = conversionErr
+			return true
+		}
 		for _, resEvt := range responsesEvents {
 			ccChunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
 			for _, chunk := range ccChunks {
@@ -616,6 +626,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			break
 		}
 
+		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
+			lineReader.DrainCaptureOnParserFailure(ctx)
+			if staged.committed || clientDisconnected {
+				result := resultWithUsage()
+				result.CaptureTerminalError = true
+				return result, err
+			}
+			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
+		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			invalidEventErr := fmt.Errorf("invalid JSON for Anthropic event %q: %w", eventType, err)
@@ -663,6 +682,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			return result, incompleteErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, incompleteErr.Error())
+	}
+	if !terminalObserved {
+		missingTerminalErr := fmt.Errorf("stream usage incomplete: missing terminal event")
+		if staged.committed || clientDisconnected {
+			result := resultWithUsage()
+			result.CaptureTerminalError = true
+			return result, missingTerminalErr
+		}
+		return nil, newIncompleteProviderStreamFailover(resp, missingTerminalErr.Error())
 	}
 	if !providerPayloadObserved {
 		invalidStreamErr := fmt.Errorf("stream ended without a valid provider message_start")

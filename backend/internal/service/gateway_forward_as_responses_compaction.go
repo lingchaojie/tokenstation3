@@ -100,6 +100,7 @@ func (s *GatewayService) collectResponsesCompactionAnthropicSSE(
 	var contentAccumulator anthropicBufferedContentAccumulator
 	var usage ClaudeUsage
 	terminalObserved := false
+	providerPhase := anthropicProviderAwaitingStart
 	incompleteProviderTail := false
 	var scanErr error
 
@@ -134,6 +135,10 @@ func (s *GatewayService) collectResponsesCompactionAnthropicSSE(
 		if !ok {
 			incompleteProviderTail = true
 			break
+		}
+		if _, err := validateAnthropicProviderJSONEvent(&providerPhase, eventType, []byte(payload)); err != nil {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, usage, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(err))
 		}
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {

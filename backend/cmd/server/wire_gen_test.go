@@ -90,7 +90,6 @@ func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSu
 		schedulerSnapshotSvc,
 		tokenRefreshSvc,
 		accountExpirySvc,
-		nil, // cnProviderBalanceCheck
 		codexVersionSyncSvc,
 		proxyExpirySvc,
 		subscriptionExpirySvc,

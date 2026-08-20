@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,10 +22,57 @@ func collectAnthropicStreamEvents(t *testing.T, chunks []string) []AnthropicStre
 	for _, payload := range chunks {
 		var chunk ChatCompletionsChunk
 		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
-		events = append(events, ChatCompletionsChunkToAnthropicEvents(&chunk, state)...)
+		converted, err := ChatCompletionsChunkToAnthropicEvents(&chunk, state)
+		require.NoError(t, err)
+		events = append(events, converted...)
 	}
 	events = append(events, FinalizeChatCompletionsAnthropicStream(state)...)
 	return events
+}
+
+func TestChatCompletionsToAnthropicPendingToolArgumentsAggregateLinearly(t *testing.T) {
+	state := NewChatCompletionsToAnthropicStreamState("gpt-test")
+	first := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID:       "call-1",
+		Function: ChatFunctionCall{Arguments: `{"value":"`},
+	}}}}}}
+	_, err := ChatCompletionsChunkToAnthropicEvents(first, state)
+	require.NoError(t, err)
+
+	fragment := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Arguments: "x"},
+	}}}}}}
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 8192 {
+		_, err = ChatCompletionsChunkToAnthropicEvents(fragment, state)
+		require.NoError(t, err)
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+	closing := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		Function: ChatFunctionCall{Name: "lookup", Arguments: `"}`},
+	}}}}}}
+	events, err := ChatCompletionsChunkToAnthropicEvents(closing, state)
+	require.NoError(t, err)
+	tools := assembleToolUseBlocks(events)
+	require.Len(t, tools, 1)
+	require.Len(t, tools[0].Input, 8204)
+}
+
+func TestChatCompletionsToAnthropicRejectsOversizedPendingToolArguments(t *testing.T) {
+	state := NewChatCompletionsToAnthropicStreamState("gpt-test")
+	chunk := &ChatCompletionsChunk{Choices: []ChatChunkChoice{{Delta: ChatDelta{ToolCalls: []ChatToolCall{{
+		ID:       "call-1",
+		Function: ChatFunctionCall{Arguments: strings.Repeat("x", (8<<20)+1)},
+	}}}}}}
+
+	events, err := ChatCompletionsChunkToAnthropicEvents(chunk, state)
+	require.ErrorContains(t, err, "pending tool arguments exceed")
+	require.Empty(t, events)
 }
 
 // anthropicEventTypes extracts the sequence of event types for concise assertions.

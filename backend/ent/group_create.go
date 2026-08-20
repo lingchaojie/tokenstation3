@@ -4,7 +4,6 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -502,26 +501,6 @@ func (_c *GroupCreate) SetNillableWebSearchPricePerCall(v *float64) *GroupCreate
 	if v != nil {
 		_c.SetWebSearchPricePerCall(*v)
 	}
-	return _c
-}
-
-// SetLongContextPricingEnabled sets the "long_context_pricing_enabled" field.
-func (_c *GroupCreate) SetLongContextPricingEnabled(v bool) *GroupCreate {
-	_c.mutation.SetLongContextPricingEnabled(v)
-	return _c
-}
-
-// SetNillableLongContextPricingEnabled sets the "long_context_pricing_enabled" field if the given value is not nil.
-func (_c *GroupCreate) SetNillableLongContextPricingEnabled(v *bool) *GroupCreate {
-	if v != nil {
-		_c.SetLongContextPricingEnabled(*v)
-	}
-	return _c
-}
-
-// SetModelPricing sets the "model_pricing" field.
-func (_c *GroupCreate) SetModelPricing(v json.RawMessage) *GroupCreate {
-	_c.mutation.SetModelPricing(v)
 	return _c
 }
 
@@ -1093,10 +1072,6 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultVideoRateMultiplier
 		_c.mutation.SetVideoRateMultiplier(v)
 	}
-	if _, ok := _c.mutation.LongContextPricingEnabled(); !ok {
-		v := group.DefaultLongContextPricingEnabled
-		_c.mutation.SetLongContextPricingEnabled(v)
-	}
 	if _, ok := _c.mutation.ClaudeCodeOnly(); !ok {
 		v := group.DefaultClaudeCodeOnly
 		_c.mutation.SetClaudeCodeOnly(v)
@@ -1291,9 +1266,6 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		return &ValidationError{Name: "video_rate_multiplier", err: errors.New(`ent: missing required field "Group.video_rate_multiplier"`)}
-	}
-	if _, ok := _c.mutation.LongContextPricingEnabled(); !ok {
-		return &ValidationError{Name: "long_context_pricing_enabled", err: errors.New(`ent: missing required field "Group.long_context_pricing_enabled"`)}
 	}
 	if _, ok := _c.mutation.ClaudeCodeOnly(); !ok {
 		return &ValidationError{Name: "claude_code_only", err: errors.New(`ent: missing required field "Group.claude_code_only"`)}
@@ -1545,14 +1517,6 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.WebSearchPricePerCall(); ok {
 		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
 		_node.WebSearchPricePerCall = &value
-	}
-	if value, ok := _c.mutation.LongContextPricingEnabled(); ok {
-		_spec.SetField(group.FieldLongContextPricingEnabled, field.TypeBool, value)
-		_node.LongContextPricingEnabled = value
-	}
-	if value, ok := _c.mutation.ModelPricing(); ok {
-		_spec.SetField(group.FieldModelPricing, field.TypeJSON, value)
-		_node.ModelPricing = value
 	}
 	if value, ok := _c.mutation.ClaudeCodeOnly(); ok {
 		_spec.SetField(group.FieldClaudeCodeOnly, field.TypeBool, value)
@@ -2403,36 +2367,6 @@ func (u *GroupUpsert) AddWebSearchPricePerCall(v float64) *GroupUpsert {
 // ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
 func (u *GroupUpsert) ClearWebSearchPricePerCall() *GroupUpsert {
 	u.SetNull(group.FieldWebSearchPricePerCall)
-	return u
-}
-
-// SetLongContextPricingEnabled sets the "long_context_pricing_enabled" field.
-func (u *GroupUpsert) SetLongContextPricingEnabled(v bool) *GroupUpsert {
-	u.Set(group.FieldLongContextPricingEnabled, v)
-	return u
-}
-
-// UpdateLongContextPricingEnabled sets the "long_context_pricing_enabled" field to the value that was provided on create.
-func (u *GroupUpsert) UpdateLongContextPricingEnabled() *GroupUpsert {
-	u.SetExcluded(group.FieldLongContextPricingEnabled)
-	return u
-}
-
-// SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsert) SetModelPricing(v json.RawMessage) *GroupUpsert {
-	u.Set(group.FieldModelPricing, v)
-	return u
-}
-
-// UpdateModelPricing sets the "model_pricing" field to the value that was provided on create.
-func (u *GroupUpsert) UpdateModelPricing() *GroupUpsert {
-	u.SetExcluded(group.FieldModelPricing)
-	return u
-}
-
-// ClearModelPricing clears the value of the "model_pricing" field.
-func (u *GroupUpsert) ClearModelPricing() *GroupUpsert {
-	u.SetNull(group.FieldModelPricing)
 	return u
 }
 
@@ -3531,41 +3465,6 @@ func (u *GroupUpsertOne) UpdateWebSearchPricePerCall() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearWebSearchPricePerCall() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearWebSearchPricePerCall()
-	})
-}
-
-// SetLongContextPricingEnabled sets the "long_context_pricing_enabled" field.
-func (u *GroupUpsertOne) SetLongContextPricingEnabled(v bool) *GroupUpsertOne {
-	return u.Update(func(s *GroupUpsert) {
-		s.SetLongContextPricingEnabled(v)
-	})
-}
-
-// UpdateLongContextPricingEnabled sets the "long_context_pricing_enabled" field to the value that was provided on create.
-func (u *GroupUpsertOne) UpdateLongContextPricingEnabled() *GroupUpsertOne {
-	return u.Update(func(s *GroupUpsert) {
-		s.UpdateLongContextPricingEnabled()
-	})
-}
-
-// SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsertOne) SetModelPricing(v json.RawMessage) *GroupUpsertOne {
-	return u.Update(func(s *GroupUpsert) {
-		s.SetModelPricing(v)
-	})
-}
-
-// UpdateModelPricing sets the "model_pricing" field to the value that was provided on create.
-func (u *GroupUpsertOne) UpdateModelPricing() *GroupUpsertOne {
-	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelPricing()
-	})
-}
-
-// ClearModelPricing clears the value of the "model_pricing" field.
-func (u *GroupUpsertOne) ClearModelPricing() *GroupUpsertOne {
-	return u.Update(func(s *GroupUpsert) {
-		s.ClearModelPricing()
 	})
 }
 
@@ -4893,41 +4792,6 @@ func (u *GroupUpsertBulk) UpdateWebSearchPricePerCall() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearWebSearchPricePerCall() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearWebSearchPricePerCall()
-	})
-}
-
-// SetLongContextPricingEnabled sets the "long_context_pricing_enabled" field.
-func (u *GroupUpsertBulk) SetLongContextPricingEnabled(v bool) *GroupUpsertBulk {
-	return u.Update(func(s *GroupUpsert) {
-		s.SetLongContextPricingEnabled(v)
-	})
-}
-
-// UpdateLongContextPricingEnabled sets the "long_context_pricing_enabled" field to the value that was provided on create.
-func (u *GroupUpsertBulk) UpdateLongContextPricingEnabled() *GroupUpsertBulk {
-	return u.Update(func(s *GroupUpsert) {
-		s.UpdateLongContextPricingEnabled()
-	})
-}
-
-// SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsertBulk) SetModelPricing(v json.RawMessage) *GroupUpsertBulk {
-	return u.Update(func(s *GroupUpsert) {
-		s.SetModelPricing(v)
-	})
-}
-
-// UpdateModelPricing sets the "model_pricing" field to the value that was provided on create.
-func (u *GroupUpsertBulk) UpdateModelPricing() *GroupUpsertBulk {
-	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelPricing()
-	})
-}
-
-// ClearModelPricing clears the value of the "model_pricing" field.
-func (u *GroupUpsertBulk) ClearModelPricing() *GroupUpsertBulk {
-	return u.Update(func(s *GroupUpsert) {
-		s.ClearModelPricing()
 	})
 }
 

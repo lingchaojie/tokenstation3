@@ -13,7 +13,7 @@ import {
 const allNullQuotas: DefaultPlatformQuotasMap = {
   anthropic: { daily: null, weekly: null, monthly: null },
   openai:    { daily: null, weekly: null, monthly: null },
-  kiro: { daily: null, weekly: null, monthly: null },
+  kiro:      { daily: null, weekly: null, monthly: null },
   gemini:    { daily: null, weekly: null, monthly: null },
   antigravity: { daily: null, weekly: null, monthly: null },
   grok: { daily: null, weekly: null, monthly: null },
@@ -93,7 +93,7 @@ describe("admin settings auth source defaults helpers", () => {
     expect(state.email.platform_quotas.anthropic).toEqual({ daily: 10, weekly: 50, monthly: 200 });
     // openai 全 null 应被保留
     expect(state.email.platform_quotas.openai).toEqual({ daily: null, weekly: null, monthly: null });
-    // 未出现的平台归一化为 null
+    // 未出现的平台（kiro/gemini/antigravity）归一化为 null
     expect(state.email.platform_quotas.kiro).toEqual({ daily: null, weekly: null, monthly: null });
     expect(state.email.platform_quotas.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(state.email.platform_quotas.antigravity).toEqual({ daily: null, weekly: null, monthly: null });

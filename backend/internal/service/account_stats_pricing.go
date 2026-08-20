@@ -10,13 +10,13 @@ import (
 //
 // 优先级（先命中为准）：
 //  1. 自定义规则（始终尝试，不依赖 ApplyPricingToAccountStats 开关）
-//  2. ApplyPricingToAccountStats 启用时，直接使用本次请求的客户计费（倍率前的 totalCost）
-//  3. 模型定价文件（LiteLLM）中上游模型的默认价格
-//  4. nil → 走默认公式（total_cost × account_rate_multiplier）
+//  2. 模型定价文件中实际适用的 provider 长上下文价格
+//  3. ApplyPricingToAccountStats 启用时，直接使用本次请求的客户计费（倍率前的 totalCost）
+//  4. 模型定价文件（LiteLLM）中上游模型的默认价格
+//  5. nil → 走默认公式（total_cost × account_rate_multiplier）
 //
 // upstreamModel 是最终发往上游的模型 ID。
-// totalCost 是本次请求的客户计费（倍率前），用于优先级 2。
-// serviceTier 是最终参与用户计费的 OpenAI 服务层级，用于优先级 3。
+// totalCost 是本次请求的客户计费（倍率前），用于优先级 3。
 func resolveAccountStatsCost(
 	ctx context.Context,
 	channelService *ChannelService,
@@ -27,7 +27,6 @@ func resolveAccountStatsCost(
 	tokens UsageTokens,
 	requestCount int,
 	totalCost float64,
-	serviceTier string,
 ) *float64 {
 	if channelService == nil || upstreamModel == "" {
 		return nil
@@ -44,7 +43,16 @@ func resolveAccountStatsCost(
 		return cost
 	}
 
-	// 优先级 2：渠道开启"应用模型定价到账号统计"时，直接使用客户计费（倍率前）
+	// 优先级 2：账号是否向用户收取长上下文溢价，不影响 provider 的实际成本。
+	// 必须在 ApplyPricingToAccountStats 的客户计费回退之前计算，否则 opt-out
+	// 请求会把未加价的用户 TotalCost 错当成 provider 成本。
+	if billingService != nil {
+		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens); cost != nil {
+			return cost
+		}
+	}
+
+	// 优先级 3：渠道开启"应用模型定价到账号统计"时，直接使用客户计费（倍率前）
 	if channel.ApplyPricingToAccountStats {
 		cost := totalCost
 		if cost <= 0 {
@@ -53,28 +61,46 @@ func resolveAccountStatsCost(
 		return &cost
 	}
 
-	// 优先级 3：模型定价文件（LiteLLM）默认价格
+	// 优先级 4：模型定价文件（LiteLLM）默认价格
 	if billingService != nil {
-		return tryModelFilePricing(billingService, upstreamModel, tokens, serviceTier)
+		return tryModelFilePricing(billingService, upstreamModel, tokens)
 	}
 
 	return nil
 }
 
-// tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
-func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
+func tryLongContextModelFilePricing(billingService *BillingService, model string, tokens UsageTokens) *float64 {
 	pricing, err := billingService.GetModelPricing(model)
 	if err != nil || pricing == nil {
 		return nil
 	}
-	normalizedTier := normalizeBillingServiceTier(serviceTier)
-	if normalizedTier == "priority" || normalizedTier == "flex" ||
-		billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
-		breakdown, err := billingService.CalculateCostWithServiceTier(model, tokens, 1, normalizedTier)
-		if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
-			return nil
-		}
-		return &breakdown.TotalCost
+	return calculateLongContextModelFilePricing(billingService, model, tokens, pricing)
+}
+
+func calculateLongContextModelFilePricing(
+	billingService *BillingService,
+	model string,
+	tokens UsageTokens,
+	pricing *ModelPricing,
+) *float64 {
+	if !billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
+		return nil
+	}
+	breakdown, err := billingService.CalculateCost(model, tokens, 1)
+	if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
+		return nil
+	}
+	return &breakdown.TotalCost
+}
+
+// tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的标准价格计算费用。
+func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens) *float64 {
+	pricing, err := billingService.GetModelPricing(model)
+	if err != nil || pricing == nil {
+		return nil
+	}
+	if cost := calculateLongContextModelFilePricing(billingService, model, tokens, pricing); cost != nil {
+		return cost
 	}
 	cost := float64(tokens.InputTokens)*pricing.InputPricePerToken +
 		float64(tokens.OutputTokens)*pricing.OutputPricePerToken +
@@ -227,7 +253,7 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 
 // applyAccountStatsCost resolves the account stats cost for a usage log entry.
 // It resolves the upstream model (falling back to the requested model) and calls
-// the 4-level priority chain via resolveAccountStatsCost.
+// the priority chain via resolveAccountStatsCost.
 func applyAccountStatsCost(
 	ctx context.Context,
 	usageLog *UsageLog,
@@ -245,11 +271,7 @@ func applyAccountStatsCost(
 	if usageLog != nil && usageLog.ImageCount > 0 {
 		requestCount = usageLog.ImageCount
 	}
-	serviceTier := ""
-	if usageLog != nil && usageLog.ServiceTier != nil {
-		serviceTier = *usageLog.ServiceTier
-	}
 	usageLog.AccountStatsCost = resolveAccountStatsCost(
-		ctx, cs, bs, accountID, groupID, model, tokens, requestCount, totalCost, serviceTier,
+		ctx, cs, bs, accountID, groupID, model, tokens, requestCount, totalCost,
 	)
 }
