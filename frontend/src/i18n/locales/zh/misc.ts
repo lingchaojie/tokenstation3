@@ -106,7 +106,12 @@ export default {
     total: '条公告',
     emptyDescription: '暂时没有任何系统公告',
     readStatus: '您已阅读此公告',
-    markReadHint: '点击"已读"标记此公告'
+    markReadHint: '点击"已读"标记此公告',
+    officialUpdate: '官方更新',
+    later: '稍后阅读',
+    next: '下一条',
+    acknowledge: '知道了',
+    readSaveFailed: '已读状态保存失败，下次可能再次提醒'
   },
 
   // User Subscriptions Page
