@@ -117,6 +117,48 @@ func TestDisabledRawStorageStillExtractsWithoutCreatingContentFile(t *testing.T)
 	require.NoFileExists(t, readyPath(s, a.ID(), "response.zst"))
 }
 
+func TestAttemptFallsBackToBeginSessionIDWhenWireBodyHasNoSession(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		SessionID: "capture-session",
+		Format:    model.PayloadJSON,
+		Policy:    model.ContentPolicy{StoreRequestBody: true},
+	})
+	require.NoError(t, err)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
+	require.NoError(t, a.WriteRequest([]byte(`{"model":"claude-opus-5"}`)))
+	a.mu.Lock()
+	a.finishExtractionLocked()
+	extracted := a.extracted
+	a.mu.Unlock()
+	a.Abort(errors.New("test cleanup"))
+
+	require.Equal(t, "capture-session", extracted.SessionID)
+}
+
+func TestAttemptPrefersWireBodySessionOverBeginFallback(t *testing.T) {
+	s := openTestStore(t, nil)
+	sink, err := s.Open(model.Begin{
+		CaptureID: uuid.New(),
+		SessionID: "capture-session",
+		Format:    model.PayloadJSON,
+		Policy:    model.ContentPolicy{StoreRequestBody: true},
+	})
+	require.NoError(t, err)
+	a, ok := sink.(*Attempt)
+	require.True(t, ok)
+	require.NoError(t, a.WriteRequest([]byte(`{"conversation_id":"wire-session"}`)))
+	a.mu.Lock()
+	a.finishExtractionLocked()
+	extracted := a.extracted
+	a.mu.Unlock()
+	a.Abort(errors.New("test cleanup"))
+
+	require.Equal(t, "wire-session", extracted.SessionID)
+}
+
 func TestMalformedExtractionDoesNotPreventCommitOrLeakPayloadInWarning(t *testing.T) {
 	s := openTestStore(t, nil)
 	sink, err := s.Open(model.Begin{

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -413,6 +414,9 @@ func (a *Attempt) finishExtractionLocked() {
 		extracted, err = a.extractor.Finalize(model.Final{})
 	}
 	a.extracted = extracted
+	if a.extracted.SessionID == "" {
+		a.extracted.SessionID = strings.TrimSpace(a.begin.SessionID)
+	}
 	if err != nil {
 		a.recordExtractionWarningLocked()
 	}
