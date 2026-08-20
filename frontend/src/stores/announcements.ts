@@ -19,6 +19,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   const currentPopup = ref<UserAnnouncement | null>(null)
   const popupPosition = ref(0)
   const popupTotal = ref(0)
+  let popupTransitionTimer: number | null = null
 
   // Session-scoped dedup set — not reactive, used as plain lookup only
   let shownPopupIds = new Set<number>()
@@ -67,7 +68,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
       }
     }
 
-    if (!currentPopup.value) {
+    if (!currentPopup.value && popupTransitionTimer === null) {
       showNextPopup()
     }
   }
@@ -83,13 +84,22 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     popupPosition.value += 1
   }
 
+  function cancelPopupTransition() {
+    if (popupTransitionTimer === null) return
+    window.clearTimeout(popupTransitionTimer)
+    popupTransitionTimer = null
+  }
+
   async function advancePopup(): Promise<boolean> {
     if (!currentPopup.value) return true
     const id = currentPopup.value.id
     currentPopup.value = null
 
     if (popupQueue.value.length > 0) {
-      window.setTimeout(showNextPopup, 300)
+      popupTransitionTimer = window.setTimeout(() => {
+        popupTransitionTimer = null
+        showNextPopup()
+      }, 300)
     } else {
       popupPosition.value = 0
       popupTotal.value = 0
@@ -109,6 +119,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function snoozePopupBatch(): void {
+    cancelPopupTransition()
     if (currentPopup.value) shownPopupIds.add(currentPopup.value.id)
     for (const item of popupQueue.value) shownPopupIds.add(item.id)
     currentPopup.value = null
@@ -146,6 +157,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function reset() {
+    cancelPopupTransition()
     announcements.value = []
     lastFetchTime.value = 0
     shownPopupIds = new Set()
