@@ -120,6 +120,7 @@ import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
 import { useAnnouncementStore } from '@/stores/announcements'
 import { useAppStore } from '@/stores/app'
+import { createBodyScrollLock } from '@/utils/bodyScrollLock'
 import { formatRelativeWithDateTime } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
 import type { Announcement, UserAnnouncement } from '@/types'
@@ -142,6 +143,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const announcementStore = useAnnouncementStore()
 const appStore = useAppStore()
+const bodyScrollLock = createBodyScrollLock()
 const displayedAnnouncement = computed(() => (
   props.preview ? props.announcement : announcementStore.currentPopup
 ))
@@ -180,13 +182,17 @@ async function handleAdvance() {
 watch(
   displayedAnnouncement,
   (popup) => {
-    document.body.style.overflow = popup ? 'hidden' : ''
+    if (popup) {
+      bodyScrollLock.acquire()
+    } else {
+      bodyScrollLock.release()
+    }
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  document.body.style.overflow = ''
+  bodyScrollLock.release()
 })
 </script>
 

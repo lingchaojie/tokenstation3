@@ -16,6 +16,7 @@ vi.mock('@/utils/format', () => ({
 }))
 
 import AnnouncementPopup from '../AnnouncementPopup.vue'
+import AnnouncementBell from '../AnnouncementBell.vue'
 import { useAnnouncementStore } from '@/stores/announcements'
 
 const announcementMarkdownStyles = readFileSync(
@@ -275,5 +276,52 @@ describe('AnnouncementPopup', () => {
 
     wrapper.unmount()
     expect(document.body.style.overflow).toBe('')
+  })
+
+  it('keeps an active popup locked when an inactive popup mounts and unmounts', async () => {
+    document.body.style.overflow = 'clip'
+    const store = useAnnouncementStore()
+    store.currentPopup = announcement
+    const activePopup = mount(AnnouncementPopup)
+
+    expect(document.body.style.overflow).toBe('hidden')
+
+    const inactivePopup = mount(AnnouncementPopup, {
+      props: {
+        announcement: null,
+        preview: true,
+      },
+    })
+    expect(document.body.style.overflow).toBe('hidden')
+
+    inactivePopup.unmount()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    store.currentPopup = { ...announcement, id: 2 }
+    await activePopup.vm.$nextTick()
+    store.currentPopup = null
+    await activePopup.vm.$nextTick()
+    expect(document.body.style.overflow).toBe('clip')
+
+    activePopup.unmount()
+    expect(document.body.style.overflow).toBe('clip')
+  })
+
+  it('keeps the bell modal locked until its last concurrent popup owner releases', async () => {
+    document.body.style.overflow = 'scroll'
+    const bell = mount(AnnouncementBell)
+    await bell.get('button').trigger('click')
+    expect(document.body.style.overflow).toBe('hidden')
+
+    const store = useAnnouncementStore()
+    store.currentPopup = announcement
+    const popup = mount(AnnouncementPopup)
+    expect(document.body.style.overflow).toBe('hidden')
+
+    popup.unmount()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    bell.unmount()
+    expect(document.body.style.overflow).toBe('scroll')
   })
 })
