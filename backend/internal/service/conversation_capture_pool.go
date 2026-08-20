@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -67,9 +68,9 @@ func NewConversationCapturePool(
 	}
 	transport := protocol.NewClient(protocol.ClientConfig{
 		SocketPath:   cfg.Gateway.Capture.Sidecar.Socket,
-		DialTimeout:  10 * time.Millisecond,
-		WriteTimeout: 10 * time.Millisecond,
-		ReadTimeout:  10 * time.Millisecond,
+		DialTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		ReadTimeout:  5 * time.Second,
 	})
 	pool := newConversationCapturePoolForTransport(transport, settings.CaptureRuntimeMasterEnabledHot)
 	pool.supervisor = supervisor
@@ -93,15 +94,31 @@ func (p *ConversationCapturePool) Begin(ctx context.Context, begin model.Begin) 
 	}
 	sidecarRunning := p.supervisor == nil || p.supervisor.Status().Running
 	if p.transport == nil {
-		p.recordAdmissionLoss(sidecarRunning, errors.New("capture transport unavailable"))
+		err := errors.New("capture transport unavailable")
+		p.recordAdmissionLoss(sidecarRunning, err)
+		logCaptureAdmissionError(begin, sidecarRunning, err)
 		return nil, false
 	}
 	attempt, err := p.transport.Begin(ctx, begin)
 	if err != nil || attempt == nil {
+		if err == nil {
+			err = errors.New("capture transport returned nil attempt")
+		}
 		p.recordAdmissionLoss(sidecarRunning, err)
+		logCaptureAdmissionError(begin, sidecarRunning, err)
 		return nil, false
 	}
 	return &CaptureAttempt{attempt: attempt, policy: begin.Policy, losses: p.losses}, true
+}
+
+func logCaptureAdmissionError(begin model.Begin, sidecarRunning bool, err error) {
+	slog.Error("capture_ipc_begin_failed",
+		"capture_id", begin.CaptureID,
+		"request_id", begin.RequestID,
+		"platform", begin.Platform,
+		"sidecar_running", sidecarRunning,
+		"error", err,
+	)
 }
 
 func (p *ConversationCapturePool) recordAdmissionLoss(sidecarRunning bool, beginErr error) {
