@@ -60,6 +60,77 @@ func TestPublicModelCatalog_IncludesClaudeSonnet5(t *testing.T) {
 	require.Equal(t, 0.2, *sonnet5.Pricing.CacheReadPerMillion)
 }
 
+func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
+	type expectation struct {
+		displayName      string
+		releasedAt       string
+		input            float64
+		cacheRead        float64
+		output           float64
+		sourceURL        string
+		contextSourceURL string
+	}
+
+	expected := map[string]expectation{
+		"claude-opus-5": {
+			displayName:      "Claude Opus 5",
+			releasedAt:       "2026-07-24",
+			input:            5,
+			cacheRead:        0.5,
+			output:           25,
+			sourceURL:        "https://www.anthropic.com/news/claude-opus-5",
+			contextSourceURL: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html",
+		},
+		"claude-fable-5": {
+			displayName:      "Claude Fable 5",
+			releasedAt:       "2026-06-09",
+			input:            10,
+			cacheRead:        1,
+			output:           50,
+			sourceURL:        "https://www.anthropic.com/news/claude-fable-5-mythos-5",
+			contextSourceURL: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html",
+		},
+	}
+
+	models := PublicModelCatalogModelsForWebChat()
+	found := make(map[string]struct{}, len(expected))
+	anthropicModelNames := make([]string, 0)
+	for idx := range models {
+		model := &models[idx]
+		if model.Provider != "anthropic" {
+			continue
+		}
+		anthropicModelNames = append(anthropicModelNames, model.ModelName)
+		want, ok := expected[model.ModelName]
+		if !ok {
+			continue
+		}
+
+		found[model.ModelName] = struct{}{}
+		require.Equal(t, "Anthropic", model.ProviderName)
+		require.Equal(t, want.displayName, model.DisplayName)
+		require.Equal(t, []string{"text"}, model.Modalities)
+		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
+		require.Equal(t, want.releasedAt, model.ReleasedAt)
+		require.Equal(t, "confirmed", model.ReleaseStatus)
+		require.Equal(t, "2026-08-20", model.UpdatedAt)
+		require.Equal(t, 1_000_000, model.ContextWindow)
+		require.Equal(t, want.sourceURL, model.SourceURL)
+		require.Equal(t, want.contextSourceURL, model.ContextSourceURL)
+		require.Equal(t, "confirmed", model.PriceStatus)
+		require.NotNil(t, model.Pricing.InputPerMillion)
+		require.NotNil(t, model.Pricing.CacheReadPerMillion)
+		require.NotNil(t, model.Pricing.OutputPerMillion)
+		require.Equal(t, want.input, *model.Pricing.InputPerMillion)
+		require.Equal(t, want.cacheRead, *model.Pricing.CacheReadPerMillion)
+		require.Equal(t, want.output, *model.Pricing.OutputPerMillion)
+	}
+
+	require.Len(t, found, len(expected))
+	require.GreaterOrEqual(t, len(anthropicModelNames), 4)
+	require.Equal(t, []string{"claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-fable-5"}, anthropicModelNames[:4])
+}
+
 func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 	type expectation struct {
 		displayName string
@@ -95,7 +166,7 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, "2026-07-09", model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-07-15", model.UpdatedAt)
+		require.Equal(t, "2026-08-20", model.UpdatedAt)
 		require.Equal(t, 1_050_000, model.ContextWindow)
 		require.Equal(t, sourceOpenAI, model.SourceURL)
 		require.Equal(t, contextSourceOpenAI, model.ContextSourceURL)

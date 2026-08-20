@@ -213,6 +213,28 @@ func TestResolveWebChatCatalog_DatedKeyRoutingPreserved(t *testing.T) {
 	}
 }
 
+func TestResolveWebChatCatalog_EnrichesClaudeFable5FromPublicCatalog(t *testing.T) {
+	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeAnthropic: 3}}
+	al := stubAccountLister{byGroup: map[int64][]Account{
+		3: {acctWithMapping(PlatformAnthropic, "claude-fable-5")},
+	}}
+
+	got, err := resolveWebChatCatalog(context.Background(), gr, al)
+
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 model, got %d: %+v", len(got), got)
+	}
+	if got[0].DisplayName != "Claude Fable 5" {
+		t.Fatalf("display name=%q want Claude Fable 5", got[0].DisplayName)
+	}
+	if got[0].ReleasedAt != "2026-06-09" {
+		t.Fatalf("released_at=%q want 2026-06-09", got[0].ReleasedAt)
+	}
+}
+
 func TestResolveWebChatCatalog_SortsModelsByReleaseDateWithinProvider(t *testing.T) {
 	gr := stubGroupResolver{ids: map[string]int64{APIKeyTypeOpenAI: 6}}
 	al := stubAccountLister{byGroup: map[int64][]Account{

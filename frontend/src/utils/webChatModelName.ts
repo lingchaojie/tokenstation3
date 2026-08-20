@@ -6,8 +6,8 @@ export interface WebChatModelNameInput {
 
 const THINKING_SUFFIX = /-thinking$/i
 const DATE_SUFFIX = /-\d{8}$/
-const CLAUDE_FAMILY_FIRST = /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/i
-const CLAUDE_VERSION_FIRST = /^claude-(\d+)(?:-(\d+))?-(opus|sonnet|haiku)$/i
+const CLAUDE_FAMILY_FIRST = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?$/i
+const CLAUDE_VERSION_FIRST = /^claude-(\d+)(?:-(\d+))?-(opus|sonnet|haiku|fable)$/i
 const GPT_IMAGE = /^gpt-image-(\d+(?:[.-]\d+)*)$/i
 const GPT_MODEL = /^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/i
 

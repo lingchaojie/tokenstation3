@@ -15,6 +15,8 @@ describe('formatWebChatModelName', () => {
     ['claude-opus-4-5-20251101', 'Claude Opus 4.5'],
     ['claude-sonnet-4-5-20250929-thinking', 'Claude Sonnet 4.5'],
     ['claude-sonnet-5-thinking', 'Claude Sonnet 5'],
+    ['claude-fable-5', 'Claude Fable 5'],
+    ['claude-fable-5-thinking', 'Claude Fable 5'],
     ['claude-3-5-haiku-20241022', 'Claude Haiku 3.5'],
   ])('formats %s as %s', (model, expected) => {
     expect(formatWebChatModelName({ model })).toBe(expected)
@@ -26,6 +28,12 @@ describe('formatWebChatModelName', () => {
       model: 'gpt-5.6-luna',
       displayName: 'gpt-5.6-luna',
     })).toBe('GPT-5.6 Luna')
+
+    expect(formatWebChatModelName({
+      provider: 'anthropic',
+      model: 'claude-fable-5',
+      displayName: 'claude-fable-5',
+    })).toBe('Claude Fable 5')
   })
 
   it('prefers a supplied human name for an unknown model', () => {
